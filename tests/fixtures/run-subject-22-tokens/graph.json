@@ -1,0 +1,192 @@
+{
+ "schema_version": 1,
+ "name": "subject-issue",
+ "description": "One subject issue through the five-phase shape: spec, work in a worktree behind scope and security gates, merge, verify.",
+ "run": {
+  "deadline": 5400,
+  "max_parallel": 1,
+  "spend_cap": 10
+ },
+ "facts": [
+  {
+   "name": "git",
+   "type": "bool",
+   "instrument": "code: git is available in the target",
+   "source_kind": "target"
+  }
+ ],
+ "gates": [
+  {
+   "id": "scope",
+   "params": [
+    "allowed_generated"
+   ]
+  },
+  {
+   "id": "security",
+   "params": [
+    "sensitive_paths"
+   ]
+  },
+  {
+   "id": "ac-verify",
+   "params": [
+    "commands_from"
+   ]
+  }
+ ],
+ "root": "main",
+ "nodes": [
+  {
+   "name": "main",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "spec",
+    "worktree",
+    "work",
+    "merge",
+    "verify"
+   ]
+  },
+  {
+   "name": "spec",
+   "kind": "agent",
+   "model": "claude-sonnet-5-5",
+   "effort": "medium",
+   "tools": [
+    "Read",
+    "Grep",
+    "Glob"
+   ],
+   "output_key": "spec",
+   "instructions": "Read issues/22-an-order-ships-in-parts.md and CLAUDE.md in this repository. Do not change any file. Reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"spec\": {\"summary\": \"<one paragraph>\", \"ac_commands\": [\"cp /Users/rafaelaguilherdacosta/sources/agent-squad/bench/subject/acceptance/test_issue_22.py tests/api/test_zz_heldout_22.py && python3 -m pytest -q\"]}}. Copy ac_commands exactly.",
+   "budget": {
+    "turns": {
+     "min": 2,
+     "max": 15
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2.0
+    }
+   },
+   "deadline": 900,
+   "next": {
+    "fail": "repeat"
+   },
+   "workspace": "."
+  },
+  {
+   "name": "worktree",
+   "kind": "action",
+   "effect": "worktree_create",
+   "workspace": "worktrees/item"
+  },
+  {
+   "name": "work",
+   "kind": "loop",
+   "max": {
+    "value": 2,
+    "min": 1
+   },
+   "children": [
+    "actor",
+    "scope_gate",
+    "security_gate"
+   ]
+  },
+  {
+   "name": "actor",
+   "kind": "agent",
+   "model": "claude-sonnet-5-5",
+   "effort": "medium",
+   "tools": [
+    "Read",
+    "Edit",
+    "Write",
+    "Bash",
+    "Glob",
+    "Grep"
+   ],
+   "output_key": "diff",
+   "instructions": "Implement the issue in issues/22-an-order-ships-in-parts.md. Your working directory is the project. Follow CLAUDE.md. Write a test for each acceptance criterion and run `python3 -m pytest -q` until it passes. Do not run git commit: the harness commits. When done, reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"diff\": {\"files\": [{\"path\": \"<changed file>\", \"generated\": false}]}} listing every file you changed. If you cannot finish, reply {\"status\": \"fail\", \"reasons\": [\"<why>\"]}.",
+   "budget": {
+    "turns": {
+     "min": 10,
+     "max": 80
+    },
+    "spend": {
+     "min": 0.2,
+     "max": 2.0
+    }
+   },
+   "deadline": 1800,
+   "next": {
+    "fail": "repeat"
+   },
+   "workspace": "worktrees/item"
+  },
+  {
+   "name": "scope_gate",
+   "kind": "gate",
+   "check": "scope",
+   "params": {
+    "allowed_generated": []
+   },
+   "next": {
+    "fail": "repeat"
+   }
+  },
+  {
+   "name": "security_gate",
+   "kind": "gate",
+   "check": "security",
+   "params": {
+    "sensitive_paths": [
+     ".env*",
+     "auth",
+     "crypto"
+    ]
+   },
+   "next": {
+    "fail": "repeat"
+   }
+  },
+  {
+   "name": "merge",
+   "kind": "action",
+   "effect": "merge_land",
+   "workspace": "worktrees/item",
+   "deadline": 300,
+   "next": {
+    "fail": "exit:fail"
+   }
+  },
+  {
+   "name": "verify",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "ac_verify"
+   ]
+  },
+  {
+   "name": "ac_verify",
+   "kind": "gate",
+   "check": "ac-verify",
+   "params": {
+    "commands_from": "spec"
+   },
+   "next": {
+    "fail": "exit:fail"
+   }
+  }
+ ]
+}

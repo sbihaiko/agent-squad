@@ -1,0 +1,14 @@
+# The skills that ship in vendor/skills, the local plugin that config/agent-defaults.yaml loads (owner ruling 2026-09-30, ticket #46).
+# Each entry names a skill and where `scripts/build_vendor_skills.py` copies it from. Sources are read at build time only.
+# `skill:NAME` is found by name (squad/skillpath.py, ADR-0129): personal, then agents, then the current plugin install. A path still works.
+# Choice: every "best skill" and "extra skill" in docs/research/role-skill-map.md. Runner-ups (understand, frontend-design,
+# code-review) are not shipped: code-review starts subagents, which no role may do (panel 2026-09-30).
+# Excluded when copying: a `learnings` directory (per-user browsing notes) and any `install.sh` (an agent never runs an installer).
+skills:
+  - {name: to-spec, source: skill:to-spec}
+  - {name: to-tickets, source: skill:to-tickets}
+  - {name: tdd, source: skill:tdd}
+  - {name: ego-browser, source: skill:ego-browser}
+  - {name: codebase-design, source: skill:codebase-design}
+  - {name: ask-matt, source: skill:ask-matt}
+  - {name: diagnosing-bugs, source: skill:diagnosing-bugs}

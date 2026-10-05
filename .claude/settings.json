@@ -1,0 +1,64 @@
+{
+  "env": {
+    "ENABLE_TOOL_SEARCH": "auto:3",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "0",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+  },
+  "permissions": {
+    "deny": [
+      "EndConversation"
+    ]
+  },
+  "skillOverrides": {
+    "ask-matt": "on",
+    "claude-handoff": "on",
+    "code-review": "on",
+    "codebase-design": "on",
+    "diagnosing-bugs": "on",
+    "domain-modeling": "on",
+    "find-skills": "on",
+    "grill-me": "on",
+    "grill-with-docs": "on",
+    "grilling": "on",
+    "handoff": "on",
+    "implement": "on",
+    "implement-spec": "on",
+    "improve-codebase-architecture": "on",
+    "loop-me": "on",
+    "migrate-to-shoehorn": "on",
+    "prototype": "on",
+    "research": "on",
+    "retro": "on",
+    "scaffold-exercises": "on",
+    "setup-matt-pocock-skills": "on",
+    "setup-pre-commit": "on",
+    "setup-ts-deep-modules": "on",
+    "systematic-debugging": "on",
+    "tdd": "on",
+    "teach": "on",
+    "to-questionnaire": "on",
+    "to-spec": "on",
+    "to-tickets": "on",
+    "triage": "on",
+    "understand": "on",
+    "wait-what": "on",
+    "wayfinder": "on",
+    "wizard": "on",
+    "writing-beats": "on",
+    "writing-for-agents": "on",
+    "writing-fragments": "on",
+    "writing-shape": "on"
+  },
+  "skillListingBudgetFraction": 0.05,
+  "extraKnownMarketplaces": {
+    "autonomy": {
+      "source": {
+        "source": "github",
+        "repo": "mmctech-ai/autonomy"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "autonomy@autonomy": true
+  }
+}

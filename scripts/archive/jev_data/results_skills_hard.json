@@ -1,0 +1,578 @@
+{
+ "model": "jev-1.13.0",
+ "roster": 49,
+ "rows": [
+  {
+   "r": "run the panel of grilling on my plan but also write the glossary while we go",
+   "ok": [
+    "grill-with-docs"
+   ],
+   "jev": {
+    "pick": "grill-with-docs",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.53,
+    "tokens": 2673,
+    "ms": 702.2061250027036,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "grill-with-docs",
+    "ms": 11834.917708009016
+   }
+  },
+  {
+   "r": "interview me about the spec for the workflow I want to build in this workspace",
+   "ok": [
+    "loop-me"
+   ],
+   "jev": {
+    "pick": "loop-me",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.61,
+    "tokens": 2669,
+    "ms": 662.8314170084195,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "loop-me",
+    "ms": 10570.890542003326
+   }
+  },
+  {
+   "r": "hand this conversation to a background agent that starts right now",
+   "ok": [
+    "claude-handoff"
+   ],
+   "jev": {
+    "pick": "claude-handoff",
+    "conf": 0.99,
+    "top": 0.99,
+    "wanted": 0.44,
+    "tokens": 2664,
+    "ms": 646.4248339907499,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "claude-handoff",
+    "ms": 10507.280208010343
+   }
+  },
+  {
+   "r": "write down where we are so another agent can continue tomorrow",
+   "ok": [
+    "handoff"
+   ],
+   "jev": {
+    "pick": "handoff",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.22,
+    "tokens": 2664,
+    "ms": 673.0525419989135,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "handoff",
+    "ms": 10371.918791992357
+   }
+  },
+  {
+   "r": "I have a stack trace and want the root cause before anyone proposes a fix",
+   "ok": [
+    "systematic-debugging",
+    "diagnosing-bugs"
+   ],
+   "jev": {
+    "pick": "systematic-debugging",
+    "conf": 0.85,
+    "top": 0.86,
+    "wanted": 0.77,
+    "tokens": 2668,
+    "ms": 879.8231659893645,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "systematic-debugging",
+    "ms": 14090.231541995308
+   }
+  },
+  {
+   "r": "memory use doubled after the last release, build a repeatable feedback loop and bisect",
+   "ok": [
+    "diagnosing-bugs"
+   ],
+   "jev": {
+    "pick": "diagnosing-bugs",
+    "conf": 0.93,
+    "top": 0.93,
+    "wanted": 0.91,
+    "tokens": 2671,
+    "ms": 663.610042000073,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "diagnosing-bugs",
+    "ms": 12585.798290994717
+   }
+  },
+  {
+   "r": "we agreed on the design; now publish it as one issue, do not ask me anything",
+   "ok": [
+    "to-spec"
+   ],
+   "jev": {
+    "pick": "to-spec",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.51,
+    "tokens": 2671,
+    "ms": 661.1086250049993,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "to-spec",
+    "ms": 10944.623332994524
+   }
+  },
+  {
+   "r": "we have a spec issue; cut it into vertical slices that can be built in parallel",
+   "ok": [
+    "to-tickets"
+   ],
+   "jev": {
+    "pick": "to-tickets",
+    "conf": 0.98,
+    "top": 0.99,
+    "wanted": 0.85,
+    "tokens": 2670,
+    "ms": 655.3731669991976,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "to-tickets",
+    "ms": 9816.995625005802
+   }
+  },
+  {
+   "r": "someone outside the team has to answer this, package the open questions for them",
+   "ok": [
+    "to-questionnaire"
+   ],
+   "jev": {
+    "pick": "to-questionnaire",
+    "conf": 0.96,
+    "top": 0.97,
+    "wanted": 0.42,
+    "tokens": 2668,
+    "ms": 298.00508299376816,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "to-questionnaire",
+    "ms": 10796.898790998966
+   }
+  },
+  {
+   "r": "this external PR and two feature requests came in, decide what to do with each",
+   "ok": [
+    "triage"
+   ],
+   "jev": {
+    "pick": "triage",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.73,
+    "tokens": 2669,
+    "ms": 281.0440830071457,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "triage",
+    "ms": 9862.501333002001
+   }
+  },
+  {
+   "r": "I want to learn what this codebase does before changing it, with a visual graph",
+   "ok": [
+    "understand"
+   ],
+   "jev": {
+    "pick": "understand",
+    "conf": 0.98,
+    "top": 0.98,
+    "wanted": 0.86,
+    "tokens": 2670,
+    "ms": 298.7033329991391,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "understand",
+    "ms": 9513.665040998603
+   }
+  },
+  {
+   "r": "what does the SDK documentation say about the max_turns option? keep the answer in a file",
+   "ok": [
+    "research"
+   ],
+   "jev": {
+    "pick": "research",
+    "conf": 0.99,
+    "top": 0.99,
+    "wanted": 0.34,
+    "tokens": 2673,
+    "ms": 328.5116249899147,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "research",
+    "ms": 9911.78966598818
+   }
+  },
+  {
+   "r": "pull raw ideas out of my rambling notes, no structure yet",
+   "ok": [
+    "writing-fragments"
+   ],
+   "jev": {
+    "pick": "writing-fragments",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.52,
+    "tokens": 2667,
+    "ms": 323.54837500315625,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "writing-fragments",
+    "ms": 9184.540125002968
+   }
+  },
+  {
+   "r": "take these fragments and arrange them as a sequence of beats",
+   "ok": [
+    "writing-beats"
+   ],
+   "jev": {
+    "pick": "writing-beats",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.51,
+    "tokens": 2664,
+    "ms": 341.8735419982113,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "writing-beats",
+    "ms": 9423.394291996374
+   }
+  },
+  {
+   "r": "turn this outline into a finished article paragraph by paragraph",
+   "ok": [
+    "writing-shape"
+   ],
+   "jev": {
+    "pick": "writing-shape",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.77,
+    "tokens": 2663,
+    "ms": 322.34712499484885,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "writing-shape",
+    "ms": 8499.466291992576
+   }
+  },
+  {
+   "r": "draft a reply to my landlord in my voice",
+   "ok": [
+    "write-like-me"
+   ],
+   "jev": {
+    "pick": "write-like-me",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.43,
+    "tokens": 2662,
+    "ms": 314.03008301276714,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "write-like-me",
+    "ms": 9160.448458991596
+   }
+  },
+  {
+   "r": "review this diff for spec compliance only",
+   "ok": [
+    "code-review"
+   ],
+   "jev": {
+    "pick": "code-review",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.84,
+    "tokens": 2660,
+    "ms": 297.51033399952576,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "code-review",
+    "ms": 9029.340749999392
+   }
+  },
+  {
+   "r": "three tickets are ready, implement them in order and review each",
+   "ok": [
+    "implement"
+   ],
+   "jev": {
+    "pick": "implement",
+    "conf": 0.94,
+    "top": 0.95,
+    "wanted": 0.81,
+    "tokens": 2665,
+    "ms": 330.23254199360963,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "implement",
+    "ms": 13700.969583005644
+   }
+  },
+  {
+   "r": "build this spec end to end on a single branch",
+   "ok": [
+    "implement-spec"
+   ],
+   "jev": {
+    "pick": "implement-spec",
+    "conf": 0.85,
+    "top": 0.86,
+    "wanted": 0.92,
+    "tokens": 2663,
+    "ms": 335.32199999899603,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "implement-spec",
+    "ms": 20340.012417000253
+   }
+  },
+  {
+   "r": "I keep hitting merge conflicts, walk me through resolving them safely",
+   "ok": [
+    "resolving-merge-conflicts"
+   ],
+   "jev": {
+    "pick": "resolving-merge-conflicts",
+    "conf": 0.88,
+    "top": 0.89,
+    "wanted": 0.48,
+    "tokens": 2665,
+    "ms": 367.5316660082899,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "resolving-merge-conflicts",
+    "ms": 8593.279000007897
+   }
+  },
+  {
+   "r": "which of these ten skills should I run first for a brand-new big project",
+   "ok": [
+    "ask-matt",
+    "wayfinder"
+   ],
+   "jev": {
+    "pick": "wayfinder",
+    "conf": 0.32,
+    "top": 0.34,
+    "wanted": 0.56,
+    "tokens": 2668,
+    "ms": 302.3144170001615,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "wayfinder",
+    "ms": 11893.851542001357
+   }
+  },
+  {
+   "r": "the cart page copy is fine but the checkout button labels and error text confuse people",
+   "ok": [
+    "ux-writing"
+   ],
+   "jev": {
+    "pick": "ux-writing",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.49,
+    "tokens": 2669,
+    "ms": 576.337209000485,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "ux-writing",
+    "ms": 10852.86850000557
+   }
+  },
+  {
+   "r": "sales page headline and CTA are underperforming, rewrite them",
+   "ok": [
+    "copywriting"
+   ],
+   "jev": {
+    "pick": "copywriting",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.86,
+    "tokens": 2666,
+    "ms": 311.02174999250565,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "copywriting",
+    "ms": 10552.831624998362
+   }
+  },
+  {
+   "r": "make our packages deep modules with dependency-cruiser",
+   "ok": [
+    "setup-ts-deep-modules"
+   ],
+   "jev": {
+    "pick": "setup-ts-deep-modules",
+    "conf": 0.99,
+    "top": 0.99,
+    "wanted": 0.85,
+    "tokens": 2663,
+    "ms": 307.7395420114044,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "setup-ts-deep-modules",
+    "ms": 9487.770124993403
+   }
+  },
+  {
+   "r": "set up the labels and tracker before I use the other engineering skills",
+   "ok": [
+    "setup-matt-pocock-skills"
+   ],
+   "jev": {
+    "pick": "setup-matt-pocock-skills",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.49,
+    "tokens": 2666,
+    "ms": 320.16337499953806,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "setup-matt-pocock-skills",
+    "ms": 9622.79608300014
+   }
+  },
+  {
+   "r": "review the CLAUDE.md I wrote; agents ignore half of it",
+   "ok": [
+    "writing-for-agents"
+   ],
+   "jev": {
+    "pick": "writing-for-agents",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.71,
+    "tokens": 2667,
+    "ms": 438.26512499072123,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "writing-for-agents",
+    "ms": 11784.146834004787
+   }
+  },
+  {
+   "r": "explain gradient descent to me with exercises across a few sessions",
+   "ok": [
+    "teach"
+   ],
+   "jev": {
+    "pick": "teach",
+    "conf": 0.77,
+    "top": 0.78,
+    "wanted": 0.75,
+    "tokens": 2665,
+    "ms": 325.83512499695644,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "teach",
+    "ms": 13260.655958001735
+   }
+  },
+  {
+   "r": "make a scaffold of exercises with solutions for my course section",
+   "ok": [
+    "scaffold-exercises"
+   ],
+   "jev": {
+    "pick": "scaffold-exercises",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.78,
+    "tokens": 2664,
+    "ms": 285.37574999791104,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "scaffold-exercises",
+    "ms": 9921.443125000224
+   }
+  },
+  {
+   "r": "generate an interactive script that guides me through creating the cloud account",
+   "ok": [
+    "wizard"
+   ],
+   "jev": {
+    "pick": "wizard",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.65,
+    "tokens": 2665,
+    "ms": 457.3179169965442,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "wizard",
+    "ms": 10007.311042005313
+   }
+  },
+  {
+   "r": "that last answer used jargon I don't know, restate it",
+   "ok": [
+    "wait-what"
+   ],
+   "jev": {
+    "pick": "wait-what",
+    "conf": 0.52,
+    "top": 0.54,
+    "wanted": 0.16,
+    "tokens": 2668,
+    "ms": 333.4679999970831,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "wait-what",
+    "ms": 9186.613415993634
+   }
+  }
+ ]
+}

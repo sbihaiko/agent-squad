@@ -1,0 +1,459 @@
+{
+ "context": {
+  "default": {
+   "totalTokens": 22007,
+   "maxTokens": 1000000,
+   "rawMaxTokens": 1000000,
+   "autoCompactThreshold": 967000,
+   "isAutoCompactEnabled": true,
+   "model": "claude-sonnet-5-5"
+  },
+  "window_100000": {
+   "totalTokens": 22007,
+   "maxTokens": 100000,
+   "rawMaxTokens": 100000,
+   "autoCompactThreshold": 67000,
+   "isAutoCompactEnabled": true,
+   "model": "claude-sonnet-5-5"
+  },
+  "window_50000": {
+   "totalTokens": 22007,
+   "maxTokens": 100000,
+   "rawMaxTokens": 100000,
+   "autoCompactThreshold": 67000,
+   "isAutoCompactEnabled": true,
+   "model": "claude-sonnet-5-5"
+  }
+ },
+ "tools": {
+  "tools_none": {
+   "init": {
+    "tools": [
+     "Task",
+     "Bash",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "Edit",
+     "EnterWorktree",
+     "ExitWorktree",
+     "ListAgents",
+     "NotebookEdit",
+     "Read",
+     "RemoteTrigger",
+     "ReportFindings",
+     "ScheduleWakeup",
+     "SendMessage",
+     "Skill",
+     "TaskStop",
+     "ToolSearch",
+     "WebFetch",
+     "WebSearch",
+     "Workflow",
+     "Write"
+    ],
+    "model": "claude-sonnet-5-5",
+    "version": "2.1.286"
+   },
+   "cost": [
+    0.01847
+   ]
+  },
+  "tools_read_grep_glob": {
+   "init": {
+    "tools": [
+     "Glob",
+     "Grep",
+     "Read"
+    ],
+    "model": "claude-sonnet-5-5",
+    "version": "2.1.286"
+   },
+   "cost": [
+    0.011916000000000001
+   ]
+  },
+  "tools_read_only": {
+   "init": {
+    "tools": [
+     "Read"
+    ],
+    "model": "claude-sonnet-5-5",
+    "version": "2.1.286"
+   },
+   "cost": [
+    0.005704
+   ]
+  }
+ },
+ "output": {
+  "cap_300": {
+   "results": [
+    {
+     "subtype": "success",
+     "is_error": true,
+     "turns": 4,
+     "cost": 0.0222074,
+     "stop_reason": "stop_sequence",
+     "terminal_reason": "api_error",
+     "usage": {
+      "input_tokens": 14,
+      "cache_creation_input_tokens": 2261,
+      "cache_read_input_tokens": 5677,
+      "output_tokens": 1200,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "server_tool_use": {
+       "web_search_requests": 0,
+       "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+       "ephemeral_1h_input_tokens": 2261,
+       "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [],
+      "speed": "standard",
+      "fallback_credit": null
+     },
+     "model_usage": {
+      "claude-sonnet-5-5": {
+       "inputTokens": 14,
+       "outputTokens": 1200,
+       "cacheReadInputTokens": 5677,
+       "cacheCreationInputTokens": 2261,
+       "webSearchRequests": 0,
+       "costUSD": 0.0222074,
+       "contextWindow": 1000000,
+       "maxOutputTokens": 128000,
+       "thinkingTokens": 0,
+       "canonicalModel": "claude-sonnet-5-5",
+       "provider": "firstParty",
+       "costBasis": "list"
+      }
+     },
+     "denials": [],
+     "result_chars": 155,
+     "errors": null,
+     "origin": null,
+     "text": "API Error: Claude's response exceeded the 300 output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable."
+    }
+   ],
+   "init": {
+    "tools": [
+     "Read"
+    ],
+    "model": "claude-sonnet-5-5",
+    "version": "2.1.286"
+   },
+   "compact": 0,
+   "tool_uses": [],
+   "error": "ResultError: Claude Code returned an error result: API Error: Claude's response exceeded the 300 output token maximum. To configure this behavior, set the CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable. (exit code: 1)"
+  },
+  "cap_32000": {
+   "results": [
+    {
+     "subtype": "success",
+     "is_error": false,
+     "turns": 1,
+     "cost": 0.0420016,
+     "stop_reason": "end_turn",
+     "terminal_reason": "completed",
+     "usage": {
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 1438,
+      "output_tokens": 4171,
+      "output_tokens_details": {
+       "thinking_tokens": 0
+      },
+      "server_tool_use": {
+       "web_search_requests": 0,
+       "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+       "ephemeral_1h_input_tokens": 0,
+       "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [],
+      "speed": "standard",
+      "fallback_credit": null
+     },
+     "model_usage": {
+      "claude-sonnet-5-5": {
+       "inputTokens": 2,
+       "outputTokens": 4171,
+       "cacheReadInputTokens": 1438,
+       "cacheCreationInputTokens": 0,
+       "webSearchRequests": 0,
+       "costUSD": 0.0420016,
+       "contextWindow": 1000000,
+       "maxOutputTokens": 128000,
+       "thinkingTokens": 0,
+       "canonicalModel": "claude-sonnet-5-5",
+       "provider": "firstParty",
+       "costBasis": "list"
+      }
+     },
+     "denials": [],
+     "result_chars": 12091,
+     "errors": null,
+     "origin": null,
+     "text": "# The Leaf That Shaped the World: A History of Tea\n\nFew substances have traveled as far, or changed as much, as the dried leaf of *Camellia sinensis*. Tea began as a regional medicinal plant in the misty highlands of southwest China. It became a scholar's refreshment, a monastic aid to meditation, an imperial tribute, a commodity of global empire, and finally an everyday drink consumed in every co"
+    }
+   ],
+   "init": {
+    "tools": [
+     "Read"
+    ],
+    "model": "claude-sonnet-5-5",
+    "version": "2.1.286"
+   },
+   "compact": 0,
+   "tool_uses": [],
+   "error": null
+  }
+ },
+ "subagent": {
+  "results": [
+   {
+    "subtype": "error_max_budget_usd",
+    "is_error": true,
+    "turns": 2,
+    "cost": 2.1961578,
+    "stop_reason": "end_turn",
+    "terminal_reason": "budget_exhausted",
+    "usage": {
+     "input_tokens": 2,
+     "cache_creation_input_tokens": 3100,
+     "cache_read_input_tokens": 0,
+     "output_tokens": 224,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 3100,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "not_available",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "model_usage": {
+     "claude-sonnet-5-5": {
+      "inputTokens": 14,
+      "outputTokens": 1253,
+      "cacheReadInputTokens": 394964,
+      "cacheCreationInputTokens": 658292,
+      "webSearchRequests": 0,
+      "costUSD": 2.1961578,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 421,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "denials": [],
+    "result_chars": 0,
+    "errors": [
+     "Reached maximum budget ($1)"
+    ],
+    "origin": null,
+    "text": ""
+   }
+  ],
+  "init": {
+   "tools": [
+    "Task",
+    "Read"
+   ],
+   "model": "claude-sonnet-5-5",
+   "version": "2.1.286"
+  },
+  "compact": 0,
+  "tool_uses": [
+   "Agent",
+   "Read",
+   "Agent"
+  ],
+  "error": "ResultError: Claude Code returned an error result: Reached maximum budget ($1) (exit code: 1)"
+ },
+ "dontask": {
+  "results": [
+   {
+    "subtype": "success",
+    "is_error": false,
+    "turns": 4,
+    "cost": 0.0852706,
+    "stop_reason": "end_turn",
+    "terminal_reason": "completed",
+    "usage": {
+     "input_tokens": 6,
+     "cache_creation_input_tokens": 17924,
+     "cache_read_input_tokens": 48263,
+     "output_tokens": 391,
+     "output_tokens_details": {
+      "thinking_tokens": 0
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 17924,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "not_available",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "model_usage": {
+     "claude-sonnet-5-5": {
+      "inputTokens": 6,
+      "outputTokens": 391,
+      "cacheReadInputTokens": 48263,
+      "cacheCreationInputTokens": 17924,
+      "webSearchRequests": 0,
+      "costUSD": 0.0852706,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "denials": [],
+    "result_chars": 183,
+    "errors": null,
+    "origin": null,
+    "text": "I replaced \"draft\" with \"final\" in `note.txt`. The file contained only that word, so it now reads \"final\".\n\n`echo hi` was allowed. It ran without a permission prompt and printed `hi`."
+   }
+  ],
+  "init": {
+   "tools": [
+    "Bash",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "Edit",
+    "EnterWorktree",
+    "ExitWorktree",
+    "Glob",
+    "Grep",
+    "ListAgents",
+    "NotebookEdit",
+    "Read",
+    "RemoteTrigger",
+    "ReportFindings",
+    "ScheduleWakeup",
+    "SendMessage",
+    "Skill",
+    "TaskStop",
+    "ToolSearch",
+    "Workflow",
+    "Write"
+   ],
+   "model": "claude-sonnet-5-5",
+   "version": "2.1.286"
+  },
+  "compact": 0,
+  "tool_uses": [
+   "Read",
+   "Bash",
+   "Edit"
+  ],
+  "error": null,
+  "file_after": "final\n"
+ },
+ "compact": {
+  "results": [
+   {
+    "subtype": "error_max_budget_usd",
+    "is_error": true,
+    "turns": 6,
+    "cost": 2.0016642,
+    "stop_reason": "tool_use",
+    "terminal_reason": "budget_exhausted",
+    "usage": {
+     "input_tokens": 6,
+     "cache_creation_input_tokens": 122230,
+     "cache_read_input_tokens": 73520,
+     "output_tokens": 355,
+     "output_tokens_details": {
+      "thinking_tokens": 47
+     },
+     "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+     },
+     "service_tier": "standard",
+     "cache_creation": {
+      "ephemeral_1h_input_tokens": 122230,
+      "ephemeral_5m_input_tokens": 0
+     },
+     "inference_geo": "not_available",
+     "iterations": [],
+     "speed": "standard",
+     "fallback_credit": null
+    },
+    "model_usage": {
+     "claude-sonnet-5-5": {
+      "inputTokens": 50916,
+      "outputTokens": 2382,
+      "cacheReadInputTokens": 443956,
+      "cacheCreationInputTokens": 447574,
+      "webSearchRequests": 0,
+      "costUSD": 2.0016642,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "thinkingTokens": 47,
+      "canonicalModel": "claude-sonnet-5-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+     }
+    },
+    "denials": [],
+    "result_chars": 0,
+    "errors": [
+     "Reached maximum budget ($2)"
+    ],
+    "origin": null,
+    "text": ""
+   }
+  ],
+  "init": {
+   "tools": [
+    "Read"
+   ],
+   "model": "claude-sonnet-5-5",
+   "version": "2.1.286"
+  },
+  "compact": 2,
+  "tool_uses": [
+   "Read",
+   "Read",
+   "Read",
+   "Read"
+  ],
+  "error": "ResultError: Claude Code returned an error result: Reached maximum budget ($2) (exit code: 1)",
+  "precompact_fired": [
+   "auto",
+   "auto"
+  ]
+ }
+}

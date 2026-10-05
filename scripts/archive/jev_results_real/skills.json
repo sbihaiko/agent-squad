@@ -1,0 +1,612 @@
+{
+ "n_rows": 311,
+ "dropped_not_in_roster": 72,
+ "errors": 0,
+ "counts": {
+  "S0": 120,
+  "S1": 83,
+  "S2": 108
+ },
+ "S1": {
+  "n": 83,
+  "jev_top1": 0.301,
+  "jev_ci": [
+   0.213,
+   0.407
+  ],
+  "base_top1": 0.361,
+  "base_ci": [
+   0.266,
+   0.469
+  ],
+  "paired_diff_jev_minus_base": -0.06,
+  "paired_diff_ci": [
+   -0.145,
+   0.024
+  ],
+  "curve": [
+   {
+    "t": 0.0,
+    "covered": 83,
+    "coverage": 1.0,
+    "precision": 0.301,
+    "precision_ci": [
+     0.213,
+     0.407
+    ]
+   },
+   {
+    "t": 0.3,
+    "covered": 74,
+    "coverage": 0.892,
+    "precision": 0.311,
+    "precision_ci": [
+     0.217,
+     0.423
+    ]
+   },
+   {
+    "t": 0.5,
+    "covered": 44,
+    "coverage": 0.53,
+    "precision": 0.364,
+    "precision_ci": [
+     0.238,
+     0.511
+    ]
+   },
+   {
+    "t": 0.6,
+    "covered": 38,
+    "coverage": 0.458,
+    "precision": 0.395,
+    "precision_ci": [
+     0.256,
+     0.553
+    ]
+   },
+   {
+    "t": 0.7,
+    "covered": 30,
+    "coverage": 0.361,
+    "precision": 0.433,
+    "precision_ci": [
+     0.274,
+     0.608
+    ]
+   },
+   {
+    "t": 0.8,
+    "covered": 23,
+    "coverage": 0.277,
+    "precision": 0.522,
+    "precision_ci": [
+     0.33,
+     0.708
+    ]
+   },
+   {
+    "t": 0.9,
+    "covered": 17,
+    "coverage": 0.205,
+    "precision": 0.471,
+    "precision_ci": [
+     0.262,
+     0.69
+    ]
+   },
+   {
+    "t": 0.95,
+    "covered": 11,
+    "coverage": 0.133,
+    "precision": 0.364,
+    "precision_ci": [
+     0.152,
+     0.646
+    ]
+   }
+  ],
+  "ece": [
+   0.291,
+   [
+    {
+     "bin": "0.0-0.2",
+     "n": 2,
+     "mean_conf": 0.19,
+     "accuracy": 0.0
+    },
+    {
+     "bin": "0.2-0.4",
+     "n": 22,
+     "mean_conf": 0.305,
+     "accuracy": 0.227
+    },
+    {
+     "bin": "0.4-0.6",
+     "n": 21,
+     "mean_conf": 0.485,
+     "accuracy": 0.238
+    },
+    {
+     "bin": "0.6-0.8",
+     "n": 15,
+     "mean_conf": 0.687,
+     "accuracy": 0.2
+    },
+    {
+     "bin": "0.8-1.0",
+     "n": 23,
+     "mean_conf": 0.938,
+     "accuracy": 0.522
+    }
+   ]
+  ]
+ },
+ "S2": {
+  "n": 108,
+  "jev_top1": 0.417,
+  "jev_ci": [
+   0.328,
+   0.511
+  ],
+  "base_top1": 0.37,
+  "base_ci": [
+   0.285,
+   0.464
+  ],
+  "paired_diff_jev_minus_base": 0.046,
+  "paired_diff_ci": [
+   -0.019,
+   0.111
+  ],
+  "curve": [
+   {
+    "t": 0.0,
+    "covered": 108,
+    "coverage": 1.0,
+    "precision": 0.417,
+    "precision_ci": [
+     0.328,
+     0.511
+    ]
+   },
+   {
+    "t": 0.3,
+    "covered": 103,
+    "coverage": 0.954,
+    "precision": 0.427,
+    "precision_ci": [
+     0.336,
+     0.524
+    ]
+   },
+   {
+    "t": 0.5,
+    "covered": 79,
+    "coverage": 0.731,
+    "precision": 0.494,
+    "precision_ci": [
+     0.386,
+     0.602
+    ]
+   },
+   {
+    "t": 0.6,
+    "covered": 62,
+    "coverage": 0.574,
+    "precision": 0.565,
+    "precision_ci": [
+     0.441,
+     0.681
+    ]
+   },
+   {
+    "t": 0.7,
+    "covered": 47,
+    "coverage": 0.435,
+    "precision": 0.66,
+    "precision_ci": [
+     0.517,
+     0.778
+    ]
+   },
+   {
+    "t": 0.8,
+    "covered": 34,
+    "coverage": 0.315,
+    "precision": 0.735,
+    "precision_ci": [
+     0.569,
+     0.854
+    ]
+   },
+   {
+    "t": 0.9,
+    "covered": 27,
+    "coverage": 0.25,
+    "precision": 0.852,
+    "precision_ci": [
+     0.675,
+     0.941
+    ]
+   },
+   {
+    "t": 0.95,
+    "covered": 18,
+    "coverage": 0.167,
+    "precision": 0.944,
+    "precision_ci": [
+     0.742,
+     0.99
+    ]
+   }
+  ],
+  "ece": [
+   0.24,
+   [
+    {
+     "bin": "0.2-0.4",
+     "n": 19,
+     "mean_conf": 0.321,
+     "accuracy": 0.158
+    },
+    {
+     "bin": "0.4-0.6",
+     "n": 27,
+     "mean_conf": 0.5,
+     "accuracy": 0.259
+    },
+    {
+     "bin": "0.6-0.8",
+     "n": 28,
+     "mean_conf": 0.701,
+     "accuracy": 0.357
+    },
+    {
+     "bin": "0.8-1.0",
+     "n": 34,
+     "mean_conf": 0.933,
+     "accuracy": 0.735
+    }
+   ]
+  ]
+ },
+ "S1+S2": {
+  "n": 191,
+  "jev_top1": 0.366,
+  "jev_ci": [
+   0.301,
+   0.437
+  ],
+  "base_top1": 0.366,
+  "base_ci": [
+   0.301,
+   0.437
+  ],
+  "paired_diff_jev_minus_base": 0.0,
+  "paired_diff_ci": [
+   -0.052,
+   0.052
+  ],
+  "curve": [
+   {
+    "t": 0.0,
+    "covered": 191,
+    "coverage": 1.0,
+    "precision": 0.366,
+    "precision_ci": [
+     0.301,
+     0.437
+    ]
+   },
+   {
+    "t": 0.3,
+    "covered": 177,
+    "coverage": 0.927,
+    "precision": 0.379,
+    "precision_ci": [
+     0.31,
+     0.452
+    ]
+   },
+   {
+    "t": 0.5,
+    "covered": 123,
+    "coverage": 0.644,
+    "precision": 0.447,
+    "precision_ci": [
+     0.362,
+     0.535
+    ]
+   },
+   {
+    "t": 0.6,
+    "covered": 100,
+    "coverage": 0.524,
+    "precision": 0.5,
+    "precision_ci": [
+     0.404,
+     0.596
+    ]
+   },
+   {
+    "t": 0.7,
+    "covered": 77,
+    "coverage": 0.403,
+    "precision": 0.571,
+    "precision_ci": [
+     0.46,
+     0.676
+    ]
+   },
+   {
+    "t": 0.8,
+    "covered": 57,
+    "coverage": 0.298,
+    "precision": 0.649,
+    "precision_ci": [
+     0.519,
+     0.76
+    ]
+   },
+   {
+    "t": 0.9,
+    "covered": 44,
+    "coverage": 0.23,
+    "precision": 0.705,
+    "precision_ci": [
+     0.558,
+     0.818
+    ]
+   },
+   {
+    "t": 0.95,
+    "covered": 29,
+    "coverage": 0.152,
+    "precision": 0.724,
+    "precision_ci": [
+     0.543,
+     0.853
+    ]
+   }
+  ],
+  "ece": [
+   0.262,
+   [
+    {
+     "bin": "0.0-0.2",
+     "n": 2,
+     "mean_conf": 0.19,
+     "accuracy": 0.0
+    },
+    {
+     "bin": "0.2-0.4",
+     "n": 41,
+     "mean_conf": 0.313,
+     "accuracy": 0.195
+    },
+    {
+     "bin": "0.4-0.6",
+     "n": 48,
+     "mean_conf": 0.494,
+     "accuracy": 0.25
+    },
+    {
+     "bin": "0.6-0.8",
+     "n": 43,
+     "mean_conf": 0.697,
+     "accuracy": 0.302
+    },
+    {
+     "bin": "0.8-1.0",
+     "n": 57,
+     "mean_conf": 0.935,
+     "accuracy": 0.649
+    }
+   ]
+  ]
+ },
+ "fit_test": {
+  "fit_n": 133,
+  "test_n": 58,
+  "fit_span": [
+   "2026-08-17",
+   "2026-09-13"
+  ],
+  "test_span": [
+   "2026-09-13",
+   "2026-09-30"
+  ],
+  "target_95": {
+   "threshold_on_fit": null
+  },
+  "target_90": {
+   "threshold_on_fit": null
+  },
+  "test_top1": {
+   "jev": 0.431,
+   "base": 0.431
+  }
+ },
+ "S0_false_pick": [
+  {
+   "t": 0.3,
+   "picked_skill": 47,
+   "n": 120
+  },
+  {
+   "t": 0.5,
+   "picked_skill": 33,
+   "n": 120
+  },
+  {
+   "t": 0.6,
+   "picked_skill": 18,
+   "n": 120
+  },
+  {
+   "t": 0.7,
+   "picked_skill": 9,
+   "n": 120
+  },
+  {
+   "t": 0.8,
+   "picked_skill": 4,
+   "n": 120
+  },
+  {
+   "t": 0.9,
+   "picked_skill": 1,
+   "n": 120
+  },
+  {
+   "t": 0.95,
+   "picked_skill": 1,
+   "n": 120
+  }
+ ],
+ "S0_base_non_none": 24,
+ "S0_jev_non_none_any_conf": 55,
+ "per_label": {
+  "handoff": {
+   "n": 4,
+   "jev": 0,
+   "base": 2
+  },
+  "diagnosing-bugs": {
+   "n": 11,
+   "jev": 6,
+   "base": 7
+  },
+  "ego-browser": {
+   "n": 50,
+   "jev": 20,
+   "base": 14
+  },
+  "find-skills": {
+   "n": 12,
+   "jev": 1,
+   "base": 0
+  },
+  "tdd": {
+   "n": 3,
+   "jev": 0,
+   "base": 0
+  },
+  "pricing": {
+   "n": 2,
+   "jev": 1,
+   "base": 1
+  },
+  "grilling": {
+   "n": 11,
+   "jev": 0,
+   "base": 0
+  },
+  "wayfinder": {
+   "n": 4,
+   "jev": 0,
+   "base": 1
+  },
+  "improve-codebase-architecture": {
+   "n": 3,
+   "jev": 1,
+   "base": 0
+  },
+  "to-spec": {
+   "n": 7,
+   "jev": 1,
+   "base": 2
+  },
+  "code-review": {
+   "n": 9,
+   "jev": 2,
+   "base": 3
+  },
+  "write-like-me": {
+   "n": 8,
+   "jev": 7,
+   "base": 8
+  },
+  "grill-with-docs": {
+   "n": 8,
+   "jev": 1,
+   "base": 1
+  },
+  "proposal-writer": {
+   "n": 2,
+   "jev": 2,
+   "base": 2
+  },
+  "research": {
+   "n": 15,
+   "jev": 8,
+   "base": 9
+  },
+  "frontend-design": {
+   "n": 2,
+   "jev": 1,
+   "base": 0
+  },
+  "ux-writing": {
+   "n": 1,
+   "jev": 1,
+   "base": 1
+  },
+  "implement": {
+   "n": 8,
+   "jev": 2,
+   "base": 3
+  },
+  "domain-modeling": {
+   "n": 11,
+   "jev": 8,
+   "base": 8
+  },
+  "copywriting": {
+   "n": 1,
+   "jev": 0,
+   "base": 0
+  },
+  "systematic-debugging": {
+   "n": 1,
+   "jev": 0,
+   "base": 0
+  },
+  "grill-me": {
+   "n": 1,
+   "jev": 0,
+   "base": 0
+  },
+  "to-tickets": {
+   "n": 6,
+   "jev": 2,
+   "base": 3
+  },
+  "understand": {
+   "n": 1,
+   "jev": 0,
+   "base": 0
+  },
+  "writing-for-agents": {
+   "n": 5,
+   "jev": 5,
+   "base": 3
+  },
+  "triage": {
+   "n": 2,
+   "jev": 0,
+   "base": 0
+  },
+  "prototype": {
+   "n": 1,
+   "jev": 1,
+   "base": 1
+  },
+  "setup-matt-pocock-skills": {
+   "n": 2,
+   "jev": 0,
+   "base": 1
+  }
+ }
+}

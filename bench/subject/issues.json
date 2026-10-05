@@ -1,0 +1,186 @@
+[
+  {
+    "issue": 1,
+    "title": "Foreign-currency order totals",
+    "original_id": "M1",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_01.py"
+  },
+  {
+    "issue": 2,
+    "title": "Tax-inclusive rates through the pipeline",
+    "original_id": "M2",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_02.py"
+  },
+  {
+    "issue": 3,
+    "title": "Product lifecycle gates the sale",
+    "original_id": "M3",
+    "blocked_by": [
+      11
+    ],
+    "acceptance_test": "acceptance/test_issue_03.py"
+  },
+  {
+    "issue": 4,
+    "title": "The credit limit is enforced where the charge happens",
+    "original_id": "M4",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_04.py"
+  },
+  {
+    "issue": 5,
+    "title": "Coupon stacking reaches the engine",
+    "original_id": "M5",
+    "blocked_by": [
+      11
+    ],
+    "acceptance_test": "acceptance/test_issue_05.py"
+  },
+  {
+    "issue": 6,
+    "title": "Why a discount applied is auditable end to end",
+    "original_id": "M6",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_06.py"
+  },
+  {
+    "issue": 7,
+    "title": "Rounding policy is a property of the jurisdiction",
+    "original_id": "M7",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_07.py"
+  },
+  {
+    "issue": 8,
+    "title": "A cart can be priced as of a date",
+    "original_id": "M8",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_08.py"
+  },
+  {
+    "issue": 9,
+    "title": "A customer's addresses decide the tax scopes",
+    "original_id": "M9",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_09.py"
+  },
+  {
+    "issue": 10,
+    "title": "Variants roll up into one sellable family",
+    "original_id": "M10",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_10.py"
+  },
+  {
+    "issue": 11,
+    "title": "One row parser for every bulk load",
+    "original_id": "R1",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_11.py"
+  },
+  {
+    "issue": 12,
+    "title": "\"Active\" has one definition",
+    "original_id": "R2",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_12.py"
+  },
+  {
+    "issue": 13,
+    "title": "The rule combinators share one component reader",
+    "original_id": "R3",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_13.py"
+  },
+  {
+    "issue": 14,
+    "title": "Price history folds into the catalog",
+    "original_id": "R4",
+    "blocked_by": [
+      8
+    ],
+    "acceptance_test": "acceptance/test_issue_14.py"
+  },
+  {
+    "issue": 15,
+    "title": "One audit stamp, and the override reason becomes readable",
+    "original_id": "R5",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_15.py"
+  },
+  {
+    "issue": 16,
+    "title": "Tax unpacking has one arity checker",
+    "original_id": "R6",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_16.py"
+  },
+  {
+    "issue": 17,
+    "title": "An empty collection stops being USD by accident",
+    "original_id": "R7",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_17.py"
+  },
+  {
+    "issue": 18,
+    "title": "The report's five folds become one",
+    "original_id": "R8",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_18.py"
+  },
+  {
+    "issue": 19,
+    "title": "A restock can be requested",
+    "original_id": "K1",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_19.py"
+  },
+  {
+    "issue": 20,
+    "title": "A receipt closes a restock request",
+    "original_id": "K2",
+    "blocked_by": [
+      19
+    ],
+    "acceptance_test": "acceptance/test_issue_20.py"
+  },
+  {
+    "issue": 21,
+    "title": "Restock lead times are measurable",
+    "original_id": "K3",
+    "blocked_by": [
+      20,
+      19
+    ],
+    "acceptance_test": "acceptance/test_issue_21.py"
+  },
+  {
+    "issue": 22,
+    "title": "An order ships in parts",
+    "original_id": "K4",
+    "blocked_by": [],
+    "acceptance_test": "acceptance/test_issue_22.py"
+  },
+  {
+    "issue": 23,
+    "title": "Tax follows the shipment",
+    "original_id": "K5",
+    "blocked_by": [
+      22
+    ],
+    "acceptance_test": "acceptance/test_issue_23.py"
+  },
+  {
+    "issue": 24,
+    "title": "Dispatch performance is reportable",
+    "original_id": "K6",
+    "blocked_by": [
+      23,
+      22
+    ],
+    "acceptance_test": "acceptance/test_issue_24.py"
+  }
+]

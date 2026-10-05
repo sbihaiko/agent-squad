@@ -1,0 +1,826 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mmctech-ai/agent-squad/docs/design/graph.schema.json",
+  "title": "agent-squad graph document",
+  "description": "One flat JSON document. Edges are name references. Rules: ADR-0100 to ADR-0111. Rules that a schema cannot express live in check_graph.py.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "run",
+    "facts",
+    "gates",
+    "root",
+    "nodes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "run": {
+      "$ref": "#/$defs/run_block"
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/gate_def"
+      }
+    },
+    "root": {
+      "$ref": "#/$defs/name"
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/agent"
+          },
+          {
+            "$ref": "#/$defs/gate"
+          },
+          {
+            "$ref": "#/$defs/wait"
+          },
+          {
+            "$ref": "#/$defs/loop"
+          },
+          {
+            "$ref": "#/$defs/each"
+          },
+          {
+            "$ref": "#/$defs/action"
+          },
+          {
+            "$ref": "#/$defs/dispatch"
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "range_int": {
+      "type": "object",
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "range_usd": {
+      "type": "object",
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "max": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "budget": {
+      "description": "Turn cap and spend cap, each with a minimum and a maximum (ADR-0100 rule 5). A proposal shrinks toward min and never raises max (ADR-0103).",
+      "type": "object",
+      "required": [
+        "turns",
+        "spend"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "turns": {
+          "$ref": "#/$defs/range_int"
+        },
+        "spend": {
+          "$ref": "#/$defs/range_usd"
+        }
+      }
+    },
+    "run_block": {
+      "description": "Run-level defaults. An engine option may only lower them (ADR-0106 rules 7, 9).",
+      "type": "object",
+      "required": [
+        "deadline",
+        "max_parallel",
+        "spend_cap"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "deadline": {
+          "description": "Seconds for the whole run, or null for no run deadline (owner ruling 2026-09-30: long runs may take days, the per-call deadline is the cap).",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/seconds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "spend_cap": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "fact": {
+      "description": "A registered fact: only code produces it (ADR-0104 rule 1). The families outcome:<node>, run_spend, run_spend_remaining are built in.",
+      "type": "object",
+      "required": [
+        "name",
+        "type",
+        "instrument",
+        "source_kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "type": {
+          "enum": [
+            "bool",
+            "int",
+            "number",
+            "enum"
+          ]
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "instrument": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_kind": {
+          "enum": [
+            "artifact",
+            "run_record",
+            "target"
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "type": {
+            "const": "enum"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "values"
+        ]
+      }
+    },
+    "gate_def": {
+      "type": "object",
+      "required": [
+        "id",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "when": {
+      "description": "One predicate over a registered fact, read on every entry and never bypassed (ADR-0101 rules 4, 5).",
+      "type": "object",
+      "required": [
+        "fact",
+        "op",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "fact": {
+          "type": "string",
+          "pattern": "^([a-z][a-z0-9_]*|outcome:[a-z][a-z0-9_]*)$"
+        },
+        "op": {
+          "enum": [
+            "eq",
+            "ne",
+            "gt",
+            "gte",
+            "lt",
+            "lte"
+          ]
+        },
+        "value": {
+          "type": [
+            "boolean",
+            "integer",
+            "number",
+            "string"
+          ]
+        }
+      }
+    },
+    "next_word": {
+      "enum": [
+        "repeat",
+        "continue",
+        "exit:pass",
+        "exit:fail",
+        "exit:deadline",
+        "exit:needs-human"
+      ]
+    },
+    "next": {
+      "description": "Reserved words only, per outcome (ADR-0115).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pass": {
+          "$ref": "#/$defs/next_word"
+        },
+        "fail": {
+          "$ref": "#/$defs/next_word"
+        },
+        "deadline": {
+          "$ref": "#/$defs/next_word"
+        },
+        "needs-human": {
+          "$ref": "#/$defs/next_word"
+        }
+      }
+    },
+    "adapt": {
+      "description": "The node's own range for run-time proposals (ADR-0103 rule 3, ADR-0104 rule 2). No block means the node is not adaptable.",
+      "type": "object",
+      "required": [
+        "kinds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "set_model",
+              "set_effort",
+              "narrow_tools",
+              "shrink_turns",
+              "shrink_spend",
+              "shrink_loop_max"
+            ]
+          }
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "efforts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sees": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "model",
+        "tools",
+        "budget"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "agent"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "deadline": {
+          "$ref": "#/$defs/seconds"
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "output_key": {
+          "type": "string"
+        },
+        "may_propose": {
+          "type": "boolean"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "next": {
+          "$ref": "#/$defs/next"
+        },
+        "adapt": {
+          "$ref": "#/$defs/adapt"
+        },
+        "skill": {
+          "type": "string",
+          "description": "A skill the entry agent runs through the /name prefix (ADR-0113 rule 6)."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "The role text the model reads before its inputs. Authored data: the graph hash covers it."
+        },
+        "may_spawn": {
+          "type": "boolean",
+          "description": "Valid only on the entry agent of a dispatch node (ADR-0113 rule 2). Its output carries a spawns list."
+        },
+        "reads": {
+          "$ref": "#/$defs/paths"
+        },
+        "writes": {
+          "$ref": "#/$defs/paths"
+        }
+      }
+    },
+    "gate": {
+      "description": "A deterministic check. No model, no when, no deadline, no adapt. Its fail is repeat or exit:fail and never names a node (ADR-0100, ADR-0101).",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "check",
+        "params"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "gate"
+        },
+        "check": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object"
+        },
+        "next": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "fail": {
+              "enum": [
+                "repeat",
+                "exit:fail"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "wait": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "owner",
+        "deadline",
+        "default"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "wait"
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "deadline": {
+          "$ref": "#/$defs/seconds"
+        },
+        "default": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "next": {
+          "$ref": "#/$defs/next"
+        }
+      }
+    },
+    "loop": {
+      "description": "Repeats its ordered children up to max. Max may only shrink at run time. Carries no deadline (ADR-0102 rule 3).",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "max",
+        "children"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "loop"
+        },
+        "max": {
+          "type": "object",
+          "required": [
+            "value",
+            "min"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "min": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "next": {
+          "$ref": "#/$defs/next"
+        },
+        "adapt": {
+          "$ref": "#/$defs/adapt"
+        },
+        "stall_after": {
+          "description": "Opt-in: exit `fail` with reason waves_stalled once this many consecutive entries land nothing, before `max` is ever reached (#93). An entry that lands at least one child resets the count. Omit for the old count-only behavior.",
+          "type": "object",
+          "required": [
+            "count"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "by": {
+              "description": "The signal a wave counts as progress. Only \"land\" exists today.",
+              "const": "land"
+            }
+          }
+        },
+        "max_by": {
+          "description": "Opt-in: make `max` the ceiling of one task's attempts, not of the loop's entries (#98). Each entry adds one attempt to every `task` key its accepted children name; a task that reaches `max` attempts ends the loop `fail` with reason task_max_exhausted, and a loop that advances to a new task never spends the ceiling. An entry that names no task key adds one unnamed attempt. Omit for the old count-every-entry behavior.",
+          "const": "task"
+        }
+      }
+    },
+    "each": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "items",
+        "mode",
+        "join",
+        "children",
+        "deadline"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "each"
+        },
+        "items": {
+          "$ref": "#/$defs/name"
+        },
+        "mode": {
+          "enum": [
+            "parallel",
+            "sequence"
+          ]
+        },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "join": {
+          "enum": [
+            "all",
+            "first_failure"
+          ]
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "deadline": {
+          "$ref": "#/$defs/seconds"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "next": {
+          "$ref": "#/$defs/next"
+        }
+      }
+    },
+    "action": {
+      "description": "Deterministic code with declared side effects. No model, no spend (ADR-0101).",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "effect"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "action"
+        },
+        "effect": {
+          "enum": [
+            "worktree_create",
+            "worktree_revert",
+            "commit",
+            "merge_land"
+          ]
+        },
+        "workspace": {
+          "type": "string"
+        },
+        "deadline": {
+          "$ref": "#/$defs/seconds"
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "next": {
+          "$ref": "#/$defs/next"
+        },
+        "reads": {
+          "$ref": "#/$defs/paths"
+        },
+        "writes": {
+          "$ref": "#/$defs/paths"
+        }
+      }
+    },
+    "dispatch": {
+      "description": "An agent requests children inside an author-fixed envelope. Code validates each request (ADR-0113). A model never widens a field here.",
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "entry",
+        "max_depth",
+        "max_children",
+        "max_parallel",
+        "deadline",
+        "join",
+        "allow",
+        "budget",
+        "checks"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "kind": {
+          "const": "dispatch"
+        },
+        "entry": {
+          "$ref": "#/$defs/name"
+        },
+        "max_depth": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_children": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_parallel": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "deadline": {
+          "$ref": "#/$defs/seconds"
+        },
+        "join": {
+          "enum": [
+            "all",
+            "first_failure"
+          ]
+        },
+        "allow": {
+          "type": "object",
+          "required": [
+            "models",
+            "efforts",
+            "tools",
+            "skills",
+            "workspaces"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "models": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "efforts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "skills": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              }
+            },
+            "workspaces": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        },
+        "budget": {
+          "$ref": "#/$defs/budget"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/name"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "when": {
+          "$ref": "#/$defs/when"
+        },
+        "next": {
+          "$ref": "#/$defs/next"
+        }
+      }
+    },
+    "paths": {
+      "description": "Repo file paths a node declares (ADR-0110 rule 2). A path in one node's `reads` is never in another node's `writes`.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agent-squad-run-dashboard</title>
+<style>
+/*CSS*/</style>
+</head>
+<body>
+<header id="topbar">
+  <button id="b-panel" type="button" aria-expanded="false" aria-controls="left" title="Show or hide the side panel (key [)">Panel</button>
+  <span id="ident"></span>
+  <button id="vchip" type="button" hidden title="The run's verdict. Click to open the details."></button>
+  <button id="chip" type="button" title="Copy the full graph hash" disabled>no graph</button><span id="rechash"></span>
+  <span class="grow"></span>
+  <div id="modesw" role="group" aria-label="Mode"><button id="m-run" type="button" title="Read the run. Nothing here changes a file.">View</button><button id="m-edit" type="button" title="Edit the graph: add, remove, rename, save">Edit</button></div>
+  <details id="fmenu"><summary title="Open and save files">File</summary>
+    <div class="drop">
+      <label class="btn" id="l-open" title="Open a graph file (a JSON graph document)">Open graph<input id="f-graph" type="file" accept=".json,application/json"></label>
+      <button id="b-example" title="Load the five-phase example graph">Load the five-phase example</button>
+      <button id="b-folder" title="Give the page read access to one run folder. The page remembers it.">Connect run folder</button>
+      <label class="btn" id="l-folder" style="display:none" title="Choose the run folder (this browser has no folder picker)">Connect run folder<input id="f-folder" type="file" webkitdirectory></label>
+      <label class="btn" id="l-record" title="Open a run record file, read-only. It never changes the record.">Open run record (read-only)<input id="f-record" type="file" accept=".jsonl,.json,text/plain"></label>
+      <label class="btn" id="l-open-layout" title="Open the layout file that holds the node positions">Open layout<input id="f-layout" type="file" accept=".json,application/json"></label>
+      <div class="sep edit-only">Save</div>
+      <button class="edit-only" id="b-save" title="In place where the browser gives a file handle, a download elsewhere">Save graph</button>
+      <button class="edit-only" id="b-export" title="A download of a copy of the graph, in every browser">Export graph</button>
+      <button class="edit-only" id="b-save-layout" title="In place for a layout opened with the picker, a download otherwise">Save layout</button>
+      <button class="edit-only" id="b-layout" title="A download of a copy of the layout, in every browser">Export layout</button>
+      <span class="edit-only note" id="mode" title="How Save graph writes the file"></span>
+    </div>
+  </details>
+  <button class="edit-only" id="b-review" title="Review the graph before a run: hash, errors, caps, a diff, and the command to type. The page never starts a run." aria-expanded="false">Review</button>
+  <button id="b-help" title="Show the controls and the color legend (key ?)" aria-expanded="false" aria-label="Help">?</button>
+</header>
+<div id="left">
+  <div id="stop" hidden></div>
+  <div id="offer" hidden></div>
+  <div id="review" hidden></div>
+  <div id="side"></div>
+</div>
+<div id="graph"><div id="recbad" role="alert" hidden></div><div id="progress" role="status" aria-label="Issue progress"></div><div id="mapbox">
+  <svg id="map" xmlns="http://www.w3.org/2000/svg">
+    <defs><clipPath id="card-clip"><rect width="194" height="60"/></clipPath><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs>
+    <g id="vp"><g id="edges"></g><g id="cards"></g></g>
+  </svg>
+  <div class="tools edit-only" id="addbar">
+    <select id="s-kind" title="Kind of the new node"></select>
+    <select id="s-check" title="Registered check for the new gate" hidden></select>
+    <button id="b-add" title="Add a node under the selected loop or each, else under the root loop">Add node</button>
+    <button id="b-remove" title="Remove the selected node (Delete key)">Remove node</button>
+    <button id="b-unlink" title="Remove the selected link (Delete key)">Remove link</button>
+    <button id="b-undo" title="Undo the last edit (Ctrl or Cmd + Z)">Undo</button>
+    <button id="b-redo" title="Redo (Ctrl or Cmd + Shift + Z)">Redo</button>
+  </div>
+  <div id="view"><button id="b-out" title="Zoom out">&minus;</button><span id="zoom">100%</span><button id="b-in" title="Zoom in">+</button><button id="b-fit" title="Fit the graph to the screen">Fit</button></div>
+  <datalist id="dl-models"></datalist><datalist id="dl-efforts"></datalist><datalist id="dl-skills"></datalist>
+  <div id="replay"><button id="r-start" title="First event">|&lt;</button><button id="r-back" title="One event back (Left arrow)">&lt;</button><input id="r-range" type="range" min="1" max="1" step="1" value="1" title="Replay cursor: a position in the run record"><button id="r-fwd" title="One event forward (Right arrow)">&gt;</button><button id="r-end" title="Last event: a live run keeps following from here">&gt;|</button><span id="r-pos"></span></div>
+  <div id="footer"><div id="hint">Press ? or Help for the controls</div><div id="legend"></div></div>
+  <div id="help" hidden><div class="box"><h2>Controls</h2><table id="help-rows"></table><h2>Buttons</h2><table id="help-btns"></table><h2>Colors</h2><div id="help-legend"></div><div class="row"><button id="b-help-close" title="Close the help (Esc)">Close</button></div></div></div>
+  <div id="menu"></div>
+</div>
+<div id="totals" role="status" aria-label="Run totals"></div>
+</div>
+<div id="status" role="status" title="Click to dismiss"></div>
+<script>const ENGINE = /*ENGINE*/;</script>
+<script>const EXAMPLE = /*EXAMPLE*/;</script>
+<script>const SERVED = /*SERVED*/;</script>
+<script>/*CORE*/</script>
+<script>/*PAGE*/</script>
+</body>
+</html>
+

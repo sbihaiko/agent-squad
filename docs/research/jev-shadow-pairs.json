@@ -1,0 +1,2450 @@
+[
+ {
+  "run": "subject-02-20260930-212230",
+  "issue": 2,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.32,
+     "top": 0.34,
+     "wanted": 0.4
+    },
+    "ms": 423,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/02-tax-inclusive-rates-through-the-pipeline.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5138
+    },
+    "ms": 368,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 307,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.66,
+     "wanted": 0.92
+    },
+    "ms": 346,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-02-20260930-212851",
+  "issue": 2,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.32,
+     "top": 0.35000000000000003,
+     "wanted": 0.39
+    },
+    "ms": 450,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/02-tax-inclusive-rates-through-the-pipeline.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5138
+    },
+    "ms": 337,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 324,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.66,
+     "wanted": 0.91
+    },
+    "ms": 284,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-03-20260930-212404",
+  "issue": 3,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.29,
+     "top": 0.31,
+     "wanted": 0.38
+    },
+    "ms": 315,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/03-product-lifecycle-gates-the-sale.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 3447
+    },
+    "ms": 291,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.9,
+     "chars": 1223
+    },
+    "ms": 29145,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.59,
+     "top": 0.61,
+     "wanted": 0.91
+    },
+    "ms": 392,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-03-20260930-212851",
+  "issue": 3,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.3,
+     "top": 0.32,
+     "wanted": 0.38
+    },
+    "ms": 395,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/03-product-lifecycle-gates-the-sale.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 3447
+    },
+    "ms": 326,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 314,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.57,
+     "top": 0.59,
+     "wanted": 0.91
+    },
+    "ms": 291,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-04-20260930-212404",
+  "issue": 4,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "code-review",
+     "confidence": 0.27,
+     "top": 0.29000000000000004,
+     "wanted": 0.45
+    },
+    "ms": 322,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/04-the-credit-limit-is-enforced-where-the-charge-happens.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.05,
+     "chars": 2860
+    },
+    "ms": 316,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 28058,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.66,
+     "wanted": 0.91
+    },
+    "ms": 319,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-04-20260930-212851",
+  "issue": 4,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "code-review",
+     "confidence": 0.25,
+     "top": 0.28,
+     "wanted": 0.39
+    },
+    "ms": 429,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/04-the-credit-limit-is-enforced-where-the-charge-happens.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.05,
+     "chars": 2860
+    },
+    "ms": 303,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.87,
+     "chars": 1223
+    },
+    "ms": 351,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.59,
+     "top": 0.61,
+     "wanted": 0.9
+    },
+    "ms": 284,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-05-20260930-212404",
+  "issue": 5,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.28,
+     "top": 0.31,
+     "wanted": 0.38
+    },
+    "ms": 349,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/05-coupon-stacking-reaches-the-engine.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5518
+    },
+    "ms": 457,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 313,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.58,
+     "top": 0.6,
+     "wanted": 0.93
+    },
+    "ms": 18701,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-05-20260930-212851",
+  "issue": 5,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.3,
+     "top": 0.32,
+     "wanted": 0.39
+    },
+    "ms": 400,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/05-coupon-stacking-reaches-the-engine.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 5518
+    },
+    "ms": 311,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 335,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.66,
+     "wanted": 0.93
+    },
+    "ms": 437,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-06-20260930-212404",
+  "issue": 6,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "code-review",
+     "confidence": 0.26,
+     "top": 0.28,
+     "wanted": 0.47
+    },
+    "ms": 347,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/06-why-a-discount-applied-is-auditable-end-to-end.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 4415
+    },
+    "ms": 314,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 312,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.63,
+     "top": 0.64,
+     "wanted": 0.92
+    },
+    "ms": 292,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-06-20260930-212948",
+  "issue": 6,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.25,
+     "top": 0.27,
+     "wanted": 0.49
+    },
+    "ms": 366,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/06-why-a-discount-applied-is-auditable-end-to-end.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 4415
+    },
+    "ms": 352,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 298,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.55,
+     "top": 0.56,
+     "wanted": 0.92
+    },
+    "ms": 305,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-07-20260930-212512",
+  "issue": 7,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.32,
+     "top": 0.34,
+     "wanted": 0.37
+    },
+    "ms": 325,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/07-rounding-policy-is-a-property-of-the-jurisdiction.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 5016
+    },
+    "ms": 311,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 278,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.63,
+     "top": 0.64,
+     "wanted": 0.89
+    },
+    "ms": 310,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-07-20260930-212950",
+  "issue": 7,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.31,
+     "top": 0.33,
+     "wanted": 0.35
+    },
+    "ms": 332,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/07-rounding-policy-is-a-property-of-the-jurisdiction.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 5016
+    },
+    "ms": 315,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 280,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.64,
+     "top": 0.66,
+     "wanted": 0.89
+    },
+    "ms": 330,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-08-20260930-212513",
+  "issue": 8,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.26,
+     "top": 0.28,
+     "wanted": 0.44
+    },
+    "ms": 374,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/08-a-cart-can-be-priced-as-of-a-date.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 4979
+    },
+    "ms": 326,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 278,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.68,
+     "top": 0.68,
+     "wanted": 0.93
+    },
+    "ms": 308,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-08-20260930-212958",
+  "issue": 8,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.24,
+     "top": 0.27,
+     "wanted": 0.44
+    },
+    "ms": 382,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/08-a-cart-can-be-priced-as-of-a-date.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 4979
+    },
+    "ms": 341,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 339,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.62,
+     "top": 0.64,
+     "wanted": 0.92
+    },
+    "ms": 338,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-09-20260930-212522",
+  "issue": 9,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.29,
+     "top": 0.32,
+     "wanted": 0.38
+    },
+    "ms": 331,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/09-a-customer-s-addresses-decide-the-tax-scopes.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5145
+    },
+    "ms": 314,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 362,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.55,
+     "top": 0.56,
+     "wanted": 0.92
+    },
+    "ms": 320,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-09-20260930-213008",
+  "issue": 9,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.38,
+     "top": 0.4,
+     "wanted": 0.38
+    },
+    "ms": 399,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/09-a-customer-s-addresses-decide-the-tax-scopes.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5145
+    },
+    "ms": 292,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 302,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.61,
+     "top": 0.62,
+     "wanted": 0.92
+    },
+    "ms": 353,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-10-20260930-212523",
+  "issue": 10,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.3,
+     "top": 0.33,
+     "wanted": 0.36
+    },
+    "ms": 292,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/10-variants-roll-up-into-one-sellable-family.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 4648
+    },
+    "ms": 325,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 322,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.62,
+     "top": 0.64,
+     "wanted": 0.91
+    },
+    "ms": 363,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-10-20260930-213052",
+  "issue": 10,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.31,
+     "top": 0.34,
+     "wanted": 0.37
+    },
+    "ms": 358,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/10-variants-roll-up-into-one-sellable-family.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 4648
+    },
+    "ms": 316,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 293,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.64,
+     "top": 0.65,
+     "wanted": 0.91
+    },
+    "ms": 312,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-11-20260930-212611",
+  "issue": 11,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.3,
+     "top": 0.32,
+     "wanted": 0.38
+    },
+    "ms": 366,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/11-one-row-parser-for-every-bulk-load.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 3454
+    },
+    "ms": 317,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 287,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.74,
+     "top": 0.75,
+     "wanted": 0.89
+    },
+    "ms": 21531,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-11-20260930-213053",
+  "issue": 11,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.26,
+     "top": 0.28,
+     "wanted": 0.35
+    },
+    "ms": 376,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/11-one-row-parser-for-every-bulk-load.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 3454
+    },
+    "ms": 387,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 301,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.66,
+     "top": 0.67,
+     "wanted": 0.9
+    },
+    "ms": 320,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-12-20260930-212623",
+  "issue": 12,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.31,
+     "top": 0.33,
+     "wanted": 0.37
+    },
+    "ms": 314,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/12-active-has-one-definition.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 2152
+    },
+    "ms": 296,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 308,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.66,
+     "wanted": 0.91
+    },
+    "ms": 331,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-12-20260930-213120",
+  "issue": 12,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.33,
+     "top": 0.36,
+     "wanted": 0.39
+    },
+    "ms": 321,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/12-active-has-one-definition.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 2152
+    },
+    "ms": 398,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 302,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.69,
+     "top": 0.71,
+     "wanted": 0.9
+    },
+    "ms": 330,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-13-20260930-212624",
+  "issue": 13,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.24,
+     "top": 0.27,
+     "wanted": 0.44
+    },
+    "ms": 306,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/13-the-rule-combinators-share-one-component-reader.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.03,
+     "chars": 3654
+    },
+    "ms": 283,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.9,
+     "chars": 1223
+    },
+    "ms": 312,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.63,
+     "top": 0.65,
+     "wanted": 0.91
+    },
+    "ms": 332,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-13-20260930-213137",
+  "issue": 13,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.23,
+     "top": 0.25,
+     "wanted": 0.4
+    },
+    "ms": 377,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/13-the-rule-combinators-share-one-component-reader.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 3654
+    },
+    "ms": 332,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 288,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.67,
+     "top": 0.68,
+     "wanted": 0.9
+    },
+    "ms": 314,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-15-20260930-212625",
+  "issue": 15,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.24,
+     "top": 0.27,
+     "wanted": 0.37
+    },
+    "ms": 372,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/15-one-audit-stamp-and-the-override-reason-becomes-readable.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.05,
+     "chars": 3527
+    },
+    "ms": 365,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 342,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.67,
+     "wanted": 0.9
+    },
+    "ms": 308,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-15-20260930-213155",
+  "issue": 15,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "code-review",
+     "confidence": 0.25,
+     "top": 0.28,
+     "wanted": 0.38
+    },
+    "ms": 552,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/15-one-audit-stamp-and-the-override-reason-becomes-readable.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.05,
+     "chars": 3527
+    },
+    "ms": 314,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.9,
+     "chars": 1223
+    },
+    "ms": 321,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.66,
+     "top": 0.68,
+     "wanted": 0.9
+    },
+    "ms": 354,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-16-20260930-212704",
+  "issue": 16,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.28,
+     "top": 0.3,
+     "wanted": 0.4
+    },
+    "ms": 355,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/16-tax-unpacking-has-one-arity-checker.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 2605
+    },
+    "ms": 295,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 358,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.67,
+     "wanted": 0.9
+    },
+    "ms": 310,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-16-20260930-213156",
+  "issue": 16,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.27,
+     "top": 0.29000000000000004,
+     "wanted": 0.41
+    },
+    "ms": 347,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/16-tax-unpacking-has-one-arity-checker.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 2605
+    },
+    "ms": 296,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 302,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.64,
+     "top": 0.65,
+     "wanted": 0.89
+    },
+    "ms": 320,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-17-20260930-212705",
+  "issue": 17,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.24,
+     "top": 0.26,
+     "wanted": 0.35
+    },
+    "ms": 315,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/17-an-empty-collection-stops-being-usd-by-accident.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.21,
+     "chars": 6066
+    },
+    "ms": 319,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 330,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.62,
+     "top": 0.64,
+     "wanted": 0.89
+    },
+    "ms": 358,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-17-20260930-213219",
+  "issue": 17,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.26,
+     "top": 0.29000000000000004,
+     "wanted": 0.33
+    },
+    "ms": 378,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/17-an-empty-collection-stops-being-usd-by-accident.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.2,
+     "chars": 6066
+    },
+    "ms": 318,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.88,
+     "chars": 1223
+    },
+    "ms": 298,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.65,
+     "top": 0.67,
+     "wanted": 0.9
+    },
+    "ms": 332,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-18-20260930-212726",
+  "issue": 18,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.26,
+     "top": 0.28,
+     "wanted": 0.39
+    },
+    "ms": 398,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/18-the-report-s-five-folds-become-one.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5230
+    },
+    "ms": 274,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.9,
+     "chars": 1223
+    },
+    "ms": 337,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.56,
+     "top": 0.58,
+     "wanted": 0.91
+    },
+    "ms": 336,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-18-20260930-213223",
+  "issue": 18,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.25,
+     "top": 0.28,
+     "wanted": 0.39
+    },
+    "ms": 354,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/18-the-report-s-five-folds-become-one.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 5230
+    },
+    "ms": 392,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.87,
+     "chars": 1223
+    },
+    "ms": 345,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.59,
+     "top": 0.61,
+     "wanted": 0.9
+    },
+    "ms": 290,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-19-20260930-212728",
+  "issue": 19,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.28,
+     "top": 0.3,
+     "wanted": 0.34
+    },
+    "ms": 357,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/19-a-restock-can-be-requested.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.37,
+     "chars": 5044
+    },
+    "ms": 336,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.9,
+     "chars": 1223
+    },
+    "ms": 283,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.61,
+     "top": 0.63,
+     "wanted": 0.9
+    },
+    "ms": 331,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-19-20260930-213254",
+  "issue": 19,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.25,
+     "top": 0.28,
+     "wanted": 0.36
+    },
+    "ms": 382,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/19-a-restock-can-be-requested.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.39,
+     "chars": 5044
+    },
+    "ms": 276,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 327,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.62,
+     "top": 0.64,
+     "wanted": 0.92
+    },
+    "ms": 316,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-22-20260930-212802",
+  "issue": 22,
+  "held_out": "fail",
+  "verdict": "failed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.24,
+     "top": 0.26,
+     "wanted": 0.4
+    },
+    "ms": 381,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/22-an-order-ships-in-parts.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 1886
+    },
+    "ms": 313,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 347,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.54,
+     "top": 0.56,
+     "wanted": 0.92
+    },
+    "ms": 313,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ },
+ {
+  "run": "subject-22-20260930-213300",
+  "issue": 22,
+  "held_out": "pass",
+  "verdict": "completed",
+  "jev": [
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "spec",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "none",
+     "confidence": 0.33,
+     "top": 0.35000000000000003,
+     "wanted": 0.37
+    },
+    "ms": 370,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "issues/22-an-order-ships-in-parts.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.04,
+     "chars": 1886
+    },
+    "ms": 306,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "content_screen",
+    "subject": "CLAUDE.md",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "p": 0.89,
+     "chars": 1223
+    },
+    "ms": 301,
+    "node": "spec",
+    "entry": 1
+   },
+   {
+    "source": "jev",
+    "use": "skill_choice",
+    "subject": "actor",
+    "model": "jev-1.13.0",
+    "status": "ok",
+    "result": {
+     "pick": "implement",
+     "confidence": 0.53,
+     "top": 0.54,
+     "wanted": 0.91
+    },
+    "ms": 320,
+    "node": "actor",
+    "entry": 1
+   }
+  ]
+ }
+]

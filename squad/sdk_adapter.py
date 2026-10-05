@@ -1,0 +1,208 @@
+"""The real adapter: one call is one Claude Agent SDK `query()` (ADR-0102 rule 1). It fills the seam in squad.adapter.
+
+Spend is the `total_cost_usd` of the session's own `ResultMessage` (origin empty). A call with no
+`ResultMessage` raises AdapterError, so the engine keeps the node cap reserved and never counts zero (ADR-0108 rule 2).
+A deadline cancels the task; the stream is closed in `finally`, which stops the CLI child (docs/research/sdk-live-smoke.md).
+
+A call in flight writes a `progress` event through the sink, at most once per `progress_seconds` (ticket #101). The
+record then says where the call has got to — its assistant messages so far, the context the newest message read, and
+the tool it last used — so a reader can tell a live call from an abandoned one (ADR-0051 rule 4). Every other message
+is read and dropped.
+"""
+import json
+import re
+import time
+
+import anyio
+
+from squad.adapter import AdapterError, CallResult
+
+STOP_REASONS = {"error_max_turns": "turn_cap", "error_max_budget_usd": "spend_cap"}
+OUTPUT_CAP_TEXT = "output token maximum"
+FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+PROGRESS_SECONDS = 10.0     # the default interval between two progress events of one call; a setting in agent-defaults.yaml
+INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+CACHE_KEYS = (("cache_read", "cache_read_input_tokens"), ("cache_write", "cache_creation_input_tokens"))
+
+
+def usage_of(result):
+    """tokens_in counts every prompt token (plain, cache write, cache read); tokens_out counts output; cache_read and cache_write are the cache share of tokens_in. None when unreported."""
+    u = getattr(result, "usage", None)
+    if not isinstance(u, dict) or not isinstance(u.get("output_tokens"), int):
+        return None
+    tin = sum(v for k in INPUT_KEYS if isinstance(v := u.get(k), int))
+    out = {"tokens_in": tin, "tokens_out": u["output_tokens"]}
+    for field, key in CACHE_KEYS:       # the split of tokens_in (#102); a key the provider omits stays absent, a reported 0 stays 0
+        if isinstance(v := u.get(key), int):
+            out[field] = v
+    return out
+
+
+def extract_json(text):
+    """The node artifact: the last fenced JSON object in the text, else the last top-level object. None when absent."""
+    if not text:
+        return None
+    for body in reversed(FENCE.findall(text)):
+        obj = _loads(body)
+        if obj is not None:
+            return obj
+    dec, best, i = json.JSONDecoder(), None, text.find("{")
+    while i != -1:
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        best = obj if isinstance(obj, dict) else best
+        i = text.find("{", end)
+    return best
+
+
+def _loads(s):
+    try:
+        obj = json.loads(s)
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+class _Progress:
+    """Where one call in flight has got to, written to the run record now and then (ticket #101).
+
+    `messages` counts the assistant messages the call has produced. It is not the result's `turns`: probed on
+    2026-10-02, one turn reaches the stream as two assistant messages, so the two figures differ and neither stands for
+    the other. `context_tokens` is the prompt the newest message read: the CLI reports `input_tokens` plus the cache
+    buckets of that response, so the last message gives the size of the context now. It stays None until a message
+    reports usage, so an unreported figure reads unknown, never zero (ADR-0012). The CLI reports no output tokens
+    before the result, so none is claimed. The tool is the last one the call used. The first write waits out the
+    interval, so a call shorter than the interval writes none, and an interval of None writes none at all.
+    """
+
+    def __init__(self, req, sink, seconds):
+        self.req, self.sink, self.seconds = req, sink, seconds
+        self.messages, self.context_tokens, self.tool = 0, None, None
+        self.last = time.monotonic()
+
+    def take(self, message):
+        self.messages += 1
+        u = getattr(message, "usage", None)
+        counts = [v for k in INPUT_KEYS if isinstance(v := (u.get(k) if isinstance(u, dict) else None), int)]
+        if counts:      # a message that reports no whole number leaves the last reading alone: an unreported figure is unknown, never zero (ADR-0012)
+            self.context_tokens = sum(counts)
+        for block in getattr(message, "content", None) or []:
+            if type(block).__name__ == "ToolUseBlock":
+                self.tool = getattr(block, "name", None)
+        self.write()
+
+    def write(self):
+        if not self.sink or self.seconds is None:
+            return
+        now = time.monotonic()
+        if now - self.last < self.seconds:
+            return
+        self.last = now
+        self.sink("progress", node=self.req.node, entry=self.req.entry, item=self.req.item, session=self.req.session_id,
+                  messages=self.messages, context_tokens=self.context_tokens, tool=self.tool)
+
+
+class SdkAdapter:
+    """`query` and `options_cls` are injectable so a test runs with no SDK and no spend."""
+
+    def __init__(self, query=None, options_cls=None, setting_sources=("project",), extra_options=None, hook_cls=None, log_compaction=False,
+                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS):
+        self._query, self._options_cls, self._hook_cls = query, options_cls, hook_cls
+        self.setting_sources = list(setting_sources)
+        self.extra_options = dict(extra_options or {})
+        self.log_compaction, self.hook_timeout, self.sink = log_compaction, hook_timeout, None
+        self.progress_seconds = progress_seconds
+
+    @classmethod
+    def from_defaults(cls, cfg, root=None, **kw):
+        """Build the adapter from the engine-level keys of config/agent-defaults.yaml (ticket #46)."""
+        from squad import defaults
+        opts = defaults.sdk_kwargs(cfg, root or defaults.ROOT)
+        progress = (cfg.get("progress") or {}).get("seconds", PROGRESS_SECONDS)
+        return cls(setting_sources=opts.pop("setting_sources"), extra_options=opts, log_compaction=cfg["hooks"]["log_compaction"],
+                   hook_timeout=cfg["hooks"]["timeout_seconds"], progress_seconds=progress, **kw)
+
+    def bind(self, sink):
+        """The engine hands over a function that appends an event to the run record."""
+        self.sink = sink
+
+    def _hooks(self, req):
+        """A PreCompact hook that logs each compaction to the run record. The timeout is set on the matcher (G12)."""
+        if not self.log_compaction:
+            return None
+        if self._hook_cls is None:
+            import claude_agent_sdk as sdk
+            self._hook_cls = sdk.HookMatcher
+
+        async def on_compact(input_data, tool_use_id, context):
+            if self.sink:
+                self.sink("compaction", node=req.node, entry=req.entry, item=req.item, session=req.session_id, trigger=input_data.get("trigger"))
+            return {}
+        return {"PreCompact": [self._hook_cls(hooks=[on_compact], timeout=self.hook_timeout)]}
+
+    def _sdk(self):
+        if self._query is None or self._options_cls is None:
+            import claude_agent_sdk as sdk  # imported late: the engine and its tests never need it
+            self._query = self._query or sdk.query
+            self._options_cls = self._options_cls or sdk.ClaudeAgentOptions
+        return self._query, self._options_cls
+
+    def options(self, req):
+        _, cls = self._sdk()
+        kw: dict[str, object] = dict(cwd=req.workspace, model=req.model, tools=list(req.tools), max_turns=req.max_turns,
+                                     max_budget_usd=req.max_spend, permission_mode="bypassPermissions",
+                                     setting_sources=self.setting_sources)
+        if req.effort:
+            kw["effort"] = req.effort
+        kw.update(self.extra_options)
+        if req.instructions:     # the role text joins the system prompt after the shared contract; the user message holds only the JSON
+            sp = kw.get("system_prompt")
+            sp = dict(sp) if isinstance(sp, dict) else {"type": "preset", "preset": "claude_code"}
+            sp["append"] = "\n\n".join(x for x in (sp.get("append"), req.instructions) if x)
+            kw["system_prompt"] = sp
+        hooks = self._hooks(req)
+        if hooks:
+            kw["hooks"] = hooks
+        return cls(**kw)
+
+    async def call(self, req):
+        query, _ = self._sdk()
+        result, subagents, output_cap = None, 0, False
+        prog = _Progress(req, self.sink, self.progress_seconds)
+        stream = query(prompt=req.prompt, options=self.options(req))
+        try:
+            async for m in stream:
+                kind = type(m).__name__
+                if kind == "AssistantMessage":
+                    prog.take(m)
+                    continue
+                if kind != "ResultMessage":
+                    continue
+                if getattr(m, "origin", None):
+                    subagents += 1
+                else:
+                    result = m
+        except Exception as e:   # broad on purpose: the SDK raises several types; each becomes AdapterError with its type kept; only a capped result is kept
+            # Probed 2026-09-30: a response past CLAUDE_CODE_MAX_OUTPUT_TOKENS ends the call with an error that follows a measured ResultMessage.
+            output_cap = result is not None and OUTPUT_CAP_TEXT in str(e)
+            # Probed 2026-10-01: a call stopped at its turn or spend cap raises in the same way (subtypes
+            # error_max_turns, error_max_budget_usd). Keep its ResultMessage too: ADR-0108 rule 4 ends a capped
+            # node through its artifact, and the result carries the reason, the spend, and the turns.
+            capped = result is not None and getattr(result, "subtype", None) in STOP_REASONS
+            if not output_cap and not capped:   # an error with no result, or an unmapped one: spend unknown
+                raise AdapterError(f"{type(e).__name__}: {e}") from e
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close:
+                with anyio.CancelScope(shield=True):
+                    await close()
+        if result is None:
+            raise AdapterError("the stream ended with no ResultMessage")
+        subtype = getattr(result, "subtype", None)
+        reason = "output_cap" if output_cap else (STOP_REASONS.get(subtype) if isinstance(subtype, str) else None)
+        return CallResult(extract_json(getattr(result, "result", None)), getattr(result, "total_cost_usd", None),
+                          getattr(result, "num_turns", None), reason,
+                          subagents, getattr(result, "session_id", None) or req.session_id, usage_of(result))

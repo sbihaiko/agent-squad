@@ -1,0 +1,11 @@
+{
+  "name": "agent-squad",
+  "owner": { "name": "Rafael Aguilher da Costa" },
+  "plugins": [
+    {
+      "name": "agent-squad",
+      "source": "./",
+      "description": "Edit workflows, start work from a request or a task."
+    }
+  ]
+}

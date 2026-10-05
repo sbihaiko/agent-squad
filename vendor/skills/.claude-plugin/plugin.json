@@ -1,0 +1,5 @@
+{
+  "name": "agent-squad-skills",
+  "version": "1",
+  "description": "Skills that agent-squad nodes load. Built by scripts/build_vendor_skills.py."
+}

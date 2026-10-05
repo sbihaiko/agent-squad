@@ -1,0 +1,941 @@
+{
+ "model": "jev-1.13.0",
+ "roster": 49,
+ "rows": [
+  {
+   "r": "pytest is red on main after Priya's merge and I cannot tell why",
+   "ok": [
+    "diagnosing-bugs",
+    "systematic-debugging"
+   ],
+   "jev": {
+    "pick": "diagnosing-bugs",
+    "conf": 0.53,
+    "top": 0.54,
+    "wanted": 0.77,
+    "tokens": 2668,
+    "ms": 744.4905830052448,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "systematic-debugging",
+    "ms": 11594.328457998927
+   }
+  },
+  {
+   "r": "the export job is getting slower every week, find out why",
+   "ok": [
+    "diagnosing-bugs",
+    "systematic-debugging"
+   ],
+   "jev": {
+    "pick": "diagnosing-bugs",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.81,
+    "tokens": 2665,
+    "ms": 752.5782500015339,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "diagnosing-bugs",
+    "ms": 8908.968165997067
+   }
+  },
+  {
+   "r": "build the retry helper test-first, one red-green slice at a time",
+   "ok": [
+    "tdd"
+   ],
+   "jev": {
+    "pick": "tdd",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.84,
+    "tokens": 2667,
+    "ms": 760.287207987858,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "tdd",
+    "ms": 7833.731417005765
+   }
+  },
+  {
+   "r": "implement ticket 42 from the tracker",
+   "ok": [
+    "implement"
+   ],
+   "jev": {
+    "pick": "implement",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.84,
+    "tokens": 2661,
+    "ms": 766.0254590009572,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "implement",
+    "ms": 7851.027708995389
+   }
+  },
+  {
+   "r": "implement the whole spec on one branch with subagents",
+   "ok": [
+    "implement-spec"
+   ],
+   "jev": {
+    "pick": "implement-spec",
+    "conf": 0.74,
+    "top": 0.75,
+    "wanted": 0.93,
+    "tokens": 2663,
+    "ms": 728.3651670004474,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "implement-spec",
+    "ms": 16486.101959002553
+   }
+  },
+  {
+   "r": "turn what we just agreed into a spec on the issue tracker, no more questions",
+   "ok": [
+    "to-spec"
+   ],
+   "jev": {
+    "pick": "to-spec",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.59,
+    "tokens": 2669,
+    "ms": 778.0821250053123,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "to-spec",
+    "ms": 7103.867583995452
+   }
+  },
+  {
+   "r": "split this plan into tickets with blocking edges",
+   "ok": [
+    "to-tickets"
+   ],
+   "jev": {
+    "pick": "to-tickets",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.77,
+    "tokens": 2661,
+    "ms": 734.1870829986874,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "to-tickets",
+    "ms": 6402.603499998804
+   }
+  },
+  {
+   "r": "interview me hard about this plan until every branch is settled, and write the ADRs as we go",
+   "ok": [
+    "grill-with-docs"
+   ],
+   "jev": {
+    "pick": "grill-with-docs",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.94,
+    "tokens": 2674,
+    "ms": 693.5483339912025,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "grill-with-docs",
+    "ms": 7340.925333002815
+   }
+  },
+  {
+   "r": "stress-test my idea, no repo involved, nothing saved",
+   "ok": [
+    "grill-me",
+    "grilling"
+   ],
+   "jev": {
+    "pick": "grilling",
+    "conf": 0.95,
+    "top": 0.95,
+    "wanted": 0.73,
+    "tokens": 2664,
+    "ms": 304.95849999715574,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "grilling",
+    "ms": 8475.30537500279
+   }
+  },
+  {
+   "r": "this project is too big for one session, chart the decisions as a map",
+   "ok": [
+    "wayfinder"
+   ],
+   "jev": {
+    "pick": "wayfinder",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.83,
+    "tokens": 2668,
+    "ms": 299.57329100579955,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "wayfinder",
+    "ms": 5610.40716599382
+   }
+  },
+  {
+   "r": "there are 30 raw issues from users, sort them and write briefs",
+   "ok": [
+    "triage"
+   ],
+   "jev": {
+    "pick": "triage",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.54,
+    "tokens": 2669,
+    "ms": 333.8029589940561,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "triage",
+    "ms": 6170.089625011315
+   }
+  },
+  {
+   "r": "review my branch against the spec and our coding standards",
+   "ok": [
+    "code-review"
+   ],
+   "jev": {
+    "pick": "code-review",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.89,
+    "tokens": 2663,
+    "ms": 310.32249999407213,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "code-review",
+    "ms": 6595.637041988084
+   }
+  },
+  {
+   "r": "there is a rebase in progress and three files conflict",
+   "ok": [
+    "resolving-merge-conflicts"
+   ],
+   "jev": {
+    "pick": "resolving-merge-conflicts",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.42,
+    "tokens": 2664,
+    "ms": 391.3639999955194,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "resolving-merge-conflicts",
+    "ms": 5924.973583998508
+   }
+  },
+  {
+   "r": "find deepening opportunities in this codebase and show me a report",
+   "ok": [
+    "improve-codebase-architecture"
+   ],
+   "jev": {
+    "pick": "improve-codebase-architecture",
+    "conf": 0.99,
+    "top": 0.99,
+    "wanted": 0.93,
+    "tokens": 2666,
+    "ms": 326.1991249892162,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "improve-codebase-architecture",
+    "ms": 8794.81512500206
+   }
+  },
+  {
+   "r": "I need a throwaway UI to feel out whether this state model works",
+   "ok": [
+    "prototype"
+   ],
+   "jev": {
+    "pick": "prototype",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.82,
+    "tokens": 2668,
+    "ms": 281.92037499684375,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "prototype",
+    "ms": 5675.3671250044135
+   }
+  },
+  {
+   "r": "what does the Stripe API say about idempotency keys? write the findings into the repo",
+   "ok": [
+    "research"
+   ],
+   "jev": {
+    "pick": "research",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.45,
+    "tokens": 2672,
+    "ms": 293.11812500236556,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "research",
+    "ms": 7669.301625006483
+   }
+  },
+  {
+   "r": "draw the request flow of this service as a sequence diagram",
+   "ok": [
+    "design-doc-mermaid"
+   ],
+   "jev": {
+    "pick": "design-doc-mermaid",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.83,
+    "tokens": 2664,
+    "ms": 325.709958007792,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "design-doc-mermaid",
+    "ms": 7107.675457998994
+   }
+  },
+  {
+   "r": "help me pick pricing tiers and decide on a free plan",
+   "ok": [
+    "pricing"
+   ],
+   "jev": {
+    "pick": "pricing",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.67,
+    "tokens": 2664,
+    "ms": 347.3996660031844,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "pricing",
+    "ms": 6276.351291991887
+   }
+  },
+  {
+   "r": "rewrite the hero section of the landing page, the headline is weak",
+   "ok": [
+    "copywriting"
+   ],
+   "jev": {
+    "pick": "copywriting",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.83,
+    "tokens": 2666,
+    "ms": 343.6763339996105,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "copywriting",
+    "ms": 6585.638916993048
+   }
+  },
+  {
+   "r": "the error messages in the signup form are confusing, fix the wording",
+   "ok": [
+    "ux-writing"
+   ],
+   "jev": {
+    "pick": "ux-writing",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.29,
+    "tokens": 2666,
+    "ms": 339.17604200541973,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "ux-writing",
+    "ms": 7036.052458992344
+   }
+  },
+  {
+   "r": "block git push and reset --hard from Claude before they run",
+   "ok": [
+    "git-guardrails-claude-code"
+   ],
+   "jev": {
+    "pick": "git-guardrails-claude-code",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.63,
+    "tokens": 2665,
+    "ms": 294.97395899670664,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "git-guardrails-claude-code",
+    "ms": 6212.514667000505
+   }
+  },
+  {
+   "r": "add husky and lint-staged so prettier runs on commit",
+   "ok": [
+    "setup-pre-commit"
+   ],
+   "jev": {
+    "pick": "setup-pre-commit",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.36,
+    "tokens": 2666,
+    "ms": 292.25991599378176,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "setup-pre-commit",
+    "ms": 5548.637875006534
+   }
+  },
+  {
+   "r": "replace the as casts in our test files with shoehorn",
+   "ok": [
+    "migrate-to-shoehorn"
+   ],
+   "jev": {
+    "pick": "migrate-to-shoehorn",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.48,
+    "tokens": 2665,
+    "ms": 411.87520801031496,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "migrate-to-shoehorn",
+    "ms": 6857.803833991056
+   }
+  },
+  {
+   "r": "write a doc for the next agent so it can pick up this work in a new session",
+   "ok": [
+    "handoff",
+    "claude-handoff"
+   ],
+   "jev": {
+    "pick": "handoff",
+    "conf": 0.99,
+    "top": 0.99,
+    "wanted": 0.43,
+    "tokens": 2671,
+    "ms": 299.51620900828857,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "handoff",
+    "ms": 7267.907708010171
+   }
+  },
+  {
+   "r": "your last message went over my head, say it again in the project's terms",
+   "ok": [
+    "wait-what"
+   ],
+   "jev": {
+    "pick": "wait-what",
+    "conf": 0.98,
+    "top": 0.98,
+    "wanted": 0.3,
+    "tokens": 2669,
+    "ms": 312.7044170105364,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "wait-what",
+    "ms": 10134.872333001113
+   }
+  },
+  {
+   "r": "we need terms and definitions in CONTEXT.md cleaned up, the glossary is a mess",
+   "ok": [
+    "domain-modeling"
+   ],
+   "jev": {
+    "pick": "domain-modeling",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.48,
+    "tokens": 2672,
+    "ms": 331.5788330073701,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "domain-modeling",
+    "ms": 6857.698167004855
+   }
+  },
+  {
+   "r": "I do not know which skill to use for this, what is the flow",
+   "ok": [
+    "ask-matt"
+   ],
+   "jev": {
+    "pick": "ask-matt",
+    "conf": 0.56,
+    "top": 0.58,
+    "wanted": 0.34,
+    "tokens": 2668,
+    "ms": 341.32204100023955,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "ask-matt",
+    "ms": 9287.360000002082
+   }
+  },
+  {
+   "r": "walk me through setting the CI secrets, only I can click the dashboard",
+   "ok": [
+    "wizard"
+   ],
+   "jev": {
+    "pick": "wizard",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.39,
+    "tokens": 2667,
+    "ms": 440.9835410042433,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "wizard",
+    "ms": 5551.343750004889
+   }
+  },
+  {
+   "r": "turn this blocking question into a questionnaire for my cofounder",
+   "ok": [
+    "to-questionnaire"
+   ],
+   "jev": {
+    "pick": "to-questionnaire",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.58,
+    "tokens": 2665,
+    "ms": 314.59437499870546,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "to-questionnaire",
+    "ms": 5959.749417001149
+   }
+  },
+  {
+   "r": "map this unfamiliar repo into an interactive graph so I can learn it",
+   "ok": [
+    "understand"
+   ],
+   "jev": {
+    "pick": "understand",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.9,
+    "tokens": 2666,
+    "ms": 339.89270799793303,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "understand",
+    "ms": 5342.12375000061
+   }
+  },
+  {
+   "r": "train a random forest on this table and tune hyperparameters",
+   "ok": [
+    "scikit-learn"
+   ],
+   "jev": {
+    "pick": "scikit-learn",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.91,
+    "tokens": 2666,
+    "ms": 320.9297499997774,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "scikit-learn",
+    "ms": 5991.402291998384
+   }
+  },
+  {
+   "r": "draft a proposal to win the Acme partnership",
+   "ok": [
+    "proposal-writer"
+   ],
+   "jev": {
+    "pick": "proposal-writer",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.9,
+    "tokens": 2662,
+    "ms": 287.6328749989625,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "proposal-writer",
+    "ms": 5192.738375000772
+   }
+  },
+  {
+   "r": "run a retrospective on what went wrong in this coding session",
+   "ok": [
+    "retro"
+   ],
+   "jev": {
+    "pick": "retro",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.7,
+    "tokens": 2664,
+    "ms": 306.23420800839085,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "retro",
+    "ms": 5702.160582994111
+   }
+  },
+  {
+   "r": "teach me how attention works, over several sessions",
+   "ok": [
+    "teach"
+   ],
+   "jev": {
+    "pick": "teach",
+    "conf": 0.98,
+    "top": 0.98,
+    "wanted": 0.64,
+    "tokens": 2663,
+    "ms": 316.9089580042055,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "teach",
+    "ms": 6619.567833011388
+   }
+  },
+  {
+   "r": "configure the issue tracker and triage labels for this repo",
+   "ok": [
+    "setup-matt-pocock-skills"
+   ],
+   "jev": {
+    "pick": "setup-matt-pocock-skills",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.58,
+    "tokens": 2664,
+    "ms": 352.106709004147,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "setup-matt-pocock-skills",
+    "ms": 6246.067125000991
+   }
+  },
+  {
+   "r": "rewrite CLAUDE.md so agents actually follow it",
+   "ok": [
+    "writing-for-agents"
+   ],
+   "jev": {
+    "pick": "writing-for-agents",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.67,
+    "tokens": 2663,
+    "ms": 293.9615000068443,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "writing-for-agents",
+    "ms": 7004.202416996122
+   }
+  },
+  {
+   "r": "fill out the browser form on that site and take a screenshot",
+   "ok": [
+    "ego-browser"
+   ],
+   "jev": {
+    "pick": "ego-browser",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.69,
+    "tokens": 2665,
+    "ms": 364.1748749942053,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "ego-browser",
+    "ms": 4710.7586250058375
+   }
+  },
+  {
+   "r": "how should I design this module's interface, where does the seam go",
+   "ok": [
+    "codebase-design"
+   ],
+   "jev": {
+    "pick": "codebase-design",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.87,
+    "tokens": 2667,
+    "ms": 313.7425000022631,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "codebase-design",
+    "ms": 7088.813833994209
+   }
+  },
+  {
+   "r": "is there a skill that can convert docx to pdf",
+   "ok": [
+    "find-skills"
+   ],
+   "jev": {
+    "pick": "find-skills",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.51,
+    "tokens": 2664,
+    "ms": 294.57916600222234,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 8653.149749996373
+   }
+  },
+  {
+   "r": "what is 17 times 23",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.07,
+    "tokens": 2662,
+    "ms": 286.5755000093486,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 9791.267666994827
+   }
+  },
+  {
+   "r": "thanks, that looks good",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.03,
+    "tokens": 2658,
+    "ms": 331.2199590000091,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 6270.873166009551
+   }
+  },
+  {
+   "r": "what time is it in Tokyo",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.07,
+    "tokens": 2659,
+    "ms": 279.40358300111257,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 6012.240625001141
+   }
+  },
+  {
+   "r": "rename the variable foo to bar in utils.py",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.85,
+    "top": 0.85,
+    "wanted": 0.1,
+    "tokens": 2662,
+    "ms": 301.9536659994628,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 10556.22004099132
+   }
+  },
+  {
+   "r": "summarize this paragraph in one sentence: The cat sat on the mat and looked out the window at the rain.",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.97,
+    "top": 0.98,
+    "wanted": 0.2,
+    "tokens": 2677,
+    "ms": 306.07695899379905,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 7015.586124995025
+   }
+  },
+  {
+   "r": "translate 'good morning' to Portuguese",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.99,
+    "top": 1.0,
+    "wanted": 0.13,
+    "tokens": 2660,
+    "ms": 304.98020799132064,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 7249.074833001941
+   }
+  },
+  {
+   "r": "run the tests",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.86,
+    "top": 0.87,
+    "wanted": 0.26,
+    "tokens": 2656,
+    "ms": 282.0540420070756,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 7673.259124989272
+   }
+  },
+  {
+   "r": "commit and push",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.91,
+    "top": 0.92,
+    "wanted": 0.16,
+    "tokens": 2656,
+    "ms": 278.22749999177177,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 7369.9242919974495
+   }
+  },
+  {
+   "r": "what is the capital of Australia",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 1.0,
+    "top": 1.0,
+    "wanted": 0.04,
+    "tokens": 2659,
+    "ms": 281.95270799915306,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 4688.411541006644
+   }
+  },
+  {
+   "r": "fix the typo on line 12 of the README",
+   "ok": [
+    "none"
+   ],
+   "jev": {
+    "pick": "none",
+    "conf": 0.96,
+    "top": 0.97,
+    "wanted": 0.06,
+    "tokens": 2664,
+    "ms": 359.2564999999013,
+    "model": "jev-1.13.0"
+   },
+   "base": {
+    "pick": "none",
+    "ms": 5863.101791997906
+   }
+  }
+ ]
+}

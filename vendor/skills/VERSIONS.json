@@ -1,0 +1,42 @@
+{
+  "ask-matt": {
+    "files": 3,
+    "sha256": "0173067a65de11c925d4dcf89408698ca5df828d2ab5effbe21997332107e679",
+    "source": "skill:ask-matt"
+  },
+  "codebase-design": {
+    "files": 4,
+    "sha256": "e91e18258598832efe27af7e3c423ab262c6f8b8ecb6262d8fbb80d626ef0e19",
+    "source": "skill:codebase-design"
+  },
+  "diagnosing-bugs": {
+    "files": 3,
+    "sha256": "79cca571387cbb4e9f254c3f93fb8be51d36ebe6f3854d26d006c1f9e7c87b82",
+    "source": "skill:diagnosing-bugs"
+  },
+  "ego-browser": {
+    "files": 4,
+    "sha256": "7d5f89c5e85197323d345ac37f69141e05acc1ccc8a7313eaac04cefdb9366dc",
+    "source": "skill:ego-browser"
+  },
+  "panel": {
+    "files": 1,
+    "sha256": "e50205130c40e2d75b95b6446060c49ae65c95d5cbd8792d1616dfb87a994bc0",
+    "source": ".agents/skills/panel"
+  },
+  "tdd": {
+    "files": 4,
+    "sha256": "c4236fd83d4629d4aed684403fd277aece9feb347c798e964a9a78a2ae1eb654",
+    "source": "skill:tdd"
+  },
+  "to-spec": {
+    "files": 2,
+    "sha256": "f525dab8b9bd3961aa4813d8568ef6184f6e24aad5a020e129165ca6c220f836",
+    "source": "skill:to-spec"
+  },
+  "to-tickets": {
+    "files": 2,
+    "sha256": "5c1691ddf02291d5189213f8ffc82d2b05451131929bbc9e99052f912a05c300",
+    "source": "skill:to-tickets"
+  }
+}

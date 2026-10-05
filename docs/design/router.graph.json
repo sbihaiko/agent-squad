@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "name": "router-dynamic",
+  "description": "A dynamic flow. A router agent runs the ask-matt skill and requests children inside the dispatch envelope (ADR-0113).",
+  "run": {
+    "deadline": 21600,
+    "max_parallel": 2,
+    "spend_cap": 40
+  },
+  "facts": [
+    {
+      "name": "git",
+      "type": "bool",
+      "instrument": "code: git is available in the target",
+      "source_kind": "target"
+    },
+    {
+      "name": "run_spend",
+      "type": "number",
+      "instrument": "code: sum of SDK result spend over agent entries (ADR-0108)",
+      "source_kind": "run_record"
+    }
+  ],
+  "gates": [
+    {
+      "id": "scope",
+      "params": [
+        "allowed_generated"
+      ]
+    },
+    {
+      "id": "security",
+      "params": [
+        "sensitive_paths"
+      ]
+    },
+    {
+      "id": "ac-verify",
+      "params": [
+        "commands_from"
+      ]
+    }
+  ],
+  "root": "main",
+  "nodes": [
+    {
+      "name": "main",
+      "kind": "loop",
+      "max": {
+        "value": 1,
+        "min": 1
+      },
+      "children": [
+        "route",
+        "final_gate"
+      ]
+    },
+    {
+      "name": "route",
+      "kind": "dispatch",
+      "entry": "router",
+      "max_depth": 2,
+      "max_children": 4,
+      "max_parallel": 2,
+      "deadline": 7200,
+      "join": "all",
+      "allow": {
+        "models": [
+          "opus",
+          "sonnet",
+          "haiku"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Edit",
+          "Write",
+          "Bash"
+        ],
+        "skills": [
+          {
+            "name": "tdd"
+          },
+          {
+            "name": "diagnosing-bugs"
+          },
+          {
+            "name": "codebase-design"
+          }
+        ],
+        "workspaces": [
+          "worktrees/child"
+        ]
+      },
+      "budget": {
+        "turns": {
+          "min": 3,
+          "max": 60
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 4
+        }
+      },
+      "checks": [
+        "scope_gate",
+        "security_gate"
+      ]
+    },
+    {
+      "name": "router",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "budget": {
+        "turns": {
+          "min": 3,
+          "max": 30
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 2
+        }
+      },
+      "deadline": 600,
+      "skill": "ask-matt",
+      "may_spawn": true,
+      "output_key": "spawns",
+      "next": {
+        "fail": "exit:fail"
+      }
+    },
+    {
+      "name": "scope_gate",
+      "kind": "gate",
+      "check": "scope",
+      "params": {
+        "allowed_generated": [
+          "package-lock.json"
+        ]
+      }
+    },
+    {
+      "name": "security_gate",
+      "kind": "gate",
+      "check": "security",
+      "params": {
+        "sensitive_paths": [
+          "auth",
+          "crypto",
+          ".env*"
+        ]
+      }
+    },
+    {
+      "name": "final_gate",
+      "kind": "gate",
+      "check": "ac-verify",
+      "params": {
+        "commands_from": "route"
+      },
+      "next": {
+        "fail": "exit:fail"
+      }
+    }
+  ]
+}

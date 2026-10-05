@@ -1,0 +1,52 @@
+[project]
+name = "agent-squad"
+version = "0.1.3"
+description = "A self-adapting orchestration graph engine on the Claude Agent SDK"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["anyio>=4", "jsonschema>=4", "pyyaml>=6"]
+
+[project.optional-dependencies]
+sdk = ["claude-agent-sdk==0.2.161"]
+dev = ["ruff", "pytest>=8", "pytest-json-report", "pytest-xdist", "mypy", "types-PyYAML", "types-jsonschema"]
+
+[project.scripts]
+squad = "squad.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["squad"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider --durations=15"
+slow_cap_seconds = "20"
+
+[tool.mypy]
+files = ["squad"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+# claude-agent-sdk is the optional `sdk` extra; it is absent in a dev install and ships no stub we pin.
+module = ["claude_agent_sdk"]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py311"
+# Fits the longest line in the code as it is (285); reflowing 2000+ lines is out of scope.
+line-length = 290
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "BLE", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures pack setup into one line with semicolons; splitting them adds noise, not safety.
+"tests/**" = ["E702"]

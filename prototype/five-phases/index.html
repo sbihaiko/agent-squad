@@ -1,0 +1,1055 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: the five dev_squad phases as graph data</title>
+<style>
+  :root { --accent: #2a6; --ink: #222; --muted: #777; --line: #ddd; }
+  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; color: var(--ink); margin: 0; padding: 24px; max-width: 1400px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 24px 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; max-width: 900px; }
+  .row { display: grid; grid-template-columns: 380px 1fr; gap: 24px; align-items: start; }
+  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  label { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; }
+  select, input { font: inherit; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid var(--line); background: #fff; border-radius: 6px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .tabs button.on { background: #eaf6ee; border-color: var(--accent); }
+  .outcome { font-size: 20px; font-weight: 600; }
+  .outcome.pass { color: var(--accent); } .outcome.fail { color: #c33; } .outcome.deadline { color: #b80; } .outcome.needs-human { color: #36c; }
+  ol.events { font-family: ui-monospace, monospace; font-size: 12.5px; padding-left: 20px; max-height: 480px; overflow: auto; }
+  ol.events li.skipped { color: var(--muted); } ol.events li.loop { color: #36c; }
+  ul.findings li { margin: 4px 0; }
+  pre { font-size: 12px; background: #fafafa; border: 1px solid var(--line); padding: 8px; overflow: auto; max-height: 360px; }
+  .mermaid { border: 1px solid var(--line); border-radius: 8px; padding: 8px; overflow: auto; }
+  small { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>The five dev_squad phases as graph data</h1>
+<p class="lead"><strong>Question (wayfinder ticket #11):</strong> does the draft schema (GLOSSARY.md vocabulary, ADR-0100) express scout, spec, decompose, execute, verify, the actor-critic loops, and the trivial, medium, and large tier skips as data alone? Set the facts, press a scenario, and watch which nodes run, which are skipped, and what the run's last outcome is. Green nodes ran. Grey nodes were skipped by their <code>when</code>. Dashed borders mark nodes that carry a <code>when</code>. Hexagons are gates and never carry one.</p>
+
+<div class="row">
+  <div>
+    <div class="panel">
+      <h2 style="margin-top:0">Facts (free play)</h2>
+      <div id="facts"></div>
+      <h2>Scripted outcomes <small>(name: outcomes in order)</small></h2>
+      <textarea id="script" rows="4" style="width:100%; font: 12px ui-monospace, monospace">{}</textarea>
+      <div style="margin-top:8px"><button class="primary" id="run">Walk the graph</button></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2 style="margin-top:0">Guided walkthroughs</h2>
+      <div class="tabs" id="tabs"></div>
+      <p id="watch"><small>Pick one.</small></p>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2 style="margin-top:0">Validation of the fixture</h2>
+      <ul class="findings" id="validation"></ul>
+    </div>
+  </div>
+  <div>
+    <div class="panel">
+      <div>Run outcome: <span class="outcome" id="outcome">-</span> <small id="summary"></small></div>
+      <ol class="events" id="events"></ol>
+    </div>
+    <h2>Graph, with this walk painted on it</h2>
+    <div class="mermaid" id="diagram"></div>
+    <h2>Fixture (graph.json)</h2>
+    <pre id="json"></pre>
+  </div>
+</div>
+
+<script type="module">
+// PROTOTYPE. Pure module: no DOM, no I/O. Validates a graph, walks it under
+// given facts and scripted outcomes, and renders Mermaid.
+//
+// Walk rules this prototype assumes (each one is a finding for the schema):
+//  R1 Control is order-based. A loop runs its children in order. The root is a loop.
+//  R2 `when` is read when a child is reached in order. False: the child is skipped.
+//  R3 `next.<outcome>` names a later sibling, or a reserved word. A jump to a
+//     sibling enters it even when its `when` is false.
+//  R4 Reserved words: `repeat` (loop again from the first child), `continue`
+//     (treat as pass), `exit:pass`, `exit:fail` (leave the enclosing loop now).
+//  R5 Defaults: pass -> next sibling; fail -> repeat; deadline and needs-human
+//     -> the loop ends with that outcome.
+//  R6 A loop passes when its last child is done. It fails when a repeat would
+//     exceed `max.value`.
+
+const KINDS = ['agent', 'gate', 'wait', 'loop'];
+const OUTCOMES = ['pass', 'fail', 'deadline', 'needs-human'];
+const OPS = ['eq', 'ne', 'gt', 'lt'];
+const RESERVED = ['repeat', 'continue', 'exit:pass', 'exit:fail'];
+
+function byName(graph) {
+  const m = new Map();
+  for (const n of graph.nodes) m.set(n.name, n);
+  return m;
+}
+
+function validate(graph) {
+  const errors = [];
+  const nodes = byName(graph);
+  const factNames = new Set((graph.facts || []).map(f => f.name));
+  const gateIds = new Set((graph.gates || []).map(g => g.id));
+  if (graph.schema_version === undefined) errors.push('graph: schema_version missing');
+  if (!nodes.has(graph.root)) errors.push(`graph: root "${graph.root}" is not a node`);
+  else if (nodes.get(graph.root).kind !== 'loop') errors.push('graph: root must be a loop (R1)');
+  if (nodes.size !== graph.nodes.length) errors.push('graph: node names are not unique');
+
+  const parentOf = new Map();
+  for (const n of graph.nodes) {
+    if (!KINDS.includes(n.kind)) errors.push(`${n.name}: kind "${n.kind}" is not one of ${KINDS.join(', ')}`);
+    if (n.kind === 'gate') {
+      if (n.when) errors.push(`${n.name}: a gate never carries a when (ADR-0100)`);
+      if (!gateIds.has(n.check)) errors.push(`${n.name}: check "${n.check}" is not a registered gate`);
+    }
+    if (n.kind === 'agent') {
+      for (const k of ['model', 'tools', 'budget', 'deadline']) if (n[k] === undefined) errors.push(`${n.name}: agent needs ${k}`);
+      if (n.budget && (!n.budget.turns || !n.budget.spend)) errors.push(`${n.name}: budget needs turns and spend`);
+    }
+    if (n.kind === 'wait') {
+      for (const k of ['owner', 'deadline', 'default']) if (n[k] === undefined) errors.push(`${n.name}: wait needs ${k}`);
+    }
+    if (n.kind === 'loop') {
+      if (!Array.isArray(n.children) || n.children.length === 0) errors.push(`${n.name}: loop needs children`);
+      if (!n.max || typeof n.max.value !== 'number') errors.push(`${n.name}: loop needs max.value`);
+      for (const c of n.children || []) {
+        if (!nodes.has(c)) errors.push(`${n.name}: child "${c}" is not a node`);
+        else if (parentOf.has(c)) errors.push(`${c}: listed as a child of two loops`);
+        else parentOf.set(c, n.name);
+      }
+    }
+    if (n.when) {
+      const w = n.when;
+      const factOk = factNames.has(w.fact) || (typeof w.fact === 'string' && w.fact.startsWith('outcome:') && nodes.has(w.fact.slice(8)));
+      if (!factOk) errors.push(`${n.name}: when.fact "${w.fact}" is not a declared fact`);
+      if (!OPS.includes(w.op)) errors.push(`${n.name}: when.op "${w.op}" is not one of ${OPS.join(', ')}`);
+    }
+    for (const key of ['_GAP']) if (n[key]) errors.push(`${n.name}: GAP ${n[key]}`);
+  }
+  for (const n of graph.nodes) {
+    if (n.name !== graph.root && !parentOf.has(n.name)) errors.push(`${n.name}: reachable from no loop`);
+    for (const [oc, target] of Object.entries(n.next || {})) {
+      if (!OUTCOMES.includes(oc)) errors.push(`${n.name}: next.${oc} is not an outcome`);
+      if (RESERVED.includes(target)) continue;
+      const p = parentOf.get(n.name);
+      const sibs = p ? nodes.get(p).children : [];
+      const i = sibs.indexOf(n.name), j = sibs.indexOf(target);
+      if (j < 0) errors.push(`${n.name}: next.${oc} "${target}" is not a sibling (R3)`);
+      else if (j <= i) errors.push(`${n.name}: next.${oc} "${target}" is not a later sibling (R3)`);
+    }
+  }
+  return errors;
+}
+
+function holds(when, facts, lastOutcome) {
+  const v = when.fact.startsWith('outcome:') ? lastOutcome.get(when.fact.slice(8)) : facts[when.fact];
+  switch (when.op) {
+    case 'eq': return v === when.value;
+    case 'ne': return v !== when.value;
+    case 'gt': return v > when.value;
+    case 'lt': return v < when.value;
+  }
+  return false;
+}
+
+// script: { nodeName: [outcome, outcome, ...] } consumed in order; default pass.
+function walk(graph, facts, script = {}) {
+  const nodes = byName(graph);
+  const queue = Object.fromEntries(Object.entries(script).map(([k, v]) => [k, [...v]]));
+  const events = [];
+  const lastOutcome = new Map();
+  const counts = {};
+
+  const scripted = (n) => (queue[n.name] && queue[n.name].length ? queue[n.name].shift() : 'pass');
+
+  function runLeaf(n, how) {
+    let outcome = scripted(n);
+    if (n.kind === 'wait' && outcome === 'deadline') {
+      events.push({ node: n.name, kind: n.kind, how, note: `deadline expired; default "${n.default}" applied (ADR-0029 rule 7)` });
+      outcome = n.default;
+    }
+    lastOutcome.set(n.name, outcome);
+    events.push({ node: n.name, kind: n.kind, how, outcome });
+    return outcome;
+  }
+
+  function runLoop(loop, how) {
+    const times = loop.for_each ? Math.max(1, facts[loop.for_each] ?? 1) : 1;
+    let outcome = 'pass';
+    for (let item = 0; item < times; item++) {
+      let count = 1;
+      counts[loop.name] = count;
+      events.push({ node: loop.name, kind: 'loop', how, note: `enter${loop.for_each ? ` (item ${item + 1} of ${times})` : ''}, count 1 of ${loop.max.value}` });
+      let i = 0, forced = false;
+      outcome = 'pass';
+      while (i < loop.children.length) {
+        const child = nodes.get(loop.children[i]);
+        if (!forced && child.when && !holds(child.when, facts, lastOutcome)) {
+          events.push({ node: child.name, kind: child.kind, how: 'order', skipped: true, why: `when ${child.when.fact} ${child.when.op} ${JSON.stringify(child.when.value)} is false` });
+          i++; continue;
+        }
+        const entry = forced ? 'jump' : 'order';
+        forced = false;
+        const oc = child.kind === 'loop' ? runLoop(child, entry) : runLeaf(child, entry);
+        lastOutcome.set(child.name, oc);
+        const target = (child.next || {})[oc];
+        let action;
+        if (target === undefined) action = oc === 'pass' ? 'continue' : oc === 'fail' ? 'repeat' : 'exit:' + oc;
+        else action = target;
+        if (action === 'continue') { i++; continue; }
+        if (action === 'repeat') {
+          if (count >= loop.max.value) {
+            events.push({ node: loop.name, kind: 'loop', note: `max ${loop.max.value} reached; loop fails (R6)` });
+            outcome = 'fail'; break;
+          }
+          count++; counts[loop.name] = count;
+          events.push({ node: loop.name, kind: 'loop', note: `repeat, count ${count} of ${loop.max.value}` });
+          i = 0; continue;
+        }
+        if (action.startsWith('exit:')) { outcome = action.slice(5); events.push({ node: loop.name, kind: 'loop', note: `exit ${outcome}` }); break; }
+        // jump to a later sibling, bypassing its when (R3)
+        i = loop.children.indexOf(action); forced = true;
+        if (i < 0) throw new Error(`${child.name}: next.${oc} "${action}" is not a sibling`);
+        events.push({ node: loop.name, kind: 'loop', note: `${child.name} ${oc} -> jump to ${action} (when bypassed)` });
+      }
+      events.push({ node: loop.name, kind: 'loop', note: `leave with ${outcome}` });
+      lastOutcome.set(loop.name, outcome);
+      if (outcome !== 'pass') break;
+    }
+    return outcome;
+  }
+
+  const outcome = runLoop(nodes.get(graph.root), 'root');
+  const ran = new Set(events.filter(e => e.outcome).map(e => e.node));
+  const skipped = new Set(events.filter(e => e.skipped).map(e => e.node));
+  return { outcome, events, ran: [...ran], skipped: [...skipped].filter(n => !ran.has(n)) };
+}
+
+function toMermaid(graph, result) {
+  const nodes = byName(graph);
+  const ran = new Set(result ? result.ran : []);
+  const skipped = new Set(result ? result.skipped : []);
+  const out = ['flowchart TD'];
+  const shape = (n) => n.kind === 'gate' ? `{{"${n.name}<br/>gate: ${n.check}"}}`
+    : n.kind === 'wait' ? `(["${n.name}<br/>wait: ${n.owner}, ${n.deadline}s"])`
+    : `["${n.name}<br/>${n.model}${n.when ? '<br/>when ' + n.when.fact + ' ' + n.when.op + ' ' + String(n.when.value) : ''}"]`;
+  const edges = [];
+  function emit(loop, depth) {
+    const pad = '  '.repeat(depth);
+    const title = `${loop.name} loop max ${loop.max.value}${loop.for_each ? ' for each ' + loop.for_each : ''}${loop.when ? ' when ' + loop.when.fact + ' ' + loop.when.op + ' ' + String(loop.when.value) : ''}`;
+    out.push(`${pad}subgraph ${loop.name}["${title}"]`);
+    out.push(`${pad}  direction TB`);
+    let prev = null;
+    for (const c of loop.children) {
+      const n = nodes.get(c);
+      if (n.kind === 'loop') emit(n, depth + 1); else out.push(`${pad}  ${n.name}${shape(n)}`);
+      if (prev) edges.push(`${prev} --> ${c}`);
+      prev = c;
+      for (const [oc, t] of Object.entries(n.next || {})) {
+        if (t === 'repeat') edges.push(`${c} -. ${oc}: repeat .-> ${loop.children[0]}`);
+        else if (t === 'continue') edges.push(`${c} -. ${oc}: continue .-> ${c}`);
+        else if (t.startsWith('exit:')) edges.push(`${c} -. ${oc}: ${t} .-> ${loop.name}_exit`);
+        else edges.push(`${c} -. ${oc} .-> ${t}`);
+      }
+      if (n.kind !== 'loop' && !(n.next || {}).fail && n.kind !== 'wait') edges.push(`${c} -. fail: repeat .-> ${loop.children[0]}`);
+    }
+    if (loop.children.some(c => Object.values(nodes.get(c).next || {}).some(t => t.startsWith('exit:')))) out.push(`${pad}  ${loop.name}_exit((exit))`);
+    out.push(`${pad}end`);
+  }
+  emit(nodes.get(graph.root), 0);
+  out.push(...edges.map(e => '  ' + e));
+  out.push('  classDef gate fill:#eee,stroke:#333,stroke-width:2px');
+  out.push('  classDef wait fill:#fff4d6,stroke:#333');
+  out.push('  classDef cond stroke-dasharray: 5 5');
+  out.push('  classDef ran fill:#cfe8cf,stroke:#2a6');
+  out.push('  classDef skipped fill:#f6f6f6,stroke:#bbb,color:#999');
+  const cls = (name, c) => out.push(`  class ${name} ${c}`);
+  for (const n of graph.nodes) {
+    if (n.kind === 'loop') continue;
+    if (n.kind === 'gate') cls(n.name, 'gate');
+    if (n.kind === 'wait') cls(n.name, 'wait');
+    if (n.when) cls(n.name, 'cond');
+    if (ran.has(n.name)) cls(n.name, 'ran');
+    else if (skipped.has(n.name)) cls(n.name, 'skipped');
+  }
+  return out.join('\n');
+}
+
+// PROTOTYPE. Guided walkthroughs. Each one sets facts and scripts node outcomes.
+const BASE_FACTS = { tier: 'large', sensitive: false, visual: false, git: true, work_items: 1, blocking_learnings: 0, architecture_issues: 0 };
+
+const SCENARIOS = [
+  { id: 'trivial-clean', title: 'Trivial tier, clean change',
+    watch: 'Spec, plan, and the critic are skipped by their when. The size backstop gate still runs.',
+    facts: { tier: 'trivial' }, script: {},
+    expect: { outcome: 'pass', skipped: ['spec', 'plan', 'critic'], ran: ['size_backstop', 'scope_gate', 'security_gate'] } },
+
+  { id: 'trivial-backstop', title: 'Trivial tier, but the diff is too big',
+    watch: 'The size backstop fails. Its fail edge jumps into the critic, whose when says trivial skips it. The jump wins (R3).',
+    facts: { tier: 'trivial' }, script: { size_backstop: ['fail'] },
+    expect: { outcome: 'pass', ran: ['critic'], skipped: ['spec', 'plan'] } },
+
+  { id: 'medium-proxy-rejects', title: 'Medium tier, the spec proxy rejects once',
+    watch: 'Spec runs and repeats once. Plan is skipped. The critic runs by order.',
+    facts: { tier: 'medium' }, script: { spec_proxy: ['fail', 'pass'] },
+    expect: { outcome: 'pass', ran: ['spec_draft', 'critic'], skipped: ['plan'], counts: { spec: 2 } } },
+
+  { id: 'large-two-items', title: 'Large tier, two work items, scope gate fails once',
+    watch: 'Execute runs the work loop once per work item (for_each, a GAP). A scope failure repeats the work loop without a critic call.',
+    facts: { tier: 'large', work_items: 2 }, script: { scope_gate: ['fail'] },
+    expect: { outcome: 'pass', ran: ['decompose', 'audit_c'] } },
+
+  { id: 'merge-wait-expires', title: 'Merge fails, the owner never answers',
+    watch: 'Merge fails into a wait node. Its deadline expires. The declared default (fail) applies and the run exits with fail.',
+    facts: { tier: 'large' }, script: { merge: ['fail'], manual_merge: ['deadline'] },
+    expect: { outcome: 'fail', ran: ['manual_merge'] } },
+
+  { id: 'merge-wait-answered', title: 'Merge fails, the owner resolves it',
+    watch: 'The wait node passes and the run continues to verify.',
+    facts: { tier: 'large' }, script: { merge: ['fail'], manual_merge: ['pass'] },
+    expect: { outcome: 'pass', ran: ['manual_merge', 'ac_verify'] } },
+
+  { id: 'critic-never-approves', title: 'The critic never approves',
+    watch: 'The work loop hits max 12 and fails. Execute fails, main fails. No verify.',
+    facts: { tier: 'medium' }, script: { critic: Array(12).fill('fail') },
+    expect: { outcome: 'fail', skipped: [], notRan: ['ac_verify'] } },
+
+  { id: 'scout-deadline', title: 'Scout hits its deadline',
+    watch: 'A deadline is its own outcome. The loop ends with deadline, not fail, and nothing repeats.',
+    facts: { tier: 'large' }, script: { scout: ['deadline'] },
+    expect: { outcome: 'deadline', notRan: ['spec_draft'] } },
+
+  { id: 'visual-and-learnings', title: 'Web app change with a blocking learning',
+    watch: 'The visual loop runs. The learning gate always runs (a gate has no when). Audit A runs because a learning blocks; its fail is advisory.',
+    facts: { tier: 'medium', visual: true, blocking_learnings: 1 }, script: { audit_a: ['fail'] },
+    expect: { outcome: 'pass', ran: ['visual_actor', 'learning_gate', 'audit_a'], skipped: ['audit_b', 'audit_c'] } },
+
+  { id: 'no-git', title: 'No git in the target',
+    watch: 'Commit is skipped by its when. dev_squad also drops the merge node and adds revert nodes here; this schema cannot say that (one knob, many effects).',
+    facts: { tier: 'trivial', git: false }, script: {},
+    expect: { outcome: 'pass', skipped: ['commit'] } },
+];
+
+function check(result, expect, counts) {
+  const problems = [];
+  if (expect.outcome && result.outcome !== expect.outcome) problems.push(`outcome ${result.outcome}, expected ${expect.outcome}`);
+  for (const n of expect.ran || []) if (!result.ran.includes(n)) problems.push(`${n} did not run`);
+  for (const n of expect.skipped || []) if (!result.skipped.includes(n)) problems.push(`${n} was not skipped`);
+  for (const n of expect.notRan || []) if (result.ran.includes(n)) problems.push(`${n} ran`);
+  for (const [k, v] of Object.entries(expect.counts || {})) if (counts && counts[k] !== v) problems.push(`${k} count ${counts && counts[k]}, expected ${v}`);
+  return problems;
+}
+
+const graph = {
+ "schema_version": 0,
+ "name": "dev-squad-default",
+ "description": "PROTOTYPE fixture for wayfinder ticket #11. The five dev_squad phases, the actor-critic loops, and the tier skips, written in the GLOSSARY.md vocabulary. Fields marked GAP are not in the vocabulary.",
+ "root": "main",
+ "facts": [
+  {
+   "name": "tier",
+   "type": "enum",
+   "values": [
+    "trivial",
+    "medium",
+    "large"
+   ],
+   "instrument": "code: classifyTier over scout.size_estimate (1 file/40 LoC, 3 files/200 LoC); missing estimate is large",
+   "source": "scout"
+  },
+  {
+   "name": "sensitive",
+   "type": "bool",
+   "instrument": "code: sensitive path set over scout.paths",
+   "source": "scout"
+  },
+  {
+   "name": "visual",
+   "type": "bool",
+   "instrument": "code: changed files and setup.webApp (dev_squad D8: computed before execute)",
+   "source": "scout"
+  },
+  {
+   "name": "git",
+   "type": "bool",
+   "instrument": "code: setup.gitAvailable",
+   "source": "scout"
+  },
+  {
+   "name": "work_items",
+   "type": "int",
+   "instrument": "code: length of decompose.work_items, or 1 synthetic item when decompose did not run",
+   "source": "decompose"
+  },
+  {
+   "name": "blocking_learnings",
+   "type": "int",
+   "instrument": "code: count of learnings in state blocking-in-review",
+   "source": "memory (GAP: cross-run, not yet specified)"
+  },
+  {
+   "name": "architecture_issues",
+   "type": "int",
+   "instrument": "code: count of architecture issues the critic emitted",
+   "source": "run record"
+  }
+ ],
+ "gates": [
+  {
+   "id": "ac-command-shape",
+   "params": [
+    "duplicate_warn_ratio"
+   ]
+  },
+  {
+   "id": "plan-semantics",
+   "params": [
+    "max_work_items"
+   ]
+  },
+  {
+   "id": "spend-floor",
+   "params": [
+    "min_remaining_usd"
+   ]
+  },
+  {
+   "id": "scope",
+   "params": [
+    "allowed_generated"
+   ]
+  },
+  {
+   "id": "security",
+   "params": [
+    "sensitive_paths"
+   ]
+  },
+  {
+   "id": "size-backstop",
+   "params": [
+    "max_files",
+    "max_added_lines"
+   ]
+  },
+  {
+   "id": "ac-verify",
+   "params": [
+    "commands_from"
+   ]
+  },
+  {
+   "id": "visual-guard",
+   "params": []
+  },
+  {
+   "id": "learning-check",
+   "params": []
+  }
+ ],
+ "nodes": [
+  {
+   "name": "main",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "scout",
+    "spec",
+    "plan",
+    "budget_gate",
+    "execute",
+    "verify",
+    "ship"
+   ]
+  },
+  {
+   "name": "scout",
+   "kind": "agent",
+   "model": "sonnet",
+   "tools": [
+    "Read",
+    "Grep",
+    "Glob"
+   ],
+   "budget": {
+    "turns": {
+     "min": 5,
+     "max": 40
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2
+    }
+   },
+   "deadline": 600,
+   "output_key": "size_estimate"
+  },
+  {
+   "name": "spec",
+   "kind": "loop",
+   "when": {
+    "fact": "tier",
+    "op": "ne",
+    "value": "trivial"
+   },
+   "max": {
+    "value": 4,
+    "min": 1
+   },
+   "children": [
+    "spec_draft",
+    "spec_gate",
+    "spec_proxy"
+   ]
+  },
+  {
+   "name": "spec_draft",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read",
+    "Grep"
+   ],
+   "budget": {
+    "turns": {
+     "min": 5,
+     "max": 60
+    },
+    "spend": {
+     "min": 0.1,
+     "max": 4
+    }
+   },
+   "deadline": 900,
+   "output_key": "spec"
+  },
+  {
+   "name": "spec_gate",
+   "kind": "gate",
+   "check": "ac-command-shape",
+   "params": {
+    "duplicate_warn_ratio": 0.4
+   }
+  },
+  {
+   "name": "spec_proxy",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 3,
+     "max": 20
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2
+    }
+   },
+   "deadline": 600
+  },
+  {
+   "name": "plan",
+   "kind": "loop",
+   "when": {
+    "fact": "tier",
+    "op": "eq",
+    "value": "large"
+   },
+   "max": {
+    "value": 4,
+    "min": 1
+   },
+   "children": [
+    "decompose",
+    "plan_gate",
+    "plan_proxy"
+   ]
+  },
+  {
+   "name": "decompose",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read",
+    "Grep"
+   ],
+   "budget": {
+    "turns": {
+     "min": 5,
+     "max": 60
+    },
+    "spend": {
+     "min": 0.1,
+     "max": 4
+    }
+   },
+   "deadline": 900,
+   "output_key": "work_items"
+  },
+  {
+   "name": "plan_gate",
+   "kind": "gate",
+   "check": "plan-semantics",
+   "params": {
+    "max_work_items": 5
+   }
+  },
+  {
+   "name": "plan_proxy",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 3,
+     "max": 20
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2
+    }
+   },
+   "deadline": 600
+  },
+  {
+   "name": "budget_gate",
+   "kind": "gate",
+   "check": "spend-floor",
+   "params": {
+    "min_remaining_usd": 1
+   },
+   "next": {
+    "fail": "exit:fail"
+   }
+  },
+  {
+   "name": "execute",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "for_each": "work_items",
+   "_GAP": "for_each is not in the vocabulary. dev_squad runs batches in parallel; the four kinds have no fan-out.",
+   "children": [
+    "work",
+    "merge",
+    "manual_merge"
+   ]
+  },
+  {
+   "name": "work",
+   "kind": "loop",
+   "max": {
+    "value": 12,
+    "min": 1
+   },
+   "children": [
+    "actor",
+    "scope_gate",
+    "security_gate",
+    "size_backstop",
+    "critic"
+   ]
+  },
+  {
+   "name": "actor",
+   "kind": "agent",
+   "model": "sonnet",
+   "tools": [
+    "Read",
+    "Edit",
+    "Write",
+    "Bash"
+   ],
+   "budget": {
+    "turns": {
+     "min": 10,
+     "max": 120
+    },
+    "spend": {
+     "min": 0.2,
+     "max": 8
+    }
+   },
+   "deadline": 1800,
+   "output_key": "diff"
+  },
+  {
+   "name": "scope_gate",
+   "kind": "gate",
+   "check": "scope",
+   "params": {
+    "allowed_generated": [
+     "package-lock.json"
+    ]
+   }
+  },
+  {
+   "name": "security_gate",
+   "kind": "gate",
+   "check": "security",
+   "params": {
+    "sensitive_paths": [
+     "auth",
+     "crypto",
+     ".env*"
+    ]
+   }
+  },
+  {
+   "name": "size_backstop",
+   "kind": "gate",
+   "check": "size-backstop",
+   "params": {
+    "max_files": 1,
+    "max_added_lines": 40
+   },
+   "next": {
+    "fail": "critic"
+   }
+  },
+  {
+   "name": "critic",
+   "kind": "agent",
+   "when": {
+    "fact": "tier",
+    "op": "ne",
+    "value": "trivial"
+   },
+   "model": "opus",
+   "tools": [
+    "Read",
+    "Grep"
+   ],
+   "budget": {
+    "turns": {
+     "min": 3,
+     "max": 30
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 3
+    }
+   },
+   "deadline": 900
+  },
+  {
+   "name": "merge",
+   "kind": "agent",
+   "model": "sonnet",
+   "tools": [
+    "Bash"
+   ],
+   "budget": {
+    "turns": {
+     "min": 2,
+     "max": 15
+    },
+    "spend": {
+     "min": 0.02,
+     "max": 1
+    }
+   },
+   "deadline": 300,
+   "next": {
+    "fail": "manual_merge"
+   }
+  },
+  {
+   "name": "manual_merge",
+   "kind": "wait",
+   "owner": "rafael",
+   "deadline": 86400,
+   "default": "fail",
+   "when": {
+    "fact": "outcome:merge",
+    "op": "eq",
+    "value": "fail"
+   },
+   "next": {
+    "fail": "exit:fail"
+   }
+  },
+  {
+   "name": "verify",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "ac_verify",
+    "visual",
+    "learning_gate",
+    "audit_a",
+    "audit_b",
+    "audit_c"
+   ]
+  },
+  {
+   "name": "ac_verify",
+   "kind": "gate",
+   "check": "ac-verify",
+   "params": {
+    "commands_from": "spec"
+   },
+   "next": {
+    "fail": "exit:fail"
+   }
+  },
+  {
+   "name": "visual",
+   "kind": "loop",
+   "when": {
+    "fact": "visual",
+    "op": "eq",
+    "value": true
+   },
+   "max": {
+    "value": 4,
+    "min": 1
+   },
+   "children": [
+    "visual_actor",
+    "visual_guard",
+    "visual_critic"
+   ]
+  },
+  {
+   "name": "visual_actor",
+   "kind": "agent",
+   "model": "sonnet",
+   "tools": [
+    "Bash",
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 5,
+     "max": 40
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2
+    }
+   },
+   "deadline": 600
+  },
+  {
+   "name": "visual_guard",
+   "kind": "gate",
+   "check": "visual-guard",
+   "params": {}
+  },
+  {
+   "name": "visual_critic",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 3,
+     "max": 20
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2
+    }
+   },
+   "deadline": 600
+  },
+  {
+   "name": "learning_gate",
+   "kind": "gate",
+   "check": "learning-check",
+   "params": {},
+   "next": {
+    "fail": "exit:fail"
+   },
+   "_note": "dev_squad T17 makes this node conditional. A gate may not carry a when, so it always runs and passes vacuously when blocking_learnings is 0."
+  },
+  {
+   "name": "audit_a",
+   "kind": "agent",
+   "when": {
+    "fact": "blocking_learnings",
+    "op": "gt",
+    "value": 0
+   },
+   "model": "haiku",
+   "tools": [
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 1,
+     "max": 10
+    },
+    "spend": {
+     "min": 0.01,
+     "max": 0.5
+    }
+   },
+   "deadline": 300,
+   "next": {
+    "fail": "continue",
+    "deadline": "continue"
+   }
+  },
+  {
+   "name": "audit_b",
+   "kind": "agent",
+   "when": {
+    "fact": "architecture_issues",
+    "op": "gt",
+    "value": 0
+   },
+   "model": "haiku",
+   "tools": [
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 1,
+     "max": 10
+    },
+    "spend": {
+     "min": 0.01,
+     "max": 0.5
+    }
+   },
+   "deadline": 300,
+   "next": {
+    "fail": "continue",
+    "deadline": "continue"
+   }
+  },
+  {
+   "name": "audit_c",
+   "kind": "agent",
+   "when": {
+    "fact": "work_items",
+    "op": "gt",
+    "value": 1
+   },
+   "model": "haiku",
+   "tools": [
+    "Read"
+   ],
+   "budget": {
+    "turns": {
+     "min": 1,
+     "max": 10
+    },
+    "spend": {
+     "min": 0.01,
+     "max": 0.5
+    }
+   },
+   "deadline": 300,
+   "next": {
+    "fail": "continue",
+    "deadline": "continue"
+   }
+  },
+  {
+   "name": "ship",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "commit"
+   ]
+  },
+  {
+   "name": "commit",
+   "kind": "agent",
+   "when": {
+    "fact": "git",
+    "op": "eq",
+    "value": true
+   },
+   "model": "haiku",
+   "tools": [
+    "Bash"
+   ],
+   "budget": {
+    "turns": {
+     "min": 1,
+     "max": 5
+    },
+    "spend": {
+     "min": 0.01,
+     "max": 0.2
+    }
+   },
+   "deadline": 120,
+   "_GAP": "A commit is deterministic code, not a model call and not a check. No kind fits."
+  }
+ ]
+};
+
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', flowchart: { htmlLabels: true } });
+
+const $ = (id) => document.getElementById(id);
+const facts = { ...BASE_FACTS };
+function renderFacts() {
+  $('facts').innerHTML = graph.facts.map(f => {
+    if (f.type === 'enum') return `<label>${f.name} <select data-f="${f.name}">${f.values.map(v => `<option ${facts[f.name] === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`;
+    if (f.type === 'bool') return `<label>${f.name} <input type="checkbox" data-f="${f.name}" ${facts[f.name] ? 'checked' : ''}></label>`;
+    return `<label>${f.name} <input type="number" data-f="${f.name}" value="${facts[f.name]}" style="width:70px"></label>`;
+  }).join('');
+  $('facts').querySelectorAll('[data-f]').forEach(el => el.addEventListener('change', () => {
+    const f = graph.facts.find(x => x.name === el.dataset.f);
+    facts[f.name] = f.type === 'bool' ? el.checked : f.type === 'int' ? Number(el.value) : el.value;
+  }));
+}
+async function run() {
+  let script = {};
+  try { script = JSON.parse($('script').value || '{}'); } catch (e) { alert('script is not JSON'); return; }
+  const r = walk(graph, facts, script);
+  $('outcome').textContent = r.outcome; $('outcome').className = 'outcome ' + r.outcome;
+  $('summary').textContent = `${r.ran.length} nodes ran, skipped: ${r.skipped.join(', ') || 'none'}`;
+  $('events').innerHTML = r.events.map(e => {
+    if (e.skipped) return `<li class="skipped">${e.node}: skipped, ${e.why}</li>`;
+    if (e.note) return `<li class="loop">${e.node}: ${e.note}</li>`;
+    return `<li>${e.node} (${e.kind}, by ${e.how}): <b>${e.outcome}</b></li>`;
+  }).join('');
+  const { svg } = await mermaid.render('g' + Date.now(), toMermaid(graph, r));
+  $('diagram').innerHTML = svg;
+}
+$('tabs').innerHTML = SCENARIOS.map((s, i) => `<button data-i="${i}">${s.title}</button>`).join('');
+$('tabs').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  const s = SCENARIOS[Number(b.dataset.i)];
+  $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  Object.assign(facts, BASE_FACTS, s.facts); renderFacts();
+  $('script').value = JSON.stringify(s.script);
+  $('watch').textContent = s.watch;
+  run();
+}));
+$('run').addEventListener('click', run);
+const errors = validate(graph);
+$('validation').innerHTML = errors.length ? errors.map(e => `<li>${e}</li>`).join('') : '<li>no findings</li>';
+$('json').textContent = JSON.stringify(graph, null, 2);
+renderFacts();
+run();
+</script>
+</body>
+</html>

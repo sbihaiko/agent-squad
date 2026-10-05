@@ -1,0 +1,13 @@
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
+.env
+
+scripts/archive/jev_data_real/
+__pycache__/
+.pytest_cache/
+runs/
+*.egg-info/
+build/

@@ -1,0 +1,196 @@
+{
+ "schema_version": 1,
+ "name": "router-dynamic",
+ "description": "A dynamic flow. A router agent runs the ask-matt skill and requests children inside the dispatch envelope (ADR-0113).",
+ "run": {
+  "deadline": 5400,
+  "max_parallel": 2,
+  "spend_cap": 10
+ },
+ "facts": [
+  {
+   "name": "git",
+   "type": "bool",
+   "instrument": "code: git is available in the target",
+   "source_kind": "target"
+  },
+  {
+   "name": "run_spend",
+   "type": "number",
+   "instrument": "code: sum of SDK result spend over agent entries (ADR-0108)",
+   "source_kind": "run_record"
+  }
+ ],
+ "gates": [
+  {
+   "id": "scope",
+   "params": [
+    "allowed_generated"
+   ]
+  },
+  {
+   "id": "security",
+   "params": [
+    "sensitive_paths"
+   ]
+  },
+  {
+   "id": "ac-verify",
+   "params": [
+    "commands_from"
+   ]
+  }
+ ],
+ "root": "main",
+ "nodes": [
+  {
+   "name": "main",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "waves",
+    "final_gate"
+   ]
+  },
+  {
+   "name": "route",
+   "kind": "dispatch",
+   "entry": "router",
+   "max_depth": 2,
+   "max_children": 4,
+   "max_parallel": 2,
+   "deadline": 4800,
+   "join": "all",
+   "allow": {
+    "models": [
+     "opus",
+     "sonnet",
+     "haiku"
+    ],
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "tools": [
+     "Read",
+     "Grep",
+     "Glob",
+     "Edit",
+     "Write",
+     "Bash"
+    ],
+    "skills": [
+     {
+      "name": "grill-with-docs"
+     },
+     {
+      "name": "tdd"
+     },
+     {
+      "name": "code-review"
+     },
+     {
+      "name": "research"
+     }
+    ],
+    "workspaces": [
+     "worktrees/child"
+    ]
+   },
+   "budget": {
+    "turns": {
+     "min": 3,
+     "max": 60
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 4
+    }
+   },
+   "checks": [
+    "scope_gate",
+    "security_gate"
+   ],
+   "next": {
+    "pass": "repeat",
+    "fail": "repeat"
+   }
+  },
+  {
+   "name": "router",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read",
+    "Grep",
+    "Glob"
+   ],
+   "budget": {
+    "turns": {
+     "min": 3,
+     "max": 30
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 2
+    }
+   },
+   "deadline": 600,
+   "skill": "ask-matt",
+   "may_spawn": true,
+   "output_key": "spawns",
+   "next": {
+    "fail": "exit:fail"
+   },
+   "instructions": "The task is this set of issues of one project. Read CLAUDE.md and the issue files. Do not change any file.\n- issue 19: file issues/19-a-restock-can-be-requested.md; blocked by nothing; held-out command [\"cp /Users/rafaelaguilherdacosta/sources/agent-squad/.claude/worktrees/agent-a3e2ec166b3d5fe4a/bench/subject/acceptance/test_issue_19.py tests/api/test_zz_heldout_19.py && python3 -m pytest -q\"]\n- issue 20: file issues/20-a-receipt-closes-a-restock-request.md; blocked by [19]; held-out command [\"cp /Users/rafaelaguilherdacosta/sources/agent-squad/.claude/worktrees/agent-a3e2ec166b3d5fe4a/bench/subject/acceptance/test_issue_20.py tests/api/test_zz_heldout_20.py && python3 -m pytest -q\"]\n- issue 21: file issues/21-restock-lead-times-are-measurable.md; blocked by [20, 19]; held-out command [\"cp /Users/rafaelaguilherdacosta/sources/agent-squad/.claude/worktrees/agent-a3e2ec166b3d5fe4a/bench/subject/acceptance/test_issue_21.py tests/api/test_zz_heldout_21.py && python3 -m pytest -q\"]\n- issue 22: file issues/22-an-order-ships-in-parts.md; blocked by nothing; held-out command [\"cp /Users/rafaelaguilherdacosta/sources/agent-squad/.claude/worktrees/agent-a3e2ec166b3d5fe4a/bench/subject/acceptance/test_issue_22.py tests/api/test_zz_heldout_22.py && python3 -m pytest -q\"]\nYou run in waves. Each time you are called, your input holds a `ledger`: one row per finished child with its task, outcome, files, checks and landed_head. Code lands each passing child into the project in the order you requested it. You never merge. A child with landed_head null did not land. Request, in this wave, only issues whose blockers are all landed in the ledger and that no ledger row already landed. Put two issues in the same wave only when they touch different files; two children that edit one file conflict at landing. When unsure, use separate waves. Ask for at most three children. Each child uses the tdd skill, the tools Read, Edit, Write, Bash, Glob, Grep, a spend of 2 and a turn cap of 60. Name one issue file in the child prompt, and end the prompt with: 'When done, reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"diff\": {\"files\": [{\"path\": \"<changed file>\", \"generated\": false}]}, \"ac_commands\": <that issue's held-out command, as a one-item list>}. Copy ac_commands exactly. Do not run git commit: the harness lands your work.' If a child failed or did not land (for example reason merge_conflict), request one repair child for that issue in the next wave: its worktree starts from the project as landed, so it redoes the issue on top of the landed work. When every issue has a landed row, or a second attempt failed, reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"spawns\": [], \"done\": true}. Otherwise reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"spawns\": [{\"prompt\": \"...\", \"skill\": \"tdd\", \"model\": \"sonnet\", \"effort\": \"medium\", \"tools\": [\"Read\"], \"turns\": 10, \"spend\": 1.0, \"deadline\": 900, \"after\": []}]}."
+  },
+  {
+   "name": "scope_gate",
+   "kind": "gate",
+   "check": "scope",
+   "params": {
+    "allowed_generated": [
+     "package-lock.json"
+    ]
+   }
+  },
+  {
+   "name": "security_gate",
+   "kind": "gate",
+   "check": "security",
+   "params": {
+    "sensitive_paths": [
+     "auth",
+     "crypto",
+     ".env*"
+    ]
+   }
+  },
+  {
+   "name": "final_gate",
+   "kind": "gate",
+   "check": "ac-verify",
+   "params": {
+    "commands_from": "route"
+   },
+   "next": {
+    "fail": "exit:fail"
+   }
+  },
+  {
+   "name": "waves",
+   "kind": "loop",
+   "max": {
+    "value": 6,
+    "min": 1
+   },
+   "children": [
+    "route"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,27 @@
+# The models a subject run uses. Owner ruling, 2026-10-02 (latest): claude-sonnet-5-5 only, on every node of both subject graphs.
+# `squad.subject.load_config` reads this file for the one-issue graph; `scripts/run_router.py` reads it for the router
+# graph. A missing or incomplete file refuses the run: a model is never guessed.
+#
+# The names below are served by the local proxy at 127.0.0.1:8016, and `ANTHROPIC_BASE_URL` must point at it. The CLI
+# child inherits that variable, so a subject run reaches the proxy without further setup. A name the proxy does not
+# serve, such as `opus`, still reaches the Anthropic leg and spends there.
+#
+# The proxy's cost figure for an off-catalog model is a fallback rate, not the real price: it reads "unknown" for
+# `costBasis` and reports about 14x DeepSeek's own price. A spend cap sized for Anthropic therefore fires early.
+# See docs/research/deepseek-model-probe.md and docs/research/prompt-cache-reuse.md.
+
+version: 1
+
+issue:                      # the five-phase graph of one issue (squad/subject.py)
+  model: claude-sonnet-5-5
+  effort: medium
+
+router:                     # applies to docs/design/router.graph.json through squad.subject.apply_router_models
+                            # The design file keeps the envelope's shape and is the test suite's fixture, so it keeps
+                            # its own wider model list. This file narrows it for a real run: the router node takes the
+                            # model below, and the envelope's `models` becomes the child model alone, so a child that
+                            # asks for anything else is rejected whole (squad/envelope.py:47).
+  model: claude-sonnet-5-5     # the node that reads the issue and asks for its children
+  effort: medium
+  child_model: claude-sonnet-5-5   # the model every child the router may ask for
+  child_effort: medium      # the effort the contract's example names; the envelope still allows the others

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PROTOTYPE: the five dev_squad phases as graph data</title>
+<style>
+  :root { --accent: #2a6; --ink: #222; --muted: #777; --line: #ddd; }
+  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; color: var(--ink); margin: 0; padding: 24px; max-width: 1400px; }
+  h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 24px 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; max-width: 900px; }
+  .row { display: grid; grid-template-columns: 380px 1fr; gap: 24px; align-items: start; }
+  .panel { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  label { display: flex; justify-content: space-between; gap: 8px; margin: 4px 0; }
+  select, input { font: inherit; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid var(--line); background: #fff; border-radius: 6px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .tabs button.on { background: #eaf6ee; border-color: var(--accent); }
+  .outcome { font-size: 20px; font-weight: 600; }
+  .outcome.pass { color: var(--accent); } .outcome.fail { color: #c33; } .outcome.deadline { color: #b80; } .outcome.needs-human { color: #36c; }
+  ol.events { font-family: ui-monospace, monospace; font-size: 12.5px; padding-left: 20px; max-height: 480px; overflow: auto; }
+  ol.events li.skipped { color: var(--muted); } ol.events li.loop { color: #36c; }
+  ul.findings li { margin: 4px 0; }
+  pre { font-size: 12px; background: #fafafa; border: 1px solid var(--line); padding: 8px; overflow: auto; max-height: 360px; }
+  .mermaid { border: 1px solid var(--line); border-radius: 8px; padding: 8px; overflow: auto; }
+  small { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>The five dev_squad phases as graph data</h1>
+<p class="lead"><strong>Question (wayfinder ticket #11):</strong> does the draft schema (GLOSSARY.md vocabulary, ADR-0100) express scout, spec, decompose, execute, verify, the actor-critic loops, and the trivial, medium, and large tier skips as data alone? Set the facts, press a scenario, and watch which nodes run, which are skipped, and what the run's last outcome is. Green nodes ran. Grey nodes were skipped by their <code>when</code>. Dashed borders mark nodes that carry a <code>when</code>. Hexagons are gates and never carry one.</p>
+
+<div class="row">
+  <div>
+    <div class="panel">
+      <h2 style="margin-top:0">Facts (free play)</h2>
+      <div id="facts"></div>
+      <h2>Scripted outcomes <small>(name: outcomes in order)</small></h2>
+      <textarea id="script" rows="4" style="width:100%; font: 12px ui-monospace, monospace">{}</textarea>
+      <div style="margin-top:8px"><button class="primary" id="run">Walk the graph</button></div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2 style="margin-top:0">Guided walkthroughs</h2>
+      <div class="tabs" id="tabs"></div>
+      <p id="watch"><small>Pick one.</small></p>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2 style="margin-top:0">Validation of the fixture</h2>
+      <ul class="findings" id="validation"></ul>
+    </div>
+  </div>
+  <div>
+    <div class="panel">
+      <div>Run outcome: <span class="outcome" id="outcome">-</span> <small id="summary"></small></div>
+      <ol class="events" id="events"></ol>
+    </div>
+    <h2>Graph, with this walk painted on it</h2>
+    <div class="mermaid" id="diagram"></div>
+    <h2>Fixture (graph.json)</h2>
+    <pre id="json"></pre>
+  </div>
+</div>
+
+<script type="module">
+/*LOGIC*/
+/*SCENARIOS*/
+const graph = /*GRAPH*/;
+
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', flowchart: { htmlLabels: true } });
+
+const $ = (id) => document.getElementById(id);
+const facts = { ...BASE_FACTS };
+function renderFacts() {
+  $('facts').innerHTML = graph.facts.map(f => {
+    if (f.type === 'enum') return `<label>${f.name} <select data-f="${f.name}">${f.values.map(v => `<option ${facts[f.name] === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`;
+    if (f.type === 'bool') return `<label>${f.name} <input type="checkbox" data-f="${f.name}" ${facts[f.name] ? 'checked' : ''}></label>`;
+    return `<label>${f.name} <input type="number" data-f="${f.name}" value="${facts[f.name]}" style="width:70px"></label>`;
+  }).join('');
+  $('facts').querySelectorAll('[data-f]').forEach(el => el.addEventListener('change', () => {
+    const f = graph.facts.find(x => x.name === el.dataset.f);
+    facts[f.name] = f.type === 'bool' ? el.checked : f.type === 'int' ? Number(el.value) : el.value;
+  }));
+}
+async function run() {
+  let script = {};
+  try { script = JSON.parse($('script').value || '{}'); } catch (e) { alert('script is not JSON'); return; }
+  const r = walk(graph, facts, script);
+  $('outcome').textContent = r.outcome; $('outcome').className = 'outcome ' + r.outcome;
+  $('summary').textContent = `${r.ran.length} nodes ran, skipped: ${r.skipped.join(', ') || 'none'}`;
+  $('events').innerHTML = r.events.map(e => {
+    if (e.skipped) return `<li class="skipped">${e.node}: skipped, ${e.why}</li>`;
+    if (e.note) return `<li class="loop">${e.node}: ${e.note}</li>`;
+    return `<li>${e.node} (${e.kind}, by ${e.how}): <b>${e.outcome}</b></li>`;
+  }).join('');
+  const { svg } = await mermaid.render('g' + Date.now(), toMermaid(graph, r));
+  $('diagram').innerHTML = svg;
+}
+$('tabs').innerHTML = SCENARIOS.map((s, i) => `<button data-i="${i}">${s.title}</button>`).join('');
+$('tabs').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+  const s = SCENARIOS[Number(b.dataset.i)];
+  $('tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  Object.assign(facts, BASE_FACTS, s.facts); renderFacts();
+  $('script').value = JSON.stringify(s.script);
+  $('watch').textContent = s.watch;
+  run();
+}));
+$('run').addEventListener('click', run);
+const errors = validate(graph);
+$('validation').innerHTML = errors.length ? errors.map(e => `<li>${e}</li>`).join('') : '<li>no findings</li>';
+$('json').textContent = JSON.stringify(graph, null, 2);
+renderFacts();
+run();
+</script>
+</body>
+</html>

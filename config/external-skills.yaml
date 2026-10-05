@@ -1,0 +1,40 @@
+# Skills this repo borrows from outside itself (ADR-0129, ticket #135). Each is found by name at run time with
+# `python3 -m squad.skillpath NAME`, never by a path, so a plugin update, a move or a removal shows up in
+# `python3 -m squad.skillpath --check` instead of breaking a door silently.
+#
+# The doors' targets (`.agents/skills/agent-*`) and the `skill:` entries in config/vendor-skills.yaml count as
+# borrowed without being listed. `referenced` adds the skills the docs name but no door opens.
+# `harness` lists commands that belong to Claude Code itself: nothing to resolve.
+# tests/test_skillpath.py fails when docs/skill-workflow-map.md names a command that no list here, no project skill
+# and no door covers: register a new reference in the same change that writes it.
+# `plugins` names the plugins that may supply a borrowed skill when no personal copy exists. A door runs the skill's text
+# with the door's authority, so a plugin that merely ships a skill of the same name is not trusted.
+plugins:
+  - mattpocock-skills
+referenced:
+  - code-review
+  - codebase-design
+  - diagnosing-bugs
+  - domain-modeling
+  - grilling
+  - implement
+  - prototype
+  - research
+  - setup-matt-pocock-skills
+  - tdd
+  - teach
+  - triage
+  - wait-what
+  - wayfinder
+  - wizard
+  - writing-for-agents
+# `optional` lists commands the upstream router names that this machine may not load (an unlisted, in-progress skill).
+# A missing one is no problem and no warning. `retro` is a design-notes stub in pack 1.2.3, and `understand` is not in the pack at all.
+optional:
+  - pr
+  - retro
+  - understand
+harness:
+  - clear
+  - compact
+  - goal
