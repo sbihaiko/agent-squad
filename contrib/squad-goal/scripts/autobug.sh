@@ -1,15 +1,15 @@
 #!/bin/bash
 # usage: autobug.sh   (called by watch.sh every ~6 min; AB_DRY=1 prints what it would dispatch)
 # Automatic bug fixing: every open issue labeled $SG_BUG_LABEL that has no open PR naming it ("Refs #N"), no dispatch
-# marker (auto/bug-<n>) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
+# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
 # PR each, TDD with the RED output in the PR), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed by the loop: a run that ends without a PR is surfaced by its RUN verdict, and the
 # coordinator deletes auto/bug-<n> to retry. SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
-free=$(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
-import json, sys, pathlib
+read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
+import json, re, sys, pathlib
 def find(o):
     if isinstance(o, dict):
         if isinstance(o.get("max_parallel"), int): return o["max_parallel"]
@@ -22,18 +22,26 @@ def find(o):
             if r: return r
 g = pathlib.Path(f"docs/squad/workflows/{sys.argv[1]}.graph.json")
 cap = (find(json.loads(g.read_text())) if g.exists() else None) or 10
-live = 0
+live = 0; busy = set()
 for r in open(sys.argv[2]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
-    if f.exists() and '"event": "verdict"' not in f.read_text() and '"event":"verdict"' not in f.read_text(): live += 1
-print(max(cap - live, 0))
+    if not f.exists(): continue
+    t = f.read_text()
+    if '"event": "verdict"' in t or '"event":"verdict"' in t: continue
+    live += 1
+    for l in t.splitlines():
+        if '"spawn_accepted"' in l:
+            m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
+            if m: busy.add(m.group(1))
+print(max(cap - live, 0), ",".join(sorted(busy)) or "-")
 PY
+
 )
 [ "${free:-0}" -gt 0 ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 pick=()
 while IFS=$'\x1f' read -r n labels; do
-  [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac
+  [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
   pick+=("$n"); [ ${#pick[@]} -ge "$free" ] && break
 done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$lab&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null)

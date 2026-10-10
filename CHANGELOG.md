@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `autobug.sh` skips an issue that a live run already works (a `spawn_accepted` for it in a run without a verdict), so it never dispatches a duplicate beside a run that is already fixing it.
 - squad-goal: `stack.sh` stacks on a stacked PR (chains up to `SG_STACK_DEPTH`, default 3); `forkclose.sh` treats a lock whose pid is gone as stale.
 - squad-goal: `autopilot.sh` never merges a PR whose diff is empty (a fix round that undid the change); it raises NEEDS OWNER instead. The fork test command runs every `tests/test_gui_test_*.py`.
 - squad-goal: `forkclose.sh` sweeps every fork branch; an issue with a MesenAI PR waits for its merge, then its fork half lands with no close; each fork test first rebuilds `SG_E2E_BUILD_DIR` at the base head (`SG_E2E_BUILD_CMD`).
