@@ -8,7 +8,9 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   run=${w%%/ws/*}; grep -q '"event": *"verdict"' "$run/record.jsonl" 2>/dev/null || continue
   [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
-  if [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+  own=$($G -C "$w" branch --show-current)
+  # kept only when HEAD is on no remote branch and on no other local branch (a run that made no commit sits on its base)
+  if [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && [ -z "$($G branch --contains "$sha" --format='%(refname:short)' 2>/dev/null | grep -vxF "${own:-//}" | head -1)" ]; then
     grep -qx "$w" "$seen" || { echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept"; echo "$w" >> "$seen"; }; continue; fi
   b=$($G -C "$w" branch --show-current); $G worktree remove "$w" && echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}"
   case $b in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$b" >/dev/null 2>&1;; esac   # throwaway local names only
