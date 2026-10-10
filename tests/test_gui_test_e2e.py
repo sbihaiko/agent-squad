@@ -1975,14 +1975,14 @@ def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
             {"id": "c", "verdict": "passed", "capture": None, "held": False,
              "batch": "b1", "mode": "automated", "expect": "what c shows"}]
     calls = []
-    detail = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
-                              runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
+    url = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
+                           runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
     assert len(calls) == 1, calls
     title, body = calls[0][1], calls[0][2]
-    assert title == "tiny: a — expected x, observed y (+1 more steps)", "the title names the failure, not a count"
+    assert title == "GUI test `tiny`: 2 failed steps"
     assert "### `a`" in body and "### `b`" in body and "### `c`" not in body
     assert "failed (expected x, observed y)" in body
-    assert detail["url"] == "https://example.invalid/1" and detail["existing"] is False
+    assert url == "https://example.invalid/1"
 
 
 HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
@@ -2093,18 +2093,12 @@ def _bug_helper(tmp_path, output="Issue created: https://example.invalid/1241", 
     return root, root / "bug-titles.log"
 
 
-def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True,
-             fresh_github=True):
+def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True):
     """The run command driven in-process on its own contract: argv in, one results file out.
 
     The adapter registry is how a fake adapter gets a name the command accepts; a literal `module:Class` spec is never
-    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug. The bug
-    doors are pointed at the fake GitHub (#1249), so a filing lands there and never on the real one; `fresh_github`
-    False keeps the board between two runs of one case.
+    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug.
     """
-    if fresh_github:
-        fake_github.reset()
-    extra = (*extra, "--github-runner", FAKE_GITHUB)
     import importlib.util
     monkeypatch.chdir(FORK)
     monkeypatch.setenv("MESENAI_ROOT", str(root if root is not None else tmp_path / "mesenai"))
@@ -2141,9 +2135,7 @@ def test_1241_asked_it_files_exactly_one_bug_for_every_failed_step_and_records_i
     root, titles = _bug_helper(tmp_path)
     code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
     assert code == 1
-    assert titles.read_text().splitlines() == [
-        "run-script-smoke: smoke.still-home — expected play.home, observed play.library (+1 more steps)"], \
-        "one bug, never one per step, and its title says what failed"
+    assert titles.read_text().splitlines() == ["GUI test `run-script-smoke`: 2 failed steps"], "one bug, never one per step"
     body = (root / "bug-body.log").read_text()
     assert "### `smoke.still-home`" in body and "### `smoke.unknown-id`" in body, "every failed step, in one bug"
     assert "### `smoke.open-library`" not in body, "a step that passed is not a failed step of this bug"
@@ -2214,144 +2206,3 @@ def test_1241_an_unknown_selector_is_refused_before_anything_is_launched(tmp_pat
     assert any("b1.two" in reason or "b2.a" in reason for reason in r["reasons"]), "it names what the script does have"
     assert "selection" not in r
     assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
-
-
-# --- #1249: the bug a red run files names the failure, and the same failure is never filed twice ---
-
-from squad.gui_test_report import (bug_title, comment_on_bug_with, failure_key, failure_words,  # noqa: E402
-                                   find_open_bug_with, report_failures_detail)
-from tests import gui_test_github_fake as fake_github  # noqa: E402
-
-FAKE_GITHUB = "tests.gui_test_github_fake:shell"
-REPO_1249 = "example/1249"
-
-
-class _Board:
-    """A fake GitHub runner around one board: the search door reads the issues it holds, the file door adds one.
-
-    Filing is the fake board's own, not the checkout helper's: these cases are about which issue a run belongs to,
-    and only the run-command case below goes through the helper route a real run takes.
-    """
-
-    def __init__(self, repo=REPO_1249):
-        fake_github.reset()
-        self.find_open_bug = find_open_bug_with(repo, fake_github.shell)
-        self.comment_on_bug = comment_on_bug_with(repo, fake_github.shell)
-        self.filed = []
-
-    @property
-    def issues(self):
-        return fake_github.ISSUES
-
-    @property
-    def comments(self):
-        return fake_github.COMMENTS
-
-    @property
-    def doors(self):
-        return {"find_open_bug": self.find_open_bug, "comment_on_bug": self.comment_on_bug}
-
-    def file_bug(self, title, body, priority=None):
-        number = 1000 + len(self.issues) + 1
-        url = f"https://example.invalid/bugs/{number}"
-        self.issues.append({"number": number, "title": title, "body": body, "url": url})
-        self.filed.append((title, body))
-        return url
-
-    def store(self, path, name):
-        return f"https://evidence.example/{name}"
-
-
-def test_1249_the_title_names_the_script_the_step_and_the_failure():
-    """The old title was `GUI test <script>: N failed step(s)`: nine of them in one afternoon say nothing."""
-    one = [{"id": "home.focus-holds-up", "verdict": "failed (expected play.home.open-rom, observed none)"}]
-    assert failure_words("failed (expected play.home.open-rom, observed none)") == \
-        "expected play.home.open-rom, observed none"
-    assert failure_words("failed (timeout waiting for ui.screen == play.library)") == \
-        "timeout waiting for ui.screen == play.library"
-    assert failure_words("failed (unknown id)") == "unknown id"
-    assert bug_title("play-pad-only", one) == \
-        "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none"
-    two = one + [{"id": "home.open-library", "verdict": "failed (timeout waiting for ui.screen == play.library)"}]
-    assert bug_title("play-pad-only", two) == \
-        "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none (+1 more steps)"
-    other = [{"id": "home.focus-holds-up", "verdict": "failed (expected play.home.open-rom, observed play.library)"}]
-    assert bug_title("play-pad-only", other) != bug_title("play-pad-only", one), "two failures, two titles"
-    assert failure_key("play-pad-only", one[0]) == "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none"
-    for title in (bug_title("play-pad-only", one), bug_title("play-pad-only", two)):
-        assert not re.search(r"\d+ failed step", title), title
-
-
-def test_1249_a_run_of_a_failure_already_open_comments_instead_of_filing_a_second_bug(tmp_path):
-    d = _two_failures_script()
-    results = run(d, TickingFake(tmp_path))
-    board = _Board()
-    first = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json",
-                                   run={"run_id": "run-1", "build_sha": "abc123", "platform": "darwin-arm64"},
-                                   **board.doors)
-    assert first["existing"] is False and len(board.issues) == 1 and board.comments == []
-    again = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json",
-                                   run={"run_id": "run-2", "build_sha": "def456", "platform": "darwin-arm64"},
-                                   **board.doors)
-    assert again["existing"] is True and again["url"] == first["url"], "the run belongs to the open bug"
-    assert len(board.issues) == 1, "the same failure is one open bug, however many runs hit it"
-    [comment] = board.comments
-    assert comment["number"] == board.issues[0]["number"]
-    for text in ("run-2", "def456", "### `b1.bad-screen`", "### `b1.never`",
-                 "the library is showing", "failed (timeout waiting for ui.screen == nowhere)"):
-        assert text in comment["body"], text
-
-
-def test_1249_a_different_failure_is_a_second_bug_with_its_own_readable_title(tmp_path):
-    board = _Board()
-    d = _two_failures_script()
-    report_failures_detail(d, run(d, TickingFake(tmp_path)), board.store, board.file_bug, tmp_path / "a.json",
-                           **board.doors)
-    other = _two_failures_script()
-    other["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.library"  # that step passes; the wait times out
-    report_failures_detail(other, run(other, TickingFake(tmp_path)), board.store, board.file_bug, tmp_path / "a.json",
-                           **board.doors)
-    titles = [i["title"] for i in board.issues]
-    assert len(titles) == 2 and len(set(titles)) == 2, titles
-    assert titles[0].startswith("tiny: b1.bad-screen — ") and titles[1].startswith("tiny: b1.never — "), titles
-    assert board.comments == [], "a different failure is a new bug, never a comment on an unrelated one"
-
-
-def test_1249_a_look_up_that_cannot_run_files_a_bug_rather_than_losing_the_failure(tmp_path):
-    """No `gh`, no network: the run still opens its bug, and the file says why it could not check for a twin."""
-    board = _Board()
-    board.find_open_bug = lambda key: (_ for _ in ()).throw(OSError("no gh"))
-    d = _two_failures_script()
-    detail = report_failures_detail(d, run(d, TickingFake(tmp_path)), board.store, board.file_bug,
-                                    tmp_path / "a.json", **board.doors)
-    assert detail["existing"] is False and len(board.issues) == 1
-    assert "look-up" in detail["lookup_failed"]
-
-
-def test_1249_the_run_command_records_the_issue_the_run_belongs_to(tmp_path, monkeypatch):
-    root, titles = _bug_helper(tmp_path)
-    fake_github.reset()
-    code, first = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
-    assert code == 1 and first["bug"]["filed"] is True
-    assert first["bug"]["existing"] is False and len(fake_github.ISSUES) == 1
-    assert first["bug"]["url"] == fake_github.ISSUES[0]["url"] and fake_github.ISSUES[0]["url"]
-    assert first["bug"]["title"].startswith("run-script-smoke: smoke.still-home — ")
-    code, again = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root, fresh_github=False)
-    assert again["bug"]["filed"] is True and again["bug"]["existing"] is True
-    assert again["bug"]["url"] == first["bug"]["url"], "the second run names the issue it was attached to"
-    assert len(fake_github.ISSUES) == 1 and len(titles.read_text().splitlines()) == 1, "one bug, never two"
-    [comment] = fake_github.COMMENTS
-    assert again["run_id"] in comment["body"] and again["build_sha"] in comment["body"]
-    assert "### `smoke.still-home`" in comment["body"] and "### `smoke.unknown-id`" in comment["body"]
-
-
-def test_1249_a_comment_that_cannot_be_posted_still_reports_the_run(tmp_path):
-    """An open bug the run cannot comment on is still a run to report: it files its own, and says why."""
-    board = _Board()
-    d = _two_failures_script()
-    results = run(d, TickingFake(tmp_path))
-    report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
-    board.comment_on_bug = lambda issue, body: (_ for _ in ()).throw(OSError("no network"))
-    detail = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
-    assert detail["existing"] is False and len(board.issues) == 2 and board.comments == []
-    assert "comment" in detail["lookup_failed"] and board.issues[0]["url"] in detail["lookup_failed"]

@@ -35,16 +35,6 @@ A red run files **one** bug for the whole run through the MesenAI failure-report
 never pollutes the board (#1241). The bug is filed only for the registered emulator adapter — a run against a fake
 adapter never touches GitHub. A bug that cannot be filed is recorded as `bug.filed=false` with the reason and never
 aborts the run: the exit code reads the steps, never the filing.
-
-That bug says what failed and is never filed twice (#1249): its title is the script, the first failed step and that
-failure in plain words (`run-script-smoke: smoke.still-home — expected play.home, observed play.library (+1 more
-steps)`), and a run whose first failed step and failure match an **open** bug comments on it — with the run id, the
-build SHA and the same evidence — instead of opening a second one. `bug` in the results file names the issue the run
-belongs to, new or existing, in `bug.url`/`bug.title`/`bug.existing`.
-
-`--github-runner module:callable` swaps the shell the bug's GitHub calls go through, the same `module:Class` shape
-`--adapter` takes: the acceptance suite drives the filing path against a fake GitHub with it, so no test reaches the
-network. Without it the calls run for real through `gh api` and the checkout's `scripts/report-bug.sh`.
 """
 import argparse
 import copy
@@ -65,8 +55,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from squad.gui_test import ScriptError, validate  # noqa: E402
-from squad.gui_test_report import (comment_on_bug_with, file_bug_with, find_open_bug_with,  # noqa: E402
-                                   report_failures_detail)
+from squad.gui_test_report import file_bug_with, report_failures  # noqa: E402
 from squad.gui_test_supervise import Crash, Hang, Session, run_supervised  # noqa: E402
 
 RESULTS_FORMAT = "gui-test-results/1"
@@ -192,28 +181,10 @@ def local_store(path, name=None):
     return Path(path).name
 
 
-def shell_of(spec):
-    """The shell a `--github-runner module:callable` spec names: `(argv, **kw) -> stdout`, the contract `_sh` has."""
-    module, _, attr = spec.partition(":")
-    import importlib
-    if not (module and attr):
-        raise ValueError(f"{spec!r} is not a module:callable spec")
-    return getattr(importlib.import_module(module), attr)
-
-
-def file_one_bug(script, rows, repo_root, approvals_path, store=None, runner=None, repo=None, run=None):
-    """File ONE bug listing every failed step (never one per step), or attach the run to the open bug for the same
-    failure; return that bug's detail (`title`, `key`, `url`, `existing`, `lookup_failed`).
-
-    `repo` is the adapter's GitHub slug: with it the doors also look for an open bug with the same first failed step and
-    failure and comment there (#1249). Without it — a direct call, a checkout with no slug — the run only files, which
-    is the one-bug-per-run behaviour of #1190.
-    """
-    file_bug = file_bug_with(str(repo_root), runner)
-    doors = {"find_open_bug": find_open_bug_with(repo, runner), "comment_on_bug": comment_on_bug_with(repo, runner)} \
-        if repo else {}
-    return report_failures_detail(script, rows, store or local_store, file_bug, Path(approvals_path),
-                                  priority="P1", run=run, **doors)
+def file_one_bug(script, rows, repo_root, approvals_path, store=None, runner=None):
+    """File ONE bug listing every failed step (never one per step); return its URL."""
+    file_bug = file_bug_with(str(repo_root), runner) if runner else file_bug_with(str(repo_root))
+    return report_failures(script, rows, store or local_store, file_bug, Path(approvals_path), priority="P1")
 
 
 def bug_reason(entry, rows, repo_root, asked):
@@ -293,9 +264,6 @@ def main(argv=None):
     ap.add_argument("--file-bug", action="store_true",
                     help="file the one bug a red run files through scripts/report-bug.sh; off by default, so a test, "
                          "acceptance or CI run never touches the board")
-    ap.add_argument("--github-runner",
-                    help="a module:callable shell the bug's GitHub calls go through instead of the real one (the "
-                         "acceptance suite points this at a fake GitHub, so no test reaches the network)")
     args = ap.parse_args(argv)
 
     name = args.adapter
@@ -306,13 +274,6 @@ def main(argv=None):
     else:
         print(f"gui test run: FAILED\n  unknown adapter {name!r}; known: {', '.join(sorted(ADAPTERS))}", file=sys.stderr)
         return 1
-    shell = None
-    if args.github_runner:
-        try:
-            shell = shell_of(args.github_runner)
-        except (ImportError, AttributeError, ValueError) as ex:
-            print(f"gui test run: FAILED\n  --github-runner {args.github_runner!r}: {ex}", file=sys.stderr)
-            return 1
 
     path = Path(args.script).expanduser()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -367,16 +328,10 @@ def main(argv=None):
     record.update({"status": status, "reasons": reasons})
     bug = {"filed": False, "reason": bug_reason(entry, rows, os.environ.get("MESENAI_ROOT", ""), args.file_bug)}
     if bug["reason"] is None:
-        n = len([r for r in rows if kind(r["verdict"]) == "failed"])
         try:  # a bug that could not be filed is recorded, never raised: the exit code reads the steps, not the filing
-            detail = file_one_bug(script, rows, os.environ.get("MESENAI_ROOT", ""), artifacts / "approvals.json",
-                                  runner=shell, repo=entry["repo"],
-                                  run={"run_id": run_id, "build_sha": record["build_sha"], "platform": platform_tag()})
-            bug = {"filed": True, "url": detail["url"], "title": detail["title"], "existing": detail["existing"],
-                   "reason": ("the open bug for this failure: the run commented on it instead of opening a second one"
-                              if detail["existing"] else
-                              f"a new bug for the run's {n} failed step(s)" +
-                              (f"; {detail['lookup_failed']}" if detail["lookup_failed"] else ""))}
+            bug = {"filed": True, "url": file_one_bug(script, rows, os.environ.get("MESENAI_ROOT", ""),
+                                                      artifacts / "approvals.json"),
+                   "reason": f"one bug for the run's {len([r for r in rows if kind(r['verdict']) == 'failed'])} failed step(s)"}
         except (subprocess.SubprocessError, OSError) as ex:
             bug = {"filed": False, "reason": f"report-bug.sh failed: {ex}"}
     record["bug"] = bug
@@ -384,7 +339,7 @@ def main(argv=None):
     lines += [f"  {r['id']}: {r['verdict']}" for r in rows if kind(r["verdict"]) in ("failed", *UNRESOLVED)]
     lines.append(f"  results: {out}")
     if bug["filed"]:
-        lines.append(f"  bug: {bug['url']}" + (" (the run joined an open bug)" if bug.get("existing") else ""))
+        lines.append(f"  bug: {bug['url']}")
     report(record, out, f"gui test run: {'RED' if status == 'failed' else 'GREEN'}\n" + "\n".join(lines))
     return 1 if status == "failed" else 0
 
