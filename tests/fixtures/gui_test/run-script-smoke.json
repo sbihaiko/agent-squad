@@ -1,0 +1,87 @@
+{
+  "format": "gui-test/1",
+  "name": "run-script-smoke",
+  "target": "fake-shape",
+  "requires": {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused"]},
+  "variants": {"window.mode": ["windowed"]},
+  "fixtures": {},
+  "batches": [
+    {
+      "id": "open",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "smoke.open-library",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "action": {"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+          "wait": {"check": "ui.screen == play.library", "timeout_ticks": 20},
+          "check": {"name": "ui.screen", "args": {"is": "play.library"}},
+          "expect": "A on the Home screen opens the library",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "smoke.still-home",
+          "role": "under-test",
+          "precondition": "ui.screen == play.library",
+          "wait": {"check": "ui.screen == play.library", "timeout_ticks": 2},
+          "check": {"name": "ui.screen", "args": {"is": "play.home"}},
+          "expect": "the Home screen is still on top (it is not: the library opened)",
+          "severity": "major",
+          "mode": "automated"
+        }
+      ]
+    },
+    {
+      "id": "unknown",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "smoke.unknown-id",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "wait": {"timeout_ticks": 1},
+          "check": {"name": "ui.focused", "args": {"is": "play.ghost"}},
+          "expect": "a check on an id the application does not have fails loudly",
+          "severity": "major",
+          "mode": "automated"
+        }
+      ]
+    },
+    {
+      "id": "manual",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "smoke.manual",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "expect": "the pad lamp P1 lights when a pad is connected",
+          "severity": "minor",
+          "mode": "manual"
+        }
+      ]
+    },
+    {
+      "id": "unchecked",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "smoke.unchecked",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "action": {"name": "pad.press", "args": {"button": "Right", "ticks": 1}},
+          "wait": {"timeout_ticks": 2},
+          "expect": "the focus ring moves right and nothing objective decides it",
+          "severity": "minor",
+          "mode": "automated"
+        }
+      ]
+    }
+  ]
+}
