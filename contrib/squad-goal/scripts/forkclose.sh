@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: forkclose.sh   (watch.sh, every loop; FC_DRY=1 prints the candidates)
-# Fork work merges itself (an issue with an open PR too gets only its fork half merged, no close):
+# Fork work merges itself: an issue that also has a MesenAI PR waits for it, then gets its fork half merged with no close.
 # Fork-only work closes itself: an open issue whose card is Code Complete, with no open PR naming it and a fork branch
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
@@ -12,11 +12,14 @@
 L="$A/forkclose.lock"; mkdir "$L" 2>/dev/null || exit 0   # a test pass is still running
 trap 'rmdir "$L" 2>/dev/null' EXIT
 G="/usr/bin/git -C $SG_FORK_DIR"
-cc=$(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null)
+ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null | tr '\n' ' ') "
+pat=${SG_FORK_BRANCH//%n/}; cc=$($G for-each-ref --format='%(refname:short)' "refs/heads/$pat*" | sed "s#^$pat##" | grep -E '^[0-9]+$')   # every fork branch, so a closed issue's fork half still lands
 [ -n "$cc" ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 for n in $cc; do
-  mixed=""; case "$refs" in *" $n "*) mixed=1;; esac   # the issue also has an open MesenAI PR: merge and test its fork half, the PR path closes it
+  case "$refs" in *" $n "*) continue;; esac   # an open MesenAI PR: its fork half waits for that merge (the fork suite runs against main's build)
+  st=$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null) || continue
+  mixed=""; if [ "$st" = closed ]; then mixed=1; else case "$ready" in *" $n "*) ;; *) continue;; esac; fi   # closed: its PR half landed, merge the fork half without touching the issue
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
   [ "$($G rev-list --count "$SG_FORK_BASE..$br")" -gt 0 ] || continue
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; [ -e "$mk" ] && continue
@@ -36,10 +39,15 @@ for n in $cc; do
   m=$($G rev-parse HEAD)
   [ -n "${SG_E2E_DIR:-}" ] && [ -d "$SG_E2E_DIR" ] && [ -z "$(/usr/bin/git -C "$SG_E2E_DIR" status --porcelain --untracked-files=no)" ] \
     && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"
+  if [ -n "${SG_E2E_BUILD_DIR:-}" ] && [ -d "$SG_E2E_BUILD_DIR" ]; then   # the built emulator the real-app cases drive: rebuild at the base's head (incremental)
+    /usr/bin/git -C "$SG_E2E_BUILD_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_BUILD_DIR" checkout -q --detach "origin/$SG_BASE" \
+      && (cd "$SG_E2E_BUILD_DIR" && eval "${SG_E2E_BUILD_CMD:-make core && make ui}") > "$SG_STATE/e2e-build.log" 2>&1 \
+      || echo "FORKCLOSE WARN #$n: rebuilding $SG_E2E_BUILD_DIR failed (see e2e-build.log)"
+  fi
   out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- sh -c "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
   tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
   if [ $rc = 0 ] && [ -n "$mixed" ]; then
-    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half is still an open PR; the issue closes on that path.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
+    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
     echo "FORKCLOSE #$n fork half merged ($br ${head:0:9} -> ${m:0:9}, $id green; PR still open)"
   elif [ $rc = 0 ]; then
     gh api -X POST repos/$SG_REPO/issues/$n/comments -F body=@- >/dev/null <<EOT

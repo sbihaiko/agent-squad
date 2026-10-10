@@ -505,4 +505,4 @@ Report:
 - Anthropic quota-guard activations and substitutions that occurred;
 - stalls and recoveries that occurred;
 - open `needs-ratification` items;
-- anything left undone, and why.
+- anything left undone, and why. An issue with both a MesenAI PR and fork work waits for the PR to merge, then `forkclose.sh` merges its fork half (it sweeps every fork branch, so a closed issue's half still lands) without touching the issue; before each fork test it rebuilds `SG_E2E_BUILD_DIR` at the base head (`SG_E2E_BUILD_CMD`) for the real-app cases.
