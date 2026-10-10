@@ -575,3 +575,36 @@ def test_1190_the_bug_goes_through_report_bug_sh(tmp_path):
     fb = file_bug_with("/repo", runner=lambda args, **kw: calls.append(args) or "Issue created: u/1\n")
     fb("t", "b", "P1")
     assert calls == [["/repo/scripts/report-bug.sh", "t", "b", "P1"]]
+
+
+# --- #1186: CI verdict: a missing native core or a failed step is red; needs-review/pending alone is green ---
+
+from squad.gui_test_ci import ci_verdict  # noqa: E402
+
+
+def _r(*verdicts):
+    return [{"id": f"b1.s{i}", "verdict": v, "capture": None, "held": False} for i, v in enumerate(verdicts)]
+
+
+def test_ci_a_run_with_the_native_core_unavailable_is_red_never_a_skip():
+    code, summary = ci_verdict(_r("pending", "pending"), core_available=False)
+    assert code != 0
+    assert "native core" in summary
+
+
+def test_ci_a_run_with_a_failed_step_is_red_and_names_it():
+    code, summary = ci_verdict(_r("passed", "failed (timeout waiting for x)"), core_available=True)
+    assert code != 0
+    assert "b1.s1" in summary
+
+
+def test_ci_only_needs_review_and_pending_steps_is_green_and_listed_in_the_summary():
+    code, summary = ci_verdict(_r("passed", "needs review", "pending"), core_available=True)
+    assert code == 0
+    assert "needs review" in summary and "b1.s1" in summary and "b1.s2" in summary
+
+
+def test_ci_a_clean_run_is_green(tmp_path):
+    results = _three_step_run(tmp_path)[3]
+    code, _ = ci_verdict(results, core_available=True)
+    assert code == 0

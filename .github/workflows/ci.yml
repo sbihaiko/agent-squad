@@ -25,3 +25,7 @@ jobs:
       - run: ruff check squad tests
       - run: mypy squad
       - run: python3 -m pytest -n auto
+      - name: GUI test squad e2e suite
+        env:
+          MESENAI_REPO: ${{ github.workspace }}/../MesenAI
+        run: python3 -m pytest tests/test_gui_test_e2e.py -q
