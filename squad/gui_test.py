@@ -68,6 +68,8 @@ def _step(s, in_steps, ctx, bad):
         waited = [k for k in ("timeout_frames", "timeout_ticks") if k in (s.get("wait") or {})]
         if family and len(waited) == 1 and waited[0] != "timeout_" + family:
             bad.append(f"{sid}: action counts {family} but wait uses {waited[0]}")
+    if "sensitive" in s and type(s["sensitive"]) is not bool:
+        bad.append(f"{sid}: sensitive must be true or false")
     if s.get("check"):
         _name("check", CHECK_NS, s["check"]["name"], ctx["requires"], ctx["caps"], sid, bad)
     if "wait" in s:

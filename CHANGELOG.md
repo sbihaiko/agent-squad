@@ -2,8 +2,22 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: an issue with both a PR and fork work: `forkclose.sh` merges and tests its fork half (Code Complete or Testing) without closing it, and `stack.sh` hands dependents both the PR to stack on and the fork branch to merge.
+- squad-goal: the pre-push checklist forbids an invented owner go-ahead: an ADR amendment needs a quote present word for word in the request, else the conflicting change is undone.
+- squad-goal: `stack.sh` dispatches on Code Complete (owner's pick 2026-10-10): a Code Complete blocker no longer gates; with a PR it stacks, with fork-only work its unmerged fork branch is named (`READY FORK <br>`) and `autofrontier.sh` tells the child to merge it into its own fork branch first.
+- squad-goal: `wtclean.sh` also drops stale `acpr.sh` trees (and `acpr.sh` removes its tree on kill), closed fork-only issue worktrees with their merged branch, `~/wt-*` worktrees of merged PRs. Child worktrees still wait for the run verdict: the land step reads every child workspace (an early per-child cleanup failed a run with land_workspace_missing and was reverted).
+- squad-goal forkclose: a merge conflict launches a conflict-fix squad run on the fork branch (base merged in, both sides kept); its new head re-arms the close. The hub labels such runs `merge #N`.
+- squad-goal **autofrontier** (`scripts/autofrontier.sh`): the loop dispatches the startable frontier itself as soon as a blocker falls (one squad start, free slots, wave order, profile preamble).
+- squad-goal **forkclose** (`scripts/forkclose.sh`): fork-only Code Complete work is merged into the fork base, tested through `test.sh` and closed with evidence, or the merge is reverted (`git revert -m 1`) on a red suite.
+- squad-goal `stack.sh`: optimism keys on the blocker's card being in Testing, not on a merged PR that says "Refs #N" (a docs PR citing an issue had unblocked its dependents).
+- squad-goal GraphQL diet: card moves are REST (`scripts/board.py`, cached field/item ids), `reconcile.py` reads and moves over REST, the review diff is REST, and the pre-push checklist tells children to open PRs with `gh api --method POST`.
+- squad-goal review chain reordered by measured latency: Gemini 3.8 flash high (median 18 s) before Grok 4.6 (median 271 s, 2/6 timeouts); timeout 480 s -> 300 s.
+- squad-goal hub: a run that implements issues is labeled `build #N …` (was `code #N …`).
+- squad-goal board latency: moves go through `scripts/board.sh`, which flags the hub to refresh within 2 s (was up to 60 s + 15 s page poll, now 5 s); `childcc.py` runs every 30 s.
+- squad-goal `scripts/childcc.py`: a child that finishes with outcome pass moves its issue to Code Complete during the run (live runs only, once per child; the issue is read from the child's spawn prompt).
+- squad-goal hub: a run whose final gate failed but whose work landed and whose issues were all closed afterwards (verified by hand, evidence on the issue) shows as `verified`, not `failed`.
 - squad-goal `scripts/test.sh`: a coordinator test pass (post-merge e2e, fork suite) moves the card to Testing, logs under `$SG_STATE/tests/`, queues the result on the issue, and shows on the hub as `test #N` with its live log as the panel.
-- squad-goal hub: a bug-fix run (request says "(bug)" or names a `fix/` branch) is labeled `fix #N`, not `code #N`.
+- squad-goal hub: a bug-fix run (request says "(bug)" or names a `fix/` branch) is labeled `fix #N`, not `build #N`.
 - squad-goal **autobug**: `scripts/autobug.sh`, run by the watch loop every ~6 min, dispatches every open `bug` issue without an open PR, dispatch marker or skip label, all in one squad start within the free slots (one child and PR each, TDD with the RED output in the PR); profile knobs `SG_AUTO_BUGFIX`, `SG_BUG_LABEL`, `SG_BUG_SKIP_LABELS`, `SG_BUG_PROJECT`/`SG_BUG_DOING`.
 - squad-goal `stack.sh` is optimistic while testing: a blocker whose PR is already merged into the base no longer gates its dependents while its e2e runs or the issue waits to close.
 - squad-goal board flow gains **Code Complete** between In Progress and Testing: an open PR is Code Complete (`revci.sh`, `reconcile.py`); Testing starts at the merge, while the e2e on the merge SHA runs (`autopilot.sh`); the hub orders and colors the new column.

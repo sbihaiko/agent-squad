@@ -15,7 +15,7 @@ function scriptModule() {
       return { error: `unknown format ${JSON.stringify(script && script.format)}; the dashboard draws ${JSON.stringify(SCRIPT_FORMATS)}` };
     }
     const node = (s) => ({ id: s.id, text: s.expect, tags: s.variants && Object.keys(s.variants).length ? Object.entries(s.variants).map(([k, v]) => `${k}=${v}`) : ["all"],
-      manual: s.mode === "manual", severity: s.severity });
+      manual: s.mode === "manual", sensitive: s.sensitive === true, severity: s.severity });
     return { name: script.name, batches: (script.batches || []).map((b) => ({ id: b.id,
       sections: SECTIONS.filter((k) => (b[k] || []).length).map((k) => ({ label: k, nodes: b[k].map(node) })) })) };
   }
@@ -41,7 +41,7 @@ function scriptModule() {
       for (const sec of b.sections) {
         for (const n of sec.nodes) {
           if (prev !== null) out += `<path class="flow" d="M${x + STEP.w / 2} ${prev} V${y}" marker-end="url(#arrow)"/>`;
-          const cls = n.manual ? "step manual" : "step auto";
+          const cls = (n.manual ? "step manual" : "step auto") + (n.sensitive ? " sensitive" : "");
           out += `<g class="${cls}" data-step="${escXml(n.id)}" data-section="${sec.label}"><title>${escXml(n.id)}: ${escXml(n.text)}</title>`
             + `<rect x="${x}" y="${y}" width="${STEP.w}" height="${STEP.h}" rx="6"/>`
             + `<text class="step-id" x="${x + 8}" y="${y + 14}">${escXml(sec.label === "steps" ? "" : sec.label + " · ")}${escXml(n.id)}${n.manual ? " · manual" : ""}</text>`
@@ -61,16 +61,23 @@ function scriptModule() {
 
   // A GUI test run as nodes, one per step in record order: the runner's gui_step, gui_capture and gui_verdict events up to the replay cursor
   // (null is the end). A step shows `executed` once its wait was met, its capture was taken and its verdict is in; a verdict with no
-  // capture is `failed` (its wait timed out); a step with no verdict yet is `running`.
+  // capture is `failed` (its wait timed out); a step with no verdict yet is `running`; a manual step nobody ran is `pending`.
   function guiRun(events, cursor) {
-    const nodes = new Map();
+    const nodes = new Map(), sources = new Map();
     for (const e of events) {
       if (cursor != null && e.pos > cursor) break;
       if (!String(e.event).startsWith("gui_")) continue;
-      if (!nodes.has(e.node)) nodes.set(e.node, { id: e.node, status: "running", verdict: null, capture: null, pos: e.pos });
+      if (!nodes.has(e.node)) nodes.set(e.node, { id: e.node, status: "running", verdict: null, capture: null, held: false, manual: false, pos: e.pos });
       const n = nodes.get(e.node);
-      if (e.event === "gui_capture") n.capture = { path: e.path, size: e.size, sha256: e.sha256 };
-      if (e.event === "gui_verdict") { n.verdict = e.verdict; n.status = n.capture ? "executed" : "failed"; }
+      if (e.manual) n.manual = true;
+      // A held capture (a step marked sensitive) shows no path until a gui_approve event names its sha256.
+      if (e.event === "gui_capture") { n.held = e.held === true; n.capture = { path: n.held ? null : e.path, size: e.size, sha256: e.sha256 }; sources.set(e.node, e.path); }
+      if (e.event === "gui_approve" && n.capture && n.capture.sha256 === e.sha256) { n.held = false; n.capture.path = sources.get(e.node); }
+      if (e.event === "gui_verdict") { n.verdict = e.verdict; n.status = e.verdict === "pending" ? "pending" : n.capture ? "executed" : "failed"; }
+      // A vision verdict shows what the model saw and what the call cost; a run stopped by its spend cap marks the skipped steps.
+      if (e.event === "gui_vision") { n.vision = { answer: e.answer, saw: e.saw, cost: e.cost }; n.cost = e.cost; }
+      if (e.event === "gui_stop") n.stop = e.reason;
+      if (e.event === "gui_verdict" && String(e.verdict).startsWith("skipped")) n.status = "skipped";
     }
     return [...nodes.values()];
   }
