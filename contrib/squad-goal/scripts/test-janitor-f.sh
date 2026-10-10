@@ -1,0 +1,18 @@
+#!/bin/bash
+# Regression test for janitor rule F (report-only: open issue named by a fork commit subject "(#N)"), stubbed gh and a throwaway fork repo. usage: bash test-janitor-f.sh [path/to/janitor.py]
+src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+mkdir -p "$T/bin" "$T/st/auto" "$T/co" "$T/fork"; cp "$src" "$T/janitor.py"
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in *issues/5*) echo open;; *issues/6*) echo closed;; *search/issues*) echo "${GH_PRS:-0}";; *) echo "";; esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+g() { git -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
+g init -q -b local/next; echo 1 > "$T/fork/f"; g add f
+GIT_COMMITTER_DATE="2020-01-01T00:00:00" g commit -q --date="2020-01-01T00:00:00" -m "squad-goal: fix for a bug (#5)"
+echo 2 > "$T/fork/f"; GIT_COMMITTER_DATE="2020-01-01T00:00:00" g commit -qam "squad-goal: another (#6)" --date="2020-01-01T00:00:00"
+run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_FORK_DIR="$T/fork" SG_FORK_BASE=local/next SG_REPO=x/y JANITOR_DRY=1 python3 -I "$T/janitor.py" 2>&1; }
+r=$(run); case "$r" in *"FIXED-NOT-CLOSED #5"*) ok "open issue named by an old fork commit is reported";; *) ko "no report for #5: '$r'";; esac
+case "$r" in *"#6"*) ko "closed issue #6 reported";; *) ok "closed issue not reported";; esac
+GH_PRS=1; export GH_PRS; r=$(run); case "$r" in *"#5"*) ko "reported although an open PR names it";; *) ok "an open PR names it: not reported";; esac
+rm -rf "$T"; exit $fail

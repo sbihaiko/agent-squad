@@ -4,7 +4,7 @@
 #                             2026-10-10: dispatch on Code Complete). A Code Complete blocker with fork-only work names its
 #                             unmerged fork branch after FORK: merge it into the new fork branch. Testing (code merged, its e2e or fork suite
 #                             running: optimistic while testing; a PR that merely says "Refs #N" proves nothing; a red e2e reopens the blocker's fix, not this child): branch from origin/$SG_BASE
-#   STACK <pr> <branch> [FORK <br>...]  exactly one blocker is open (or Code Complete with a PR) and it has an open PR based on $SG_BASE (one level only), with no
+#   STACK <pr> <branch> [FORK <br>...]  exactly one blocker is open (or Code Complete with a PR) and it has an open PR (stacked chains up to SG_STACK_DEPTH, default 3), with no
 #                             failing CI on its head: branch from origin/<branch>, open the PR with base <branch>, and put
 #                             "Merge after #<pr>" in the body (autopilot never merges it first and retargets it after)
 #   WAIT <reason>             anything else (two open blockers, a blocker with no PR, a parent that is itself stacked, red CI)
@@ -31,6 +31,9 @@ b=${open[0]}
 pr=$(prof "$b")
 [ -n "$pr" ] || { echo "WAIT blocker #$b has no open PR"; exit 0; }
 read -r n ref base sha <<<"$pr"
-[ "$base" = "$SG_BASE" ] || { echo "WAIT blocker #$b's PR #$n is itself stacked on $base"; exit 0; }
+if [ "$base" != "$SG_BASE" ]; then   # nested stack: allowed up to SG_STACK_DEPTH levels (autopilot retargets one level per parent merge)
+  d=1 cur=$base; while [ "$cur" != "$SG_BASE" ]; do d=$((d+1)); [ $d -lt "${SG_STACK_DEPTH:-3}" ] || { echo "WAIT blocker #$b's PR #$n sits $d levels deep (cap ${SG_STACK_DEPTH:-3})"; exit 0; }
+    cur=$(printf '%s' "$prs" | jq -r --arg h "$cur" '[.[]|select(.head.ref==$h)][0].base.ref // empty'); [ -n "$cur" ] || { echo "WAIT blocker #$b's PR #$n is stacked on $base, whose parent PR is gone"; exit 0; }; done
+fi
 gh api repos/$SG_REPO/commits/$sha/check-runs -q '[.check_runs[].conclusion]|any(.=="failure" or .=="timed_out")' | grep -q true && { echo "WAIT blocker #$b's PR #$n has failing CI"; exit 0; }
 echo "STACK $n $ref$fx"

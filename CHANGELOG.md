@@ -1,7 +1,36 @@
 # Changelog
 
+## 0.2.2 (local fork, 2026-10-10)
+
+- gui-test: the emulator adapter stays in MesenAI (ADR-0272 item 6, P1-A); `squad.gui_test_worker` puts `<MESENAI_ROOT>/scripts/gui_test` on `sys.path` so a `module:cls` target resolves to `mesen_gui_adapter:MesenGuiAdapter`. `tests/test_gui_test_e2e.py` gains: the worker loader case; the pilot's `launch.first-run-home`, `launch.open-rom-focused`, `home.focus-holds-up` on the real app with no pad attached (screenshot and `executed` per step in the `guirun` model); `scripts/gui_test/run_headless_e2e.py` required to report exactly 1 passed, 0 skipped, 0 failed; a missing ROM fixture or a wrong sha1 fails with a clear message. The real-app cases fail, never skip, without `MESENAI_ROOT`, `MESEN_GUI_BINARY` or `MESEN_CORE_LIB`. Refs sbihaiko/MesenAI#1183.
+
 ## 0.2.1 (local fork, 2026-10-09)
 
+- mesenai profile: `SG_FORK_TEST_CMD` also sets `MESENAI_ROOT` and `MESEN_GUI_BINARY`, which the 0.2.2 e2e cases require (they fail, never skip, without them); before, every fork-close ran RED (#1200, #1194). The checkout in `MESENAI_ROOT` must hold `scripts/gui_test/mesen_gui_adapter.py` (merged to main with #1206).
+- wtclean.sh: cleans the worktrees of a zombie run (no verdict, record.jsonl idle >20 min, no process inside the run folder) under the usual clean-tree / HEAD-on-a-remote-branch rules; before, a run that died without a verdict kept its worktree forever (the #1177 run). `test-wtclean.sh` covers it.
+- autofix.sh: a fix run is told that findings needing a push to the agent-squad fork are out of its scope (it has no write access; forkclose.sh lands them after the merge), so PRs with a fork-only finding stop ending the run needs-human and burning a round (#1209, #1212); `test-autofix.sh` covers it.
+- review.sh: when the reviewer narrates before the verdict, the saved review now starts with the `VERDICT: APPROVE|CHANGES` line (revci/autopilot read line 1; a narrated first line left PR #1211 unclassified); `test-review.sh` covers it.
+- janitor rule F (report-only): an open issue named `(#N)` in a `local/next` commit subject older than 30 min, with no open PR naming it, prints `FIXED-NOT-CLOSED #N` once; it never closes. janitor.sh passes SG_FORK_DIR/SG_FORK_BASE/SG_REPO; `test-janitor-f.sh` covers it.
+- autofix.sh: a conflict on a PR stacked on an OPEN parent now asks for a rebase onto the parent's branch (the PR's base), not onto `main`, which would replay the parent's commits; the text also tells the run to replay only the PR's own commits when the parent was rewritten; `test-autofix.sh` covers it.
+- autopilot/autopanel: `grep -c . f || echo 0` printed "0" twice on an empty round file, so a PR went to the panel with 0 rounds spent; counts now default to 0.
+- review.sh: the Claude reviewer reads its effort from `models.json` `efforts.review_models` (default medium).
+- squad-goal: `review_models` starts with `claude:claude-opus-5-5` again (owner, 2026-10-10: "ponha o opus de volta na frente"); after the rc fix (bug #1215) Gemini still answered empty with exit 0 and Grok timed out, about 5 min per review before Opus.
+
+- squad-goal: FIX (bug #1215) `review.sh` read `rc=$?` after the superseded test, so every reviewer was logged rc=1 and no PR was reviewed for ~15 min; `rc` is now captured first, and `scripts/test-review.sh` (stubbed gh and claude, RED 3 of 4 on the old order, GREEN 4 of 4) guards it. The same pass adds `janitor.sh`: leftover processes of finished runs, idle dashboards of finished runs, zombie runs dropped from `active-runs.txt`, duplicate-run report, stale `disp-` markers (only for a failed request, an open issue and no PR); dry-run reviewed on live state before enabling.
+
+- squad-goal: review speed round (Fable audit, 54 min open-to-merge, 21.8 min of it in the review chain). `gemini-3.8-flash-medium` leaves the review chain (0 of 30 verdicts headless) and `review_timeout_seconds` is 210; `review.sh` kills the reviewer when the PR head moves during the review; `revci.sh` pins the head sha before the review, so a push during it ends as SUPERSEDED instead of reporting the old verdict on the new head; `retryfix.sh` re-arms a PR sha whose autofix run failed or died (max 2 retries, test-covered with a fake state); `watch.sh` logs any step of 5 s or more to `cycle.log`.
+
+- squad-goal: `revci.sh` reports a conflicting head (`mergeable_state` dirty on two polls, 15 s apart) at once, as `CI=none`, instead of waiting 45 min for checks that never start (a conflicting PR gets no CI); autopilot already turns a dirty line into the conflict-only autofix round. Stub-tested.
+
+- squad-goal: review chain puts `claude:claude-opus-5-5` first. Measured (49 tries): `gemini-3.8-flash-high` ran 30 s and returned no VERDICT in headless mode (a tool call was auto-denied, "no output produced"), twice per PR; `grok-4.6` timed out at 300 s in 12 of 19 tries; Opus averaged 77 s with 0 failures. Every review paid about 6 min before Opus answered; Gemini, Grok and GPT stay as fallbacks.
+- squad-goal: a run that ends `failed` with `no_dispatch` gets one consult: `consult.sh` asks the coding model (`coding_models[0]`, claude-sonnet-5-5) through the CLI whether the request is valid; GO relaunches it once with the answer appended. `launch.py` keeps the request in the run folder (`request.txt`).
+- squad-goal: `autofix.sh` and `forkclose.sh` requests also say "Spawn the child with spend 8"; an autofix run for #1209 was rejected with `spawn_rejected:spend_outside_budget` (router asked for 40).
+- squad-goal: `autobug.sh` and `autofrontier.sh` requests say "Spawn each child with spend 8", so the router no longer asks for 40 and gets `spawn_rejected:spend_outside_budget`.
+- squad-goal: `autobug.sh` skips an issue that a live run already works (a `spawn_accepted` for it in a run without a verdict), so it never dispatches a duplicate beside a run that is already fixing it.
+- squad-goal: `stack.sh` stacks on a stacked PR (chains up to `SG_STACK_DEPTH`, default 3); `forkclose.sh` treats a lock whose pid is gone as stale.
+- squad-goal: `autopilot.sh` never merges a PR whose diff is empty (a fix round that undid the change); it raises NEEDS OWNER instead. The fork test command runs every `tests/test_gui_test_*.py`.
+- squad-goal: `forkclose.sh` sweeps every fork branch; an issue with a MesenAI PR waits for its merge, then its fork half lands with no close; each fork test first rebuilds `SG_E2E_BUILD_DIR` at the base head (`SG_E2E_BUILD_CMD`).
+- squad-goal: `autopilot.sh` no longer retargets a stacked PR whose parent was never merged (an empty jq match printed "null null", read as a merged parent).
 - squad-goal: a red fork suite no longer strands the branch: after the revert, `forkclose.sh` re-applies the work on the branch (merge base in, revert the revert) and launches a fix run with the log tail; the fix commit re-arms the close.
 - squad-goal: `wtclean.sh` keeps a fork worktree while any live run references it (a final gate cds into it).
 - squad-goal: an issue with both a PR and fork work: `forkclose.sh` merges and tests its fork half (Code Complete or Testing) without closing it, and `stack.sh` hands dependents both the PR to stack on and the fork branch to merge.

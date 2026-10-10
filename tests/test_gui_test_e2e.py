@@ -900,6 +900,104 @@ def test_ci_a_clean_run_is_green(tmp_path):
     assert code == 0
 
 
+# ---- #1199: goal navigation (ADR-0271) ----
+
+def _goal_step(sid, goal="ui.screen == play.library", family="pad", **over):
+    over.setdefault("role", "setup")
+    return step(sid, action={"name": "nav.goal", "args": {"goal": goal, "input": family}},
+                wait={"check": goal, "timeout_ticks": 10}, check={"name": "ui.screen", "args": {"is": "play.library"}}, **over)
+
+
+class _Chooser:
+    """A stand-in for Jev: always picks the first option offered, so only the withdrawal of failed moves gets it anywhere."""
+
+    def __init__(self, cost=0.00002):
+        self.calls, self.cost = [], cost
+
+    def __call__(self, state, options):
+        self.calls.append((state, list(options)))
+        return {"choice": options[0], "probabilities": {o: 1 / len(options) for o in options}, "cost": self.cost}
+
+
+@pytest.mark.parametrize("family", ["pad", "key"])
+def test_1199_a_goal_is_reached_from_home_with_no_fixed_path_by_pad_and_by_keyboard(tmp_path, family):
+    from squad.gui_test_goal import Navigator
+    d = script(_goal_step("b1.pre", family=family))
+    validate(d)
+    chooser = _Chooser()
+    events = []
+    [r] = run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(chooser))
+    assert r["verdict"] == "passed"
+    assert len(chooser.calls) > 1  # the first pick fails from home, so it is withdrawn and Jev is asked again
+    first, second = chooser.calls[0][1], chooser.calls[1][1]
+    assert first[0] not in second and len(second) == len(first) - 1
+    assert all("png" not in json.dumps(s).lower() for s, _ in chooser.calls)  # state is typed JSON, never pixels
+    assert {"screen", "focus", "controls", "options"} <= set(chooser.calls[0][0])
+
+
+def test_1199_each_decision_is_a_sub_node_with_options_choice_probabilities_snapshot_and_cost_and_counts_against_the_cap(tmp_path):
+    from squad.gui_test_goal import Navigator
+    from squad.gui_test_vision import Vision
+    vision = Vision(lambda png, expect: {"answer": "compatible", "saw": "", "cost": 0}, cap=1.0)
+    events = []
+    run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(cost=0.25), max_spend=5.0), vision=vision)
+    [node] = [n for n in run_node([{"op": "guirun", "events": events}])[0] if n["id"] == "b1.pre"]
+    kids = node["decisions"]
+    assert len(kids) >= 2 and kids[-1]["choice"] in kids[-1]["options"]
+    assert set(kids[0]) >= {"options", "choice", "probabilities", "state", "cost"}
+    assert vision.spent == pytest.approx(0.25 * len(kids))
+    assert node["cost"] == pytest.approx(0.25 * len(kids))
+
+
+def test_1199_caps_end_the_step_failed_goal_not_reached_with_the_last_state(tmp_path):
+    from squad.gui_test_goal import Navigator
+    events = []
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(), max_decisions=1))
+    assert r["verdict"].startswith("failed (goal not reached")
+    assert "play.home" in r["verdict"]
+    [r2] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(_Chooser(cost=0.5), max_spend=0.6))
+    assert r2["verdict"].startswith("failed (goal not reached") and "spend" in r2["verdict"]
+
+
+def test_1199_the_validator_rejects_a_goal_as_the_action_of_a_step_under_test():
+    d = script(_goal_step("b1.bad", role="under-test"))
+    with pytest.raises(ScriptError, match="nav.goal is not allowed on a step under test"):
+        validate(d)
+    no_goal = script(step("b1.nogoal", role="setup", action={"name": "nav.goal", "args": {}}))
+    with pytest.raises(ScriptError, match="nav.goal needs a goal"):
+        validate(no_goal)
+
+
+def test_1199_a_replay_reuses_the_recorded_moves_and_makes_no_jev_call(tmp_path):
+    from squad.gui_test_goal import Navigator, recorded_moves
+    d = script(_goal_step("b1.pre"))
+    events = []
+    run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser()))
+    chooser = _Chooser()
+    again = TickingFake(tmp_path)
+    [r] = run(d, again, goal=Navigator(chooser, replay=recorded_moves(events)))
+    assert r["verdict"] == "passed" and chooser.calls == []
+    assert again.screen == "play.library"
+
+
+def test_1199_with_no_navigator_a_goal_step_is_pending_never_failed(tmp_path):
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path))
+    assert r["verdict"] == "pending"
+
+
+def test_1199_the_jev_chooser_sends_the_typed_ui_state_and_the_options_as_one_choice(tmp_path):
+    from squad.gui_test_goal import Navigator, jev_chooser
+    asked = []
+
+    class Client:
+        def ask(self, state, questions):
+            asked.append((state, questions))
+            opts = list(questions["move"]["criteria"])
+            return {"move": {"choice": opts[-1], "probabilities": {o: 1 / len(opts) for o in opts}}}, "jev"
+
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(jev_chooser(Client(), "ui.screen == play.library")))
+    assert r["verdict"] == "passed" and len(asked) == 1  # the last offered move is A
+    assert asked[0][0]["ui"]["screen"] == "play.home" and "image" not in json.dumps(asked[0]).lower()
 # --- #1187: key.* through the hook: a keyboard-driven step runs unattended and its node shows its check ---
 
 from squad.gui_test_adapter import KeyboardFake  # noqa: E402
@@ -937,3 +1035,320 @@ def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
     d["batches"][0]["steps"][0]["wait"] = {"check": "ui.screen == play.library", "timeout_ticks": 6}
     [r] = run(d, KeyboardFake(tmp_path))
     assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"
+# --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
+
+from squad.gui_test_variants import (  # noqa: E402
+    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+
+
+class _Modal(TickingFake):
+    def __init__(self, out_dir):
+        super().__init__(out_dir)
+        self.modes = []
+
+    def set_variant(self, axis, value):
+        self.modes.append(value)
+
+
+def _v1191_script(*steps):
+    d = script(*steps)
+    d["requires"] = {"actions": ["pad.press", "pointer.click", "text.type", "window.mode"],
+                     "checks": ["ui.screen", "ui.focused"]}
+    return d
+
+
+def test_1191_a_step_tagged_for_both_window_modes_runs_once_per_mode(tmp_path):
+    both = step("b1.both", variants={"window.mode": ["windowed", "fullscreen"]})
+    win = step("b1.win", variants={"window.mode": "windowed"})
+    untagged = step("b1.any")
+    d = _v1191_script(both, win, untagged)
+    a = _Modal(tmp_path)
+    out = run_variants(d, a, axis="window.mode")
+    assert [(r["id"], r["variant"]) for r in out] == [
+        ("b1.both", "windowed"), ("b1.win", "windowed"), ("b1.any", "windowed"),
+        ("b1.both", "fullscreen"), ("b1.any", "fullscreen")]
+    assert [m for m in a.modes] == ["windowed", "fullscreen"]
+
+
+def test_1191_pointer_and_text_actions_reach_the_adapter(tmp_path):
+    click = step("b1.click", action={"name": "pointer.click", "args": {"x": 10, "y": 20, "button": "left"}})
+    typed = step("b1.type", action={"name": "text.type", "args": {"text": "contra"}})
+    d = _v1191_script(click, typed)
+    a = TickingFake(tmp_path)
+    validate(d, {**a.capabilities(), "actions": a.capabilities()["actions"] + ["pointer.click", "text.type"],
+                 "variants": a.capabilities()["variants"]})
+    run_variants(d, a, axis="window.mode")
+    assert ("pointer.click", {"x": 10, "y": 20, "button": "left"}) in a.log
+    assert ("text.type", {"text": "contra"}) in a.log
+
+
+def test_1191_a_full_screen_pilot_case_runs_locally_in_the_real_window_mode(tmp_path):
+    fs = step("b1.fs", variants={"window.mode": "fullscreen"})
+    a = RealWindowAdapter(TickingFake(tmp_path), env={}, permissions=lambda: {"accessibility", "screen-recording"})
+    out = run_variants(_v1191_script(fs), a, axis="window.mode")
+    assert [(r["id"], r["variant"], r["verdict"]) for r in out] == [("b1.fs", "fullscreen", "passed")]
+    assert a.real_window is True
+
+
+def test_1191_the_real_window_mode_refuses_to_start_without_the_permissions(tmp_path):
+    a = RealWindowAdapter(TickingFake(tmp_path), env={}, permissions=lambda: {"accessibility"})
+    with pytest.raises(PermissionsMissing) as e:
+        a.launch({})
+    assert "screen-recording" in str(e.value) and "accessibility" not in str(e.value)
+    assert a.inner.log == []
+
+
+def test_1191_the_real_window_mode_is_not_used_in_ci(tmp_path):
+    for env in ({"CI": "true"}, {"GITHUB_ACTIONS": "true"}):
+        a = RealWindowAdapter(TickingFake(tmp_path), env=env,
+                              permissions=lambda: {"accessibility", "screen-recording"})
+        with pytest.raises(RealWindowRefused):
+            a.launch({})
+
+
+def test_1210_a_failed_objective_check_names_expected_and_observed_and_skips_the_model(tmp_path):
+    from squad.gui_test_vision import Vision
+
+    asked = []
+
+    def model(png, expect):
+        asked.append(expect)
+        return {"answer": "compatible", "saw": "x", "cost": 0.01}
+
+    d = script(step("b1.wrong", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+                    check={"name": "ui.screen", "args": {"is": "play.home"}}))
+    [r] = run(d, TickingFake(tmp_path), vision=Vision(model))
+    assert r["verdict"] == "failed (expected ui.screen == play.home, observed play.library)"
+    assert asked == [] and "vision" not in r
+# --- #1193: the pilot's Library, Favorites and opening-and-playing cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake import PilotFake  # noqa: E402
+
+CASES_1193 = ([f"LIB-0{n}" for n in range(1, 10)] + ["FAV-01", "FAV-02"] + [f"GAME-0{n}" for n in range(1, 5)])
+PILOT_1193 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1193.json"
+
+
+def _pilot_1193():
+    d = json.loads(PILOT_1193.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1193(d, *batches):
+    return [s for b in d["batches"] if b["id"] in batches for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def test_1193_every_library_favorites_and_game_case_is_converted_none_dropped():
+    d = _pilot_1193()
+    steps = _steps_1193(d, "library", "favorites", "favorites-home", "game", "game-archive", "game-bios")
+    for case in CASES_1193:
+        assert any(s["expect"].startswith(case + ":") or f" {case}:" in s["expect"] or f"({case})" in s["expect"]
+                   for s in steps), f"{case} has no step"
+
+
+def _run_1193(tmp_path, d, **fixtures):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in ("launch", "home", "home-after-game"):
+            continue
+        view = {**d, "batches": [batch]}
+        adapter = PilotFake(tmp_path, **fixtures.get(batch["id"], {}))
+        results += [{**r, "batch": batch["id"]} for r in run_variants(view, adapter, axis="window.mode")]
+    return results
+
+
+def test_1193_the_batches_run_end_to_end_in_both_window_modes(tmp_path):
+    d = _pilot_1193()
+    results = _run_1193(tmp_path, d, **{"game-archive": {"tile": "zip"}, "game-bios": {"tile": "fds"},
+                                    "favorites-home": {"favorites": 1}})
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results
+           if r["verdict"].startswith("failed")]
+    assert bad == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    manual = {s["id"] for s in _steps_1193(d, "library", "favorites", "favorites-home", "game", "game-archive",
+                                           "game-bios") if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
+
+
+def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
+    d = _pilot_1193()
+    results = _run_1193(tmp_path, d, library={"y_focuses_search": False})
+    failed = [r["id"] for r in results if r["verdict"].startswith("failed")]
+    assert "lib.search-y-focuses-field" in failed
+    from squad.gui_test_run import failed as run_failed
+    assert run_failed(results)
+
+
+# --- #1183: the emulator adapter lives in MesenAI (ADR-0272 item 6, P1-A); the fork only loads it from MESENAI_ROOT ---
+
+import sys  # noqa: E402
+import time  # noqa: E402
+
+PILOT = "play-pad-only.gui-test.json"
+THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
+HEADLESS_CASE = "GuiTestHookTests.GuiTestHook_e2e_a_runner_drives_the_Home_over_the_socket"
+
+
+def _need(name, what):
+    """A real-emulator case FAILS, never skips, when its environment is not set (a skip would read green)."""
+    value = os.environ.get(name)
+    assert value, f"set {name} to {what}"
+    return Path(value).expanduser()
+
+
+def _mesenai_root():
+    return _need("MESENAI_ROOT", "a MesenAI checkout holding scripts/gui_test/mesen_gui_adapter.py")
+
+
+def _adapter_class(root):
+    sys.path.insert(0, str(root / "scripts" / "gui_test"))
+    try:
+        import importlib
+        return importlib.import_module("mesen_gui_adapter").MesenGuiAdapter
+    finally:
+        sys.path.remove(str(root / "scripts" / "gui_test"))
+
+
+def _pilot_for_the_real_app(ids):
+    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom, so that fixture is dropped."""
+    d = json.loads((_mesenai_root() / "docs" / "validation" / "process" / PILOT).read_text(encoding="utf-8"))
+    for b in d["batches"]:
+        b["steps"] = [s for s in b["steps"] if s["id"] in ids]
+    d["batches"] = [b for b in d["batches"] if b["steps"]]
+    d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    d["fixtures"].pop("rom")
+    return d
+
+
+@pytest.fixture
+def short_work():
+    """A Unix socket path is capped near 100 bytes, which pytest's tmp_path blows through."""
+    import shutil
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="mg-", dir="/tmp"))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def _synthetic_rom(tmp_path):
+    rom = tmp_path / "lib" / "Contra (USA).nes"
+    rom.parent.mkdir()
+    rom.write_bytes(b"NES\x1a" + bytes(12) + b"prg")
+    return rom, hashlib.sha1(b"prg").hexdigest()
+
+
+def test_the_worker_loads_the_adapter_class_from_mesenai_root(tmp_path):
+    """squad.gui_test_worker resolves `module:cls` against <MESENAI_ROOT>/scripts/gui_test."""
+    pkg = tmp_path / "scripts" / "gui_test"
+    pkg.mkdir(parents=True)
+    (pkg / "probe_adapter.py").write_text("class Probe:\n    def __init__(self, **kw):\n        pass\n    def capabilities(self):\n        return {'probe': True}\n")
+    p = subprocess.run([sys.executable, "-m", "squad.gui_test_worker", "probe_adapter:Probe", "{}"], cwd=FORK,
+                       input=json.dumps({"call": "capabilities"}) + "\n", capture_output=True, text=True, timeout=30,
+                       env={**os.environ, "MESENAI_ROOT": str(tmp_path)})
+    assert json.loads(p.stdout.splitlines()[0]) == {"ok": {"probe": True}}, p.stderr[-800:]
+
+
+def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
+    root = _mesenai_root()
+    binary = _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
+    _need("MESEN_CORE_LIB", "the MesenCore library built from the same checkout")
+    assert binary.is_file(), f"MESEN_GUI_BINARY {binary} is not a file"
+    d = _pilot_for_the_real_app(ids)
+    # The adapter seeds `{}`, and this build then boots into the classic menu UI after tick 0 (screen None), so the
+    # Play first run is seeded here, through the adapter's own `files` fixture, until the adapter seeds it itself.
+    seed = tmp_path / "settings.json"
+    seed.write_text(json.dumps({"Preferences": {"UiMode": "Player", "Workspace": "Play"}}))
+    d["fixtures"]["files"] = [{"src": str(seed), "dest": "settings.json"}]
+    adapter = _adapter_class(root)(binary=str(binary), workdir=short_work, connect_timeout=120)
+    validate(d, adapter.capabilities())
+    events, results = [], []
+    for batch in d["batches"]:
+        session = adapter.launch(d["fixtures"])
+        try:
+            mark = len(events)
+            try:
+                results += run({**d, "batches": [batch]}, _Shot(session, tmp_path / "shots"), record=events.append)
+            except Exception as e:  # what run_supervised does with an adapter error: the step in flight fails with it
+                open_step = [ev["node"] for ev in events[mark:] if ev["event"] == "gui_step"][-1]
+                verdict = f"failed ({e})"
+                events.append({"event": "gui_verdict", "node": open_step, "pos": len(events), "verdict": verdict})
+                results.append({"id": open_step, "verdict": verdict, "capture": None})
+        finally:
+            left = session.teardown()  # `quit` over the hook sometimes ends in a SIGSEGV (exit -11): reported, not asserted here
+            assert all("quit not acknowledged" in x or "exited -11" in x for x in left), left
+    return results, run_node([{"op": "guirun", "events": events}])[0]
+
+
+@pytest.mark.slow(reason="starts the real emulator twice (one process per batch) and waits on its window")
+def test_three_pilot_steps_are_executed_through_the_mesenai_adapter_with_a_capture_each(tmp_path, short_work):
+    results, nodes = _run_pilot_on_the_real_app(tmp_path, short_work, THREE_PILOT_STEPS)
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS], nodes
+    assert [r["verdict"] for r in results] == ["passed"] * 3, results
+    for n in nodes:
+        assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), n
+
+
+class _Shot:
+    """The run's capture seam: `run` asks the adapter for a screenshot per step; the session needs a path."""
+
+    def __init__(self, session, out):
+        out.mkdir(exist_ok=True)
+        self._s, self._out, self._n = session, out, 0
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
+
+    def inject(self, action, args):
+        """A press right after launch can answer `unknown button Up on pad 1` until the app has built its key names
+        (measured: the first inject after launch fails, the same one a second later is taken); retry it for up to 10 s."""
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                return self._s.inject(action, args)
+            except Exception as e:
+                if "unknown button" not in str(e) or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.25)
+
+    def wait(self, condition, timeout_ticks):
+        """A tick-only wait (`wait` with no `check`, as home.focus-holds-up has) reaches the adapter as None, which
+        MesenGuiAdapter.wait cannot read (`None.strip`); the hook's own tick counter is the clock, so wait it out here."""
+        if condition is not None:
+            return self._s.wait(condition, timeout_ticks)
+        start = self._s._ask("state")["tick"]
+        while self._s._ask("state")["tick"] < start + timeout_ticks:
+            time.sleep(0.02)
+        return "met"
+
+    def capture(self, path=None):
+        self._n += 1
+        return self._s.capture(path or self._out / f"shot-{self._n}.png")
+
+
+@pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
+def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
+    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line."""
+    root = _mesenai_root()
+    lib = _need("MESEN_CORE_LIB", "the MesenCore library built from the MesenAI checkout")
+    assert lib.is_file(), f"MESEN_CORE_LIB {lib} is not a file"
+    p = subprocess.run([sys.executable, str(root / "scripts" / "gui_test" / "run_headless_e2e.py")], cwd=root,
+                       env={**os.environ, "MESEN_CORE_LIB": str(lib)}, capture_output=True, text=True, timeout=1500)
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out[-2000:]
+    assert re.search(r"Failed:\s*0,\s*Passed:\s*1,\s*Skipped:\s*0,\s*Total:\s*1", out), out[-2000:]
+    assert HEADLESS_CASE.split(".")[1] in out or "Passed!" in out
+
+
+def test_a_missing_rom_fixture_or_a_wrong_sha1_fails_clearly(tmp_path, short_work):
+    root = _mesenai_root()
+    adapter = _adapter_class(root)(binary=str(_need("MESEN_GUI_BINARY", "the built Mesen launcher")), workdir=short_work)
+    absent = {"rom": {"path": str(tmp_path / "nope" / "Contra (USA).nes"), "sha1": "0" * 40}}
+    with pytest.raises(Exception, match=r"rom fixture missing: .*Contra \(USA\)\.nes"):
+        adapter.launch(absent)
+    rom, sha1 = _synthetic_rom(tmp_path)
+    with pytest.raises(Exception, match=rf"sha1 {sha1} is not the expected {'0' * 40}"):
+        adapter.launch({"rom": {"path": str(rom), "sha1": "0" * 40}})
+    assert not list(short_work.glob("**/hook.sock"))

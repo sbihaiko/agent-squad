@@ -9,6 +9,9 @@ def main(spec, kwargs):
     proto = os.fdopen(os.dup(1), "w")
     sys.stdout = sys.stderr  # adapter prints must not corrupt the protocol
     module, _, cls = spec.partition(":")
+    root = os.environ.get("MESENAI_ROOT")
+    if root:  # the emulator adapter lives in MesenAI (ADR-0272 item 6, P1-A): scripts/gui_test/<module>.py
+        sys.path.insert(0, os.path.join(root, "scripts", "gui_test"))
     adapter = getattr(importlib.import_module(module), cls)(**kwargs)
     for line in sys.stdin:
         msg = json.loads(line)
