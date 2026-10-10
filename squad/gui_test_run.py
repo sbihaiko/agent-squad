@@ -2,7 +2,7 @@
 
 
 def run(script, adapter, record=None):
-    """Run every automated step in order; return [{id, verdict, capture}]. Never raises on a wait timeout.
+    """Run every automated step in order; return [{id, verdict, capture, held}]. Never raises on a wait timeout.
 
     `record` takes one replay event per call: gui_step, then gui_capture (only once the wait is met), then gui_verdict.
     """
@@ -26,12 +26,12 @@ def run(script, adapter, record=None):
                 verdict = f"failed (timeout waiting for {cond})"
             else:
                 capture = adapter.capture()
-                emit("gui_capture", s["id"], **capture)
+                emit("gui_capture", s["id"], held=bool(s.get("sensitive")), **capture)
                 if "check" not in s:
                     verdict = "passed"
                 else:
                     got = adapter.check(s["check"]["name"], s["check"].get("args", {}))
                     verdict = "failed (unknown id)" if got == "unknown id" else "passed" if got else "failed"
             emit("gui_verdict", s["id"], verdict=verdict)
-            results.append({"id": s["id"], "verdict": verdict, "capture": capture})
+            results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": bool(s.get("sensitive"))})
     return results

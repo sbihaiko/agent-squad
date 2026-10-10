@@ -226,6 +226,101 @@ def test_the_fake_adapter_passes_the_shared_contract_suite(tmp_path):
     assert {"launch", "inject", "check", "wait", "capture", "teardown", "capabilities"} <= set(CONTRACT)
 
 
+# --- #1188: screenshot privacy gate: a capture marked sensitive is held until a person approves it ---
+
+from squad.gui_test_gate import approve, egress  # noqa: E402
+
+
+def _privacy_script():
+    return script(
+        step("b1.plain"),
+        step("b1.file-dialog", sensitive=True,
+             action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+    )
+
+
+def _privacy_run(tmp_path):
+    d, events = _privacy_script(), []
+    adapter = TickingFake(tmp_path)
+    validate(d, adapter.capabilities())
+    return run(d, adapter, record=events.append), events
+
+
+def test_sensitive_must_be_a_boolean_and_a_step_may_omit_it():
+    d = _privacy_script()
+    validate(d)
+    d["batches"][0]["steps"][1]["sensitive"] = "yes"
+    with pytest.raises(ScriptError) as e:
+        validate(d)
+    assert "b1.file-dialog: sensitive must be true or false" in e.value.problems
+
+
+def test_a_marked_capture_is_held_and_nothing_is_sent_before_approval(tmp_path):
+    results, events = _privacy_run(tmp_path)
+    assert [(r["id"], r["held"]) for r in results] == [("b1.plain", False), ("b1.file-dialog", True)]
+    assert [e["held"] for e in events if e["event"] == "gui_capture"] == [False, True]
+    sent = []
+    out = egress(results, sent.append, tmp_path / "approvals.json")
+    assert out == {"sent": ["b1.plain"], "held": ["b1.file-dialog"]}
+    assert sent == [results[0]["capture"]["path"]]
+
+
+def test_an_unmarked_capture_flows_without_a_prompt(tmp_path):
+    d = script(step("b1.a"), step("b1.b"))
+    results = run(d, TickingFake(tmp_path))
+    sent = []
+    out = egress(results, sent.append, tmp_path / "approvals.json")
+    assert out == {"sent": ["b1.a", "b1.b"], "held": []}
+    assert not (tmp_path / "approvals.json").exists()
+
+
+def test_approval_by_a_person_releases_exactly_that_capture(tmp_path):
+    results, _ = _privacy_run(tmp_path)
+    ap = tmp_path / "approvals.json"
+    cap = results[1]["capture"]
+    approve(ap, "b1.file-dialog", cap["sha256"], by="sandro")
+    sent = []
+    assert egress(results, sent.append, ap) == {"sent": ["b1.plain", "b1.file-dialog"], "held": []}
+    assert cap["path"] in sent
+
+
+def test_an_approval_does_not_cover_a_different_capture_of_the_same_step(tmp_path):
+    results, _ = _privacy_run(tmp_path)
+    ap = tmp_path / "approvals.json"
+    approve(ap, "b1.file-dialog", "0" * 64, by="sandro")
+    sent = []
+    assert egress(results, sent.append, ap)["held"] == ["b1.file-dialog"]
+
+
+def test_approval_needs_a_named_person(tmp_path):
+    with pytest.raises(ValueError):
+        approve(tmp_path / "a.json", "b1.x", "0" * 64, by="")
+
+
+def test_dashboard_shows_which_captures_are_held_and_withholds_their_path(tmp_path):
+    results, events = _privacy_run(tmp_path)
+    nodes = {n["id"]: n for n in run_node([{"op": "guirun", "events": events}])[0]}
+    assert (nodes["b1.plain"]["held"], nodes["b1.file-dialog"]["held"]) == (False, True)
+    assert nodes["b1.plain"]["capture"]["path"] and nodes["b1.file-dialog"]["capture"]["path"] is None
+
+
+def test_dashboard_releases_a_held_capture_on_its_approval_event(tmp_path):
+    results, events = _privacy_run(tmp_path)
+    cap = results[1]["capture"]
+    events = events + [{"event": "gui_approve", "node": "b1.file-dialog", "sha256": cap["sha256"],
+                        "by": "sandro", "pos": len(events)}]
+    nodes = {n["id"]: n for n in run_node([{"op": "guirun", "events": events}])[0]}
+    assert nodes["b1.file-dialog"]["held"] is False
+    assert nodes["b1.file-dialog"]["capture"]["path"] == cap["path"]
+
+
+def test_script_diagram_marks_a_sensitive_step():
+    svg = _svg(_privacy_script())
+    assert re.search(r'class="step auto sensitive"[^>]*data-step="b1\.file-dialog"', svg)
+    assert re.search(r'class="step auto"[^>]*data-step="b1\.plain"', svg)
+
 # --- #1185: batches with fixtures, crash/hang supervision and state restored ---
 
 import time  # noqa: E402
