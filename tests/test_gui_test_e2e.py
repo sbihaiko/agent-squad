@@ -882,34 +882,39 @@ def _pilot_1194():
     return d
 
 
+BATCHES_1194 = ("pause", "settings", "pause-pack-multi", "settings-menu-sounds")
+
+
 def _steps_1194(d):
-    return [s for b in d["batches"] if b["id"] in ("pause", "settings") for k in ("setup", "steps", "teardown")
+    return [s for b in d["batches"] if b["id"] in BATCHES_1194 for k in ("setup", "steps", "teardown")
             for s in b[k]]
 
 
 def _run_1194(tmp_path, d, **switches):
-    """The Pause batch needs a running game and the Settings batch needs W-P4 open: each runs on its own fake."""
+    """Each batch needs its own state (a running game, W-P4 open): each runs on its own fake."""
     results = []
     for batch in d["batches"]:
-        if batch["id"] in ("pause", "settings"):
+        if batch["id"] in BATCHES_1194:
             view = {**d, "batches": [batch]}
             results += [{**r, "batch": batch["id"]}
                         for r in run_variants(view, PauseSettingsFake(tmp_path, **switches), axis="window.mode")]
     return results
 
 
-def test_1194_every_pause_and_settings_case_is_converted_none_dropped():
+def test_1194_every_pause_and_settings_case_is_converted_none_dropped_across_the_four_batches():
     steps = _steps_1194(_pilot_1194())
     for case in CASES_1194:
         assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
 
 
-def test_1194_the_pause_and_settings_batches_run_end_to_end_in_both_window_modes(tmp_path):
+def test_1194_the_four_batches_run_end_to_end_in_both_window_modes(tmp_path):
     d = _pilot_1194()
     results = _run_1194(tmp_path, d)
     bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
     assert bad == []
     assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    for batch in BATCHES_1194:
+        assert {r["variant"] for r in results if r["batch"] == batch} == {"windowed", "fullscreen"}, batch
     manual = {s["id"] for s in _steps_1194(d) if s["mode"] == "manual"}
     assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
     assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
