@@ -486,12 +486,16 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
 }
 const GROUPS=[["open","OPEN"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
 let openGroup=null,userPicked=false;
+// runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
+// then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
+const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
+const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
 const groupOf=r=>{if(r.rank===0)return"open";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":"d"};
 function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   const filled=GROUPS.filter(g=>by[g[0]]);
   if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(label(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(name(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>`<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr>${by[k].length} · ${usd(by[k].reduce((a,r)=>a+r.spend,0))}</span></div>${openGroup===k?by[k].map(row).join(""):""}`).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
@@ -508,7 +512,7 @@ function drawMain(force){
     main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.</div>";
     slots.forEach(id=>{const r=byId.get(id);let f=frames.get(id);
       if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
-      const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${label(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
+      const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
 }
 function refresh(){plan();drawList();drawMain()}
 function applyFilter(){runs=allRuns}

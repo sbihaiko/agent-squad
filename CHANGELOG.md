@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.22 (local fork, 2026-10-10)
+- **Hub: two panels can no longer carry the same name.** A panel is labelled with the issue it belongs to, and more than one run per issue is normal — three runs carried `#1281` and three `#1282` at the same time today, so the list showed the same row twice and the panel header read `#1281 · running` on two different runs. A label that repeats is now suffixed with the run's start time (`#1281 · 18:50`, `#1281 · 19:07`), read off the id, which both shapes carry (`run-YYYYMMDD-HHMMSS-xxxx` and `test-<issue>-YYYYMMDD-HHMMSS`). Unique labels are untouched.
+
 ## 0.2.21 (local fork, 2026-10-10)
 - **A live run's fork worktree is no longer deleted under its own final gate.** `wtclean.sh` decides whether a `~/wt-as-<n>` / `~/wt-fr-<n>` tree is still in use by looking for the tree's name in the run's `record.jsonl` — but a run in flight never names it there; that only happens when the final gate writes its outcome. So the moment a sibling issue closed, the tree was removed, the gate's acceptance commands ran against a directory that no longer existed, and a correct run was marked `verdict=failed`: all five `ac_commands` of run `45a682` (gui/1227) returned `/bin/sh: cd: /Users/bihaiko/wt-as-1227: No such file or directory`, after the branch had already merged and its fork suite had already gone green. The block now uses the same liveness rule as the ws trees above it: a run without a `verdict` event is live unless it is a zombie (record idle over 20 minutes and no process whose cwd is inside the run folder).
 - `test-wtclean.sh` gains the regression: a fork tree whose run has no verdict survives the close of its issue, and is removed once the run has a verdict. 11 assertions, all green.
