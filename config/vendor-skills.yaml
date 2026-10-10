@@ -7,6 +7,7 @@
 skills:
   - {name: to-spec, source: skill:to-spec}
   - {name: to-tickets, source: skill:to-tickets}
+  - {name: to-test-scenario, source: skill:to-test-scenario}
   - {name: tdd, source: skill:tdd}
   - {name: ego-browser, source: skill:ego-browser}
   - {name: codebase-design, source: skill:codebase-design}

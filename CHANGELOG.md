@@ -2,6 +2,8 @@
 
 ## 0.2.2 (local fork, 2026-10-10)
 
+- skills: new `/to-test-scenario` (personal skill, vendored): turns a manual GUI test scenario into a `gui-test/1` script, one parent issue with a sub-issue per case (`test-case` label, never `ready-for-agent`) and a run whose verdicts are written back; the run step needs `scripts/gui_test_run_script.py` in MesenAI (not yet written).
+
 - squad-goal: `forkclose.sh` no longer treats a branch as landed just because it is an ancestor of the base: when a sibling's reverted merge took its files away (0 ahead, tip files missing) it relands the branch as a merge commit restoring them. This was the silent stall of #1195's fork half. New `test-forkclose-reland.sh`.
 - squad-goal: `forkclose.sh` waits for the fork half of every issue named in `## Blocked by` (branch still ahead of the base) before merging a dependent; a dependent merged early imports files that are not there yet and goes red (#1198 on #1195). New `test-forkclose-wait.sh`.
 - squad-goal: janitor rule H checks board state against the issue's loop comments (once per 10 min, report-only): `RED-LOOP` after 3+ fork-suite REDs with no green close, `STATE-REGRESSION` for a Todo/Blocked card that already reached Code Complete/Testing or a Done card on an open issue. New `test-janitor-h.sh`.

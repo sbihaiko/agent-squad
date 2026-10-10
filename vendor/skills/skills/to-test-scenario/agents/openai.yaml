@@ -1,0 +1,5 @@
+interface:
+  display_name: "To Test Scenario"
+  short_description: "Turn a manual test scenario into a gui-test script, GitHub issues and a run"
+policy:
+  allow_implicit_invocation: false

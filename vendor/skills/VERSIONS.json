@@ -29,6 +29,11 @@
     "sha256": "f525dab8b9bd3961aa4813d8568ef6184f6e24aad5a020e129165ca6c220f836",
     "source": "skill:to-spec"
   },
+  "to-test-scenario": {
+    "files": 2,
+    "sha256": "3ab8477d98af2d184490226819e05a2de008f11cd27307fa0dcaaff149059a2d",
+    "source": "skill:to-test-scenario"
+  },
   "to-tickets": {
     "files": 2,
     "sha256": "04711e02803dc5203c04afdfc9ba200cede79b0569de988e76a40dfdd9e9c99a",
