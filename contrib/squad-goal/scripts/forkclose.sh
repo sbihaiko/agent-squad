@@ -6,6 +6,7 @@
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
 # card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
 # conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); the fork checkout must be clean and on the base branch.
+# An issue whose `## Blocked by` names an issue with an unlanded fork branch waits for it (FORKCLOSE WAIT, once per set): its tests import the blocker's files.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ] || exit 0; [ -e "$A/off" ] && exit 0
@@ -24,6 +25,9 @@ for n in $cc; do
   mixed=""; if [ "$st" = closed ]; then mixed=1; else case "$ready" in *" $n "*) ;; *) continue;; esac; fi   # closed: its PR half landed, merge the fork half without touching the issue
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
   [ "$($G rev-list --count "$SG_FORK_BASE..$br")" -gt 0 ] || continue
+  wait=""; for d in $(gh api repos/$SG_REPO/issues/$n -q .body 2>/dev/null | awk '/^## Blocked by/{f=1;next}/^## /{f=0}f' | grep -oE '#[0-9]+' | tr -d '#'); do   # a blocker whose fork half is not in the base yet: merging this one now only goes red (it imports the blocker's files)
+    bb=${SG_FORK_BRANCH//%n/$d}; $G rev-parse -q --verify "refs/heads/$bb" >/dev/null && [ "$($G rev-list --count "$SG_FORK_BASE..$bb")" -gt 0 ] && wait="$wait #$d"; done
+  [ -z "$wait" ] || { wm="$A/forkwait-$n${wait// /-}"; [ -e "$wm" ] || { touch "$wm"; echo "FORKCLOSE WAIT #$n: the fork half of$wait is not in $SG_FORK_BASE yet (Blocked by)"; }; continue; }
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; [ -e "$mk" ] && continue
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   if [ "$($G branch --show-current)" != "$SG_FORK_BASE" ] || [ -n "$($G status --porcelain --untracked-files=no)" ]; then echo "FORKCLOSE WAIT #$n: $SG_FORK_DIR is not a clean $SG_FORK_BASE checkout"; exit 0; fi

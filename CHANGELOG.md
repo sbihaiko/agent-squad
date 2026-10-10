@@ -2,6 +2,7 @@
 
 ## 0.2.2 (local fork, 2026-10-10)
 
+- squad-goal: `forkclose.sh` waits for the fork half of every issue named in `## Blocked by` (branch still ahead of the base) before merging a dependent; a dependent merged early imports files that are not there yet and goes red (#1198 on #1195). New `test-forkclose-wait.sh`.
 - squad-goal: janitor rule H checks board state against the issue's loop comments (once per 10 min, report-only): `RED-LOOP` after 3+ fork-suite REDs with no green close, `STATE-REGRESSION` for a Todo/Blocked card that already reached Code Complete/Testing or a Done card on an open issue. New `test-janitor-h.sh`.
 - squad-goal: `serial.sh <name> <cmd>` serializes GUI suites with a per-name lock (stale-pid takeover, exit code passed through). Concurrent fork suites made the second emulator exit 0 through Mesen's SingleInstance mutex and read as red tests; the mesenai profile's `SG_FORK_TEST_CMD` now runs through it. New `test-serial.sh`.
 - squad-goal: merge stalls are now visible and self-healing. The autopilot logs `HOLD #pr @ sha: <reason>` (once per head and reason) when an APPROVE PR does not merge; janitor rule G reports `READY-NOT-MERGED` for an APPROVE + clean PR left unmerged 5 min and runs one autopilot pass (never merges itself). New `test-autopilot-hold.sh`, `test-janitor-g.sh`.
