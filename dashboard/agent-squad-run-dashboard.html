@@ -122,7 +122,7 @@
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:11px; font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
   .chip-sw.v-wait { border-color:var(--warn); color:var(--warn); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
-  .chip-sw.v-live { border-color:var(--run); color:var(--run); }
+  .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
   .card:focus { outline:none; } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:#1a1f27; stroke:#556; stroke-width:1.2; }
@@ -180,6 +180,7 @@
   #vchip.v-wait { border-color:var(--warn); color:var(--warn); }
   #vchip.v-none { border-color:var(--none); color:var(--none); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
+  #vchip.v-human { border-color:var(--warn); color:var(--warn); }
   #modesw { display:flex; }
   #modesw button { border-radius:0; }
   #modesw button:first-child { border-radius:4px 0 0 4px; }
@@ -2090,14 +2091,21 @@ function sourcesModule({ STATES }) {
     { cls: "sel", label: "Selected" },
     { cls: "drop", label: "Target of the link you drag" },
   ];
-  // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
-  const LEGEND_CHIPS = [
-    { cls: "v-ok", label: "Run completed" },
-    { cls: "v-bad", label: "Run failed" },
-    { cls: "v-live", label: "Run in progress" },
-    { cls: "v-wait", label: "Run stalled" },
-    { cls: "v-none", label: "No verdict yet" },
+  // One run-state vocabulary: the top-bar verdict chip, its legend and the hub's run badges (contrib/squad-goal/scripts/hub.py RUN_STATES) name and
+  // paint a state alike; a Python test holds the two tables equal. `color` is a palette variable; a `hub_only` state is one the hub derives, so the chip never shows it.
+  const RUN_STATES = [
+    { state: "completed", cls: "v-ok", label: "Run completed", color: "ok" },
+    { state: "verified", cls: null, label: "Failed or unverified run, verified by hand", color: "ok", hub_only: true },
+    { state: "unverified", cls: null, label: "Work landed, the final gate had no command", color: "ok", hub_only: true },
+    { state: "failed", cls: "v-bad", label: "Run failed", color: "err" },
+    { state: "needs-human", cls: "v-human", label: "Run needs a person", color: "warn" },
+    { state: "running", cls: "v-live", label: "Run in progress", color: "run" },
+    { state: "starting", cls: null, label: "Run starting", color: "run", hub_only: true },
+    { state: "stalled", cls: "v-wait", label: "Run stalled", color: "warn" },
+    { state: "no verdict yet", cls: "v-none", label: "No verdict yet", color: "none" },
   ];
+  // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
+  const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
     { how: "Drag empty space", what: "Pan the graph.", covers: ["pan"] },
     { how: "Mouse wheel or trackpad pinch", what: "Zoom at the cursor.", covers: ["wheel"] },
@@ -2166,7 +2174,7 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, HELP, httpSource, followPush };
 }
 
 // Dashboard core module: Where a pause leaves the run.
@@ -2309,7 +2317,7 @@ function make(ENGINE) {
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
-  const { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush } = sourcesModule({ STATES });
+  const { LEGEND, LEGEND_CHIPS, RUN_STATES, HELP, httpSource, followPush } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
@@ -2317,7 +2325,7 @@ function make(ENGINE) {
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -3726,7 +3734,7 @@ $("m-run").addEventListener("click", () => setMode(false, true));
 $("m-edit").addEventListener("click", () => setMode(true, true));
 function inEdit() { return document.body.classList.contains("edit"); }
 
-var VERDICT_CLASS = { completed: "v-ok", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
+var VERDICT_CLASS = { completed: "v-ok", failed: "v-bad", "needs-human": "v-human", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
 function renderChrome() {
   if (!modePicked && inEdit() !== !S.events) setMode(!S.events);
   const st = S.stats, v = st && st.verdict, chip = $("vchip");

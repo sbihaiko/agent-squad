@@ -116,7 +116,7 @@
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:11px; font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
   .chip-sw.v-wait { border-color:var(--warn); color:var(--warn); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
-  .chip-sw.v-live { border-color:var(--run); color:var(--run); }
+  .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
   .card:focus { outline:none; } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:#1a1f27; stroke:#556; stroke-width:1.2; }
@@ -174,6 +174,7 @@
   #vchip.v-wait { border-color:var(--warn); color:var(--warn); }
   #vchip.v-none { border-color:var(--none); color:var(--none); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
+  #vchip.v-human { border-color:var(--warn); color:var(--warn); }
   #modesw { display:flex; }
   #modesw button { border-radius:0; }
   #modesw button:first-child { border-radius:4px 0 0 4px; }
