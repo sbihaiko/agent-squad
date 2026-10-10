@@ -698,3 +698,42 @@ def test_ci_a_clean_run_is_green(tmp_path):
     results = _three_step_run(tmp_path)[3]
     code, _ = ci_verdict(results, core_available=True)
     assert code == 0
+
+
+# --- #1187: key.* through the hook: a keyboard-driven step runs unattended and its node shows its check ---
+
+from squad.gui_test_adapter import KeyboardFake  # noqa: E402
+
+
+def _keyboard_script():
+    d = script(
+        step("b1.key-open", action={"name": "key.press", "args": {"key": "Enter", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+    )
+    d["requires"] = {"actions": ["key.press"], "checks": ["ui.screen"]}
+    return d
+
+
+def test_a_keyboard_step_runs_unattended_and_its_node_shows_its_check(tmp_path):
+    d, adapter, events = _keyboard_script(), KeyboardFake(tmp_path), []
+    validate(d, adapter.capabilities())
+    results = run(d, adapter, record=events.append)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.key-open", "passed")]
+    assert adapter.log == [("key.press", {"key": "Enter", "ticks": 4})]
+    [n] = run_node([{"op": "guirun", "events": events}])[0]
+    assert n["check"] == {"name": "ui.screen", "args": {"is": "play.library"}}
+    assert n["action"] == "key.press"
+
+
+def test_the_emulator_adapter_advertises_key_press_and_the_pad_only_fake_does_not(tmp_path):
+    assert "key.press" in KeyboardFake(tmp_path).capabilities()["actions"]
+    assert "key.press" not in TickingFake(tmp_path).capabilities()["actions"]
+
+
+def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
+    d = _keyboard_script()
+    d["batches"][0]["steps"][0]["action"]["args"]["key"] = "NoSuchKey"
+    d["batches"][0]["steps"][0]["wait"] = {"check": "ui.screen == play.library", "timeout_ticks": 6}
+    [r] = run(d, KeyboardFake(tmp_path))
+    assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"

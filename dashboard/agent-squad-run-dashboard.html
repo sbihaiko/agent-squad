@@ -2270,6 +2270,8 @@ function scriptModule() {
       if (!nodes.has(e.node)) nodes.set(e.node, { id: e.node, status: "running", verdict: null, capture: null, held: false, manual: false, pos: e.pos });
       const n = nodes.get(e.node);
       if (e.manual) n.manual = true;
+      // A step's event names its action and its objective check, so the node shows what decided it.
+      if (e.event === "gui_step") { if (e.action) n.action = e.action; if (e.check) n.check = e.check; }
       // A held capture (a step marked sensitive) shows no path until a gui_approve event names its sha256.
       if (e.event === "gui_capture") { n.held = e.held === true; n.capture = { path: n.held ? null : e.path, size: e.size, sha256: e.sha256 }; sources.set(e.node, e.path); }
       if (e.event === "gui_approve" && n.capture && n.capture.sha256 === e.sha256) { n.held = false; n.capture.path = sources.get(e.node); }

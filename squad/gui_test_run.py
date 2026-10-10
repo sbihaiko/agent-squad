@@ -81,7 +81,7 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None):
                 emit("gui_verdict", s["id"], verdict=verdict)
                 results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": False})
                 continue
-            emit("gui_step", s["id"])
+            emit("gui_step", s["id"], action=s["action"]["name"], **({"check": s["check"]} if "check" in s else {}))
             adapter.inject(s["action"]["name"], s["action"].get("args", {}))
             cond = s["wait"].get("check")
             capture = None
