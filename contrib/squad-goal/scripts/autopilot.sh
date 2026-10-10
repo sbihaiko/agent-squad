@@ -95,7 +95,16 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
     continue
   fi
-  prob=0 hard=0; [[ $line == *CHANGES* && $line != *"(prepush)"* ]] && hard=1; [[ $line == *"(prepush)"* ]] && prob=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
+  # ADR-0273 Decision 3/5: a CHANGES whose review has no BLOCKING line (and at least one DEBT line) does not cost a round -- the
+  # debt is filed and the merge path below runs with every guard. Never for a (prepush) CHANGES, failed CI, a conflict or open
+  # threads, and never once the open `debt` ledger is past SG_DEBT_MAX.
+  soft=0; rv="$SG_STATE/review-$pr.md"; tag='^[^[:alnum:]]*([0-9]+[.)][[:space:]]*)?'
+  if [ "${SG_DEBT_SOFT:-yes}" = yes ] && [[ $line == *CHANGES* && $line != *"(prepush)"* && $ci != *failure* && $ci != *timed_out* && $ci != *cancelled* ]] \
+     && [ "$ms" != dirty ] && [ "$nt" -eq 0 ] && [ -f "$rv" ] && ! grep -Eiq "${tag}BLOCKING" "$rv" && grep -Eiq "${tag}DEBT" "$rv"; then
+    od=$(gh api --paginate "repos/$SG_REPO/issues?labels=debt&state=open&per_page=100" -q '.[].number' 2>/dev/null | grep -c .)
+    [ "${od:-0}" -le "${SG_DEBT_MAX:-15}" ] && soft=1
+  fi
+  prob=0 hard=0; [[ $line == *CHANGES* && $line != *"(prepush)"* && $soft = 0 ]] && hard=1; [[ $line == *"(prepush)"* ]] && prob=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
   [ $hard = 1 ] || [ "$ms" = dirty ] || [ "$nt" -gt 0 ] && prob=1   # a prepush CHANGES is a soft round (process, not code)
   if [ $prob = 1 ]; then
     [ -e "$A/nofix" ] && continue
@@ -109,7 +118,7 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     else bg autopanel.sh $pr $iss; echo "ROUND CAP #$pr issue #$iss: $n fix rounds spent -> panel"; fi
     continue
   fi
-  [[ $line == *APPROVE* ]] || continue
+  [[ $line == *APPROVE* ]] || [ $soft = 1 ] || continue
   # A head no workflow has run on is not a green head. `CI=none` reaches this point untouched, and an empty check list used to
   # read as "nothing is wrong" -- so a PR would merge having never run the five contexts the `main` ruleset requires. Ask
   # GitHub for the head's check runs directly (the revci line is a snapshot from when the review finished) and re-dispatch
@@ -134,6 +143,11 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     [ -e "$A/empty-$pr-${sha:0:9}" ] || { touch "$A/empty-$pr-${sha:0:9}"; printf "NEEDS OWNER: PR #%s @ %s has an empty diff against %s (a fix round undid the change); not merged.\n" $pr ${sha:0:9} "$SG_BASE" > "$SG_STATE/cq/$iss-empty$$.md"; echo "NEEDS OWNER #$pr issue #$iss: empty diff at ${sha:0:9}, not merged"; }
     continue; fi
   [ "$(bash "$here/autofix.sh" --threads $pr)" = 0 ] || { rm -f "$tf"; hold threads "unresolved review threads opened after the cache"; continue; }   # a thread opened after the cache: re-ask next pass
+  if [ $soft = 1 ]; then   # the merge cannot happen unless the filing succeeded; filing is idempotent per finding, so a retry files nothing twice
+    fl=${SG_DEBT_FILER:-env PYTHONPATH=${SG_FORK:-$HOME/VSCodeProjects/agent-squad} python3 -m squad.debt_filing}
+    $fl --repo "$SG_REPO" --pr $pr --issue $iss --head $sha --review "$rv" >> "$A/debt-$pr.out" 2>&1 || { hold debtfile "debt filing failed (see auto/debt-$pr.out); the debt-only CHANGES is not merged"; continue; }
+    echo "DEBT FILED #$pr @ $s9: debt-only CHANGES, debt filed, merge guards next"
+  fi
   if m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
     touch "$A/merged-$pr"
     printf "PR #%s merged automatically (squash %s): review APPROVE and CI green on %s, mergeable clean, no open review threads. Follow-up: e2e on the merge SHA, close when AC are met.\n" $pr "${m:0:9}" $s9 > "$SG_STATE/cq/$iss-automerge$$.md"
