@@ -21,6 +21,7 @@ if v:
     [ -n "$v" ] && { [ $boot = 1 ] || { echo "RUN ${r##*/} verdict=$v"
         # the run's verdict goes on every issue it worked (issue numbers read from the run's first records)
         rd=$r; [ "${r#/}" = "$r" ] && rd=runs/$r
+        case "$v" in failed*no_dispatch*) "$(dirname "$0")/consult.sh" "$rd" >> "$SG_STATE/consult.log" 2>&1 & ;; esac   # router hesitated: ask the coding model once (ADR-free loop rule)
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
           printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$SG_STATE/cq/$n-run$$-${r##*-}.md"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
