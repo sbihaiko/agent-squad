@@ -921,3 +921,95 @@ def test_1199_the_jev_chooser_sends_the_typed_ui_state_and_the_options_as_one_ch
     [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(jev_chooser(Client(), "ui.screen == play.library")))
     assert r["verdict"] == "passed" and len(asked) == 1  # the last offered move is A
     assert asked[0][0]["ui"]["screen"] == "play.home" and "image" not in json.dumps(asked[0]).lower()
+
+
+# ---- #1200: the exploratory trap sweep (ADR-0271) ----
+
+def _sweep_step(sid="b1.sweep", bound=40, **args):
+    return step(sid, role="under-test", action={"name": "nav.sweep", "args": {"input": "pad", "bound": bound, **args}},
+                wait={"timeout_ticks": 600}, expect="No screen reachable by pad is one no advertised action leaves.")
+
+
+def _sweep_script(*steps):
+    d = script(*steps)
+    d["requires"]["actions"].append("nav.sweep")
+    return d
+
+
+def _sweep(tmp_path, edges, step_=None, **kw):
+    from squad.gui_test_goal import Navigator
+    from tests.gui_test_fakes import GraphAdapter
+    events = []
+    d = _sweep_script(step_ or _sweep_step())
+    validate(d)
+    [r] = run(d, GraphAdapter(tmp_path, edges, dialogs=kw.pop("dialogs", ())), record=events.append,
+              goal=Navigator(_Chooser(), **kw))
+    return r, events
+
+
+def test_1200_a_planted_trap_screen_is_caught_naming_the_screen_and_the_path_that_reached_it(tmp_path):
+    from tests.gui_test_fakes import TRAP_APP
+    r, events = _sweep(tmp_path, TRAP_APP)
+    assert r["verdict"].startswith("failed (trap screen play.about")
+    assert "play.home -[pad.press A]-> play.settings -[pad.press A]-> play.about" in r["verdict"]
+    assert any(e["event"] == "gui_decision" for e in events)  # same mechanism as nav.goal: Jev's Choice per move
+
+
+def test_1200_a_trap_free_fixture_passes_within_the_bound(tmp_path):
+    from tests.gui_test_fakes import CLEAN_APP
+    r, events = _sweep(tmp_path, CLEAN_APP)
+    assert r["verdict"] == "passed"
+    assert sum(e["event"] == "gui_decision" for e in events) <= 40
+
+
+def test_1200_a_sweep_that_cannot_finish_within_the_bound_fails_naming_the_bound(tmp_path):
+    from tests.gui_test_fakes import CLEAN_APP
+    r, _ = _sweep(tmp_path, CLEAN_APP, step_=_sweep_step(bound=2))
+    assert r["verdict"].startswith("failed (sweep bound 2 reached")
+
+
+def test_1200_the_dialogs_scope_only_judges_dialog_screens(tmp_path):
+    from tests.gui_test_fakes import TRAP_APP
+    r, _ = _sweep(tmp_path, TRAP_APP, step_=_sweep_step(scope="dialogs"))
+    assert r["verdict"] == "passed"  # About is a dead end but not a dialog
+    r, _ = _sweep(tmp_path, TRAP_APP, step_=_sweep_step(scope="dialogs"), dialogs=["play.about"])
+    assert r["verdict"].startswith("failed (trap screen play.about")
+
+
+def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
+    from tests.gui_test_fakes import GraphAdapter
+    from squad.gui_test_goal import Navigator
+    edges = {"play.home": {"Enter": "play.dead"}}
+    d = _sweep_script(_sweep_step())
+    d["batches"][0]["steps"][0]["action"]["args"]["input"] = "key"
+    [r] = run(d, GraphAdapter(tmp_path, edges), goal=Navigator(_Chooser()))
+    assert r["verdict"].startswith("failed (trap screen play.dead") and "key.press Enter" in r["verdict"]
+
+
+def test_1200_a_sweep_replays_without_asking_jev_and_with_no_navigator_ends_pending(tmp_path):
+    from squad.gui_test_goal import Navigator, recorded_moves
+    from tests.gui_test_fakes import GraphAdapter, TRAP_APP
+    d = _sweep_script(_sweep_step())
+    events = []
+    run(d, GraphAdapter(tmp_path, TRAP_APP), record=events.append, goal=Navigator(_Chooser()))
+    [r] = run(d, GraphAdapter(tmp_path, TRAP_APP), goal=Navigator(None, replay=recorded_moves(events)))
+    assert r["verdict"].startswith("failed (trap screen play.about")
+    [p] = run(d, GraphAdapter(tmp_path, TRAP_APP))
+    assert p["verdict"] == "pending"
+
+
+def test_1200_the_validator_needs_a_positive_integer_bound():
+    d = _sweep_script(_sweep_step(bound=0))
+    with pytest.raises(ScriptError, match="nav.sweep needs a positive integer bound"):
+        validate(d)
+
+
+def test_1200_the_pilot_dialogs_no_trap_sweep_is_one_nav_sweep_step():
+    root = _mesenai()
+    d = json.loads((root / "docs/validation/process/play-pad-only.gui-test.json").read_text())
+    validate(d)
+    sweeps = [s for b in d["batches"] for s in b["setup"] + b["steps"] + b["teardown"] if s.get("action", {}).get("name") == "nav.sweep"]
+    if not sweeps:  # the pilot step lands with MesenAI's #1200 PR; until it is on main the read-only checkout lacks it
+        pytest.skip("MESENAI_REPO's pilot script has no nav.sweep step yet")
+    [s] = sweeps
+    assert s["action"]["args"]["scope"] == "dialogs" and s["id"] == "dialogs.no-trap"

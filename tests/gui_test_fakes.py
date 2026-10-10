@@ -46,3 +46,38 @@ class SettingsAdapter(FakeAdapter):
         for p in fixtures.get("restore", []):
             Path(p).write_bytes(b"mutated by the app")
         return super().launch(fixtures)
+
+
+class GraphAdapter(FakeAdapter):
+    """A fixture app as a screen graph: `edges[screen][move label] = next screen`; a screen absent from `edges`, or whose
+    moves all lead back to itself, is one no advertised action leaves. `dialogs` names the screens that are dialogs."""
+
+    def __init__(self, out_dir, edges, start="play.home", dialogs=()):
+        super().__init__(out_dir)
+        self.edges, self.start, self.dialog_screens = edges, start, set(dialogs)
+        self.screen = start
+
+    def launch(self, fixtures):
+        self.screen = self.start
+        return self
+
+    def moves(self, family):
+        if family == "key":
+            return [{"name": "key.press", "args": {"key": k, "ticks": 1}} for k in ("Enter", "Escape")]
+        return [{"name": "pad.press", "args": {"button": b, "ticks": 1}} for b in ("Up", "Down", "B", "A")]
+
+    def inject(self, name, args):
+        self.log.append((name, args))
+        self.screen = self.edges.get(self.screen, {}).get((args.get("button") or args.get("key")), self.screen)
+
+    def ui_state(self):
+        return {"screen": self.screen, "focus": self.screen + ".focus", "controls": [], "options": [],
+                "dialogs": [self.screen] if self.screen in self.dialog_screens else []}
+
+
+# home -A-> settings -A-> about (a dead end: nothing leaves it); settings -B-> home
+TRAP_APP = {"play.home": {"A": "play.settings", "Down": "play.library"},
+            "play.settings": {"B": "play.home", "A": "play.about"},
+            "play.library": {"B": "play.home"}}
+# the same app with About's way back
+CLEAN_APP = {**TRAP_APP, "play.about": {"B": "play.settings"}}

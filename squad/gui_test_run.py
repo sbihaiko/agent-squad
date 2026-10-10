@@ -89,6 +89,12 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=
                     emit("gui_verdict", s["id"], verdict="pending" if goal is None else f"failed ({missed})")
                     results.append({"id": s["id"], "verdict": "pending" if goal is None else f"failed ({missed})", "capture": None, "held": False})
                     continue
+            elif s["action"]["name"] == "nav.sweep":
+                missed = "pending" if goal is None else goal.sweep(adapter, s, emit, vision)
+                verdict = "pending" if goal is None else f"failed ({missed})" if missed else "passed"
+                emit("gui_verdict", s["id"], verdict=verdict)
+                results.append({"id": s["id"], "verdict": verdict, "capture": None, "held": False})
+                continue
             else:
                 adapter.inject(s["action"]["name"], s["action"].get("args", {}))
             cond = s["wait"].get("check")
