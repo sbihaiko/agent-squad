@@ -39,7 +39,8 @@ while IFS=$'\x1f' read -r w n labels; do
   [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*) continue;; esac
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
-  case "$d" in READY) notes+=("base origin/$SG_BASE");; STACK\ *) set -- $d; notes+=("OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body");; *) continue;; esac
+  fk=""; case "$d" in *" FORK "*) fk="; OPTIMISTIC ON CODE COMPLETE: create your fork branch from $SG_FORK_BASE and first \`git merge --no-ff\` the blocker's unmerged fork branch(es) ${d##* FORK } into it, then build on top";; esac
+  case "$d" in READY*) notes+=("base origin/$SG_BASE$fk");; STACK\ *) set -- $d; notes+=("OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body$fk");; *) continue;; esac
   pick+=("$n"); [ ${#pick[@]} -ge "$free" ] && break
 done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$SG_FRONTIER_LABEL&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
 [ ${#pick[@]} -gt 0 ] || exit 0
