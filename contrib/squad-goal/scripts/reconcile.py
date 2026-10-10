@@ -14,23 +14,15 @@ def gh(*a):
     return r.stdout
 def js(*a):
     o = gh(*a); return json.loads(o) if o else None
-board = js("project", "item-list", str(BOARD), "--owner", OWNER, "--limit", "1500", "--format", "json")
-if not board: sys.exit("board unreadable")
-def board_ids():
-    """Project node id, Status field id and option ids, cached a day under SG_STATE (GraphQL budget)."""
-    import time
-    f = os.path.join(os.environ.get("SG_STATE", os.path.expanduser("~/.cache/squad-goal")), f"board-ids-{OWNER}-{BOARD}.json")
-    try:
-        if time.time() - os.path.getmtime(f) < 86400: return json.load(open(f))
-    except OSError: pass
-    pv = js("project", "view", str(BOARD), "--owner", OWNER, "--format", "json") or {}
-    fl = js("project", "field-list", str(BOARD), "--owner", OWNER, "--format", "json") or {}
-    st = next((x for x in fl.get("fields", []) if x.get("name") == "Status"), {})
-    d = {"project": pv.get("id"), "field": st.get("id"), "opt": {o["name"]: o["id"] for o in st.get("options", [])}}
-    if d["project"] and d["field"]: json.dump(d, open(f, "w"))
-    return d
-_ids = board_ids(); PROJECT, FIELD, OPT = _ids["project"], _ids["field"], _ids["opt"]
-items = {i["content"]["number"]: i for i in board["items"] if i["content"].get("number") and i["content"].get("type") == "Issue" and i["content"]["number"] >= MIN}
+_here = os.path.dirname(os.path.abspath(__file__)); MOVE = os.path.join(_here, "board.sh")
+def _status_field():
+    o = js("api", f"/users/{OWNER}/projectsV2/{BOARD}/fields?per_page=100") or js("api", f"/orgs/{OWNER}/projectsV2/{BOARD}/fields?per_page=100") or []
+    return next((str(x["id"]) for x in o if x.get("name") == "Status"), "")
+_kind = "users"; _sf = _status_field()
+_raw = gh("api", "--paginate", f"/{_kind}/{OWNER}/projectsV2/{BOARD}/items?per_page=100&fields[]={_sf}", "--jq",
+          '.[]|select(.content_type=="Issue")|{n:.content.number,id:.id,status:((.fields[]?|select(.name=="Status")|.value.name.raw)//null)}')   # REST: no GraphQL quota
+if _raw is None: sys.exit("board unreadable")
+items = {i["n"]: i for i in (json.loads(l) for l in _raw.splitlines() if l.strip()) if i["n"] and i["n"] >= MIN}
 prs = js("api", f"repos/{REPO}/pulls?state=open&per_page=100") or []
 refs = {}
 for p in prs:
@@ -38,7 +30,7 @@ for p in prs:
 def move(n, to, why):
     cur = items[n].get("status")
     print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {to} ({why})")
-    if APPLY: gh("project", "item-edit", "--project-id", PROJECT, "--id", items[n]["id"], "--field-id", FIELD, "--single-select-option-id", OPT[to])
+    if APPLY: subprocess.run([MOVE, OWNER, str(BOARD), to, str(n)], capture_output=True)
 _state = {}
 def is_open(d):
     if d not in _state:
@@ -65,6 +57,4 @@ for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or
     if "pull_request" in i or i["number"] < MIN or i["number"] in items: continue
     to = "Code Complete" if i["number"] in refs else "Todo"
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {to} (new bug)")
-    if APPLY:
-        o = js("project", "item-add", str(BOARD), "--owner", OWNER, "--url", i["html_url"], "--format", "json")
-        if o: gh("project", "item-edit", "--project-id", PROJECT, "--id", o["id"], "--field-id", FIELD, "--single-select-option-id", OPT[to])
+    if APPLY: subprocess.run([MOVE, "--add", OWNER, str(BOARD), to, str(i["number"])], capture_output=True)
