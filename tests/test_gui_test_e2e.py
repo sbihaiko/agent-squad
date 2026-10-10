@@ -823,3 +823,129 @@ def test_1210_a_failed_objective_check_names_expected_and_observed_and_skips_the
     [r] = run(d, TickingFake(tmp_path), vision=Vision(model))
     assert r["verdict"] == "failed (expected ui.screen == play.home, observed play.library)"
     assert asked == [] and "vision" not in r
+# --- #1193: the pilot's Library, Favorites and opening-and-playing cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake import PilotFake  # noqa: E402
+
+CASES_1193 = ([f"LIB-0{n}" for n in range(1, 10)] + ["FAV-01", "FAV-02"] + [f"GAME-0{n}" for n in range(1, 5)])
+PILOT_1193 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1193.json"
+
+
+def _pilot_1193():
+    d = json.loads(PILOT_1193.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1193(d, *batches):
+    return [s for b in d["batches"] if b["id"] in batches for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def test_1193_every_library_favorites_and_game_case_is_converted_none_dropped():
+    d = _pilot_1193()
+    steps = _steps_1193(d, "library", "favorites", "favorites-home", "game", "game-archive", "game-bios")
+    for case in CASES_1193:
+        assert any(s["expect"].startswith(case + ":") or f" {case}:" in s["expect"] or f"({case})" in s["expect"]
+                   for s in steps), f"{case} has no step"
+
+
+def _run_1193(tmp_path, d, **fixtures):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in ("launch", "home", "home-after-game"):
+            continue
+        view = {**d, "batches": [batch]}
+        adapter = PilotFake(tmp_path, **fixtures.get(batch["id"], {}))
+        results += [{**r, "batch": batch["id"]} for r in run_variants(view, adapter, axis="window.mode")]
+    return results
+
+
+def test_1193_the_batches_run_end_to_end_in_both_window_modes(tmp_path):
+    d = _pilot_1193()
+    results = _run_1193(tmp_path, d, **{"game-archive": {"tile": "zip"}, "game-bios": {"tile": "fds"},
+                                    "favorites-home": {"favorites": 1}})
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results
+           if r["verdict"].startswith("failed")]
+    assert bad == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    manual = {s["id"] for s in _steps_1193(d, "library", "favorites", "favorites-home", "game", "game-archive",
+                                           "game-bios") if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
+
+
+def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
+    d = _pilot_1193()
+    results = _run_1193(tmp_path, d, library={"y_focuses_search": False})
+    failed = [r["id"] for r in results if r["verdict"].startswith("failed")]
+    assert "lib.search-y-focuses-field" in failed
+    from squad.gui_test_run import failed as run_failed
+    assert run_failed(results)
+
+
+# --- #1194: the pilot's Pause overlay and Settings cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake_1194 import PauseSettingsFake  # noqa: E402
+
+CASES_1194 = [f"P4-0{n}" for n in range(1, 10)] + [f"SET-0{n}" for n in range(1, 8)]
+PILOT_1194 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1194.json"
+
+
+def _pilot_1194():
+    d = json.loads(PILOT_1194.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1194(d):
+    return [s for b in d["batches"] if b["id"] in ("pause", "settings") for k in ("setup", "steps", "teardown")
+            for s in b[k]]
+
+
+def _run_1194(tmp_path, d, **switches):
+    """The Pause batch needs a running game and the Settings batch needs W-P4 open: each runs on its own fake."""
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in ("pause", "settings"):
+            view = {**d, "batches": [batch]}
+            results += [{**r, "batch": batch["id"]}
+                        for r in run_variants(view, PauseSettingsFake(tmp_path, **switches), axis="window.mode")]
+    return results
+
+
+def test_1194_every_pause_and_settings_case_is_converted_none_dropped():
+    steps = _steps_1194(_pilot_1194())
+    for case in CASES_1194:
+        assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
+
+
+def test_1194_the_pause_and_settings_batches_run_end_to_end_in_both_window_modes(tmp_path):
+    d = _pilot_1194()
+    results = _run_1194(tmp_path, d)
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
+    assert bad == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    manual = {s["id"] for s in _steps_1194(d) if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
+    automated = {s["id"] for s in _steps_1194(d) if s["mode"] == "automated"}
+    assert automated <= {r["id"] for r in results if r["verdict"] == "passed"}
+
+
+def test_1194_exit_full_screen_is_checked_in_full_screen_only(tmp_path):
+    results = _run_1194(tmp_path, _pilot_1194())
+    ran = {r["variant"] for r in results if r["id"] == "settings.exit-fullscreen-left-of-done"}
+    assert ran == {"fullscreen"}
+
+
+def test_1194_a_pause_that_b_does_not_resume_fails_that_step_and_the_run(tmp_path):
+    from squad.gui_test_run import failed as run_failed
+    results = _run_1194(tmp_path, _pilot_1194(), b_resumes=False)
+    assert "pause.b-resumes" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+    assert run_failed(results)
+
+
+def test_1194_a_done_the_pad_cannot_reach_fails_every_tab(tmp_path):
+    results = _run_1194(tmp_path, _pilot_1194(), done_unreachable=True)
+    failed = {r["id"] for r in results if r["verdict"].startswith("failed")}
+    assert {f"settings.{t}-done-reachable" for t in ("display", "look", "audio", "controls", "system")} <= failed
