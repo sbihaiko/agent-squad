@@ -27,7 +27,7 @@ def test_version_was_bumped_past_the_pre_series_release():
 
 
 def test_changelog_names_every_slice_of_the_adr_0273_series():
-    sec = _section(_version())
+    sec = _section("0.2.26")
     assert "ADR-0273" in sec
     for issue in ("#1393", "#1394", "#1395", "#1396"):
-        assert issue in sec, f"{issue} missing from the {_version()} section"
+        assert issue in sec, f"{issue} missing from the 0.2.26 section"

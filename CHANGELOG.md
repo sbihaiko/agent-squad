@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.27 (local fork, 2026-10-10)
+- **#1404 — landed fork work can refresh the live skill, and `sync-to-fork.sh` can no longer erase it.** Children land work on `local/next`, but the only supported direction was live → fork, and `sync-to-fork.sh` began with `rm -rf` on the fork's `contrib/squad-goal`, so `fork-gate.sh`/`shell-suites.sh` (#1392), the reviewer severity tags (#1393) and the debt-only merge (#1395) never reached the running loop.
+  - New `refresh-from-fork.sh`, the documented counterpart: copies `local/next`'s `contrib/squad-goal` into the live skill, one new inode per file, and never touches `scripts/models.json`, per-repo profiles or `$SG_STATE`. `--check` exits 1 naming every shipped file where live and `local/next` disagree.
+  - `sync-to-fork.sh` now refuses, naming the files, when the fork copy holds work the live copy lacks; the refresh likewise refuses over live-only edits. `SG_SYNC_FORCE=1` / `SG_REFRESH_FORCE=1` override. The last synced state is kept in `$SG_STATE/fork-base`.
+  - `test-sync-refresh.sh` covers a fork-ahead file blocking the sync, the refresh bringing it over, local config preserved, and the explicit overrides. `tests/test_release_changelog.py` pins the ADR-0273 series to its own 0.2.26 section so later bumps do not break it.
+
 ## 0.2.26 (local fork, 2026-10-10)
 - **A review that finds only debt merges and files the debt as tasks (ADR-0273).** Four slices ship together; the loop only gets the gate once the live skill directory is refreshed from this release.
   - **#1393 — the reviewer tags every finding.** Each finding line of `review-<pr>.md` starts `BLOCKING` or `DEBT`; line 1 stays `VERDICT: APPROVE | CHANGES`. The contract covers both prompt modes, and a fix round keeps the tag each finding was first given. Blocking is the closed list of four (accepted-ADR divergence, regression of behaviour `main` had, wire/persisted-format change, a test that passes while lying); everything else is `DEBT`.
