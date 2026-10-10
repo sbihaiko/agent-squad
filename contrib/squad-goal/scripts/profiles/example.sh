@@ -17,3 +17,7 @@
 : "${SG_BUG_LABEL:=bug}"
 : "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"
 # : "${SG_BUG_PROJECT:=2}"; : "${SG_BUG_DOING:=Doing}"   # a separate bug board, if any
+: "${SG_FRONTIER_LABEL:=}"             # autofrontier.sh: label of dispatchable issues (empty = off)
+# : "${SG_FRONTIER_PREAMBLE:=$here/profiles/<name>.frontier.txt}"   # shared rules prepended to every frontier request
+# Fork-only work (forkclose.py): an issue delivered as a branch in a local fork, no PR, closes on merge + fork suite green
+# : "${SG_FORK_DIR:=$HOME/src/fork}"; : "${SG_FORK_BASE:=main}"; : "${SG_FORK_BRANCH:=issue/%n}"; : "${SG_FORK_TEST_CMD:=make test}"
