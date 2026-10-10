@@ -20,7 +20,9 @@ from squad.gui_test_run import run
 TICK_SECONDS = 0.05
 SETTLE_SECONDS = 5
 # A fresh install starts in Player on the Play door, with no play history (ADR-0256 Decision 8).
-PROFILES = {"fresh": {"Preferences": {"UiMode": "Player", "Workspace": "Play"}}}
+# SingleInstance is off: the app's guard is a machine-wide named mutex, so while any other Mesen runs (a sibling suite,
+# the user's own copy) a launch hands off to it and exits 0 before its hook comes up.
+PROFILES = {"fresh": {"Preferences": {"UiMode": "Player", "Workspace": "Play", "SingleInstance": False}}}
 KNOWN_PROFILES = tuple(PROFILES)
 NES_HEADER = 16
 
@@ -191,7 +193,16 @@ class EmulatorAdapter:
         return reply
 
     def inject(self, name, args):
-        self._ask({"op": "inject", "action": name, "args": args})
+        """A press right after launch can answer `unknown button Up on pad 1` until the app has built its key names
+        (the same press a moment later is taken), so that one refusal is retried for up to 10 s."""
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                return self._ask({"op": "inject", "action": name, "args": args})
+            except AdapterError as e:
+                if "unknown button" not in str(e) or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.25)
 
     def _state(self):
         return self._ask({"op": "state"})

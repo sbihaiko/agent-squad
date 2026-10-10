@@ -366,7 +366,7 @@ def test_a_portable_session_runs_from_a_clone_with_its_own_settings_and_leaves_t
     try:
         clone = adapter.session_dir / "app"
         assert adapter.command[0] == str(clone / "Mesen")
-        assert json.loads((clone / "settings.json").read_text())["Preferences"] == {"UiMode": "Player", "Workspace": "Play"}
+        assert json.loads((clone / "settings.json").read_text())["Preferences"] == {"UiMode": "Player", "Workspace": "Play", "SingleInstance": False}
         assert not (app / "settings.json").exists()
     finally:
         assert adapter.teardown() == []
@@ -1269,7 +1269,9 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
     # The adapter seeds `{}`, and this build then boots into the classic menu UI after tick 0 (screen None), so the
     # Play first run is seeded here, through the adapter's own `files` fixture, until the adapter seeds it itself.
     seed = tmp_path / "settings.json"
-    seed.write_text(json.dumps({"Preferences": {"UiMode": "Player", "Workspace": "Play"}}))
+    # SingleInstance off: the app's instance guard is a machine-wide named mutex, so while any other Mesen runs (a
+    # sibling suite, the user's own copy) a second launch hands off to it and exits 0 before opening its hook.
+    seed.write_text(json.dumps({"Preferences": {"UiMode": "Player", "Workspace": "Play", "SingleInstance": False}}))
     d["fixtures"]["files"] = [{"src": str(seed), "dest": "settings.json"}]
     adapter = _adapter_class(root)(binary=str(binary), workdir=short_work, connect_timeout=120)
     validate(d, adapter.capabilities())
