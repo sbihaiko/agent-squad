@@ -147,7 +147,9 @@ def test_pilot_script_opens_as_a_diagram_and_every_node_shows_its_text():
         assert svg.count("data-step=") == len(steps)
         for s in steps:
             assert f'data-step="{s["id"]}"' in svg
-            assert s["expect"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:30] in svg
+            # Mirror the renderer's escXml (& < > and ") so a quoted expect still matches.
+            want = s["expect"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+            assert want[:30] in svg
         assert svg.count('class="step manual"') == sum(s["mode"] == "manual" for s in steps)
 
 
@@ -1111,7 +1113,9 @@ def _pilot_for_the_real_app(ids):
     d["batches"] = [b for b in d["batches"] if b["steps"]]
     d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
     d["variants"] = {"window.mode": ["windowed"]}
-    d["fixtures"].pop("rom")
+    # The three steps need no rom and no pack: keep only the settings fixture, the one kind every adapter build supports
+    # (the pilot also declares pack/rom-* kinds for its later batches, which the adapter rejects at launch).
+    d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k == "settings"}
     return d
 
 
