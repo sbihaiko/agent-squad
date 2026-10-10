@@ -44,7 +44,7 @@ while IFS=$'\x1f' read -r n labels; do
   [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
   pick+=("$n"); [ ${#pick[@]} -ge "$free" ] && break
-done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$lab&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null)
+done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$lab&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null)
 [ ${#pick[@]} -gt 0 ] || exit 0
 [ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${pick[*]/#/#} ($free free slots)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"

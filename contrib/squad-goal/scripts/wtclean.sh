@@ -21,6 +21,17 @@ done
 # acceptance-command trees (acpr.sh) left by a killed gate: drop any older than 2 h
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/acpr\.[^/]*\)$#\1#p' | while read -r w; do
   [ -n "$(find "$w" -maxdepth 0 -mmin +120 2>/dev/null)" ] && $G worktree remove --force "$w" && echo "WT CLEAN acpr ${w##*/}"; done
+# L: loose detached trees (acpr.* gate trees, ~/wt-* scratch trees; never the e2e trees): drop one that is clean, 10 min old, has no process inside and whose HEAD is on a remote branch (nothing is lost); a dirty or unpushed one is only reported once as WT LOOSE
+$G worktree list --porcelain | awk '/^worktree /{w=$2} /^detached/{print w}' | while read -r w; do
+  case $w in "$HOME"/wt-*|*/acpr.*) ;; *) continue;; esac
+  case $w in "${SG_E2E_DIR:-//}"|"${SG_E2E_BUILD_DIR:-//}"|"$HOME"/wt-e2e*) continue;; esac   # the e2e trees are reused between verifications: an idle one is not a loose one (a run lost them mid-verification, 2026-10-10)
+  [ -d "$w" ] || continue; [ -n "$(find "$w" -maxdepth 0 -mmin +10 2>/dev/null)" ] || continue
+  ! printf '%s\n' "$cwds" | grep -qF "$w" || continue
+  sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
+  if [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] && [ -n "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+    $G worktree remove "$w" && echo "WT CLEAN loose ${w##*/} ${sha:0:9}"
+  else grep -qx "loose $w" "$seen" || { echo "WT LOOSE ${w##*/} ${sha:0:9}: detached, dirty or on no remote branch; kept"; echo "loose $w" >> "$seen"; }; fi
+done
 # fork-only issue worktrees ($SG_FORK_DIR, ~/wt-as-<n>, ~/wt-fr-<n>): once the issue is closed, the tree clean and its branch
 # merged into $SG_FORK_BASE, remove the tree and delete the branch (git branch -d: refuses an unmerged one)
 if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
