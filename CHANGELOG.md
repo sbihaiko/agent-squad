@@ -2,6 +2,8 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `review_models` starts with `claude:claude-opus-5-5` again (owner, 2026-10-10: "ponha o opus de volta na frente"); after the rc fix (bug #1215) Gemini still answered empty with exit 0 and Grok timed out, about 5 min per review before Opus.
+
 - squad-goal: FIX (bug #1215) `review.sh` read `rc=$?` after the superseded test, so every reviewer was logged rc=1 and no PR was reviewed for ~15 min; `rc` is now captured first, and `scripts/test-review.sh` (stubbed gh and claude, RED 3 of 4 on the old order, GREEN 4 of 4) guards it. The same pass adds `janitor.sh`: leftover processes of finished runs, idle dashboards of finished runs, zombie runs dropped from `active-runs.txt`, duplicate-run report, stale `disp-` markers (only for a failed request, an open issue and no PR); dry-run reviewed on live state before enabling.
 
 - squad-goal: review speed round (Fable audit, 54 min open-to-merge, 21.8 min of it in the review chain). `gemini-3.8-flash-medium` leaves the review chain (0 of 30 verdicts headless) and `review_timeout_seconds` is 210; `review.sh` kills the reviewer when the PR head moves during the review; `revci.sh` pins the head sha before the review, so a push during it ends as SUPERSEDED instead of reporting the old verdict on the new head; `retryfix.sh` re-arms a PR sha whose autofix run failed or died (max 2 retries, test-covered with a fake state); `watch.sh` logs any step of 5 s or more to `cycle.log`.
