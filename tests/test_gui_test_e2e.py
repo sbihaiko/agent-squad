@@ -1379,3 +1379,79 @@ def test_1195_a_sheet_that_does_not_open_fails_that_step_and_the_run(tmp_path):
 def test_1195_a_capture_that_b_does_not_cancel_fails_the_step(tmp_path):
     results = _run_1195(tmp_path, _pilot_1195(), b_cancels_capture=False)
     assert "ctl.b-cancels-capture" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+
+
+# --- #1196: the pilot's full screen, sizes and dialogs no-trap cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake_1196 import TRAP_SURFACES, TrapFake  # noqa: E402
+
+BATCHES_1196 = ("fullscreen-switch", "fullscreen-exit", "fullscreen-notes", "fullscreen-extra-large", "trap")
+PILOT_1196 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1196.json"
+CASES_1196 = [f"FS-0{n}" for n in range(1, 6)] + [f"TRAP-0{n}" for n in range(1, 5)]
+
+
+def _pilot_1196():
+    d = json.loads(PILOT_1196.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1196(d):
+    return [s for b in d["batches"] if b["id"] in BATCHES_1196 for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def _run_1196(tmp_path, d, **switches):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in BATCHES_1196:
+            view = {**d, "batches": [batch]}
+            results += [{**r, "batch": batch["id"]}
+                        for r in run_variants(view, TrapFake(tmp_path, **switches), axis="window.mode")]
+    return results
+
+
+def test_1196_every_full_screen_sizes_and_trap_case_is_converted_none_dropped():
+    steps = _steps_1196(_pilot_1196())
+    for case in CASES_1196:
+        assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
+
+
+def test_1196_every_trap_01_surface_the_pilot_names_has_a_b_step():
+    ids = {s["id"] for s in _steps_1196(_pilot_1196())}
+    for surface in TRAP_SURFACES:
+        assert f"trap.{surface}-b-closes" in ids or f"trap.{surface}-b" in ids, surface
+    assert len(TRAP_SURFACES) == 23 and {"trap.setup-sheet-b", "trap.tools-sheets-b"} <= ids
+
+
+def test_1196_the_batches_run_end_to_end_in_the_modes_they_are_tagged_for(tmp_path):
+    d = _pilot_1196()
+    results = _run_1196(tmp_path, d)
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
+    assert bad == []
+    steps = _steps_1196(d)
+    tagged = {s["id"]: s.get("variants", {}).get("window.mode") for s in steps}
+    for r in results:
+        assert tagged[r["id"]] in (None, r["variant"]), r
+    assert {r["variant"] for r in results if tagged[r["id"]] == "fullscreen"} == {"fullscreen"}
+    assert {r["variant"] for r in results if tagged[r["id"]] == "windowed"} == {"windowed"}
+    manual = {s["id"] for s in steps if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    automated = {s["id"] for s in steps if s["mode"] == "automated"}
+    assert automated <= {r["id"] for r in results if r["verdict"] == "passed"}
+
+
+def test_1196_a_surface_b_does_not_close_fails_that_surface_and_the_run(tmp_path):
+    from squad.gui_test_run import failed as run_failed
+    results = _run_1196(tmp_path, _pilot_1196(), stuck={"play.pack.detail"})
+    assert {r["id"] for r in results if r["verdict"].startswith("failed")} >= {"trap.pack-detail-b-closes"}
+    assert run_failed(results)
+
+
+def test_1196_a_native_dialog_left_open_fails_the_no_native_dialog_check(tmp_path):
+    results = _run_1196(tmp_path, _pilot_1196(), native_dialog_on={"play.cheats.add-code"})
+    assert "trap.add-a-code-no-native-dialog" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+
+
+def test_1196_exit_full_screen_that_drops_the_sheet_fails_fs_02(tmp_path):
+    results = _run_1196(tmp_path, _pilot_1196(), exit_drops_sheet=True)
+    assert "fs.exit-a-sheet-stays" in [r["id"] for r in results if r["verdict"].startswith("failed")]
