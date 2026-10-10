@@ -475,3 +475,40 @@ def test_settings_and_fixtures_are_byte_identical_after_the_run_even_when_the_ap
     run_supervised(d, "tests.gui_test_fakes:SettingsAdapter", out_dir=tmp_path / "out")
     assert (settings.read_bytes(), rom.read_bytes()) == before
     assert not ghost.exists()
+
+
+# --- #1189: vision verdict with cost on nodes and a per-run spend cap ---
+
+def test_vision_verdict_and_spend_cap_end_to_end(tmp_path):
+    from squad.gui_test_vision import Vision
+
+    def model(png, expect):  # a stand-in that reads the expected text: right text compatible, wrong text incompatible
+        return {"answer": "compatible" if "library" in expect else "incompatible", "saw": "a library list", "cost": 0.03}
+
+    def look(sid, expect):
+        s = step(sid, expect=expect, action={"name": "pad.press", "args": {"button": "A", "ticks": 1}}, wait={"timeout_ticks": 2})
+        del s["check"]
+        return s
+
+    d = script(step("b1.checked", check={"name": "ui.focused", "args": {"is": "play.home.open-rom"}}, wait={"timeout_ticks": 2}),
+               look("b1.right", "the library lists games"), look("b1.wrong", "the settings page is open"),
+               look("b1.after-cap", "the library lists games"))
+    validate(d)
+    events = []
+    results = run(d, TickingFake(tmp_path), record=events.append, vision=Vision(model, cap=0.05))
+    assert [(r["id"], r["verdict"]) for r in results] == [
+        ("b1.checked", "passed"), ("b1.right", "passed"), ("b1.wrong", "needs review"),
+        ("b1.after-cap", "skipped (spend cap $0.05 reached)")]
+    nodes = {n["id"]: n for n in run_node([{"op": "guirun", "events": events}])[0]}
+    assert [nodes[i]["cost"] for i in ("b1.right", "b1.wrong")] == [0.03, 0.03]
+    assert "cost" not in nodes["b1.checked"] and nodes["b1.after-cap"]["status"] == "skipped"
+    assert "spend cap" in nodes["b1.after-cap"]["stop"]
+
+
+def test_the_recorded_vision_measurement_covers_the_fixed_screenshot_set():
+    fix = FORK / "tests" / "fixtures" / "gui_vision"
+    cases = json.loads((fix / "cases.json").read_text())
+    rec = json.loads((fix / "measurement.json").read_text())
+    assert rec["total"] == len(cases) and rec["correct"] == rec["total"] and rec["model"]
+    assert [(c["image"], c["expect"], c["want"]) for c in rec["cases"]] == [(c["image"], c["expect"], c["answer"]) for c in cases]
+    assert all(c["got"] == c["want"] for c in rec["cases"])
