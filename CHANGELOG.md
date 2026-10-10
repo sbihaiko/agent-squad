@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.26 (local fork, 2026-10-10)
+- **A review that finds only debt merges and files the debt as tasks (ADR-0273).** Four slices ship together; the loop only gets the gate once the live skill directory is refreshed from this release.
+  - **#1393 — the reviewer tags every finding.** Each finding line of `review-<pr>.md` starts `BLOCKING` or `DEBT`; line 1 stays `VERDICT: APPROVE | CHANGES`. The contract covers both prompt modes, and a fix round keeps the tag each finding was first given. Blocking is the closed list of four (accepted-ADR divergence, regression of behaviour `main` had, wire/persisted-format change, a test that passes while lying); everything else is `DEBT`.
+  - **#1394 — the debt filer.** `squad/debt_filing.py` files one `ready-for-agent` GitHub issue per `DEBT` finding (label `debt`, origin PR, `file:line`, defect, acceptance criterion), idempotent per head, so a re-run files nothing new.
+  - **#1395 — the loop's decision.** `autopilot.sh` treats a `CHANGES` with no `BLOCKING` line and at least one `DEBT` line as mergeable after filing the debt, with every existing merge guard still running first. A `(prepush)` `CHANGES`, failed CI, a conflict, open threads, or a ledger past `SG_DEBT_MAX` (default 15 open `debt` issues) still costs a round. `test-autopilot-debt.sh` covers merge-on-debt, round-on-blocking, round-at-cap and round-on-`(prepush)`.
+  - **#1396 — shipping it.** Version bump, this entry, and `tests/test_release_changelog.py`, which fails when the CHANGELOG's top section and the plugin version disagree or a slice of the series is missing from it. The Release ZIP is the delivery channel (the fork has no write access upstream).
+
 ## 0.2.25 (local fork, 2026-10-10)
 - **The GUI test case label is `testcase`, not `test-case`.** The owner asked for the shorter name. `to_test_scenario.CASE_LABEL`, the suites that carried the literal, and the repository label itself move together, so the issues already published under `test-case` keep it under the new name.
 
