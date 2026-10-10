@@ -224,3 +224,73 @@ def test_validator_rejects_before_running_what_the_adapter_does_not_advertise(tm
 def test_the_fake_adapter_passes_the_shared_contract_suite(tmp_path):
     check_contract(lambda: TickingFake(tmp_path))
     assert {"launch", "inject", "check", "wait", "capture", "teardown", "capabilities"} <= set(CONTRACT)
+
+
+# --- #1192: manual steps and degrade-to-checklist ---
+
+from squad.gui_test_run import failed  # noqa: E402
+
+
+def _mixed_script():
+    return script(
+        step("b1.auto"),
+        step("b1.look", mode="manual", expect="the card glows"),
+    )
+
+
+def _shot(tmp_path, name="look.png"):
+    p = tmp_path / name
+    p.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    return str(p)
+
+
+def test_a_manual_step_records_the_persons_verdict_and_screenshot_on_its_node(tmp_path):
+    events, asked = [], []
+
+    def prompt(s):
+        asked.append((s["id"], s["expect"]))
+        return {"verdict": "passed", "screenshot": _shot(tmp_path)}
+
+    results = run(_mixed_script(), TickingFake(tmp_path), record=events.append, prompt=prompt)
+    assert asked == [("b1.look", "the card glows")]
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.auto", "passed"), ("b1.look", "passed")]
+    nodes = {n["id"]: n for n in run_node([{"op": "guirun", "events": events}])[0]}
+    assert (nodes["b1.look"]["status"], nodes["b1.look"]["verdict"]) == ("executed", "passed")
+    assert nodes["b1.look"]["capture"]["path"].endswith("look.png")
+    assert len(nodes["b1.look"]["capture"]["sha256"]) == 64
+    assert nodes["b1.look"]["manual"] is True
+
+
+def test_a_manual_step_nobody_ran_ends_pending_and_does_not_fail_the_run(tmp_path):
+    events = []
+    results = run(_mixed_script(), TickingFake(tmp_path), record=events.append)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.auto", "passed"), ("b1.look", "pending")]
+    assert not failed(results)
+    nodes = {n["id"]: n for n in run_node([{"op": "guirun", "events": events}])[0]}
+    assert (nodes["b1.look"]["status"], nodes["b1.look"]["capture"]) == ("pending", None)
+
+
+def test_a_failed_manual_verdict_fails_the_run(tmp_path):
+    results = run(_mixed_script(), TickingFake(tmp_path),
+                  prompt=lambda s: {"verdict": "failed", "screenshot": _shot(tmp_path)})
+    assert failed(results)
+
+
+def test_a_script_whose_adapter_is_unavailable_runs_entirely_as_a_checklist(tmp_path):
+    events, asked = [], []
+
+    def prompt(s):
+        asked.append(s["id"])
+        return {"verdict": "passed", "screenshot": _shot(tmp_path, f"{s['id']}.png")}
+
+    results = run(three_steps(), None, record=events.append, prompt=prompt)
+    assert asked == ["b1.right-holds", "b1.open-library", "b1.ghost"]
+    assert [r["verdict"] for r in results] == ["passed"] * 3
+    nodes = run_node([{"op": "guirun", "events": events}])[0]
+    assert [(n["status"], n["manual"]) for n in nodes] == [("executed", True)] * 3
+
+
+def test_an_unavailable_adapter_with_nobody_at_the_checklist_leaves_every_step_pending():
+    results = run(three_steps(), None)
+    assert [r["verdict"] for r in results] == ["pending"] * 3
+    assert not failed(results)
