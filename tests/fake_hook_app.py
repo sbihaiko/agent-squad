@@ -42,6 +42,14 @@ def handle(req, token):
         return {"ok": True, "hook": 1, "ops": ["hello", "state", "inject", "capture", "quit"], "namespaces": ["pad", "ui"]}
     if op == "state":
         return {"ok": True, "screen": state["screen"], "dialogs": [], "focus": state["focus"], "tick": state["tick"], "frames": 0,
+                # #1282: what a player judges by eye, from the application's own UI state.
+                "ring": {"visible": True, "target": state["focus"]},
+                "footer": ["confirm", "back"] if state["screen"] == "play.library" else ["confirm"],
+                "surface": "play.library" if state["screen"] == "play.library" else "none",
+                "paused": False,
+                "lamps": {"shown": True, "ports": [{"port": p, "lit": p == 1, "name": ""} for p in (1, 2, 3, 4)]},
+                "items": ["play.library.tile.Contra (USA).nes"] if state["screen"] == "play.library" else [],
+                "haptics": [{"pad": 1, "count": 2}],
                 "controls": [{"id": c, "enabled": True, "visible": state["screen"] == ("play.library" if c == "play.library.back" else "play.home"), "focused": c == state["focus"]} for c in CONTROLS],
                 "options": [], "window": {"mode": "windowed", "size": [64, 48]}}
     if op == "inject":
