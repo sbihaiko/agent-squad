@@ -5,6 +5,7 @@ artifacts: those expire and do not render in an issue. Captures reach the store 
 """
 import base64
 import contextlib
+import json
 import os
 import subprocess
 import tempfile
@@ -80,15 +81,55 @@ def _sh(args, **kw):
     return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout
 
 
+def _json(text):
+    return json.loads(text or "{}")
+
+
 def evidence_store(repo, branch=EVIDENCE_BRANCH, runner=_sh):
     """Return store(path, name) -> URL that renders inline in an issue of `repo`.
 
     One REST contents PUT per image onto `branch`; the `?raw=true` blob URL renders for anyone who can see the repo.
+    The contents API refuses a branch the repo does not have ("Branch <branch> not found"), so the first refused push
+    makes the branch as an orphan ref (a root commit over an empty tree, ADR-0135 rule 1) and is retried once.
     """
+    def api(method, path, body=None):
+        args = ["gh", "api", "--method", method, f"repos/{repo}/{path}"]
+        return runner(args + (["--input", "-"] if body is not None else []),
+                      **({"input": json.dumps(body)} if body is not None else {}))
+
+    def orphan_branch():
+        """A root commit over a one-file tree: the evidence branch shares no history with the default branch.
+
+        The one file is the branch's own README (GitHub refuses an empty tree), so a person who finds the branch reads
+        what it holds and why.
+        """
+        readme = "gui-test evidence: screenshots of failed and needs-review steps (ADR-0135).\n"
+        blob = _json(api("POST", "git/blobs", {"content": readme, "encoding": "utf-8"}))["sha"]
+        tree = _json(api("POST", "git/trees", {"tree": [
+            {"path": "README.md", "mode": "100644", "type": "blob", "sha": blob}]}))["sha"]
+        commit = _json(api("POST", "git/commits", {"message": f"gui-test evidence branch {branch}", "tree": tree}))["sha"]
+        try:
+            api("POST", "git/refs", {"ref": f"refs/heads/{branch}", "sha": commit})
+        except subprocess.CalledProcessError as ex:   # another run made it first: the ref is all that mattered
+            if "already exists" not in f"{ex.stderr}{ex.output}":
+                raise
+
     def store(path, name):
         content = base64.b64encode(Path(path).read_bytes()).decode()
-        runner(["gh", "api", "--method", "PUT", f"repos/{repo}/contents/{name}",
-                "-f", f"message=gui-test evidence {name}", "-f", f"branch={branch}", "-f", f"content={content}"])
+        put = ["gh", "api", "--method", "PUT", f"repos/{repo}/contents/{name}",
+               "-f", f"message=gui-test evidence {name}", "-f", f"branch={branch}", "-f", f"content={content}"]
+        try:
+            runner(put)
+        except subprocess.CalledProcessError as ex:
+            said = f"{ex.stderr}{ex.output}"
+            if "wasn't supplied" in said:   # the capture is already on the branch: an update needs its blob sha
+                sha = _json(runner(["gh", "api", f"repos/{repo}/contents/{name}?ref={branch}"]))["sha"]
+                runner(put + ["-f", f"sha={sha}"])
+            elif branch in said:            # the branch itself is missing
+                orphan_branch()
+                runner(put)
+            else:
+                raise
         return f"https://github.com/{repo}/blob/{branch}/{name}?raw=true"
     return store
 

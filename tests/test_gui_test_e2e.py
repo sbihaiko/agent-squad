@@ -2261,6 +2261,89 @@ def test_1244_a_withheld_capture_is_said_to_be_withheld_and_never_linked(tmp_pat
     results = _sensitive_failure(tmp_path)
     body = _comment_on(results, ["b1.file-dialog"], tmp_path)[10]
     assert "withheld" in body and "![" not in body
+
+
+def _rows_with_captures(tmp_path):
+    """One row per verdict, shaped as `scripts/gui_test_run_script.py` writes them (id, verdict, capture, held)."""
+    rows = []
+    for sid, verdict in (("a", "passed"), ("b", "failed (expected x, observed y)"), ("c", "needs review"),
+                         ("d", "pending")):
+        p = Path(_shot(tmp_path, f"{sid}.png"))
+        rows.append({"id": sid, "batch": "b1", "mode": "automated", "expect": f"what {sid} shows", "verdict": verdict,
+                     "capture": {"path": str(p), "size": p.stat().st_size,
+                                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}, "held": False})
+    return rows
+
+
+def test_1244_the_run_command_publishes_only_when_a_repo_is_named(tmp_path):
+    mod = _run_script_module()
+    rows, store = _rows_with_captures(tmp_path), _EvidenceStore()
+    # a command a person runs names no repo: nothing is published, the capture stays local (ADR-0135 rule 5)
+    assert mod.attach_evidence(rows, None, tmp_path / "approvals.json", store=store) == rows
+    assert store.pushed == []
+    out = mod.attach_evidence(rows, "sbihaiko/MesenAI", tmp_path / "approvals.json",
+                              store=store, lock=tmp_path / "evidence.lock")
+    assert [name for _, name, _ in store.pushed] == [
+        f"b-{rows[1]['capture']['sha256'][:12]}.png", f"c-{rows[2]['capture']['sha256'][:12]}.png"]
+    assert [r.get("evidence") for r in out] == [None, store.pushed[0][2], store.pushed[1][2], None]
+
+
+def test_1244_the_store_makes_the_orphan_evidence_branch_before_the_first_push(tmp_path):
+    """The contents API refuses a branch it does not have, so a store that only PUTs fails on the very first run."""
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    calls, puts = [], []
+
+    def runner(args, **kw):
+        calls.append((args, kw.get("input")))
+        if args[4].startswith("repos/sbihaiko/MesenAI/contents/"):
+            puts.append(args)
+            if len(puts) == 1:      # the branch is not there yet: what GitHub really answers
+                raise subprocess.CalledProcessError(1, args, output="",
+                                                    stderr="Branch gui-test-evidence not found")
+            return '{"content": {"path": "x"}}'
+        if args[4].endswith("/git/blobs"):
+            return '{"sha": "blob1"}'
+        if args[4].endswith("/git/trees"):
+            return '{"sha": "tree1"}'
+        if args[4].endswith("/git/commits"):
+            return '{"sha": "commit1"}'
+        return '{"ref": "refs/heads/gui-test-evidence"}'
+
+    store = evidence_store("sbihaiko/MesenAI", runner=runner)
+    url = store(str(png), "b1.bad-abc123.png")
+    assert url == ("https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/b1.bad-abc123.png?raw=true")
+    posts = [(a, i) for a, i in calls if a[4].startswith("repos/sbihaiko/MesenAI/git/")]
+    assert [a[4].rsplit("/", 1)[-1] for a, _ in posts] == ["blobs", "trees", "commits", "refs"]
+    body = {a[4].rsplit("/", 1)[-1]: json.loads(i) for a, i in posts}
+    assert body["trees"] == {"tree": [{"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob1"}]}
+    assert body["commits"]["tree"] == "tree1" and "parents" not in body["commits"]   # a root commit: no shared history
+    assert body["refs"] == {"ref": "refs/heads/gui-test-evidence", "sha": "commit1"}
+    assert len(puts) == 2                                               # the one refused push is retried, not dropped
+
+
+def test_1244_repushing_a_capture_already_on_the_branch_updates_it_with_its_blob_sha(tmp_path):
+    """A second run of the same failing step pushes the same name; the contents API refuses an update without a sha."""
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    calls, puts = [], []
+
+    def runner(args, **kw):
+        calls.append((args, kw.get("input")))
+        if "PUT" in args:
+            puts.append(args)
+            if len(puts) == 1:
+                raise subprocess.CalledProcessError(1, args, output='', stderr='"sha" wasn\'t supplied.')
+            return '{"content": {"path": "x"}}'
+        return '{"sha": "oldsha"}'      # the GET that reads the file already on the branch
+
+    store = evidence_store("sbihaiko/MesenAI", runner=runner)
+    assert store(str(png), "b1.bad-abc123.png").endswith("b1.bad-abc123.png?raw=true")
+    [read] = [a for a, _ in calls if "PUT" not in a]
+    assert read[2] == "repos/sbihaiko/MesenAI/contents/b1.bad-abc123.png?ref=gui-test-evidence"
+    assert "sha=oldsha" in puts[1] and len(puts) == 2
+
+
 # --- #1241: the run command files its bug only when asked, and a partial run records its selection ---
 
 
