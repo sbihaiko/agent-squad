@@ -942,8 +942,7 @@ def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
     assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"
 # --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
 
-from squad.gui_test_variants import (  # noqa: E402
-    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+from squad.gui_test_variants import PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants  # noqa: E402
 
 
 class _Modal(TickingFake):
@@ -1180,8 +1179,8 @@ def test_1200_the_dialogs_scope_only_judges_dialog_screens(tmp_path):
 
 
 def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
-    from tests.gui_test_fakes import GraphAdapter
     from squad.gui_test_goal import Navigator
+    from tests.gui_test_fakes import GraphAdapter
     edges = {"play.home": {"Enter": "play.dead"}}
     d = _sweep_script(_sweep_step())
     d["batches"][0]["steps"][0]["action"]["args"]["input"] = "key"
@@ -1191,7 +1190,7 @@ def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
 
 def test_1200_a_sweep_replays_without_asking_jev_and_with_no_navigator_ends_pending(tmp_path):
     from squad.gui_test_goal import Navigator, recorded_moves
-    from tests.gui_test_fakes import GraphAdapter, TRAP_APP
+    from tests.gui_test_fakes import TRAP_APP, GraphAdapter
     d = _sweep_script(_sweep_step())
     events = []
     run(d, GraphAdapter(tmp_path, TRAP_APP), record=events.append, goal=Navigator(_Chooser()))
@@ -1279,7 +1278,6 @@ def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
 # --- #1183: the emulator adapter lives in MesenAI (ADR-0272 item 6, P1-A); the fork only loads it from MESENAI_ROOT ---
 
 import sys  # noqa: E402
-import time  # noqa: E402
 
 PILOT = "play-pad-only.gui-test.json"
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
@@ -1377,7 +1375,7 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
             mark = len(events)
             try:
                 results += run({**d, "batches": [batch]}, _Shot(session, tmp_path / "shots"), record=events.append)
-            except Exception as e:  # what run_supervised does with an adapter error: the step in flight fails with it
+            except Exception as e:  # noqa: BLE001 - what run_supervised does with an adapter error: the step in flight fails with it
                 open_step = [ev["node"] for ev in events[mark:] if ev["event"] == "gui_step"][-1]
                 verdict = f"failed ({e})"
                 events.append({"event": "gui_verdict", "node": open_step, "pos": len(events), "verdict": verdict})
@@ -1829,7 +1827,6 @@ def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
     assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
 # --- #1222: a command that runs a whole gui-test/1 script end to end (the /to-test-scenario Run step) ---
 
-from tests.gui_test_run_script_fake import ShapeAdapter  # noqa: E402
 
 RUN_SCRIPT = FORK / "scripts" / "gui_test_run_script.py"
 SMOKE = FORK / "tests" / "fixtures" / "gui_test" / "run-script-smoke.json"
@@ -2019,9 +2016,9 @@ def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_c
     passed = {s["id"] for s in r["steps"] if s["verdict"] == "passed"}
     assert passed >= set(HOME_BATCH_IDS) - HOME_BATCH_MANUAL - HOME_BATCH_MAY_FAIL - {"home.back-to-home"}
     assert r["summary"]["executed"] >= 6 and r["build_sha"] != "unknown"
-    for step in r["steps"]:
-        if step["verdict"] == "passed":
-            assert Path(step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), step
+    for result_step in r["steps"]:
+        if result_step["verdict"] == "passed":
+            assert Path(result_step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), result_step
 # --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
 
 class _ScenarioGitHub:
