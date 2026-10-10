@@ -2597,8 +2597,7 @@ def test_1241_an_unknown_selector_is_refused_before_anything_is_launched(tmp_pat
 
 # --- #1249: the bug a red run files names the failure, and the same failure is never filed twice ---
 
-from squad.gui_test_report import (bug_title, comment_on_bug_with, failure_key, failure_words,  # noqa: E402
-                                   find_open_bug_with, report_failures_detail)
+from squad.gui_test_report import bug_title, comment_on_bug_with, failure_key, failure_words, find_open_bug_with, report_failures_detail  # noqa: E402
 from tests import gui_test_github_fake as fake_github  # noqa: E402
 
 FAKE_GITHUB = "tests.gui_test_github_fake:shell"

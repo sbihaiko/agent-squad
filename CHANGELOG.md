@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.17 (local fork, 2026-10-10)
+- squad-goal: the dispatch checklist tells a child how to run an emulator acceptance command (item 9). It did not before, and a child that picked a bare `pytest tests/test_gui_test_e2e.py` competed with the loop's own suite — forkclose holds the `gui-suite` lock almost every cycle — which is the race `serial.sh` exists to prevent: Mesen's SingleInstance mutex makes a second emulator hand its args to the first and exit 0. Of today's 49 failed runs, 13 were exactly that (a raw pytest in a child worktree) while the serialized suite passed on the same branches; the child dispatched for #1276 lost its final gate to it after committing correct work. The item names the wrapper, the environment the loop passes, and the preference for the case ids the child touched over a whole file.
+
+## 0.2.16 (local fork, 2026-10-10)
+- Fork base: `ruff check squad tests` is clean again. The one `I001` in `tests/test_gui_test_e2e.py` (an import wrapped over three lines with a trailing `# noqa: E402`) had been failing the fork's own guard, `test_tooling::test_ruff_check_squad_and_tests_is_clean`, since the gui-test commits that added it. The loop never saw it because the fork suite runs only `tests/test_gui_test_*.py`, so the base read green while the fork's own lint guard was red. Import order only: no behaviour changes.
+
 ## 0.2.15 (local fork, 2026-10-10)
 - squad-goal: a fork-only issue whose branch already landed is closed instead of skipped. `forkclose.sh` treated "0 commits ahead of the base and nothing lost" as "nothing to do" and moved on, so an issue whose merge went in but whose close never ran (the pass died between the two) kept its Code Complete card forever: every later pass read the branch as landed and skipped it. Issue #1224 was in that state for 5 hours with all seven of its files in `local/next`. The base having a `Merge <branch>` commit is the proof the branch was merged (and not a branch that was never anything), so the close now runs late, with the fork suite as its evidence and without a second merge; a red suite there reverts nothing and launches no fix run, because nothing of the branch was merged in that pass. A landed branch whose issue is already closed is skipped as before.
 
