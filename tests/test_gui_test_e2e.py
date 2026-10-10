@@ -1875,3 +1875,194 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     again = _ScenarioGitHub()
     second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
+
+
+# --- #1244: a failed or needs-review screenshot reaches the evidence branch and the case's comment ---
+
+from squad.gui_test_report import upload_evidence  # noqa: E402
+from squad.gui_test_vision import Vision  # noqa: E402
+
+
+class _EvidenceStore:
+    """Fake evidence store: records every push and returns the URL an issue renders inline."""
+
+    def __init__(self):
+        self.pushed = []
+
+    def __call__(self, path, name):
+        url = f"https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/{name}?raw=true"
+        self.pushed.append((path, name, url))
+        return url
+
+
+def _blind(sid, expect):
+    """An automated step with no check: its verdict is the vision model's."""
+    s = step(sid, expect=expect, wait={"timeout_ticks": 2})
+    del s["check"]
+    return s
+
+
+def _every_verdict_script():
+    return script(
+        step("b1.passed"),
+        step("b1.bad-screen", expect="the library is showing",
+             action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.home"}}),
+        _blind("b1.unsure", "the dialog is open"),
+        step("b1.ran-by-hand", mode="manual", expect="the card glows"),
+        step("b1.nobody-ran", mode="manual", expect="the tooltip shows"),
+    )
+
+
+def _every_verdict_run(tmp_path):
+    """One step of every verdict: passed, failed, needs review (vision), a hand-run pass and a pending one."""
+    d = _every_verdict_script()
+    validate(d)
+    vision = Vision(lambda png, expect: {"answer": "incompatible", "saw": "a dialog", "cost": 0.01})
+
+    def prompt(s):
+        return {"verdict": "passed", "screenshot": _shot(tmp_path, f"{s['id']}.png")} \
+            if s["id"] == "b1.ran-by-hand" else None
+
+    results = run(d, TickingFake(tmp_path), prompt=prompt, vision=vision)
+    return {r["id"]: r for r in results}, results
+
+
+def test_1244_only_failed_and_needs_review_captures_are_uploaded(tmp_path):
+    by_id, results = _every_verdict_run(tmp_path)
+    assert [(i, by_id[i]["verdict"]) for i in by_id] == [
+        ("b1.passed", "passed"), ("b1.bad-screen", "failed (expected ui.screen == play.home, observed play.library)"),
+        ("b1.unsure", "needs review"), ("b1.ran-by-hand", "passed"), ("b1.nobody-ran", "pending")]
+    store = _EvidenceStore()
+    out = {r["id"]: r for r in upload_evidence(results, store, tmp_path / "approvals.json")}
+    # the failed and the needs-review capture went up; the name carries the capture it belongs to
+    assert [name for _, name, _ in store.pushed] == [
+        f"b1.bad-screen-{by_id['b1.bad-screen']['capture']['sha256'][:12]}.png",
+        f"b1.unsure-{by_id['b1.unsure']['capture']['sha256'][:12]}.png"]
+    assert store.pushed[0][0] == by_id["b1.bad-screen"]["capture"]["path"]
+    # the step records the URL the store handed back, which is what the case's comment links
+    assert out["b1.bad-screen"]["evidence"] == store.pushed[0][2]
+    assert out["b1.unsure"]["evidence"] == store.pushed[1][2]
+    # a passed step uploads nothing, even when a person did hand in a screenshot for it
+    assert "evidence" not in out["b1.passed"] and "evidence" not in out["b1.ran-by-hand"]
+    assert "evidence" not in out["b1.nobody-ran"]
+    assert len(store.pushed) == 2
+    # the run's own results are left as the runner recorded them
+    assert "evidence" not in by_id["b1.bad-screen"]
+
+
+def _sensitive_failure(tmp_path):
+    """A sensitive step that fails, and a plain step after it: the gate holds the capture, the run goes on."""
+    d = _privacy_script()
+    d["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.home"
+    d["batches"][0]["steps"].append(step("b1.after"))
+    results = run(d, TickingFake(tmp_path))
+    assert [(r["id"], r["verdict"], r["held"]) for r in results] == [
+        ("b1.plain", "passed", False),
+        ("b1.file-dialog", "failed (expected ui.screen == play.home, observed play.library)", True),
+        ("b1.after", "passed", False)]
+    return results
+
+
+def test_1244_a_capture_the_gate_withholds_is_recorded_withheld_and_the_run_goes_on(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    store = _EvidenceStore()
+    out = upload_evidence(results, store, tmp_path / "approvals.json")
+    by_id = {r["id"]: r for r in out}
+    assert by_id["b1.file-dialog"]["evidence"] == "withheld"
+    assert store.pushed == []                       # nothing left the machine, and nothing else needed to
+    assert [r["verdict"] for r in out] == [r["verdict"] for r in results]   # the run is unchanged by the gate
+
+
+def test_1244_an_approved_capture_is_uploaded_and_the_step_records_its_url(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    ap = tmp_path / "approvals.json"
+    approve(ap, "b1.file-dialog", results[1]["capture"]["sha256"], by="sandro")
+    store = _EvidenceStore()
+    out = {r["id"]: r for r in upload_evidence(results, store, ap)}
+    assert [name for _, name, _ in store.pushed] == [
+        f"b1.file-dialog-{results[1]['capture']['sha256'][:12]}.png"]
+    assert out["b1.file-dialog"]["evidence"] == store.pushed[0][2]
+
+
+def test_1244_a_green_run_uploads_nothing(tmp_path):
+    d = script(step("b1.a"), step("b1.b"))
+    store = _EvidenceStore()
+    out = upload_evidence(run(d, TickingFake(tmp_path)), store, tmp_path / "approvals.json")
+    assert [r["verdict"] for r in out] == ["passed", "passed"]
+    assert store.pushed == [] and all("evidence" not in r for r in out)
+
+
+def test_1244_two_concurrent_uploads_do_not_collide_on_the_evidence_branch(tmp_path):
+    import threading
+    import time
+
+    by_id, _ = _every_verdict_run(tmp_path)
+    inside, overlaps = [], []
+
+    class _SlowStore(_EvidenceStore):
+        """Takes long enough that two unserialized pushes to the branch would be seen overlapping."""
+
+        def __call__(self, path, name):
+            inside.append(name)
+            if len(inside) > 1:
+                overlaps.append(list(inside))
+            time.sleep(0.05)
+            inside.remove(name)
+            return super().__call__(path, name)
+
+    store, ap, lock = _SlowStore(), tmp_path / "approvals.json", tmp_path / "evidence.lock"
+    start = threading.Barrier(2)
+
+    def one_run(result):
+        start.wait()
+        return upload_evidence([result], store, ap, lock_path=lock)
+
+    threads = [threading.Thread(target=one_run, args=(by_id[i],)) for i in ("b1.bad-screen", "b1.unsure")]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert overlaps == []                       # the two pushes never stood on the branch at once
+    assert len(store.pushed) == 2 and not lock.exists()
+
+
+def test_1244_a_lock_a_dead_run_left_behind_is_taken_over(tmp_path):
+    import os
+    import time
+
+    lock = tmp_path / "evidence.lock"
+    lock.write_text("stale")
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    store = _EvidenceStore()
+    by_id, results = _every_verdict_run(tmp_path)
+    # a run that died holding the lock never blocks the next one for good
+    out = upload_evidence([by_id["b1.bad-screen"]], store, tmp_path / "approvals.json", lock_path=lock)
+    assert out[0]["evidence"] == store.pushed[0][2] and not lock.exists()
+
+
+def _comment_on(results, cases, tmp_path, store=None):
+    """Write a run back and return the case comment's body, as the write-back would post it."""
+    from squad import to_test_scenario as tts
+    out = upload_evidence(results, store or _EvidenceStore(), tmp_path / "approvals.json")
+    plan = {"name": "tiny", "issues": [{"cases": [c]} for c in cases]}
+    published = {"parent": 1, "issues": {c: 10 + i for i, c in enumerate(cases)}}
+    gh = _ScenarioGitHub()
+    tts.write_results(plan, {"run_id": "r-1244", "script_sha": "abc", "platform": "macos-arm64",
+                             "build_sha": "def", "core_available": True, "results": out}, gh, published)
+    return {kw["number"]: kw["body"] for kw in gh.of("comment")}
+
+
+def test_1244_the_case_comment_shows_the_failed_steps_screenshot_inline(tmp_path):
+    by_id, results = _every_verdict_run(tmp_path)
+    bodies = _comment_on(results, ["b1.bad-screen"], tmp_path)
+    url = {r["id"]: r for r in upload_evidence(results, _EvidenceStore(), tmp_path / "a.json")}[
+        "b1.bad-screen"]["evidence"]
+    assert url.startswith("https://") and url.endswith(".png?raw=true")
+    assert f"![b1.bad-screen]({url})" in bodies[10]
+
+
+def test_1244_a_withheld_capture_is_said_to_be_withheld_and_never_linked(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    body = _comment_on(results, ["b1.file-dialog"], tmp_path)[10]
+    assert "withheld" in body and "![" not in body

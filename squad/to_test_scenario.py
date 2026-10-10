@@ -35,6 +35,8 @@ import subprocess
 from pathlib import Path
 
 from squad.gui_test import validate
+from squad.gui_test_report import EVIDENCE_FAMILIES, WITHHELD
+
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
 CASE_LABEL = "test-case"
 TRIAGE_LABEL = "ready-for-agent"
@@ -587,6 +589,20 @@ def _verdict_of(verdicts):
     return "passed"
 
 
+def _case_line(case, result):
+    """One case's line: its verdict, and the screenshot only where a person must look at a failure or a doubt (#1244).
+
+    The evidence URL is embedded as an image so the screenshot is in the comment itself, not one click away. A capture
+    the privacy gate withheld is said to be withheld, never linked, and a passed case carries no evidence.
+    """
+    verdict, evidence = result["verdict"], result.get("evidence")
+    if not evidence or not verdict.startswith(EVIDENCE_FAMILIES):
+        return f"- `{case}`: {verdict}"
+    if evidence == WITHHELD:
+        return f"- `{case}`: {verdict} — evidence withheld by the privacy gate"
+    return f"- `{case}`: {verdict}\n\n![{case}]({evidence})"
+
+
 def write_results(plan, run, github, published):
     """Comment every case's verdict on its sub-issue, close the passed ones, and open at most one bug.
 
@@ -608,7 +624,7 @@ def write_results(plan, run, github, published):
                 missing.append(case)
                 continue
             verdicts.append(r["verdict"])
-            lines.append(f"- `{case}`: {r['verdict']}" + (f" — evidence: {r['evidence']}" if r.get("evidence") else ""))
+            lines.append(_case_line(case, r))
         if not verdicts:
             continue
         verdict = _verdict_of(verdicts)
