@@ -55,7 +55,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from squad.gui_test import ScriptError, validate  # noqa: E402
-from squad.gui_test_report import file_bug_with, report_failures  # noqa: E402
+from squad.gui_test_report import (evidence_lock, evidence_store, file_bug_with,  # noqa: E402
+                                   report_failures, upload_evidence)
 from squad.gui_test_supervise import Crash, Hang, Session, run_supervised  # noqa: E402
 
 RESULTS_FORMAT = "gui-test-results/1"
@@ -171,6 +172,18 @@ def summary_of(rows):
             "executed": len(rows) - counts["pending"] - counts["not executed"]}
 
 
+def attach_evidence(rows, repo, approvals_path, store=None, lock=None):
+    """Give the run's failed and needs-review rows their evidence URL, or `withheld` when the gate holds the capture.
+
+    With no `repo` nothing is published: a command a person runs keeps its captures local (ADR-0135 rule 5, `local_store`).
+    With one, every push is serialized on the branch's lock, so two runs never collide on the evidence branch (#1244).
+    """
+    if not repo:
+        return rows
+    return upload_evidence(rows, store or evidence_store(repo), approvals_path,
+                           lock_path=lock or evidence_lock(repo))
+
+
 def local_store(path, name=None):
     """What the bug says about a capture off CI: the file's name, next to the results file this run wrote.
 
@@ -261,6 +274,8 @@ def main(argv=None):
     sel = ap.add_mutually_exclusive_group()
     sel.add_argument("--batch", help="run only this batch: a partial run, and the results file records the selection")
     sel.add_argument("--case", help="run only this case id, with the setup and teardown steps it needs")
+    ap.add_argument("--evidence-repo", help="owner/name whose gui-test-evidence branch holds this run's failed and "
+                                            "needs-review captures; without it nothing is published (ADR-0135)")
     ap.add_argument("--file-bug", action="store_true",
                     help="file the one bug a red run files through scripts/report-bug.sh; off by default, so a test, "
                          "acceptance or CI run never touches the board")
@@ -320,7 +335,7 @@ def main(argv=None):
 
     print(f"gui test run {run_id}: {script['name']} on {name} ({platform_tag()})")
     out_dir = run_supervised(script, entry["spec"], {}, step_timeout_s=args.step_timeout, out_dir=artifacts)
-    rows = rows_for(script, out_dir)
+    rows = attach_evidence(rows_for(script, out_dir), args.evidence_repo, artifacts / "approvals.json")
     record.update({"script": {**record["script"], "name": script["name"]},
                    "batches": out_dir["batches"], "steps": rows,
                    "summary": summary_of(rows)})

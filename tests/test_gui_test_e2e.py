@@ -2060,7 +2060,7 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     first = tts.publish(plan, gh)
     assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
     again = _ScenarioGitHub()
-    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
+    second = tts.publish(plan, again, saved={"parent": first["parent"], "boarded": True, "cases": first["cases"]})
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
 # --- to_test_scenario write-back (#1226): the committed run's results land on the pilot's issues ---------------
 # --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
@@ -2116,12 +2116,12 @@ def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(t
     """One real results file and the pilot's map: comments, closes, pending cases and the run's own bug, no network."""
     tts, results, plan, mapping, cases = _write_back_fixture()
     map_path = tmp_path / "play-pad-only.gui-test.issues.json"
-    tts.save_map(map_path, {**mapping, "parent": 1999})
+    map_path.write_text(json.dumps({**mapping, "parent": 1999}))
     tracker = _IssueTracker(list(mapping.values()) + [1999])
     out = tts.write_back(results, map_path, tracker, plan=plan)
 
     assert out["counts"] == {"passed": 6, "failed": 1, "pending": 4}
-    assert out["ok"] is False and out["reason"].startswith("250 case(s) have no result")
+    assert out["ok"] is False and out["reason"].startswith(f"{len(cases) - 11} case(s) have no result")
     assert out["bug"] == "https://github.com/sbihaiko/MesenAI/issues/1230"
     assert "file_bug" not in tracker.ops()
     assert tracker.state[mapping["home.open-library"]]["state"] == "open"
@@ -2138,7 +2138,7 @@ def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(t
 def test_1226_the_same_run_written_back_twice_adds_no_case_comment_and_reopens_nothing(tmp_path):
     tts, results, plan, mapping, cases = _write_back_fixture()
     map_path = tmp_path / "play-pad-only.gui-test.issues.json"
-    tts.save_map(map_path, {**mapping, "parent": 1999})
+    map_path.write_text(json.dumps({**mapping, "parent": 1999}))
     tracker = _IssueTracker(list(mapping.values()) + [1999])
     first = tts.write_back(results, map_path, tracker, plan=plan)
     before = {number: len(bodies) for number, bodies in tracker.comments.items() if number != 1999}
@@ -2148,6 +2148,278 @@ def test_1226_the_same_run_written_back_twice_adds_no_case_comment_and_reopens_n
     assert sorted(second["unchanged"]) == sorted(first["commented"])
     assert {n: len(b) for n, b in tracker.comments.items() if n != 1999} == before
     assert len(tracker.comments[1999]) == 2          # the summary runs every time; the cases do not
+
+
+# --- #1244: a failed or needs-review screenshot reaches the evidence branch and the case's comment ---
+
+from squad.gui_test_report import upload_evidence  # noqa: E402
+from squad.gui_test_vision import Vision  # noqa: E402
+
+
+class _EvidenceStore:
+    """Fake evidence store: records every push and returns the URL an issue renders inline."""
+
+    def __init__(self):
+        self.pushed = []
+
+    def __call__(self, path, name):
+        url = f"https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/{name}?raw=true"
+        self.pushed.append((path, name, url))
+        return url
+
+
+def _blind(sid, expect):
+    """An automated step with no check: its verdict is the vision model's."""
+    s = step(sid, expect=expect, wait={"timeout_ticks": 2})
+    del s["check"]
+    return s
+
+
+def _every_verdict_script():
+    return script(
+        step("b1.passed"),
+        step("b1.bad-screen", expect="the library is showing",
+             action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.home"}}),
+        _blind("b1.unsure", "the dialog is open"),
+        step("b1.ran-by-hand", mode="manual", expect="the card glows"),
+        step("b1.nobody-ran", mode="manual", expect="the tooltip shows"),
+    )
+
+
+def _every_verdict_run(tmp_path):
+    """One step of every verdict: passed, failed, needs review (vision), a hand-run pass and a pending one."""
+    d = _every_verdict_script()
+    validate(d)
+    vision = Vision(lambda png, expect: {"answer": "incompatible", "saw": "a dialog", "cost": 0.01})
+
+    def prompt(s):
+        return {"verdict": "passed", "screenshot": _shot(tmp_path, f"{s['id']}.png")} \
+            if s["id"] == "b1.ran-by-hand" else None
+
+    results = run(d, TickingFake(tmp_path), prompt=prompt, vision=vision)
+    return {r["id"]: r for r in results}, results
+
+
+def test_1244_only_failed_and_needs_review_captures_are_uploaded(tmp_path):
+    by_id, results = _every_verdict_run(tmp_path)
+    assert [(i, by_id[i]["verdict"]) for i in by_id] == [
+        ("b1.passed", "passed"), ("b1.bad-screen", "failed (expected ui.screen == play.home, observed play.library)"),
+        ("b1.unsure", "needs review"), ("b1.ran-by-hand", "passed"), ("b1.nobody-ran", "pending")]
+    store = _EvidenceStore()
+    out = {r["id"]: r for r in upload_evidence(results, store, tmp_path / "approvals.json")}
+    # the failed and the needs-review capture went up; the name carries the capture it belongs to
+    assert [name for _, name, _ in store.pushed] == [
+        f"b1.bad-screen-{by_id['b1.bad-screen']['capture']['sha256'][:12]}.png",
+        f"b1.unsure-{by_id['b1.unsure']['capture']['sha256'][:12]}.png"]
+    assert store.pushed[0][0] == by_id["b1.bad-screen"]["capture"]["path"]
+    # the step records the URL the store handed back, which is what the case's comment links
+    assert out["b1.bad-screen"]["evidence"] == store.pushed[0][2]
+    assert out["b1.unsure"]["evidence"] == store.pushed[1][2]
+    # a passed step uploads nothing, even when a person did hand in a screenshot for it
+    assert "evidence" not in out["b1.passed"] and "evidence" not in out["b1.ran-by-hand"]
+    assert "evidence" not in out["b1.nobody-ran"]
+    assert len(store.pushed) == 2
+    # the run's own results are left as the runner recorded them
+    assert "evidence" not in by_id["b1.bad-screen"]
+
+
+def _sensitive_failure(tmp_path):
+    """A sensitive step that fails, and a plain step after it: the gate holds the capture, the run goes on."""
+    d = _privacy_script()
+    d["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.home"
+    d["batches"][0]["steps"].append(step("b1.after"))
+    results = run(d, TickingFake(tmp_path))
+    assert [(r["id"], r["verdict"], r["held"]) for r in results] == [
+        ("b1.plain", "passed", False),
+        ("b1.file-dialog", "failed (expected ui.screen == play.home, observed play.library)", True),
+        ("b1.after", "passed", False)]
+    return results
+
+
+def test_1244_a_capture_the_gate_withholds_is_recorded_withheld_and_the_run_goes_on(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    store = _EvidenceStore()
+    out = upload_evidence(results, store, tmp_path / "approvals.json")
+    by_id = {r["id"]: r for r in out}
+    assert by_id["b1.file-dialog"]["evidence"] == "withheld"
+    assert store.pushed == []                       # nothing left the machine, and nothing else needed to
+    assert [r["verdict"] for r in out] == [r["verdict"] for r in results]   # the run is unchanged by the gate
+
+
+def test_1244_an_approved_capture_is_uploaded_and_the_step_records_its_url(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    ap = tmp_path / "approvals.json"
+    approve(ap, "b1.file-dialog", results[1]["capture"]["sha256"], by="sandro")
+    store = _EvidenceStore()
+    out = {r["id"]: r for r in upload_evidence(results, store, ap)}
+    assert [name for _, name, _ in store.pushed] == [
+        f"b1.file-dialog-{results[1]['capture']['sha256'][:12]}.png"]
+    assert out["b1.file-dialog"]["evidence"] == store.pushed[0][2]
+
+
+def test_1244_a_green_run_uploads_nothing(tmp_path):
+    d = script(step("b1.a"), step("b1.b"))
+    store = _EvidenceStore()
+    out = upload_evidence(run(d, TickingFake(tmp_path)), store, tmp_path / "approvals.json")
+    assert [r["verdict"] for r in out] == ["passed", "passed"]
+    assert store.pushed == [] and all("evidence" not in r for r in out)
+
+
+def test_1244_two_concurrent_uploads_do_not_collide_on_the_evidence_branch(tmp_path):
+    import threading
+    import time
+
+    by_id, _ = _every_verdict_run(tmp_path)
+    inside, overlaps = [], []
+
+    class _SlowStore(_EvidenceStore):
+        """Takes long enough that two unserialized pushes to the branch would be seen overlapping."""
+
+        def __call__(self, path, name):
+            inside.append(name)
+            if len(inside) > 1:
+                overlaps.append(list(inside))
+            time.sleep(0.05)
+            inside.remove(name)
+            return super().__call__(path, name)
+
+    store, ap, lock = _SlowStore(), tmp_path / "approvals.json", tmp_path / "evidence.lock"
+    start = threading.Barrier(2)
+
+    def one_run(result):
+        start.wait()
+        return upload_evidence([result], store, ap, lock_path=lock)
+
+    threads = [threading.Thread(target=one_run, args=(by_id[i],)) for i in ("b1.bad-screen", "b1.unsure")]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert overlaps == []                       # the two pushes never stood on the branch at once
+    assert len(store.pushed) == 2 and not lock.exists()
+
+
+def test_1244_a_lock_a_dead_run_left_behind_is_taken_over(tmp_path):
+    import os
+    import time
+
+    lock = tmp_path / "evidence.lock"
+    lock.write_text("stale")
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    store = _EvidenceStore()
+    by_id, results = _every_verdict_run(tmp_path)
+    # a run that died holding the lock never blocks the next one for good
+    out = upload_evidence([by_id["b1.bad-screen"]], store, tmp_path / "approvals.json", lock_path=lock)
+    assert out[0]["evidence"] == store.pushed[0][2] and not lock.exists()
+
+
+def _comment_on(results, cases, tmp_path, store=None):
+    """Write a run back and return the case comment's body, as the write-back would post it."""
+    from squad import to_test_scenario as tts
+    out = upload_evidence(results, store or _EvidenceStore(), tmp_path / "approvals.json")
+    plan = {"name": "tiny", "issues": [{"cases": [c]} for c in cases]}
+    published = {"parent": 1, "issues": {c: 10 + i for i, c in enumerate(cases)}}
+    gh = _ScenarioGitHub()
+    tts.write_results(plan, {"run_id": "r-1244", "script_sha": "abc", "platform": "macos-arm64",
+                             "build_sha": "def", "core_available": True, "results": out}, gh, published)
+    return {kw["number"]: kw["body"] for kw in gh.of("comment")}
+
+
+def test_1244_the_case_comment_shows_the_failed_steps_screenshot_inline(tmp_path):
+    by_id, results = _every_verdict_run(tmp_path)
+    bodies = _comment_on(results, ["b1.bad-screen"], tmp_path)
+    url = {r["id"]: r for r in upload_evidence(results, _EvidenceStore(), tmp_path / "a.json")}[
+        "b1.bad-screen"]["evidence"]
+    assert url.startswith("https://") and url.endswith(".png?raw=true")
+    assert f"![b1.bad-screen]({url})" in bodies[10]
+
+
+def test_1244_a_withheld_capture_is_said_to_be_withheld_and_never_linked(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    body = _comment_on(results, ["b1.file-dialog"], tmp_path)[10]
+    assert "withheld" in body and "![" not in body
+
+
+def _rows_with_captures(tmp_path):
+    """One row per verdict, shaped as `scripts/gui_test_run_script.py` writes them (id, verdict, capture, held)."""
+    rows = []
+    for sid, verdict in (("a", "passed"), ("b", "failed (expected x, observed y)"), ("c", "needs review"),
+                         ("d", "pending")):
+        p = Path(_shot(tmp_path, f"{sid}.png"))
+        rows.append({"id": sid, "batch": "b1", "mode": "automated", "expect": f"what {sid} shows", "verdict": verdict,
+                     "capture": {"path": str(p), "size": p.stat().st_size,
+                                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}, "held": False})
+    return rows
+
+
+def test_1244_the_run_command_publishes_only_when_a_repo_is_named(tmp_path):
+    mod = _run_script_module()
+    rows, store = _rows_with_captures(tmp_path), _EvidenceStore()
+    # a command a person runs names no repo: nothing is published, the capture stays local (ADR-0135 rule 5)
+    assert mod.attach_evidence(rows, None, tmp_path / "approvals.json", store=store) == rows
+    assert store.pushed == []
+    out = mod.attach_evidence(rows, "sbihaiko/MesenAI", tmp_path / "approvals.json",
+                              store=store, lock=tmp_path / "evidence.lock")
+    assert [name for _, name, _ in store.pushed] == [
+        f"b-{rows[1]['capture']['sha256'][:12]}.png", f"c-{rows[2]['capture']['sha256'][:12]}.png"]
+    assert [r.get("evidence") for r in out] == [None, store.pushed[0][2], store.pushed[1][2], None]
+
+
+def test_1244_the_store_makes_the_orphan_evidence_branch_before_the_first_push(tmp_path):
+    """The contents API refuses a branch it does not have, so a store that only PUTs fails on the very first run."""
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    calls, puts = [], []
+
+    def runner(args, **kw):
+        calls.append((args, kw.get("input")))
+        if args[4].startswith("repos/sbihaiko/MesenAI/contents/"):
+            puts.append(args)
+            if len(puts) == 1:      # the branch is not there yet: what GitHub really answers
+                raise subprocess.CalledProcessError(1, args, output="",
+                                                    stderr="Branch gui-test-evidence not found")
+            return '{"content": {"path": "x"}}'
+        if args[4].endswith("/git/blobs"):
+            return '{"sha": "blob1"}'
+        if args[4].endswith("/git/trees"):
+            return '{"sha": "tree1"}'
+        if args[4].endswith("/git/commits"):
+            return '{"sha": "commit1"}'
+        return '{"ref": "refs/heads/gui-test-evidence"}'
+
+    store = evidence_store("sbihaiko/MesenAI", runner=runner)
+    url = store(str(png), "b1.bad-abc123.png")
+    assert url == ("https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/b1.bad-abc123.png?raw=true")
+    posts = [(a, i) for a, i in calls if a[4].startswith("repos/sbihaiko/MesenAI/git/")]
+    assert [a[4].rsplit("/", 1)[-1] for a, _ in posts] == ["blobs", "trees", "commits", "refs"]
+    body = {a[4].rsplit("/", 1)[-1]: json.loads(i) for a, i in posts}
+    assert body["trees"] == {"tree": [{"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob1"}]}
+    assert body["commits"]["tree"] == "tree1" and "parents" not in body["commits"]   # a root commit: no shared history
+    assert body["refs"] == {"ref": "refs/heads/gui-test-evidence", "sha": "commit1"}
+    assert len(puts) == 2                                               # the one refused push is retried, not dropped
+
+
+def test_1244_repushing_a_capture_already_on_the_branch_updates_it_with_its_blob_sha(tmp_path):
+    """A second run of the same failing step pushes the same name; the contents API refuses an update without a sha."""
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    calls, puts = [], []
+
+    def runner(args, **kw):
+        calls.append((args, kw.get("input")))
+        if "PUT" in args:
+            puts.append(args)
+            if len(puts) == 1:
+                raise subprocess.CalledProcessError(1, args, output='', stderr='"sha" wasn\'t supplied.')
+            return '{"content": {"path": "x"}}'
+        return '{"sha": "oldsha"}'      # the GET that reads the file already on the branch
+
+    store = evidence_store("sbihaiko/MesenAI", runner=runner)
+    assert store(str(png), "b1.bad-abc123.png").endswith("b1.bad-abc123.png?raw=true")
+    [read] = [a for a, _ in calls if "PUT" not in a]
+    assert read[2] == "repos/sbihaiko/MesenAI/contents/b1.bad-abc123.png?ref=gui-test-evidence"
+    assert "sha=oldsha" in puts[1] and len(puts) == 2
 
 
 # --- #1241: the run command files its bug only when asked, and a partial run records its selection ---
@@ -2295,6 +2567,7 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     going stale in silence."""
     from squad import to_test_scenario as tts
     from squad.gui_test_subset import runnable
+    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes, script_steps
     pilot = _pilot_1223()
     caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.visible", "ui.dialogs"],
             "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}

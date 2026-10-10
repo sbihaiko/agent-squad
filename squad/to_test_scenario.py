@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 
 from squad.gui_test import validate
+from squad.gui_test_report import EVIDENCE_FAMILIES, WITHHELD
 
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
 CASE_LABEL = "test-case"
@@ -51,7 +52,6 @@ AUTO_MODES = {"automated"}
 SETUP_STATUSES = {"needs review", "pending"}
 RESULTS_FORMAT = "gui-test-results/1"
 VERDICT_FAMILIES = ("passed", "failed", "needs review", "pending", "skipped")
-EVIDENCE_FAMILIES = ("failed", "needs review")
 _VERDICT_LINE = re.compile(r"\*\*(passed|failed|needs review|pending)\*\*")
 
 
@@ -772,12 +772,17 @@ def _bug_url(run):
 
 
 def _case_line(case, result):
-    """One case's line: its verdict, and the evidence only where a person must look at a failure or a doubt."""
-    verdict = result["verdict"]
-    evidence = result.get("evidence")
-    if evidence and verdict.startswith(EVIDENCE_FAMILIES):
-        return f"- `{case}`: {verdict} (evidence: {evidence})"
-    return f"- `{case}`: {verdict}"
+    """One case's line: its verdict, and the screenshot only where a person must look at a failure or a doubt (#1244).
+
+    The evidence URL is embedded as an image so the screenshot is in the comment itself, not one click away. A capture
+    the privacy gate withheld is said to be withheld, never linked, and a passed case carries no evidence.
+    """
+    verdict, evidence = result["verdict"], result.get("evidence")
+    if not evidence or not verdict.startswith(EVIDENCE_FAMILIES):
+        return f"- `{case}`: {verdict}"
+    if evidence == WITHHELD:
+        return f"- `{case}`: {verdict} — evidence withheld by the privacy gate"
+    return f"- `{case}`: {verdict}\n\n![{case}]({evidence})"
 
 
 def write_results(plan, run, github, published):
