@@ -13,3 +13,7 @@
 : "${SG_CODING_RULES:=follow AGENTS.md; bug fixes in TDD with the RED output in the PR body}"
 : "${SG_ROOT_NAME:=repo}"
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
+: "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)
+: "${SG_BUG_LABEL:=bug}"
+: "${SG_BUG_SKIP_LABELS:=needs-owner,no-auto,wontfix,question}"
+# : "${SG_BUG_PROJECT:=2}"; : "${SG_BUG_DOING:=Doing}"   # a separate bug board, if any

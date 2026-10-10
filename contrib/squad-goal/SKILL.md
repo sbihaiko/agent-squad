@@ -339,6 +339,8 @@ A PR opened for an issue moves it to Code Complete; Testing starts at the merge,
 
 The comment queue is a durability mechanism, not permission to postpone creating the update. Queue the update at the moment the event happens.
 
+Automatic bug fixing: `scripts/autobug.sh` (watch.sh, every ~6 min) dispatches every open `bug` issue with no open PR naming it, no `auto/bug-<n>` marker and no skip label (`needs-owner`, `no-auto`, `wontfix`, `question`), all in one squad start within the free run slots: one child and one PR each, TDD with the RED output in the PR, accepted ADRs binding, owner carve-outs returned as fail. It comments the dispatch on each issue and moves the cards (task board, and the bug board when the profile sets `SG_BUG_PROJECT`). The loop never retries: delete `auto/bug-<n>` to dispatch again. `SG_AUTO_BUGFIX=no` turns it off.
+
 Optimistic while testing: a blocker whose PR is already merged into the base counts as done for dispatch (`stack.sh` READY) even while its e2e runs or the issue waits to close; dispatch its dependents at the merge, not at the close. A red e2e goes back to the blocker as a fix run; the dependents keep going.
 
 ## Event handling
