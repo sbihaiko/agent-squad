@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.15 (local fork, 2026-10-10)
+- squad-goal: a fork-only issue whose branch already landed is closed instead of skipped. `forkclose.sh` treated "0 commits ahead of the base and nothing lost" as "nothing to do" and moved on, so an issue whose merge went in but whose close never ran (the pass died between the two) kept its Code Complete card forever: every later pass read the branch as landed and skipped it. Issue #1224 was in that state for 5 hours with all seven of its files in `local/next`. The base having a `Merge <branch>` commit is the proof the branch was merged (and not a branch that was never anything), so the close now runs late, with the fork suite as its evidence and without a second merge; a red suite there reverts nothing and launches no fix run, because nothing of the branch was merged in that pass. A landed branch whose issue is already closed is skipped as before.
+
 ## 0.2.14 (local fork, 2026-10-10)
 - squad-goal: the BLOCKED re-queue checks for a review already in flight before it launches one, mirroring the guard the new-head path already had. Defensive, not a fix for something seen: `ps` on PR #1285 during the first re-queue showed what looked like two `revci.sh`/`review.sh` pairs, but it is one review — bash reports a script's own name for its subshells (`revci` → `revci` → `review.sh` → `cap`'s fork → the model). With the guard the re-queue cannot ever start a second review of the same PR and race it on `review-<pr>.md`.
 
