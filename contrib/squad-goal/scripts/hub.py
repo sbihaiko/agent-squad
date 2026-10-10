@@ -137,6 +137,10 @@ TITLE = {}   # issue number -> short title, refreshed from the board cache (no e
 def _titles():
     for it in board_cache.get("items", []):
         t = re.sub(r"^GUI test squad( pilot)?: ", "", it.get("t") or ""); TITLE[it["n"]] = t[:60] + ("…" if len(t) > 60 else "")
+def demoted(st, r, closed):
+    """A failed / unverified / needs-human run whose every issue was closed afterwards (verified by hand, evidence on the issue) is no longer open business."""
+    if st in ("failed", "unverified", "needs-human") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
+    return st
 def runs():
     _titles()
     out = []
@@ -152,9 +156,7 @@ def runs():
         r = scan(p)
         if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code"}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
-        if st in ("failed", "unverified") and r["land"] and r["issues"]:   # its gate failed, but every issue it worked was closed afterwards (verified by hand, evidence on the issue)
-            closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
-            if all(int(n) in closed for n in r["issues"]): st = "verified"
+        st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
         rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stale": 2}.get(st, 1)
         t1 = r["t1"] or time.time()
         out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})

@@ -36,6 +36,14 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     fi
   fi
   s9=${sha:0:9}; out="$SG_STATE/revci-$pr.out"
+  # owner release: a comment whose whole body is `/release` on the PR or its issue lifts the hold (like /revalidate on a community pack). Only a command
+  # counts: the loop's own text ("Reply /release ...") is never the whole body. Each comment id is honored once, so a later re-hold stays held.
+  case ",$labels," in *,hold,*|*,needs-human,*)
+    for cid in $( { gh api "repos/$SG_REPO/issues/$pr/comments?per_page=100" 2>/dev/null; gh api "repos/$SG_REPO/issues/$iss/comments?per_page=100" 2>/dev/null; } | jq -r '.[]|select((.body//"")|gsub("^\\s+|\\s+$";"")=="/release")|.id' 2>/dev/null); do
+      [ -e "$A/released-$cid" ] && continue; touch "$A/released-$cid"
+      for lb in hold needs-human; do case ",$labels," in *,$lb,*) gh api -X DELETE "repos/$SG_REPO/issues/$pr/labels/$lb" >/dev/null 2>&1;; esac; done
+      rm -f "$A"/hold-$pr-*-label; labels=""; echo "RELEASE #$pr: owner replied /release (comment $cid); hold lifted, the next pass reviews and merges it"; break
+    done;; esac
   case ",$labels," in *,hold,*|*,needs-human,*) grep -q "^#$pr $s9 .*APPROVE" "$out" 2>/dev/null && { [ -e "$A/hold-$pr-$s9-label" ] || { touch "$A/hold-$pr-$s9-label"; echo "HOLD #$pr @ $s9: label hold/needs-human ($labels)"; }; }; continue;; esac
   sf="$A/seen-$pr"
   if [ -s "$sf" ]; then age=$(( (now - $(cat "$sf")) / 60 ))
