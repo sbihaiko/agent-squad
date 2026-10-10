@@ -1215,14 +1215,16 @@ def _adapter_class(root):
 
 
 def _pilot_for_the_real_app(ids):
-    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom, so that fixture is dropped."""
+    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom or pack, so those fixtures are dropped."""
     d = json.loads((_mesenai_root() / "docs" / "validation" / "process" / PILOT).read_text(encoding="utf-8"))
     for b in d["batches"]:
         b["steps"] = [s for s in b["steps"] if s["id"] in ids]
     d["batches"] = [b for b in d["batches"] if b["steps"]]
     d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
     d["variants"] = {"window.mode": ["windowed"]}
-    d["fixtures"].pop("rom")
+    # The pilot also declares fixtures for its other steps (rom-second, rom-zip, rom-fds, pack, ...); these three
+    # need none of them, and the adapter refuses a kind it does not place, so only the profile and the note stay.
+    d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k in ("settings", "note")}
     return d
 
 
