@@ -229,6 +229,7 @@ Per-repo values live in `scripts/profiles/<name>.sh` (repo, owner, board project
 
 ## Launching, and staying awake in `/goal` mode
 
+- **Worktree cleanup is automatic.** `wtclean.sh` (every watch loop) removes a child worktree once its run has a verdict, the tree is clean and HEAD is on a remote branch; a finished worktree with unpushed commits is kept and reported as `WT UNPUSHED` (cherry-pick and push it, then it is cleaned).
 - **Ship skill changes with the fork.** After editing this skill, run `scripts/sync-to-fork.sh` (copies it to the fork's `contrib/squad-goal`, refusing any name from the local `$SG_STATE/sync-deny` list) and commit on `local/next`, with a CHANGELOG line.
 - **agent-squad is a local fork.** We have no write access to Korck-lab/agent-squad. The repo profile sets `SG_SQUAD` to the fork checkout (branch `local/next` on top of `local/base-0.2.0` = the installed 0.2.0), so runs use the fork. Work on the squad itself (ADR-0272 P1-A: runner, script format, dashboard) is committed there locally — no push, no PR; review the local diff — and the owner sends it upstream as a ZIP from `scripts/export-agent-squad.sh`. Never patch the plugin cache again.
 - **No dashboard tabs.** Only the Squad hub (http://127.0.0.1:7700/) is used. `launch.py` sets `SQUAD_HEADLESS=1`, so the run's dashboard server starts for the hub but no tab opens. Never run `/agent-squad:dashboard` or `squad dashboard` without `--no-open`.

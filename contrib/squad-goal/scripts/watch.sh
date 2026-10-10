@@ -38,4 +38,5 @@ if v:
   tick=$((tick+1)); [ $((tick % 8)) -eq 1 ] && RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /"   # card Status from GitHub facts, every ~12 min (GraphQL budget)
   "$(dirname "$0")/autopilot.sh" 2>&1   # auto review, auto merge on APPROVE+CI green, round cap
   "$(dirname "$0")/heartbeat.sh"   # hung test hosts (0% CPU) and dead runs
+  "$(dirname "$0")/wtclean.sh" 2>&1   # finished, pushed child worktrees
   boot=0; for _ in 1 2; do sleep 30; "$(dirname "$0")/autopilot.sh" 2>&1; done; sleep 30; done   # autopilot every 30 s, the rest every 90 s
