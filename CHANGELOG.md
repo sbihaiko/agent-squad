@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `autopilot.sh` no longer retargets a stacked PR whose parent was never merged (an empty jq match printed "null null", read as a merged parent).
 - squad-goal: a red fork suite no longer strands the branch: after the revert, `forkclose.sh` re-applies the work on the branch (merge base in, revert the revert) and launches a fix run with the log tail; the fix commit re-arms the close.
 - squad-goal: `wtclean.sh` keeps a fork worktree while any live run references it (a final gate cds into it).
 - squad-goal: an issue with both a PR and fork work: `forkclose.sh` merges and tests its fork half (Code Complete or Testing) without closing it, and `stack.sh` hands dependents both the PR to stack on and the fork branch to merge.
