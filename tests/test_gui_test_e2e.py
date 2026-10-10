@@ -2120,7 +2120,8 @@ def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(t
     out = tts.write_back(results, map_path, tracker, plan=plan)
 
     assert out["counts"] == {"passed": 6, "failed": 1, "pending": 4}
-    assert out["ok"] is False and out["reason"].startswith("250 case(s) have no result")
+    # The pilot script keeps growing; the run covers 11 of its cases, every other mapped case has no result.
+    assert out["ok"] is False and out["reason"].startswith(f"{len(cases) - 11} case(s) have no result")
     assert out["bug"] == "https://github.com/sbihaiko/MesenAI/issues/1230"
     assert "file_bug" not in tracker.ops()
     assert tracker.state[mapping["home.open-library"]]["state"] == "open"
