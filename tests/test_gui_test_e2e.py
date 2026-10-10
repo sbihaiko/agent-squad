@@ -1808,54 +1808,6 @@ def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_
     assert bad == {"compose.save", "compose.save-says-so"}
 
 
-# --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
-
-class _ScenarioGitHub:
-    """A recorded-call stand-in for the real REST runner: no network, no `gh`."""
-
-    def __init__(self):
-        self.calls = []
-        self._next = 100
-
-    def __call__(self, op, **kw):
-        self.calls.append((op, kw))
-        if op == "create_issue":
-            self._next += 1
-            return {"number": self._next, "id": 900 + self._next}
-        return {}
-
-    def of(self, op):
-        return [kw for o, kw in self.calls if o == op]
-
-
-def _pilot_1223():
-    return json.loads((_mesenai() / "docs" / "validation" / "process"
-                       / "play-pad-only.gui-test.json").read_text(encoding="utf-8"))
-
-
-def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them_ready_for_agent():
-    from squad import to_test_scenario as tts
-    d = _pilot_1223()
-    validate(d)
-    plan = tts.build_plan(d, script_path="docs/validation/process/play-pad-only.gui-test.json",
-                          purpose="the pad-only Play script")
-    planned = [c for i in plan["issues"] for c in i["cases"]]
-    assert planned == tts.step_ids(d) and len(planned) > 100
-    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
-    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
-    assert plan["manual"] and plan["goals"]
-
-
-def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
-    from squad import to_test_scenario as tts
-    d = _pilot_1223()
-    plan = tts.build_plan(d, granularity="per-batch")
-    gh = _ScenarioGitHub()
-    first = tts.publish(plan, gh)
-    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
-    again = _ScenarioGitHub()
-    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
-    assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
 # --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
 
 def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
@@ -1875,3 +1827,105 @@ def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
     # The pilot predates content hashes, so nothing is reusable until a conversion records them per step.
     assert report["reusable"] is False
     assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
+
+
+# --- to_test_scenario (#1225): publishing the plan is idempotent, resumable and paced -------------
+
+# What a published body must never carry: a Portuguese sentence over English prose, or a tool's signature line.
+_ATTRIBUTION = re.compile(r"co-authored-by|generated with|claude\b|🤖", re.I)
+_PT_BR = re.compile(r"\b(não|uma|para|com|sem|caso|casos|jogo|tela|janela|botão|arquivo|quando|então|também|deve|"
+                    r"executa|verifica)\b", re.I)
+
+
+def _assert_en_us_with_no_attribution(bodies):
+    assert bodies
+    for body in bodies:
+        assert not _ATTRIBUTION.search(body), body[:200]
+        assert not _PT_BR.search(body), body[:200]
+
+
+class _PublishGitHub:
+    """A recorded-call stand-in for the real REST runner: no network, no `gh`, and a failing create."""
+
+    def __init__(self, fail_on_create=None, start=100):
+        self.calls, self.made = [], []
+        self.next, self.creates = start, 0
+        self.fail_on_create = fail_on_create
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        if op == "create_issue":
+            self.creates += 1
+            if self.fail_on_create and self.creates == self.fail_on_create:
+                raise RuntimeError("the connection dropped")
+            self.next += 1
+            made = {"number": self.next, "id": 900 + self.next}
+            self.made.append((kw, made))
+            return made
+        return {}
+
+    def of(self, op):
+        return [kw for o, kw in self.calls if o == op]
+
+    def ops(self):
+        return [o for o, _ in self.calls]
+
+
+def _pilot_1225():
+    """The committed pilot as a plan: its scenario, its script with the content hashes a conversion records."""
+    from squad.to_test_scenario import build_plan, read_scenario, read_script, record_hashes
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    scenario = read_scenario(md_path)
+    return script_path, build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+
+
+def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
+    from squad import to_test_scenario as tts
+
+    script_path, plan = _pilot_1225()
+    map_path = tmp_path / tts.issues_path(script_path).name
+    gh = _PublishGitHub()
+    out = tts.publish(plan, gh, map_path=map_path)
+
+    assert len(plan["issues"]) >= 67
+    labels = {kw["name"] for kw in gh.of("ensure_label")}
+    assert {"test-case", "ready-for-agent"} <= labels
+    assert [kw["title"] for kw in gh.of("create_issue")][0] == plan["parent"]["title"]
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1
+    # The relation names each issue's numeric id, and only the parent reaches the board.
+    assert {kw["sub"] for kw in gh.of("add_sub_issue")} == {made["id"] for _, made in gh.made[1:]}
+    assert gh.of("board") == [{"number": out["parent"]}]
+    # The map beside the script is what a second machine resumes from.
+    saved = tts.read_issues(map_path)
+    assert saved == {"parent": out["parent"], "boarded": True, "cases": out["cases"]}
+    assert all(case["hash"] for case in out["cases"].values())
+    _assert_en_us_with_no_attribution([kw["body"] for kw in gh.of("create_issue")])
+
+
+def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_publish_updates(tmp_path):
+    from squad import to_test_scenario as tts
+
+    script_path, plan = _pilot_1225()
+    map_path = tmp_path / tts.issues_path(script_path).name
+    with pytest.raises(RuntimeError):
+        tts.publish(plan, _PublishGitHub(fail_on_create=5), map_path=map_path)
+    saved = tts.read_issues(map_path)
+    assert saved["parent"] and len(saved["cases"]) == 3      # the parent and three cases made it
+
+    resumed = _PublishGitHub(start=5000)
+    out = tts.publish(plan, resumed, map_path=map_path)
+    assert len(resumed.of("create_issue")) == len(plan["issues"]) - 3
+    assert len(out["cases"]) == len(plan["issues"]) and out["removed"] == []
+    assert len({case["number"] for case in out["cases"].values()}) == len(plan["issues"])
+    assert resumed.of("board") == []                          # the parent is already on the board
+
+    smaller = dict(plan, issues=plan["issues"][:-1])
+    again = _PublishGitHub(start=9000)
+    dropped = tts.publish(smaller, again, map_path=map_path)
+    assert again.of("create_issue") == [] and again.of("add_sub_issue") == []
+    assert dropped["removed"] == [plan["issues"][-1]["id"]]
+    assert "close" not in again.ops()                         # a removed case is reported, never closed
