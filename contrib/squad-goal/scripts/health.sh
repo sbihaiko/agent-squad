@@ -21,6 +21,27 @@ for f in "$A"/janitor-stuck-*; do [ -e "$f" ] || continue; k=${f##*/janitor-stuc
 [ $ns -gt 0 ] && add stuck-prs "$ns open PR(s) flagged PR-STUCK (conflict or red CI with no live fix run)"
 nl=$($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk '/^worktree /{w=$2} /^detached/{print w}' | grep -cE "$HOME/wt-|/acpr\.")
 [ "$nl" -gt 0 ] && add loose-worktrees "$nl loose detached worktree(s) (wtclean keeps the dirty or unpushed ones; look at WT LOOSE)"
+# a fork branch ahead of the base with nobody on it: the fix run that was meant to move it is gone (forkclose re-arms it)
+if [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ]; then
+  cwf=$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); npk=0; pk=""
+  for b in $($G -C "$SG_FORK_DIR" for-each-ref --format='%(refname:short)' "refs/heads/${SG_FORK_BRANCH//%n/}*" 2>/dev/null); do
+    s=${b#${SG_FORK_BRANCH//%n/}}; case "$s" in ''|*[!0-9]*) continue;; esac
+    [ "$($G -C "$SG_FORK_DIR" rev-list --count "$SG_FORK_BASE..$b" 2>/dev/null)" -gt 0 ] || continue
+    w=$($G -C "$SG_FORK_DIR" worktree list --porcelain | awk -v x="refs/heads/$b" '/^worktree /{p=$2} $0=="branch "x{print p}')
+    printf '%s\n' "$cwf" | grep -qF "${w:-/nonexistent}/" && continue
+    t=$($G -C "$SG_FORK_DIR" log -1 --format=%ct "$b" 2>/dev/null); [ $(( now - t )) -ge $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] && { npk=$((npk+1)); pk="$pk #$s"; }
+  done
+  [ $npk -gt 0 ] && add fork-parked "$npk fork branch(es)$pk ahead of $SG_FORK_BASE with no process on them: forkclose re-arms the ones it can, the rest need a fix run"
+fi
+# ready work nobody is on: no run started in 30 min while a ready-for-agent issue has no open PR
+ra=" $(gh issue list --repo $SG_REPO --label ready-for-agent --state open --limit 100 --json number --jq '.[].number' 2>/dev/null | tr '\n' ' ')"
+if [ -n "${ra// /}" ]; then
+  prn=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')"
+  free=""; for n in $ra; do case "$prn" in *" $n "*) ;; *) free="$free $n";; esac; done
+  nv2=$(sed 's|.*/runs/||' "$SG_STATE/active-runs.txt" 2>/dev/null | sort -u | while read -r r; do d="$SG_CHECKOUT/runs/$r"; [ -d "$d" ] || continue
+    grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null || { [ -n "$(find "$d/request.txt" -mmin -30 2>/dev/null)" ] && echo x; }; done | wc -l | tr -d ' ')
+  [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "ready-for-agent$free with no open PR and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
+fi
 { printf '{"ts":%s,"ok":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf ']}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"
