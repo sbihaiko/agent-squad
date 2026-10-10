@@ -5,7 +5,8 @@
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
 cd "$SG_CHECKOUT" || exit 0
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\1#p' | while read -r w; do
-  run=${w%%/ws/*}; grep -q '"event": *"verdict"' "$run/record.jsonl" 2>/dev/null || continue
+  run=${w%%/ws/*}; node=${w##*/worktrees_child-}   # a child is done when its own outcome is recorded; siblings may still run
+  grep -q '"event": *"verdict"' "$run/record.jsonl" 2>/dev/null || grep -qF "\"event\": \"outcome\", \"node\": \"$node\"" "$run/record.jsonl" 2>/dev/null || continue
   [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
