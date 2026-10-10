@@ -95,28 +95,36 @@ cd ~/wt-as-1243 && uv run --extra dev pytest tests/test_gui_test_e2e.py -q --tb=
 
 ## Three runs proving the interface
 
-The demo script is two batches: `b1.any` (untagged), `b1.win` (`window.mode=windowed`), `b1.fs`
-(`window.mode=fullscreen`), `b2.a` (untagged); the adapter is `tests.gui_test_run_script_fake:VariantAdapter`.
+The demo script is committed beside this file (`docs/evidence/1243/variant-demo.json`, `variant-selector-demo`): two
+batches — `b1.any` (untagged), `b1.win` (`window.mode=windowed`), `b1.fs` (`window.mode=fullscreen`), `b2.a`
+(untagged) — and the commands below run from `~/wt-as-1243` with the fake adapter named on the command line, so
+nothing is built, nothing launches and no bug can be filed (`repo: None` for a literal `module:Class` spec).
 
 ```bash
-# a full run: every step, and no selection
-python3 scripts/gui_test_run_script.py /tmp/variant-demo.json --adapter tests.gui_test_run_script_fake:VariantAdapter --out /tmp/v-full.json
+cd ~/wt-as-1243
+S=docs/evidence/1243/variant-demo.json
+FAKE=tests.gui_test_run_script_fake
+
+# 1. a full run: every step, and no selection
+uv run python scripts/gui_test_run_script.py $S --adapter $FAKE:VariantAdapter --out /tmp/v-full.json
 # steps ['b1.any', 'b1.win', 'b1.fs', 'b2.a'], status passed, "selection" in record -> False
 
-# one variant: the steps it applies to, the selection, and each batch's process switched before launch
-python3 scripts/gui_test_run_script.py /tmp/variant-demo.json --adapter …:VariantAdapter --out /tmp/v-fs.json --variant window.mode=fullscreen
-# {'kind': 'variant', 'value': 'window.mode=fullscreen'} ['b1.any', 'b1.fs', 'b2.a'] passed
+# 2. one variant: the steps it applies to, the selection, and each batch's process switched before launch
+uv run python scripts/gui_test_run_script.py $S --adapter $FAKE:VariantAdapter --out /tmp/v-fs.json --variant window.mode=fullscreen
+# GREEN, 3 passed; {'kind': 'variant', 'value': 'window.mode=fullscreen'} ['b1.any', 'b1.fs', 'b2.a']
 # /tmp/v-fs.json.artifacts/variant.log == ['window.mode=fullscreen', 'window.mode=fullscreen'] (one per batch process)
 
-# an unknown variant: refused, nothing launched, and it names what the script has
-python3 scripts/gui_test_run_script.py /tmp/variant-demo.json --adapter …:VariantAdapter --out /tmp/v-x.json --variant window.mode=huge
-# status failed: "nothing was launched: no variant window.mode=huge in tiny: window.mode has windowed, fullscreen"
+# 3. an axis the adapter runs one way only: it narrows, and switches nothing (no set_variant on this adapter at all)
+uv run python scripts/gui_test_run_script.py $S --adapter $FAKE:OneModeAdapter --out /tmp/v-one.json --variant window.mode=windowed
+# GREEN, 3 passed; {'kind': 'variant', 'value': 'window.mode=windowed'} ['b1.any', 'b1.win', 'b2.a']
 
-# an adapter that cannot switch, and a --variant that is not a pair
-python3 scripts/gui_test_run_script.py /tmp/variant-demo.json --adapter …:ShapeAdapter --out /tmp/v-nh.json --variant window.mode=fullscreen
+# 4. refusals, each naming what is wrong (exit 1, nothing launched)
+uv run python scripts/gui_test_run_script.py $S --adapter $FAKE:VariantAdapter --out /tmp/v-x.json --variant window.mode=huge
+# "nothing was launched: no variant window.mode=huge in variant-selector-demo: window.mode has windowed, fullscreen"
+uv run python scripts/gui_test_run_script.py $S --adapter $FAKE:ShapeAdapter --out /tmp/v-nh.json --variant window.mode=fullscreen
 # "nothing was launched: the adapter cannot switch to variant window.mode=fullscreen: AttributeError: 'ShapeAdapter'
 #  object has no attribute 'set_variant'" — steps [], batches []
-python3 scripts/gui_test_run_script.py /tmp/variant-demo.json --adapter …:VariantAdapter --out /tmp/v-m.json --variant fullscreen
+uv run python scripts/gui_test_run_script.py $S --adapter $FAKE:VariantAdapter --out /tmp/v-m.json --variant fullscreen
 # "nothing was launched: no variant 'fullscreen': --variant takes <axis>=<value>, as the script declares it"
 ```
 
