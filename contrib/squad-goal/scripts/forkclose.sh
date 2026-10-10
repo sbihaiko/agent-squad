@@ -15,6 +15,15 @@ if ! mkdir "$L" 2>/dev/null; then kill -0 "$(cat "$L/pid" 2>/dev/null)" 2>/dev/n
 echo $$ > "$L/pid"
 trap 'rm -rf "$L"' EXIT
 G="/usr/bin/git -C $SG_FORK_DIR"
+now=$(date +%s)
+# A branch ahead of the base with nobody on it and no recent commit: the fix run meant to move it is gone. Without this its
+# card (In Progress) and its marker (fork-<n>-<head>) would park it forever: a wait whose only release is a process that died.
+orphan() { local b=$1 w t
+  w=$($G worktree list --porcelain | awk -v x="refs/heads/$b" '/^worktree /{p=$2} $0=="branch "x{print p}')
+  [ -n "$w" ] || return 1
+  printf '%s\n' "$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" | grep -qF "$w/" && return 1
+  t=$($G log -1 --format=%ct "$b" 2>/dev/null) || return 1
+  [ $(( now - t )) -ge $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ]; }
 lost() { for f in $($G diff --name-only --diff-filter=AM "$1~1" "$1" 2>/dev/null); do $G cat-file -e "$SG_FORK_BASE:$f" 2>/dev/null || echo "$f"; done; }   # files the branch tip adds/modifies that the base lacks: a sibling's reverted merge took them along
 relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
   t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") && $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
@@ -25,15 +34,30 @@ refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+"
 for n in $cc; do
   case "$refs" in *" $n "*) continue;; esac   # an open MesenAI PR: its fork half waits for that merge (the fork suite runs against main's build)
   st=$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null) || continue
-  mixed=""; if [ "$st" = closed ]; then mixed=1; else case "$ready" in *" $n "*) ;; *) continue;; esac; fi   # closed: its PR half landed, merge the fork half without touching the issue
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
+  mixed=""; if [ "$st" = closed ]; then mixed=1                       # closed: its PR half landed, merge the fork half without touching the issue
+  else case "$ready" in *" $n "*) ;; *)
+    orphan "$br" || continue   # the card is state THIS script owns (In Progress on a red, Done on a green): derived, never the gate
+    echo "FORKCLOSE ORPHAN #$n: $br is ahead of $SG_FORK_BASE with nobody in its worktree and no commit for $(( ${SG_FORK_ORPHAN_MINUTES:-20} )) min; a fix run that is gone left the card behind. Re-arming."
+    $BOARD $SG_OWNER $SG_PROJECT "Code Complete" $n >/dev/null;; esac; fi
   reland=""; if [ "$($G rev-list --count "$SG_FORK_BASE..$br")" = 0 ]; then lf=$(lost "$br"); [ -n "$lf" ] || continue; reland=1; fi   # 0 ahead and nothing lost: landed
   wait=""; for d in $(gh api repos/$SG_REPO/issues/$n -q .body 2>/dev/null | awk '/^## Blocked by/{f=1;next}/^## /{f=0}f' | grep -oE '#[0-9]+' | tr -d '#'); do   # a blocker whose fork half is not in the base yet: merging this one now only goes red (it imports the blocker's files)
     bb=${SG_FORK_BRANCH//%n/$d}; $G rev-parse -q --verify "refs/heads/$bb" >/dev/null && { [ "$($G rev-list --count "$SG_FORK_BASE..$bb")" -gt 0 ] || [ -n "$(lost "$bb")" ]; } && wait="$wait #$d"; done
   [ -z "$wait" ] || { wm="$A/forkwait-$n${wait// /-}"; [ -e "$wm" ] || { touch "$wm"; echo "FORKCLOSE WAIT #$n: the fork half of$wait is not in $SG_FORK_BASE yet (Blocked by)"; }; continue; }
-  head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; [ -e "$mk" ] && continue
+  head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"
+  if [ -e "$mk" ]; then   # "wait for a real fix commit" is a wait with no deadline unless the marker expires on its own
+    age=$(( now - $(stat -f %m "$mk") ))
+    [ "$age" -lt $(( ${SG_FORK_MARKER_MINUTES:-45} * 60 )) ] && continue
+    rm -f "$mk"; echo "FORKCLOSE RETRY #$n: the marker for ${head:0:9} waited $(( age / 60 )) min with no new commit on $br and no fix run alive; retrying"
+  fi
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   if [ "$($G branch --show-current)" != "$SG_FORK_BASE" ] || [ -n "$($G status --porcelain --untracked-files=no)" ]; then echo "FORKCLOSE WAIT #$n: $SG_FORK_DIR is not a clean $SG_FORK_BASE checkout"; exit 0; fi
+  bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
+  if [ -e "$A/basered-$bs" ]; then echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be $br's fault; waiting for a green base"; continue; fi
+  if [ ! -e "$A/basetest-$bs" ]; then   # a red base reds every branch at once: test it once per base head, before merging anything
+    if ( cd "$SG_FORK_DIR" && eval "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"
+    else touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own (see $SG_STATE/basetest-$bs.log); not merging $br, no revert, no fix run. Every branch is parked until the base is green."; continue; fi
+  fi
   touch "$mk"
   if ! { if [ -n "$reland" ]; then relandbr; else $G merge --no-ff -q -m "Merge $br (Refs #$n)" "$br" >/dev/null 2>&1; fi; }; then
     $G merge --abort 2>/dev/null

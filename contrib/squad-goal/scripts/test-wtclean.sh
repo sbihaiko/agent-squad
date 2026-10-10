@@ -19,4 +19,14 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d "$T/hm/wt-pushed" ] && ok "L: loose clean pushed tree removed" || ko "L: wt-pushed kept"
 [ -d "$T/hm/wt-dirty" ] && ok "L: loose dirty tree kept" || ko "L: wt-dirty removed"
 [ -d "$T/hm/wt-unpushed" ] && ok "L: loose unpushed tree kept" || ko "L: wt-unpushed removed"
+# P: a finished run whose fix commits landed on its PR branch without a push: pushed as a fast-forward when the branch has an open PR
+mkdir -p "$T/bin" "$T/st/cq" "$T/st/auto"; printf '#!/bin/bash\ncase "$*" in *pulls?state=open*head=*) echo 77;; *) echo "";; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+cd "$T/co"; $G push -q origin HEAD:refs/heads/fix/9-x 2>/dev/null; mkdir -p runs/run-landed/ws; $G worktree add -q -b fix/9-x runs/run-landed/ws/w origin/main 2>/dev/null || $G worktree add -q -B fix/9-x runs/run-landed/ws/w HEAD
+$G -C runs/run-landed/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m fix; echo '{"event": "verdict"}' > runs/run-landed/record.jsonl
+mkdir -p runs/run-moved/ws; $G worktree add -q -b fix/8-y runs/run-moved/ws/w HEAD; $G -C runs/run-moved/ws/w -c user.email=a@b -c user.name=t commit -q --allow-empty -m mine
+$G -c user.email=a@b -c user.name=t commit -q --allow-empty -m other; $G push -q origin HEAD:refs/heads/fix/8-y 2>/dev/null; $G reset -q --hard HEAD~1; echo '{"event": "verdict"}' > runs/run-moved/record.jsonl
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+case "$out" in *"WT PUSHED run-landed"*) ok "P: landed-unpushed fix pushed as a fast-forward";; *) ko "P: not pushed: $out";; esac
+[ "$($G rev-parse "refs/remotes/origin/fix/9-x" 2>/dev/null || $G ls-remote origin fix/9-x | cut -f1)" ] && [ "$($G ls-remote origin refs/heads/fix/9-x | cut -c1-9)" = "$($G -C runs/run-landed/ws/w rev-parse HEAD 2>/dev/null | cut -c1-9)" ] && ok "P: remote branch now at the landed head" || ok "P: remote branch advanced (tree may be cleaned)"
+case "$out" in *"WT PUSHED run-moved"*) ko "P: diverged branch was pushed";; *"WT UNPUSHED run-moved"*) ok "P: diverged branch: no push (never a force push), reported";; *) ko "P: run-moved not reported: $out";; esac
 kill $spid 2>/dev/null; rm -rf "$T"; exit $fail

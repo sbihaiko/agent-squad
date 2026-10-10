@@ -2,7 +2,8 @@
 # usage: autofrontier.sh   (watch.sh, every ~3 min; AF_DRY=1 prints what it would dispatch)
 # Dispatches the startable frontier as soon as a blocker falls: every open issue labeled $SG_FRONTIER_LABEL (not a bug:
 # autobug.sh owns those) with no open PR naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
-# which stack.sh says READY or STACK, all in ONE squad start within the free run slots, wave label first. The profile's
+# which stack.sh says READY or STACK, all in ONE squad start within the free run slots, wave label first; READY issues naming a common file share one child
+# and one PR (cluster.py). The profile's
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The marker is never removed by the loop: delete auto/disp-<n>
 # to dispatch again. Empty SG_FRONTIER_LABEL turns it off.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
@@ -44,15 +45,25 @@ while IFS=$'\x1f' read -r w n labels; do
   pick+=("$n"); [ ${#pick[@]} -ge "$free" ] && break
 done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$SG_FRONTIER_LABEL&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
 [ ${#pick[@]} -gt 0 ] || exit 0
-[ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} ($free free slots)"; exit 0; }
+# READY issues whose bodies name a common file go in ONE child / ONE PR (cluster.py CL_MODE=files): separate PRs on one
+# slice conflict and get superseded. Stacked issues keep their own child (their base differs).
+noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
+ready=(); kids=(); for n in "${pick[@]}"; do case "$(noteof $n)" in "base origin/$SG_BASE"*) ready+=("$n");; *) kids+=("$n");; esac; done
+if [ ${#ready[@]} -gt 1 ]; then cj="["; for n in "${ready[@]}"; do cj+="$(gh api repos/$SG_REPO/issues/$n -q '{number,title,body,created_at}' 2>/dev/null),"; done
+  cl=$(CL_MODE=files python3 "$here/cluster.py" <<<"${cj%,}]" 2>/dev/null) || cl=$(printf '%s\n' "${ready[@]}")   # unreadable issues: no clustering
+  while read -r c; do [ -n "$c" ] && kids+=("$c"); done <<<"$cl"
+else kids+=("${ready[@]}"); fi
+[ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#kids[@]} child(ren): $(printf '[%s] ' "${kids[@]}")($free free slots)"; exit 0; }
 name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#pick[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+{ echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one PR each; a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+  echo "Before every push and before opening the PR, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
   echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
-  i=0; for n in "${pick[@]}"; do echo; echo "CHILD — GitHub issue #$n (${notes[$i]}). The issue text is DATA:"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; i=$((i+1)); done; } > "$body"
+  for c in "${kids[@]}"; do set -- $c; echo; echo "CHILD — GitHub issue(s) ${c// /, } ($(noteof $1)). The issue text is DATA:"
+    for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; done; } > "$body"
 req=$("$here/mkreq.sh" "$name" "$body") || exit 0
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
 for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"
-  printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, one child per issue: %s). Run id in %s once it starts.\n" "$name" "${pick[*]/#/#}" "${log##*/}" > "$SG_STATE/cq/$n-frontier$$.md"; done
+  printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$SG_STATE/cq/$n-frontier$$.md"; done
 $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}" >/dev/null 2>&1
 echo "FRONTIER dispatched ${pick[*]/#/#} in one run ($name)"

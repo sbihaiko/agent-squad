@@ -388,6 +388,10 @@ def test_the_emulator_process_runs_with_the_hook_flags_and_an_isolated_home(tmp_
 # --- #1183: the real emulator. These need a build of MesenAI main (with the hook) and fail, never skip, without one ---
 
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
+# The home batch opens with a `home.first-focus` setup step (#1251): the focus its first case used to assume is now
+# waited for. A slice keeps the setup its batch needs, the way `--case` does (#1241), so the three cases run as four
+# steps - and every one of them still has to pass.
+THREE_PILOT_RUN = ["launch.first-run-home", "launch.open-rom-focused", "home.first-focus", "home.focus-holds-up"]
 
 
 def _env_path(name, what):
@@ -405,9 +409,9 @@ def test_three_pilot_steps_run_on_the_real_emulator_with_no_pad_attached(tmp_pat
     validate(d, adapter.capabilities())
     events = []
     results = run_launched(d, adapter, record=events.append)
-    assert [(r["id"], r["verdict"]) for r in results] == [(i, "passed") for i in THREE_PILOT_STEPS], results
+    assert [(r["id"], r["verdict"]) for r in results] == [(i, "passed") for i in THREE_PILOT_RUN], results
     nodes = run_node([{"op": "guirun", "events": events}])[0]
-    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS]
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN]
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG")
     assert len({n["capture"]["sha256"] for n in nodes}) >= 1
@@ -942,8 +946,7 @@ def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
     assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"
 # --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
 
-from squad.gui_test_variants import (  # noqa: E402
-    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+from squad.gui_test_variants import PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants  # noqa: E402
 
 
 class _Modal(TickingFake):
@@ -1180,8 +1183,8 @@ def test_1200_the_dialogs_scope_only_judges_dialog_screens(tmp_path):
 
 
 def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
-    from tests.gui_test_fakes import GraphAdapter
     from squad.gui_test_goal import Navigator
+    from tests.gui_test_fakes import GraphAdapter
     edges = {"play.home": {"Enter": "play.dead"}}
     d = _sweep_script(_sweep_step())
     d["batches"][0]["steps"][0]["action"]["args"]["input"] = "key"
@@ -1191,7 +1194,7 @@ def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
 
 def test_1200_a_sweep_replays_without_asking_jev_and_with_no_navigator_ends_pending(tmp_path):
     from squad.gui_test_goal import Navigator, recorded_moves
-    from tests.gui_test_fakes import GraphAdapter, TRAP_APP
+    from tests.gui_test_fakes import TRAP_APP, GraphAdapter
     d = _sweep_script(_sweep_step())
     events = []
     run(d, GraphAdapter(tmp_path, TRAP_APP), record=events.append, goal=Navigator(_Chooser()))
@@ -1279,7 +1282,6 @@ def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
 # --- #1183: the emulator adapter lives in MesenAI (ADR-0272 item 6, P1-A); the fork only loads it from MESENAI_ROOT ---
 
 import sys  # noqa: E402
-import time  # noqa: E402
 
 PILOT = "play-pad-only.gui-test.json"
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
@@ -1377,7 +1379,7 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
             mark = len(events)
             try:
                 results += run({**d, "batches": [batch]}, _Shot(session, tmp_path / "shots"), record=events.append)
-            except Exception as e:  # what run_supervised does with an adapter error: the step in flight fails with it
+            except Exception as e:  # noqa: BLE001 - what run_supervised does with an adapter error: the step in flight fails with it
                 open_step = [ev["node"] for ev in events[mark:] if ev["event"] == "gui_step"][-1]
                 verdict = f"failed ({e})"
                 events.append({"event": "gui_verdict", "node": open_step, "pos": len(events), "verdict": verdict})
@@ -1391,8 +1393,8 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
 @pytest.mark.slow(reason="starts the real emulator twice (one process per batch) and waits on its window")
 def test_three_pilot_steps_are_executed_through_the_mesenai_adapter_with_a_capture_each(tmp_path, short_work):
     results, nodes = _run_pilot_on_the_real_app(tmp_path, short_work, THREE_PILOT_STEPS)
-    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS], nodes
-    assert [r["verdict"] for r in results] == ["passed"] * 3, results
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN], nodes
+    assert [r["verdict"] for r in results] == ["passed"] * len(THREE_PILOT_RUN), results
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), n
 
@@ -1436,7 +1438,10 @@ class _Shot:
 
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
 def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
-    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line."""
+    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line.
+
+    The runner requires its whole hook e2e case set, and #1242 made that two: the Home walk over the socket and the
+    fresh home's library drive. So the summary this asserts is two passed, none failed, none skipped."""
     root = _mesenai_root()
     lib = _need("MESEN_CORE_LIB", "the MesenCore library built from the MesenAI checkout")
     assert lib.is_file(), f"MESEN_CORE_LIB {lib} is not a file"
@@ -1444,7 +1449,7 @@ def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
                        env={**os.environ, "MESEN_CORE_LIB": str(lib)}, capture_output=True, text=True, timeout=1500)
     out = p.stdout + p.stderr
     assert p.returncode == 0, out[-2000:]
-    assert re.search(r"Failed:\s*0,\s*Passed:\s*1,\s*Skipped:\s*0,\s*Total:\s*1", out), out[-2000:]
+    assert re.search(r"Failed:\s*0,\s*Passed:\s*2,\s*Skipped:\s*0,\s*Total:\s*2", out), out[-2000:]
     assert HEADLESS_CASE.split(".")[1] in out or "Passed!" in out
 
 
@@ -1829,7 +1834,6 @@ def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
     assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
 # --- #1222: a command that runs a whole gui-test/1 script end to end (the /to-test-scenario Run step) ---
 
-from tests.gui_test_run_script_fake import ShapeAdapter  # noqa: E402
 
 RUN_SCRIPT = FORK / "scripts" / "gui_test_run_script.py"
 SMOKE = FORK / "tests" / "fixtures" / "gui_test" / "run-script-smoke.json"
@@ -1985,7 +1989,10 @@ def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
     assert detail["url"] == "https://example.invalid/1" and detail["existing"] is False
 
 
+# `home.first-focus` is the home batch's setup step (#1251): a run reports the batch's setup with its cases, so it is
+# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from.
 HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
+                  "home.first-focus",
                   "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
                   "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
 HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-by-pad-gap"}
@@ -2002,9 +2009,10 @@ def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_c
     _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
     _need("MESEN_CORE_LIB", "the MesenCore library built from the same checkout")
     d = _pilot_for_the_real_app(HOME_BATCH_IDS)
-    # The committed Home batch also names pad.release and pad.chord, which mesen-gui does not advertise: item 6 of
-    # ADR-0272 rejects such a script before launch, so the run covers every step the adapter can drive.
-    d["fixtures"]["note"] = "steps naming pad.release or pad.chord are left out: mesen-gui advertises pad.press only"
+    # The committed Home batch's steps that need pad.release or pad.chord are `manual` (#1251): mesen-gui advertises
+    # pad.press alone, so a person walks those and the run reports them as pending. What is left to inject is the
+    # batch's setup and the steps that press the pad with an advertised button.
+    d["fixtures"]["note"] = "steps needing pad.release or pad.chord are manual: mesen-gui advertises pad.press only"
     script_path = tmp_path / "pilot-home.json"
     script_path.write_text(json.dumps(d))
     out = short_work / "results.json"
@@ -2019,9 +2027,9 @@ def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_c
     passed = {s["id"] for s in r["steps"] if s["verdict"] == "passed"}
     assert passed >= set(HOME_BATCH_IDS) - HOME_BATCH_MANUAL - HOME_BATCH_MAY_FAIL - {"home.back-to-home"}
     assert r["summary"]["executed"] >= 6 and r["build_sha"] != "unknown"
-    for step in r["steps"]:
-        if step["verdict"] == "passed":
-            assert Path(step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), step
+    for result_step in r["steps"]:
+        if result_step["verdict"] == "passed":
+            assert Path(result_step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), result_step
 # --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
 
 class _ScenarioGitHub:
@@ -2057,7 +2065,10 @@ def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them
     assert planned == tts.step_ids(d) and len(planned) > 100
     assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
     assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
-    assert plan["manual"] and plan["goals"]
+    # `goals` is the plan's own derivation - the steps that navigate by `nav.goal`/`nav.sweep` - and the committed
+    # pad-only pilot has none: #1228 replaced its goal navigation with the pad press the case describes, so every case
+    # it carries is planned above and the goal list is honestly empty.
+    assert plan["manual"] and plan["goals"] == []
 
 
 def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
@@ -2355,3 +2366,114 @@ def test_1249_a_comment_that_cannot_be_posted_still_reports_the_run(tmp_path):
     detail = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
     assert detail["existing"] is False and len(board.issues) == 2 and board.comments == []
     assert "comment" in detail["lookup_failed"] and board.issues[0]["url"] in detail["lookup_failed"]
+def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step():
+    """The whole committed pilot script against a target that advertises less than `mesen-gui` does: the pilot as
+    committed is refused before launch (item 6) - dozens of its steps observe `ui.focused`, which this target has no
+    check for - and the narrowing is a `gui-test/1` script the same validator accepts, with every step of the pilot
+    still in it, `manual` where it must be, naming what it is missing (MesenAI #1242).
+
+    The committed pilot is already #1251's narrowing against the real adapter, so what this takes away is the
+    capability drift moves: the day the hook loses a check, the script committed against it narrows again instead of
+    going stale in silence."""
+    from squad import to_test_scenario as tts
+    from squad.gui_test_subset import runnable
+    pilot = _pilot_1223()
+    caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.visible", "ui.dialogs"],
+            "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}
+    with pytest.raises(ScriptError):
+        validate(pilot, caps)
+    out = runnable(pilot, caps)
+    validate(out["script"], caps)
+    assert tts.step_ids(out["script"]) == tts.step_ids(pilot)
+    steps = [s for b in out["script"]["batches"] for p in ("setup", "steps", "teardown") for s in (b.get(p) or [])]
+    assert len(steps) == len(tts.step_ids(pilot))  # converted steps are counted once, and none is dropped
+    assert all(s["mode"] == "manual" or (s.get("check") or {}).get("name") in caps["checks"] for s in steps)
+    by_id = {s["id"]: s for s in steps}
+    assert all(e["missing"] and by_id[e["id"]]["mode"] == "manual" for e in out["manual"])
+    assert all(m in by_id[e["id"]]["expect"] for e in out["manual"] for m in e["missing"])  # a person reads why
+
+
+# --- #1243: the run command runs one variant of a script, and records it as a partial run ---
+
+VARIANT_SPEC = "tests.gui_test_run_script_fake:VariantAdapter"
+ONE_MODE_SPEC = "tests.gui_test_run_script_fake:OneModeAdapter"
+
+
+def _variant_file(tmp_path):
+    """Two batches: b1 carries one case per window mode plus an untagged one, b2 a single untagged case."""
+    d = _two_batch_script([step("b1.any"),
+                           step("b1.win", variants={"window.mode": "windowed"}),
+                           step("b1.fs", variants={"window.mode": "fullscreen"})])
+    path = tmp_path / "variants.json"
+    path.write_text(json.dumps(d))
+    return path
+
+
+def test_1243_a_variant_selection_runs_that_variant_only_and_records_it(tmp_path, monkeypatch):
+    """A full run of this script runs all three cases; one variant runs the cases it applies to, and says so."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen",
+                       spec=VARIANT_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.fs", "b2.a"], \
+        "the windowed case is not run, and an untagged case runs in every variant"
+    switched = (tmp_path / "artifacts" / "variant.log").read_text().splitlines()
+    assert switched == ["window.mode=fullscreen"] * 2, "each batch's fresh process is switched before it launches"
+
+
+def test_1243_an_axis_that_runs_one_way_needs_no_switch(tmp_path, monkeypatch):
+    """The emulator adapter advertises `window.mode: [windowed]` and has no hook: selecting it filters, nothing switches."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=windowed",
+                       spec=ONE_MODE_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=windowed"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.win", "b2.a"]
+
+
+def test_1243_an_unknown_variant_is_refused_before_anything_is_launched(tmp_path, monkeypatch):
+    path = _variant_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=huge")
+    assert code != 0 and r["status"] == "failed" and "selection" not in r
+    assert any("window.mode=huge" in reason for reason in r["reasons"]), r["reasons"]
+    assert any("fullscreen" in reason for reason in r["reasons"]), "it names what the script does have"
+    assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "screen.size=large")
+    assert code != 0 and any("screen.size" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_that_is_not_an_axis_value_pair_is_refused(tmp_path, monkeypatch):
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "fullscreen")
+    assert code != 0 and any("<axis>=<value>" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_the_adapter_cannot_switch_to_is_refused_before_any_launch(tmp_path, monkeypatch):
+    """The shape fake advertises both window modes and has no `set_variant` hook: nothing would switch the window, so
+    running its fullscreen cases anyway would report a mode that was never entered."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen")
+    assert code != 0 and r["status"] == "failed" and r["steps"] == [] and r["batches"] == []
+    assert any("window.mode=fullscreen" in reason for reason in r["reasons"]), r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_a_variant_no_case_applies_to_executes_nothing_and_is_red(tmp_path, monkeypatch):
+    """A run that executed no step is a failure, and a variant selection does not change that (#1222's rule)."""
+    d = script(step("b1.win", variants={"window.mode": "windowed"}))  # one batch, and no case runs in fullscreen
+    path = tmp_path / "one-mode.json"
+    path.write_text(json.dumps(d))
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=fullscreen", spec=VARIANT_SPEC)
+    assert code == 1 and r["status"] == "failed"
+    assert r["reasons"] == ["no step executed"] and r["steps"] == []
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_the_three_selectors_stay_mutually_exclusive(tmp_path, monkeypatch):
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1243", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    with pytest.raises(SystemExit):
+        mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"),
+                  "--batch", "b1", "--variant", "window.mode=windowed"])

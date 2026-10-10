@@ -2,13 +2,16 @@
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function childrenModule({ num, openCalls, orNull, skillName }) {
-  // The issue a spawn ran, read from its own prompt: a tracker reference ("GitHub issue #1179", "issue #14") first, else
-  // the issue file ("issues/14-slug.md" -> 14). The file form must sit under issues/, so another numbered file the prompt
-  // cites ("docs/adr/gui/0272-the-hook.md") never reads as the issue. A prompt with neither names none.
+  // The issue a spawn ran, read from its own prompt: a tracker reference ("GitHub issue #1179", "issue #14") or the issue
+  // file ("issues/14-slug.md" -> 14), whichever the prompt names first. A prompt states its own issue first and cites a
+  // blocker after ("... issues/20-x.md ... Issue #19 has landed"), so the first reference is the one it ran. The file form
+  // must sit under issues/, so another numbered file the prompt cites ("docs/adr/gui/0272-the-hook.md") never reads as the
+  // issue. A prompt with neither names none.
   const issueNumber = (prompt) => {
     const t = typeof prompt === "string" ? prompt : "";
-    const m = /\bissue\s+#(\d+)/i.exec(t) || /(?:^|[\s/`"'(])issues\/(\d+)-[\w-]+\.md/.exec(t);
-    return m ? Number(m[1]) : null;
+    const found = [/\bissue\s+#(\d+)/i, /(?:^|[\s/`"'(])issues\/(\d+)-[\w-]+\.md/].map((re) => re.exec(t)).filter(Boolean);
+    const first = found.sort((a, b) => a.index - b.index)[0];
+    return first ? Number(first[1]) : null;
   };
 
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.

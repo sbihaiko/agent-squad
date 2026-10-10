@@ -2,7 +2,7 @@
 """Run a whole `gui-test/1` script end to end on the squad's GUI test infrastructure (ADR-0272 items 6-8, #1222).
 
     python3 scripts/gui_test_run_script.py <script.json> [--adapter mesen-gui] [--out <results.json>]
-                                           [--batch <id> | --case <id>] [--file-bug]
+                                           [--batch <id> | --case <id> | --variant <axis>=<value>] [--file-bug]
 
 The runner, the script format and the adapter interface live with the squad (item 6, P1-A); the emulator adapter this
 command drives lives in MesenAI, loaded from `MESENAI_ROOT` through `squad.gui_test_worker`. This command is the door
@@ -23,12 +23,15 @@ item 8), `pending` (a `manual` step: nobody ran it). Exactly one of the last two
 `failed` steps make the run red, `needs review` and `pending` make it neither red nor green and are listed. A run
 that executed no step is a failure (a claim needs a step behind it).
 
-`--batch <id>` and `--case <id>` narrow the run (a case keeps its batch's setup) and the results file records a
-`selection` naming what was run, so a write-back can call it a partial run and never present it as the health of the
-whole scenario; a full run carries no `selection`. A selector the script does not have is refused before the adapter is
-asked anything. A **variant** selector waits for the supervised runner's variant hook (`squad.gui_test_variants` has
-the in-process one, the supervised path does not), so no `--variant` is accepted yet: it would name a window mode
-nothing switched.
+`--batch <id>`, `--case <id>` and `--variant <axis>=<value>` narrow the run (a case keeps its batch's setup, a variant
+runs the steps that variant applies to in every batch) and the results file records a `selection` naming what was run,
+so a write-back can call it a partial run and never present it as the health of the whole scenario; a full run carries
+no `selection`. A selector the script does not have is refused before the adapter is asked anything.
+
+A variant the adapter advertises several ways is switched through its optional `set_variant` hook, in each batch's
+fresh process before that batch launches; an adapter with no hook is refused there, naming the variant, because a run
+whose cases were tagged for a window mode nothing switched would report a mode it never entered. An axis the adapter
+advertises one way only is the mode the run is already in, so selecting that value only narrows the steps.
 
 A red run files **one** bug for the whole run through the MesenAI failure-report path (`scripts/report-bug.sh`, see
 `squad.gui_test_report`), and only when `--file-bug` asks for it: filing is **opt-in**, so a test, acceptance or CI run
@@ -65,9 +68,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from squad.gui_test import ScriptError, validate  # noqa: E402
-from squad.gui_test_report import (comment_on_bug_with, file_bug_with, find_open_bug_with,  # noqa: E402
-                                   report_failures_detail)
-from squad.gui_test_supervise import Crash, Hang, Session, run_supervised  # noqa: E402
+from squad.gui_test_report import comment_on_bug_with, file_bug_with, find_open_bug_with, report_failures_detail  # noqa: E402
+from squad.gui_test_supervise import Crash, Hang, Session, VariantUnsupported, run_supervised  # noqa: E402
 
 RESULTS_FORMAT = "gui-test-results/1"
 CAPABILITIES_TIMEOUT_S = 60
@@ -235,14 +237,46 @@ def bug_reason(entry, rows, repo_root, asked):
     return None
 
 
-def narrow(script, batch=None, case=None):
+def _applies(s, axis, value):
+    """Whether a step runs in this variant: an untagged step runs in every value (`squad.gui_test_variants`)."""
+    tagged = (s.get("variants") or {}).get(axis)
+    return tagged is None or value in ([tagged] if isinstance(tagged, str) else list(tagged))
+
+
+def _narrow_variant(script, axis, value):
+    """The script with only the steps `axis=value` applies to, and the `selection` that names it.
+
+    An untagged step applies to every value, so it stays; a step tagged for other values of the axis is dropped, and a
+    batch left with no step at all goes with it. The narrowed script declares that one value, so a step that applies to
+    several is recorded as the one under test, and the adapter is compared against what this run really asks for.
+    """
+    declared = script["variants"].get(axis)
+    if declared is None:
+        raise ScriptError([f"no variant axis {axis!r} in {script['name']}: "
+                           f"it has {', '.join(script['variants'])}"])
+    if value not in declared:
+        raise ScriptError([f"no variant {axis}={value} in {script['name']}: {axis} has {', '.join(declared)}"])
+    view = copy.deepcopy(script)
+    view["variants"] = {**view["variants"], axis: [value]}
+    for b in view["batches"]:
+        for part in ("setup", "steps", "teardown"):
+            b[part] = [s for s in b[part] if _applies(s, axis, value)]
+            for s in b[part]:
+                if (s.get("variants") or {}).get(axis) is not None:
+                    s["variants"][axis] = value  # it applies to exactly this value now
+    view["batches"] = [b for b in view["batches"] if b["steps"]]
+    return view, {"kind": "variant", "value": f"{axis}={value}"}
+
+
+def narrow(script, batch=None, case=None, variant=None):
     """(the script the selectors name, the `selection` this run records); (script, None) when nothing was selected.
 
     A batch runs that batch alone; a case runs its batch's setup and teardown with that one step, because a case whose
-    state its setup left is otherwise unrunnable. An id the script does not have raises `ScriptError` naming it, before
-    the adapter is asked for its capabilities and before anything is launched.
+    state its setup left is otherwise unrunnable; a variant runs the steps that variant applies to, in every batch. An
+    id or value the script does not have raises `ScriptError` naming it, before the adapter is asked for its
+    capabilities and before anything is launched.
     """
-    if batch is None and case is None:
+    if batch is None and case is None and variant is None:
         return script, None
     ids = [b["id"] for b in script["batches"]]
     if batch is not None:
@@ -251,6 +285,11 @@ def narrow(script, batch=None, case=None):
         view = copy.deepcopy(script)
         view["batches"] = [b for b in view["batches"] if b["id"] == batch]
         return view, {"kind": "batch", "value": batch}
+    if variant is not None:
+        axis, sep, value = variant.partition("=")
+        if not (sep and axis and value):
+            raise ScriptError([f"no variant {variant!r}: --variant takes <axis>=<value>, as the script declares it"])
+        return _narrow_variant(script, axis, value)
     steps = [(b["id"], s["id"]) for b in script["batches"] for s in b["setup"] + b["steps"]]
     if case not in [sid for _, sid in steps]:
         raise ScriptError([f"no case {case!r} in {script['name']}: it has {', '.join(sid for _, sid in steps)}"])
@@ -261,6 +300,19 @@ def narrow(script, batch=None, case=None):
         b["steps"] = [s for s in b["steps"] if s["id"] == case]
     view["batches"] = [b for b in view["batches"] if b["steps"]]
     return view, {"kind": "case", "value": case}
+
+
+def required_switch(variant, caps):
+    """The (axis, value) a selected variant must be switched to before launch, or None when there is nothing to switch.
+
+    An axis the adapter advertises one way only is the mode a run is already in: the emulator adapter's `window.mode` is
+    `[windowed]`, so selecting it narrows the steps and starts no switching. An axis advertised several ways needs the
+    adapter's optional `set_variant` hook, and the run is refused, before anything is launched, when it has none.
+    """
+    if variant is None:
+        return None
+    axis, _, value = variant.partition("=")
+    return (axis, value) if len(caps.get("variants", {}).get(axis, [])) > 1 else None
 
 
 def report(record, path, text):
@@ -290,6 +342,8 @@ def main(argv=None):
     sel = ap.add_mutually_exclusive_group()
     sel.add_argument("--batch", help="run only this batch: a partial run, and the results file records the selection")
     sel.add_argument("--case", help="run only this case id, with the setup and teardown steps it needs")
+    sel.add_argument("--variant", metavar="AXIS=VALUE",
+                     help="run only the steps this variant of an axis applies to, e.g. window.mode=fullscreen")
     ap.add_argument("--file-bug", action="store_true",
                     help="file the one bug a red run files through scripts/report-bug.sh; off by default, so a test, "
                          "acceptance or CI run never touches the board")
@@ -338,7 +392,7 @@ def main(argv=None):
         return _failed(record, out, "gui test run", ["the script is not a well-formed gui-test/1 file: " + p
                                                      for p in ex.problems])
     try:  # the selectors narrow before the capabilities are read: a refused id never asks the adapter anything
-        script, selection = narrow(script, args.batch, args.case)
+        script, selection = narrow(script, args.batch, args.case, args.variant)
     except ScriptError as ex:
         return _failed(record, out, "gui test run",
                        ["nothing was launched: " + p for p in ex.problems])
@@ -356,9 +410,14 @@ def main(argv=None):
     except ScriptError as ex:
         return _failed(record, out, "gui test run",
                        ["the script names what the adapter does not advertise: " + p for p in ex.problems])
+    switch = required_switch(args.variant, caps)
 
     print(f"gui test run {run_id}: {script['name']} on {name} ({platform_tag()})")
-    out_dir = run_supervised(script, entry["spec"], {}, step_timeout_s=args.step_timeout, out_dir=artifacts)
+    try:
+        out_dir = run_supervised(script, entry["spec"], {}, step_timeout_s=args.step_timeout, out_dir=artifacts,
+                                 variant=switch)
+    except VariantUnsupported as ex:
+        return _failed(record, out, "gui test run", [f"nothing was launched: {ex}"])
     rows = rows_for(script, out_dir)
     record.update({"script": {**record["script"], "name": script["name"]},
                    "batches": out_dir["batches"], "steps": rows,

@@ -175,7 +175,7 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
     except ValueError: continue
     if now - upd < 1200: continue
     mk = st / "auto" / f"janitor-stuck-{pr}-{sha[:9]}"
-    if mk.exists(): continue
+    if mk.exists() or any((st / "auto").glob(f"dupiss-{pr}-*")): continue   # dupiss: autopilot found its issue closed as a duplicate; superseded, not stuck
     ms = sh("gh", "api", f"repos/{repo}/pulls/{pr}", "-q", ".mergeable_state").strip()
     ci = sh("bash", "-c", f"grep -h '^#{pr} {sha[:9]} ' '{st}/revci-{pr}.out' 2>/dev/null | tail -1 | sed -n 's/.*CI=\\([^ ]*\\).*/\\1/p'").strip()
     why = "conflicts with the base (dirty)" if ms == "dirty" else ("CI red (" + ci + ")" if re.search(r"failure|timed_out|cancelled", ci) else "")
