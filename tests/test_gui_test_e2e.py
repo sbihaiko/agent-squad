@@ -806,3 +806,20 @@ def test_1191_the_real_window_mode_is_not_used_in_ci(tmp_path):
                               permissions=lambda: {"accessibility", "screen-recording"})
         with pytest.raises(RealWindowRefused):
             a.launch({})
+
+
+def test_1210_a_failed_objective_check_names_expected_and_observed_and_skips_the_model(tmp_path):
+    from squad.gui_test_vision import Vision
+
+    asked = []
+
+    def model(png, expect):
+        asked.append(expect)
+        return {"answer": "compatible", "saw": "x", "cost": 0.01}
+
+    d = script(step("b1.wrong", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+                    check={"name": "ui.screen", "args": {"is": "play.home"}}))
+    [r] = run(d, TickingFake(tmp_path), vision=Vision(model))
+    assert r["verdict"] == "failed (expected ui.screen == play.home, observed play.library)"
+    assert asked == [] and "vision" not in r

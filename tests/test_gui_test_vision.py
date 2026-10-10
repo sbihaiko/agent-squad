@@ -59,7 +59,7 @@ def test_the_objective_check_wins_and_the_model_is_not_asked(tmp_path):
     assert r["verdict"] == "passed" and model.asked == [] and "vision" not in r
     d["batches"][0]["steps"][0]["check"]["args"]["is"] = "play.home"
     [r] = run(d, FakeAdapter(tmp_path), vision=Vision(Model("compatible")))
-    assert r["verdict"] == "failed"
+    assert r["verdict"] == "failed (expected ui.screen == play.home, observed play.library)"
 
 
 def test_without_a_vision_model_a_step_with_no_check_still_passes(tmp_path):
