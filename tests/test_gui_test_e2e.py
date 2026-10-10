@@ -1775,3 +1775,34 @@ def test_1197_a_quit_that_does_not_land_on_home_fails_the_journey_and_the_run(tm
 def test_1197_a_full_screen_switch_that_loses_the_sheet_fails_the_full_screen_journey(tmp_path):
     results = _run_1197(tmp_path, _pilot_1197(), switch_drops_sheet=True)
     assert "journey-fs.switch-focus-kept" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+
+
+# --- #1198: a second script (runbook section 1, the composition editor) on a second adapter, run with no runner change ---
+
+from tests.gui_test_compose_fake import ComposeEditorFake  # noqa: E402
+
+COMPOSE_1198 = FORK / "tests" / "fixtures" / "gui_test" / "composition-editor-runbook.json"
+
+
+def _run_1198(tmp_path, **switches):
+    d = json.loads(COMPOSE_1198.read_text(encoding="utf-8"))
+    validate(d)
+    fake = ComposeEditorFake(tmp_path, **switches)
+    fake.launch(d["fixtures"])
+    validate(d, fake.capabilities())
+    return d, run(d, fake, root=tmp_path)
+
+
+def test_1198_the_composition_editor_script_runs_end_to_end_on_its_own_adapter_with_fs_checks(tmp_path):
+    d, results = _run_1198(tmp_path)
+    assert d["target"] == "compose-editor" and d["target"] != _pilot_1197()["target"]
+    assert {r["id"]: r["verdict"] for r in results} == {
+        **{s["id"]: "passed" for b in d["batches"] for s in b["steps"] if s["mode"] == "automated"},
+        "compose.reslice": "pending", "compose.survives-bootstrap": "pending"}
+    assert {s["check"]["name"] for b in d["batches"] for s in b["steps"] if "check" in s} >= {"fs.exists", "log.contains"}
+
+
+def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_path):
+    _, results = _run_1198(tmp_path, save_stays_in_auto=True)
+    bad = {r["id"] for r in results if r["verdict"].startswith("failed")}
+    assert bad == {"compose.save", "compose.save-says-so"}
