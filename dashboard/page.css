@@ -197,3 +197,6 @@
   /* A narrow window gives the map its height back: the legend lives in the help (?) too, so below 900 px it is not drawn on the map. */
   @media (max-width:900px) { #legend { display:none; } }
 
+#side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
+#side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
+#side .pnav button:disabled { opacity:.35; cursor:default; }

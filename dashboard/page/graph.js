@@ -115,8 +115,25 @@ function clearSelection() { S.selected = null; S.link = null; setSide(false, tru
 function pick(name) {
   S.link = null;
   if (S.selected === name) { clearSelection(); return; }
-  S.selected = name; render(); revealSelected();
+  S.selected = name; render(); // the panel is a popup over the map: a selection never pans the view
 }
+// The cards in reading order (top to bottom, then left to right), for the popup's previous / next.
+function cardOrder() {
+  return [...$("cards").children].filter((c) => c.dataset.name).map((c) => ({ n: c.dataset.name, r: c.getBoundingClientRect() }))
+    .sort((a, b) => Math.round(a.r.top) - Math.round(b.r.top) || a.r.left - b.r.left).map((c) => c.n);
+}
+// Previous / next card without closing the popup: the ‹ › buttons, or ← → while the popup is open.
+function stepCard(k) {
+  const o = cardOrder(), i = o.indexOf(S.selected) + k;
+  if (i < 0 || i >= o.length) return;
+  S.selected = o[i]; S.link = null; render();
+}
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-step]"); if (b && !b.disabled) { e.stopPropagation(); stepCard(+b.dataset.step); } });
+window.addEventListener("keydown", (e) => {
+  if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || !sideOpen() || !S.selected || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+  if (["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName)) return;
+  e.preventDefault(); e.stopImmediatePropagation(); stepCard(e.key === "ArrowLeft" ? -1 : 1);
+}, true);
 
 // A card is a keyboard stop: Tab reaches it, Enter selects it, Space opens or folds a group. The cards are rebuilt on every render, so the key
 // handler puts the focus back on the card it acted on.

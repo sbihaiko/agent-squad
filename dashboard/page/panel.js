@@ -187,6 +187,8 @@ function renderSide() {
   if (top.length) parts.push(`<h2>Errors on the graph</h2><ul class="errs">${top.map((e) => `<li>${esc(e.message)}</li>`).join("")}</ul>`);
   if (S.warnings.length) parts.push(`<h2>Links the last change broke</h2><ul class="errs">${S.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>`);
   if (S.selected) {
+    const o = cardOrder(), i = o.indexOf(S.selected);
+    if (o.length > 1 && i >= 0) parts.unshift(`<div class="pnav"><button data-step="-1" title="previous card (←)"${i > 0 ? "" : " disabled"}>‹</button><span class="note">${i + 1} / ${o.length}</span><button data-step="1" title="next card (→)"${i < o.length - 1 ? "" : " disabled"}>›</button></div>`);
     const n = nodesOf().find((x) => x.name === S.selected), ch = S.children.find((x) => x.name === S.selected);
     const gr = S.groups.find((x) => x.key === S.selected);
     if (gr) { parts.push(groupHtml(gr)); parts.push(rosterHtml(gr.dispatch)); }
