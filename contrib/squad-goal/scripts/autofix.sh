@@ -23,7 +23,8 @@ b=$(mktemp); probs=""
     echo; echo "[ci] CI failed on $s9:"; echo "$bad"
     echo "Read each log (gh run view <run-id> --repo $SG_REPO --log-failed; the run id is in the URL). Reproduce locally and fix the root cause, never by weakening the test. A failure that is clearly infrastructure (runner died, network timeout, rate limit) gets 'gh run rerun <run-id> --repo $SG_REPO --failed' instead of a code change; say which in the PR comment."; fi
   if [ "$ms" = dirty ]; then probs+=" conflict"
-    echo; echo "[conflict] The branch conflicts with $SG_BASE. Rebase onto origin/$SG_BASE (no merge commits), resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."; fi
+    echo; echo "[conflict] The branch conflicts with $SG_BASE. Rebase onto origin/$SG_BASE (no merge commits), resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."
+    [ -s "$A/stack-$pr" ] && echo "This PR was stacked on a parent PR that has since been squash-merged: replay only this PR's own commits with git rebase --onto origin/$SG_BASE $(cat "$A/stack-$pr") HEAD (the parent's last commit), never the parent's commits again."; fi
   nt=$(threads $pr)
   if [ "${nt:-0}" -gt 0 ]; then probs+=" threads"
     echo; echo "[threads] $nt unresolved review threads (CodeRabbit or people). List them with:"

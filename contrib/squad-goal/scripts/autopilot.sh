@@ -5,6 +5,8 @@
 #     -> autofix.sh (one agent-squad fix run on the PR branch, every problem in one request), up to AP_MAX_ROUNDS;
 #     past the cap -> autopanel.sh (Opus ruling: one more round, or label needs-human + NEEDS OWNER on the issue)
 #  3. APPROVE + CI green + mergeable clean + no unresolved threads -> squash-merge (SG_AUTO_MERGE=yes)
+#  Stacked PRs (base = another PR's branch, see stack.sh): never merged while the base is not $SG_BASE; once the parent
+#  is merged the PR is retargeted to $SG_BASE (RETARGET) and the parent's last sha is kept in auto/stack-<pr> for the rebase.
 # Fix and panel runs go detached; their lines land in $SG_STATE/auto.log and are echoed here on the next pass.
 # Kill switch: touch $SG_STATE/auto/off (everything) or $SG_STATE/auto/nofix (review+merge only). Hold a PR: label `hold` or `needs-human`.
 # Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE.
@@ -14,9 +16,16 @@ L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo
 MAX=${AP_MAX_ROUNDS:-2}; MIN=${AP_MIN_ISSUE:-1090}; here="$(dirname "$0")"
 bg() { nohup bash "$here/$1" "${@:2}" >> "$L" 2>&1 </dev/null & }
 gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
- | jq -r '.[]|select(.draft==false)|[.number,.head.sha,(((.title+" "+(.body//""))|capture("Refs #(?<n>[0-9]+)")|.n) // ""),([.labels[].name]|join(","))]|@tsv' \
- | while IFS=$'\t' read -r pr sha iss labels; do
+ | jq -r '.[]|select(.draft==false)|[.number,.head.sha,(((.title+" "+(.body//""))|capture("Refs #(?<n>[0-9]+)")|.n) // ""),([.labels[].name]|join(",")),.base.ref]|@tsv' \
+ | while IFS=$'\t' read -r pr sha iss labels base; do
   [ -n "$iss" ] && [ "$iss" -ge "$MIN" ] 2>/dev/null || continue
+  if [ "$base" != "$SG_BASE" ]; then   # stacked: retarget once the parent PR (head = our base) is merged
+    par=$(gh api "repos/$SG_REPO/pulls?state=closed&head=${SG_REPO%%/*}:$base&per_page=5" -q '[.[]|select(.merged_at!=null)][0]|"\(.number) \(.head.sha)"' 2>/dev/null)
+    if [ -n "$par" ] && [ "$par" != null ] && [ "$(cat "$A/stack-$pr" 2>/dev/null)" != "${par#* }" ]; then   # once per parent (the list API can lag)
+      echo "${par#* }" > "$A/stack-$pr"; gh api -X PATCH repos/$SG_REPO/pulls/$pr -f base="$SG_BASE" >/dev/null 2>&1 \
+        && { printf "PR #%s retargeted to %s: its parent PR #%s was merged. A conflict from the squash is fixed by replaying only this PR's commits onto %s.\n" $pr "$SG_BASE" "${par%% *}" "$SG_BASE" > "$SG_STATE/cq/$iss-retarget$pr.md"; echo "RETARGET #$pr -> $SG_BASE (parent #${par%% *} merged)"; }
+    fi
+  fi
   case ",$labels," in *,hold,*|*,needs-human,*) continue;; esac
   s9=${sha:0:9}; out="$SG_STATE/revci-$pr.out"
   line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
@@ -46,6 +55,7 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   fi
   [[ $line == *APPROVE* ]] || continue
   [ "$SG_AUTO_MERGE" = yes ] || continue
+  [ "$base" = "$SG_BASE" ] || continue   # a stacked PR waits for its parent's merge and the retarget
   [ -e "$A/merged-$pr" ] && continue
   body=$(gh api repos/$SG_REPO/pulls/$pr -q .body 2>/dev/null)
   for d in $(echo "$body" | grep -ioE "merge (after|order)[^.]*" | grep -oE "#[0-9]+" | tr -d '#'); do
