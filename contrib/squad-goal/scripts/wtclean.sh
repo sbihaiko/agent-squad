@@ -24,6 +24,9 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/acpr\.[^/]*\)$#\1#p' | w
 if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
   $G -C "$SG_FORK_DIR" worktree list --porcelain | sed -En 's#^worktree (.*/wt-(as|fr)-[0-9]+)$#\1#p' | while read -r w; do
     n=${w##*-}; b=$($G -C "$w" branch --show-current 2>/dev/null)
+    live=0; for r in "$SG_CHECKOUT"/runs/run-*/record.jsonl; do   # a live run's final gate still cds into it
+      grep -q '"event": *"verdict"' "$r" || ! grep -qF "${w##*/}" "$r" || { live=1; break; }; done
+    [ $live = 0 ] || continue
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
     [ "$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null)" = closed ] || continue
     [ -z "$b" ] || $G -C "$SG_FORK_DIR" merge-base --is-ancestor "$b" "$SG_FORK_BASE" || continue

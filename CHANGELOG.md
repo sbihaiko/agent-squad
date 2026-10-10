@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `wtclean.sh` keeps a fork worktree while any live run references it (a final gate cds into it).
 - squad-goal: an issue with both a PR and fork work: `forkclose.sh` merges and tests its fork half (Code Complete or Testing) without closing it, and `stack.sh` hands dependents both the PR to stack on and the fork branch to merge.
 - squad-goal: the pre-push checklist forbids an invented owner go-ahead: an ADR amendment needs a quote present word for word in the request, else the conflicting change is undone.
 - squad-goal: `stack.sh` dispatches on Code Complete (owner's pick 2026-10-10): a Code Complete blocker no longer gates; with a PR it stacks, with fork-only work its unmerged fork branch is named (`READY FORK <br>`) and `autofrontier.sh` tells the child to merge it into its own fork branch first.
