@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.25 (local fork, 2026-10-10)
+- **The GUI test case label is `testcase`, not `test-case`.** The owner asked for the shorter name. `to_test_scenario.CASE_LABEL`, the suites that carried the literal, and the repository label itself move together, so the issues already published under `test-case` keep it under the new name.
+
 ## 0.2.24 (local fork, 2026-10-10)
 - **Fix to 0.2.21: the fork-worktree liveness test had to be scoped to the run that owns the tree.** 0.2.21 replaced the record-grep with "a run without a verdict is live", which is true of *every* fork worktree at once — one run in flight anywhere parked them all, and six trees belonging to closed issues (1222, 1225, 1226, 1243, 1244, 1249) stopped being collected. The test is now forkclose.sh's: a process whose cwd is inside the tree, or a run whose record moved inside the orphan window, has no `verdict` event yet and names `gui/<n>` or `wt-(as|fr)-<n>` in its record or request. A run that has ended owns nothing. `test-wtclean.sh` covers both directions — the tree survives its issue closing while the run is live, and is collected once the run has a verdict.
 

@@ -2144,7 +2144,7 @@ def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them
                           purpose="the pad-only Play script")
     planned = [c for i in plan["issues"] for c in i["cases"]]
     assert planned == tts.step_ids(d) and len(planned) > 100
-    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert all("testcase" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
     assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
     # `goals` is the plan's own derivation - the steps that navigate by `nav.goal`/`nav.sweep` - and the committed
     # pad-only pilot has none: #1228 replaced its goal navigation with the pad press the case describes, so every case
@@ -2999,7 +2999,7 @@ def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_nati
 
     assert len(plan["issues"]) >= 67
     labels = {kw["name"] for kw in gh.of("ensure_label")}
-    assert {"test-case", "ready-for-agent"} <= labels
+    assert {"testcase", "ready-for-agent"} <= labels
     assert [kw["title"] for kw in gh.of("create_issue")][0] == plan["parent"]["title"]
     assert len(gh.of("create_issue")) == len(plan["issues"]) + 1
     # The relation names each issue's numeric id, and only the parent reaches the board.

@@ -54,7 +54,7 @@ from squad.gui_test import validate
 from squad.gui_test_report import EVIDENCE_FAMILIES, WITHHELD
 
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
-CASE_LABEL = "test-case"
+CASE_LABEL = "testcase"
 TRIAGE_LABEL = "ready-for-agent"
 INITIAL_STATUS = "To triage"
 SETUP_ROLES = {"setup", "recovery"}
@@ -69,7 +69,7 @@ FORMAT = "gui-test/1"
 HASH_FIELD = "content_hash"
 
 PARENT_LABEL = "ready-for-agent"
-CASE_LABEL = "test-case"
+CASE_LABEL = "testcase"
 
 SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
