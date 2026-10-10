@@ -1,20 +1,17 @@
-"""`/to-test-scenario`: a manual GUI test scenario becomes a script, tracked issues and a run whose verdicts land back.
+"""`/to-test-scenario` mechanics: a manual GUI test scenario becomes a script, tracked issues and a run whose
+verdicts land back (MesenAI #1223), and the coverage of that scenario by content hash plus the scenario's own issue
+plan (MesenAI #1224).
 
 Everything here is deterministic: reading the case ids of the Markdown and the step ids of the `gui-test/1` script,
 reporting the gap between them, building the issue **plan** (parent, sub-issues, labels, waves, `## Blocked by`), and
-turning a run's per-step results into sub-issue comments, closes and at most one bug. It also decides the coverage of
-the scenario by content hash plus the scenario's own issue plan (MesenAI #1223, MesenAI #1224). `write_back`, the
-command of MesenAI #1226, reads a run's results file and writes every verdict back to the case's issue: comment,
-close, reopen, and the link to the one bug the run opened. Converting prose into steps is
+turning a run's per-step results into sub-issue comments, closes and at most one bug. Converting prose into steps is
 model judgment and lives in the skill, not here.
 
 Two outside dependencies are injected, and they are the only ones this module has:
 
 - **the GitHub runner** — a callable `runner(op, **kwargs)`; the ops are `ensure_label`, `create_issue`,
-  `update_issue`, `add_sub_issue`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
-  builds the real one on `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues). This module reads
-  `issue_state` to know whether a verdict changed and whether a case is closed, and it **never** calls `file_bug`: the
-  run command owns the one bug a red run files, and the write-back only links it.
+  `update_issue`, `add_sub_issue`, `comment`, `close`, `board` and `file_bug`. `rest_runner` builds the real one on
+  `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues).
 - **the run command** — `run_command(script)` returns one run report (`run_id`, `script_sha`, `platform`,
   `build_sha`, `core_available`, `results`). It is the `gui-test/1` runner of its own issue (MesenAI #1222); until it
   exists the scenario publishes and stops, and never fabricates a verdict.
@@ -30,13 +27,11 @@ plan from the script; with a parsed scenario and its script it is the #1224 plan
 `role: setup`/`recovery` for a step that only reaches a state (a setup step gates the cases of its batch, one wave
 later) and `nav.goal` for a path that is not what is under test (ADR-0271).
 """
-import argparse
 import copy
 import hashlib
 import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 from squad.gui_test import validate
@@ -47,10 +42,6 @@ INITIAL_STATUS = "To triage"
 SETUP_ROLES = {"setup", "recovery"}
 AUTO_MODES = {"automated"}
 SETUP_STATUSES = {"needs review", "pending"}
-RESULTS_FORMAT = "gui-test-results/1"
-VERDICT_FAMILIES = ("passed", "failed", "needs review", "pending", "skipped")
-EVIDENCE_FAMILIES = ("failed", "needs review")
-_VERDICT_LINE = re.compile(r"\*\*(passed|failed|needs review|pending)\*\*")
 
 
 FORMAT = "gui-test/1"
@@ -596,143 +587,19 @@ def _verdict_of(verdicts):
     return "passed"
 
 
-# --------------------------------------------------------------------------- the results file (#1222/#1223)
-
-class ResultsError(ValueError):
-    """A file that is not the run's results schema; `.problems` names every reason it is not."""
-
-    def __init__(self, problems):
-        self.problems = list(problems)
-        super().__init__("; ".join(self.problems))
-
-
-def _step_problems(pos, step):
-    if not isinstance(step, dict):
-        return [f"step {pos} is not an object"]
-    name = step.get("id") if isinstance(step.get("id"), str) and step["id"] else f"step {pos}"
-    out = []
-    if not isinstance(step.get("id"), str) or not step["id"]:
-        out.append(f"step {pos} has no id")
-    if not isinstance(step.get("batch"), str) or not step["batch"]:
-        out.append(f"{name} has no batch")
-    verdict = step.get("verdict")
-    if not isinstance(verdict, str) or not verdict.startswith(VERDICT_FAMILIES):
-        out.append(f"{name} has verdict {verdict!r}, not one of " + ", ".join(VERDICT_FAMILIES))
-    return out
-
-
-def validate_results(report):
-    """Every problem with a run's results file, in the schema frozen by #1222/#1223; empty when it is well formed.
-
-    The schema is the run command's, consumed unchanged: run id, script name and sha, platform, build sha, the start
-    time and one result per step (id, batch, a verdict of `passed`/`failed`/`needs review`/`pending`, and an optional
-    evidence URL). A file that does not match is rejected, never read loosely.
-    """
-    if not isinstance(report, dict):
-        return ["the results file is not one JSON object"]
-    out = []
-    if report.get("format") != RESULTS_FORMAT:
-        out.append(f"format is {report.get('format')!r}, not {RESULTS_FORMAT!r}")
-    for field in ("run_id", "platform", "build_sha", "started"):
-        if not report.get(field):
-            out.append(f"{field} is missing")
-    script = report.get("script")
-    if not isinstance(script, dict):
-        out.append("script is missing: the run names the script it ran")
-    else:
-        for field in ("name", "sha256"):
-            if not script.get(field):
-                out.append(f"script.{field} is missing")
-    steps = report.get("steps")
-    if not isinstance(steps, list):
-        return out + ["steps is missing: a run reports one result per step"]
-    for pos, s in enumerate(steps):
-        out += _step_problems(pos, s)
-    seen = [s["id"] for s in steps if isinstance(s, dict) and isinstance(s.get("id"), str)]
-    duplicates = sorted({i for i in seen if seen.count(i) > 1})
-    if duplicates:
-        out.append("duplicate step id(s): " + ", ".join(duplicates))
-    return out
-
-
-def read_results(path):
-    """Read a run's results file; raise `ResultsError` naming every reason it is not the frozen schema."""
-    p = Path(path)
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except OSError as ex:
-        raise ResultsError([f"cannot read {p}: {ex}"]) from ex
-    except ValueError as ex:
-        raise ResultsError([f"{p} is not JSON: {ex}"]) from ex
-    problems = validate_results(data)
-    if problems:
-        raise ResultsError(problems)
-    return data
-
-
-def read_map(path):
-    """The map beside the script: `{"parent": <number>, "issues": {case id: issue number}}`.
-
-    Tolerant of the shapes a publish writes (#1225): a flat `case id -> number` map, or a `cases`/`issues` object whose
-    values are a number or `{"number": ..., "content_hash": ...}`. A missing map is an empty map, never an error: the
-    scenario has simply not been published yet.
-    """
-    try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {"parent": None, "issues": {}}
-    if not isinstance(raw, dict):
-        return {"parent": None, "issues": {}}
-    inner = raw.get("issues") if isinstance(raw.get("issues"), dict) else raw.get("cases")
-    source = inner if isinstance(inner, dict) else raw
-    issues = {}
-    for case, value in source.items():
-        if case in ("parent", "issues", "cases"):
-            continue
-        number = value.get("number") if isinstance(value, dict) else value
-        if isinstance(number, int) and not isinstance(number, bool):
-            issues[case] = number
-    parent = raw.get("parent")
-    return {"parent": parent if isinstance(parent, int) and not isinstance(parent, bool) else None, "issues": issues}
-
-
-def _bug_url(run):
-    """The URL of the one bug the run command opened, or None; this module links it and never files one."""
-    bug = run.get("bug")
-    if isinstance(bug, dict):
-        return bug.get("url")
-    return bug if isinstance(bug, str) else None
-
-
-def _case_line(case, result):
-    """One case's line: its verdict, and the evidence only where a person must look at a failure or a doubt."""
-    verdict = result["verdict"]
-    evidence = result.get("evidence")
-    if evidence and verdict.startswith(EVIDENCE_FAMILIES):
-        return f"- `{case}`: {verdict} (evidence: {evidence})"
-    return f"- `{case}`: {verdict}"
-
-
 def write_results(plan, run, github, published):
-    """Comment every case's verdict on its sub-issue, close the passed ones, reopen a closed failure, link the bug.
+    """Comment every case's verdict on its sub-issue, close the passed ones, and open at most one bug.
 
     A run that cannot load what the adapter needs (the native core, the binary) fails, and a run that executed no step
     is a failure too: neither writes anything back, so a green case always means a step executed.
-
-    A verdict is commented only when it changed since the last one on the issue (the first run comments every verdict).
-    `passed` closes the case; a `failed` verdict on a closed case reopens it, so a regression never stays hidden behind
-    a closed issue. Evidence is linked for `failed` and `needs review` only. **No bug is ever opened here**: the run
-    command owns the one bug a red run files, and this links it on the parent.
     """
-    if run.get("core_available") is False:
+    if not run.get("core_available", True):
         return {"ok": False, "reason": "the native core is unavailable; the run did not execute (never a skip)"}
-    results = run.get("results") or run.get("steps") or []
+    results = run.get("results") or []
     if not results:
-        said = "; ".join(run.get("reasons") or []) or "nothing to report"
-        return {"ok": False, "reason": f"empty run: no step executed; the run reported: {said}"}
+        return {"ok": False, "reason": "empty run: no step executed; an empty run is never a pass"}
     by_id = {r["id"]: r for r in results}
-    counts, commented, unchanged, closed, reopened = {}, [], [], [], []
-    review, pending, missing, failed = [], [], [], []
+    counts, closed, review, pending, missing, failed = {}, [], [], [], [], []
     for issue in plan["issues"]:
         verdicts, lines = [], []
         for case in issue["cases"]:
@@ -741,43 +608,37 @@ def write_results(plan, run, github, published):
                 missing.append(case)
                 continue
             verdicts.append(r["verdict"])
-            lines.append(_case_line(case, r))
+            lines.append(f"- `{case}`: {r['verdict']}" + (f" — evidence: {r['evidence']}" if r.get("evidence") else ""))
         if not verdicts:
             continue
-        key = issue["cases"][0]
         verdict = _verdict_of(verdicts)
         counts[verdict] = counts.get(verdict, 0) + 1
-        number = published["issues"][key]
-        prior = github("issue_state", number=number) or {}
-        if prior.get("verdict") == verdict:
-            unchanged.append(key)
-        else:
-            github("comment", number=number, body=f"**{verdict}**\n\n" + "\n".join(lines))
-            commented.append(key)
+        number = published["issues"][issue["cases"][0]]
+        github("comment", number=number, body=f"**{verdict}**\n\n" + "\n".join(lines))
         if verdict == "passed":
-            if prior.get("state") != "closed":
-                github("close", number=number)
-                closed.append(key)
+            github("close", number=number)
+            closed.append(issue["cases"][0])
         elif verdict == "failed":
             failed.extend(issue["cases"])
-            if prior.get("state") == "closed":
-                github("reopen", number=number)
-                reopened.append(key)
         elif verdict == "needs review":
-            review.append(key)
+            review.append(issue["cases"][0])
         else:
-            pending.append(key)
-    bug = _bug_url(run)
+            pending.append(issue["cases"][0])
+    bug = None
+    if failed:
+        bug = github("file_bug", title=f"GUI test scenario `{plan['name']}`: {len(failed)} failed case(s)",
+                     body="\n".join(["Failed cases:", ""] +
+                                    [f"### `{c}`" + "\n" + f"- **Verdict:** {by_id[c]['verdict']}" for c in failed]),
+                     priority="P1").get("url")
     github("comment", number=published["parent"], body=_summary(plan, run, counts, review, pending, missing, bug))
     counts.setdefault("passed", 0)
-    return {"ok": not failed and not missing, "counts": counts, "commented": commented, "unchanged": unchanged,
-            "closed": closed, "reopened": reopened, "needs_review": review, "pending": pending,
-            "missing_results": missing, "bug": bug,
+    return {"ok": not failed and not missing, "counts": counts, "closed": closed, "needs_review": review,
+            "pending": pending, "missing_results": missing, "bug": bug,
             **({"reason": f"{len(missing)} case(s) have no result in the run"} if missing else {})}
 
 
 def _summary(plan, run, counts, review, pending, missing, bug):
-    lines = [f"## Run summary: `{plan['name']}`", "",
+    lines = [f"## Run summary — `{plan['name']}`", "",
              f"- Run: `{run.get('run_id', '(none)')}` | script `{run.get('script_sha', '(none)')}` | "
              f"build `{run.get('build_sha', '(none)')}` | platform `{run.get('platform', '(none)')}`", ""]
     lines += [f"- {verdict}: {n}" for verdict, n in sorted(counts.items())]
@@ -787,67 +648,10 @@ def _summary(plan, run, counts, review, pending, missing, bug):
         lines.append(f"- pending: {', '.join('`' + c + '`' for c in pending)}")
     if missing:
         lines.append(f"- no result in the run: {', '.join('`' + c + '`' for c in missing)}")
-    lines.append(f"- bug: {bug}" if bug else "- bug: none reported by the run command")
+    if bug:
+        lines.append(f"- bug: {bug}")
     lines += ["", "The parent is closed by a person after reading these results, never by the run."]
     return "\n".join(lines)
-
-
-# --------------------------------------------------------------------------- the write-back command (#1226)
-
-def write_back(results_path, map_path, github, plan=None):
-    """Read a run's results file and write every verdict back to the scenario's issues. Deterministic, no model.
-
-    The map beside the script (#1225) says which issue each case is; `plan` groups the steps that belong to one issue
-    (a per-batch publish), and without it every case id of the map is one issue. This never opens a bug: the run
-    command owns the one bug a red run files, and this links it on the parent.
-
-    A malformed results file, a map that names no case or no parent, a run that executed no step and a core that never
-    loaded are all failures, and none of them writes anything back.
-    """
-    try:
-        report = read_results(results_path)
-    except ResultsError as ex:
-        return {"ok": False, "reason": "malformed results file: " + "; ".join(ex.problems),
-                "problems": ex.problems}
-    report.setdefault("script_sha", report["script"]["sha256"])
-    published = read_map(map_path)
-    if not published["issues"]:
-        return {"ok": False, "reason": f"the map {map_path} names no case: publish the scenario first (#1225)"}
-    if published["parent"] is None:
-        return {"ok": False, "reason": f"the map {map_path} names no parent issue: publish the scenario first"}
-    if plan is None:
-        plan = {"name": report["script"]["name"],
-                "issues": [{"cases": [case]} for case in sorted(published["issues"])]}
-    out = write_results(plan, report, github, published)
-    grouped = {case for issue in plan["issues"] for case in issue["cases"]}
-    unknown = [r["id"] for r in report["steps"] if r["id"] not in grouped]
-    if unknown:
-        out["unknown_cases"] = unknown
-    return out
-
-
-def main(argv=None, github=None):
-    """The write-back command: `python -m squad.to_test_scenario write-back <results> --map <map>`.
-
-    It runs from CI with no model: the REST runner behind `--repo` is the only outside dependency, and injecting
-    `github` is what a test does instead. Exit 0 when the verdicts were written back, 1 when the file, the run or the
-    map makes that impossible.
-    """
-    ap = argparse.ArgumentParser(prog="python -m squad.to_test_scenario",
-                                 description="Write a gui-test run's results back to the scenario's issues.")
-    sub = ap.add_subparsers(dest="command", required=True)
-    wb = sub.add_parser("write-back", help="write one run's results file back to the scenario's issues")
-    wb.add_argument("results", help="the results file the run command wrote (#1222)")
-    wb.add_argument("--map", required=True, help="the map beside the script (<script>.gui-test.issues.json)")
-    wb.add_argument("--repo", help="owner/name; the REST runner is built on it when no runner is injected")
-    wb.add_argument("--board", help="the board every issue joined, e.g. users/sbihaiko/projects/1")
-    wb.add_argument("--bug-helper", help="the repo's scripts/report-bug.sh, for the runner and not for this command")
-    args = ap.parse_args(argv)
-    runner = github if github is not None else rest_runner(args.repo, project=args.board, bug_helper=args.bug_helper)
-    out = write_back(args.results, args.map, runner)
-    print(json.dumps(out, indent=2, sort_keys=True))
-    return 0 if out.get("ok") else 1
-
 
 
 # --------------------------------------------------------------------------- the whole flow
@@ -914,14 +718,6 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             return api("POST", f"issues/{kw['number']}/comments", [("body", kw["body"])], json_out=True)
         if op == "close":
             return api("PATCH", f"issues/{kw['number']}", [("state", "closed")], json_out=True)
-        if op == "reopen":
-            return api("PATCH", f"issues/{kw['number']}", [("state", "open")], json_out=True)
-        if op == "issue_state":
-            issue = api("GET", f"issues/{kw['number']}", json_out=True)
-            comments = api("GET", f"issues/{kw['number']}/comments", json_out=True)
-            said = next((m.group(1) for c in reversed(comments or [])
-                         if (m := _VERDICT_LINE.match((c.get("body") or "").strip()))), None)
-            return {"state": (issue or {}).get("state"), "verdict": said}
         if op == "board":
             if not project:
                 return {}
@@ -937,7 +733,3 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             return {"url": next((w for w in out.split() if w.startswith("http")), None)}
         raise ValueError(f"unknown op {op!r}")
     return gh
-
-
-if __name__ == "__main__":
-    sys.exit(main())
