@@ -2,6 +2,7 @@
 
 ## 0.2.2 (local fork, 2026-10-10)
 
+- gui-test: `squad.to_test_scenario` (refs sbihaiko/MesenAI#1224) is the deterministic half of `/to-test-scenario`: it reads a manual scenario Markdown (one case per row: id, precondition, steps, expected) and its `gui-test/1` script, reports coverage both ways with a content hash per case (`case_hash`, `record_hashes`; a case whose text changed under an unchanged id is `stale` and is sent back to conversion alone) and builds the issue plan (one parent with `ready-for-agent` and one `wave:NN`, one `test-case` issue per case or per batch in run order, a case naming its batch's setup case in `## Blocked by`, every published string en-US, nothing touching GitHub). `tests/test_to_test_scenario.py` covers the contract; the GUI e2e suite gains the pilot coverage case (261 case ids).
 - skills: new `/to-test-scenario` (personal skill, vendored): turns a manual GUI test scenario into a `gui-test/1` script, one parent issue with a sub-issue per case (`test-case` label, never `ready-for-agent`) and a run whose verdicts are written back; the run step needs `scripts/gui_test_run_script.py` in MesenAI (not yet written).
 
 - squad-goal: `forkclose.sh` no longer treats a branch as landed just because it is an ancestor of the base: when a sibling's reverted merge took its files away (0 ahead, tip files missing) it relands the branch as a merge commit restoring them. This was the silent stall of #1195's fork half. New `test-forkclose-reland.sh`.

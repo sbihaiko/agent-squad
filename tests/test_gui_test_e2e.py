@@ -1806,3 +1806,24 @@ def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_
     _, results = _run_1198(tmp_path, save_stays_in_auto=True)
     bad = {r["id"] for r in results if r["verdict"].startswith("failed")}
     assert bad == {"compose.save", "compose.save-says-so"}
+
+
+# --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
+
+def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
+    """The pilot (261 case ids today; 67 when the spec was written) is the real fixture for the coverage check."""
+    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes, script_steps
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    script, scenario = read_script(script_path), read_scenario(md_path)
+    ids = [s["id"] for s in script_steps(script)]
+    report = coverage(scenario, script)
+    assert len(ids) == len(set(ids)) >= 67
+    assert (report["total_cases"], report["total_steps"]) == (len(ids), len(ids))
+    assert report["missing_steps"] == [] and report["steps_without_case"] == []
+    # The pilot predates content hashes, so nothing is reusable until a conversion records them per step.
+    assert report["reusable"] is False
+    assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
