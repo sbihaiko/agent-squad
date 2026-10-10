@@ -3248,3 +3248,29 @@ def test_1392_the_fork_gate_keeps_the_gui_suite_command_and_adds_the_squad_shell
     suite.write_text("#!/bin/bash\nexit 1\n")
     p = subprocess.run(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, capture_output=True, text=True, timeout=15)
     assert p.returncode != 0 and "FAILED: test-x.sh" in p.stdout, p.stdout
+def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
+    """#1394: the command files each DEBT finding with the debt labels, and a second run files nothing."""
+    log = tmp_path / "issues.jsonl"
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(
+        "#!/bin/sh\n"
+        f'LOG="{log}"; touch "$LOG"\n'
+        'case "$*" in\n'
+        '  *"/labels/debt"*) echo "{}" ;;\n'
+        '  *"--method POST"*"/issues"*) cat >> "$LOG"; echo >> "$LOG"; echo \'{"html_url":"https://x/1"}\' ;;\n'
+        '  *"--paginate"*) cat "$LOG" ;;\n'
+        'esac\n')
+    gh.chmod(0o755)
+    review = tmp_path / "review.md"
+    review.write_text("- BLOCKING a.py:1 — bad. Acceptance: fixed.\n- DEBT b.py:2 — no backoff. Acceptance: backs off.\n")
+    env = {**os.environ, "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}"}
+    cmd = ["python", "-m", "squad.debt_filing", "--repo", "o/r", "--pr", "5", "--issue", "4", "--head", "abc",
+           "--review", str(review)]
+    first = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
+    assert first.returncode == 0, first.stderr
+    filed = [json.loads(line) for line in log.read_text().splitlines() if line]
+    assert len(filed) == 1 and set(filed[0]["labels"]) == {"debt", "ready-for-agent"}
+    assert "b.py:2" in filed[0]["body"] and "backs off" in filed[0]["body"]
+    again = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
+    assert again.returncode == 0 and "no new DEBT findings" in again.stdout
