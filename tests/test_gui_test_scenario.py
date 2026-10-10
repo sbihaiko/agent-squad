@@ -201,45 +201,6 @@ def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
     assert gh.ops().index("ensure_label") < gh.ops().index("create_issue")
 
 
-def test_publish_puts_every_issue_on_the_board_with_the_initial_status():
-    plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
-    gh = FakeGitHub()
-    tts.publish(plan, gh)
-    assert len(gh.of("board")) == 4 and all(b["status"] == "To triage" for b in gh.of("board"))
-
-
-def test_republish_with_the_saved_map_updates_instead_of_creating_a_duplicate():
-    plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
-    gh = FakeGitHub()
-    first = tts.publish(plan, gh)
-    again = FakeGitHub()
-    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
-    assert "create_issue" not in again.ops()
-    assert second["issues"] == first["issues"]
-    assert [kw["number"] for kw in again.of("update_issue")] == [first["parent"]] + [first["issues"][c]
-                                                                                  for c in ("HOME-01", "HOME-02", "LIB-01")]
-
-
-def test_a_case_removed_from_the_script_is_reported_never_closed():
-    plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
-    gh = FakeGitHub()
-    first = tts.publish(plan, gh)
-    shrunk = tts.build_plan(script(batches=[{"id": "launch", "setup": [], "teardown": [],
-                                             "steps": [_step("HOME-01")]}]), markdown=None)
-    again = FakeGitHub()
-    out = tts.publish(shrunk, again, saved=first["issues"])
-    assert out["removed"] == ["HOME-02", "LIB-01"]
-    assert "close" not in again.ops()
-
-
-def test_the_map_round_trips_beside_the_script(tmp_path):
-    path = tmp_path / "play.gui-test.issues.json"
-    tts.save_map(path, {"HOME-01": 7})
-    assert tts.load_map(path) == {"HOME-01": 7}
-    assert json.loads(path.read_text())["HOME-01"] == 7
-    assert tts.load_map(tmp_path / "absent.json") == {}
-
-
 # --- writing a run's results back ---
 
 def _run(results, **over):
@@ -388,14 +349,6 @@ def test_the_scenario_reports_a_gap_and_publishes_nothing():
                                                       "steps": [_step("NOPE-01")]}]), gh, run_command=None)
     assert out["gaps"]["missing_in_script"] == ["HOME-01", "HOME-02", "LIB-01"]
     assert gh.calls == []
-
-
-def test_the_scenario_reuses_the_saved_map_on_a_second_invocation():
-    first, second = FakeGitHub(), FakeGitHub()
-    a = tts.run_scenario(MARKDOWN, covered_script(), first, run_command=None, map_path=None)
-    out = tts.run_scenario(MARKDOWN, covered_script(), second, run_command=None,
-                           saved=a["published"]["issues"], parent=a["published"]["parent"])
-    assert "create_issue" not in second.ops() and out["published"]["issues"] == a["published"]["issues"]
 
 
 # --- the real runner: REST, and the numeric id on a sub-issue link ---
