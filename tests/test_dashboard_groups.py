@@ -17,7 +17,7 @@ OUTCOMES = [None, "pass", "fail", "deadline", "needs-human"]
 def _kids(n, dispatch="route"):
     doc, events = _run()
     one = run_node([{"op": "children", "events": events}])[0][0]
-    return doc, [{**one, "dispatch": dispatch, "name": f"{dispatch}.router.{i}", "label": "issue 11", "index": i, "running_for": None, "outcome": OUTCOMES[i % 5]} for i in range(1, n + 1)]
+    return doc, [{**one, "dispatch": dispatch, "name": f"{dispatch}.router.{i}", "label": "issue #11", "index": i, "running_for": None, "outcome": OUTCOMES[i % 5]} for i in range(1, n + 1)]
 
 
 def _mk(n, outcome, start=1, dispatch="route", **kw):

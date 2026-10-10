@@ -2,9 +2,14 @@
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function childrenModule({ num, openCalls, orNull, skillName }) {
-  // The issue a spawn ran, read from its own prompt ("issues/14-slug.md" -> 14). The record does not carry the number
-  // apart; the prompt names the issue file. A request with no such prompt names none.
-  const issueNumber = (prompt) => { const m = /(\d\d)-[\w-]+\.md/.exec(typeof prompt === "string" ? prompt : ""); return m ? Number(m[1]) : null; };
+  // The issue a spawn ran, read from its own prompt: a tracker reference ("GitHub issue #1179", "issue #14") first, else
+  // the issue file ("issues/14-slug.md" -> 14). The file form must sit under issues/, so another numbered file the prompt
+  // cites ("docs/adr/gui/0272-the-hook.md") never reads as the issue. A prompt with neither names none.
+  const issueNumber = (prompt) => {
+    const t = typeof prompt === "string" ? prompt : "";
+    const m = /\bissue\s+#(\d+)/i.exec(t) || /(?:^|[\s/`"'(])issues\/(\d+)-[\w-]+\.md/.exec(t);
+    return m ? Number(m[1]) : null;
+  };
 
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
@@ -31,7 +36,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
         // apart, while the issue does. A child with no task falls back to its skill, then to its own name.
-        label: issue === null ? skill || short : `issue ${issue}`,
+        label: issue === null ? skill || short : `issue #${issue}`,
         model: o && o.model ? o.model : orNull(d.model), effort: o && o.effort ? o.effort : orNull(d.effort), after: Array.isArray(d.after) ? d.after : [],
         workspace: orNull(d.workspace), spend: o ? orNull(o.spend) : null, turns: o ? orNull(o.turns) : null, elapsed: o ? orNull(o.elapsed) : null,
         tokens_in: o ? orNull(o.tokens_in) : null, tokens_out: o ? orNull(o.tokens_out) : null, tps: o && num(o.tokens_out) && num(o.elapsed) && o.elapsed > 0 ? o.tokens_out / o.elapsed : null,
@@ -41,8 +46,8 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       rejected: true, outcome: "fail", reasons: e.reasons || [e.reason], evidence: null, checks: null, skill: null, skillLabel: null, label: `${e.envelope} request ${e.request_key}`,
       model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null,
       elapsed: null, tokens_in: null, tokens_out: null, tps: null, land: null, issue: null }));
-    // The position of each child among the children of its dispatch, and a title no two children share: "issue 11" can
-    // repeat across waves, "3 · issue 11" cannot.
+    // The position of each child among the children of its dispatch, and a title no two children share: "issue #11" can
+    // repeat across waves, "3 · issue #11" cannot.
     const seen = {};
     const all = [...kids, ...bad];
     for (const c of all) { c.index = seen[c.dispatch] = (seen[c.dispatch] || 0) + 1; c.title = `${c.index} · ${c.label}`; }

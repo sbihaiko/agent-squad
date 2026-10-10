@@ -65,7 +65,7 @@ def test_a_dispatch_child_is_titled_by_the_issue_it_ran():
     kids = {c["name"]: c for c in _children(events)}
     # The task is the title, not the skill: every child of the router's dispatch runs `tdd`, so the skill alone would
     # make every card read the same. The skill moves to the detail line.
-    assert kids["route.router.1"]["label"] == "issue 19"     # the fixture's first child worked issue 19
+    assert kids["route.router.1"]["label"] == "issue #19"     # the fixture's first child worked issue 19
     assert kids["route.router.1"]["skillLabel"] == "tdd"
     assert kids["route.router.1"]["skill"] == {"name": "tdd", "version": "1"}
     assert kids["route.router.1"]["name"] == "route.router.1"  # the full name stays for the tooltip
@@ -91,3 +91,14 @@ def test_no_node_of_either_fixture_and_no_degenerate_node_yields_an_empty_label(
             assert _label(n), n
     for weird in ({}, {"name": ""}, {"kind": "gate"}, {"kind": "agent"}, {"kind": "wait"}, {"kind": "action"}, {"kind": "loop"}):
         assert _label(weird), weird
+
+
+def test_a_tracker_reference_names_the_issue_and_another_numbered_file_does_not():
+    # A GitHub-style prompt: the issue is "#1179"; the ADR file it cites ("0272-...md") is not the issue.
+    gh = _children([{"event": "spawn_accepted", "child": "route.router.1", "envelope": "route", "definition": {
+        "prompt": "GitHub issue #1179: read docs/adr/gui/0272-the-gui-test-hook.md first", "skill": "tdd"}}])
+    assert gh[0]["issue"] == 1179 and gh[0]["label"] == "issue #1179"
+    # A numbered file outside issues/ alone names no issue.
+    adr = _children([{"event": "spawn_accepted", "child": "route.router.2", "envelope": "route", "definition": {
+        "prompt": "read docs/adr/gui/0272-the-gui-test-hook.md", "skill": "tdd"}}])
+    assert adr[0]["issue"] is None and adr[0]["label"] == "tdd"

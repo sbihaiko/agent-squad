@@ -32,7 +32,7 @@ def test_a_redo_that_passed_reads_passed_after_two_attempts():
 
 def test_the_failed_attempt_is_still_failed_and_reads_superseded_by_the_redo_that_passed():
     k = _kids(RUN60)["route.router.1"]
-    assert k["outcome"] == "fail" and k["superseded_by"] == 3 and k["rework"] == "superseded by 3 · issue 10, which passed"
+    assert k["outcome"] == "fail" and k["superseded_by"] == 3 and k["rework"] == "superseded by 3 · issue #10, which passed"
 
 
 def test_a_task_that_passed_first_time_has_no_rework_mark():

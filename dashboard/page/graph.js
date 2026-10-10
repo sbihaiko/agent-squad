@@ -96,7 +96,7 @@ function renderChildren(cards) {
       : c.rework && !live ? { cls: "rw", y: TEXT.cause, text: clipText(`↻ ${c.rework}`, CLIP.cause) }
       : tok ? { cls: "st", y: TEXT.line2, text: tok } : null;
     const tip = (running ? runningTitle(c) : `${oc || "no outcome"}${cause ? ", " + cause : ""}${c.rejected ? "" : ", " + stat + ", tokens " + tok}`) + (c.rework ? ` | ${c.rework}` : "");
-    // The text is clipped to the card and the full text stays in the tooltip; the title carries the child's index, so two "issue 11" cards differ.
+    // The text is clipped to the card and the full text stays in the tooltip; the title carries the child's index, so two "issue #11" cards differ.
     g.innerHTML = `<title>${esc(c.title)} | ${esc(c.name)} | ${esc(tip)}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(clipText(c.title, CLIP.name))}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(kind)}</text>${stat ? `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(stat)}</text>` : ""}${line2 ? `<text class="${line2.cls}" x="${TEXT.x}" y="${line2.y}">${esc(line2.text)}</text>` : ""}</g><text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${mark.glyph}</text><circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`;
     g.addEventListener("pointerdown", (ev) => {
       ev.stopPropagation();
