@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.9 (local fork, 2026-10-10)
+- squad-goal: a head with no CI behind it is dispatched, not waited out. Measured on PR #1285: the fix run pushed 8ced7e274 with an ordinary `git push origin HEAD:<branch>` and GitHub created **no workflow run at all**, so the five required checks sat at "Expected - waiting for status to be reported" and `revci.sh` would have spun to its 45 min timeout (and the merge waited on checks that could never report). The same push by hand minutes later created both gates, so the mechanism is sound and the event was simply lost. `revci.sh` now reads that state directly: past a 90 s grace window, a head whose check-runs are empty gets `${SG_CI_WORKFLOW:-checks.yml}` dispatched on its own branch once (`auto/cidisp-<sha>`), which is what a person would do, and queues `CI dispatch` naming the head.
+
+
 ## 0.2.8 (local fork, 2026-10-10)
 - squad-goal: a spent quota is read once, not rediscovered every round. The agy (Antigravity/Gemini) account hit `RESOURCE_EXHAUSTED` with its own "Resets in 48h42m18s"; `review.sh` now parses that reset out of the error, writes `$SG_STATE/agy-limited` and skips every gemini entry until then, the way `codex-limited` already gates codex. Without it the loop spent one dead try per gemini entry per review, and the chain read as if the model had been tried and failed on the diff.
 
