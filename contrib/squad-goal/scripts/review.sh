@@ -74,6 +74,9 @@ fi
 for m in $chain; do
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
   case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && continue;; esac
+  # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
+  # until the reset the error itself names, instead of spending one dead try per review round
+  case $m in gemini-*) [ -e "$SG_STATE/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/agy-limited")" ] && continue;; esac
   if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # outside its window the model is skipped like an unhealthy one: the chain moves on, and no MODEL_FAIL is written
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$SG_STATE/cq/$iss-mhours$$.md"; continue; }
@@ -93,6 +96,10 @@ for m in $chain; do
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_STATE/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
+    if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$SG_STATE/review-$pr.err" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
+      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_STATE/agy-limited"
+      printf "MODEL_QUOTA review %s skipped until %s for PR #%s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_STATE/agy-limited")" '+%F %T')" "$pr" > "$SG_STATE/cq/$iss-mquota$$.md"
+      rc=99; break; fi
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on PR #%s after %ss; next model.\n" "$m" "$pr" "$tmo" > "$SG_STATE/cq/$iss-mtimeout$$.md"; break; }
     # a reviewer that narrates first leaves the verdict off line 1, which revci/autopilot read: put the (last) APPROVE|CHANGES verdict on line 1
     if [ $rc = 0 ] && ! head -1 "$out" 2>/dev/null | tr -d '*' | grep -q '^ *VERDICT' && w=$(grep -oE 'VERDICT: *(APPROVE|CHANGES)' "$out" 2>/dev/null | tail -1 | sed -E 's/VERDICT: *//') && [ -n "$w" ]; then

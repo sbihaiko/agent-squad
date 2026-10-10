@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.8 (local fork, 2026-10-10)
+- squad-goal: a spent quota is read once, not rediscovered every round. The agy (Antigravity/Gemini) account hit `RESOURCE_EXHAUSTED` with its own "Resets in 48h42m18s"; `review.sh` now parses that reset out of the error, writes `$SG_STATE/agy-limited` and skips every gemini entry until then, the way `codex-limited` already gates codex. Without it the loop spent one dead try per gemini entry per review, and the chain read as if the model had been tried and failed on the diff.
+
+
 ## 0.2.7 (local fork, 2026-10-10)
 - squad-goal: the review chain is ordered by each model's own measured record, not by assumption. The models panel's history (`review-times.tsv`) over the whole run reads: `gemini-3.8-flash-high` 30/30 green at 26 s, `gemini-3.8-flash-medium` 38 green / 28 CLI failures, `claude:claude-opus-5-5` 57 green of 83 at ~50 s, and `grok-4.5` 10 green of 43 with **33 timeouts at the cap** (mean 215 s), `grok-4.6` worse still. `review_models` becomes opus -> gemini-3.8-flash-high -> gemini-3.8-flash-medium -> grok-4.5, so the daytime chain (opus is windowed to 19-07) no longer opens on the one model that fails three tries in four.
 - squad-goal: a model's review timeout is its own. `models.json` gains `review_timeout_seconds_by_model` and `review.sh` reads it per model (falling back to `review_timeout_seconds`), so grok gets the 600 s its successes need instead of being killed at 360 s mid-answer, while gemini and opus keep the shorter cap.
