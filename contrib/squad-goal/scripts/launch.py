@@ -29,11 +29,21 @@ cm = mdoc.get("coding_models") or []
 primary = next((m for m in cm if _in_hours("coding_models", m)), None)
 if cm and not primary and not os.environ.get("SG_ALLOW_MODEL"):
     sys.exit(f"every coding model is outside its `hours` window in models.json right now ({cm}): fix the windows in the hub's models panel, or set SG_ALLOW_MODEL=1 to override.")
-if primary and primary not in req_file.read_text() and not os.environ.get("SG_ALLOW_MODEL"):
+# The "Coding model:" line is the one that decides what the child runs, so it is the line this gate reads: a substring
+# test over the whole request passed whenever the body merely mentioned the primary elsewhere, which let a request name an
+# out-of-window model (an Anthropic one during the day) and still clear the hours gate.
+txt = req_file.read_text()
+m = re.search(r"^Coding model:\s*(\S+)", txt, re.M)
+named = m.group(1) if m else None
+if primary and not os.environ.get("SG_ALLOW_MODEL"):
     why = f"coding_models[0:] = {cm}; no window in models.json contains the hour now" if not primary else \
           f"models.json coding_models, first whose `hours` window contains the hour now (fallback {cm[cm.index(primary) + 1] if cm.index(primary) + 1 < len(cm) else 'none'})"
-    sys.exit(f"request does not name the configured coding model {primary!r} ({why}). "
-             "Fix the request, or set SG_ALLOW_MODEL=1 for a deliberate exception.")
+    if named and named != primary:
+        sys.exit(f"request names the coding model {named!r}, but the model that may run now is {primary!r} ({why}). "
+                 "Name that one, or set SG_ALLOW_MODEL=1 for a deliberate exception.")
+    if not named and primary not in txt:
+        sys.exit(f"request does not name the configured coding model {primary!r} ({why}). "
+                 "Fix the request, or set SG_ALLOW_MODEL=1 for a deliberate exception.")
 
 co = os.environ.get("SG_CHECKOUT")
 if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTHER_CWD"):

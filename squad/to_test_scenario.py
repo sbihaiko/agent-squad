@@ -23,6 +23,16 @@ Coverage is by content, not only by id: the case's text (precondition, steps, ex
 records that hash on the step it produced. A case whose id is there but whose text changed is **stale** and goes back
 to conversion for that case only, so an edited case is never silently ignored.
 
+Publishing (#1225) is idempotent, resumable and paced. It takes one injected **GitHub runner** — a callable
+`github(op, **kwargs)` whose ops are `ensure_label`, `create_issue`, `update_issue`, `add_sub_issue` and `board` —
+and it writes a map beside the script (`<script>.gui-test.issues.json`: the parent's number, and per case id the
+issue number and the case's content hash) after every issue it creates. An interrupted publish, or a second machine,
+resumes from that map and creates nothing twice; publishing again updates what the map knows, and a case the script
+no longer covers is reported in `removed` and left open, because only a person closes a case. A secondary rate limit
+is not a failure: the runner raises `RateLimited` and the publish waits it out (the API's own `retry_after` when it
+gives one, an exponential back-off otherwise) and retries the same call. `rest_runner` builds the real runner on
+`gh api` (REST, never GraphQL: a scenario publishes hundreds of sub-issues).
+
 `build_plan` serves both halves: with the script alone (plus `markdown=`, `script_path=`, `purpose=`) it is the #1223
 plan from the script; with a parsed scenario and its script it is the #1224 plan, gated on the content hash coverage.
 
@@ -1060,23 +1070,26 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
     `bug_helper` is the path of the repo's own bug helper (`scripts/report-bug.sh` in the checkout), the one route a
     failed run's single bug takes.
     """
+    def call(args):
+        try:
+            return shell(args)
+        except subprocess.CalledProcessError as exc:
+            limited = _rate_limit(exc)
+            if limited is not None:
+                raise limited from exc     # a back-off for `publish`, not an error
+            raise
+
     def api(method, path, fields=(), json_out=False):
         args = ["gh", "api", "--method", method, f"repos/{repo}/{path}"] if method != "GET" else \
                ["gh", "api", f"repos/{repo}/{path}"]
         for k, v in fields:
             args += ["-F" if isinstance(v, int) and not isinstance(v, bool) else "-f", f"{k}={v}"]
-        try:
-            out = shell(args)
-        except subprocess.CalledProcessError as exc:
-            limited = _rate_limit(exc)
-            if limited is not None:
-                raise limited from exc
-            raise
+        out = call(args)
         return json.loads(out) if json_out else out
 
     def gh(op, **kw):
         if op == "ensure_label":
-            shell(["gh", "label", "create", kw["name"], "--force", "--repo", repo])
+            call(["gh", "label", "create", kw["name"], "--force", "--repo", repo])
             return {}
         if op == "create_issue":
             fields = [("title", kw["title"]), ("body", kw["body"])] + [("labels[]", x) for x in kw["labels"]]
@@ -1103,12 +1116,16 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
                 return {}
             url = f"https://github.com/{repo}/issues/{kw['number']}"
             owner, number = _project_ref(project)
-            return json.loads(shell(["gh", "project", "item-add", number, "--owner", owner, "--url", url,
-                                     "--format", "json"]))
+            item = json.loads(call(["gh", "project", "item-add", number, "--owner", owner, "--url", url,
+                                    "--format", "json"]))
+            if kw.get("status") is not None:     # a caller that names a status wants it set on the new item
+                call(["gh", "project", "item-edit", "--id", item["id"], "--field", "Status",
+                      "--text", kw["status"], "--project-id", project])
+            return item
         if op == "file_bug":
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")
-            out = shell([bug_helper, kw["title"], kw["body"], kw["priority"]])
+            out = call([bug_helper, kw["title"], kw["body"], kw["priority"]])
             return {"url": next((w for w in out.split() if w.startswith("http")), None)}
         raise ValueError(f"unknown op {op!r}")
     return gh

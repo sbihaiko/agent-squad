@@ -55,6 +55,17 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   # unresolved threads: asked once per head sha after review+CI (CodeRabbit has posted by then), cached
   tf="$A/threads-$pr-$s9"; [ -e "$tf" ] || bash "$here/autofix.sh" --threads $pr > "$tf"; nt=$(cat "$tf"); nt=${nt:-0}
   ms=$(awk '{print $3}' <<<"$line"); ci=$(sed -n 's/.*CI=\([^ ]*\).*/\1/p' <<<"$line")
+  # BLOCKED means no model in the chain could answer at all (a spent quota, a window that has not opened, a model that
+  # hit its cap): the PR itself is not accused of anything, so an autofix would spend a round on nothing. Re-run the
+  # review instead, at most once per head per SG_REREVIEW_MINUTES, so a transient outage heals without moving the head.
+  if [[ $line == *BLOCKED* ]] && [[ $ci != *failure* && $ci != *timed_out* && $ci != *cancelled* ]] && [ "$ms" != dirty ]; then
+    rf="$A/rereview-$pr-$s9"
+    [ -e "$rf" ] && [ $(( $(date +%s) - $(stat -f %m "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] && continue
+    /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue   # a review of this PR is already in flight: two would race on review-<pr>.md
+    touch "$rf"; nohup bash "$here/revci.sh" $pr $iss >> "$SG_STATE/revci-$pr.out" 2>&1 </dev/null &
+    echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
+    continue
+  fi
   prob=0 hard=0; [[ $line == *CHANGES* && $line != *"(prepush)"* ]] && hard=1; [[ $line == *"(prepush)"* ]] && prob=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
   [ $hard = 1 ] || [ "$ms" = dirty ] || [ "$nt" -gt 0 ] && prob=1   # a prepush CHANGES is a soft round (process, not code)
   if [ $prob = 1 ]; then

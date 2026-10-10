@@ -2,7 +2,7 @@
 """Run a whole `gui-test/1` script end to end on the squad's GUI test infrastructure (ADR-0272 items 6-8, #1222).
 
     python3 scripts/gui_test_run_script.py <script.json> [--adapter mesen-gui] [--out <results.json>]
-                                           [--batch <id> | --case <id>] [--file-bug]
+                                           [--batch <id> | --case <id> | --variant <axis>=<value>] [--file-bug]
 
 The runner, the script format and the adapter interface live with the squad (item 6, P1-A); the emulator adapter this
 command drives lives in MesenAI, loaded from `MESENAI_ROOT` through `squad.gui_test_worker`. This command is the door
@@ -15,7 +15,9 @@ variant value the adapter does not advertise is rejected before launch, naming w
 
 The environment is a precondition, never a skip: `MESENAI_ROOT` without `scripts/gui_test`, `MESEN_GUI_BINARY` that is
 not a file, or a native core that cannot be loaded makes the run fail with a non-zero exit and no step result at all.
-A skipped run is exactly the green-but-blind CI the ADR names as the trap.
+A skipped run is exactly the green-but-blind CI the ADR names as the trap. `MESEN_GUI_WINDOW` is part of that
+environment but not a precondition: the adapter reads it from its own environment, so the runner hands it on unchanged
+and never checks it — unset is the mode the adapter already defaults to.
 
 Verdicts, one per step in script order: `passed`, `failed (expected X, observed Y)`, `failed (unknown id)`,
 `failed (timeout waiting for ...)`, `needs review` (an automated step nothing objective decided and no model saw,
@@ -23,18 +25,31 @@ item 8), `pending` (a `manual` step: nobody ran it). Exactly one of the last two
 `failed` steps make the run red, `needs review` and `pending` make it neither red nor green and are listed. A run
 that executed no step is a failure (a claim needs a step behind it).
 
-`--batch <id>` and `--case <id>` narrow the run (a case keeps its batch's setup) and the results file records a
-`selection` naming what was run, so a write-back can call it a partial run and never present it as the health of the
-whole scenario; a full run carries no `selection`. A selector the script does not have is refused before the adapter is
-asked anything. A **variant** selector waits for the supervised runner's variant hook (`squad.gui_test_variants` has
-the in-process one, the supervised path does not), so no `--variant` is accepted yet: it would name a window mode
-nothing switched.
+`--batch <id>`, `--case <id>` and `--variant <axis>=<value>` narrow the run (a case keeps its batch's setup, a variant
+runs the steps that variant applies to in every batch) and the results file records a `selection` naming what was run,
+so a write-back can call it a partial run and never present it as the health of the whole scenario; a full run carries
+no `selection`. A selector the script does not have is refused before the adapter is asked anything.
+
+A variant the adapter advertises several ways is switched through its optional `set_variant` hook, in each batch's
+fresh process before that batch launches; an adapter with no hook is refused there, naming the variant, because a run
+whose cases were tagged for a window mode nothing switched would report a mode it never entered. An axis the adapter
+advertises one way only is the mode the run is already in, so selecting that value only narrows the steps.
 
 A red run files **one** bug for the whole run through the MesenAI failure-report path (`scripts/report-bug.sh`, see
 `squad.gui_test_report`), and only when `--file-bug` asks for it: filing is **opt-in**, so a test, acceptance or CI run
 never pollutes the board (#1241). The bug is filed only for the registered emulator adapter — a run against a fake
 adapter never touches GitHub. A bug that cannot be filed is recorded as `bug.filed=false` with the reason and never
 aborts the run: the exit code reads the steps, never the filing.
+
+That bug says what failed and is never filed twice (#1249): its title is the script, the first failed step and that
+failure in plain words (`run-script-smoke: smoke.still-home — expected play.home, observed play.library (+1 more
+steps)`), and a run whose first failed step and failure match an **open** bug comments on it — with the run id, the
+build SHA and the same evidence — instead of opening a second one. `bug` in the results file names the issue the run
+belongs to, new or existing, in `bug.url`/`bug.title`/`bug.existing`.
+
+`--github-runner module:callable` swaps the shell the bug's GitHub calls go through, the same `module:Class` shape
+`--adapter` takes: the acceptance suite drives the filing path against a fake GitHub with it, so no test reaches the
+network. Without it the calls run for real through `gh api` and the checkout's `scripts/report-bug.sh`.
 """
 import argparse
 import copy
@@ -55,9 +70,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from squad.gui_test import ScriptError, validate  # noqa: E402
-from squad.gui_test_report import (evidence_lock, evidence_store, file_bug_with,  # noqa: E402
-                                   report_failures, upload_evidence)
-from squad.gui_test_supervise import Crash, Hang, Session, run_supervised  # noqa: E402
+from squad.gui_test_report import (comment_on_bug_with, evidence_lock, evidence_store,  # noqa: E402
+                                   file_bug_with, find_open_bug_with, report_failures,
+                                   report_failures_detail, upload_evidence)
+from squad.gui_test_supervise import Crash, Hang, Session, VariantUnsupported, run_supervised  # noqa: E402
 
 RESULTS_FORMAT = "gui-test-results/1"
 CAPABILITIES_TIMEOUT_S = 60
@@ -67,7 +83,7 @@ EXECUTED = ("passed", "failed", "needs review")  # `pending` is a step nobody ra
 ADAPTERS = {
     "mesen-gui": {
         "spec": "mesen_gui_adapter:MesenGuiAdapter",
-        "env": ("MESENAI_ROOT", "MESEN_GUI_BINARY", "MESEN_CORE_LIB"),
+        "env": ("MESENAI_ROOT", "MESEN_GUI_BINARY", "MESEN_CORE_LIB", "MESEN_GUI_WINDOW"),
         "repo": "sbihaiko/MesenAI",
     },
 }
@@ -90,7 +106,12 @@ def build_sha(root):
 
 
 def env_problems(names):
-    """Every problem with the environment the adapter needs; an empty list means it can run."""
+    """Every problem with the environment the adapter needs; an empty list means it can run.
+
+    Only the names with a precondition of their own are checked. A declared name that is a pass-through — the
+    adapter's own `MESEN_GUI_WINDOW`, which it reads itself, unset meaning the mode it defaults to — is handed on
+    unchanged and is never a problem here, so naming it never turns a run red on its own account.
+    """
     bad = []
     root = os.environ.get("MESENAI_ROOT", "")
     if "MESENAI_ROOT" in names and not (root and (Path(root) / "scripts" / "gui_test").is_dir()):
@@ -194,10 +215,28 @@ def local_store(path, name=None):
     return Path(path).name
 
 
-def file_one_bug(script, rows, repo_root, approvals_path, store=None, runner=None):
-    """File ONE bug listing every failed step (never one per step); return its URL."""
-    file_bug = file_bug_with(str(repo_root), runner) if runner else file_bug_with(str(repo_root))
-    return report_failures(script, rows, store or local_store, file_bug, Path(approvals_path), priority="P1")
+def shell_of(spec):
+    """The shell a `--github-runner module:callable` spec names: `(argv, **kw) -> stdout`, the contract `_sh` has."""
+    module, _, attr = spec.partition(":")
+    import importlib
+    if not (module and attr):
+        raise ValueError(f"{spec!r} is not a module:callable spec")
+    return getattr(importlib.import_module(module), attr)
+
+
+def file_one_bug(script, rows, repo_root, approvals_path, store=None, runner=None, repo=None, run=None):
+    """File ONE bug listing every failed step (never one per step), or attach the run to the open bug for the same
+    failure; return that bug's detail (`title`, `key`, `url`, `existing`, `lookup_failed`).
+
+    `repo` is the adapter's GitHub slug: with it the doors also look for an open bug with the same first failed step and
+    failure and comment there (#1249). Without it — a direct call, a checkout with no slug — the run only files, which
+    is the one-bug-per-run behaviour of #1190.
+    """
+    file_bug = file_bug_with(str(repo_root), runner)
+    doors = {"find_open_bug": find_open_bug_with(repo, runner), "comment_on_bug": comment_on_bug_with(repo, runner)} \
+        if repo else {}
+    return report_failures_detail(script, rows, store or local_store, file_bug, Path(approvals_path),
+                                  priority="P1", run=run, **doors)
 
 
 def bug_reason(entry, rows, repo_root, asked):
@@ -219,14 +258,46 @@ def bug_reason(entry, rows, repo_root, asked):
     return None
 
 
-def narrow(script, batch=None, case=None):
+def _applies(s, axis, value):
+    """Whether a step runs in this variant: an untagged step runs in every value (`squad.gui_test_variants`)."""
+    tagged = (s.get("variants") or {}).get(axis)
+    return tagged is None or value in ([tagged] if isinstance(tagged, str) else list(tagged))
+
+
+def _narrow_variant(script, axis, value):
+    """The script with only the steps `axis=value` applies to, and the `selection` that names it.
+
+    An untagged step applies to every value, so it stays; a step tagged for other values of the axis is dropped, and a
+    batch left with no step at all goes with it. The narrowed script declares that one value, so a step that applies to
+    several is recorded as the one under test, and the adapter is compared against what this run really asks for.
+    """
+    declared = script["variants"].get(axis)
+    if declared is None:
+        raise ScriptError([f"no variant axis {axis!r} in {script['name']}: "
+                           f"it has {', '.join(script['variants'])}"])
+    if value not in declared:
+        raise ScriptError([f"no variant {axis}={value} in {script['name']}: {axis} has {', '.join(declared)}"])
+    view = copy.deepcopy(script)
+    view["variants"] = {**view["variants"], axis: [value]}
+    for b in view["batches"]:
+        for part in ("setup", "steps", "teardown"):
+            b[part] = [s for s in b[part] if _applies(s, axis, value)]
+            for s in b[part]:
+                if (s.get("variants") or {}).get(axis) is not None:
+                    s["variants"][axis] = value  # it applies to exactly this value now
+    view["batches"] = [b for b in view["batches"] if b["steps"]]
+    return view, {"kind": "variant", "value": f"{axis}={value}"}
+
+
+def narrow(script, batch=None, case=None, variant=None):
     """(the script the selectors name, the `selection` this run records); (script, None) when nothing was selected.
 
     A batch runs that batch alone; a case runs its batch's setup and teardown with that one step, because a case whose
-    state its setup left is otherwise unrunnable. An id the script does not have raises `ScriptError` naming it, before
-    the adapter is asked for its capabilities and before anything is launched.
+    state its setup left is otherwise unrunnable; a variant runs the steps that variant applies to, in every batch. An
+    id or value the script does not have raises `ScriptError` naming it, before the adapter is asked for its
+    capabilities and before anything is launched.
     """
-    if batch is None and case is None:
+    if batch is None and case is None and variant is None:
         return script, None
     ids = [b["id"] for b in script["batches"]]
     if batch is not None:
@@ -235,6 +306,11 @@ def narrow(script, batch=None, case=None):
         view = copy.deepcopy(script)
         view["batches"] = [b for b in view["batches"] if b["id"] == batch]
         return view, {"kind": "batch", "value": batch}
+    if variant is not None:
+        axis, sep, value = variant.partition("=")
+        if not (sep and axis and value):
+            raise ScriptError([f"no variant {variant!r}: --variant takes <axis>=<value>, as the script declares it"])
+        return _narrow_variant(script, axis, value)
     steps = [(b["id"], s["id"]) for b in script["batches"] for s in b["setup"] + b["steps"]]
     if case not in [sid for _, sid in steps]:
         raise ScriptError([f"no case {case!r} in {script['name']}: it has {', '.join(sid for _, sid in steps)}"])
@@ -245,6 +321,19 @@ def narrow(script, batch=None, case=None):
         b["steps"] = [s for s in b["steps"] if s["id"] == case]
     view["batches"] = [b for b in view["batches"] if b["steps"]]
     return view, {"kind": "case", "value": case}
+
+
+def required_switch(variant, caps):
+    """The (axis, value) a selected variant must be switched to before launch, or None when there is nothing to switch.
+
+    An axis the adapter advertises one way only is the mode a run is already in: the emulator adapter's `window.mode` is
+    `[windowed]`, so selecting it narrows the steps and starts no switching. An axis advertised several ways needs the
+    adapter's optional `set_variant` hook, and the run is refused, before anything is launched, when it has none.
+    """
+    if variant is None:
+        return None
+    axis, _, value = variant.partition("=")
+    return (axis, value) if len(caps.get("variants", {}).get(axis, [])) > 1 else None
 
 
 def report(record, path, text):
@@ -276,9 +365,14 @@ def main(argv=None):
     sel.add_argument("--case", help="run only this case id, with the setup and teardown steps it needs")
     ap.add_argument("--evidence-repo", help="owner/name whose gui-test-evidence branch holds this run's failed and "
                                             "needs-review captures; without it nothing is published (ADR-0135)")
+    sel.add_argument("--variant", metavar="AXIS=VALUE",
+                     help="run only the steps this variant of an axis applies to, e.g. window.mode=fullscreen")
     ap.add_argument("--file-bug", action="store_true",
                     help="file the one bug a red run files through scripts/report-bug.sh; off by default, so a test, "
                          "acceptance or CI run never touches the board")
+    ap.add_argument("--github-runner",
+                    help="a module:callable shell the bug's GitHub calls go through instead of the real one (the "
+                         "acceptance suite points this at a fake GitHub, so no test reaches the network)")
     args = ap.parse_args(argv)
 
     name = args.adapter
@@ -289,6 +383,13 @@ def main(argv=None):
     else:
         print(f"gui test run: FAILED\n  unknown adapter {name!r}; known: {', '.join(sorted(ADAPTERS))}", file=sys.stderr)
         return 1
+    shell = None
+    if args.github_runner:
+        try:
+            shell = shell_of(args.github_runner)
+        except (ImportError, AttributeError, ValueError) as ex:
+            print(f"gui test run: FAILED\n  --github-runner {args.github_runner!r}: {ex}", file=sys.stderr)
+            return 1
 
     path = Path(args.script).expanduser()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -314,7 +415,7 @@ def main(argv=None):
         return _failed(record, out, "gui test run", ["the script is not a well-formed gui-test/1 file: " + p
                                                      for p in ex.problems])
     try:  # the selectors narrow before the capabilities are read: a refused id never asks the adapter anything
-        script, selection = narrow(script, args.batch, args.case)
+        script, selection = narrow(script, args.batch, args.case, args.variant)
     except ScriptError as ex:
         return _failed(record, out, "gui test run",
                        ["nothing was launched: " + p for p in ex.problems])
@@ -332,9 +433,14 @@ def main(argv=None):
     except ScriptError as ex:
         return _failed(record, out, "gui test run",
                        ["the script names what the adapter does not advertise: " + p for p in ex.problems])
+    switch = required_switch(args.variant, caps)
 
     print(f"gui test run {run_id}: {script['name']} on {name} ({platform_tag()})")
-    out_dir = run_supervised(script, entry["spec"], {}, step_timeout_s=args.step_timeout, out_dir=artifacts)
+    try:
+        out_dir = run_supervised(script, entry["spec"], {}, step_timeout_s=args.step_timeout, out_dir=artifacts,
+                                 variant=switch)
+    except VariantUnsupported as ex:
+        return _failed(record, out, "gui test run", [f"nothing was launched: {ex}"])
     rows = attach_evidence(rows_for(script, out_dir), args.evidence_repo, artifacts / "approvals.json")
     record.update({"script": {**record["script"], "name": script["name"]},
                    "batches": out_dir["batches"], "steps": rows,
@@ -343,10 +449,16 @@ def main(argv=None):
     record.update({"status": status, "reasons": reasons})
     bug = {"filed": False, "reason": bug_reason(entry, rows, os.environ.get("MESENAI_ROOT", ""), args.file_bug)}
     if bug["reason"] is None:
+        n = len([r for r in rows if kind(r["verdict"]) == "failed"])
         try:  # a bug that could not be filed is recorded, never raised: the exit code reads the steps, not the filing
-            bug = {"filed": True, "url": file_one_bug(script, rows, os.environ.get("MESENAI_ROOT", ""),
-                                                      artifacts / "approvals.json"),
-                   "reason": f"one bug for the run's {len([r for r in rows if kind(r['verdict']) == 'failed'])} failed step(s)"}
+            detail = file_one_bug(script, rows, os.environ.get("MESENAI_ROOT", ""), artifacts / "approvals.json",
+                                  runner=shell, repo=entry["repo"],
+                                  run={"run_id": run_id, "build_sha": record["build_sha"], "platform": platform_tag()})
+            bug = {"filed": True, "url": detail["url"], "title": detail["title"], "existing": detail["existing"],
+                   "reason": ("the open bug for this failure: the run commented on it instead of opening a second one"
+                              if detail["existing"] else
+                              f"a new bug for the run's {n} failed step(s)" +
+                              (f"; {detail['lookup_failed']}" if detail["lookup_failed"] else ""))}
         except (subprocess.SubprocessError, OSError) as ex:
             bug = {"filed": False, "reason": f"report-bug.sh failed: {ex}"}
     record["bug"] = bug
@@ -354,7 +466,7 @@ def main(argv=None):
     lines += [f"  {r['id']}: {r['verdict']}" for r in rows if kind(r["verdict"]) in ("failed", *UNRESOLVED)]
     lines.append(f"  results: {out}")
     if bug["filed"]:
-        lines.append(f"  bug: {bug['url']}")
+        lines.append(f"  bug: {bug['url']}" + (" (the run joined an open bug)" if bug.get("existing") else ""))
     report(record, out, f"gui test run: {'RED' if status == 'failed' else 'GREEN'}\n" + "\n".join(lines))
     return 1 if status == "failed" else 0
 
