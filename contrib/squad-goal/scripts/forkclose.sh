@@ -55,8 +55,13 @@ for n in $cc; do
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
   if [ -e "$A/basered-$bs" ]; then echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be $br's fault; waiting for a green base"; continue; fi
   if [ ! -e "$A/basetest-$bs" ]; then   # a red base reds every branch at once: test it once per base head, before merging anything
-    if ( cd "$SG_FORK_DIR" && eval "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"
-    else touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own (see $SG_STATE/basetest-$bs.log); not merging $br, no revert, no fix run. Every branch is parked until the base is green."; continue; fi
+    if ( cd "$SG_FORK_DIR" && eval "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"
+    else   # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
+           # parallel), and a single red would park every branch on a flake. Two consecutive reds is the base, one is a retry.
+      bt=$(( $(cat "$A/basered-$bs.tries" 2>/dev/null || echo 0) + 1 )); echo "$bt" > "$A/basered-$bs.tries"
+      if [ "$bt" -ge "${SG_FORK_BASERED_TRIES:-2}" ]; then touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own $bt runs in a row (see $SG_STATE/basetest-$bs.log); not merging $br, no revert, no fix run. Every branch is parked until the base is green."
+      else echo "FORKCLOSE BASE-FLAKE #$n: $SG_FORK_BASE $bs failed the fork suite on its own (run $bt of ${SG_FORK_BASERED_TRIES:-2}); one red is not proof, retrying next cycle."; fi
+      continue; fi
   fi
   touch "$mk"
   if ! { if [ -n "$reland" ]; then relandbr; else $G merge --no-ff -q -m "Merge $br (Refs #$n)" "$br" >/dev/null 2>&1; fi; }; then

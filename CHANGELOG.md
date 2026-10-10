@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.10 (local fork, 2026-10-10)
+- squad-goal: one red is not proof the base is broken. The base-red guard fired on `local/next` at 915361e13 over a single full-suite failure (`home.focus-holds-right`, a hold step that loses the window to a suite running in parallel), and parked every branch on it - while that same test passes in isolation on the same head. `forkclose.sh` now requires `${SG_FORK_BASERED_TRIES:-2}` consecutive reds per base head before it writes `basered-<sha>` (`FORKCLOSE BASE-FLAKE` names the retry, which just skips the cycle), and clears the counter on a green.
+
+
 ## 0.2.9 (local fork, 2026-10-10)
 - squad-goal: a head with no CI behind it is dispatched, not waited out. Measured on PR #1285: the fix run pushed 8ced7e274 with an ordinary `git push origin HEAD:<branch>` and GitHub created **no workflow run at all**, so the five required checks sat at "Expected - waiting for status to be reported" and `revci.sh` would have spun to its 45 min timeout (and the merge waited on checks that could never report). The same push by hand minutes later created both gates, so the mechanism is sound and the event was simply lost. `revci.sh` now reads that state directly: past a 90 s grace window, a head whose check-runs are empty gets `${SG_CI_WORKFLOW:-checks.yml}` dispatched on its own branch once (`auto/cidisp-<sha>`), which is what a person would do, and queues `CI dispatch` naming the head.
 
