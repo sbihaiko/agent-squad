@@ -152,7 +152,7 @@ def test_a_case_blocked_by_a_setup_step_sits_one_wave_later_and_names_it():
 
 def test_a_case_never_carries_ready_for_agent_and_the_parent_always_does():
     plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
-    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert all("testcase" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
     assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
 
 
@@ -197,7 +197,7 @@ def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
     gh = FakeGitHub()
     tts.publish(plan, gh)
     ensured = [kw["name"] for kw in gh.of("ensure_label")]
-    assert "test-case" in ensured and "ready-for-agent" in ensured and "wave:01" in ensured
+    assert "testcase" in ensured and "ready-for-agent" in ensured and "wave:01" in ensured
     assert gh.ops().index("ensure_label") < gh.ops().index("create_issue")
 
 
@@ -371,10 +371,10 @@ class _Shell:
 def test_the_rest_runner_posts_issues_and_links_a_sub_issue_by_its_numeric_id():
     sh = _Shell()
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
-    gh("create_issue", title="Test case HOME-01", body="body", labels=["test-case", "wave:01"])
+    gh("create_issue", title="Test case HOME-01", body="body", labels=["testcase", "wave:01"])
     gh("add_sub_issue", parent=7, sub=99)
     assert "repos/sbihaiko/MesenAI/issues" in sh.args[0]
-    assert "=Test case HOME-01" in " ".join(sh.args[0]) and "labels[]=test-case" in sh.args[0]
+    assert "=Test case HOME-01" in " ".join(sh.args[0]) and "labels[]=testcase" in sh.args[0]
     link = " ".join(sh.args[1])
     assert "repos/sbihaiko/MesenAI/issues/7/sub_issues" in link and "sub_issue_id=99" in link
 

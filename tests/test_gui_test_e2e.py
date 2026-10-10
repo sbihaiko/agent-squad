@@ -2144,7 +2144,7 @@ def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them
                           purpose="the pad-only Play script")
     planned = [c for i in plan["issues"] for c in i["cases"]]
     assert planned == tts.step_ids(d) and len(planned) > 100
-    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert all("testcase" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
     assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
     # `goals` is the plan's own derivation - the steps that navigate by `nav.goal`/`nav.sweep` - and the committed
     # pad-only pilot has none: #1228 replaced its goal navigation with the pad press the case describes, so every case
@@ -2999,7 +2999,7 @@ def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_nati
 
     assert len(plan["issues"]) >= 67
     labels = {kw["name"] for kw in gh.of("ensure_label")}
-    assert {"test-case", "ready-for-agent"} <= labels
+    assert {"testcase", "ready-for-agent"} <= labels
     assert [kw["title"] for kw in gh.of("create_issue")][0] == plan["parent"]["title"]
     assert len(gh.of("create_issue")) == len(plan["issues"]) + 1
     # The relation names each issue's numeric id, and only the parent reaches the board.
@@ -3076,12 +3076,12 @@ from squad.gui_test_scenario import run_scenario  # noqa: E402
 from tests.gui_test_pilot_fake_1286 import ADAPTERS as PILOT_ADAPTERS  # noqa: E402
 from tests.gui_test_pilot_fake_1286 import MANUAL_ONLY_BATCHES  # noqa: E402
 
-# The Mode and Blocked-by columns of the scenario's own case table (#1286): the fourteen cases its 26 batches run,
+# The Mode and Blocked-by columns of the scenario's own case table (#1286): the fifteen cases its 26 batches run,
 # each with the case that has to have run before it. Every other case of the pilot is `manual` and waits for a person.
 AUTOMATED_1286 = [
     "launch.first-run-home", "launch.open-rom-focused",
     "home.first-focus", "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left",
-    "home.focus-holds-right", "home.open-library", "home.back-to-home",
+    "home.focus-holds-right", "home.open-library", "home.back-to-home", "home.back-focus-restored",
     "lib.home-ring", "lib.reach-library", "lib.open-screen", "lib.back-to-home", "lib.back-ring-on-opener",
 ]
 HOLDS_1286 = ["home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right"]
@@ -3102,7 +3102,7 @@ def test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run(t
     """A fresh settings profile has no play history and no favorites, so the Home holds Open a ROM alone and a D-pad
     press stays on it - which is what the four `home.focus-holds-*` cases and the real emulator say (#1137, and the
     real-app case above). An adapter whose Home keeps four tiles whatever the profile lets Up escape to Recent, and
-    that one escape is enough to make the whole home batch - six of the scenario's fourteen automated cases - unrunnable.
+    that one escape is enough to make the whole home batch - six of the scenario's fifteen automated cases - unrunnable.
     """
     out = _home_1286(tmp_path)
     by_id = {r["id"]: r["verdict"] for r in out["rows"]}
@@ -3113,7 +3113,7 @@ def test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster(tmp_path):
     out = _home_1286(tmp_path)
     by_id = {r["id"]: r["verdict"] for r in out["rows"]}
     home = [c for c in AUTOMATED_1286 if c.startswith("home.")]
-    assert len(home) == 7
+    assert len(home) == 8
     assert [by_id[i] for i in home] == ["passed"] * len(home), by_id
 
 
@@ -3131,7 +3131,7 @@ def test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter():
 
 def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated_ones_pass(tmp_path):
     """The whole scenario in one call: 281 cases of the committed script, in script order, none dropped and none
-    added; the fourteen automated cases pass on the roster and every other case is `pending` for a person."""
+    added; the fifteen automated cases pass on the roster and every other case is `pending` for a person."""
     d = _pilot_1286()
     out = run_scenario(d, PILOT_ADAPTERS, out_root=tmp_path)
     assert [r["id"] for r in out["rows"]] == [s["id"] for s in scenario_cases(d)]
@@ -3141,7 +3141,7 @@ def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated
     assert [r["id"] for r in out["rows"] if r["verdict"] == "passed"] == AUTOMATED_1286
     assert {r["id"] for r in out["rows"] if r["verdict"] == "pending"} == \
         {c["id"] for c in scenario_cases(d)} - set(AUTOMATED_1286)
-    assert out["summary"]["pending"] == 281 - 14
+    assert out["summary"]["pending"] == 281 - 15
 
 
 def test_1286_a_case_names_the_case_that_blocks_it():

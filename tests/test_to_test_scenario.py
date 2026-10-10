@@ -194,7 +194,7 @@ def test_the_parent_is_ready_for_agent_in_one_wave_and_the_cases_are_not(tmp_pat
     plan = plan_of(tmp_path, wave="07")
     assert plan["parent"]["labels"] == ["ready-for-agent", "wave:07"]
     for issue in plan["issues"]:
-        assert issue["labels"] == ["test-case"]
+        assert issue["labels"] == ["testcase"]
         assert "ready-for-agent" not in issue["labels"]
         assert not any(label.startswith("wave:") for label in issue["labels"])
 
@@ -219,7 +219,7 @@ def test_a_case_issue_carries_the_case_text_a_reader_needs(tmp_path):
 def test_the_per_batch_plan_has_one_issue_per_batch_in_script_order(tmp_path):
     plan = plan_of(tmp_path, granularity="batch")
     assert [i["id"] for i in plan["issues"]] == ["launch", "pause"]
-    assert all(i["kind"] == "batch" and i["labels"] == ["test-case"] for i in plan["issues"])
+    assert all(i["kind"] == "batch" and i["labels"] == ["testcase"] for i in plan["issues"])
     assert plan["issues"][0]["title"] == "Test case batch launch"
     for cid in ("launch.s0", "launch.home", "launch.return"):
         assert f"`{cid}`" in plan["issues"][0]["body"]
