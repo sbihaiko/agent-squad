@@ -2648,7 +2648,9 @@ def _pilot_1225():
     if not (script_path.exists() and md_path.exists()):
         pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
     scenario = read_scenario(md_path)
-    return script_path, build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+    plan = build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+    # The pilot outgrew GitHub's 100 sub-issues per parent (#1227): these cases exercise the first parent's worth.
+    return script_path, dict(plan, issues=plan["issues"][:100])
 
 
 def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
@@ -2697,3 +2699,37 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
     assert again.of("create_issue") == [] and again.of("add_sub_issue") == []
     assert dropped["removed"] == [plan["issues"][-1]["id"]]
     assert "close" not in again.ops()                         # a removed case is reported, never closed
+
+
+# --- to_test_scenario close-out (#1227): the pilot publishes through the command, within GitHub's sub-issue cap ----
+
+def test_1227_the_pilot_publishes_per_batch_and_per_case_is_refused_over_the_sub_issue_cap(tmp_path):
+    import shutil
+
+    from squad import to_test_scenario as tts
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    if not (docs / "play-pad-only.gui-test.json").exists():
+        pytest.skip("MESENAI_REPO holds no committed pilot script")
+    md, script = tmp_path / "pilot.md", tmp_path / "pilot.gui-test.json"
+    shutil.copy(docs / "play-pad-only.gui-test.md", md)
+    shutil.copy(docs / "play-pad-only.gui-test.json", script)
+    cases = len(tts.read_scenario(md)["cases"])
+
+    class Fake:
+        def __init__(self):
+            self.n, self.creates = 100, 0
+
+        def __call__(self, op, **kw):
+            if op != "create_issue":
+                return {}
+            self.n, self.creates = self.n + 1, self.creates + 1
+            return {"number": self.n, "id": 9000 + self.n}
+
+    per_case = Fake()
+    if cases > tts.SUB_ISSUE_CAP:
+        assert tts.main(["publish", str(md), str(script), "--stamp"], github=per_case) == 1 and per_case.creates == 0
+    per_batch = Fake()
+    assert tts.main(["publish", str(md), str(script), "--granularity", "batch"], github=per_batch) == 0
+    assert per_batch.creates == len(tts.read_script(script)["batches"]) + 1
+    assert tts.read_issues(tts.issues_path(script))["parent"] is not None

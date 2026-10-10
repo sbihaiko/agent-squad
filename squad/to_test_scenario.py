@@ -61,6 +61,7 @@ HASH_FIELD = "content_hash"
 PARENT_LABEL = "ready-for-agent"
 CASE_LABEL = "test-case"
 
+SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
 
 _SCRIPT_SUFFIXES = (".gui-test.json", ".gui-test")
@@ -586,6 +587,9 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     state = read_issues(path) if saved is None else {
         "parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
         "cases": {key: dict(value) for key, value in (saved.get("cases") or {}).items()}}
+    if len(plan["issues"]) > SUB_ISSUE_CAP:
+        raise ScenarioError([f"the plan has {len(plan['issues'])} issues and GitHub allows {SUB_ISSUE_CAP} sub-issues "
+                             "per parent: publish per batch, or split the scenario; nothing was created"])
     wait = sleep or time.sleep
     call = _paced(github, wait=wait, attempts=attempts, backoff=backoff)
 
@@ -898,6 +902,23 @@ def write_back(results_path, map_path, github, plan=None):
     return out
 
 
+def _publish_command(args, github):
+    scenario, script = read_scenario(args.markdown), read_script(args.script)
+    if args.stamp:
+        script = record_hashes(scenario, script)
+        Path(args.script).write_text(json.dumps(script, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    runner = github if github is not None else rest_runner(args.repo, project=args.board)
+    try:
+        plan = build_plan(scenario, script, granularity=args.granularity)
+        out = publish(plan, runner, script_path=args.script)
+    except ScenarioError as err:
+        print(json.dumps({"ok": False, "published": False, "problems": err.problems}, indent=2))
+        return 1
+    print(json.dumps({"ok": True, "parent": out["parent"], "created": len(out["created"]),
+                      "updated": len(out["updated"]), "removed": out["removed"], "map": out["map_path"]}, indent=2))
+    return 0
+
+
 def main(argv=None, github=None):
     """The write-back command: `python -m squad.to_test_scenario write-back <results> --map <map>`.
 
@@ -914,12 +935,75 @@ def main(argv=None, github=None):
     wb.add_argument("--repo", help="owner/name; the REST runner is built on it when no runner is injected")
     wb.add_argument("--board", help="the board every issue joined, e.g. users/sbihaiko/projects/1")
     wb.add_argument("--bug-helper", help="the repo's scripts/report-bug.sh, for the runner and not for this command")
+    sr = sub.add_parser("start-run", help="start the run command on a script and return; nothing waits for the run")
+    sr.add_argument("script", help="the gui-test/1 script")
+    sr.add_argument("--out-dir", help="where the results file goes (default ./gui-test-results)")
+    sr.add_argument("--batch", help="run only this batch")
+    sr.add_argument("--no-file-bug", action="store_true", help="do not let the run file its one bug")
+    for flag in ("--repo", "--board", "--bug-helper"):
+        sr.add_argument(flag, help="carried into the write-back command it prints")
+    pb = sub.add_parser("publish", help="publish the scenario's issues; idempotent, resumable and paced")
+    pb.add_argument("markdown", help="the manual scenario")
+    pb.add_argument("script", help="its gui-test/1 script; the issue map is written beside it")
+    pb.add_argument("--granularity", choices=("case", "batch"), default="case")
+    pb.add_argument("--stamp", action="store_true", help="record each case's content hash on its step, in the script file")
+    for flag in ("--repo", "--board"):
+        pb.add_argument(flag)
     args = ap.parse_args(argv)
+    if args.command == "publish":
+        return _publish_command(args, github)
+    if args.command == "start-run":
+        out = start_run(args.script, out_dir=args.out_dir, batch=args.batch, file_bug=not args.no_file_bug,
+                        repo=args.repo, board=args.board, bug_helper=args.bug_helper)
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0 if out["started"] else 1
     runner = github if github is not None else rest_runner(args.repo, project=args.board, bug_helper=args.bug_helper)
     out = write_back(args.results, args.map, runner)
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0 if out.get("ok") else 1
 
+
+
+# --------------------------------------------------------------------------- starting a run, never waiting on it
+
+RUN_COMMAND = [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "gui_test_run_script.py")]
+
+
+def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", batch=None, case=None, file_bug=True,
+              evidence_repo=None, repo=None, board=None, bug_helper=None, env=None):
+    """Start the run command on a script and return at once: a run takes minutes, and nothing here waits for it.
+
+    The run command writes its results file when it ends; this returns the file's path, the pid, the log, and the
+    **write-back argv** to run afterwards (`write-back <results> --map ...`, a separate step that reads the file). When
+    the run command is not there it starts nothing and says `run command unavailable`: a run is never simulated.
+    """
+    command = list(command or RUN_COMMAND)
+    if not Path(command[-1]).is_file():
+        return {"started": False, "reason": "run command unavailable"}
+    script = Path(script_path)
+    out_dir = Path(out_dir) if out_dir else Path.cwd() / "gui-test-results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = script.name.split(".")[0]
+    results = out_dir / f"{stem}-{time.strftime('%Y%m%dT%H%M%S')}{'-' + (batch or case) if batch or case else ''}.results.json"
+    log = results.with_suffix(".log")
+    args = [*command, str(script), "--adapter", adapter, "--out", str(results)]
+    if file_bug:
+        args.append("--file-bug")
+    if evidence_repo:
+        args += ["--evidence-repo", evidence_repo]
+    if batch:
+        args += ["--batch", batch]
+    elif case:
+        args += ["--case", case]
+    with open(log, "w") as sink:
+        proc = subprocess.Popen(args, stdout=sink, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                start_new_session=True, env=env)
+    write_back = [sys.executable, "-m", "squad.to_test_scenario", "write-back", str(results),
+                  "--map", str(issues_path(script))]
+    for flag, value in (("--repo", repo), ("--board", board), ("--bug-helper", bug_helper)):
+        if value:
+            write_back += [flag, value]
+    return {"started": True, "pid": proc.pid, "results": str(results), "log": str(log), "write_back": write_back}
 
 
 # --------------------------------------------------------------------------- the whole flow
@@ -955,6 +1039,14 @@ def _sh(args, **kw):
     return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout
 
 
+def _project_ref(project):
+    """`users/<owner>/projects/<n>` (or `orgs/...`) as the `(owner, n)` that `gh project item-add` takes."""
+    parts = str(project).strip("/").split("/")
+    if len(parts) == 4 and parts[2] == "projects":
+        return parts[1], parts[3]
+    raise ValueError(f"project must look like users/<owner>/projects/<n>, not {project!r}")
+
+
 def _rate_limit(exc):
     """A `gh` failure that is a secondary rate limit: a back-off, not an error the caller must handle."""
     text = ((exc.stderr or "") + (exc.stdout or "")).lower()
@@ -972,7 +1064,7 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
         args = ["gh", "api", "--method", method, f"repos/{repo}/{path}"] if method != "GET" else \
                ["gh", "api", f"repos/{repo}/{path}"]
         for k, v in fields:
-            args += ["-f", f"{k}={v}"]
+            args += ["-F" if isinstance(v, int) and not isinstance(v, bool) else "-f", f"{k}={v}"]
         try:
             out = shell(args)
         except subprocess.CalledProcessError as exc:
@@ -1010,7 +1102,9 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             if not project:
                 return {}
             url = f"https://github.com/{repo}/issues/{kw['number']}"
-            return json.loads(shell(["gh", "project", "item-add", project, "--url", url, "--format", "json"]))
+            owner, number = _project_ref(project)
+            return json.loads(shell(["gh", "project", "item-add", number, "--owner", owner, "--url", url,
+                                     "--format", "json"]))
         if op == "file_bug":
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")
