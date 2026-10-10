@@ -72,7 +72,7 @@ for n in $cc; do
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
   if [ -e "$A/basered-$bs" ]; then echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be $br's fault; waiting for a green base"; continue; fi
   if [ ! -e "$A/basetest-$bs" ]; then   # a red base reds every branch at once: test it once per base head, before merging anything
-    if ( cd "$SG_FORK_DIR" && eval "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"
+    if ( cd "$SG_FORK_DIR" && bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"
     else   # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
            # parallel), and a single red would park every branch on a flake. Two consecutive reds is the base, one is a retry.
       bt=$(( $(cat "$A/basered-$bs.tries" 2>/dev/null || echo 0) + 1 )); echo "$bt" > "$A/basered-$bs.tries"
@@ -99,7 +99,7 @@ for n in $cc; do
       && (cd "$SG_E2E_BUILD_DIR" && eval "${SG_E2E_BUILD_CMD:-make core && make ui}") > "$SG_STATE/e2e-build.log" 2>&1 \
       || echo "FORKCLOSE WARN #$n: rebuilding $SG_E2E_BUILD_DIR failed (see e2e-build.log)"
   fi
-  out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- sh -c "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
+  out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
   tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
   if [ $rc = 0 ] && [ -n "$mixed" ]; then
     printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"

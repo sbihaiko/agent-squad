@@ -8,6 +8,7 @@ cat > "$T/bin/gh" <<'J'
 case "$*" in
   *"pulls?state=open"*) echo '[{"number":10,"head":{"sha":"aaaaaaaaaaaa"},"title":"t","body":"Refs #1100","labels":[{"name":"hold"}],"base":{"ref":"main"},"draft":false},{"number":12,"head":{"sha":"cccccccccccc"},"title":"t","body":"Refs #1102","labels":[],"base":{"ref":"main"},"draft":false}]';;
   *"pulls/12 -q .head.sha"*) echo "cccccccccccc blocked";;
+  *"/check-runs"*) echo success;;   # a head with a check run: the autopilot holds a head with none (CI MISSING) before it reaches the state hold
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
