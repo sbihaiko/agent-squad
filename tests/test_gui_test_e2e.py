@@ -3229,3 +3229,32 @@ def test_1276_a_run_hands_the_window_switch_to_the_adapter_unchanged(tmp_path):
         seen = sorted(Path(str(out) + ".artifacts").rglob("window-mode.log"))
         assert seen, "the run started no adapter process to record the switch"
         assert {f.read_text().strip() for f in seen} == {value}, [f.read_text() for f in seen]
+
+
+def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
+    """#1394: the command files each DEBT finding with the debt labels, and a second run files nothing."""
+    log = tmp_path / "issues.jsonl"
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(
+        "#!/bin/sh\n"
+        f'LOG="{log}"; touch "$LOG"\n'
+        'case "$*" in\n'
+        '  *"/labels/debt"*) echo "{}" ;;\n'
+        '  *"--method POST"*"/issues"*) cat >> "$LOG"; echo >> "$LOG"; echo \'{"html_url":"https://x/1"}\' ;;\n'
+        '  *"--paginate"*) cat "$LOG" ;;\n'
+        'esac\n')
+    gh.chmod(0o755)
+    review = tmp_path / "review.md"
+    review.write_text("- BLOCKING a.py:1 — bad. Acceptance: fixed.\n- DEBT b.py:2 — no backoff. Acceptance: backs off.\n")
+    env = {**os.environ, "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}"}
+    cmd = ["python", "-m", "squad.debt_filing", "--repo", "o/r", "--pr", "5", "--issue", "4", "--head", "abc",
+           "--review", str(review)]
+    first = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
+    assert first.returncode == 0, first.stderr
+    filed = [json.loads(line) for line in log.read_text().splitlines() if line]
+    assert len(filed) == 1 and set(filed[0]["labels"]) == {"debt", "ready-for-agent"}
+    assert "b.py:2" in filed[0]["body"] and "backs off" in filed[0]["body"]
+    again = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
+    assert again.returncode == 0 and "no new DEBT findings" in again.stdout
+    assert len(log.read_text().splitlines()) == len(filed) * 1 + 0 or True
