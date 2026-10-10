@@ -39,7 +39,8 @@ class FakeAdapter:
 
     def inject(self, name, args):
         self.log.append((name, args))
-        if name == "pad.press" and args.get("button") == "A" and self.screen == "play.home":
+        if (name == "pad.press" and args.get("button") == "A" or name == "key.press" and args.get("key") == "Enter") \
+                and self.screen == "play.home":
             self._opens_at = self.tick + OPEN_AFTER
 
     def _advance(self):
@@ -53,6 +54,16 @@ class FakeAdapter:
                 return "met"
             self._advance()
         return "timeout"
+
+    def moves(self, family):
+        """The pad or keyboard moves this adapter advertises for goal navigation."""
+        if family == "key":
+            return [{"name": "key.press", "args": {"key": k, "ticks": 1}} for k in ("Space", "Escape", "Enter")]
+        return [{"name": "pad.press", "args": {"button": b, "ticks": 1}} for b in ("Up", "Down", "B", "A")]
+
+    def ui_state(self):
+        return {"screen": self.screen, "focus": self.focus, "dialogs": [],
+                "controls": [{"id": self.focus, "enabled": True, "visible": True, "focused": True}], "options": []}
 
     def advance(self):
         self._advance()

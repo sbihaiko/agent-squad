@@ -698,3 +698,103 @@ def test_ci_a_clean_run_is_green(tmp_path):
     results = _three_step_run(tmp_path)[3]
     code, _ = ci_verdict(results, core_available=True)
     assert code == 0
+
+
+# ---- #1199: goal navigation (ADR-0271) ----
+
+def _goal_step(sid, goal="ui.screen == play.library", family="pad", **over):
+    over.setdefault("role", "setup")
+    return step(sid, action={"name": "nav.goal", "args": {"goal": goal, "input": family}},
+                wait={"check": goal, "timeout_ticks": 10}, check={"name": "ui.screen", "args": {"is": "play.library"}}, **over)
+
+
+class _Chooser:
+    """A stand-in for Jev: always picks the first option offered, so only the withdrawal of failed moves gets it anywhere."""
+
+    def __init__(self, cost=0.00002):
+        self.calls, self.cost = [], cost
+
+    def __call__(self, state, options):
+        self.calls.append((state, list(options)))
+        return {"choice": options[0], "probabilities": {o: 1 / len(options) for o in options}, "cost": self.cost}
+
+
+@pytest.mark.parametrize("family", ["pad", "key"])
+def test_1199_a_goal_is_reached_from_home_with_no_fixed_path_by_pad_and_by_keyboard(tmp_path, family):
+    from squad.gui_test_goal import Navigator
+    d = script(_goal_step("b1.pre", family=family))
+    validate(d)
+    chooser = _Chooser()
+    events = []
+    [r] = run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(chooser))
+    assert r["verdict"] == "passed"
+    assert len(chooser.calls) > 1  # the first pick fails from home, so it is withdrawn and Jev is asked again
+    first, second = chooser.calls[0][1], chooser.calls[1][1]
+    assert first[0] not in second and len(second) == len(first) - 1
+    assert all("png" not in json.dumps(s).lower() for s, _ in chooser.calls)  # state is typed JSON, never pixels
+    assert {"screen", "focus", "controls", "options"} <= set(chooser.calls[0][0])
+
+
+def test_1199_each_decision_is_a_sub_node_with_options_choice_probabilities_snapshot_and_cost_and_counts_against_the_cap(tmp_path):
+    from squad.gui_test_goal import Navigator
+    from squad.gui_test_vision import Vision
+    vision = Vision(lambda png, expect: {"answer": "compatible", "saw": "", "cost": 0}, cap=1.0)
+    events = []
+    run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(cost=0.25), max_spend=5.0), vision=vision)
+    [node] = [n for n in run_node([{"op": "guirun", "events": events}])[0] if n["id"] == "b1.pre"]
+    kids = node["decisions"]
+    assert len(kids) >= 2 and kids[-1]["choice"] in kids[-1]["options"]
+    assert set(kids[0]) >= {"options", "choice", "probabilities", "state", "cost"}
+    assert vision.spent == pytest.approx(0.25 * len(kids))
+    assert node["cost"] == pytest.approx(0.25 * len(kids))
+
+
+def test_1199_caps_end_the_step_failed_goal_not_reached_with_the_last_state(tmp_path):
+    from squad.gui_test_goal import Navigator
+    events = []
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(), max_decisions=1))
+    assert r["verdict"].startswith("failed (goal not reached")
+    assert "play.home" in r["verdict"]
+    [r2] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(_Chooser(cost=0.5), max_spend=0.6))
+    assert r2["verdict"].startswith("failed (goal not reached") and "spend" in r2["verdict"]
+
+
+def test_1199_the_validator_rejects_a_goal_as_the_action_of_a_step_under_test():
+    d = script(_goal_step("b1.bad", role="under-test"))
+    with pytest.raises(ScriptError, match="nav.goal is not allowed on a step under test"):
+        validate(d)
+    no_goal = script(step("b1.nogoal", role="setup", action={"name": "nav.goal", "args": {}}))
+    with pytest.raises(ScriptError, match="nav.goal needs a goal"):
+        validate(no_goal)
+
+
+def test_1199_a_replay_reuses_the_recorded_moves_and_makes_no_jev_call(tmp_path):
+    from squad.gui_test_goal import Navigator, recorded_moves
+    d = script(_goal_step("b1.pre"))
+    events = []
+    run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser()))
+    chooser = _Chooser()
+    again = TickingFake(tmp_path)
+    [r] = run(d, again, goal=Navigator(chooser, replay=recorded_moves(events)))
+    assert r["verdict"] == "passed" and chooser.calls == []
+    assert again.screen == "play.library"
+
+
+def test_1199_with_no_navigator_a_goal_step_is_pending_never_failed(tmp_path):
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path))
+    assert r["verdict"] == "pending"
+
+
+def test_1199_the_jev_chooser_sends_the_typed_ui_state_and_the_options_as_one_choice(tmp_path):
+    from squad.gui_test_goal import Navigator, jev_chooser
+    asked = []
+
+    class Client:
+        def ask(self, state, questions):
+            asked.append((state, questions))
+            opts = list(questions["move"]["criteria"])
+            return {"move": {"choice": opts[-1], "probabilities": {o: 1 / len(opts) for o in opts}}}, "jev"
+
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(jev_chooser(Client(), "ui.screen == play.library")))
+    assert r["verdict"] == "passed" and len(asked) == 1  # the last offered move is A
+    assert asked[0][0]["ui"]["screen"] == "play.home" and "image" not in json.dumps(asked[0]).lower()

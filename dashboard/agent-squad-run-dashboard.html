@@ -2276,6 +2276,8 @@ function scriptModule() {
       if (e.event === "gui_verdict") { n.verdict = e.verdict; n.status = e.verdict === "pending" ? "pending" : n.capture ? "executed" : "failed"; }
       // A vision verdict shows what the model saw and what the call cost; a run stopped by its spend cap marks the skipped steps.
       if (e.event === "gui_vision") { n.vision = { answer: e.answer, saw: e.saw, cost: e.cost }; n.cost = e.cost; }
+      // A goal's decisions are sub-nodes of its step; their cost adds to the step's.
+      if (e.event === "gui_decision") { (n.decisions = n.decisions || []).push({ options: e.options, choice: e.choice, probabilities: e.probabilities, state: e.state, cost: e.cost }); n.cost = (n.cost || 0) + e.cost; }
       if (e.event === "gui_stop") n.stop = e.reason;
       if (e.event === "gui_verdict" && String(e.verdict).startsWith("skipped")) n.status = "skipped";
     }
