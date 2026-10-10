@@ -14,6 +14,8 @@ cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
   *'.head.sha+" "+.base.ref'*) echo "aaa111 main";;
+  *compare*'-q .status'*|*compare*'.status'*) echo ahead;;
+  *compare*) printf 'diff --git a/f b/f\n+x\n';;
   *pulls/7/files*) printf '%s\n' ${GH_FILES:-UI/a.cs};;
   *'.head.sha'*) if [ -n "$GH_MOVE" ] && [ -e "$GH_MOVE" ]; then echo bbb222; else echo aaa111; fi;;
   *) echo "stub";;
@@ -21,7 +23,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > /dev/null; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; echo "VERDICT: APPROVE"; echo "1. fine"
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_TAGGED" ] && { printf "VERDICT: CHANGES\n1. BLOCKING a.cs:1 - diverges from ADR-0001 - wrong - fix\n2. DEBT b.cs:2 - naming - none - rename\n"; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; echo "VERDICT: APPROVE"; echo "1. fine"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 out=$(bash "$T/s/review.sh" 7 8); rc=$?
@@ -52,4 +54,18 @@ h2=$(( (h+23)%24 )); h3=$(( (h+1)%24 )); printf -v wb '%02d-%02d' $h2 $h3   # a 
 printf '{"review_models":["claude:slow"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:slow":"%s"}}}' "$wb" > "$T/s/models.json"
 rm -f "$T/st/review-7.sha" "$T/st/cq/8-mhours"*; out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "hours: inside the window the model runs ($wb)";; *) ko "hours inside: '$out'";; esac
+# 6) severity tags (#1393): every finding line is BLOCKING or DEBT, both survive into the saved review, on both prompt modes
+printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+unset CLAUDE_NARRATE; export CLAUDE_TAGGED=1 CLAUDE_PROMPT="$T/prompt"
+for mode in full fix; do
+  rm -f "$T/st/review-7".*; if [ $mode = fix ]; then echo ccc333 > "$T/st/review-7.sha"; printf 'VERDICT: CHANGES\n1. BLOCKING a.cs:1 - x\n2. DEBT b.cs:2 - y\n' > "$T/st/review-7.md"; fi
+  bash "$T/s/review.sh" 7 8 >/dev/null 2>&1
+  [ $mode = fix ] && { /usr/bin/grep -q 'FIX ROUND' "$T/prompt" && ok "fix mode really ran" || ko "fix mode did not run"; }
+  [ "$(head -1 "$T/st/review-7.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^2\. DEBT ' "$T/st/review-7.md" && /usr/bin/grep -q '^1\. BLOCKING ' "$T/st/review-7.md" && ok "$mode: BLOCKING and DEBT survive into the saved review" || ko "$mode saved review: $(cat "$T/st/review-7.md")"
+  /usr/bin/grep -q 'BLOCKING' "$T/prompt" && /usr/bin/grep -q 'DEBT' "$T/prompt" && ok "$mode prompt asks for the tags" || ko "$mode prompt lacks the tags"
+  /usr/bin/grep -q 'divergence from an accepted ADR' "$T/prompt" && /usr/bin/grep -q 'regression of behaviour' "$T/prompt" && /usr/bin/grep -q 'wire protocol or a persisted format' "$T/prompt" && /usr/bin/grep -q 'passes while lying' "$T/prompt" && ok "$mode prompt lists the closed blocking set" || ko "$mode prompt lacks the blocking list"
+  /usr/bin/grep -qi 'filed task' "$T/prompt" && ok "$mode prompt states what DEBT costs" || ko "$mode prompt lacks the DEBT cost"
+done
+/usr/bin/grep -qi 'keeps the tag' "$T/prompt" && ok "fix prompt keeps previous tags" || ko "fix prompt does not keep previous tags"
+unset CLAUDE_TAGGED CLAUDE_PROMPT
 rm -rf "$T"; exit $fail
