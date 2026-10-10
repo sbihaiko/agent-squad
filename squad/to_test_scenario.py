@@ -23,6 +23,16 @@ Coverage is by content, not only by id: the case's text (precondition, steps, ex
 records that hash on the step it produced. A case whose id is there but whose text changed is **stale** and goes back
 to conversion for that case only, so an edited case is never silently ignored.
 
+Publishing (#1225) is idempotent, resumable and paced. It takes one injected **GitHub runner** — a callable
+`github(op, **kwargs)` whose ops are `ensure_label`, `create_issue`, `update_issue`, `add_sub_issue` and `board` —
+and it writes a map beside the script (`<script>.gui-test.issues.json`: the parent's number, and per case id the
+issue number and the case's content hash) after every issue it creates. An interrupted publish, or a second machine,
+resumes from that map and creates nothing twice; publishing again updates what the map knows, and a case the script
+no longer covers is reported in `removed` and left open, because only a person closes a case. A secondary rate limit
+is not a failure: the runner raises `RateLimited` and the publish waits it out (the API's own `retry_after` when it
+gives one, an exponential back-off otherwise) and retries the same call. `rest_runner` builds the real runner on
+`gh api` (REST, never GraphQL: a scenario publishes hundreds of sub-issues).
+
 `build_plan` serves both halves: with the script alone (plus `markdown=`, `script_path=`, `purpose=`) it is the #1223
 plan from the script; with a parsed scenario and its script it is the #1224 plan, gated on the content hash coverage.
 
@@ -37,6 +47,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from squad.gui_test import validate
@@ -60,6 +71,8 @@ HASH_FIELD = "content_hash"
 PARENT_LABEL = "ready-for-agent"
 CASE_LABEL = "test-case"
 
+MAP_SUFFIX = ".gui-test.issues.json"
+
 _SCRIPT_SUFFIXES = (".gui-test.json", ".gui-test")
 _SEPARATOR = re.compile(r":?-{2,}:?")
 
@@ -68,6 +81,14 @@ class ScenarioError(ValueError):
     def __init__(self, problems):
         self.problems = list(problems)
         super().__init__("; ".join(self.problems))
+
+
+class RateLimited(Exception):
+    """The API answered with a secondary rate limit: the runner raises this, and a publish waits and retries."""
+
+    def __init__(self, retry_after=None):
+        self.retry_after = retry_after
+        super().__init__("secondary rate limit" + (f", retry after {retry_after}s" if retry_after else ""))
 
 
 def case_hash(precondition, steps, expected):
@@ -305,7 +326,8 @@ def _case_issue(case, step, edges):
         _edge_text(edges.get(case["id"]), step["batch"]), "",
     ])
     return {"kind": "case", "id": case["id"], "title": f"Test case {case['id']}",
-            "labels": [CASE_LABEL], "blocked_by": edges.get(case["id"]), "body": body}
+            "labels": [CASE_LABEL], "blocked_by": edges.get(case["id"]), "body": body,
+            "hash": step.get(HASH_FIELD)}
 
 
 def _batch_issue(batch, steps, edges):
@@ -321,8 +343,10 @@ def _batch_issue(batch, steps, edges):
         "## Blocked by", "",
         _edge_text(None, batch), "",
     ])
+    hashes = "".join(s.get(HASH_FIELD) or "" for s in own)
     return {"kind": "batch", "id": batch, "title": f"Test case batch {batch}",
-            "labels": [CASE_LABEL], "blocked_by": None, "body": body}
+            "labels": [CASE_LABEL], "blocked_by": None, "body": body,
+            "hash": hashlib.sha256(hashes.encode("utf-8")).hexdigest() if hashes else None}
 
 
 def _scenario_parent_body(scenario, script, steps, edges):
@@ -379,6 +403,119 @@ def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
                        "labels": [PARENT_LABEL, f"wave:{wave}"],
                        "body": _scenario_parent_body(scenario, script, steps, edges)},
             "issues": issues}
+
+
+# --- publishing the plan, idempotently, resumably and paced (#1225) -------------------------------
+
+def issues_path(script_path):
+    """The map of a script's issues, beside the script: `<script>.gui-test.issues.json`.
+
+    The script keeps its own name without its format suffix, so `play-pad-only.gui-test.json` maps to
+    `play-pad-only.gui-test.issues.json` — one committed file per script, and no state inside the script itself.
+    """
+    path = Path(script_path)
+    name = path.name
+    for suffix in _SCRIPT_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    else:
+        name = Path(name).stem
+    return path.with_name(name + MAP_SUFFIX)
+
+
+def read_issues(path):
+    """The map beside the script, or an empty one: the parent's number, whether it is on the board, and per case."""
+    if not path:
+        return {"parent": None, "boarded": False, "cases": {}}
+    try:
+        saved = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"parent": None, "boarded": False, "cases": {}}
+    return {"parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
+            "cases": {key: {"number": value.get("number"), "hash": value.get("hash")}
+                      for key, value in (saved.get("cases") or {}).items()}}
+
+
+def _publish_resumable(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4,
+                       backoff=1.0):
+    """Publish the plan: one parent, one natively linked sub-issue per case, and only the parent on the board.
+
+    Idempotent and resumable through the map beside the script, flushed after every issue is created: a case the map
+    knows is updated, never created twice, so an interrupted publish — or another machine — resumes from it. A case
+    the map knows and the plan no longer covers is reported in `removed` and stays open. Creations are paced: a
+    secondary rate limit (`RateLimited` from the runner) is waited out and retried, never a failure.
+    """
+    if script_path is None and map_path is None and saved:
+        path = None
+    else:
+        path = Path(map_path) if map_path else (issues_path(script_path) if script_path else None)
+    state = read_issues(path) if saved is None else {
+        "parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
+        "cases": {key: dict(value) for key, value in (saved.get("cases") or {}).items()}}
+    wait = sleep or time.sleep
+    call = _paced(github, wait=wait, attempts=attempts, backoff=backoff)
+
+    def flush():
+        if path:
+            Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    issues, created, updated = {}, [], []
+    for label in _resumable_labels(plan):
+        call("ensure_label", name=label)
+    if state["parent"]:
+        call("update_issue", number=state["parent"], title=plan["parent"]["title"],
+             body=plan["parent"]["body"], labels=plan["parent"]["labels"])
+        updated.append("parent")
+    else:
+        made = call("create_issue", title=plan["parent"]["title"], body=plan["parent"]["body"],
+                    labels=plan["parent"]["labels"])
+        state["parent"] = made["number"]
+        flush()                     # known from here on, so an interrupt below never buys a second parent
+    if not state["boarded"]:
+        call("board", number=state["parent"])
+        state["boarded"] = True
+        flush()
+    for issue in plan["issues"]:
+        key = issue["id"]
+        if key in state["cases"]:
+            number = state["cases"][key]["number"]
+            call("update_issue", number=number, title=issue["title"], body=issue["body"], labels=issue["labels"])
+            updated.append(key)
+        else:
+            made = call("create_issue", title=issue["title"], body=issue["body"], labels=issue["labels"])
+            number = made["number"]
+            call("add_sub_issue", parent=state["parent"], sub=made["id"])   # the numeric id, never the number
+            created.append(key)
+        state["cases"][key] = {"number": number, "hash": issue.get("hash")}
+        issues[key] = dict(state["cases"][key])
+        flush()
+    return {"parent": state["parent"], "boarded": state["boarded"], "cases": issues, "created": created,
+            "updated": updated, "removed": [k for k in state["cases"] if k not in issues],
+            "map_path": str(path) if path else None, "map": state}
+
+
+def _resumable_labels(plan):
+    """Every label the plan's issues need, the case label included, whatever the granularity."""
+    out = {CASE_LABEL, *plan["parent"]["labels"]}
+    for issue in plan["issues"]:
+        out.update(issue["labels"])
+    return sorted(out)
+
+
+def _paced(github, *, wait, attempts, backoff):
+    """Every runner call goes through here, so a rate limit delays a publish instead of failing it."""
+    def call(op, **kwargs):
+        delay = backoff
+        for attempt in range(1, attempts + 1):
+            try:
+                return github(op, **kwargs)
+            except RateLimited as limited:
+                if attempt == attempts:
+                    raise
+                wait(limited.retry_after or delay)
+                delay *= 2
+    return call
 # --------------------------------------------------------------------------- the plan
 
 
@@ -541,7 +678,7 @@ def save_map(path, mapping):
     Path(path).write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n")
 
 
-def publish(plan, github, saved=None, parent=None):
+def _publish_from_script(plan, github, saved=None, parent=None):
     """Create or update the parent and its sub-issues; return the map and what happened.
 
     Idempotent by case id through `saved` (the map of a previous publish): a case the map knows is updated, never
@@ -574,6 +711,19 @@ def publish(plan, github, saved=None, parent=None):
         github("board", number=made["number"], status=INITIAL_STATUS)
     return {"parent": parent_number, "issues": issues, "created": created, "updated": updated,
             "removed": [k for k in saved if k not in issues and k != "parent"]}
+
+
+def publish(plan, github, saved=None, parent=None, **options):
+    """Publish a plan. Two plan shapes meet here and each keeps its own contract.
+
+    A plan built from a scenario (issues keyed by `id`, #1224) goes through the resumable, paced publish (#1225): the
+    map beside the script, only the parent on the board, `options` = `script_path`, `map_path`, `sleep`, `attempts`,
+    `backoff`. A plan built from a script alone (issues carrying `cases` and a `wave`, #1223) is published against the
+    `saved` map and `parent` the caller passes, and every issue lands on the board.
+    """
+    if options or not (plan["issues"] and "cases" in plan["issues"][0]):
+        return _publish_resumable(plan, github, saved=saved, **options)
+    return _publish_from_script(plan, github, saved=saved, parent=parent)
 
 
 def _create(github, item):
@@ -884,6 +1034,13 @@ def _sh(args, **kw):
     return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout
 
 
+def _rate_limit(exc):
+    """A `gh` failure that is a secondary rate limit: a back-off, not an error the caller must handle."""
+    text = ((exc.stderr or "") + (exc.stdout or "")).lower()
+    return RateLimited() if "rate limit" in text or "secondary rate" in text else None
+
+
+
 def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=INITIAL_STATUS):
     """The real GitHub runner: REST through `gh api` (number, not GraphQL), plus the repo's label and board helpers.
 
@@ -891,17 +1048,26 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
     `bug_helper` is the path of the repo's own bug helper (`scripts/report-bug.sh` in the checkout), the one route a
     failed run's single bug takes.
     """
+    def call(args):
+        try:
+            return shell(args)
+        except subprocess.CalledProcessError as exc:
+            limited = _rate_limit(exc)
+            if limited is not None:
+                raise limited from exc     # a back-off for `publish`, not an error
+            raise
+
     def api(method, path, fields=(), json_out=False):
         args = ["gh", "api", "--method", method, f"repos/{repo}/{path}"] if method != "GET" else \
                ["gh", "api", f"repos/{repo}/{path}"]
         for k, v in fields:
             args += ["-f", f"{k}={v}"]
-        out = shell(args)
+        out = call(args)
         return json.loads(out) if json_out else out
 
     def gh(op, **kw):
         if op == "ensure_label":
-            shell(["gh", "label", "create", kw["name"], "--force", "--repo", repo])
+            call(["gh", "label", "create", kw["name"], "--force", "--repo", repo])
             return {}
         if op == "create_issue":
             fields = [("title", kw["title"]), ("body", kw["body"])] + [("labels[]", x) for x in kw["labels"]]
@@ -927,14 +1093,15 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             if not project:
                 return {}
             url = f"https://github.com/{repo}/issues/{kw['number']}"
-            item = json.loads(shell(["gh", "project", "item-add", project, "--url", url, "--format", "json"]))
-            shell(["gh", "project", "item-edit", "--id", item["id"], "--field", "Status",
-                   "--text", kw.get("status", initial_status), "--project-id", project])
+            item = json.loads(call(["gh", "project", "item-add", project, "--url", url, "--format", "json"]))
+            if kw.get("status") is not None:     # the resumable publish boards only the parent, with no status
+                call(["gh", "project", "item-edit", "--id", item["id"], "--field", "Status",
+                      "--text", kw["status"], "--project-id", project])
             return item
         if op == "file_bug":
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")
-            out = shell([bug_helper, kw["title"], kw["body"], kw["priority"]])
+            out = call([bug_helper, kw["title"], kw["body"], kw["priority"]])
             return {"url": next((w for w in out.split() if w.startswith("http")), None)}
         raise ValueError(f"unknown op {op!r}")
     return gh

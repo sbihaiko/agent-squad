@@ -1960,14 +1960,14 @@ def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
             {"id": "c", "verdict": "passed", "capture": None, "held": False,
              "batch": "b1", "mode": "automated", "expect": "what c shows"}]
     calls = []
-    url = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
-                           runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
+    detail = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
+                              runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
     assert len(calls) == 1, calls
     title, body = calls[0][1], calls[0][2]
-    assert title == "GUI test `tiny`: 2 failed steps"
+    assert title == "tiny: a — expected x, observed y (+1 more steps)", "the title names the failure, not a count"
     assert "### `a`" in body and "### `b`" in body and "### `c`" not in body
     assert "failed (expected x, observed y)" in body
-    assert url == "https://example.invalid/1"
+    assert detail["url"] == "https://example.invalid/1" and detail["existing"] is False
 
 
 # `home.first-focus` is the home batch's setup step (#1251): a run reports the batch's setup with its cases, so it is
@@ -2171,12 +2171,18 @@ def _bug_helper(tmp_path, output="Issue created: https://example.invalid/1241", 
     return root, root / "bug-titles.log"
 
 
-def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True):
+def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True,
+             fresh_github=True):
     """The run command driven in-process on its own contract: argv in, one results file out.
 
     The adapter registry is how a fake adapter gets a name the command accepts; a literal `module:Class` spec is never
-    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug.
+    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug. The bug
+    doors are pointed at the fake GitHub (#1249), so a filing lands there and never on the real one; `fresh_github`
+    False keeps the board between two runs of one case.
     """
+    if fresh_github:
+        fake_github.reset()
+    extra = (*extra, "--github-runner", FAKE_GITHUB)
     import importlib.util
     monkeypatch.chdir(FORK)
     monkeypatch.setenv("MESENAI_ROOT", str(root if root is not None else tmp_path / "mesenai"))
@@ -2213,7 +2219,9 @@ def test_1241_asked_it_files_exactly_one_bug_for_every_failed_step_and_records_i
     root, titles = _bug_helper(tmp_path)
     code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
     assert code == 1
-    assert titles.read_text().splitlines() == ["GUI test `run-script-smoke`: 2 failed steps"], "one bug, never one per step"
+    assert titles.read_text().splitlines() == [
+        "run-script-smoke: smoke.still-home — expected play.home, observed play.library (+1 more steps)"], \
+        "one bug, never one per step, and its title says what failed"
     body = (root / "bug-body.log").read_text()
     assert "### `smoke.still-home`" in body and "### `smoke.unknown-id`" in body, "every failed step, in one bug"
     assert "### `smoke.open-library`" not in body, "a step that passed is not a failed step of this bug"
@@ -2284,6 +2292,147 @@ def test_1241_an_unknown_selector_is_refused_before_anything_is_launched(tmp_pat
     assert any("b1.two" in reason or "b2.a" in reason for reason in r["reasons"]), "it names what the script does have"
     assert "selection" not in r
     assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+
+
+# --- #1249: the bug a red run files names the failure, and the same failure is never filed twice ---
+
+from squad.gui_test_report import (bug_title, comment_on_bug_with, failure_key, failure_words,  # noqa: E402
+                                   find_open_bug_with, report_failures_detail)
+from tests import gui_test_github_fake as fake_github  # noqa: E402
+
+FAKE_GITHUB = "tests.gui_test_github_fake:shell"
+REPO_1249 = "example/1249"
+
+
+class _Board:
+    """A fake GitHub runner around one board: the search door reads the issues it holds, the file door adds one.
+
+    Filing is the fake board's own, not the checkout helper's: these cases are about which issue a run belongs to,
+    and only the run-command case below goes through the helper route a real run takes.
+    """
+
+    def __init__(self, repo=REPO_1249):
+        fake_github.reset()
+        self.find_open_bug = find_open_bug_with(repo, fake_github.shell)
+        self.comment_on_bug = comment_on_bug_with(repo, fake_github.shell)
+        self.filed = []
+
+    @property
+    def issues(self):
+        return fake_github.ISSUES
+
+    @property
+    def comments(self):
+        return fake_github.COMMENTS
+
+    @property
+    def doors(self):
+        return {"find_open_bug": self.find_open_bug, "comment_on_bug": self.comment_on_bug}
+
+    def file_bug(self, title, body, priority=None):
+        number = 1000 + len(self.issues) + 1
+        url = f"https://example.invalid/bugs/{number}"
+        self.issues.append({"number": number, "title": title, "body": body, "url": url})
+        self.filed.append((title, body))
+        return url
+
+    def store(self, path, name):
+        return f"https://evidence.example/{name}"
+
+
+def test_1249_the_title_names_the_script_the_step_and_the_failure():
+    """The old title was `GUI test <script>: N failed step(s)`: nine of them in one afternoon say nothing."""
+    one = [{"id": "home.focus-holds-up", "verdict": "failed (expected play.home.open-rom, observed none)"}]
+    assert failure_words("failed (expected play.home.open-rom, observed none)") == \
+        "expected play.home.open-rom, observed none"
+    assert failure_words("failed (timeout waiting for ui.screen == play.library)") == \
+        "timeout waiting for ui.screen == play.library"
+    assert failure_words("failed (unknown id)") == "unknown id"
+    assert bug_title("play-pad-only", one) == \
+        "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none"
+    two = one + [{"id": "home.open-library", "verdict": "failed (timeout waiting for ui.screen == play.library)"}]
+    assert bug_title("play-pad-only", two) == \
+        "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none (+1 more steps)"
+    other = [{"id": "home.focus-holds-up", "verdict": "failed (expected play.home.open-rom, observed play.library)"}]
+    assert bug_title("play-pad-only", other) != bug_title("play-pad-only", one), "two failures, two titles"
+    assert failure_key("play-pad-only", one[0]) == "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none"
+    for title in (bug_title("play-pad-only", one), bug_title("play-pad-only", two)):
+        assert not re.search(r"\d+ failed step", title), title
+
+
+def test_1249_a_run_of_a_failure_already_open_comments_instead_of_filing_a_second_bug(tmp_path):
+    d = _two_failures_script()
+    results = run(d, TickingFake(tmp_path))
+    board = _Board()
+    first = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json",
+                                   run={"run_id": "run-1", "build_sha": "abc123", "platform": "darwin-arm64"},
+                                   **board.doors)
+    assert first["existing"] is False and len(board.issues) == 1 and board.comments == []
+    again = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json",
+                                   run={"run_id": "run-2", "build_sha": "def456", "platform": "darwin-arm64"},
+                                   **board.doors)
+    assert again["existing"] is True and again["url"] == first["url"], "the run belongs to the open bug"
+    assert len(board.issues) == 1, "the same failure is one open bug, however many runs hit it"
+    [comment] = board.comments
+    assert comment["number"] == board.issues[0]["number"]
+    for text in ("run-2", "def456", "### `b1.bad-screen`", "### `b1.never`",
+                 "the library is showing", "failed (timeout waiting for ui.screen == nowhere)"):
+        assert text in comment["body"], text
+
+
+def test_1249_a_different_failure_is_a_second_bug_with_its_own_readable_title(tmp_path):
+    board = _Board()
+    d = _two_failures_script()
+    report_failures_detail(d, run(d, TickingFake(tmp_path)), board.store, board.file_bug, tmp_path / "a.json",
+                           **board.doors)
+    other = _two_failures_script()
+    other["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.library"  # that step passes; the wait times out
+    report_failures_detail(other, run(other, TickingFake(tmp_path)), board.store, board.file_bug, tmp_path / "a.json",
+                           **board.doors)
+    titles = [i["title"] for i in board.issues]
+    assert len(titles) == 2 and len(set(titles)) == 2, titles
+    assert titles[0].startswith("tiny: b1.bad-screen — ") and titles[1].startswith("tiny: b1.never — "), titles
+    assert board.comments == [], "a different failure is a new bug, never a comment on an unrelated one"
+
+
+def test_1249_a_look_up_that_cannot_run_files_a_bug_rather_than_losing_the_failure(tmp_path):
+    """No `gh`, no network: the run still opens its bug, and the file says why it could not check for a twin."""
+    board = _Board()
+    board.find_open_bug = lambda key: (_ for _ in ()).throw(OSError("no gh"))
+    d = _two_failures_script()
+    detail = report_failures_detail(d, run(d, TickingFake(tmp_path)), board.store, board.file_bug,
+                                    tmp_path / "a.json", **board.doors)
+    assert detail["existing"] is False and len(board.issues) == 1
+    assert "look-up" in detail["lookup_failed"]
+
+
+def test_1249_the_run_command_records_the_issue_the_run_belongs_to(tmp_path, monkeypatch):
+    root, titles = _bug_helper(tmp_path)
+    fake_github.reset()
+    code, first = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1 and first["bug"]["filed"] is True
+    assert first["bug"]["existing"] is False and len(fake_github.ISSUES) == 1
+    assert first["bug"]["url"] == fake_github.ISSUES[0]["url"] and fake_github.ISSUES[0]["url"]
+    assert first["bug"]["title"].startswith("run-script-smoke: smoke.still-home — ")
+    code, again = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root, fresh_github=False)
+    assert again["bug"]["filed"] is True and again["bug"]["existing"] is True
+    assert again["bug"]["url"] == first["bug"]["url"], "the second run names the issue it was attached to"
+    assert len(fake_github.ISSUES) == 1 and len(titles.read_text().splitlines()) == 1, "one bug, never two"
+    [comment] = fake_github.COMMENTS
+    assert again["run_id"] in comment["body"] and again["build_sha"] in comment["body"]
+    assert "### `smoke.still-home`" in comment["body"] and "### `smoke.unknown-id`" in comment["body"]
+
+
+def test_1249_a_comment_that_cannot_be_posted_still_reports_the_run(tmp_path):
+    """An open bug the run cannot comment on is still a run to report: it files its own, and says why."""
+    board = _Board()
+    d = _two_failures_script()
+    results = run(d, TickingFake(tmp_path))
+    report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
+    board.comment_on_bug = lambda issue, body: (_ for _ in ()).throw(OSError("no network"))
+    detail = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
+    assert detail["existing"] is False and len(board.issues) == 2 and board.comments == []
+    assert "comment" in detail["lookup_failed"] and board.issues[0]["url"] in detail["lookup_failed"]
 def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step():
     """The whole committed pilot script against a target that advertises less than `mesen-gui` does: the pilot as
     committed is refused before launch (item 6) - dozens of its steps observe `ui.focused`, which this target has no
@@ -2309,3 +2458,192 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     by_id = {s["id"]: s for s in steps}
     assert all(e["missing"] and by_id[e["id"]]["mode"] == "manual" for e in out["manual"])
     assert all(m in by_id[e["id"]]["expect"] for e in out["manual"] for m in e["missing"])  # a person reads why
+
+
+# --- #1243: the run command runs one variant of a script, and records it as a partial run ---
+
+VARIANT_SPEC = "tests.gui_test_run_script_fake:VariantAdapter"
+ONE_MODE_SPEC = "tests.gui_test_run_script_fake:OneModeAdapter"
+
+
+def _variant_file(tmp_path):
+    """Two batches: b1 carries one case per window mode plus an untagged one, b2 a single untagged case."""
+    d = _two_batch_script([step("b1.any"),
+                           step("b1.win", variants={"window.mode": "windowed"}),
+                           step("b1.fs", variants={"window.mode": "fullscreen"})])
+    path = tmp_path / "variants.json"
+    path.write_text(json.dumps(d))
+    return path
+
+
+def test_1243_a_variant_selection_runs_that_variant_only_and_records_it(tmp_path, monkeypatch):
+    """A full run of this script runs all three cases; one variant runs the cases it applies to, and says so."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen",
+                       spec=VARIANT_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.fs", "b2.a"], \
+        "the windowed case is not run, and an untagged case runs in every variant"
+    switched = (tmp_path / "artifacts" / "variant.log").read_text().splitlines()
+    assert switched == ["window.mode=fullscreen"] * 2, "each batch's fresh process is switched before it launches"
+
+
+def test_1243_an_axis_that_runs_one_way_needs_no_switch(tmp_path, monkeypatch):
+    """The emulator adapter advertises `window.mode: [windowed]` and has no hook: selecting it filters, nothing switches."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=windowed",
+                       spec=ONE_MODE_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=windowed"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.win", "b2.a"]
+
+
+def test_1243_an_unknown_variant_is_refused_before_anything_is_launched(tmp_path, monkeypatch):
+    path = _variant_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=huge")
+    assert code != 0 and r["status"] == "failed" and "selection" not in r
+    assert any("window.mode=huge" in reason for reason in r["reasons"]), r["reasons"]
+    assert any("fullscreen" in reason for reason in r["reasons"]), "it names what the script does have"
+    assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "screen.size=large")
+    assert code != 0 and any("screen.size" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_that_is_not_an_axis_value_pair_is_refused(tmp_path, monkeypatch):
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "fullscreen")
+    assert code != 0 and any("<axis>=<value>" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_the_adapter_cannot_switch_to_is_refused_before_any_launch(tmp_path, monkeypatch):
+    """The shape fake advertises both window modes and has no `set_variant` hook: nothing would switch the window, so
+    running its fullscreen cases anyway would report a mode that was never entered."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen")
+    assert code != 0 and r["status"] == "failed" and r["steps"] == [] and r["batches"] == []
+    assert any("window.mode=fullscreen" in reason for reason in r["reasons"]), r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_a_variant_no_case_applies_to_executes_nothing_and_is_red(tmp_path, monkeypatch):
+    """A run that executed no step is a failure, and a variant selection does not change that (#1222's rule)."""
+    d = script(step("b1.win", variants={"window.mode": "windowed"}))  # one batch, and no case runs in fullscreen
+    path = tmp_path / "one-mode.json"
+    path.write_text(json.dumps(d))
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=fullscreen", spec=VARIANT_SPEC)
+    assert code == 1 and r["status"] == "failed"
+    assert r["reasons"] == ["no step executed"] and r["steps"] == []
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_the_three_selectors_stay_mutually_exclusive(tmp_path, monkeypatch):
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1243", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    with pytest.raises(SystemExit):
+        mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"),
+                  "--batch", "b1", "--variant", "window.mode=windowed"])
+
+
+
+# --- to_test_scenario (#1225): publishing the plan is idempotent, resumable and paced -------------
+
+# What a published body must never carry: a Portuguese sentence over English prose, or a tool's signature line.
+_ATTRIBUTION = re.compile(r"co-authored-by|generated with|claude\b|🤖", re.I)
+_PT_BR = re.compile(r"\b(não|uma|para|com|sem|caso|casos|jogo|tela|janela|botão|arquivo|quando|então|também|deve|"
+                    r"executa|verifica)\b", re.I)
+
+
+def _assert_en_us_with_no_attribution(bodies):
+    assert bodies
+    for body in bodies:
+        assert not _ATTRIBUTION.search(body), body[:200]
+        assert not _PT_BR.search(body), body[:200]
+
+
+class _PublishGitHub:
+    """A recorded-call stand-in for the real REST runner: no network, no `gh`, and a failing create."""
+
+    def __init__(self, fail_on_create=None, start=100):
+        self.calls, self.made = [], []
+        self.next, self.creates = start, 0
+        self.fail_on_create = fail_on_create
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        if op == "create_issue":
+            self.creates += 1
+            if self.fail_on_create and self.creates == self.fail_on_create:
+                raise RuntimeError("the connection dropped")
+            self.next += 1
+            made = {"number": self.next, "id": 900 + self.next}
+            self.made.append((kw, made))
+            return made
+        return {}
+
+    def of(self, op):
+        return [kw for o, kw in self.calls if o == op]
+
+    def ops(self):
+        return [o for o, _ in self.calls]
+
+
+def _pilot_1225():
+    """The committed pilot as a plan: its scenario, its script with the content hashes a conversion records."""
+    from squad.to_test_scenario import build_plan, read_scenario, read_script, record_hashes
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    scenario = read_scenario(md_path)
+    return script_path, build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+
+
+def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
+    from squad import to_test_scenario as tts
+
+    script_path, plan = _pilot_1225()
+    map_path = tmp_path / tts.issues_path(script_path).name
+    gh = _PublishGitHub()
+    out = tts.publish(plan, gh, map_path=map_path)
+
+    assert len(plan["issues"]) >= 67
+    labels = {kw["name"] for kw in gh.of("ensure_label")}
+    assert {"test-case", "ready-for-agent"} <= labels
+    assert [kw["title"] for kw in gh.of("create_issue")][0] == plan["parent"]["title"]
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1
+    # The relation names each issue's numeric id, and only the parent reaches the board.
+    assert {kw["sub"] for kw in gh.of("add_sub_issue")} == {made["id"] for _, made in gh.made[1:]}
+    assert gh.of("board") == [{"number": out["parent"]}]
+    # The map beside the script is what a second machine resumes from.
+    saved = tts.read_issues(map_path)
+    assert saved == {"parent": out["parent"], "boarded": True, "cases": out["cases"]}
+    assert all(case["hash"] for case in out["cases"].values())
+    _assert_en_us_with_no_attribution([kw["body"] for kw in gh.of("create_issue")])
+
+
+def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_publish_updates(tmp_path):
+    from squad import to_test_scenario as tts
+
+    script_path, plan = _pilot_1225()
+    map_path = tmp_path / tts.issues_path(script_path).name
+    with pytest.raises(RuntimeError):
+        tts.publish(plan, _PublishGitHub(fail_on_create=5), map_path=map_path)
+    saved = tts.read_issues(map_path)
+    assert saved["parent"] and len(saved["cases"]) == 3      # the parent and three cases made it
+
+    resumed = _PublishGitHub(start=5000)
+    out = tts.publish(plan, resumed, map_path=map_path)
+    assert len(resumed.of("create_issue")) == len(plan["issues"]) - 3
+    assert len(out["cases"]) == len(plan["issues"]) and out["removed"] == []
+    assert len({case["number"] for case in out["cases"].values()}) == len(plan["issues"])
+    assert resumed.of("board") == []                          # the parent is already on the board
+
+    smaller = dict(plan, issues=plan["issues"][:-1])
+    again = _PublishGitHub(start=9000)
+    dropped = tts.publish(smaller, again, map_path=map_path)
+    assert again.of("create_issue") == [] and again.of("add_sub_issue") == []
+    assert dropped["removed"] == [plan["issues"][-1]["id"]]
+    assert "close" not in again.ops()                         # a removed case is reported, never closed

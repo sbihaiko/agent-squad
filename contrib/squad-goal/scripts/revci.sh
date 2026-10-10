@@ -7,7 +7,7 @@ printf "%s" "PR #$pr open; independent review running (chain in models.json)." >
 sha=$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha)   # the head the review is about: a push during the review ends this run as SUPERSEDED
 rm=$(bash "$(dirname "$0")/review.sh" $pr $iss | head -1 | sed -n "s/^model=\([^ ]*\).*/\1/p")
 t0=$(date +%s)
-dk=0
+dk=0; A="$SG_STATE/auto"; mkdir -p "$A"
 while :; do
   now=$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha 2>/dev/null)
   [ -n "$now" ] && [ "$now" != "$sha" ] && { echo "#$pr ${sha:0:9} SUPERSEDED by ${now:0:9}"; exit 0; }
@@ -15,6 +15,18 @@ while :; do
   if [ "$ms" = dirty ]; then dk=$((dk+1)); [ "$dk" -ge 2 ] && { r='[]'; break; }; else dk=0; fi
   r=$(gh api repos/$SG_REPO/commits/$sha/check-runs -q '[.check_runs[]|select((.name//"")!="CodeRabbit" and (.name//"")!="")]' 2>/dev/null) \
     && [ "$(echo "$r"|jq length)" -gt 0 ] && [ "$(echo "$r"|jq '[.[]|select(.status!="completed")]|length')" = 0 ] && break
+  # A push can arrive with no workflow run behind it: the required checks then sit at "Expected - waiting for status
+  # to be reported" and this loop spins to the 45 min timeout. Measured on PR #1285 (2026-10-10): the fix run's push of
+  # 8ced7e274 created no run at all, while the same `git push` by hand minutes later created both gates. Past the grace
+  # window a head with zero check runs is dispatched once, which is what a person would do.
+  if [ ! -e "$A/cidisp-${sha:0:9}" ] && [ $(( $(date +%s) - t0 )) -gt 90 ] && [ "$(gh api "repos/$SG_REPO/commits/$sha/check-runs?per_page=1" -q .total_count 2>/dev/null)" = 0 ]; then
+    touch "$A/cidisp-${sha:0:9}"
+    ref=$(gh api repos/$SG_REPO/pulls/$pr -q .head.ref 2>/dev/null)
+    if [ -n "$ref" ] && gh workflow run "${SG_CI_WORKFLOW:-checks.yml}" -R "$SG_REPO" --ref "$ref" >/dev/null 2>&1; then
+      echo "#$pr ${sha:0:9} CI_DISPATCH: the head has no check run at all, so the gate would wait forever; ${SG_CI_WORKFLOW:-checks.yml} dispatched on $ref"
+      printf "CI dispatch: PR #%s @ %s came out of the fix run with no workflow run behind it, so none of the required checks would ever report. \`%s\` was dispatched on \`%s\`.\n" $pr ${sha:0:9} "${SG_CI_WORKFLOW:-checks.yml}" "$ref" > "$SG_STATE/cq/$iss-cidisp$$.md"
+    fi
+  fi
   [ $(( $(date +%s) - t0 )) -gt 2700 ] && { echo "#$pr ${sha:0:9} CI_TIMEOUT after 45m"; printf "STALL CI: PR #%s @ %s has checks unfinished or missing after 45 min.\n" $pr ${sha:0:9} > "$SG_STATE/cq/$iss-cistall$$.md"; exit 1; }
   sleep 15; done
 ci=$(echo "$r"|jq -r '[.[]|.conclusion]|group_by(.)|map("\(.[0]):\(length)")|join(",")'); [ -n "$ci" ] || ci=none
