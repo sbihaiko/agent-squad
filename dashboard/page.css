@@ -206,6 +206,7 @@
 .script-diagram .batch-name { font-weight: 600; font-size: 14px; fill: currentColor; }
 .script-diagram .step rect { fill: #eef3fb; stroke: #4a6fa5; stroke-width: 1.5; }
 .script-diagram .step.manual rect { fill: #fff6e0; stroke: #b7791f; stroke-dasharray: 6 4; }
+.script-diagram .step.sensitive rect { stroke: #b03030; stroke-width: 2.5; }
 .script-diagram .step-id { font-weight: 600; fill: #222; }
 .script-diagram .step-text { fill: #222; }
 .script-diagram .step-tags { fill: #555; font-size: 11px; }
