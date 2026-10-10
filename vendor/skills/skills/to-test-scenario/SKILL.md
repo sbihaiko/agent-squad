@@ -43,12 +43,21 @@ Do not close or edit any issue the scenario came from.
 
 ### 5. Run
 
-Run the script on the squad's GUI test infrastructure through `scripts/gui_test_run_script.py <script.json> --adapter mesen-gui` (needs `MESENAI_ROOT`, `MESEN_GUI_BINARY` and `MESEN_CORE_LIB`; if the core cannot load, the run **fails**, never skips). It writes one result per step: `passed`, `failed (expected X, observed Y)`, `needs review`, `pending`.
-If the wrapper does not exist yet, say so and stop after publishing: do not simulate a run.
+Run the script on the squad's GUI test infrastructure:
+
+```bash
+python3 scripts/gui_test_run_script.py <script.json> --adapter mesen-gui [--out <results.json>]
+```
+
+It needs `MESENAI_ROOT` (a MesenAI checkout holding `scripts/gui_test/mesen_gui_adapter.py`), `MESEN_GUI_BINARY` (the built launcher of a build carrying the test hook) and `MESEN_CORE_LIB` (the `MesenCore` library of that same build). A missing variable, or a native core that cannot be loaded, makes the run **fail** — never skip. The command validates the script against the adapter's advertised capabilities *before* it launches anything, and rejects a script naming an action, check or variant the adapter does not advertise, naming what is missing.
+
+It writes one result per step — `passed`, `failed (expected X, observed Y)`, `failed (unknown id)`, `needs review`, `pending` — plus the run id, the script sha, the platform and the build SHA, to `--out` (default `./gui-test-results/<name>-<run id>.json`), with the batch logs and the captures beside it. A failed step exits non-zero; `needs review` and `pending` do not and are listed. A run that executed no step is a failure. A red run files **one** bug for the whole run through `scripts/report-bug.sh` (never one per step); `--no-report-bug` turns that off.
+
+That results file is the run report step 6 reads. Never simulate a run, and never hand a verdict to a case the report does not carry.
 
 ### 6. Write results back
 
-For every case, comment on its sub-issue with the verdict, the observed value, the variant and the evidence link (screenshots go through the privacy gate and reach an issue only via the evidence branch, never as a CI artifact). Then:
+Read the run's results file and, for every case, comment on its sub-issue with the verdict, the observed value, the variant and the evidence link (screenshots go through the privacy gate and reach an issue only via the evidence branch, never as a CI artifact). A case with no result in the report is reported as such, never passed. Then:
 
 - `passed` → close the sub-issue.
 - `failed` → leave open, comment the failure, and let the run file **one bug** through `scripts/report-bug.sh` with the failed steps (never a bug per step).
