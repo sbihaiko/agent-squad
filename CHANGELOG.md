@@ -2,6 +2,7 @@
 
 ## 0.2.2 (local fork, 2026-10-10)
 
+- squad-goal: janitor rule H checks board state against the issue's loop comments (once per 10 min, report-only): `RED-LOOP` after 3+ fork-suite REDs with no green close, `STATE-REGRESSION` for a Todo/Blocked card that already reached Code Complete/Testing or a Done card on an open issue. New `test-janitor-h.sh`.
 - squad-goal: `serial.sh <name> <cmd>` serializes GUI suites with a per-name lock (stale-pid takeover, exit code passed through). Concurrent fork suites made the second emulator exit 0 through Mesen's SingleInstance mutex and read as red tests; the mesenai profile's `SG_FORK_TEST_CMD` now runs through it. New `test-serial.sh`.
 - squad-goal: merge stalls are now visible and self-healing. The autopilot logs `HOLD #pr @ sha: <reason>` (once per head and reason) when an APPROVE PR does not merge; janitor rule G reports `READY-NOT-MERGED` for an APPROVE + clean PR left unmerged 5 min and runs one autopilot pass (never merges itself). New `test-autopilot-hold.sh`, `test-janitor-g.sh`.
 - squad-goal: `childcc.py` also backfills runs that already have their verdict (tiny and fork-only runs go pass → verdict in under 1 s and were never seen live): the card moves to Code Complete only from Todo/In Progress/Blocked, never past it. New `test-childcc.sh`.

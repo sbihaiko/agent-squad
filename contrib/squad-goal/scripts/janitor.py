@@ -7,7 +7,10 @@
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
  G  an open PR on the base branch whose revci line for its current head says APPROVE (5 min old), mergeable clean, with no auto/merged-<pr>: report READY-NOT-MERGED and run one autopilot pass
-    (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why)."""
+    (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why).
+ H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
+    RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
+    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
 import json, os, pathlib, re, signal, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 acts = []
@@ -122,6 +125,37 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
     elif age > 900 and not k2.exists():
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
         if not dry: k2.touch()
+hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
+if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
+    if not dry: hm.touch()
+    try: items = json.loads(hb.read_text()).get("items", [])
+    except Exception: items = []
+    for it in items:
+        n = it.get("n"); stt = it.get("st"); op = it.get("s") == "open"
+        if not (isinstance(n, int) and n >= 1102): continue
+        if stt == "Done" and op:
+            mk = st / "auto" / f"janitor-regress-{n}-done-open"
+            if not mk.exists():
+                say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open")
+                if not dry: mk.touch()
+            continue
+        if not (op and stt in ("Todo", "Blocked", "In Progress", "Code Complete")): continue
+        cm = [x.split("\t", 1) for x in sh("gh", "api", f"repos/{repo}/issues/{n}/comments?per_page=100", "--paginate", "--jq", r'.[]|[.created_at,(.body|gsub("\n";" "))]|join("\t")').splitlines() if "\t" in x]
+        reds = 0
+        for _, b in cm:
+            if "the fork suite failed after merging" in b: reds += 1
+            elif re.search(r"Fork half merged:.*fork suite green|^Done \(fork-only work", b): reds = 0
+        if reds >= 3:
+            mk = st / "auto" / f"janitor-redloop-{n}-{reds}"
+            if not mk.exists():
+                say(f"RED-LOOP #{n}: {reds} fork-suite REDs with no green fork close since; the loop is not converging (NEEDS OWNER)")
+                if not dry: mk.touch()
+        reach = [t for t, b in cm if re.search(r"Card -> Code Complete|merged automatically|Fork half merged:|^Done \(fork-only work", b)]
+        if stt in ("Todo", "Blocked") and reach:
+            mk = st / "auto" / f"janitor-regress-{n}-{stt}"
+            if not mk.exists():
+                say(f"STATE-REGRESSION #{n}: card is {stt} but its history reached Code Complete/Testing at {reach[-1]}")
+                if not dry: mk.touch()
 if acts and not dry:
     kinds = {}
     for a in acts: k = a.split()[0] if not a.startswith("kill") else ("kill " + ("dashboard" if "dashboard" in a else "leftover")); kinds[k] = kinds.get(k, 0) + 1
