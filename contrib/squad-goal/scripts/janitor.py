@@ -11,6 +11,9 @@
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs.
+ K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
+    after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
+ M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
@@ -67,6 +70,7 @@ for r in names:
         age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
         if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
             say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
+            if not dry: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], capture_output=True, text=True, cwd=co)   # K: re-arm the PR sha of a never-started autofix run
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
             continue
@@ -121,10 +125,10 @@ for n, i in live.items():
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()
 for d in (st / "auto").glob("disp-*"):
-    if now - d.stat().st_mtime < 1800: continue
     req = d.read_text().strip(); lg = st / f"{req}.log"
-    n = d.name[5:]
-    if not (lg.exists() and "verdict failed" in lg.read_text() and n not in byissue): continue
+    n = d.name[5:]; lt = lg.read_text() if lg.exists() else ""
+    if now - d.stat().st_mtime < (600 if "Nothing ran" in lt else 1800): continue   # K: a refused start (`Nothing ran`) frees the issue after 10 min
+    if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
     if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged): the issue is past dispatch
@@ -159,6 +163,26 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
     elif age > 900 and not k2.exists():
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
         if not dry: k2.touch()
+alerts = st / "alerts.log"
+def alert(msg):   # alerts.log is what health.sh and the session read; the notification reaches the human away from the terminal
+    open(alerts, "a").write(time.strftime("%F %T ") + msg + "\n")
+    if not dry: subprocess.run([os.environ.get("JANITOR_NOTIFY", "/usr/bin/osascript"), "-e", 'display notification "' + msg.replace('"', "'")[:180] + '" with title "squad-goal"'], capture_output=True)
+liveq = " ".join((folder(r) / "request.txt").read_text() for r in keep if (folder(r) / "request.txt").exists() and folder(r).name in live)
+for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)"').splitlines():   # M
+    pr, sha, pb, hr, ua = (l.split() + ["", "", "", "", ""])[:5]
+    if not (pr.isdigit() and pb == base and ua): continue
+    try: upd = time.mktime(time.strptime(ua, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+    except ValueError: continue
+    if now - upd < 1200: continue
+    mk = st / "auto" / f"janitor-stuck-{pr}-{sha[:9]}"
+    if mk.exists(): continue
+    ms = sh("gh", "api", f"repos/{repo}/pulls/{pr}", "-q", ".mergeable_state").strip()
+    ci = sh("bash", "-c", f"grep -h '^#{pr} {sha[:9]} ' '{st}/revci-{pr}.out' 2>/dev/null | tail -1 | sed -n 's/.*CI=\\([^ ]*\\).*/\\1/p'").strip()
+    why = "conflicts with the base (dirty)" if ms == "dirty" else ("CI red (" + ci + ")" if re.search(r"failure|timed_out|cancelled", ci) else "")
+    if not why or f"#{pr}" in liveq or hr in liveq: continue
+    tried = sum(1 for _ in (st / "auto").glob(f"retry-{pr}-{sha[:9]}"))
+    say(f"PR-STUCK #{pr} @ {sha[:9]}: {why}, unchanged {int((now - upd) // 60)} min, no live run on it" + (" (retries spent)" if tried else ""))
+    if not dry: mk.touch(); alert(f"PR #{pr} stuck: {why}; no live fix run for {int((now - upd) // 60)} min")
 hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     if not dry: hm.touch()

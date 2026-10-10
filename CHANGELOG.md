@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.2.2 (local fork, 2026-10-10)
+- squad-goal: four guards against silent stalls. Janitor rule K re-arms stale `queued-*` markers via `retryfix.sh` when a fix run never started; rule M alerts on PRs stuck (conflict / red CI, no live run); `wtclean.sh` rule L culls loose clean+pushed `~/wt-*` worktrees (never `~/wt-e2e*`: removing them killed every real-emulator launch with `exited (-15) before opening its hook`); `health.sh` + `health-install.sh` publish `health.json` and notify via a launchd agent. Tests: `test-janitor-kmn.sh`, `test-wtclean.sh` (loose cases), `test-health.sh`.
 - squad-goal: runs that never started no longer pile up as "starting" panels: janitor rule J drops a run with no `record.jsonl` after 5 min (kills its dashboard), and `vendor-guard.sh` re-vendors drifted personal skills so `squad start` stops refusing with "vendor/skills is not clean" (the cause: `to-test-scenario` bytes differed from VERSIONS.json, so every dispatch since then did nothing).
 - squad-goal: janitor rule I stops a live run whose accepted issues are all closed as duplicates / not planned (report-only for other closures), and `autobug.sh` skips open bug issues titled `[duplicate…`; wasted fix runs for closed duplicate bugs no longer burn slots (`test-janitor-i.sh`).
 
