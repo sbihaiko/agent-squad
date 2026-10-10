@@ -267,18 +267,13 @@ def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
 
 
 def _slice_batch(b, ids):
-    """Keep only the asked-for steps of `b`, in every role.
+    """Keep only the asked-for steps of `b`; its setup/teardown stay, the way `--case` keeps them (#1241).
 
     A batch's `setup`/`teardown` are steps too, and the runner runs `setup + steps` in the batch's own process
-    (`squad.gui_test_supervise.run_supervised`), so a setup step left behind by the id filter is not inert: it
-    opens a process the caller did not ask for and lands in the results as a row of its own. The pilot's `home`
-    batch carries one (`home.ring-at-launch`, #1232, "the home has settled with the ring on its one action"), and
-    keeping it while dropping the batch's other steps turned the continuation below into a second batch. Dropping it
-    costs nothing: every slice that asks for the batch's steps also asks for `launch.open-rom-focused`, which waits
-    for the same `ui.focused == play.home.open-rom` inside the same (merged) process.
+    (`squad.gui_test_supervise.run_supervised`). The pilot's `home` batch opens with a `home.first-focus` setup
+    step (#1251) that waits for the focus its cases assume, so a slice of its cases still has to pass it; a slice
+    that names it explicitly gets it back as a step of the continuation (`_pilot_for_the_real_app`).
     """
-    for role in ("setup", "teardown"):
-        b[role] = [s for s in b.get(role, []) if s["id"] in ids]
     b["steps"] = [s for s in b["steps"] if s["id"] in ids]
     return b
 
@@ -1336,10 +1331,13 @@ def _pilot_for_the_real_app(ids):
     # steps are preconditioned on `ui.focused == play.home.open-rom`, the state its preceding `launch` batch
     # establishes, and the Home's first focus lands a few ticks after the window opens. A second process would press
     # the pad at a Home that has focused nothing yet, so the continuation stays in the session of the batch before.
+    # A slice that names the batch's setup step (`home.first-focus`) asks for it as a case of the continuation: it waits
+    # on the state the batch before leaves, so it runs in that batch's process, in order.
     kept = []
     for b in d["batches"]:
-        if kept and not b["setup"]:
-            kept[-1]["steps"] = kept[-1]["steps"] + b["steps"]
+        asked = [s for s in b["setup"] if s["id"] in ids]
+        if kept and asked and len(asked) == len(b["setup"]):
+            kept[-1]["steps"] = kept[-1]["steps"] + b["setup"] + b["steps"]
         else:
             kept.append(b)
     d["batches"] = kept
