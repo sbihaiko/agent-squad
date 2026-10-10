@@ -1313,18 +1313,6 @@ def _pilot_for_the_real_app(ids):
     for b in d["batches"]:
         b["steps"] = [s for s in b["steps"] if s["id"] in ids]
     d["batches"] = [b for b in d["batches"] if b["steps"]]
-    # The runner opens one fresh application process per batch (ADR-0272 item 6), so a batch that carries no setup
-    # step can only run as the continuation of the batch before it. The pilot's `home` batch is exactly that: its
-    # steps are preconditioned on `ui.focused == play.home.open-rom`, the state its preceding `launch` batch
-    # establishes, and the Home's first focus lands a few ticks after the window opens. A second process would press
-    # the pad at a Home that has focused nothing yet, so the continuation stays in the session of the batch before.
-    kept = []
-    for b in d["batches"]:
-        if kept and not b["setup"]:
-            kept[-1]["steps"] = kept[-1]["steps"] + b["steps"]
-        else:
-            kept.append(b)
-    d["batches"] = kept
     d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
     d["variants"] = {"window.mode": ["windowed"]}
     # The three steps need no rom and none of the pilot's other fixture kinds (packs, second rom, zip, fds, library):
@@ -2005,15 +1993,6 @@ HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-
 # pilot says its ids are provisional until the in-app AutomationIds land (#1182). It is the one step this can fail on
 # today, and it is asserted as a subset so the case keeps its meaning when that slice lands and the step passes.
 HOME_BATCH_MAY_FAIL = {"home.open-library"}
-
-
-def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
-    """The runner opens one process per batch (ADR-0272 item 6), so the pilot's launch -> home continuation stays one batch."""
-    d = _pilot_for_the_real_app(HOME_BATCH_IDS)
-    assert [b["id"] for b in d["batches"]] == ["launch"], [b["id"] for b in d["batches"]]
-    assert [s["id"] for b in d["batches"] for s in b["steps"]] == HOME_BATCH_IDS
-    for b in d["batches"][1:]:
-        assert b["setup"], f"batch {b['id']} carries no setup step, so only the batch before it can open it"
 
 
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
