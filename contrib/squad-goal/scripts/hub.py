@@ -151,6 +151,9 @@ def runs():
         r = scan(p)
         if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code"}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
+        if st in ("failed", "unverified") and r["land"] and r["issues"]:   # its gate failed, but every issue it worked was closed afterwards (verified by hand, evidence on the issue)
+            closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
+            if all(int(n) in closed for n in r["issues"]): st = "verified"
         rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stale": 2}.get(st, 1)
         t1 = r["t1"] or time.time()
         out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
@@ -332,7 +335,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .r.show{background:#1f2a3a;box-shadow:inset 3px 0 0 var(--pin)}.r.pinned .pn{color:var(--pin)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 .b{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;border:1px solid}
-.running,.starting{color:var(--run)}.stale{color:var(--mute)}.landed,.pass,.ok{color:var(--ok)}.unverified{color:#4fb8d6}.needs-human,.stalled{color:var(--warn)}.failed{color:var(--err)}
+.running,.starting{color:var(--run)}.stale{color:var(--mute)}.landed,.pass,.ok{color:var(--ok)}.unverified{color:#4fb8d6}.verified{color:#56d364;font-style:italic}.needs-human,.stalled{color:var(--warn)}.failed{color:var(--err)}
 .m{color:var(--mute);font-size:11px;margin-top:2px}
 #q{width:100%;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
 .sp{border-bottom:1px solid var(--line);font-size:11px}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:12px;font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:none}
