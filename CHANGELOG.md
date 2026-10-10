@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `autofix.sh` and `forkclose.sh` requests also say "Spawn the child with spend 8"; an autofix run for #1209 was rejected with `spawn_rejected:spend_outside_budget` (router asked for 40).
 - squad-goal: `autobug.sh` and `autofrontier.sh` requests say "Spawn each child with spend 8", so the router no longer asks for 40 and gets `spawn_rejected:spend_outside_budget`.
 - squad-goal: `autobug.sh` skips an issue that a live run already works (a `spawn_accepted` for it in a run without a verdict), so it never dispatches a duplicate beside a run that is already fixing it.
 - squad-goal: `stack.sh` stacks on a stacked PR (chains up to `SG_STACK_DEPTH`, default 3); `forkclose.sh` treats a lock whose pid is gone as stale.

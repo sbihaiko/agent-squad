@@ -12,7 +12,7 @@ pr=$1 iss=$2 notes=${3:-}
 read -r ref sha ms < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha+" "+.mergeable_state') || exit 1
 s9=${sha:0:9}; [ -e "$A/fix-$pr-$s9" ] && [ -z "${AF_DRY:-}" ] && exit 0
 b=$(mktemp); probs=""
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $SG_REPO). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
+{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $SG_REPO). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo "Fix every problem below on head $s9; do not change scope beyond them."
   line=$(grep "^#$pr $s9 " "$SG_STATE/revci-$pr.out" 2>/dev/null | tail -1)
   if [[ $line == *CHANGES* ]]; then probs+=" review"
