@@ -1806,3 +1806,53 @@ def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_
     _, results = _run_1198(tmp_path, save_stays_in_auto=True)
     bad = {r["id"] for r in results if r["verdict"].startswith("failed")}
     assert bad == {"compose.save", "compose.save-says-so"}
+
+
+# --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
+
+class _ScenarioGitHub:
+    """A recorded-call stand-in for the real REST runner: no network, no `gh`."""
+
+    def __init__(self):
+        self.calls = []
+        self._next = 100
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        if op == "create_issue":
+            self._next += 1
+            return {"number": self._next, "id": 900 + self._next}
+        return {}
+
+    def of(self, op):
+        return [kw for o, kw in self.calls if o == op]
+
+
+def _pilot_1223():
+    return json.loads((_mesenai() / "docs" / "validation" / "process"
+                       / "play-pad-only.gui-test.json").read_text(encoding="utf-8"))
+
+
+def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them_ready_for_agent():
+    from squad import to_test_scenario as tts
+    d = _pilot_1223()
+    validate(d)
+    plan = tts.build_plan(d, script_path="docs/validation/process/play-pad-only.gui-test.json",
+                          purpose="the pad-only Play script")
+    planned = [c for i in plan["issues"] for c in i["cases"]]
+    assert planned == tts.step_ids(d) and len(planned) > 100
+    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
+    assert plan["manual"] and plan["goals"]
+
+
+def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
+    from squad import to_test_scenario as tts
+    d = _pilot_1223()
+    plan = tts.build_plan(d, granularity="per-batch")
+    gh = _ScenarioGitHub()
+    first = tts.publish(plan, gh)
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
+    again = _ScenarioGitHub()
+    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
+    assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
