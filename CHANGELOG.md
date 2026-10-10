@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.13 (local fork, 2026-10-10)
+- squad-goal: a BLOCKED review (no model in the chain could answer at all: a spent quota, a window that has not opened, a model that hit its cap) is re-queued instead of leaving the PR parked. `autopilot.sh` read BLOCKED as "nothing to do": no CHANGES, no failing CI, no threads means no fix round and no merge, so PR #1285 sat with a clean head and no verdict until something else moved it. Now, when BLOCKED is the only problem, the review is re-run on the same head at most once every `SG_REREVIEW_MINUTES` (20) per head, so a transient outage heals on its own without spending a fix round or moving the head.
+
 ## 0.2.12 (local fork, 2026-10-10)
 - squad-goal: grok's review cap is 900 s, not 600. Measured on PR #1285: grok answered a mid-size diff (PR #1389) in 424 s and hit the 600 s cap on the larger one, so 600 s was still a cap the model could lose to, not a bound it worked inside. With the agy quota spent until 12/10 18:38 and codex limited until 14/10 01:01, grok is the only reviewer left inside the owner's no-Anthropic daytime window, so its headroom is the chain's headroom.
 
