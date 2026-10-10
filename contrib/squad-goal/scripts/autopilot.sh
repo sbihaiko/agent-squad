@@ -60,6 +60,15 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
     [ -e "$A/launched-$pr-$s9" ] && continue
     touch "$A/launched-$pr-$s9"
+    # A head that already conflicts with its base cannot merge as it is, so it will move before it can: reviewing it now
+    # spends a model on a diff that is about to change, and the conflict round that follows pushes a new head that is
+    # reviewed a second time. Fix the conflict first, and let the review see the rebased head. (This is how PR #1285 was
+    # reviewed against a head that had been doomed for minutes: #1391, its sibling, had merged on top of the same files.)
+    if [ "$(gh api repos/$SG_REPO/pulls/$pr -q .mergeable_state 2>/dev/null)" = dirty ]; then
+      [ -e "$A/queued-$pr-$s9" ] && continue
+      touch "$A/queued-$pr-$s9"; AF_SOFT=1 bg autofix.sh $pr $iss
+      echo "AUTOFIX queued #$pr @ $s9 (conflict before review: the head conflicts with its base, so a review of it would be spent on a diff that is about to move)"; continue
+    fi
     # prepush gate: process-only problems (closing keyword, a cited file missing from the head, profile checks) skip the
     # model review and go straight to a fix round as a CHANGES verdict (autofix reads review-<pr>.md as usual)
     pp=; if [ "${SG_PREPUSH_GATE:-yes}" = yes ] && pp=$(bash "$here/prepush.sh" $pr 2>/dev/null; exit $?) ; then :; elif [ -n "$pp" ]; then
