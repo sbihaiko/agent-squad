@@ -462,7 +462,7 @@ const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 // a run's name says what it is for: "fix PR #1202 · #1178", "panel · #1179 #1182", "#1183"; the run id moves to the detail line
 const label=r=>{const is=(r.issues||[]).filter(i=>+i!==r.fix).map(i=>"#"+i).join(" ");
   if(r.url)return "test "+is;
-  return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?(r.bug?"fix ":"code ")+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or code issues (stacked on a parent PR); "test" is kept for test-only runs
+  return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?(r.bug?"fix ":"build ")+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or build issues (stacked on a parent PR); "test" is kept for test-only runs
 const sub=r=>{const t=r.titles||{},ks=(r.issues||[]).filter(i=>+i!==r.fix&&t[i]);return ks.length===1?t[ks[0]]:ks.length?ks.map(i=>"#"+i+" "+t[i].split(" ").slice(0,4).join(" ")).join(" · "):""};
 function plan(){ // which runs fill the N slots: pinned first, then most recently updated; slots stay stable, top slot has hysteresis
   const byId=new Map(runs.map(r=>[r.id,r])),want=[];
