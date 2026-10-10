@@ -228,7 +228,11 @@ def refresh_board():
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())} or board_cache.get("lc", {})   # label colors as GitHub shows them
             if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
         except Exception as e: board_cache["err"] = str(e)[:80]
-        time.sleep(60)
+        for _ in range(30):   # every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag)
+            time.sleep(2)
+            try:
+                if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
+            except OSError: pass
 ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
@@ -674,7 +678,7 @@ if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTM
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
 $("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
 document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});
-pollBoard();setInterval(pollBoard,15000);
+pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 

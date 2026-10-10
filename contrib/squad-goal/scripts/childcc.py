@@ -7,7 +7,7 @@ past it is left alone because the marker is written the first time the child is 
 import json, os, pathlib, re, subprocess, sys
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
-board = os.path.expanduser("~/.claude/skills/drive-board/scripts/board-status.sh")
+board = str(pathlib.Path(__file__).resolve().parent / "board.sh")
 for r in (st / "active-runs.txt").read_text().split():
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue

@@ -15,6 +15,6 @@ fi
 : "${SG_STATE:=$HOME/.cache/squad-goal}"
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
 export SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING
-BOARD=~/.claude/skills/drive-board/scripts/board-status.sh
+BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req"
 touch "$SG_STATE/active-runs.txt"
