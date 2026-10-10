@@ -7,9 +7,11 @@
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again."""
 import json, os, pathlib, re, signal, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
-def say(m):
-    print("JANITOR " + m, flush=True)
-    if not dry: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
+acts = []
+def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets one summary line per pass
+    acts.append(m)
+    if dry: print("JANITOR " + m, flush=True)
+    else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 procs = {}
 for l in sh("/bin/ps", "-axo", "pid=,ppid=,command=").splitlines():
@@ -88,3 +90,7 @@ for d in (st / "auto").glob("disp-*"):
     if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged): the issue is past dispatch
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
+if acts and not dry:
+    kinds = {}
+    for a in acts: k = a.split()[0] if not a.startswith("kill") else ("kill " + ("dashboard" if "dashboard" in a else "leftover")); kinds[k] = kinds.get(k, 0) + 1
+    print("JANITOR " + ", ".join(f"{v} {k}" for k, v in kinds.items()) + " (details in cycle.log)", flush=True)
