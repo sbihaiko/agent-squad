@@ -1,9 +1,9 @@
-"""A call in flight reads as running, with everything the record knows about it (ticket #101).
+"""A call in flight reads as running, with everything the record knows about it.
 
 Guards the defect the owner found on 2026-10-02: a node that starts never showed the running state on the
 dashboard. The child of a dispatch stayed on `started` — a dashed outline and three dashes — for the whole
 call, up to sixteen minutes in the real run, then jumped to its result. A card in flight must show that it runs,
-for how long, and the last turn count and token count the record has (ADR-0051 rule 4: the last turn is the
+for how long, and the last turn count and token count the record has (the last turn is the
 evidence that a call is live, not abandoned).
 """
 import json
@@ -97,7 +97,7 @@ def test_a_progress_event_of_a_finished_call_does_not_mark_it_running():
 
 
 def test_a_call_left_open_by_a_finished_run_never_reads_as_running_again():
-    """A killed run can end with a call_start and no outcome. After the verdict nothing is in flight (ADR-0051 rule 4)."""
+    """A killed run can end with a call_start and no outcome. After the verdict nothing is in flight."""
     doc, events = _run()
     cut, _ = _cut(events, "route.router.1")
     v = next(e for e in events if e["event"] == "verdict")

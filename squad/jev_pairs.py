@@ -1,8 +1,8 @@
-"""Pair each Jev diagnostic in a run record with the held-out outcome of the same run (ticket #55).
+"""Pair each Jev diagnostic in a run record with the held-out outcome of the same run.
 
 The held-out outcome is the `ac_verify` gate: it copies the held-out acceptance test into the clone and runs the suite.
 A run that never reached `ac_verify` has no label and no pair. This module only reads records. It sets no threshold
-and makes no claim about one (ADR-0012, ADR-0018).
+and makes no claim about one.
 """
 import json
 from pathlib import Path
@@ -24,8 +24,8 @@ def collect(runs_dir, prefix="subject-"):
     """One record per run directory: {run, issue, held_out, verdict, jev: [payload, ...]}."""
     out = []
     for d in sorted(Path(runs_dir).glob(f"{prefix}*")):
-        rec = d / "run" / "record.jsonl"
-        if not rec.is_file():
+        rec = next((p for p in (d / "record.jsonl", d / "run" / "record.jsonl") if p.is_file()), None)   # the run folder itself, else the old `run/` layout
+        if rec is None:
             continue
         label, verdict, rows = pairs_of(record.read(rec))
         issue = int(d.name.split("-")[1])

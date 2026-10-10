@@ -1,4 +1,4 @@
-"""Suite-time guard (ADR-0123): a single test call over the cap fails, unless it carries `slow(reason=...)`."""
+"""Suite-time guard: a single test call over the cap fails, unless it carries `slow(reason=...)`."""
 import pytest
 
 DEFAULT_CAP_SECONDS = 20.0
@@ -35,6 +35,6 @@ def pytest_runtest_makereport(item, call):
     if report.duration > cap and _slow_reason(item) is None:
         report.outcome = "failed"
         report.longrepr = (
-            f"{item.nodeid} took {report.duration:.1f} s, over the {cap:g} s cap (ADR-0123). "
+            f"{item.nodeid} took {report.duration:.1f} s, over the {cap:g} s cap. "
             "Investigate the cause; do not tune the test to sit under the cap."
         )

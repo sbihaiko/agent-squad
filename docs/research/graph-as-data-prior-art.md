@@ -1,7 +1,7 @@
 # Graph-as-data prior art
 
 Answers ticket #5: how do existing orchestration systems express a graph as data?
-Researched on 2026-09-29. Language: US English, Concise STE100 (ADR-0001).
+Researched on 2026-09-29. Language: US English, Concise STE100.
 
 ## How to read this note
 
@@ -155,7 +155,7 @@ Graph is YAML or JSON with a spec version field.
 8. **Bound every loop in data.** LangGraph has `recursion_limit`. Temporal and ASL have max attempts. Require a maximum iteration count on each loop node. [LG-graph] [T-retry] [ASL-spec]
 9. **Model human approval as a first-class wait node with a timeout.** ASL uses `HeartbeatSeconds`. Argo `suspend` has `duration`. LangGraph needs a persisted state and an ID to resume. Maps to the map's "declared needs-human node". [SF-cb] [A-susp] [LG-int]
 10. **Separate the graph from the run record.** Temporal stores an append-only history. Airflow keeps run and task states apart from the DAG. The graph stays a static document, and events go in a log. [T-wf] [AF-run]
-11. **Keep the model's write surface narrow.** Argo `dependencies` and `depends` cannot mix, and ASL fixes state types. A closed set of node types and edge kinds gives the validator less to prove. Gate nodes stay outside the editable set (ADR-0012, ADR-0018). [A-dep] [ASL-spec]
+11. **Keep the model's write surface narrow.** Argo `dependencies` and `depends` cannot mix, and ASL fixes state types. A closed set of node types and edge kinds gives the validator less to prove. Gate nodes stay outside the editable set. [A-dep] [ASL-spec]
 
 ## 9. Open items
 

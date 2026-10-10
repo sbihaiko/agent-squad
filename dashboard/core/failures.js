@@ -1,8 +1,8 @@
-// Dashboard core module: Why a node failed, and a node's label. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: Why a node failed, and a node's label.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function failuresModule({ orNull }) {
-  // ---- Failures and dispatch children (ticket #91) ----
+  // ---- Failures and dispatch children ----
   // A reason is `<check id>:<code>:<detail>` from a gate, `check:<gate>:<code>:<detail>` from a dispatch check, or a bare code.
   // A check id has no underscore, a code has no hyphen: that is how `after_failed:route.router.1` stays a code.
   function reasonParts(text) {
@@ -46,11 +46,11 @@ function failuresModule({ orNull }) {
   }
 
   // The bare skill name of a node or a dispatch child: a skill field is a string, or a {name, version} object already
-  // resolved by squad/envelope.py (issue #99). The label drops the version; the detail panel keeps it.
+  // resolved by squad/envelope.py. The label drops the version; the detail panel keeps it.
   const skillName = (s) => (typeof s === "string" && s ? s : s && typeof s.name === "string" && s.name ? s.name : null);
 
-  // The role label on a node card (issue #99): what the node IS, derived from the graph node, never its bare name when a
-  // role is known. Display only: it never writes the graph and never enters the graph hash (ADR-0111). A node the rule does
+  // The role label on a node card: what the node IS, derived from the graph node, never its bare name when a
+  // role is known. Display only: it never writes the graph and never enters the graph hash. A node the rule does
   // not cover falls back to its name, so the label is never empty. A loop, an each, and a dispatch carry no role field of
   // their own (their bound and their kind sit on the detail line), and two loops would collide on the bare kind, so they
   // keep their own name, the only token that tells them apart.

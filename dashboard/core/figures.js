@@ -1,8 +1,8 @@
-// Dashboard core module: The numbers every read module sums, and the token and timeline figures of a record. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The numbers every read module sums, and the token and timeline figures of a record.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function figuresModule() {
-  // ---- A finished run: statistics, harness, and the hash rule (ticket #76) ----
+  // ---- A finished run: statistics, harness, and the hash rule ----
   // Every figure comes from a field the record has today. A field the record lacks is null, never zero (a sum of nulls is null).
   const num = (v) => typeof v === "number" && Number.isFinite(v);
 

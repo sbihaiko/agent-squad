@@ -1,4 +1,4 @@
-"""Facts: observations that a `when` or a proposal may read (ADR-0104, ADR-0106 rule 6).
+"""Facts: observations that a `when` or a proposal may read.
 
 Only code produces a fact. The registry is closed: a name outside it is refused on read and on write.
 A fact carries its instrument, its source, a timestamp, and a severity. A model never mints one.
@@ -11,17 +11,17 @@ from pathlib import Path
 from squad.graph import BUILTIN_FACTS
 
 BUILTIN_INSTRUMENT = {
-    "run_spend": "code: sum of measured SDK result spend over agent entries (ADR-0108)",
-    "run_spend_remaining": "code: run spend cap minus run_spend (ADR-0108)",
-    "depth": "code: depth of the child being requested (ADR-0113)",
-    "children_count": "code: accepted children of the requesting parent in its entry (ADR-0113)",
-    "spawn_rejected_count": "code: spawn_rejected events in this run (ADR-0113)",
-    "tier_pin": "code: the tier_pin engine option (ADR-0106 rule 6)",
+    "run_spend": "code: sum of measured SDK result spend over agent entries",
+    "run_spend_remaining": "code: run spend cap minus run_spend",
+    "depth": "code: depth of the child being requested",
+    "children_count": "code: accepted children of the requesting parent in its entry",
+    "spawn_rejected_count": "code: spawn_rejected events in this run",
+    "tier_pin": "code: the tier_pin engine option",
 }
 OPS = {"eq": operator.eq, "ne": operator.ne, "gt": operator.gt, "gte": operator.ge, "lt": operator.lt, "lte": operator.le}
 NOT_READY = object()
 
-# The tier classifier and the review backstop (ADR-0101 rule 2). A missing estimate is large.
+# The tier classifier and the review backstop. A missing estimate is large.
 TRIVIAL_MAX = {"files": 2, "added_lines": 50}
 MEDIUM_MAX = {"files": 10, "added_lines": 400}
 REVIEW_FILES, REVIEW_LINES = 3, 80
@@ -52,7 +52,7 @@ class Fact:
 
 
 def fact_errors(fact, current_pos, latest=None):
-    """Return why a fact is refused (ADR-0104 rule 7). An empty list means it is fresh and sourced.
+    """Return why a fact is refused. An empty list means it is fresh and sourced.
 
     `latest(source)` gives the newest version of a source. A fact is not refused only because it is old.
     """
@@ -87,17 +87,17 @@ class FactStore:
         if name in self.defs:
             return self.defs[name]["instrument"]
         if name.startswith("outcome:"):
-            return "code: the node's outcome, derived from its declared artifact (ADR-0105)"
+            return "code: the node's outcome, derived from its declared artifact"
         return BUILTIN_INSTRUMENT[name]
 
     def produce(self, name, value, source, item=None, timestamp=None, severity="info", instrument=None):
         if not self.registered(name):
-            raise UnregisteredFact(f"{name} is not in the facts registry (ADR-0104 rule 1)")
+            raise UnregisteredFact(f"{name} is not in the facts registry")
         if not source:
-            raise FactError(f"{name}: a fact with no source is refused (ADR-0104 rule 7)")
+            raise FactError(f"{name}: a fact with no source is refused")
         ts = self.clock() if timestamp is None else timestamp
         if not ts:
-            raise FactError(f"{name}: a fact with no timestamp is refused (ADR-0104 rule 7)")
+            raise FactError(f"{name}: a fact with no timestamp is refused")
         f = Fact(name, value, instrument or self.instrument_of(name), source, ts, severity)
         self.values[(name, item)] = f
         return f
@@ -105,7 +105,7 @@ class FactStore:
     def get(self, name, item=None):
         """Return the fact in the item's scope, else the run scope, else None. An unregistered name raises."""
         if not self.registered(name):
-            raise UnregisteredFact(f"{name} is not in the facts registry (ADR-0104 rule 1)")
+            raise UnregisteredFact(f"{name} is not in the facts registry")
         return self.values.get((name, item)) or self.values.get((name, None))
 
     def read(self, name, item=None):
@@ -117,7 +117,7 @@ class FactStore:
         out = {}
         for n in names:
             if n not in sees or n == "tier":
-                raise FactError(f"{n} is not on the proposer's sees list (ADR-0104 rule 2)")
+                raise FactError(f"{n} is not on the proposer's sees list")
             f = self.get(n)
             if f is not None:
                 out[n] = f.as_dict()

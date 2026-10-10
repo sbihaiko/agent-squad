@@ -1,4 +1,4 @@
-"""Tickets #34 and #35: the adaptation applier and its replay (ADR-0103, ADR-0104, ADR-0107 rule 1)."""
+"""Tickets #34 and #35: the adaptation applier and its replay."""
 import copy
 
 import pytest
@@ -10,7 +10,7 @@ from squad.record import read
 from tests.flows import agent, doc, scope_gate
 
 FLAG = {"name": "flag", "type": "bool", "instrument": "code: test flag", "source_kind": "artifact"}
-ADAPT = {"kinds": ["set_model", "set_effort", "narrow_tools", "shrink_turns", "shrink_spend"], "models": ["sonnet", "haiku"],
+ADAPT = {"kinds": ["set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend"], "models": ["sonnet", "haiku"],
          "efforts": ["low", "high"], "tools": ["Read"]}
 OK = {"output": {"x": 1}, "spend": 0.1}
 
@@ -46,12 +46,12 @@ def p(kind, value, target="target", facts=()):
 async def test_each_kind_is_applied_and_logged_as_proposed_validated_applied(tmp_path):
     g = ("outcome:gate",)
     eng = run(tmp_path, graph(late=True), {"prop": prop(p("set_model", "haiku", facts=g), p("set_effort", "low", facts=g), p("narrow_tools", ["Read"], facts=g),
-                                                p("shrink_turns", 5, facts=g), p("shrink_spend", 0.5, facts=g)), "target": OK})
+                                                p("shrink_stalls", 5, facts=g), p("shrink_spend", 0.5, facts=g)), "target": OK})
     await eng.run()
     kinds = [e["event"] for e in read(tmp_path / "record.jsonl") if e["event"] in ("proposed", "validated", "applied", "rejected")]
     assert kinds == ["proposed", "validated", "applied"] * 5
     a = eng.eff.agent(eng.nodes["target"])
-    assert (a["model"], a["effort"], a["tools"], a["turns_max"], a["spend_max"]) == ("haiku", "low", ["Read"], 5, 0.5)
+    assert (a["model"], a["effort"], a["tools"], a["stalls_max"], a["spend_max"]) == ("haiku", "low", ["Read"], 5, 0.5)
     e = ev(tmp_path, "applied")[0]
     assert e["old"] == "sonnet" and e["requested"] == "haiku" and e["proposer"] == "prop" and e["session"]
     assert e["facts"][0]["name"] == "outcome:gate" and {"instrument", "source", "timestamp"} <= set(e["facts"][0])
@@ -81,11 +81,11 @@ async def test_a_seventh_kind_is_rejected_whole_with_one_event_and_no_outcome(tm
     (p("set_effort", "max"), "effort_outside_range"),
     (p("narrow_tools", ["Read", "Bash"]), "tool_outside_range"),
     (p("narrow_tools", ["Read", "Edit"]), "tool_outside_range"),
-    (p("shrink_turns", 99), "turns_max_outside_range"),
-    (p("shrink_turns", 0), "turns_max_outside_range"),
+    (p("shrink_stalls", 99), "stalls_max_outside_range"),
+    (p("shrink_stalls", 0), "stalls_max_outside_range"),
     (p("shrink_spend", 5.0), "spend_max_outside_range"),
     (p("shrink_spend", 0.001), "spend_max_outside_range"),
-    (p("shrink_turns", "five"), "proposal_malformed"),
+    (p("shrink_stalls", "five"), "proposal_malformed"),
     (p("set_model", "haiku", target="gate"), "gate_target"),
     (p("set_model", "haiku", target="nowhere"), "unknown_target"),
     (p("shrink_loop_max", 1, target="work"), "kind_not_allowed_on_target"),
@@ -155,14 +155,14 @@ async def test_a_replayed_proposal_changes_the_effective_node_never_the_graph_or
     d = graph()
     d["nodes"].append({"name": "ask", "kind": "wait", "owner": "r", "deadline": 100, "default": "pass"})
     next(n for n in d["nodes"] if n["name"] == "main")["children"].append("ask")
-    eng = run(tmp_path, d, {"prop": prop(p("set_model", "haiku"), p("shrink_turns", 4)), "target": OK})
+    eng = run(tmp_path, d, {"prop": prop(p("set_model", "haiku"), p("shrink_stalls", 4)), "target": OK})
     first = await eng.run()
     assert first.exit_code == 10
     doc_before, hash_before = copy.deepcopy(eng.g.doc), eng.g.hash
     eng2 = run(tmp_path, d, {"prop": OK, "target": OK})
     v = await eng2.resume(answer="pass")
     a = eng2.eff.agent(eng2.nodes["target"])
-    assert (a["model"], a["turns_max"]) == ("haiku", 4)
+    assert (a["model"], a["stalls_max"]) == ("haiku", 4)
     assert eng2.g.doc == doc_before and eng2.g.hash == hash_before and v.verdict == "completed"
     assert eng2.adapter.calls == []           # nothing ran again: prop, target and gate are all recorded
 
@@ -172,9 +172,9 @@ async def test_a_resume_from_a_node_does_not_replay_what_that_node_applied(tmp_p
     d = graph()
     d["nodes"].append({"name": "ask", "kind": "wait", "owner": "r", "deadline": 100, "default": "pass"})
     next(n for n in d["nodes"] if n["name"] == "main")["children"].append("ask")
-    eng = run(tmp_path, d, {"prop": prop(p("shrink_turns", 4)), "target": OK})
+    eng = run(tmp_path, d, {"prop": prop(p("shrink_stalls", 4)), "target": OK})
     await eng.run()
-    eng2 = run(tmp_path, d, {"prop": prop(p("shrink_turns", 4)), "target": OK})
+    eng2 = run(tmp_path, d, {"prop": prop(p("shrink_stalls", 4)), "target": OK})
     v = await eng2.resume(from_node="prop", answer="pass")
     assert v.verdict == "completed" and not ev(tmp_path, "rejected")
     assert len(ev(tmp_path, "applied")) == 2

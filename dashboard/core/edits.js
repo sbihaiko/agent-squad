@@ -1,8 +1,8 @@
-// Dashboard core module: edit operations: node edits, field groups, add, remove, rename, change kind, connect, disconnect (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: edit operations: node edits, field groups, add, remove, rename, change kind, connect, disconnect. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
-  // ---- What a person may write (ADR-0111 rules 1, 2) ----
+  // ---- What a person may write ----
   // A node edit may not change a gate's check id or its params, a node's name, or its kind.
   function applyNodeEdit(doc, name, edited) {
     const i = doc.nodes.findIndex((n) => n.name === name);
@@ -11,13 +11,13 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     if (!isObj(edited)) return { error: "A node is one JSON object." };
     if (edited.name !== old.name) return { error: "The JSON edit keeps the name: use Rename, which updates every reference." };
     if (edited.kind !== old.kind) return { error: "The JSON edit keeps the kind: use Change kind." };
-    if (old.kind === "gate" && (edited.check !== old.check || !same(edited.params, old.params))) return { error: "A gate's check id and its thresholds are read-only (ADR-0100 rule 2, ADR-0111 rule 2)." };
+    if (old.kind === "gate" && (edited.check !== old.check || !same(edited.params, old.params))) return { error: "A gate's check id and its thresholds are read-only." };
     const nodes = doc.nodes.slice();
     nodes[i] = edited;
     return { doc: { ...doc, nodes } };
   }
 
-  // ---- Fields grouped by purpose (ticket #74, decision #60) ----
+  // ---- Fields grouped by purpose ----
   // The fields of a kind come from the engine's own schema, so a new schema field shows up with no edit here.
   // Every key a node holds sits in exactly one group; a key the schema does not know sits in "unknown" and is kept as written.
   const GROUPS = [
@@ -109,13 +109,13 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return applyNodeEdit(doc, name, edited);
   }
 
-  // ---- Add and remove a node (ticket #73) ----
-  // Both are pure: they return a new document. The rules of validate() judge the result, so a gap shows on the node (ADR-0111 rule 4).
+  // ---- Add and remove a node ----
+  // Both are pure: they return a new document. The rules of validate() judge the result, so a gap shows on the node.
   const HOLDS_CHILDREN = ["loop", "each"];
 
   function newNodeBody(doc, kind, name, opts) {
     const dispatch = doc.nodes.find((n) => isObj(n) && n.kind === "dispatch");
-    const budget = () => ({ turns: { min: 1, max: 10 }, spend: { min: 0.01, max: 1 } });
+    const budget = () => ({ stalls: { min: 1, max: 5 }, spend: { min: 0.01, max: 1 } });
     if (kind === "agent") return { name, kind, model: "sonnet", tools: [], budget: budget() };
     if (kind === "wait") return { name, kind, owner: "owner", deadline: 3600, default: "fail" };
     if (kind === "action") return { name, kind, effect: "commit" };
@@ -124,7 +124,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     if (kind === "dispatch") {
       // A dispatch names an entry agent and checks that exist; the person connects them. Until then the engine rule shows on the node.
       const keep = ["max_depth", "max_children", "max_parallel", "deadline", "join", "allow", "budget"];
-      const base = dispatch ? clone(Object.fromEntries(keep.map((k) => [k, dispatch[k]]))) : { max_depth: 2, max_children: 4, max_parallel: 1, deadline: 3600, join: "all", budget: { turns: { min: 3, max: 60 }, spend: { min: 0.05, max: 4 } },
+      const base = dispatch ? clone(Object.fromEntries(keep.map((k) => [k, dispatch[k]]))) : { max_depth: 2, max_children: 4, max_parallel: 1, deadline: 3600, join: "all", budget: { stalls: { min: 2, max: 5 }, spend: { min: 0.05, max: 4 } },
         allow: { models: ["sonnet"], efforts: ["medium"], tools: [], skills: [{ name: "tdd", version: "1" }], workspaces: ["worktrees/child"] } };
       return { ...base, name, kind, entry: "todo_entry", checks: ["todo_check"] };
     }
@@ -134,7 +134,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return { name, kind, check: reg.id, params: twin ? clone(twin.params) : Object.fromEntries((reg.params || []).map((p) => [p, null])) };
   }
 
-  // A gate picks a check id the registry holds, and the dashboard never adds one (ADR-0111 rule 2).
+  // A gate picks a check id the registry holds, and the dashboard never adds one.
   function gateOpts(doc, opts) {
     if (!(doc.gates || []).length) return { error: "The gates registry is empty: a gate needs a registered check id." };
     const check = opts.check === undefined ? doc.gates[0].id : opts.check;
@@ -190,8 +190,8 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
       .flatMap(([label, key, vs]) => (Array.isArray(vs) ? vs : []).filter((v) => typeof v === "string" && !(served[key] || []).includes(v)).map((v) => `${label} ${v}`));
   }
 
-  // ---- Rename a node and change its kind (ticket #78) ----
-  // Both are pure and return a new document. The rules of validate() judge the result, so a gap shows on the node (ADR-0111 rule 4).
+  // ---- Rename a node and change its kind ----
+  // Both are pure and return a new document. The rules of validate() judge the result, so a gap shows on the node.
   const NAME_RE = new RegExp(SCHEMA.$defs.name.pattern);
 
   // The places a node name is written: root, children, a dispatch's entry and checks, a `when` or a `sees` entry named outcome:<node>.
@@ -231,7 +231,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     const old = (Array.isArray(doc.nodes) ? doc.nodes : []).find((n) => isObj(n) && n.name === name);
     if (!old) return { error: `No node named ${name}.` };
     if (old.kind === kind) return { error: `${name} is already a ${kind}.` };
-    if (old.kind === "gate") return { error: `${name} is a gate: its check id and thresholds are read-only (ADR-0100 rule 2, ADR-0111 rule 2). Remove it and add the node you want.` };
+    if (old.kind === "gate") return { error: `${name} is a gate: its check id and thresholds are read-only. Remove it and add the node you want.` };
     if (kind === "gate") {
       const g = gateOpts(doc, opts);
       if (g.error) return g;
@@ -243,9 +243,9 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return { doc: { ...doc, nodes: doc.nodes.map((n) => (n === old ? body : n)) }, name };
   }
 
-  // ---- Connect and disconnect (ticket #77) ----
+  // ---- Connect and disconnect ----
   // A link is a loop or each child, a dispatch entry, or a dispatch check. `next` holds reserved words, never a node name, so no link sets it.
-  // Both functions are pure. A second parent or an orphan is allowed: validate() shows it on the node (ADR-0111 rule 4), and a save is never blocked.
+  // Both functions are pure. A second parent or an orphan is allowed: validate() shows it on the node, and a save is never blocked.
   function reaches(byName, from, to, seen) {
     if (from === to) return true;
     seen = seen || new Set();

@@ -1,4 +1,4 @@
-"""Save, draft copy, and review: the save gate, the diff, and the review sheet (#75, #84, #118)."""
+"""Save, draft copy, and review: the save gate, the diff, and the review sheet."""
 import copy
 import json
 import re
@@ -8,7 +8,7 @@ from tests.dashboard_helpers import CORE_DIR, page_template, run_node
 from tests.helpers import five, node
 
 
-# --- save, draft copy, and the changed-file stop (decision #62, ticket #75) ---
+# --- save, draft copy, and the changed-file stop ---
 def test_the_hash_chip_hashes_the_bytes_that_save_writes_and_equals_the_engine_hash():
     d = five()
     text = json.dumps(d, indent=2)
@@ -86,7 +86,7 @@ def test_the_dashboard_page_writes_a_file_only_after_the_save_gate_and_never_aut
     assert "core.hashChip(" in page
 
 
-# --- review (ticket #84): a diff by node name, declared caps, a command template, a review sheet. No run starts here (ADR-0117). ---
+# --- review: a diff by node name, declared caps, a command template, a review sheet. No run starts here. ---
 def _hash(d):
     return graph.canon_hash(d)
 
@@ -137,7 +137,7 @@ def test_declared_caps_are_the_document_values_as_written_and_nothing_is_added_u
     gate = next(g for g in caps["gates"] if g["name"] == "plan_gate")
     assert gate["check"] == '"plan-semantics"' and json.loads(gate["params"]) == {"max_work_items": 5}
     flat = json.dumps(caps).lower()
-    assert not any(w in flat for w in ("total", "sum", "bound", "forecast", "score"))   # ADR-0117 rule 3: no computed spend bound
+    assert not any(w in flat for w in ("total", "sum", "bound", "forecast", "score"))   # no computed spend bound
 
 
 def test_the_command_template_carries_the_reviewed_hash_and_every_set_option():
@@ -188,10 +188,10 @@ def test_the_review_sheet_is_plain_text_that_says_it_approves_nothing_and_holds_
 
 def test_the_review_code_starts_no_process_and_makes_no_request_and_the_page_has_no_run_control():
     core = "".join(p.read_text() for p in sorted(CORE_DIR.glob("*.js")))
-    review = core.split("// --- review (ticket #84", 1)[1].split("// The view is {k, tx, ty}", 1)[0]
+    review = core.split("// --- review: plain text", 1)[1].split("// The view is {k, tx, ty}", 1)[0]
     assert not re.search(r"require\(|child_process|fetch\(|XMLHttpRequest|WebSocket|https?://|createWritable|localStorage|indexedDB", review)
     page = page_template()
-    panel = page.split("// --- review panel (ticket #84", 1)[1].split("\n// --- ", 1)[0]
+    panel = page.split("// --- review panel:", 1)[1].split("\n// --- ", 1)[0]
     assert not re.search(r"fetch\(|XMLHttpRequest|WebSocket|child_process|https?://", panel)
     assert not re.search(r"<button[^>]*>\s*(Run|Launch|Start|Approve|Execute)", page, re.I)   # a control that starts a run or approves
     assert not re.search(r'id="b-(run|launch|start|approve)', page)

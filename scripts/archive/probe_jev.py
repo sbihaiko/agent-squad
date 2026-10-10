@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 DATA = ROOT / "scripts" / "archive" / "jev_data"
 ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-1.13.0"  # pinned; the alias moves
-DEADLINE_S = 60  # total per call, retries included (ADR-0051)
+DEADLINE_S = 60  # total per call, retries included
 BASELINE_MODEL = "haiku"
 
 

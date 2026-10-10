@@ -4,7 +4,7 @@ Date: 2026-09-30. Ticket: #13. Model: `jev-1.13.0`, pinned. Baseline: `claude-so
 
 ## Answer
 
-The data is too small and the labels are too noisy to set a confidence threshold. No threshold enters any gate (ADR-0012, ADR-0018). A gate stays deterministic.
+The data is too small and the labels are too noisy to set a confidence threshold. No threshold enters any gate. A gate stays deterministic.
 
 The owner asked for real usage, no mocks, no synthetic text. The earlier synthetic probes scored near 100 percent. Real requests score about 37 percent. The synthetic result does not transfer.
 
@@ -12,7 +12,7 @@ The owner asked for real usage, no mocks, no synthetic text. The earlier synthet
 
 - Real text came from past Claude Code sessions on this machine. The owner approved sending repo text to Jev.
 - Raw text stays in `scripts/archive/jev_data_real/`, which git ignores. Only aggregates are committed in `scripts/archive/jev_results_real/`.
-- A secret scrubber ran before any send. Jev calls carry a 60 s deadline (ADR-0051).
+- A secret scrubber ran before any send. Jev calls carry a 60 s deadline.
 - Jev calls: 601. Baseline calls: 601. Jev spend is unverified. Baseline spend used the OAuth usage limits.
 - Code: `scripts/archive/jev_real/extract.py`, `probe_skills.py`, `probe_screen.py`, `analyze.py`.
 
@@ -80,7 +80,7 @@ Jev at 0.5 flags about 14 percent of real fetched text, and the flagged items fo
 ## What this means for the design
 
 - Jev stays optional (section 2 of the Jev workflow note). Nothing depends on it.
-- Do not use a Jev confidence as a gate parameter. A gate is a stop condition, not a target (ADR-0012). A retuned threshold is a defect (ADR-0018).
+- Do not use a Jev confidence as a gate parameter. A gate is a stop condition, not a target. A retuned threshold is a defect.
 - If a Jev pick is ever used, it is a proposal to a model or a person, never a fact.
 - The next measurement needs more labeled items. It needs a label source better than "a skill ran after this request". A labeled set with known attacks is needed for the screen.
 

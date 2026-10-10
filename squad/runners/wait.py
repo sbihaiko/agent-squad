@@ -1,4 +1,4 @@
-"""The wait runner: halt for the owner, then pass, fail, or apply the default at the deadline (ADR-0107)."""
+"""The wait runner: halt for the owner, then pass, fail, or apply the default at the deadline."""
 from squad.engine_errors import Halt
 
 

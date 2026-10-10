@@ -1,4 +1,4 @@
-"""Ticket #139: run_start records the hash of every skill the graph can load (ADR-0130)."""
+"""Ticket #139: run_start records the hash of every skill the graph can load."""
 import json
 from pathlib import Path
 
@@ -109,7 +109,7 @@ async def test_an_older_record_without_skills_resumes_as_before(tmp_path):
     (v / "VERSIONS.json").write_text("{}")
     await make_skill_engine(v, run).resume(answer="pass")
 
-# Ticket #140: a start refuses on a dirty or hand-edited vendor/skills, before run_start is written (ADR-0130).
+# Ticket #140: a start refuses on a dirty or hand-edited vendor/skills, before run_start is written.
 
 def _refused(tmp_path, v, match):
     run = tmp_path / "run"

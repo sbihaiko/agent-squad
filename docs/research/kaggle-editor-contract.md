@@ -134,14 +134,14 @@ Needed to load in an editor of this kind:
 4. **Ordered child lists** for sequence, plus a separate reference list for "call as a tool". The editor draws these as different edges (E:416-418).
 5. **Named state keys**: a writer field and a reader syntax, so a static check can prove read-after-write (E:336-350).
 6. **Closed registries** (tools, skills, gate ids) that the editor can offer as checkboxes. The editor holds them in a constant. agent-squad should serve them from one source, so editor and validator cannot drift.
-7. **A separate read-only block for fixed limits**, kept outside the editable fields. For agent-squad, gates never adapt at run time (ADR-0012, ADR-0018). The schema should mark gate fields read-only so the editor shows them as text, as it shows `FW` (E:511-532).
+7. **A separate read-only block for fixed limits**, kept outside the editable fields. For agent-squad, gates never adapt at run time. The schema should mark gate fields read-only so the editor shows them as text, as it shows `FW` (E:511-532).
 8. **Layout kept out of the spec.** The editor stores positions apart from the spec and drops them on export (E:604). Keep the same split so a graph diff shows no layout noise.
 9. **Numeric budgets with min and max** so the editor can bound inputs and sum them along the run order, including loop multipliers (E:314, E:320-327).
 10. **Defaults for every optional field**, because import fills missing fields silently (E:669). The schema should say what each default is.
 
 Gaps to decide (the editor has no answer):
 - **Run-record events.** The editor reads none. The map lists "run-record events it reads" as open. The kaggle editor gives no shape to copy. The estimate panel is the closest part: it derives numbers from the spec only.
-- **Adapted topology.** The editor edits one static graph. It has no field for "the model proposed this change" or "code validated it". The schema needs a way to mark a graph or a change as proposed, validated, or applied. See ADR-0012 and the map decision on issue #2.
+- **Adapted topology.** The editor edits one static graph. It has no field for "the model proposed this change" or "code validated it". The schema needs a way to mark a graph or a change as proposed, validated, or applied. See the map decision on issue #2.
 - **Import validation.** The editor accepts a file with no schema check. A new editor should validate against the machine-readable schema on import and refuse a bad file with a message.
 - **Two copies of the rules.** Editor checks (E:291-404) and script checks (S:125-198) duplicate each other. One schema plus one rule set should serve both.
 - **Edge editing.** Edges change only through card fields. The graph cannot draw an edge. A later build may want that. The schema does not depend on it.

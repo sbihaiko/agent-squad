@@ -76,7 +76,7 @@ async def deadline(kind: str) -> dict:
         else:
             with anyio.fail_after(DEADLINE_S):
                 await consume(prompt, options(), results)
-    except (asyncio.TimeoutError, TimeoutError):
+    except TimeoutError:
         timed_out = True
     elapsed = round(time.time() - t0, 1)
     await asyncio.sleep(5)

@@ -6,7 +6,7 @@ pairing each request with its receipt or `None`, `Cart.fillable` answering
 whether a backorder can now be filled, and `RevenueReport.open_restocks`
 reporting the ledger's unclosed rows.
 
-Every assertion below is one the issue text (20-*.md) states (ADR-0119). The
+Every assertion below is one the issue text (20-*.md) states. The
 text names no exception class, no row attribute and no remainder reader, so
 the test asks only that a refusal raises, reads a ledger row as the pair the
 text names (a request and its receipt or `None`), and reads a remainder by

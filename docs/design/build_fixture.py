@@ -1,8 +1,9 @@
 """Build five-phases.graph.json and five-phases.mmd. Design hand-off, not runtime code."""
 import json
 
+
 def rng(a, b): return {"min": a, "max": b}
-def bud(t0, t1, s0, s1): return {"turns": rng(t0, t1), "spend": rng(s0, s1)}
+def bud(t0, t1, s0, s1): return {"stalls": rng(t0, t1), "spend": rng(s0, s1)}
 def agent(name, model, tools, b, dl, **kw):
     n = {"name": name, "kind": "agent", "model": model, "tools": tools, "budget": b, "deadline": dl}
     n.update(kw); return n
@@ -27,10 +28,10 @@ facts = [
  {"name": "visual", "type": "bool", "instrument": "code: changed files and web app flag, computed before execute", "source_kind": "target"},
  {"name": "git", "type": "bool", "instrument": "code: git is available in the target", "source_kind": "target"},
  {"name": "work_items", "type": "int", "instrument": "code: length of decompose.work_items, or 1 when decompose did not run", "source_kind": "artifact"},
- {"name": "review_required", "type": "bool", "instrument": "code: derived from diff size and sensitive; replaces the size backstop gate (ADR-0101)", "source_kind": "artifact"},
- {"name": "blocking_learnings", "type": "int", "instrument": "code: count of blocking entries in the declared file learnings.json (ADR-0110: no cross-run input)", "source_kind": "artifact"},
+ {"name": "review_required", "type": "bool", "instrument": "code: derived from diff size and sensitive; replaces the size backstop gate", "source_kind": "artifact"},
+ {"name": "blocking_learnings", "type": "int", "instrument": "code: count of blocking entries in the declared file learnings.json (no cross-run input)", "source_kind": "artifact"},
  {"name": "architecture_issues", "type": "int", "instrument": "code: count of architecture issues in the critic artifact", "source_kind": "run_record"},
- {"name": "run_spend", "type": "number", "instrument": "code: sum of SDK result spend over agent entries (ADR-0108)", "source_kind": "run_record"},
+ {"name": "run_spend", "type": "number", "instrument": "code: sum of SDK result spend over agent entries", "source_kind": "run_record"},
 ]
 gates = [
  {"id": "spec-shape", "params": []},
@@ -49,7 +50,7 @@ nodes = [
  agent("scout", "sonnet", RO, bud(5, 40, 0.05, 2), 600, output_key="size_estimate", next=REP),
  loop("spec", 4, ["spec_draft", "spec_gate", "spec_proxy"], when=tier_ne),
  agent("spec_draft", "opus", ["Read", "Grep"], bud(5, 60, 0.1, 4), 900, output_key="spec", next=REP,
-       adapt=adapt(["set_model", "set_effort", "shrink_turns", "shrink_spend"], ["opus", "sonnet"], sees=["run_spend"]), may_propose=True),
+       adapt=adapt(["set_model", "set_effort", "shrink_stalls", "shrink_spend"], ["opus", "sonnet"], sees=["run_spend"]), may_propose=True),
  gate("spec_gate", "ac-command-shape", {"duplicate_warn_ratio": 0.4}),
  agent("spec_proxy", "opus", ["Read"], bud(3, 20, 0.05, 2), 600, next=REP),
  loop("plan", 4, ["decompose", "plan_gate", "plan_proxy"], when={"fact": "tier", "op": "eq", "value": "large"}),
@@ -64,12 +65,12 @@ nodes = [
       adapt=adapt(["shrink_loop_max"])),
  agent("actor", "sonnet", ["Read", "Edit", "Write", "Bash"], bud(10, 120, 0.2, 8), 1800, output_key="diff",
        workspace="worktrees/item", next=REP,
-       adapt=adapt(["set_model", "set_effort", "narrow_tools", "shrink_turns", "shrink_spend"], ["sonnet", "haiku"], ["Read", "Edit", "Write"], ["sensitive", "run_spend"])),
+       adapt=adapt(["set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend"], ["sonnet", "haiku"], ["Read", "Edit", "Write"], ["sensitive", "run_spend"])),
  gate("scope_gate", "scope", {"allowed_generated": ["package-lock.json"]}),
  gate("security_gate", "security", {"sensitive_paths": ["auth", "crypto", ".env*"]}),
  agent("critic", "opus", ["Read", "Grep"], bud(3, 30, 0.05, 3), 900, next=REP,
        when={"fact": "review_required", "op": "eq", "value": True},
-       adapt=adapt(["set_model", "shrink_turns"], ["opus", "sonnet"], sees=["run_spend"])),
+       adapt=adapt(["set_model", "shrink_stalls"], ["opus", "sonnet"], sees=["run_spend"])),
  {"name": "merge", "kind": "action", "effect": "merge_land", "workspace": "worktrees/item", "deadline": 300, "next": {"fail": "continue"}},
  {"name": "manual_merge", "kind": "wait", "owner": "rafael", "deadline": 86400, "default": "fail",
   "when": {"fact": "outcome:merge", "op": "eq", "value": "fail"}, "next": {"fail": "exit:fail"}},
@@ -90,7 +91,7 @@ nodes += [
   "when": {"fact": "git", "op": "eq", "value": True}},
 ]
 doc = {"schema_version": 1, "name": "dev-squad-default",
-       "description": "The five dev_squad phases in the ADR-0100 to ADR-0111 vocabulary. Fixture for the schema.",
+       "description": "The five dev_squad phases in the graph vocabulary. Fixture for the schema.",
        "run": {"deadline": 21600, "max_parallel": 2, "spend_cap": 60},
        "facts": facts, "gates": gates, "root": "main", "nodes": nodes}
 json.dump(doc, open("five-phases.graph.json", "w"), indent=2); open("five-phases.graph.json", "a").write("\n")

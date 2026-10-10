@@ -10,7 +10,8 @@
   body.noside #left { display:none; }
   #left { grid-row:2; overflow:auto; border-right:1px solid var(--line); background:var(--panel); padding:4px 12px 12px; min-height:0; }
   #graph { grid-column:1; grid-row:2; }
-  #left { position:fixed; top:37px; bottom:0; left:0; width:360px; z-index:8; box-shadow:4px 0 16px #0006; }
+  #left { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; bottom:auto; z-index:9; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 48px #000b; padding:8px 20px 20px; }
+  body:not(.noside)::after { content:""; position:fixed; inset:37px 0 0 0; background:#0008; z-index:8; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
   button, label.btn { cursor:pointer; }
@@ -63,7 +64,7 @@
   #totals .cell b { color:var(--fg); font:600 13px var(--mono); }
   #totals .cell b.unk { color:var(--mute); font-weight:400; }
   #totals .past { color:#e0a030; }
-  /* #progress is the top bar (issue #97), parallel to #totals under the graph: the issue set the run landed. */
+  /* #progress is the top bar, parallel to #totals under the graph: the issue set the run landed. */
   #progress { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--line); font-size:12px; color:var(--mute); }
   #progress.on { display:flex; }
   #progress .cell { display:inline-flex; align-items:baseline; gap:6px; cursor:help; }
@@ -78,7 +79,7 @@
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
   #r-pos.past { color:var(--warn); }
-  /* #footer holds #hint and #legend as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap (#95). */
+  /* #footer holds #hint and #legend as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap. */
   #footer { position:absolute; left:12px; right:12px; bottom:10px; display:flex; justify-content:space-between; align-items:flex-end; gap:12px; pointer-events:none; }
   #hint { color:var(--mute); font-size:11px; white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
@@ -92,8 +93,8 @@
   .card .bd-e { fill:var(--err); font-size:10px; }
   .card .bd-o { fill:var(--warn); font-size:10px; }
   .card .st { fill:var(--mute); font-size:10px; }
-  .card .bd-c { fill:#ffb8b8; font-size:12px; font-weight:600; }   /* a failure reason: 12 px, light on the dark red card (ADR-0125) */
-  .card .rw { fill:var(--ok); font-size:11px; font-weight:600; }   /* a redo that passed, or a later attempt (issue #134) */
+  .card .bd-c { fill:#ffb8b8; font-size:12px; font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
+  .card .rw { fill:var(--ok); font-size:11px; font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:bold 14px sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
   pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:11px/1.4 var(--mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
@@ -111,7 +112,7 @@
   .runbox b { color:var(--fg); }
   .state-completed { color:var(--ok); } .state-none { color:var(--none); } .state-running { color:var(--acc); } .state-stalled { color:var(--warn); font-weight:600; }
   .card.running rect { stroke:var(--run); stroke-width:3.5; fill:#0f262a; }   /* running: a thick teal outline and the ▶ glyph; nothing moves, so prefers-reduced-motion has nothing to switch off */
-  /* The group card (ADR-0125): one square per child; the fill and the glyph both show the outcome. Selectors avoid `.card.<x> rect`, which the legend guard reads as a card color. */
+  /* The group card: one square per child; the fill and the glyph both show the outcome. Selectors avoid `.card.<x> rect`, which the legend guard reads as a card color. */
   .group-card { cursor:pointer; }
   .group-card.s-passed > rect { stroke:var(--ok); } .group-card.s-failed > rect { stroke:var(--err); stroke-width:1.8; }
   .group-card.s-deadline > rect, .group-card.s-needs-human > rect { stroke:var(--warn); } .group-card.s-running > rect { stroke:var(--run); stroke-width:3.5; }
@@ -131,7 +132,7 @@
   .group-card .sq.s-deadline rect, .group-card .sq.s-needs-human rect { fill:#2a2212; stroke:var(--warn); } .group-card .sq.s-deadline text, .group-card .sq.s-needs-human text { fill:var(--warn); }
   .group-card .sq.s-running rect { fill:#12263d; stroke:var(--run); } .group-card .sq.s-running text { fill:var(--run); }
   .group-card .sq.s-started rect { stroke:var(--acc); stroke-dasharray:3 2; }
-  .group-card .sq.sup rect { stroke-dasharray:3 2; }   /* a failed child a later attempt replaced (issue #134) */
+  .group-card .sq.sup rect { stroke-dasharray:3 2; }   /* a failed child a later attempt replaced */
   .group-card .sq:hover rect { stroke:#fff; }
   .group-card .sq:focus { outline:none; } .group-card g.sq.sq rect.fr { fill:none; stroke:none; } .group-card g.sq.sq:focus-visible rect.fr { stroke:#fff; stroke-width:2; }   /* the keyboard ring: an outer white ring, so a focused selected square still differs from a selected one */
   .group-card .sq.sel rect { stroke:#fff; stroke-width:2.5; }
@@ -167,7 +168,7 @@
   #help td:first-child { font:12px var(--mono); color:var(--fg); white-space:nowrap; }
   #help #help-legend { display:flex; flex-wrap:wrap; gap:6px 16px; }
 
-  /* The top bar holds identity, verdict, mode and files. The side panel is an inspector that opens on a selection (ADR-0124). */
+  /* The top bar holds identity, verdict, mode and files. The side panel is an inspector that opens on a selection. */
   #topbar { grid-column:1; height:37px; display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--panel); border-bottom:1px solid var(--line); min-width:0; }
   #topbar .grow { flex:1; }
   #ident { font-weight:600; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -260,11 +261,11 @@
 <div id="totals" role="status" aria-label="Run totals"></div>
 </div>
 <div id="status" role="status" title="Click to dismiss"></div>
-<script>const ENGINE = {"builtin_facts": ["children_count", "depth", "run_spend", "run_spend_remaining", "spawn_rejected_count", "tier_pin"], "forbidden_instrument": "(\\bmodel\\b|\\bjudge\\b|self-report|self report|confidence|pass rate|finding count|\\btrend\\b|\\b(another|other|previous|past|earlier) run\\b|adaptation report)", "forbidden_name": "(pass_rate|finding|trend|self_report|judge|confidence|effectiveness|learning_count)", "gate_registry": {"ac-command-shape": ["duplicate_warn_ratio"], "ac-verify": ["commands_from"], "learning-check": [], "plan-semantics": ["max_work_items"], "scope": ["allowed_generated"], "security": ["sensitive_paths"], "spec-shape": [], "spend-floor": ["min_remaining_usd"], "visual-guard": []}, "kinds": ["agent", "gate", "wait", "loop", "each", "action", "dispatch"], "schema": {"$defs": {"action": {"additionalProperties": false, "description": "Deterministic code with declared side effects. No model, no spend (ADR-0101).", "properties": {"deadline": {"$ref": "#/$defs/seconds"}, "effect": {"enum": ["worktree_create", "worktree_revert", "commit", "merge_land"]}, "kind": {"const": "action"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "reads": {"$ref": "#/$defs/paths"}, "when": {"$ref": "#/$defs/when"}, "workspace": {"type": "string"}, "writes": {"$ref": "#/$defs/paths"}}, "required": ["name", "kind", "effect"], "type": "object"}, "adapt": {"additionalProperties": false, "description": "The node's own range for run-time proposals (ADR-0103 rule 3, ADR-0104 rule 2). No block means the node is not adaptable.", "properties": {"efforts": {"items": {"type": "string"}, "minItems": 1, "type": "array"}, "kinds": {"items": {"enum": ["set_model", "set_effort", "narrow_tools", "shrink_turns", "shrink_spend", "shrink_loop_max"]}, "minItems": 1, "type": "array", "uniqueItems": true}, "models": {"items": {"type": "string"}, "minItems": 1, "type": "array"}, "sees": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "tools": {"items": {"type": "string"}, "type": "array"}}, "required": ["kinds"], "type": "object"}, "agent": {"additionalProperties": false, "properties": {"adapt": {"$ref": "#/$defs/adapt"}, "budget": {"$ref": "#/$defs/budget"}, "deadline": {"$ref": "#/$defs/seconds"}, "effort": {"type": "string"}, "instructions": {"description": "The role text the model reads before its inputs. Authored data: the graph hash covers it.", "type": "string"}, "kind": {"const": "agent"}, "may_propose": {"type": "boolean"}, "may_spawn": {"description": "Valid only on the entry agent of a dispatch node (ADR-0113 rule 2). Its output carries a spawns list.", "type": "boolean"}, "model": {"type": "string"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "output_key": {"type": "string"}, "reads": {"$ref": "#/$defs/paths"}, "skill": {"description": "A skill the entry agent runs through the /name prefix (ADR-0113 rule 6).", "type": "string"}, "tools": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "when": {"$ref": "#/$defs/when"}, "workspace": {"type": "string"}, "writes": {"$ref": "#/$defs/paths"}}, "required": ["name", "kind", "model", "tools", "budget"], "type": "object"}, "budget": {"additionalProperties": false, "description": "Turn cap and spend cap, each with a minimum and a maximum (ADR-0100 rule 5). A proposal shrinks toward min and never raises max (ADR-0103).", "properties": {"spend": {"$ref": "#/$defs/range_usd"}, "turns": {"$ref": "#/$defs/range_int"}}, "required": ["turns", "spend"], "type": "object"}, "dispatch": {"additionalProperties": false, "description": "An agent requests children inside an author-fixed envelope. Code validates each request (ADR-0113). A model never widens a field here.", "properties": {"allow": {"additionalProperties": false, "properties": {"efforts": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}, "models": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}, "skills": {"items": {"additionalProperties": false, "properties": {"name": {"minLength": 1, "type": "string"}, "version": {"pattern": "^[0-9a-f]{64}$", "type": "string"}}, "required": ["name"], "type": "object"}, "minItems": 1, "type": "array"}, "tools": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "workspaces": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}}, "required": ["models", "efforts", "tools", "skills", "workspaces"], "type": "object"}, "budget": {"$ref": "#/$defs/budget"}, "checks": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "deadline": {"$ref": "#/$defs/seconds"}, "entry": {"$ref": "#/$defs/name"}, "join": {"enum": ["all", "first_failure"]}, "kind": {"const": "dispatch"}, "max_children": {"minimum": 1, "type": "integer"}, "max_depth": {"minimum": 1, "type": "integer"}, "max_parallel": {"minimum": 1, "type": "integer"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "entry", "max_depth", "max_children", "max_parallel", "deadline", "join", "allow", "budget", "checks"], "type": "object"}, "each": {"additionalProperties": false, "properties": {"children": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "deadline": {"$ref": "#/$defs/seconds"}, "items": {"$ref": "#/$defs/name"}, "join": {"enum": ["all", "first_failure"]}, "kind": {"const": "each"}, "max_parallel": {"minimum": 1, "type": "integer"}, "mode": {"enum": ["parallel", "sequence"]}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "items", "mode", "join", "children", "deadline"], "type": "object"}, "fact": {"additionalProperties": false, "description": "A registered fact: only code produces it (ADR-0104 rule 1). The families outcome:<node>, run_spend, run_spend_remaining are built in.", "if": {"properties": {"type": {"const": "enum"}}}, "properties": {"instrument": {"minLength": 1, "type": "string"}, "name": {"$ref": "#/$defs/name"}, "source_kind": {"enum": ["artifact", "run_record", "target"]}, "type": {"enum": ["bool", "int", "number", "enum"]}, "values": {"items": {"type": "string"}, "minItems": 1, "type": "array"}}, "required": ["name", "type", "instrument", "source_kind"], "then": {"required": ["values"]}, "type": "object"}, "gate": {"additionalProperties": false, "description": "A deterministic check. No model, no when, no deadline, no adapt. Its fail is repeat or exit:fail and never names a node (ADR-0100, ADR-0101).", "properties": {"check": {"type": "string"}, "kind": {"const": "gate"}, "name": {"$ref": "#/$defs/name"}, "next": {"additionalProperties": false, "properties": {"fail": {"enum": ["repeat", "exit:fail"]}}, "type": "object"}, "params": {"type": "object"}}, "required": ["name", "kind", "check", "params"], "type": "object"}, "gate_def": {"additionalProperties": false, "properties": {"id": {"pattern": "^[a-z][a-z0-9-]*$", "type": "string"}, "params": {"items": {"type": "string"}, "type": "array"}}, "required": ["id", "params"], "type": "object"}, "loop": {"additionalProperties": false, "description": "Repeats its ordered children up to max. Max may only shrink at run time. Carries no deadline (ADR-0102 rule 3).", "properties": {"adapt": {"$ref": "#/$defs/adapt"}, "children": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "kind": {"const": "loop"}, "max": {"additionalProperties": false, "properties": {"min": {"minimum": 1, "type": "integer"}, "value": {"minimum": 1, "type": "integer"}}, "required": ["value", "min"], "type": "object"}, "max_by": {"const": "task", "description": "Opt-in: make `max` the ceiling of one task's attempts, not of the loop's entries (#98). Each entry adds one attempt to every `task` key its accepted children name; a task that reaches `max` attempts ends the loop `fail` with reason task_max_exhausted, and a loop that advances to a new task never spends the ceiling. An entry that names no task key adds one unnamed attempt. Omit for the old count-every-entry behavior."}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "stall_after": {"additionalProperties": false, "description": "Opt-in: exit `fail` with reason waves_stalled once this many consecutive entries land nothing, before `max` is ever reached (#93). An entry that lands at least one child resets the count. Omit for the old count-only behavior.", "properties": {"by": {"const": "land", "description": "The signal a wave counts as progress. Only \"land\" exists today."}, "count": {"minimum": 1, "type": "integer"}}, "required": ["count"], "type": "object"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "max", "children"], "type": "object"}, "name": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"}, "next": {"additionalProperties": false, "description": "Reserved words only, per outcome (ADR-0115).", "properties": {"deadline": {"$ref": "#/$defs/next_word"}, "fail": {"$ref": "#/$defs/next_word"}, "needs-human": {"$ref": "#/$defs/next_word"}, "pass": {"$ref": "#/$defs/next_word"}}, "type": "object"}, "next_word": {"enum": ["repeat", "continue", "exit:pass", "exit:fail", "exit:deadline", "exit:needs-human"]}, "paths": {"description": "Repo file paths a node declares (ADR-0110 rule 2). A path in one node's `reads` is never in another node's `writes`.", "items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true}, "range_int": {"additionalProperties": false, "properties": {"max": {"minimum": 1, "type": "integer"}, "min": {"minimum": 1, "type": "integer"}}, "required": ["min", "max"], "type": "object"}, "range_usd": {"additionalProperties": false, "properties": {"max": {"exclusiveMinimum": 0, "type": "number"}, "min": {"exclusiveMinimum": 0, "type": "number"}}, "required": ["min", "max"], "type": "object"}, "run_block": {"additionalProperties": false, "description": "Run-level defaults. An engine option may only lower them (ADR-0106 rules 7, 9).", "properties": {"deadline": {"description": "Seconds for the whole run, or null for no run deadline (owner ruling 2026-09-30: long runs may take days, the per-call deadline is the cap).", "oneOf": [{"$ref": "#/$defs/seconds"}, {"type": "null"}]}, "max_parallel": {"minimum": 1, "type": "integer"}, "spend_cap": {"exclusiveMinimum": 0, "type": "number"}}, "required": ["deadline", "max_parallel", "spend_cap"], "type": "object"}, "seconds": {"minimum": 1, "type": "integer"}, "wait": {"additionalProperties": false, "properties": {"deadline": {"$ref": "#/$defs/seconds"}, "default": {"enum": ["pass", "fail"]}, "kind": {"const": "wait"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "owner": {"minLength": 1, "type": "string"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "owner", "deadline", "default"], "type": "object"}, "when": {"additionalProperties": false, "description": "One predicate over a registered fact, read on every entry and never bypassed (ADR-0101 rules 4, 5).", "properties": {"fact": {"pattern": "^([a-z][a-z0-9_]*|outcome:[a-z][a-z0-9_]*)$", "type": "string"}, "op": {"enum": ["eq", "ne", "gt", "gte", "lt", "lte"]}, "value": {"type": ["boolean", "integer", "number", "string"]}}, "required": ["fact", "op", "value"], "type": "object"}}, "$id": "https://github.com/mmctech-ai/agent-squad/docs/design/graph.schema.json", "$schema": "https://json-schema.org/draft/2020-12/schema", "additionalProperties": false, "description": "One flat JSON document. Edges are name references. Rules: ADR-0100 to ADR-0111. Rules that a schema cannot express live in check_graph.py.", "properties": {"description": {"type": "string"}, "facts": {"items": {"$ref": "#/$defs/fact"}, "type": "array"}, "gates": {"items": {"$ref": "#/$defs/gate_def"}, "type": "array"}, "name": {"minLength": 1, "type": "string"}, "nodes": {"items": {"oneOf": [{"$ref": "#/$defs/agent"}, {"$ref": "#/$defs/gate"}, {"$ref": "#/$defs/wait"}, {"$ref": "#/$defs/loop"}, {"$ref": "#/$defs/each"}, {"$ref": "#/$defs/action"}, {"$ref": "#/$defs/dispatch"}]}, "minItems": 1, "type": "array"}, "root": {"$ref": "#/$defs/name"}, "run": {"$ref": "#/$defs/run_block"}, "schema_version": {"const": 1}}, "required": ["schema_version", "name", "run", "facts", "gates", "root", "nodes"], "title": "agent-squad graph document", "type": "object"}, "sees_forbidden": ["tier"], "write_tools": ["Bash", "Edit", "NotebookEdit", "Write"]};</script>
-<script>const EXAMPLE = {"description": "The five dev_squad phases in the ADR-0100 to ADR-0111 vocabulary. Fixture for the schema.", "facts": [{"instrument": "code: classify tier from scout.size_estimate; a missing estimate is large", "name": "tier", "source_kind": "artifact", "type": "enum", "values": ["trivial", "medium", "large"]}, {"instrument": "code: sensitive path set over scout.paths", "name": "sensitive", "source_kind": "artifact", "type": "bool"}, {"instrument": "code: changed files and web app flag, computed before execute", "name": "visual", "source_kind": "target", "type": "bool"}, {"instrument": "code: git is available in the target", "name": "git", "source_kind": "target", "type": "bool"}, {"instrument": "code: length of decompose.work_items, or 1 when decompose did not run", "name": "work_items", "source_kind": "artifact", "type": "int"}, {"instrument": "code: derived from diff size and sensitive; replaces the size backstop gate (ADR-0101)", "name": "review_required", "source_kind": "artifact", "type": "bool"}, {"instrument": "code: count of blocking entries in the declared file learnings.json (ADR-0110: no cross-run input)", "name": "blocking_learnings", "source_kind": "artifact", "type": "int"}, {"instrument": "code: count of architecture issues in the critic artifact", "name": "architecture_issues", "source_kind": "run_record", "type": "int"}, {"instrument": "code: sum of SDK result spend over agent entries (ADR-0108)", "name": "run_spend", "source_kind": "run_record", "type": "number"}], "gates": [{"id": "spec-shape", "params": []}, {"id": "ac-command-shape", "params": ["duplicate_warn_ratio"]}, {"id": "plan-semantics", "params": ["max_work_items"]}, {"id": "spend-floor", "params": ["min_remaining_usd"]}, {"id": "scope", "params": ["allowed_generated"]}, {"id": "security", "params": ["sensitive_paths"]}, {"id": "ac-verify", "params": ["commands_from"]}, {"id": "visual-guard", "params": []}, {"id": "learning-check", "params": []}], "name": "dev-squad-default", "nodes": [{"children": ["scout", "spec", "plan", "budget_gate", "execute", "verify", "ship"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "main"}, {"budget": {"spend": {"max": 2, "min": 0.05}, "turns": {"max": 40, "min": 5}}, "deadline": 600, "kind": "agent", "model": "sonnet", "name": "scout", "next": {"fail": "repeat"}, "output_key": "size_estimate", "tools": ["Read", "Grep", "Glob"]}, {"children": ["spec_draft", "spec_gate", "spec_proxy"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "spec", "when": {"fact": "tier", "op": "ne", "value": "trivial"}}, {"adapt": {"efforts": ["low", "medium", "high"], "kinds": ["set_model", "set_effort", "shrink_turns", "shrink_spend"], "models": ["opus", "sonnet"], "sees": ["run_spend"]}, "budget": {"spend": {"max": 4, "min": 0.1}, "turns": {"max": 60, "min": 5}}, "deadline": 900, "kind": "agent", "may_propose": true, "model": "opus", "name": "spec_draft", "next": {"fail": "repeat"}, "output_key": "spec", "tools": ["Read", "Grep"]}, {"check": "ac-command-shape", "kind": "gate", "name": "spec_gate", "next": {"fail": "repeat"}, "params": {"duplicate_warn_ratio": 0.4}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "turns": {"max": 20, "min": 3}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "spec_proxy", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"children": ["decompose", "plan_gate", "plan_proxy"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "plan", "when": {"fact": "tier", "op": "eq", "value": "large"}}, {"budget": {"spend": {"max": 4, "min": 0.1}, "turns": {"max": 60, "min": 5}}, "deadline": 900, "kind": "agent", "model": "opus", "name": "decompose", "next": {"fail": "repeat"}, "output_key": "work_items", "tools": ["Read", "Grep"]}, {"check": "plan-semantics", "kind": "gate", "name": "plan_gate", "next": {"fail": "repeat"}, "params": {"max_work_items": 5}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "turns": {"max": 20, "min": 3}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "plan_proxy", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"check": "spend-floor", "kind": "gate", "name": "budget_gate", "next": {"fail": "exit:fail"}, "params": {"min_remaining_usd": 1}}, {"children": ["worktree", "work", "merge", "manual_merge"], "deadline": 7200, "items": "work_items", "join": "all", "kind": "each", "max_parallel": 2, "mode": "parallel", "name": "execute"}, {"effect": "worktree_create", "kind": "action", "name": "worktree", "workspace": "worktrees/item"}, {"adapt": {"kinds": ["shrink_loop_max"]}, "children": ["actor", "scope_gate", "security_gate", "critic"], "kind": "loop", "max": {"min": 1, "value": 12}, "name": "work"}, {"adapt": {"efforts": ["low", "medium", "high"], "kinds": ["set_model", "set_effort", "narrow_tools", "shrink_turns", "shrink_spend"], "models": ["sonnet", "haiku"], "sees": ["sensitive", "run_spend"], "tools": ["Read", "Edit", "Write"]}, "budget": {"spend": {"max": 8, "min": 0.2}, "turns": {"max": 120, "min": 10}}, "deadline": 1800, "kind": "agent", "model": "sonnet", "name": "actor", "next": {"fail": "repeat"}, "output_key": "diff", "tools": ["Read", "Edit", "Write", "Bash"], "workspace": "worktrees/item"}, {"check": "scope", "kind": "gate", "name": "scope_gate", "next": {"fail": "repeat"}, "params": {"allowed_generated": ["package-lock.json"]}}, {"check": "security", "kind": "gate", "name": "security_gate", "next": {"fail": "repeat"}, "params": {"sensitive_paths": ["auth", "crypto", ".env*"]}}, {"adapt": {"kinds": ["set_model", "shrink_turns"], "models": ["opus", "sonnet"], "sees": ["run_spend"]}, "budget": {"spend": {"max": 3, "min": 0.05}, "turns": {"max": 30, "min": 3}}, "deadline": 900, "kind": "agent", "model": "opus", "name": "critic", "next": {"fail": "repeat"}, "tools": ["Read", "Grep"], "when": {"fact": "review_required", "op": "eq", "value": true}}, {"deadline": 300, "effect": "merge_land", "kind": "action", "name": "merge", "next": {"fail": "continue"}, "workspace": "worktrees/item"}, {"deadline": 86400, "default": "fail", "kind": "wait", "name": "manual_merge", "next": {"fail": "exit:fail"}, "owner": "rafael", "when": {"fact": "outcome:merge", "op": "eq", "value": "fail"}}, {"children": ["ac_verify", "visual", "learning_gate", "audit_a", "audit_b", "audit_c"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "verify"}, {"check": "ac-verify", "kind": "gate", "name": "ac_verify", "next": {"fail": "exit:fail"}, "params": {"commands_from": ["spec", "scout"]}}, {"children": ["visual_actor", "visual_guard", "visual_critic"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "visual", "when": {"fact": "visual", "op": "eq", "value": true}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "turns": {"max": 40, "min": 5}}, "deadline": 600, "kind": "agent", "model": "sonnet", "name": "visual_actor", "next": {"fail": "repeat"}, "tools": ["Bash", "Read"]}, {"check": "visual-guard", "kind": "gate", "name": "visual_guard", "next": {"fail": "repeat"}, "params": {}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "turns": {"max": 20, "min": 3}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "visual_critic", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"check": "learning-check", "kind": "gate", "name": "learning_gate", "next": {"fail": "exit:fail"}, "params": {}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "turns": {"max": 10, "min": 1}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_a", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "blocking_learnings", "op": "gt", "value": 0}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "turns": {"max": 10, "min": 1}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_b", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "architecture_issues", "op": "gt", "value": 0}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "turns": {"max": 10, "min": 1}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_c", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "work_items", "op": "gt", "value": 1}}, {"children": ["commit"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "ship"}, {"deadline": 120, "effect": "commit", "kind": "action", "name": "commit", "when": {"fact": "git", "op": "eq", "value": true}, "workspace": "."}], "root": "main", "run": {"deadline": 21600, "max_parallel": 2, "spend_cap": 60}, "schema_version": 1};</script>
-<script>const SERVED = {"efforts": ["high", "low", "medium"], "hash": "e692f45cd133975a796949c63fb500ed996c299a7f9b5b139acf15d2d4e7e29f", "models": ["claude-sonnet-5-5", "haiku", "opus", "sonnet"], "skills": ["agent-ask-matt", "agent-grill-me", "agent-grill-with-docs", "agent-handoff", "agent-implement", "agent-implement-spec", "agent-improve-codebase-architecture", "agent-squad-dashboard", "agent-to-questionnaire", "agent-to-spec", "agent-to-tickets", "agent-wayfinder", "ask-matt", "autonomy", "codebase-design", "diagnosing-bugs", "ego-browser", "panel", "squad-skill-update", "tdd", "to-spec", "to-tickets"], "sources": ["config/agent-defaults.yaml", "vendor/skills/skills", ".claude/skills", "five-phases", "router"], "tools": ["Agent", "Bash", "Edit", "Glob", "Grep", "NotebookEdit", "Read", "Task", "WebFetch", "WebSearch", "Write"]};</script>
+<script>const ENGINE = {"builtin_facts": ["children_count", "depth", "run_spend", "run_spend_remaining", "spawn_rejected_count", "tier_pin"], "forbidden_instrument": "(\\bmodel\\b|\\bjudge\\b|self-report|self report|confidence|pass rate|finding count|\\btrend\\b|\\b(another|other|previous|past|earlier) run\\b|adaptation report)", "forbidden_name": "(pass_rate|finding|trend|self_report|judge|confidence|effectiveness|learning_count)", "gate_registry": {"ac-command-shape": ["duplicate_warn_ratio"], "ac-verify": ["commands_from"], "learning-check": [], "plan-semantics": ["max_work_items"], "scope": ["allowed_generated"], "security": ["sensitive_paths"], "spec-shape": [], "spend-floor": ["min_remaining_usd"], "visual-guard": []}, "kinds": ["agent", "gate", "wait", "loop", "each", "action", "dispatch"], "schema": {"$defs": {"action": {"additionalProperties": false, "description": "Deterministic code with declared side effects. No model, no spend.", "properties": {"deadline": {"$ref": "#/$defs/seconds"}, "effect": {"enum": ["worktree_create", "worktree_revert", "commit", "merge_land"]}, "kind": {"const": "action"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "reads": {"$ref": "#/$defs/paths"}, "when": {"$ref": "#/$defs/when"}, "workspace": {"type": "string"}, "writes": {"$ref": "#/$defs/paths"}}, "required": ["name", "kind", "effect"], "type": "object"}, "adapt": {"additionalProperties": false, "description": "The node's own range for run-time proposals. No block means the node is not adaptable.", "properties": {"efforts": {"items": {"type": "string"}, "minItems": 1, "type": "array"}, "kinds": {"items": {"enum": ["set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend", "shrink_loop_max"]}, "minItems": 1, "type": "array", "uniqueItems": true}, "models": {"items": {"type": "string"}, "minItems": 1, "type": "array"}, "sees": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "tools": {"items": {"type": "string"}, "type": "array"}}, "required": ["kinds"], "type": "object"}, "agent": {"additionalProperties": false, "properties": {"adapt": {"$ref": "#/$defs/adapt"}, "budget": {"$ref": "#/$defs/budget"}, "deadline": {"$ref": "#/$defs/seconds"}, "effort": {"type": "string"}, "instructions": {"description": "The role text the model reads before its inputs. Authored data: the graph hash covers it.", "type": "string"}, "kind": {"const": "agent"}, "may_propose": {"type": "boolean"}, "may_spawn": {"description": "Valid only on the entry agent of a dispatch node. Its output carries a spawns list.", "type": "boolean"}, "model": {"type": "string"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "output_key": {"type": "string"}, "reads": {"$ref": "#/$defs/paths"}, "skill": {"description": "A skill the entry agent runs through the /name prefix.", "type": "string"}, "tools": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "when": {"$ref": "#/$defs/when"}, "workspace": {"type": "string"}, "writes": {"$ref": "#/$defs/paths"}}, "required": ["name", "kind", "model", "tools", "budget"], "type": "object"}, "budget": {"additionalProperties": false, "description": "Turn cap and spend cap, each with a minimum and a maximum. A proposal shrinks toward min and never raises max.", "properties": {"spend": {"$ref": "#/$defs/range_usd"}, "stalls": {"$ref": "#/$defs/range_int"}}, "required": ["stalls", "spend"], "type": "object"}, "dispatch": {"additionalProperties": false, "description": "An agent requests children inside an author-fixed envelope. Code validates each request. A model never widens a field here.", "properties": {"allow": {"additionalProperties": false, "properties": {"efforts": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}, "models": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}, "skills": {"items": {"additionalProperties": false, "properties": {"name": {"minLength": 1, "type": "string"}, "version": {"pattern": "^[0-9a-f]{64}$", "type": "string"}}, "required": ["name"], "type": "object"}, "minItems": 1, "type": "array"}, "tools": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "workspaces": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}}, "required": ["models", "efforts", "tools", "skills", "workspaces"], "type": "object"}, "budget": {"$ref": "#/$defs/budget"}, "checks": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "deadline": {"$ref": "#/$defs/seconds"}, "entry": {"$ref": "#/$defs/name"}, "join": {"enum": ["all", "first_failure"]}, "kind": {"const": "dispatch"}, "max_children": {"minimum": 1, "type": "integer"}, "max_depth": {"minimum": 1, "type": "integer"}, "max_parallel": {"minimum": 1, "type": "integer"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "entry", "max_depth", "max_children", "max_parallel", "deadline", "join", "allow", "budget", "checks"], "type": "object"}, "each": {"additionalProperties": false, "properties": {"children": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "deadline": {"$ref": "#/$defs/seconds"}, "items": {"$ref": "#/$defs/name"}, "join": {"enum": ["all", "first_failure"]}, "kind": {"const": "each"}, "max_parallel": {"minimum": 1, "type": "integer"}, "mode": {"enum": ["parallel", "sequence"]}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "items", "mode", "join", "children", "deadline"], "type": "object"}, "fact": {"additionalProperties": false, "description": "A registered fact: only code produces it. The families outcome:<node>, run_spend, run_spend_remaining are built in.", "if": {"properties": {"type": {"const": "enum"}}}, "properties": {"instrument": {"minLength": 1, "type": "string"}, "name": {"$ref": "#/$defs/name"}, "source_kind": {"enum": ["artifact", "run_record", "target"]}, "type": {"enum": ["bool", "int", "number", "enum"]}, "values": {"items": {"type": "string"}, "minItems": 1, "type": "array"}}, "required": ["name", "type", "instrument", "source_kind"], "then": {"required": ["values"]}, "type": "object"}, "gate": {"additionalProperties": false, "description": "A deterministic check. No model, no when, no deadline, no adapt. Its fail is repeat or exit:fail and never names a node.", "properties": {"check": {"type": "string"}, "kind": {"const": "gate"}, "name": {"$ref": "#/$defs/name"}, "next": {"additionalProperties": false, "properties": {"fail": {"enum": ["repeat", "exit:fail"]}}, "type": "object"}, "params": {"type": "object"}}, "required": ["name", "kind", "check", "params"], "type": "object"}, "gate_def": {"additionalProperties": false, "properties": {"id": {"pattern": "^[a-z][a-z0-9-]*$", "type": "string"}, "params": {"items": {"type": "string"}, "type": "array"}}, "required": ["id", "params"], "type": "object"}, "loop": {"additionalProperties": false, "description": "Repeats its ordered children up to max. Max may only shrink at run time. Carries no deadline.", "properties": {"adapt": {"$ref": "#/$defs/adapt"}, "children": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "kind": {"const": "loop"}, "max": {"additionalProperties": false, "properties": {"min": {"minimum": 1, "type": "integer"}, "value": {"minimum": 1, "type": "integer"}}, "required": ["value", "min"], "type": "object"}, "max_by": {"const": "task", "description": "Opt-in: make `max` the ceiling of one task's attempts, not of the loop's entries. Each entry adds one attempt to every `task` key its accepted children name; a task that reaches `max` attempts is dropped and recorded, and the loop goes on; an entry that names only dropped tasks ends the loop `fail` with reason task_max_exhausted, and a loop that would end `pass` with a dropped task ends `fail` with task_exhausted:<task>. A loop that advances to a new task never spends the ceiling. An entry that names no task key adds one unnamed attempt. Omit for the old count-every-entry behavior."}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "stall_after": {"additionalProperties": false, "description": "Opt-in: exit `fail` with reason waves_stalled once this many consecutive entries land nothing, before `max` is ever reached. An entry that lands at least one child resets the count. Omit for the old count-only behavior.", "properties": {"by": {"const": "land", "description": "The signal a wave counts as progress. Only \"land\" exists today."}, "count": {"minimum": 1, "type": "integer"}}, "required": ["count"], "type": "object"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "max", "children"], "type": "object"}, "name": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"}, "next": {"additionalProperties": false, "description": "Reserved words only, per outcome.", "properties": {"deadline": {"$ref": "#/$defs/next_word"}, "fail": {"$ref": "#/$defs/next_word"}, "needs-human": {"$ref": "#/$defs/next_word"}, "pass": {"$ref": "#/$defs/next_word"}}, "type": "object"}, "next_word": {"enum": ["repeat", "continue", "exit:pass", "exit:fail", "exit:deadline", "exit:needs-human"]}, "paths": {"description": "Repo file paths a node declares. A path in one node's `reads` is never in another node's `writes`.", "items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true}, "range_int": {"additionalProperties": false, "properties": {"max": {"minimum": 1, "type": "integer"}, "min": {"minimum": 1, "type": "integer"}}, "required": ["min", "max"], "type": "object"}, "range_usd": {"additionalProperties": false, "properties": {"max": {"exclusiveMinimum": 0, "type": "number"}, "min": {"exclusiveMinimum": 0, "type": "number"}}, "required": ["min", "max"], "type": "object"}, "run_block": {"additionalProperties": false, "description": "Run-level defaults. An engine option may only lower them.", "properties": {"deadline": {"description": "Seconds for the whole run, or null for no run deadline (owner ruling 2026-09-30: long runs may take days, the per-call deadline is the cap).", "oneOf": [{"$ref": "#/$defs/seconds"}, {"type": "null"}]}, "max_parallel": {"minimum": 1, "type": "integer"}, "spend_cap": {"exclusiveMinimum": 0, "type": "number"}}, "required": ["deadline", "max_parallel", "spend_cap"], "type": "object"}, "seconds": {"minimum": 1, "type": "integer"}, "wait": {"additionalProperties": false, "properties": {"deadline": {"$ref": "#/$defs/seconds"}, "default": {"enum": ["pass", "fail"]}, "kind": {"const": "wait"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "owner": {"minLength": 1, "type": "string"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "owner", "deadline", "default"], "type": "object"}, "when": {"additionalProperties": false, "description": "One predicate over a registered fact, read on every entry and never bypassed.", "properties": {"fact": {"pattern": "^([a-z][a-z0-9_]*|outcome:[a-z][a-z0-9_]*)$", "type": "string"}, "op": {"enum": ["eq", "ne", "gt", "gte", "lt", "lte"]}, "value": {"type": ["boolean", "integer", "number", "string"]}}, "required": ["fact", "op", "value"], "type": "object"}}, "$id": "https://github.com/mmctech-ai/agent-squad/docs/design/graph.schema.json", "$schema": "https://json-schema.org/draft/2020-12/schema", "additionalProperties": false, "description": "One flat JSON document. Edges are name references. Rules that a schema cannot express live in check_graph.py.", "properties": {"description": {"type": "string"}, "facts": {"items": {"$ref": "#/$defs/fact"}, "type": "array"}, "gates": {"items": {"$ref": "#/$defs/gate_def"}, "type": "array"}, "name": {"minLength": 1, "type": "string"}, "nodes": {"items": {"oneOf": [{"$ref": "#/$defs/agent"}, {"$ref": "#/$defs/gate"}, {"$ref": "#/$defs/wait"}, {"$ref": "#/$defs/loop"}, {"$ref": "#/$defs/each"}, {"$ref": "#/$defs/action"}, {"$ref": "#/$defs/dispatch"}]}, "minItems": 1, "type": "array"}, "root": {"$ref": "#/$defs/name"}, "run": {"$ref": "#/$defs/run_block"}, "schema_version": {"const": 1}}, "required": ["schema_version", "name", "run", "facts", "gates", "root", "nodes"], "title": "agent-squad graph document", "type": "object"}, "sees_forbidden": ["tier"], "write_tools": ["Bash", "Edit", "NotebookEdit", "Write"]};</script>
+<script>const EXAMPLE = {"description": "The five dev_squad phases in the graph vocabulary. Fixture for the schema.", "facts": [{"instrument": "code: classify tier from scout.size_estimate; a missing estimate is large", "name": "tier", "source_kind": "artifact", "type": "enum", "values": ["trivial", "medium", "large"]}, {"instrument": "code: sensitive path set over scout.paths", "name": "sensitive", "source_kind": "artifact", "type": "bool"}, {"instrument": "code: changed files and web app flag, computed before execute", "name": "visual", "source_kind": "target", "type": "bool"}, {"instrument": "code: git is available in the target", "name": "git", "source_kind": "target", "type": "bool"}, {"instrument": "code: length of decompose.work_items, or 1 when decompose did not run", "name": "work_items", "source_kind": "artifact", "type": "int"}, {"instrument": "code: derived from diff size and sensitive; replaces the size backstop gate", "name": "review_required", "source_kind": "artifact", "type": "bool"}, {"instrument": "code: count of blocking entries in the declared file learnings.json (no cross-run input)", "name": "blocking_learnings", "source_kind": "artifact", "type": "int"}, {"instrument": "code: count of architecture issues in the critic artifact", "name": "architecture_issues", "source_kind": "run_record", "type": "int"}, {"instrument": "code: sum of SDK result spend over agent entries", "name": "run_spend", "source_kind": "run_record", "type": "number"}], "gates": [{"id": "spec-shape", "params": []}, {"id": "ac-command-shape", "params": ["duplicate_warn_ratio"]}, {"id": "plan-semantics", "params": ["max_work_items"]}, {"id": "spend-floor", "params": ["min_remaining_usd"]}, {"id": "scope", "params": ["allowed_generated"]}, {"id": "security", "params": ["sensitive_paths"]}, {"id": "ac-verify", "params": ["commands_from"]}, {"id": "visual-guard", "params": []}, {"id": "learning-check", "params": []}], "name": "dev-squad-default", "nodes": [{"children": ["scout", "spec", "plan", "budget_gate", "execute", "verify", "ship"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "main"}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "sonnet", "name": "scout", "next": {"fail": "repeat"}, "output_key": "size_estimate", "tools": ["Read", "Grep", "Glob"]}, {"children": ["spec_draft", "spec_gate", "spec_proxy"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "spec", "when": {"fact": "tier", "op": "ne", "value": "trivial"}}, {"adapt": {"efforts": ["low", "medium", "high"], "kinds": ["set_model", "set_effort", "shrink_stalls", "shrink_spend"], "models": ["opus", "sonnet"], "sees": ["run_spend"]}, "budget": {"spend": {"max": 4, "min": 0.1}, "stalls": {"max": 5, "min": 2}}, "deadline": 900, "kind": "agent", "may_propose": true, "model": "opus", "name": "spec_draft", "next": {"fail": "repeat"}, "output_key": "spec", "tools": ["Read", "Grep"]}, {"check": "ac-command-shape", "kind": "gate", "name": "spec_gate", "next": {"fail": "repeat"}, "params": {"duplicate_warn_ratio": 0.4}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "spec_proxy", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"children": ["decompose", "plan_gate", "plan_proxy"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "plan", "when": {"fact": "tier", "op": "eq", "value": "large"}}, {"budget": {"spend": {"max": 4, "min": 0.1}, "stalls": {"max": 5, "min": 2}}, "deadline": 900, "kind": "agent", "model": "opus", "name": "decompose", "next": {"fail": "repeat"}, "output_key": "work_items", "tools": ["Read", "Grep"]}, {"check": "plan-semantics", "kind": "gate", "name": "plan_gate", "next": {"fail": "repeat"}, "params": {"max_work_items": 5}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "plan_proxy", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"check": "spend-floor", "kind": "gate", "name": "budget_gate", "next": {"fail": "exit:fail"}, "params": {"min_remaining_usd": 1}}, {"children": ["worktree", "work", "merge", "manual_merge"], "deadline": 7200, "items": "work_items", "join": "all", "kind": "each", "max_parallel": 2, "mode": "parallel", "name": "execute"}, {"effect": "worktree_create", "kind": "action", "name": "worktree", "workspace": "worktrees/item"}, {"adapt": {"kinds": ["shrink_loop_max"]}, "children": ["actor", "scope_gate", "security_gate", "critic"], "kind": "loop", "max": {"min": 1, "value": 12}, "name": "work"}, {"adapt": {"efforts": ["low", "medium", "high"], "kinds": ["set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend"], "models": ["sonnet", "haiku"], "sees": ["sensitive", "run_spend"], "tools": ["Read", "Edit", "Write"]}, "budget": {"spend": {"max": 8, "min": 0.2}, "stalls": {"max": 5, "min": 2}}, "deadline": 1800, "kind": "agent", "model": "sonnet", "name": "actor", "next": {"fail": "repeat"}, "output_key": "diff", "tools": ["Read", "Edit", "Write", "Bash"], "workspace": "worktrees/item"}, {"check": "scope", "kind": "gate", "name": "scope_gate", "next": {"fail": "repeat"}, "params": {"allowed_generated": ["package-lock.json"]}}, {"check": "security", "kind": "gate", "name": "security_gate", "next": {"fail": "repeat"}, "params": {"sensitive_paths": ["auth", "crypto", ".env*"]}}, {"adapt": {"kinds": ["set_model", "shrink_stalls"], "models": ["opus", "sonnet"], "sees": ["run_spend"]}, "budget": {"spend": {"max": 3, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 900, "kind": "agent", "model": "opus", "name": "critic", "next": {"fail": "repeat"}, "tools": ["Read", "Grep"], "when": {"fact": "review_required", "op": "eq", "value": true}}, {"deadline": 300, "effect": "merge_land", "kind": "action", "name": "merge", "next": {"fail": "continue"}, "workspace": "worktrees/item"}, {"deadline": 86400, "default": "fail", "kind": "wait", "name": "manual_merge", "next": {"fail": "exit:fail"}, "owner": "rafael", "when": {"fact": "outcome:merge", "op": "eq", "value": "fail"}}, {"children": ["ac_verify", "visual", "learning_gate", "audit_a", "audit_b", "audit_c"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "verify"}, {"check": "ac-verify", "kind": "gate", "name": "ac_verify", "next": {"fail": "exit:fail"}, "params": {"commands_from": ["spec", "scout"]}}, {"children": ["visual_actor", "visual_guard", "visual_critic"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "visual", "when": {"fact": "visual", "op": "eq", "value": true}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "sonnet", "name": "visual_actor", "next": {"fail": "repeat"}, "tools": ["Bash", "Read"]}, {"check": "visual-guard", "kind": "gate", "name": "visual_guard", "next": {"fail": "repeat"}, "params": {}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "visual_critic", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"check": "learning-check", "kind": "gate", "name": "learning_gate", "next": {"fail": "exit:fail"}, "params": {}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "stalls": {"max": 5, "min": 2}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_a", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "blocking_learnings", "op": "gt", "value": 0}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "stalls": {"max": 5, "min": 2}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_b", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "architecture_issues", "op": "gt", "value": 0}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "stalls": {"max": 5, "min": 2}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_c", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "work_items", "op": "gt", "value": 1}}, {"children": ["commit"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "ship"}, {"deadline": 120, "effect": "commit", "kind": "action", "name": "commit", "when": {"fact": "git", "op": "eq", "value": true}, "workspace": "."}], "root": "main", "run": {"deadline": 21600, "max_parallel": 2, "spend_cap": 60}, "schema_version": 1};</script>
+<script>const SERVED = {"efforts": ["high", "low", "medium"], "hash": "3c669b0eeeff8a61af9722cd1a724b75c0a3e8a6c6f94f43874f7e7ef2ddfae4", "models": ["claude-sonnet-5-5", "haiku", "opus", "sonnet"], "skills": ["agent-ask-matt", "agent-grill-me", "agent-grill-with-docs", "agent-handoff", "agent-implement", "agent-implement-spec", "agent-improve-codebase-architecture", "agent-setup-matt-pocock-skills", "agent-squad-dashboard", "agent-to-questionnaire", "agent-to-spec", "agent-to-tickets", "agent-wayfinder", "ask-matt", "codebase-design", "diagnosing-bugs", "ego-browser", "squad-skill-update", "tdd", "to-spec", "to-tickets"], "sources": ["config/agent-defaults.yaml", "vendor/skills/skills", ".claude/skills", "five-phases", "router"], "tools": ["Agent", "Bash", "Edit", "Glob", "Grep", "NotebookEdit", "Read", "Task", "WebFetch", "WebSearch", "Write"]};</script>
 <script>"use strict";
-// Dashboard core module: canonical form, hash and import (ticket #120). The module the others depend on.
+// Dashboard core module: canonical form, hash and import. The module the others depend on.
 // A factory: it takes ENGINE and the modules it depends on, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
@@ -393,7 +394,7 @@ function canonModule(ENGINE) {
   }
   const graphHash = (text) => sha256Hex(canonFromText(text));
 
-  // ---- Import (ADR-0111 rule 5): any parseable JSON that holds a schema_version ----
+  // ---- Import: any parseable JSON that holds a schema_version ----
   function parseImport(text) {
     let doc;
     try { doc = JSON.parse(text); } catch (e) { return { error: "This file is not parseable JSON: " + e.message }; }
@@ -407,11 +408,11 @@ function canonModule(ENGINE) {
   return { isObj, same, clone, pyFloat, pyInt, pyString, cmpCodePoints, canonText, canonFromText, sha256Hex, graphHash, parseImport };
 }
 
-// Dashboard core module: The numbers every read module sums, and the token and timeline figures of a record. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The numbers every read module sums, and the token and timeline figures of a record.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function figuresModule() {
-  // ---- A finished run: statistics, harness, and the hash rule (ticket #76) ----
+  // ---- A finished run: statistics, harness, and the hash rule ----
   // Every figure comes from a field the record has today. A field the record lacks is null, never zero (a sum of nulls is null).
   const num = (v) => typeof v === "number" && Number.isFinite(v);
 
@@ -438,14 +439,26 @@ function figuresModule() {
   return { num, sumOf, orNull, lastOf, tokenFigures, runTimeline };
 }
 
-// Dashboard core module: The run record: parse, the live reread, and the adaptation overlay. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The run record: parse, the live reread, and the adaptation overlay.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function recordModule({ graphHash }) {
-  // ---- Run record (read-only) and the overlay (ADR-0111 rule 6, ADR-0109) ----
-  // A line that is not JSON ends the record there (ADR-0126): the lines before it are shown, the line and the lines after it are not, and
+  // ---- Run record (read-only) and the overlay ----
+  // A line that is not JSON ends the record there: the lines before it are shown, the line and the lines after it are not, and
   // `bad` names the line and what was wrong. The page never skips the bad line to read on: events after a gap would be a wrong run.
   // With no valid prefix (line 1 is bad, or the first event is not run_start) there is nothing to show, and `error` says why.
+  // Local patch: the SDK's spend is an estimate at the wrong list prices for non-Claude models; re-price from tokens (same table as the hub).
+  const PRICES = [[/deepseek-.*pro/, 0.044, 1.32, 3.96], [/deepseek/, 0.006, 0.3, 1.2], [/grok-4\.5/, 0.30, 2, 6], [/grok-4\.[67]/, 0.50, 2, 6],
+    [/gpt-5\.6-sol-fast/, 0.8, 8, 40], [/gpt-5\.6-sol/, 0.4, 4, 20], [/gpt-5\.6-terra-fast/, 0.4, 4, 24], [/gpt-5\.6-terra/, 0.2, 2, 12],
+    [/gpt-5\.5-fast/, 1.25, 12.5, 75], [/gpt-5\.5/, 0.5, 5, 30], [/gpt-6\.1-sol-fast/, 0.2, 4, 20], [/gpt-6\.1-sol/, 0.1, 2, 10]];
+  function repriced(ev) {
+    if (ev.event !== "outcome" || typeof ev.model !== "string" || typeof ev.tokens_in !== "number") return ev;
+    for (const [rx, hit, miss, out] of PRICES) if (rx.test(ev.model)) {
+      const cr = ev.cache_read || 0;
+      return { ...ev, spend_sdk: ev.spend, spend: (cr * hit + Math.max(ev.tokens_in - cr, 0) * miss + (ev.tokens_out || 0) * out) / 1e6 };
+    }
+    return ev;
+  }
   function parseRecord(text) {
     const events = [];
     const lines = text.split("\n");
@@ -454,7 +467,7 @@ function recordModule({ graphHash }) {
       if (!lines[n].trim()) continue;
       try {
         const ev = JSON.parse(lines[n]);
-        if (!ev || typeof ev !== "object" || Array.isArray(ev)) bad = { line: n + 1, message: "the line is not a JSON object" }; else events.push(ev);
+        if (!ev || typeof ev !== "object" || Array.isArray(ev)) bad = { line: n + 1, message: "the line is not a JSON object" }; else events.push(repriced(ev));
       } catch (e) { bad = { line: n + 1, message: e.message }; }
     }
     if (!events.length) return { error: bad ? `Record line ${bad.line} is not JSON: ${bad.message}` : "A run record starts with a run_start event." };
@@ -462,13 +475,13 @@ function recordModule({ graphHash }) {
     return bad ? { events, bad: { ...bad, shown: events.length } } : { events };
   }
 
-  // A reread of a record the engine is still writing can catch a half-written last line. Keep the complete lines only (ticket #80).
+  // A reread of a record the engine is still writing can catch a half-written last line. Keep the complete lines only.
   function parseLive(text) {
     const cut = text.lastIndexOf("\n");
     return parseRecord(cut < 0 ? "" : text.slice(0, cut + 1));
   }
 
-  const REPORT_NOTE = "one observation, not a measurement (ADR-0012): each entry is a fresh session, so the two entries may be different tasks";
+  const REPORT_NOTE = "one observation, not a measurement: each entry is a fresh session, so the two entries may be different tasks";
 
   const REPORT_INSTRUMENT = "code: outcome events of the run record; spend is the measured SDK result; elapsed is wall-clock";
 
@@ -507,7 +520,7 @@ function recordModule({ graphHash }) {
   return { parseRecord, parseLive, REPORT_NOTE, REPORT_INSTRUMENT, FIELDS, entryOf, deltaOf, overlayRows, overlayFor };
 }
 
-// Dashboard core module: A run still being written: the read delay, the calls in flight, the live state. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: A run still being written: the read delay, the calls in flight, the live state.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function liveModule({ lastOf, num, orNull }) {
@@ -515,9 +528,9 @@ function liveModule({ lastOf, num, orNull }) {
   // its outcome all carry the same three, so the record's own fields pair them without a new index.
   const callKey = (e) => `${e.node}|${e.entry}|${orNull(e.item)}`;
 
-  // Where each call in flight has got to, as the call itself last reported it (ticket #101). A running call records a
+  // Where each call in flight has got to, as the call itself last reported it. A running call records a
   // `progress` event now and then; the last one for a call wins. A call that reported nothing has no entry here, so its
-  // figures stay unknown, never zero (ADR-0012).
+  // figures stay unknown, never zero.
   function callProgress(events) {
     const out = new Map();
     for (const e of events) if (e.event === "progress") out.set(callKey(e), { messages: orNull(e.messages), context_tokens: orNull(e.context_tokens), tool: orNull(e.tool) });
@@ -528,7 +541,7 @@ function liveModule({ lastOf, num, orNull }) {
   // the map is keyed by the node; where two entries of one node are open, the longer-running one is the one shown.
   // A call whose call_start carries no start time has no duration, so it makes no entry: unknown time stays unknown.
   // A run with a verdict has nothing in flight (liveState says the same): a call_start left open by a killed call must
-  // never read as running again (ADR-0051 rule 4).
+  // never read as running again.
   function openCalls(events, now) {
     const prog = callProgress(events), out = new Map();
     if (lastOf(events.filter((e) => e.event === "verdict"))) return out;
@@ -539,7 +552,7 @@ function liveModule({ lastOf, num, orNull }) {
     return out;
   }
 
-  // ---- A live run (ticket #80) ----
+  // ---- A live run ----
   // The reread interval is an engine setting that run_start records. A record made before it, or a bad value, gets one second.
   function readDelay(events) {
     const d = events && events[0] && events[0].defaults && events[0].defaults.engine && events[0].defaults.engine.dashboard;
@@ -547,7 +560,7 @@ function liveModule({ lastOf, num, orNull }) {
     return num(r) && r > 0 ? r : 1;
   }
 
-  // Stalled is a display state, not a gate (ADR-0012): no new event for longer than the longest call in flight may take, plus a grace.
+  // Stalled is a display state, not a gate: no new event for longer than the longest call in flight may take, plus a grace.
   // With no call in flight, a gate command or an effect can be quiet for a while, so the idle period is longer.
   const STALL_IDLE = 300, STALL_GRACE = 60;
 
@@ -572,11 +585,11 @@ function liveModule({ lastOf, num, orNull }) {
   return { readDelay, STALL_IDLE, inFlight, liveState, callKey, callProgress, openCalls };
 }
 
-// Dashboard core module: Why a node failed, and a node's label. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: Why a node failed, and a node's label.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function failuresModule({ orNull }) {
-  // ---- Failures and dispatch children (ticket #91) ----
+  // ---- Failures and dispatch children ----
   // A reason is `<check id>:<code>:<detail>` from a gate, `check:<gate>:<code>:<detail>` from a dispatch check, or a bare code.
   // A check id has no underscore, a code has no hyphen: that is how `after_failed:route.router.1` stays a code.
   function reasonParts(text) {
@@ -620,11 +633,11 @@ function failuresModule({ orNull }) {
   }
 
   // The bare skill name of a node or a dispatch child: a skill field is a string, or a {name, version} object already
-  // resolved by squad/envelope.py (issue #99). The label drops the version; the detail panel keeps it.
+  // resolved by squad/envelope.py. The label drops the version; the detail panel keeps it.
   const skillName = (s) => (typeof s === "string" && s ? s : s && typeof s.name === "string" && s.name ? s.name : null);
 
-  // The role label on a node card (issue #99): what the node IS, derived from the graph node, never its bare name when a
-  // role is known. Display only: it never writes the graph and never enters the graph hash (ADR-0111). A node the rule does
+  // The role label on a node card: what the node IS, derived from the graph node, never its bare name when a
+  // role is known. Display only: it never writes the graph and never enters the graph hash. A node the rule does
   // not cover falls back to its name, so the label is never empty. A loop, an each, and a dispatch carry no role field of
   // their own (their bound and their kind sit on the detail line), and two loops would collide on the bare kind, so they
   // keep their own name, the only token that tells them apart.
@@ -642,21 +655,21 @@ function failuresModule({ orNull }) {
   return { reasonParts, causeSummary, failureCauses, skillName, nodeLabel };
 }
 
-// Dashboard core module: The children a dispatch spawned: their rows, layout and checks. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The children a dispatch spawned: their rows, layout and checks.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function childrenModule({ num, openCalls, orNull, skillName }) {
   // The issue a spawn ran, read from its own prompt ("issues/14-slug.md" -> 14). The record does not carry the number
-  // apart; the prompt names the issue file (issue #97). A request with no such prompt names none.
+  // apart; the prompt names the issue file. A request with no such prompt names none.
   const issueNumber = (prompt) => { const m = /(\d\d)-[\w-]+\.md/.exec(typeof prompt === "string" ? prompt : ""); return m ? Number(m[1]) : null; };
 
-  // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip (issue #99).
+  // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
 
   // The children of every dispatch, in request order. Each carries what its call recorded and what landing did to it.
-  // An outcome that is not pass after landing is fail (ticket #90), so a landing failure shows on the child, not only in its own event.
+  // An outcome that is not pass after landing is fail, so a landing failure shows on the child, not only in its own event.
   // `now` (epoch seconds) makes a child that is running now read as running, with its time and its live figures; without
-  // it a child in flight keeps the static `started` state (ticket #101).
+  // it a child in flight keeps the static `started` state.
   function runChildren(events, now) {
     const last = (kind) => new Map(events.filter((e) => e.event === kind).map((e) => [e.node, e]));
     const outs = last("outcome"), lands = last("land"), started = new Set(events.filter((e) => e.event === "call_start").map((e) => e.node));
@@ -674,7 +687,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
         running_for: run ? run.running_for : null, live: run ? run.live : null,   // a child in flight: how long it has run, and what it last reported
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
-        // apart, while the issue does. A child with no task falls back to its skill, then to its own name (issue #99).
+        // apart, while the issue does. A child with no task falls back to its skill, then to its own name.
         label: issue === null ? skill || short : `issue ${issue}`,
         model: o && o.model ? o.model : orNull(d.model), effort: o && o.effort ? o.effort : orNull(d.effort), after: Array.isArray(d.after) ? d.after : [],
         workspace: orNull(d.workspace), spend: o ? orNull(o.spend) : null, turns: o ? orNull(o.turns) : null, elapsed: o ? orNull(o.elapsed) : null,
@@ -686,7 +699,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null,
       elapsed: null, tokens_in: null, tokens_out: null, tps: null, land: null, issue: null }));
     // The position of each child among the children of its dispatch, and a title no two children share: "issue 11" can
-    // repeat across waves, "3 · issue 11" cannot (ADR-0125).
+    // repeat across waves, "3 · issue 11" cannot.
     const seen = {};
     const all = [...kids, ...bad];
     for (const c of all) { c.index = seen[c.dispatch] = (seen[c.dispatch] || 0) + 1; c.title = `${c.index} · ${c.label}`; }
@@ -694,7 +707,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     return all;
   }
 
-  // Which children are attempts at one task (issue #134, ADR-0125 amendment). Attempts are the children of one dispatch that share a task
+  // Which children are attempts at one task. Attempts are the children of one dispatch that share a task
   // key: the spawn's own `task`, else the issue its prompt names. The marks are derived text. The record holds no "redo of" fact, so
   // no edge is drawn, and a failed attempt stays failed. It reads superseded once a later attempt of the same task passed.
   // A child passed when its call and its landing passed and its held-out command did not fail.
@@ -708,32 +721,38 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     return `attempt ${c.attempt}${why ? ", " + why : ""}`;
   }
 
+  // The tasks one child worked: its `task` split at commas, else the issue its prompt names. A router may fold two issues into one child
+  // ("13, 21"), so a child can belong to more than one task.
+  const taskKeys = (c) => {
+    if (c.rejected) return [];
+    const t = c.task === null || c.task === undefined ? "" : String(c.task);
+    const parts = t.split(/[,\s]+/).filter(Boolean);
+    return parts.length ? parts : c.issue === null ? [] : [String(c.issue)];
+  };
+
   function markRework(all) {
-    const taskKey = (c) => {
-      if (c.rejected) return null;
-      const t = c.task === null || c.task === undefined ? "" : String(c.task);
-      return t !== "" ? t : c.issue === null ? null : String(c.issue);
-    };
-    const byTask = new Map();
+    const keys = new Map(all.map((c) => [c, taskKeys(c)]));
+    for (const c of all) Object.assign(c, { attempt: null, superseded_by: null, rework: null });
+    const same = (c) => all.filter((o) => o.dispatch === c.dispatch && keys.get(o).some((t) => keys.get(c).includes(t)));
     for (const c of all) {
-      Object.assign(c, { attempt: null, superseded_by: null, rework: null });
-      const t = taskKey(c);
-      if (t !== null) byTask.set(JSON.stringify([c.dispatch, t]), [...(byTask.get(JSON.stringify([c.dispatch, t])) || []), c]);
-    }
-    for (const attempts of byTask.values()) {
-      if (attempts.length < 2) continue;
-      attempts.forEach((c, i) => {
-        c.attempt = i + 1;
-        const winner = passedClean(c) ? null : attempts.slice(i + 1).find(passedClean);
-        c.superseded_by = winner ? winner.index : null;
-        c.rework = reworkText(c, winner);
-      });
+      const mine = keys.get(c);
+      if (!mine.length) continue;
+      const related = same(c);
+      if (related.length < 2) continue;
+      const i = related.indexOf(c);
+      c.attempt = i + 1;
+      // superseded: every task of this child has a later clean attempt. The first such attempt is the one named.
+      const later = related.slice(i + 1).filter(passedClean);
+      const covered = !passedClean(c) && mine.every((t) => later.some((o) => keys.get(o).includes(t)));
+      const winner = covered ? later.find((o) => keys.get(o).some((t) => mine.includes(t))) : null;
+      c.superseded_by = winner ? winner.index : null;
+      c.rework = reworkText(c, winner);
     }
   }
 
-  // The available-vs-used harness of one selected node (issue #96), read from the record and the graph, never authored.
+  // The available-vs-used harness of one selected node, read from the record and the graph, never authored.
   // A dispatch child resolves its own harness in `definition` (squad/envelope.py) and inherits the allow ceiling from its
-  // dispatch envelope (ADR-0113 rule 2). A plain agent declares its own fields. A gate or a loop carries no harness, so the
+  // dispatch envelope. A plain agent declares its own fields. A gate or a loop carries no harness, so the
   // caller says so plainly instead of showing an empty list. A missing field stays null, never zero.
   const skillLabel = (s) => (typeof s === "string" ? s : s && typeof s.name === "string" ? (s.version ? `${s.name}@${s.version}` : s.name) : null);
 
@@ -797,11 +816,11 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
   return { issueNumber, shortChildName, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor };
 }
 
-// Dashboard core module: The one state a card shows, and the class it paints. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The one state a card shows, and the class it paints.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function stateModule({ num }) {
-  // ---- The one state a node's card shows (issue #97) ----
+  // ---- The one state a node's card shows ----
   // Every node the run has touched reads one definite state, so a root or a structural node is never an ambiguous
   // flat grey. A node that never ran (after the verdict) reads "not-run", not a plain card. The states reuse the
   // legend's: passed, failed, deadline, needs-human, running, started, and not-run.
@@ -842,7 +861,7 @@ function stateModule({ num }) {
   // The card class for a node's state, or null when the node is not in the record.
   const stateClass = (ns) => { const s = nodeState(ns); return s ? STATE_CLASS[s] || "o-" + s : null; };
 
-  // The class a child card paints (ticket #101). A child reads the same states a node reads, except the never-ran
+  // The class a child card paints. A child reads the same states a node reads, except the never-ran
   // marker: a child whose call has not started is queued, not done, so its card stays unmarked. Without this a child
   // in flight kept the static `started` outline for the whole call and showed a result only at the end.
   function childStateClass(c) {
@@ -854,7 +873,7 @@ function stateModule({ num }) {
   return { OUTCOME_STATE, STATES, STATE_CLASS, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass };
 }
 
-// Dashboard core module: The totals bar and the top bar of issue progress. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The totals bar and the top bar of issue progress.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
@@ -876,7 +895,7 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
       wall: num(start.ts) ? (num(now) && !v ? now - start.ts : num(end.ts) ? end.ts - start.ts : null) : null };
   }
 
-  // The bar's cells as data: a label, the text, and a tooltip that names the rule. Unknown tokens read "unknown", never 0 (ADR-0012, spec #70).
+  // The bar's cells as data: a label, the text, and a tooltip that names the rule. Unknown tokens read "unknown", never 0.
   function totalsCells(t) {
     const f = fmt, unk = "unknown", floor = t.partial_tokens ? "≥ " : "";
     return [
@@ -893,12 +912,22 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
     ];
   }
 
-  // ---- The top bar: the issues the run landed, of the issue set (issue #97) ----
+  // ---- The top bar: the issues the run landed, of the issue set ----
   // The record carries no issue-set size, so `total` comes from the run folder the page was given (the page counts
   // `target/issues/*.md` and passes the number in). `done` is the distinct issues a `land` event landed, read from
   // the record's own ledger: no new event type. Both figures stay null-ish when the record shows nothing.
-  function issueProgress(events, total) {
-    const done = new Set(events.filter((e) => e.event === "land" && e.outcome === "pass").map((e) => e.node)).size;
+  function issueProgress(events, total, held) {
+    const lands = new Set(events.filter((e) => e.event === "land" && e.outcome === "pass").map((e) => e.node));
+    // A one-issue run lands through the merge_land action, which logs no `land` event. Its issue is delivered when
+    // the merge passed and the run completed, so the gate after the merge held; the set is that one issue, not the folder's.
+    const merged = events.some((e) => e.event === "outcome" && e.outcome === "pass" && e.effect && e.effect.name === "merge_land");
+    if (lands.size === 0 && (merged || (num(held) && held > 0))) {
+      const done = merged && events.some((e) => e.event === "verdict" && e.verdict === "completed") ? 1 : 0;
+      // A chained run starts from a tree that already holds `held` issues: the strip counts them, of the folder's set.
+      if (num(held) && held > 0 && num(total)) return { done: held + done, total, text: `${held + done} of ${total} issues` };
+      return { done, total: 1, text: `${done} of 1 issue` };
+    }
+    const done = lands.size;
     const t = num(total) ? total : null;
     return { done, total: t, text: t === null ? `${done} landed` : `${done} of ${t} issue${t === 1 ? "" : "s"}` };
   }
@@ -908,7 +937,7 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
   function progressCells(p) {
     if (p.total === null) return [];
     return [{ id: "issues", label: "Issues", text: p.text,
-      title: "Issues the run landed, of the issue set in the run folder. A land event marks one landed issue; the run folder's target/issues holds the set. The record itself carries no issue count." }];
+      title: "Issues the run landed, of the issue set in the run folder. A land event marks one landed issue, and a one-issue run counts its passing merge once the run completes; the run folder's target/issues holds the set of a multi-issue run. The record itself carries no issue count." }];
   }
 
   // One place for the unit and the dash. A missing value is a dash, never a zero.
@@ -926,11 +955,11 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
   return { runCap, runTotals, totalsCells, issueProgress, progressCells, DASH, fmt };
 }
 
-// Dashboard core module: The replay cursor. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The replay cursor.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function replayModule({ num, orNull }) {
-  // ---- The replay cursor (ticket #81, decision #63) ----
+  // ---- The replay cursor ----
   // The cursor is one record `pos`. It folds nothing into the record and keeps no index: events are in file order, so `pos` is sorted and a
   // binary search finds the cut. A null cursor means "pinned to the end": a live run keeps the cursor there until the owner moves it.
   function countUpTo(events, pos) {
@@ -969,7 +998,7 @@ function replayModule({ num, orNull }) {
   return { countUpTo, unresolvedChildren, replayAt, moveCursor };
 }
 
-// Dashboard core module: how the children of one dispatch are drawn: the group card, the roster, the bus edge (ADR-0125).
+// Dashboard core module: how the children of one dispatch are drawn: the group card, the roster, the bus edge.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf }) {
@@ -1021,7 +1050,7 @@ function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, chil
       // The summary strings come from core.fmt, the one formatter, so the card, its tooltip and the panel read the same text; tests pin them.
       const lineTime = `${fmt.seconds(time)} of calls · ${fmt.usd(cost)}`, lineTokens = `${fmt.tokens(tin)} in · ${fmt.tokens(tout)} out`;
       for (const c of kids) grouped.add(c.name);
-      // A failed group says how many of its children a later attempt replaced, so a collapsed card never reads as an open failure (issue #134).
+      // A failed group says how many of its children a later attempt replaced, so a collapsed card never reads as an open failure.
       const redone = kids.filter((c) => c.superseded_by !== null && c.superseded_by !== undefined).length;
       groups.push({ key, dispatch: first.dispatch, state: running ? "running" : st, label, harness: running ? harnessOf(first) : "", redone, name: `${first.dispatch} · ${kids.length} ${label}${redone ? ` · ${redone} redone` : ""}`, kids, time, cost, tokens_in: tin, tokens_out: tout, lineTime, lineTokens, line: `${lineTime} · ${lineTokens}` });
     }
@@ -1106,7 +1135,7 @@ function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, chil
   return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus };
 }
 
-// Dashboard core module: Per-node statistics, the harness a node used, and the run statistics. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: Per-node statistics, the harness a node used, and the run statistics.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures }) {
@@ -1125,12 +1154,12 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
     };
   }
 
-  // The engine-level harness the run recorded in run_start (ADR-0106): what no node sets.
+  // The engine-level harness the run recorded in run_start: what no node sets.
   function engineHarness(start) {
     const d = (start.defaults && start.defaults.engine) || {}, o = d.options || {}, l = d.limits || {};
     return { permission_mode: orNull(o.permission_mode), setting_sources: orNull(o.setting_sources), disallowed_tools: orNull(o.disallowed_tools),
       max_output_tokens: orNull(l.max_output_tokens), context_tokens: orNull(l.context_tokens), auth: d.auth ? orNull(d.auth.source) : null,
-      // ADR-0130: each loadable skill's hash and the vendor commit. A record made before it has neither: null.
+      // Each loadable skill's hash and the vendor commit. A record made before it has neither: null.
       skills: start.skills && typeof start.skills === "object" ? Object.keys(start.skills).sort().map((k) => ({ name: k, hash: start.skills[k].hash, source: start.skills[k].source })) : null,
       skills_commit: orNull(start.skills_commit) };
   }
@@ -1148,10 +1177,10 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
       return {
         kind: "child", name, dispatch: a.envelope,
         available: { skill, model: orNull(d.model), effort: orNull(d.effort), tools: Array.isArray(d.tools) ? d.tools : null,
-          turns: orNull(d.turns), spend: orNull(d.spend), deadline: orNull(d.deadline) },
+          stalls: orNull(d.stalls), spend: orNull(d.spend), deadline: orNull(d.deadline) },
         allow: allow ? { tools: Array.isArray(allow.tools) ? allow.tools : null, skills: Array.isArray(allow.skills) ? allow.skills.map(skillLabel) : null,
           models: Array.isArray(allow.models) ? allow.models : null, efforts: Array.isArray(allow.efforts) ? allow.efforts : null,
-          turns: disp.budget && disp.budget.turns ? disp.budget.turns : null, spend: disp.budget && disp.budget.spend ? disp.budget.spend : null,
+          stalls: disp.budget && disp.budget.stalls ? disp.budget.stalls : null, spend: disp.budget && disp.budget.spend ? disp.budget.spend : null,
           deadline: orNull(disp.deadline) } : null,
         used: { skill, model: o ? orNull(o.model) : null, effort: o ? orNull(o.effort) : null,
           turns: o ? orNull(o.turns) : null, tokens_in: o ? orNull(o.tokens_in) : null, tokens_out: o ? orNull(o.tokens_out) : null,
@@ -1165,7 +1194,7 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
       return {
         kind: "agent", name,
         available: { skill: orNull(gn.skill), model: orNull(gn.model), effort: orNull(gn.effort), tools: Array.isArray(gn.tools) ? gn.tools : null,
-          turns: gn.budget && gn.budget.turns ? gn.budget.turns : null, spend: gn.budget && gn.budget.spend ? gn.budget.spend : null, deadline: orNull(gn.deadline) },
+          stalls: gn.budget && gn.budget.stalls ? gn.budget.stalls : null, spend: gn.budget && gn.budget.spend ? gn.budget.spend : null, deadline: orNull(gn.deadline) },
         used: { skill: orNull(gn.skill), model: usedOf("model"), effort: usedOf("effort"), turns: sumOf(outs.map((o) => o.turns)),
           tokens_in: sumOf(outs.map((o) => o.tokens_in)), tokens_out: sumOf(outs.map((o) => o.tokens_out)),
           spend: sumOf(outs.map((o) => o.spend)), elapsed: sumOf(outs.map((o) => o.elapsed)) },
@@ -1175,7 +1204,7 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
     return { kind: "none", name, nodeKind: gn ? gn.kind : null };
   }
 
-  // shown is the overlay's rule: the record's graph hash equals the loaded graph's. When it is false, only the timeline and the verdict stay (decision #63).
+  // shown is the overlay's rule: the record's graph hash equals the loaded graph's. When it is false, only the timeline and the verdict stay.
   // now (epoch seconds) makes the state live: running, stalled, or the verdict. Without it the state is a snapshot: the verdict, or "no verdict yet".
   function runStats(events, doc, shown, now) {
     const start = events[0], v = lastOf(events.filter((e) => e.event === "verdict"));
@@ -1201,7 +1230,7 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
   return { nodeStats, engineHarness, nodeHarness, runStats };
 }
 
-// Dashboard core module: the JSON Schema check and the engine rules (the port that tests/test_dashboard.py compares with squad.graph.validate) (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: the JSON Schema check and the engine rules (the port that tests/test_dashboard.py compares with squad.graph.validate). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
@@ -1294,22 +1323,22 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
   function nodeSchemaErrors(node) {
     const kind = node.kind;
     const name = typeof node.name === "string" ? node.name : null;
-    if (!KINDS.includes(kind)) return [E(name, `kind ${pyRepr(kind)} is not one of the seven kinds: ${KINDS.join(", ")} (ADR-0100 rule 1)`)];
+    if (!KINDS.includes(kind)) return [E(name, `kind ${pyRepr(kind)} is not one of the seven kinds: ${KINDS.join(", ")}`)];
     const explicit = [];
     const s = { ...node };
     if (kind === "gate") {
-      for (const [key, msg] of [["when", "a gate never carries a when (ADR-0100 rule 3)"], ["adapt", "a gate never adapts (ADR-0103 rule 1)"],
-        ["deadline", "a gate carries no deadline (ADR-0102 rule 3)"]]) {
+      for (const [key, msg] of [["when", "a gate never carries a when"], ["adapt", "a gate never adapts"],
+        ["deadline", "a gate carries no deadline"]]) {
         if (key in s) { explicit.push(E(name, msg)); delete s[key]; }
       }
       const nxt = s.next || {};
       if (isObj(nxt) && nxt.fail !== undefined && nxt.fail !== null && !["repeat", "exit:fail"].includes(nxt.fail)) {
-        explicit.push(E(name, `a gate's fail never names a node; got ${pyRepr(nxt.fail)} (ADR-0101 rule 2)`));
+        explicit.push(E(name, `a gate's fail never names a node; got ${pyRepr(nxt.fail)}`));
         const { fail, ...rest } = nxt;
         s.next = rest;
       }
     }
-    if (kind === "loop" && "deadline" in s) { explicit.push(E(name, "a loop carries no deadline (ADR-0102 rule 3)")); delete s.deadline; }
+    if (kind === "loop" && "deadline" in s) { explicit.push(E(name, "a loop carries no deadline")); delete s.deadline; }
     const errs = check(s, { $ref: `#/$defs/${kind}` }, SCHEMA.$defs, []).map((e) => E(name, `${e.path === "<root>" ? kind : e.path}: ${e.message}`));
     return [...explicit, ...errs];
   }
@@ -1317,7 +1346,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
   function whenErrors(nm, when, nodes, known, factDefs) {
     const f = when.fact;
     if (f.startsWith("outcome:")) return nodes[f.slice(8)] ? [] : [E(nm, `when names unknown node ${f.slice(8)}`)];
-    if (!known.has(f)) return [E(nm, `when reads unregistered fact ${f} (ADR-0104 rule 1)`)];
+    if (!known.has(f)) return [E(nm, `when reads unregistered fact ${f}`)];
     const d = factDefs[f], v = when.value;
     if (d && d.type === "enum" && !(d.values || []).some((x) => same(x, v))) return [E(nm, `when value ${pyRepr(v)} is not a value of fact ${f}`)];
     if (d && d.type === "bool" && typeof v !== "boolean") return [E(nm, `when value for bool fact ${f} must be a bool`)];
@@ -1331,9 +1360,9 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       const n = f.name;
       if (seen.has(n)) errs.push(E(null, `fact ${n}: registered twice`));
       seen.add(n);
-      if (FORBIDDEN_NAME.test(n)) errs.push(E(null, `fact ${n}: a gate rate, a finding count or trend, a self-report, or a judge score never triggers (ADR-0104 rule 5)`));
-      if (!f.instrument.startsWith("code:")) errs.push(E(null, `fact ${n}: instrument must be code, not a model (ADR-0104 rule 4)`));
-      else if (FORBIDDEN_INSTRUMENT.test(f.instrument)) errs.push(E(null, `fact ${n}: instrument names a model, a judge, a cross-run source, or the adaptation report (ADR-0104 rule 4, ADR-0109, ADR-0110)`));
+      if (FORBIDDEN_NAME.test(n)) errs.push(E(null, `fact ${n}: a gate rate, a finding count or trend, a self-report, or a judge score never triggers`));
+      if (!f.instrument.startsWith("code:")) errs.push(E(null, `fact ${n}: instrument must be code, not a model`));
+      else if (FORBIDDEN_INSTRUMENT.test(f.instrument)) errs.push(E(null, `fact ${n}: instrument names a model, a judge, a cross-run source, or the adaptation report`));
     }
     return errs;
   }
@@ -1357,13 +1386,13 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       created.set(w, [...(created.get(w) || []), n.name]);
     }
     const errs = [];
-    for (const [w, ns] of created) if (ns.length > 1) errs.push(E(nm, `parallel items share workspace ${pyRepr(w)}: created by ${ns.join(", ")} (ADR-0102 rule 2)`));
+    for (const [w, ns] of created) if (ns.length > 1) errs.push(E(nm, `parallel items share workspace ${pyRepr(w)}: created by ${ns.join(", ")}`));
     for (const n of sub) {
       if (!["agent", "action"].includes(n.kind)) continue;
       const writes = (n.kind === "action" && n.effect !== "worktree_create") || (n.kind === "agent" && n.tools.some((t) => WRITE_TOOLS.has(t)));
       if (!writes) continue;
       const ws = n.workspace === undefined ? null : n.workspace;
-      if (ws === null || ws === "." || !created.has(ws)) errs.push(E(nm, `parallel items share workspace ${pyRepr(ws)} at ${n.name}: no worktree_create makes one per item (ADR-0102 rule 2)`));
+      if (ws === null || ws === "." || !created.has(ws)) errs.push(E(nm, `parallel items share workspace ${pyRepr(ws)} at ${n.name}: no worktree_create makes one per item`));
     }
     return errs;
   }
@@ -1374,7 +1403,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     const errs = [];
     for (const n of Object.values(nodes)) for (const f of n.reads || []) {
       const w = (writers.get(f) || []).filter((x) => x !== n.name);
-      if (w.length) errs.push(E(n.name, `reads ${pyRepr(f)}, which ${w.join(", ")} writes: a declared input is never written by the graph (ADR-0110 rule 2)`));
+      if (w.length) errs.push(E(n.name, `reads ${pyRepr(f)}, which ${w.join(", ")} writes: a declared input is never written by the graph`));
     }
     return errs;
   }
@@ -1387,8 +1416,8 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       else if (!e.may_spawn) errs.push(E(nm, `entry ${n.entry} lacks may_spawn`));
       if ("when" in e) errs.push(E(nm, `entry ${n.entry} carries a when, which would bypass the dispatch`));
     }
-    for (const c of n.checks) if (nodes[c] && nodes[c].kind !== "gate") errs.push(E(nm, `check ${c} is not a gate (ADR-0113 rule 2)`));
-    for (const key of ["turns", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `child ${key} min above max`));
+    for (const c of n.checks) if (nodes[c] && nodes[c].kind !== "gate") errs.push(E(nm, `check ${c} is not a gate`));
+    for (const key of ["stalls", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `child ${key} min above max`));
     if (n.max_parallel > doc.run.max_parallel) errs.push(E(nm, "max_parallel above the run block"));
     const names = n.allow.skills.map((x) => x.name);
     if (names.length !== new Set(names).size) errs.push(E(nm, "duplicate skill in allow"));
@@ -1412,8 +1441,8 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     if (a.models && a.models.length && !a.models.includes(n.model)) errs.push(E(nm, "adapt models exclude the node's own model"));
     if (a.efforts && a.efforts.length && n.effort && !a.efforts.includes(n.effort)) errs.push(E(nm, "adapt efforts exclude the node's own effort"));
     for (const s of a.sees || []) {
-      if (SEES_FORBIDDEN.has(s)) errs.push(E(nm, `sees lists ${s}: a proposer may not see it (ADR-0104 rule 3)`));
-      else if (!known.has(s) && !s.startsWith("outcome:")) errs.push(E(nm, `sees unregistered fact ${s} (ADR-0104 rule 2)`));
+      if (SEES_FORBIDDEN.has(s)) errs.push(E(nm, `sees lists ${s}: a proposer may not see it`));
+      else if (!known.has(s) && !s.startsWith("outcome:")) errs.push(E(nm, `sees unregistered fact ${s}`));
     }
     return errs;
   }
@@ -1437,7 +1466,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     errs.push(...factErrors(doc));
     const gateIds = Object.fromEntries(doc.gates.map((g) => [g.id, new Set(g.params)]));
     for (const [gid, params] of Object.entries(gateIds)) {
-      if (!(gid in GATES)) errs.push(E(null, `gates registry: check id ${gid} is outside the engine registry (ADR-0111 rule 7)`));
+      if (!(gid in GATES)) errs.push(E(null, `gates registry: check id ${gid} is outside the engine registry`));
       else if (params.size !== GATES[gid].length || !GATES[gid].every((p) => params.has(p))) errs.push(E(null, `gates registry: params of ${gid} differ from the engine registry`));
     }
     if (!nodes[doc.root] || nodes[doc.root].kind !== "loop") errs.push(E(doc.root, "root must name a loop"));
@@ -1458,7 +1487,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     }
     const run = doc.run;
     const minSpend = Object.values(nodes).filter((n) => ["agent", "dispatch"].includes(n.kind)).map((n) => n.budget.spend.min);
-    if (minSpend.length && run.spend_cap < Math.max(...minSpend)) errs.push(E(null, `run spend cap ${run.spend_cap} is below an agent's spend minimum ${Math.max(...minSpend)} (ADR-0108 rule 9)`));
+    if (minSpend.length && run.spend_cap < Math.max(...minSpend)) errs.push(E(null, `run spend cap ${run.spend_cap} is below an agent's spend minimum ${Math.max(...minSpend)}`));
     for (const n of Object.values(nodes)) {
       const nm = n.name, k = n.kind;
       if (nm !== doc.root && !(nm in parents)) errs.push(E(nm, "orphan: no parent"));
@@ -1467,7 +1496,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       if (n.next && Object.values(n.next).includes("repeat") && !(par && par.kind === "loop")) errs.push(E(nm, "repeat is valid only on a child of a loop"));
       if ("when" in n) errs.push(...whenErrors(nm, n.when, nodes, known, factDefs));
       if (k === "gate") {
-        if (!(n.check in gateIds)) errs.push(E(nm, `unknown check ${n.check} (ADR-0111 rule 7)`));
+        if (!(n.check in gateIds)) errs.push(E(nm, `unknown check ${n.check}`));
         else {
           const ps = new Set(Object.keys(n.params));
           if (ps.size !== gateIds[n.check].size || ![...ps].every((p) => gateIds[n.check].has(p))) errs.push(E(nm, "params differ from the gates registry"));
@@ -1476,12 +1505,12 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
         if (!(n.items in factDefs) && !BUILTIN.has(n.items)) errs.push(E(nm, "items is not a registered fact"));
         errs.push(...eachWorkspaceErrors(nm, n, nodes, run));
       } else if (k === "agent") {
-        for (const key of ["turns", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `${key} min above max`));
+        for (const key of ["stalls", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `${key} min above max`));
         if (n.may_spawn && !(nm in entries)) errs.push(E(nm, "may_spawn on a node that is not a dispatch entry"));
         if (n.may_propose && !("adapt" in n)) errs.push(E(nm, "may_propose without an adapt block"));
       } else if (k === "loop") {
         if (n.max.min > n.max.value) errs.push(E(nm, "max min above value"));
-        if ("when" in n && !n.children.some((c) => nodes[c] && ["agent", "each", "action", "dispatch"].includes(nodes[c].kind))) errs.push(E(nm, "a loop with a when must hold an agent, each, action, or dispatch child (ADR-0101 rule 3)"));
+        if ("when" in n && !n.children.some((c) => nodes[c] && ["agent", "each", "action", "dispatch"].includes(nodes[c].kind))) errs.push(E(nm, "a loop with a when must hold an agent, each, action, or dispatch child"));
       } else if (k === "dispatch") errs.push(...dispatchErrors(doc, n, nodes));
       if (n.adapt) errs.push(...adaptErrors(nm, n, n.adapt, known));
     }
@@ -1491,11 +1520,11 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
   return { SCHEMA, KINDS, resolve, validate };
 }
 
-// Dashboard core module: edit operations: node edits, field groups, add, remove, rename, change kind, connect, disconnect (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: edit operations: node edits, field groups, add, remove, rename, change kind, connect, disconnect. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
-  // ---- What a person may write (ADR-0111 rules 1, 2) ----
+  // ---- What a person may write ----
   // A node edit may not change a gate's check id or its params, a node's name, or its kind.
   function applyNodeEdit(doc, name, edited) {
     const i = doc.nodes.findIndex((n) => n.name === name);
@@ -1504,13 +1533,13 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     if (!isObj(edited)) return { error: "A node is one JSON object." };
     if (edited.name !== old.name) return { error: "The JSON edit keeps the name: use Rename, which updates every reference." };
     if (edited.kind !== old.kind) return { error: "The JSON edit keeps the kind: use Change kind." };
-    if (old.kind === "gate" && (edited.check !== old.check || !same(edited.params, old.params))) return { error: "A gate's check id and its thresholds are read-only (ADR-0100 rule 2, ADR-0111 rule 2)." };
+    if (old.kind === "gate" && (edited.check !== old.check || !same(edited.params, old.params))) return { error: "A gate's check id and its thresholds are read-only." };
     const nodes = doc.nodes.slice();
     nodes[i] = edited;
     return { doc: { ...doc, nodes } };
   }
 
-  // ---- Fields grouped by purpose (ticket #74, decision #60) ----
+  // ---- Fields grouped by purpose ----
   // The fields of a kind come from the engine's own schema, so a new schema field shows up with no edit here.
   // Every key a node holds sits in exactly one group; a key the schema does not know sits in "unknown" and is kept as written.
   const GROUPS = [
@@ -1602,13 +1631,13 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return applyNodeEdit(doc, name, edited);
   }
 
-  // ---- Add and remove a node (ticket #73) ----
-  // Both are pure: they return a new document. The rules of validate() judge the result, so a gap shows on the node (ADR-0111 rule 4).
+  // ---- Add and remove a node ----
+  // Both are pure: they return a new document. The rules of validate() judge the result, so a gap shows on the node.
   const HOLDS_CHILDREN = ["loop", "each"];
 
   function newNodeBody(doc, kind, name, opts) {
     const dispatch = doc.nodes.find((n) => isObj(n) && n.kind === "dispatch");
-    const budget = () => ({ turns: { min: 1, max: 10 }, spend: { min: 0.01, max: 1 } });
+    const budget = () => ({ stalls: { min: 1, max: 5 }, spend: { min: 0.01, max: 1 } });
     if (kind === "agent") return { name, kind, model: "sonnet", tools: [], budget: budget() };
     if (kind === "wait") return { name, kind, owner: "owner", deadline: 3600, default: "fail" };
     if (kind === "action") return { name, kind, effect: "commit" };
@@ -1617,7 +1646,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     if (kind === "dispatch") {
       // A dispatch names an entry agent and checks that exist; the person connects them. Until then the engine rule shows on the node.
       const keep = ["max_depth", "max_children", "max_parallel", "deadline", "join", "allow", "budget"];
-      const base = dispatch ? clone(Object.fromEntries(keep.map((k) => [k, dispatch[k]]))) : { max_depth: 2, max_children: 4, max_parallel: 1, deadline: 3600, join: "all", budget: { turns: { min: 3, max: 60 }, spend: { min: 0.05, max: 4 } },
+      const base = dispatch ? clone(Object.fromEntries(keep.map((k) => [k, dispatch[k]]))) : { max_depth: 2, max_children: 4, max_parallel: 1, deadline: 3600, join: "all", budget: { stalls: { min: 2, max: 5 }, spend: { min: 0.05, max: 4 } },
         allow: { models: ["sonnet"], efforts: ["medium"], tools: [], skills: [{ name: "tdd", version: "1" }], workspaces: ["worktrees/child"] } };
       return { ...base, name, kind, entry: "todo_entry", checks: ["todo_check"] };
     }
@@ -1627,7 +1656,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return { name, kind, check: reg.id, params: twin ? clone(twin.params) : Object.fromEntries((reg.params || []).map((p) => [p, null])) };
   }
 
-  // A gate picks a check id the registry holds, and the dashboard never adds one (ADR-0111 rule 2).
+  // A gate picks a check id the registry holds, and the dashboard never adds one.
   function gateOpts(doc, opts) {
     if (!(doc.gates || []).length) return { error: "The gates registry is empty: a gate needs a registered check id." };
     const check = opts.check === undefined ? doc.gates[0].id : opts.check;
@@ -1683,8 +1712,8 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
       .flatMap(([label, key, vs]) => (Array.isArray(vs) ? vs : []).filter((v) => typeof v === "string" && !(served[key] || []).includes(v)).map((v) => `${label} ${v}`));
   }
 
-  // ---- Rename a node and change its kind (ticket #78) ----
-  // Both are pure and return a new document. The rules of validate() judge the result, so a gap shows on the node (ADR-0111 rule 4).
+  // ---- Rename a node and change its kind ----
+  // Both are pure and return a new document. The rules of validate() judge the result, so a gap shows on the node.
   const NAME_RE = new RegExp(SCHEMA.$defs.name.pattern);
 
   // The places a node name is written: root, children, a dispatch's entry and checks, a `when` or a `sees` entry named outcome:<node>.
@@ -1724,7 +1753,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     const old = (Array.isArray(doc.nodes) ? doc.nodes : []).find((n) => isObj(n) && n.name === name);
     if (!old) return { error: `No node named ${name}.` };
     if (old.kind === kind) return { error: `${name} is already a ${kind}.` };
-    if (old.kind === "gate") return { error: `${name} is a gate: its check id and thresholds are read-only (ADR-0100 rule 2, ADR-0111 rule 2). Remove it and add the node you want.` };
+    if (old.kind === "gate") return { error: `${name} is a gate: its check id and thresholds are read-only. Remove it and add the node you want.` };
     if (kind === "gate") {
       const g = gateOpts(doc, opts);
       if (g.error) return g;
@@ -1736,9 +1765,9 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return { doc: { ...doc, nodes: doc.nodes.map((n) => (n === old ? body : n)) }, name };
   }
 
-  // ---- Connect and disconnect (ticket #77) ----
+  // ---- Connect and disconnect ----
   // A link is a loop or each child, a dispatch entry, or a dispatch check. `next` holds reserved words, never a node name, so no link sets it.
-  // Both functions are pure. A second parent or an orphan is allowed: validate() shows it on the node (ADR-0111 rule 4), and a save is never blocked.
+  // Both functions are pure. A second parent or an orphan is allowed: validate() shows it on the node, and a save is never blocked.
   function reaches(byName, from, to, seen) {
     if (from === to) return true;
     seen = seen || new Set();
@@ -1801,7 +1830,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
 }
 
-// Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function layoutModule() {
@@ -1811,7 +1840,7 @@ function layoutModule() {
     return [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(n.checks || [])] : [])];
   }
 
-  // A layered, dependency-free DAG layout (ADR-0111 keeps the dashboard pure and Node-tested; a layout library would break
+  // A layered, dependency-free DAG layout (a layout library would break
   // that, and a plain layered pass is enough for a graph this small). Two passes:
   //
   // 1. Layer: a node's column is the longest path from the root, by relaxation (as many rounds as there are nodes, which
@@ -1855,7 +1884,7 @@ function layoutModule() {
     return { layout: out, dropped };
   }
 
-  // The view is {k, tx, ty}: a graph point (x, y) shows at (x*k + tx, y*k + ty). Pure, so node can test it (ticket #72).
+  // The view is {k, tx, ty}: a graph point (x, y) shows at (x*k + tx, y*k + ty). Pure, so node can test it.
   const VIEW_MIN = 0.1, VIEW_MAX = 3;
   const clampK = (k) => Math.min(VIEW_MAX, Math.max(VIEW_MIN, k));
   function viewFit(layout, box, size, pad) {
@@ -1892,11 +1921,11 @@ function layoutModule() {
   return { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal };
 }
 
-// Dashboard core module: save gate, draft copy, hash chip, diff, declared caps, command template, review sheet (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: save gate, draft copy, hash chip, diff, declared caps, command template, review sheet. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function reviewModule({ canonText, graphHash, cmpCodePoints }) {
-  // Save, draft copy, and the changed-file stop (decision #62, ticket #75). Pure, so node can test them.
+  // Save, draft copy, and the changed-file stop. Pure, so node can test them.
   const saveText = (text) => (text.endsWith("\n") ? text : text + "\n");
   async function hashChip(text) { const full = await graphHash(saveText(text)); return { full, short: full.slice(0, 12) }; }
   const hashRelation = (record, chip) => (record ? (record === chip ? "matches" : "does not match") : null);
@@ -1904,14 +1933,14 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
   const draftRecord = ({ name, text, layout, time, baseHash }) => ({ name, text, layout, time, baseHash });
   const draftOffer = (draft, name, text) => (draft && draft.name === name && draft.text !== text ? draft : null);
 
-  // A save stops for a file conflict only. The number of validation errors never enters the decision (ADR-0111 rule 4).
+  // A save stops for a file conflict only. The number of validation errors never enters the decision.
   function saveGate({ mode, stored, current }) {
     if (mode !== "in-place" || !stored || !current) return "write";
     return stored.lastModified !== current.lastModified || stored.text !== current.text ? "stop" : "write";
   }
   function saveMode({ picker, handle }) { const inPlace = !!(picker && handle); return { mode: inPlace ? "in-place" : "download", label: inPlace ? "In-place save" : "Download save" }; }
 
-  // --- review (ticket #84, decision #64, ADR-0117): plain text for a person. These functions start no process, write no file,
+  // --- review: plain text for a person. These functions start no process, write no file,
   // add no approval and compute no sum of caps. The command template is text that a person pastes into a terminal.
   const REVIEW_NOTE = "A shown cap and a matching hash approve nothing and authorize no live write. Approval is a person's act outside the graph. Launching stays a person's act in a terminal.";
   const named = (list, key) => { const m = new Map(); if (Array.isArray(list)) for (const x of list) if (x && typeof x === "object" && typeof x[key] === "string") m.set(x[key], x); return m; };
@@ -1927,7 +1956,7 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
     for (const name of p.keys()) if (!c.has(name)) removed.push(name);
     return { added, removed, changed };
   }
-  // Compare two graph documents by node name. Layout is not in a document, so it never appears (ADR-0111 rule 8).
+  // Compare two graph documents by node name. Layout is not in a document, so it never appears.
   function diffGraphs(prior, cur) {
     const top = fieldDiff({ name: prior.name, description: prior.description, root: prior.root, schema_version: prior.schema_version }, { name: cur.name, description: cur.description, root: cur.root, schema_version: cur.schema_version });
     const out = { top, run: fieldDiff(prior.run, cur.run), nodes: listDiff(prior.nodes, cur.nodes, "name"), facts: listDiff(prior.facts, cur.facts, "name"), gates: listDiff(prior.gates, cur.gates, "id") };
@@ -1949,7 +1978,7 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
   }
   const shq = (t) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : "'" + String(t).replace(/'/g, "'\\''") + "'");
   // The run command a person sets up: the graph file name and the engine options. An override may only go down from the run block
-  // (ADR-0106 rules 2 and 7). With any error the text is null, so no wrong command is ever shown. The hash binds the command to the reviewed graph (#68).
+  //. With any error the text is null, so no wrong command is ever shown. The hash binds the command to the reviewed graph.
   function commandTemplate({ file, hash, opts, doc }) {
     const o = opts || {}, run = (doc && doc.run) || {}, errors = [], args = ["squad", "run", shq(file || "graph.json")];
     const num = (t) => (t === "" || t === undefined || t === null ? null : Number(t));
@@ -1997,11 +2026,11 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
   return { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode };
 }
 
-// Dashboard core module: undo and redo history (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: undo and redo history. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function historyModule({ clone }) {
-  // ---- undo and redo (ticket #79): a pure history of graph-and-layout snapshots; it lives in the page and is never saved ----
+  // ---- undo and redo: a pure history of graph-and-layout snapshots; it lives in the page and is never saved ----
   const snapshot = (doc, layout) => ({ doc: clone(doc), layout: clone(layout) });
   const histNew = (limit) => ({ past: [], future: [], limit: limit > 0 ? limit : 100 });
   // `before` is the state an edit is about to change. A new edit clears redo; the oldest step goes when the limit is reached.
@@ -2024,12 +2053,12 @@ function historyModule({ clone }) {
   return { snapshot, histNew, histRecord, histUndo, histRedo };
 }
 
-// Dashboard core module: page constants and run sources: legend, help, httpSource, followPush (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: page constants and run sources: legend, help, httpSource, followPush. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function sourcesModule({ STATES }) {
   // The legend and the help are data. The page draws a swatch as a card group, so the card CSS paints it, and a Python test
-  // holds the legend to the colors the page paints and the help to the controls the page answers (ticket #85).
+  // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend })),   // the card states: from the one STATES table
@@ -2066,9 +2095,9 @@ function sourcesModule({ STATES }) {
     { how: "Esc", what: "Close the menu and this help.", covers: ["key:Escape"] },
   ];
 
-  // The source of a run that a loopback server serves (ticket #86): fetch the record and the graph by path. A missing file is null, like the other sources.
+  // The source of a run that a loopback server serves: fetch the record and the graph by path. A missing file is null, like the other sources.
   // `fetchFn(path)` returns {ok, text()}; the page passes fetch with no-store, a test passes a map.
-  // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream` (ticket #106).
+  // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream`.
   function httpSource(fetchFn, name, streamFn) {
     const get = async (p) => { try { const r = await fetchFn(p); return r && r.ok ? await r.text() : null; } catch (e) { return null; } };
     const src = { name, live: true, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
@@ -2076,7 +2105,7 @@ function sourcesModule({ STATES }) {
     return src;
   }
 
-  // Follow a run by push (ticket #106, ADR-0122). `events` is what the page already read; each pushed line is one more event.
+  // Follow a run by push. `events` is what the page already read; each pushed line is one more event.
   // hooks: changed(events), ended(), fail(reason), status(text, bad). A repeated position is skipped; a skipped one is a gap and is never painted.
   // A stream that errors reconnects by itself (the browser sends Last-Event-ID); after MAX_STREAM_ERRORS errors with no event between, the follow gives up.
   const MAX_STREAM_ERRORS = 3;
@@ -2116,11 +2145,11 @@ function sourcesModule({ STATES }) {
   return { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush };
 }
 
-// Dashboard core module: Where a pause leaves the run (ticket #107, ADR-0128).
+// Dashboard core module: Where a pause leaves the run.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function controlModule({ lastOf }) {
-  // The page shows what the engine recorded and never works the frontier out (ADR-0117 rule 10): the `paused` event is the resume point,
+  // The page shows what the engine recorded and never works the frontier out: the `paused` event is the resume point,
   // shown as the record holds it. A pause counts for the last start of the run only (`run_start`, or a `resume`), and only while the run
   // is without a verdict, or its verdict is the `stopped` that a pause writes.
   //   state "live"   : a run with no verdict yet. A request may still pause it.
@@ -2148,7 +2177,7 @@ function controlModule({ lastOf }) {
   return { pauseView, controlBody };
 }
 
-// Dashboard core: the same JSON Schema and the same rules as squad/graph.py (ADR-0111 rule 4),
+// Dashboard core: the same JSON Schema and the same rules as squad/graph.py,
 // the canonical graph hash (squad.graph.canon_hash), and the adaptation overlay (squad/report.py).
 // No DOM here. A test runs the bundle under node and compares it with the engine (tests/test_dashboard.py).
 // ENGINE comes from scripts/build_dashboard.py: the schema and the registries, read from the engine's own modules.
@@ -2195,7 +2224,7 @@ const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CAR
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REPLAY_BAR_H = 44, REVEAL_INSET = 16, FOOTER_PAD = 12;
 
-const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
+const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
 
 function setStatus(msg, bad) { const el = $("status"); el.textContent = msg; el.className = bad ? "msg-bad" : ""; toast(); }
 
@@ -2207,10 +2236,10 @@ async function recompute(opts) {
   // The cursor cuts the record: every card, total and the verdict fold only the events up to it. A null cursor is the end, so a live run keeps following.
   S.replay = S.events ? core.replayAt(S.events, S.cursor) : null;
   S.stats = S.events ? core.runStats(S.replay.events, S.doc, !!(S.overlay && S.overlay.shown), S.replay.at_end ? nowSec() : undefined) : null;
-  // The children of a dispatch are run-only cards: placed here, never written to the layout (ticket #91).
+  // The children of a dispatch are run-only cards: placed here, never written to the layout.
   const had = Object.keys(S.childPos).length + Object.keys(S.groupPos).length;
   S.children = S.stats && S.stats.children ? S.stats.children : [];
-  // Children group by status (ADR-0125): done with one outcome, or running with one harness, three or more to a group card. The keys
+  // Children group by status: done with one outcome, or running with one harness, three or more to a group card. The keys
   // the owner expanded live in S.expanded (page state, not the record), so they survive a live update and a move of the replay cursor.
   const plan = core.childPlan(S.children, S.expanded, S.layout, BOX, CARD_GAP, S.doc);
   S.groups = plan.groups; S.groupOf = plan.groupOf; S.childPos = plan.childPos;
@@ -2253,11 +2282,11 @@ function renderTotals() {
 }
 setInterval(() => { if (S.replay && S.replay.at_end && S.stats && S.stats.state === "running") renderTotals(); }, 1000);   // a running run's time keeps counting between rereads
 
-// The top bar above the graph: how many issues the run landed, of the issue set in the run folder (issue #97). The
+// The top bar above the graph: how many issues the run landed, of the issue set in the run folder. The
 // cells are core data (core.progressCells), and the replay cursor cuts them like every other figure.
 function renderProgress() {
   const bar = $("progress"), r = S.replay, was = bar.classList.contains("on");
-  const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal)) : [];
+  const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal, S.issueHeld)) : [];
   bar.classList.toggle("on", cells.length > 0);
   bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("")
     + (cells.length && !r.at_end ? `<span class="cell past" title="The bar shows the run up to the replay cursor, not the whole run.">replay: up to event ${r.cursor} of ${r.last}</span>` : "");
@@ -2307,7 +2336,7 @@ function bottomReserve() {
 // `floorKey` (the key of a group just expanded) keeps the fit from shrinking below READABLE_K: the view then starts at the group's dispatch,
 // and the fit stays off (S.fitted false) so a live update does not shrink it again. The Fit button fits all.
 function fit(floorKey) {
-  const s = mapSize(), side = sideOpen() ? $("left").offsetWidth : 0;
+  const s = mapSize(), side = 0; // the panel is a popup now, it no longer takes room from the map
   const all = { ...S.layout, ...S.childPos, ...S.groupPos, ...S.groupPts }, size = { w: Math.max(MIN_FIT, s.w - side), h: Math.max(MIN_FIT, s.h - bottomReserve()) };
   const anchor = floorKey ? floorAnchor(floorKey) : null, v = core.viewFitFloor(all, BOX, size, PAD, anchor ? READABLE_K : 0, anchor);
   S.view = { ...v, tx: v.tx + side };
@@ -2342,7 +2371,7 @@ function edgeLines() {
       lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(n.name)}" data-to="${esc(c)}"><line class="hit" ${co}/><line class="ln" ${co} marker-end="url(#arrow)"/></g>`);
     }
   }
-  // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards (ADR-0125).
+  // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards.
   for (const d of [...new Set([...S.children.map((c) => c.dispatch), ...S.groups.map((g) => g.dispatch)])]) {
     const a = core.childAnchor(S.doc, d, S.layout);
     const pos = [...S.children.filter((c) => c.dispatch === d && S.childPos[c.name]).map((c) => S.childPos[c.name]), ...S.groups.filter((g) => g.dispatch === d && S.groupPos[g.key]).map((g) => S.groupPos[g.key])];
@@ -2352,7 +2381,7 @@ function edgeLines() {
   return lines.join("");
 }
 
-// The note a redo carries (issue #134), joined to a label or a title by `sep`, or nothing.
+// The note a redo carries, joined to a label or a title by `sep`, or nothing.
 const reworkNote = (c, sep) => (c.rework ? sep + esc(c.rework) : "");
 
 // The cards for the children of a dispatch. They select and show detail; they do not drag, since no layout file holds them.
@@ -2364,23 +2393,23 @@ function renderChildren(cards) {
     const running = core.isRunning(c);
     const live = c.live || null;
     const oc = running ? "running" : c.outcome;
-    const sc = core.childStateClass(c);   // running, passed, failed, deadline, needs-human, started (ticket #101)
+    const sc = core.childStateClass(c);   // running, passed, failed, deadline, needs-human, started
     g.setAttribute("class", "card child" + (S.selected === c.name ? " sel" : "") + (sc ? " " + sc : "") + (S.groupOf[c.name] ? " ingroup" : "") + (c.superseded_by ? " superseded" : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = c.name; g.dataset.child = "1";
     focusable(g, `${c.title}, ${core.childMark(c).label}${c.rework ? ", " + c.rework : ""}`);
     const f = core.fmt, landed = c.land ? (c.land.outcome === "pass" ? " · landed" : " · not landed") : "";
-    // The task is the card's title, so the line under it names the role and the harness instead (issue #99).
+    // The task is the card's title, so the line under it names the role and the harness instead.
     const role = c.skillLabel ? `${c.skillLabel} · ` : "";
     const kind = c.rejected ? "rejected request" : `${role}${c.model === null ? f.count(null) : c.model}${c.effort ? " " + c.effort : ""}${landed}`;
     // A call in flight has no outcome yet, so its own figures are all unknown: the card shows how long it has run and
-    // what the call itself reported (ticket #101). Without this the card showed three dashes for the whole call.
+    // what the call itself reported. Without this the card showed three dashes for the whole call.
     const stat = c.rejected ? "" : running ? runningHead(c.running_for, live)
       : [f.seconds(c.elapsed), f.usd(c.spend), f.count(c.turns) + (c.turns === null ? "" : "t")].join(" · ");
     const tok = c.rejected ? "" : live ? progressLine(live) : `${f.tokens(c.tokens_in)} in · ${f.tokens(c.tokens_out)} out · ${f.rate(c.tps)}`;
     const cause = c.outcome === "fail" ? core.causeSummary(c.reasons) : null;
     const mark = core.childMark(c);
-    // A redo (issue #134): the last line says which attempt this is. A retried issue that passed reads as passed, and the failed attempt
+    // A redo: the last line says which attempt this is. A retried issue that passed reads as passed, and the failed attempt
     // it replaced reads as superseded. The text is derived and no edge joins the two cards.
     const failLine = cause && (c.superseded_by ? `superseded by ${c.superseded_by} · ${cause}` : cause);
     const line2 = c.superseded_by ? { cls: "bd-c", y: TEXT.cause, text: clipText(failLine || `superseded by ${c.superseded_by}`, CLIP.cause) }
@@ -2392,7 +2421,7 @@ function renderChildren(cards) {
     g.innerHTML = `<title>${esc(c.title)} | ${esc(c.name)} | ${esc(tip)}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(clipText(c.title, CLIP.name))}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(kind)}</text>${stat ? `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(stat)}</text>` : ""}${line2 ? `<text class="${line2.cls}" x="${TEXT.x}" y="${line2.y}">${esc(line2.text)}</text>` : ""}</g><text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${mark.glyph}</text><circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`;
     g.addEventListener("pointerdown", (ev) => {
       ev.stopPropagation();
-      // A second press on a card of an expanded group folds the group back into its group card (ADR-0125).
+      // A second press on a card of an expanded group folds the group back into its group card.
       const again = tapTwice(c.name, ev);
       if (again && S.groupOf[c.name]) { toggleGroup(S.groupOf[c.name], again); return; }
       pick(c.name);
@@ -2451,7 +2480,7 @@ function toggleGroup(key, first) {
   return recompute().then(() => { if ((S.fitted || (!opening && S.floored)) && S.doc) fit(opening ? key : null); if (opening && S.floored) setStatus(`Opened at ${Math.round(READABLE_K * 100)}% so the cards stay readable. Drag to pan, or press Fit to see them all.`); });
 }
 
-// The group card of a set of three or more children of one dispatch (ADR-0125): "dispatch · N outcome", a summary line, and one square
+// The group card of a set of three or more children of one dispatch: "dispatch · N outcome", a summary line, and one square
 // per child. A square's fill and its glyph both show the outcome; a click selects that child. A double-press on the card expands it.
 function renderGroups(cards) {
   for (const gr of S.groups) {
@@ -2486,7 +2515,7 @@ function wireSquares(g, gr) {
 function cardLines(ns, running) {
   if (ns.not_run) return `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">not run</text>`;
   if (ns.via) return `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(`checked ${ns.via.of} child${ns.via.of > 1 ? "ren" : ""} of ${ns.via.dispatch}`)}</text><text class="${ns.via.fail ? "bd-c" : "st"}" x="${TEXT.x}" y="${ns.via.fail ? TEXT.cause : TEXT.line2}">${esc(clipText(ns.via.fail ? `${ns.via.fail} failed · ${ns.via.pass} passed` : `${ns.via.pass} passed`, CLIP.cause))}</text>`;
-  const live = running ? ns.live : null;   // a call in flight: how far the call itself says it has got (ticket #101)
+  const live = running ? ns.live : null;   // a call in flight: how far the call itself says it has got
   const head = running ? runningHead(ns.running_for, live) + (ns.entries ? " · " + statLine(ns) : "") : statLine(ns);
   const top = `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(head)}</text>`;
   if (live) return top + `<text class="st" x="${TEXT.x}" y="${TEXT.line2}">${esc(progressLine(live))}</text>`;
@@ -2502,13 +2531,13 @@ function runningTitle(ns) {
 }
 
 // The first line of a call in flight: how long it has run and how many assistant messages it has produced. `msg` is not
-// the outcome's `turns` — one turn reaches the stream as two messages — so the two never share one label (ticket #101).
+// the outcome's `turns` — one turn reaches the stream as two messages — so the two never share one label.
 function runningHead(running_for, live) {
   return "▶ " + core.fmt.seconds(running_for) + (live ? " · " + core.fmt.count(live.messages) + " msg" : "");
 }
 
 // The second line of a call in flight: the context it last read and the last tool it used. A call that has reported no
-// context keeps "—" for it, never 0 (ADR-0012).
+// context keeps "—" for it, never 0.
 function progressLine(live) {
   return `${core.fmt.tokens(live.context_tokens)} context${live.tool ? " · " + live.tool : ""}`;
 }
@@ -2524,12 +2553,12 @@ function renderMap() {
     const oc = ns ? (ns.outcome || (ns.started ? "started" : null)) : null;
     const running = !!ns && core.isRunning(ns);
     const nmark = ns ? core.stateMark(core.nodeState(ns)) : null;   // a glyph on every node the record touched: color is never the only cue
-    const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started (issue #97)
+    const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started
     g.setAttribute("class", "card" + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = n.name;
     const label = core.nodeLabel(n);
-    focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip (issue #99)
+    focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip
     const name = clipText(label, CLIP.name);   // the glyph sits at the top-right corner
     g.innerHTML = `<title>${esc(n.name)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(name)}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(n.kind)}${ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + esc(ns.routed) : ""}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
     g.addEventListener("pointerdown", (ev) => { if (ev.target.classList && ev.target.classList.contains("out")) startLink(ev, n.name); else startDrag(ev, n.name, g); });
@@ -2547,7 +2576,7 @@ function tokenLine(ns) {
   const f = core.fmt;
   return `${f.tokens(ns.tokens_in)} in \u00b7 ${f.tokens(ns.tokens_out)} out \u00b7 ${f.rate(ns.tps)}`;
 }
-// `ns.entries` is how many times this node has run an entry so far (ADR-0101: a loop, a dispatch, or a retried
+// `ns.entries` is how many times this node has run an entry so far (a loop, a dispatch, or a retried
 // gate runs more than once). Shown as `\u00d7N` on every node kind, so a node that ran five times does not read
 // the same as one that ran once (found while checking the dashboard with the owner, 2026-10-01).
 function statLine(ns) { return [core.fmt.seconds(ns.elapsed), core.fmt.usd(ns.spend), core.fmt.pct(ns.cap_pct), core.fmt.count(ns.turns) + (ns.turns === null ? "" : "t"), "\u00d7" + core.fmt.count(ns.entries)].join(" \u00b7 "); }
@@ -2646,7 +2675,7 @@ function renderOverlayRow(r) {
 <br><span class="note">instrument: ${esc(r.instrument)}<br>${esc(r.note)}</span></div>`;
 }
 
-// One failure, as the record has it: the code, what it names, and the tail of the output when the engine kept it (ticket #91).
+// One failure, as the record has it: the code, what it names, and the tail of the output when the engine kept it.
 function reasonHtml(r) {
   const ev = r.evidence === null ? `<div class="note">The record keeps no output for this failure.</div>` : `<pre class="ev">${esc(r.evidence)}</pre>`;
   return `<div class="cause"><b class="bad" title="${esc(r.detail || r.raw)}">${esc(r.code)}</b>${r.gate ? ` <span class="note">(${esc(r.gate)})</span>` : ""}${r.subject ? ` \u00b7 ${esc(r.subject)}` : ""}${ev}</div>`;
@@ -2670,7 +2699,7 @@ function childHtml(c) {
   const why = c.outcome === "fail" ? `<h2>Why it failed</h2><div class="runbox">${c.reasons.map((r) => reasonHtml({ ...core.reasonParts(r), evidence: evid[r] !== undefined ? evid[r] : null })).join("")}</div>` : "";
   return `<h2>Child ${esc(c.name)} <span class="note">(of ${esc(c.dispatch)}${c.proposer ? ", asked by " + esc(c.proposer) : ""})</span></h2><div class="runbox">${rows.join("<br>")}</div>${why}`;
 }
-// The roster of one dispatch's children (ADR-0125): one row each. A click on a row selects that child.
+// The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
   const rows = core.childRoster(S.children, dispatch);
   if (!rows.length) return "";
@@ -2692,9 +2721,9 @@ function nodeRunHtml(name) {
   return `<h2>Why it failed</h2><div class="runbox">${ns.reasons.map((r) => reasonHtml({ ...core.reasonParts(r), evidence: ev[r] !== undefined ? ev[r] : null })).join("")}</div>`;
 }
 
-// The available-vs-used harness of the selected node (issue #96): derived from the record and the graph, never authored.
+// The available-vs-used harness of the selected node: derived from the record and the graph, never authored.
 // A dispatch child's available harness is its resolved `definition`; its ceiling is the dispatch envelope's `allow` set
-// (ADR-0113 rule 2). A plain agent declares its own. A gate or a loop carries none, said plainly, never an empty list.
+//. A plain agent declares its own. A gate or a loop carries none, said plainly, never an empty list.
 const HARNESS_NONE = {
   gate: "A gate runs a deterministic check and carries no harness of its own.",
   loop: "A loop repeats its children and carries no harness of its own.",
@@ -2715,7 +2744,7 @@ function harnessHtml(h) {
       `model <b>${esc(a.model === null ? f.count(null) : a.model)}</b>`,
       `effort <b>${esc(a.effort === null ? f.count(null) : a.effort)}</b>`,
       `tools ${esc(listText(a.tools))}`,
-      `turn cap ${esc(capText(a.turns))}`,
+      `stall cap ${esc(capText(a.stalls))}`,
       `spend cap ${esc(capText(a.spend))}`,
       `deadline ${esc(f.seconds(a.deadline))}`,
     ].filter(Boolean).join(" · ");
@@ -2729,7 +2758,7 @@ function harnessHtml(h) {
       `allowed efforts ${esc(listText(a.efforts))}`,
       `allowed tools ${esc(listText(a.tools))}`,
       `allowed skills ${esc(listText(a.skills))}`,
-      `turn cap ${esc(capText(a.turns))}`,
+      `stall cap ${esc(capText(a.stalls))}`,
       `spend cap ${esc(capText(a.spend))}`,
       `deadline ${esc(f.seconds(a.deadline))}`,
     ].join(" · ");
@@ -2749,8 +2778,8 @@ function harnessHtml(h) {
   return `<h2>Available vs used</h2>${parts.join("")}`;
 }
 
-// --- pause and resume (ticket #107, ADR-0128): the one write this page makes, to the run server's control route ---
-// The page asks; the engine decides at its next node entry. It never starts a run (ADR-0117): a paused run is continued by `squad resume`.
+// --- pause and resume: the one write this page makes, to the run server's control route ---
+// The page asks; the engine decides at its next node entry. It never starts a run: a paused run is continued by `squad resume`.
 const CONTROL = { state: null };   // the server's control.json: what was asked, not what the engine did
 async function loadControl() {
   if (!FROM_SERVER) return;
@@ -2815,7 +2844,7 @@ function renderRunPanel() {
 
 function renderSide() {
   const side = $("side");
-  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash (ADR-0111).</p>`; return; }
+  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
   if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length} nodes · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
   const top = S.errors.filter((e) => !e.node);
@@ -2883,7 +2912,7 @@ function renderSide() {
 }
 
 
-// --- the inspector form: fields grouped by purpose; the core builds the groups and applies each edit (ticket #74, decision #60) ---
+// --- the inspector form: fields grouped by purpose; the core builds the groups and applies each edit ---
 const groupOpen = {};
 for (const k of ["models", "efforts", "skills"]) $("dl-" + k).innerHTML = SERVED[k].map((v) => `<option value="${esc(v)}">`).join("");
 function fieldHtml(f) {
@@ -2925,7 +2954,7 @@ function wireFields() {
   for (const b of side.querySelectorAll("[data-remove]")) b.addEventListener("click", () => setFieldFrom(name, b.dataset.remove, ""));
 }
 
-// --- add and remove a node: pure functions in the core, thin wiring here (ticket #73) ---
+// --- add and remove a node: pure functions in the core, thin wiring here ---
 const KIND_LIST = core.KINDS;
 $("s-kind").innerHTML = KIND_LIST.map((k) => `<option>${k}</option>`).join("");
 function renderAddbar() {
@@ -2942,7 +2971,7 @@ function renderAddbar() {
 }
 $("s-kind").addEventListener("change", renderAddbar);
 
-// Undo and redo (ticket #79). The history holds graph-and-layout snapshots, lives in this page only, and is never saved.
+// Undo and redo. The history holds graph-and-layout snapshots, lives in this page only, and is never saved.
 const snap = () => core.snapshot(S.doc, S.layout);
 function track(before) { S.hist = core.histRecord(S.hist, before); renderAddbar(); }
 async function stepHistory(dir) {
@@ -2994,7 +3023,7 @@ async function removeNode(name) {
   await commit(r.doc, before);
 }
 
-// --- rename a node and change its kind: pure functions in the core, thin wiring here (ticket #78) ---
+// --- rename a node and change its kind: pure functions in the core, thin wiring here ---
 function nkMessage(text) { const m = $("nk-msg"); if (m) { m.textContent = text; m.className = "msg-bad"; } setStatus(text, true); }
 function focusName() { const i = $("n-name"); if (i) { i.focus(); i.select(); } }
 
@@ -3069,7 +3098,7 @@ window.addEventListener("keydown", (e) => {
 function closeMenu() { $("menu").style.display = "none"; }
 
 
-// --- the legend and the help overlay (ticket #85): rows come from the core; a swatch is a card group, so the card CSS paints it ---
+// --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
   const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
@@ -3088,7 +3117,7 @@ function openHelp() {
 function closeHelp() { $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false"); }
 function toggleHelp() { if ($("help").hidden) openHelp(); else closeHelp(); }
 $("legend").innerHTML = swatches();
-// #footer (hint + legend) grows upward as the legend wraps; keep the floating #replay bar clear of it, at any width (#95).
+// #footer (hint + legend) grows upward as the legend wraps; keep the floating #replay bar clear of it, at any width.
 (function trackFooterHeight() {
   const footer = $("footer"), bar = $("replay");
   const sync = () => { bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px"; };
@@ -3150,7 +3179,7 @@ $("f-record").addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
-// --- review panel (ticket #84, decision #64, ADR-0117): it shows what the graph declares and prepares a command; it starts nothing ---
+// --- review panel: it shows what the graph declares and prepares a command; it starts nothing ---
 const R = { open: false, prior: null, opts: { adapter: "sdk", script: "", stopAfter: "", spendCap: "", deadline: "", maxParallel: "", tierPin: "" } };
 const divs = (arr) => arr.map((x) => `<div>${x}</div>`).join("");
 const dText = (v) => (v === null ? "(absent)" : esc(v));
@@ -3250,7 +3279,7 @@ async function loadRunSource(src) {
   const pr = core.parseLive(rec);
   if (pr.error) { setStatus(pr.error, true); return false; }
   S.events = pr.events; S.recordBad = pr.bad || null; S.cursor = null; S.expanded = [];   // a new run starts with every group collapsed
-  // The issue set lives in the run folder, not the record: count target/issues for the top bar's total (issue #97).
+  // The issue set lives in the run folder, not the record: count target/issues for the top bar's total.
   S.issueTotal = src.issues ? await src.issues() : null;
   if (src.live) startFollow(src, rec); else stopFollow();
   const g = await src.graph();
@@ -3341,9 +3370,9 @@ async function restoreFolder() {
   b.textContent = `Reconnect ${dir.name}`;
   b.onclick = async () => { if ((await dir.requestPermission({ mode: "read" })) === "granted") { b.textContent = "Connect run folder"; b.onclick = connectFolder; await loadRunSource(handleSource(dir)); } };
 }
-// Served by `squad dashboard` (ticket #86, ADR-0118): the page comes from a loopback server that holds one run (its one write is a pause or resume request, ADR-0128), so the run loads with no click and no picker.
+// Served by `squad dashboard`: the page comes from a loopback server that holds one run (its one write is a pause or resume request), so the run loads with no click and no picker.
 const FROM_SERVER = location.protocol === "http:" || location.protocol === "https:";
-// The one place that knows about EventSource: it turns the browser's stream into the core's handlers (ticket #106).
+// The one place that knows about EventSource: it turns the browser's stream into the core's handlers.
 function openStream(path, h) {
   const es = new EventSource(path);
   es.onmessage = (m) => h.line(m.data);
@@ -3353,7 +3382,7 @@ function openStream(path, h) {
 }
 async function connectServed() {
   let name = "run", issues = null;
-  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; } } catch (e) { /* the server went away: the load below says so */ }
+  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
   document.title = `${document.title} \u00b7 ${name}`;
   $("b-folder").style.display = "none"; $("l-folder").style.display = "none"; $("l-record").style.display = "none";
   const src = core.httpSource((p) => fetch(p, { cache: "no-store" }), name, openStream);
@@ -3366,7 +3395,7 @@ else if (window.showDirectoryPicker) { $("b-folder").onclick = connectFolder; re
 $("f-folder").addEventListener("change", async (e) => { const fs = [...e.target.files]; if (fs.length) await loadRunSource(fileListSource(fs)); e.target.value = ""; });
 
 
-// --- save, draft copy, hash chip, and the changed-file stop (decision #62, ticket #75) ---
+// --- save, draft copy, hash chip, and the changed-file stop ---
 const PICKER = !!window.showOpenFilePicker;
 const JSON_TYPES = [{ description: "JSON", accept: { "application/json": [".json"] } }];
 const stampOf = async (h) => { const f = await h.getFile(); return { lastModified: f.lastModified, text: await f.text() }; };
@@ -3442,7 +3471,7 @@ async function offerDraft() {
   $("b-discard").onclick = async () => { S.offerPending = null; box.hidden = true; try { await draftIdb("readwrite", (st) => st.delete(S.name)); } catch (e) { noRecovery(e); } setStatus("Discarded the draft."); };
 }
 
-// One save path for the graph file and the layout file. A save stops for a file conflict only, never for a validation error (ADR-0111 rule 4).
+// One save path for the graph file and the layout file. A save stops for a file conflict only, never for a validation error.
 const TARGETS = {
   graph: { label: "graph", handle: () => S.handle, stamp: () => S.stamp, setStamp: (v) => { S.stamp = v; }, text: () => core.saveText(S.text), copyName: () => S.name + ".copy.graph.json", done: async (text) => { S.baseText = text; S.baseLayout = JSON.stringify(S.layout); try { S.baseHash = (await core.hashChip(text)).full; } catch (e) { S.baseHash = null; } },
     reload: async (cur, h) => { const keep = S.layout; try { await draftIdb("readwrite", (st) => st.delete(S.name)); } catch (e) { noRecovery(e); } if (await loadGraph(cur.text, h.name)) { S.handle = h; S.stamp = cur; S.layout = keep && Object.keys(keep).length ? { ...S.layout, ...keep } : S.layout; refreshMode(); render(); } } },
@@ -3516,7 +3545,7 @@ refreshMode();
 
 render();
 
-// The page chrome (ADR-0124): a collapsible side panel, a Run | Edit mode, a verdict chip, and the toast. No run logic lives here.
+// The page chrome: a collapsible side panel, a Run | Edit mode, a verdict chip, and the toast. No run logic lives here.
 const UI_KEY = "agent-squad-dashboard-ui";
 const UI = (() => { try { return JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { return {}; } })();
 function saveUI() { try { localStorage.setItem(UI_KEY, JSON.stringify(UI)); } catch (e) { /* no storage: the choice lasts this page only */ } }
@@ -3531,6 +3560,9 @@ function sideOpen() { return !document.body.classList.contains("noside"); }
 function openSide() { if (!sideOpen()) setSide(true, true); }
 setSide(!!UI.side, true);
 $("b-panel").addEventListener("click", () => setSide(!sideOpen()));
+// The panel is a popup: a click on the dimmed page behind it, or Escape, closes it.
+document.addEventListener("click", (e) => { if (e.target === document.body && sideOpen()) setSide(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sideOpen() && !e.defaultPrevented) setSide(false); });
 $("vchip").addEventListener("click", () => setSide(!sideOpen()));
 
 // Run mode reads a run; Edit mode shows every control that changes the graph. A loaded run opens in Run mode, a bare page in Edit mode, until the person picks.
@@ -3559,7 +3591,7 @@ function renderChrome() {
     chip.className = VERDICT_CLASS[st.state] || "v-bad";
     chip.title = v && v.reasons.length ? core.causeSummary(v.reasons) : "The run's verdict. Click to open the details.";
   }
-  // A record cut at a bad line shows its valid prefix under a banner that names the line (ADR-0126). The banner takes height from the map.
+  // A record cut at a bad line shows its valid prefix under a banner that names the line. The banner takes height from the map.
   const rb = $("recbad"), bad = S.events ? S.recordBad : null, shown = !rb.hidden;
   rb.hidden = !bad;
   if (bad) rb.textContent = `Record line ${bad.line} is not JSON (${bad.message}). Showing the ${bad.shown} events before it; the line and everything after it are not shown.`;

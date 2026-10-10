@@ -1,4 +1,4 @@
-"""Ticket #107: the dashboard shows where a pause leaves the run, as the record holds it (ADR-0128, ADR-0117 rule 10)."""
+"""Ticket #107: the dashboard shows where a pause leaves the run, as the record holds it."""
 import re
 
 from tests.dashboard_helpers import PAGE_SRC, run_node

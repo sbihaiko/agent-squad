@@ -15,7 +15,7 @@ function bottomReserve() {
 // `floorKey` (the key of a group just expanded) keeps the fit from shrinking below READABLE_K: the view then starts at the group's dispatch,
 // and the fit stays off (S.fitted false) so a live update does not shrink it again. The Fit button fits all.
 function fit(floorKey) {
-  const s = mapSize(), side = sideOpen() ? $("left").offsetWidth : 0;
+  const s = mapSize(), side = 0; // the panel is a popup now, it no longer takes room from the map
   const all = { ...S.layout, ...S.childPos, ...S.groupPos, ...S.groupPts }, size = { w: Math.max(MIN_FIT, s.w - side), h: Math.max(MIN_FIT, s.h - bottomReserve()) };
   const anchor = floorKey ? floorAnchor(floorKey) : null, v = core.viewFitFloor(all, BOX, size, PAD, anchor ? READABLE_K : 0, anchor);
   S.view = { ...v, tx: v.tx + side };
@@ -50,7 +50,7 @@ function edgeLines() {
       lines.push(`<g class="edge${sel ? " sel" : ""}" data-from="${esc(n.name)}" data-to="${esc(c)}"><line class="hit" ${co}/><line class="ln" ${co} marker-end="url(#arrow)"/></g>`);
     }
   }
-  // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards (ADR-0125).
+  // One bus per dispatch: one line leaves the entry, a rail serves each column of single cards and group cards.
   for (const d of [...new Set([...S.children.map((c) => c.dispatch), ...S.groups.map((g) => g.dispatch)])]) {
     const a = core.childAnchor(S.doc, d, S.layout);
     const pos = [...S.children.filter((c) => c.dispatch === d && S.childPos[c.name]).map((c) => S.childPos[c.name]), ...S.groups.filter((g) => g.dispatch === d && S.groupPos[g.key]).map((g) => S.groupPos[g.key])];
@@ -60,7 +60,7 @@ function edgeLines() {
   return lines.join("");
 }
 
-// The note a redo carries (issue #134), joined to a label or a title by `sep`, or nothing.
+// The note a redo carries, joined to a label or a title by `sep`, or nothing.
 const reworkNote = (c, sep) => (c.rework ? sep + esc(c.rework) : "");
 
 // The cards for the children of a dispatch. They select and show detail; they do not drag, since no layout file holds them.
@@ -72,23 +72,23 @@ function renderChildren(cards) {
     const running = core.isRunning(c);
     const live = c.live || null;
     const oc = running ? "running" : c.outcome;
-    const sc = core.childStateClass(c);   // running, passed, failed, deadline, needs-human, started (ticket #101)
+    const sc = core.childStateClass(c);   // running, passed, failed, deadline, needs-human, started
     g.setAttribute("class", "card child" + (S.selected === c.name ? " sel" : "") + (sc ? " " + sc : "") + (S.groupOf[c.name] ? " ingroup" : "") + (c.superseded_by ? " superseded" : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = c.name; g.dataset.child = "1";
     focusable(g, `${c.title}, ${core.childMark(c).label}${c.rework ? ", " + c.rework : ""}`);
     const f = core.fmt, landed = c.land ? (c.land.outcome === "pass" ? " · landed" : " · not landed") : "";
-    // The task is the card's title, so the line under it names the role and the harness instead (issue #99).
+    // The task is the card's title, so the line under it names the role and the harness instead.
     const role = c.skillLabel ? `${c.skillLabel} · ` : "";
     const kind = c.rejected ? "rejected request" : `${role}${c.model === null ? f.count(null) : c.model}${c.effort ? " " + c.effort : ""}${landed}`;
     // A call in flight has no outcome yet, so its own figures are all unknown: the card shows how long it has run and
-    // what the call itself reported (ticket #101). Without this the card showed three dashes for the whole call.
+    // what the call itself reported. Without this the card showed three dashes for the whole call.
     const stat = c.rejected ? "" : running ? runningHead(c.running_for, live)
       : [f.seconds(c.elapsed), f.usd(c.spend), f.count(c.turns) + (c.turns === null ? "" : "t")].join(" · ");
     const tok = c.rejected ? "" : live ? progressLine(live) : `${f.tokens(c.tokens_in)} in · ${f.tokens(c.tokens_out)} out · ${f.rate(c.tps)}`;
     const cause = c.outcome === "fail" ? core.causeSummary(c.reasons) : null;
     const mark = core.childMark(c);
-    // A redo (issue #134): the last line says which attempt this is. A retried issue that passed reads as passed, and the failed attempt
+    // A redo: the last line says which attempt this is. A retried issue that passed reads as passed, and the failed attempt
     // it replaced reads as superseded. The text is derived and no edge joins the two cards.
     const failLine = cause && (c.superseded_by ? `superseded by ${c.superseded_by} · ${cause}` : cause);
     const line2 = c.superseded_by ? { cls: "bd-c", y: TEXT.cause, text: clipText(failLine || `superseded by ${c.superseded_by}`, CLIP.cause) }
@@ -100,7 +100,7 @@ function renderChildren(cards) {
     g.innerHTML = `<title>${esc(c.title)} | ${esc(c.name)} | ${esc(tip)}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(clipText(c.title, CLIP.name))}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(kind)}</text>${stat ? `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(stat)}</text>` : ""}${line2 ? `<text class="${line2.cls}" x="${TEXT.x}" y="${line2.y}">${esc(line2.text)}</text>` : ""}</g><text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${mark.glyph}</text><circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`;
     g.addEventListener("pointerdown", (ev) => {
       ev.stopPropagation();
-      // A second press on a card of an expanded group folds the group back into its group card (ADR-0125).
+      // A second press on a card of an expanded group folds the group back into its group card.
       const again = tapTwice(c.name, ev);
       if (again && S.groupOf[c.name]) { toggleGroup(S.groupOf[c.name], again); return; }
       pick(c.name);
@@ -159,7 +159,7 @@ function toggleGroup(key, first) {
   return recompute().then(() => { if ((S.fitted || (!opening && S.floored)) && S.doc) fit(opening ? key : null); if (opening && S.floored) setStatus(`Opened at ${Math.round(READABLE_K * 100)}% so the cards stay readable. Drag to pan, or press Fit to see them all.`); });
 }
 
-// The group card of a set of three or more children of one dispatch (ADR-0125): "dispatch · N outcome", a summary line, and one square
+// The group card of a set of three or more children of one dispatch: "dispatch · N outcome", a summary line, and one square
 // per child. A square's fill and its glyph both show the outcome; a click selects that child. A double-press on the card expands it.
 function renderGroups(cards) {
   for (const gr of S.groups) {
@@ -194,7 +194,7 @@ function wireSquares(g, gr) {
 function cardLines(ns, running) {
   if (ns.not_run) return `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">not run</text>`;
   if (ns.via) return `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(`checked ${ns.via.of} child${ns.via.of > 1 ? "ren" : ""} of ${ns.via.dispatch}`)}</text><text class="${ns.via.fail ? "bd-c" : "st"}" x="${TEXT.x}" y="${ns.via.fail ? TEXT.cause : TEXT.line2}">${esc(clipText(ns.via.fail ? `${ns.via.fail} failed · ${ns.via.pass} passed` : `${ns.via.pass} passed`, CLIP.cause))}</text>`;
-  const live = running ? ns.live : null;   // a call in flight: how far the call itself says it has got (ticket #101)
+  const live = running ? ns.live : null;   // a call in flight: how far the call itself says it has got
   const head = running ? runningHead(ns.running_for, live) + (ns.entries ? " · " + statLine(ns) : "") : statLine(ns);
   const top = `<text class="st" x="${TEXT.x}" y="${TEXT.line1}">${esc(head)}</text>`;
   if (live) return top + `<text class="st" x="${TEXT.x}" y="${TEXT.line2}">${esc(progressLine(live))}</text>`;
@@ -210,13 +210,13 @@ function runningTitle(ns) {
 }
 
 // The first line of a call in flight: how long it has run and how many assistant messages it has produced. `msg` is not
-// the outcome's `turns` — one turn reaches the stream as two messages — so the two never share one label (ticket #101).
+// the outcome's `turns` — one turn reaches the stream as two messages — so the two never share one label.
 function runningHead(running_for, live) {
   return "▶ " + core.fmt.seconds(running_for) + (live ? " · " + core.fmt.count(live.messages) + " msg" : "");
 }
 
 // The second line of a call in flight: the context it last read and the last tool it used. A call that has reported no
-// context keeps "—" for it, never 0 (ADR-0012).
+// context keeps "—" for it, never 0.
 function progressLine(live) {
   return `${core.fmt.tokens(live.context_tokens)} context${live.tool ? " · " + live.tool : ""}`;
 }
@@ -232,12 +232,12 @@ function renderMap() {
     const oc = ns ? (ns.outcome || (ns.started ? "started" : null)) : null;
     const running = !!ns && core.isRunning(ns);
     const nmark = ns ? core.stateMark(core.nodeState(ns)) : null;   // a glyph on every node the record touched: color is never the only cue
-    const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started (issue #97)
+    const sc = core.stateClass(ns);   // not-run, running, passed, failed, deadline, needs-human, started
     g.setAttribute("class", "card" + (S.selected === n.name ? " sel" : "") + (errs ? " err" : "") + (sc ? " " + sc : ""));
     g.setAttribute("transform", `translate(${p.x} ${p.y})`);
     g.dataset.name = n.name;
     const label = core.nodeLabel(n);
-    focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip (issue #99)
+    focusable(g, `${label}, ${nmark ? nmark.label : n.kind}`);   // the role label on the card; the raw name stays in the tooltip
     const name = clipText(label, CLIP.name);   // the glyph sits at the top-right corner
     g.innerHTML = `<title>${esc(n.name)}${ns ? ` | ${running ? esc(runningTitle(ns)) : `${esc(oc || "no outcome")}, time ${core.fmt.seconds(ns.elapsed)}, cost ${core.fmt.usd(ns.spend)}, ${core.fmt.pct(ns.cap_pct)} of the call cap, turns ${core.fmt.count(ns.turns)}${tokenLine(ns) ? ", tokens " + tokenLine(ns) : ""}, entries ${ns.entries}${ns.cause ? ", " + esc(ns.cause) : ""}`}` : ""}</title><rect width="${BOX.w}" height="${BOX.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(name)}</text><text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(n.kind)}${ns && ns.routed && ns.routed !== "continue" ? " \u2192 " + esc(ns.routed) : ""}</text>${ns ? cardLines(ns, running) : ""}</g>${errs ? `<text class="bd-e" x="${BOX.w - 8}" y="34" text-anchor="end">${errs} error${errs > 1 ? "s" : ""}</text>` : ""}${ov ? `<text class="bd-o" x="${BOX.w - 26}" y="19" text-anchor="end">${ov} adapted</text>` : ""}${nmark ? `<text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${nmark.glyph}</text>` : ""}${n.name === S.doc.root ? "" : `<circle class="port in" cx="0" cy="${BOX.h / 2}" r="5"/>`}${["loop", "each", "dispatch"].includes(n.kind) ? `<circle class="port out" cx="${BOX.w}" cy="${BOX.h / 2}" r="5"><title>Drag to another node to connect</title></circle>` : ""}`;
     g.addEventListener("pointerdown", (ev) => { if (ev.target.classList && ev.target.classList.contains("out")) startLink(ev, n.name); else startDrag(ev, n.name, g); });
@@ -255,7 +255,7 @@ function tokenLine(ns) {
   const f = core.fmt;
   return `${f.tokens(ns.tokens_in)} in \u00b7 ${f.tokens(ns.tokens_out)} out \u00b7 ${f.rate(ns.tps)}`;
 }
-// `ns.entries` is how many times this node has run an entry so far (ADR-0101: a loop, a dispatch, or a retried
+// `ns.entries` is how many times this node has run an entry so far (a loop, a dispatch, or a retried
 // gate runs more than once). Shown as `\u00d7N` on every node kind, so a node that ran five times does not read
 // the same as one that ran once (found while checking the dashboard with the owner, 2026-10-01).
 function statLine(ns) { return [core.fmt.seconds(ns.elapsed), core.fmt.usd(ns.spend), core.fmt.pct(ns.cap_pct), core.fmt.count(ns.turns) + (ns.turns === null ? "" : "t"), "\u00d7" + core.fmt.count(ns.entries)].join(" \u00b7 "); }

@@ -1,8 +1,8 @@
-// Dashboard core module: save gate, draft copy, hash chip, diff, declared caps, command template, review sheet (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: save gate, draft copy, hash chip, diff, declared caps, command template, review sheet. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function reviewModule({ canonText, graphHash, cmpCodePoints }) {
-  // Save, draft copy, and the changed-file stop (decision #62, ticket #75). Pure, so node can test them.
+  // Save, draft copy, and the changed-file stop. Pure, so node can test them.
   const saveText = (text) => (text.endsWith("\n") ? text : text + "\n");
   async function hashChip(text) { const full = await graphHash(saveText(text)); return { full, short: full.slice(0, 12) }; }
   const hashRelation = (record, chip) => (record ? (record === chip ? "matches" : "does not match") : null);
@@ -10,14 +10,14 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
   const draftRecord = ({ name, text, layout, time, baseHash }) => ({ name, text, layout, time, baseHash });
   const draftOffer = (draft, name, text) => (draft && draft.name === name && draft.text !== text ? draft : null);
 
-  // A save stops for a file conflict only. The number of validation errors never enters the decision (ADR-0111 rule 4).
+  // A save stops for a file conflict only. The number of validation errors never enters the decision.
   function saveGate({ mode, stored, current }) {
     if (mode !== "in-place" || !stored || !current) return "write";
     return stored.lastModified !== current.lastModified || stored.text !== current.text ? "stop" : "write";
   }
   function saveMode({ picker, handle }) { const inPlace = !!(picker && handle); return { mode: inPlace ? "in-place" : "download", label: inPlace ? "In-place save" : "Download save" }; }
 
-  // --- review (ticket #84, decision #64, ADR-0117): plain text for a person. These functions start no process, write no file,
+  // --- review: plain text for a person. These functions start no process, write no file,
   // add no approval and compute no sum of caps. The command template is text that a person pastes into a terminal.
   const REVIEW_NOTE = "A shown cap and a matching hash approve nothing and authorize no live write. Approval is a person's act outside the graph. Launching stays a person's act in a terminal.";
   const named = (list, key) => { const m = new Map(); if (Array.isArray(list)) for (const x of list) if (x && typeof x === "object" && typeof x[key] === "string") m.set(x[key], x); return m; };
@@ -33,7 +33,7 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
     for (const name of p.keys()) if (!c.has(name)) removed.push(name);
     return { added, removed, changed };
   }
-  // Compare two graph documents by node name. Layout is not in a document, so it never appears (ADR-0111 rule 8).
+  // Compare two graph documents by node name. Layout is not in a document, so it never appears.
   function diffGraphs(prior, cur) {
     const top = fieldDiff({ name: prior.name, description: prior.description, root: prior.root, schema_version: prior.schema_version }, { name: cur.name, description: cur.description, root: cur.root, schema_version: cur.schema_version });
     const out = { top, run: fieldDiff(prior.run, cur.run), nodes: listDiff(prior.nodes, cur.nodes, "name"), facts: listDiff(prior.facts, cur.facts, "name"), gates: listDiff(prior.gates, cur.gates, "id") };
@@ -55,7 +55,7 @@ function reviewModule({ canonText, graphHash, cmpCodePoints }) {
   }
   const shq = (t) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : "'" + String(t).replace(/'/g, "'\\''") + "'");
   // The run command a person sets up: the graph file name and the engine options. An override may only go down from the run block
-  // (ADR-0106 rules 2 and 7). With any error the text is null, so no wrong command is ever shown. The hash binds the command to the reviewed graph (#68).
+  //. With any error the text is null, so no wrong command is ever shown. The hash binds the command to the reviewed graph.
   function commandTemplate({ file, hash, opts, doc }) {
     const o = opts || {}, run = (doc && doc.run) || {}, errors = [], args = ["squad", "run", shq(file || "graph.json")];
     const num = (t) => (t === "" || t === undefined || t === null ? null : Number(t));

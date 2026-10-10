@@ -1,4 +1,4 @@
-"""Run spend (ADR-0108). Measured spend only; unknown spend is never counted as zero.
+"""Run spend. Measured spend only; unknown spend is never counted as zero.
 
 `run_spend` is the sum of measured SDK results. A call that ends with no result (a deadline kill,
 an adapter error) has unknown spend: its granted cap stays reserved for funding, so the run never

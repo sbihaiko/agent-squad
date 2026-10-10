@@ -1,4 +1,4 @@
-# Skills this repo borrows from outside itself (ADR-0129, ticket #135). Each is found by name at run time with
+# Skills this repo borrows from outside itself. Each is found by name at run time with
 # `python3 -m squad.skillpath NAME`, never by a path, so a plugin update, a move or a removal shows up in
 # `python3 -m squad.skillpath --check` instead of breaking a door silently.
 #
@@ -11,13 +11,16 @@
 # with the door's authority, so a plugin that merely ships a skill of the same name is not trusted.
 plugins:
   - mattpocock-skills
+  - autonomy
 referenced:
+  - autonomy
   - code-review
   - codebase-design
   - diagnosing-bugs
   - domain-modeling
   - grilling
   - implement
+  - panel
   - prototype
   - research
   - setup-matt-pocock-skills
@@ -30,6 +33,8 @@ referenced:
   - writing-for-agents
 # `optional` lists commands the upstream router names that this machine may not load (an unlisted, in-progress skill).
 # A missing one is no problem and no warning. `retro` is a design-notes stub in pack 1.2.3, and `understand` is not in the pack at all.
+# `autonomy` and `panel` come from the autonomy plugin (mmctech-ai/autonomy), which this repo does not vendor: they are
+# `referenced`, and the plugin is trusted. Owner ruling: they are defaults, not optional.
 optional:
   - pr
   - retro

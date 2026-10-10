@@ -23,6 +23,19 @@ class RunCtx:
     eff = property(lambda s: s._e.eff)
     run_cfg = property(lambda s: s._e.run_cfg)
     scale = property(lambda s: s._e.scale)
+    project_limits = property(lambda s: s._e.limits)   # the project settings file's call limits
+
+    dispatch = property(lambda s: s._e.dispatch)
+    runs = property(lambda s: s._e.runs)
+    dry = property(lambda s: s._e.dry)
+
+    def entry_count(self, name, item):
+        """How many times the node has been entered for the item (0 if never)."""
+        return self._e.entries.get((name, item), 0)
+
+    def outcome_event(self, name, entry, item):
+        """The recorded outcome event of one node entry, or None."""
+        return self._e.outcomes.event(name, entry, item)
 
     def route(self, node, outcome):
         return self._e._route(node, outcome)
@@ -31,10 +44,10 @@ class RunCtx:
         return name in self._e.entry_of
 
     def limits(self, name):
-        """The limits a router may ask within: the dispatch's allow lists and budget, as the envelope checks them (ADR-0113 rule 3)."""
+        """The limits a router may ask within: the dispatch's allow lists and budget, as the envelope checks them."""
         d = self._e.nodes[self._e.entry_of[name]]
         return {"skills": [s["name"] for s in d["allow"]["skills"]], **{k: d["allow"][k] for k in ("models", "efforts", "tools", "workspaces")},
-                "turns": d["budget"]["turns"], "spend": d["budget"]["spend"], "deadline": d["deadline"],
+                "stalls": d["budget"]["stalls"], "spend": d["budget"]["spend"], "deadline": d["deadline"],
                 "max_children": d["max_children"], "max_parallel": d["max_parallel"], "max_depth": d["max_depth"]}
 
     def ledger(self, name):

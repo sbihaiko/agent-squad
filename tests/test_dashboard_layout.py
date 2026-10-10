@@ -1,7 +1,7 @@
 """Ticket #92: the graph lays itself out in layers, so it spreads as nodes are added and an edge stops crossing a card.
 
 A node's column is the longest path from the root; its row follows the mean row of its parents (the barycenter heuristic). No
-layout library: the page stays pure and Node-tested (ADR-0111). A dispatch's children anchor on its agent entry, one column
+layout library: the page stays pure and Node-tested. A dispatch's children anchor on its agent entry, one column
 over, instead of on the dispatch node two columns back, so the edge to a child never crosses the entry or its check gates.
 """
 from tests.dashboard_helpers import ROOT, run_node

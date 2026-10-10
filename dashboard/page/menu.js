@@ -1,4 +1,4 @@
-// --- the legend and the help overlay (ticket #85): rows come from the core; a swatch is a card group, so the card CSS paints it ---
+// --- the legend and the help overlay: rows come from the core; a swatch is a card group, so the card CSS paints it ---
 function swatches() {
   const cards = core.LEGEND.map((r) => `<span class="lg"><svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>${esc(r.label)}</span>`);
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
@@ -17,7 +17,7 @@ function openHelp() {
 function closeHelp() { $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false"); }
 function toggleHelp() { if ($("help").hidden) openHelp(); else closeHelp(); }
 $("legend").innerHTML = swatches();
-// #footer (hint + legend) grows upward as the legend wraps; keep the floating #replay bar clear of it, at any width (#95).
+// #footer (hint + legend) grows upward as the legend wraps; keep the floating #replay bar clear of it, at any width.
 (function trackFooterHeight() {
   const footer = $("footer"), bar = $("replay");
   const sync = () => { bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px"; };

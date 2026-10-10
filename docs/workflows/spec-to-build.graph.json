@@ -1,0 +1,184 @@
+{
+ "schema_version": 1,
+ "name": "router-dynamic",
+ "description": "A dynamic flow. A router agent runs the ask-matt skill and requests children inside the dispatch envelope.",
+ "run": {
+  "deadline": 21600,
+  "max_parallel": 2,
+  "spend_cap": 40
+ },
+ "facts": [
+  {
+   "name": "git",
+   "type": "bool",
+   "instrument": "code: git is available in the target",
+   "source_kind": "target"
+  },
+  {
+   "name": "run_spend",
+   "type": "number",
+   "instrument": "code: sum of SDK result spend over agent entries",
+   "source_kind": "run_record"
+  }
+ ],
+ "gates": [
+  {
+   "id": "scope",
+   "params": [
+    "allowed_generated"
+   ]
+  },
+  {
+   "id": "security",
+   "params": [
+    "sensitive_paths"
+   ]
+  },
+  {
+   "id": "ac-verify",
+   "params": [
+    "commands_from"
+   ]
+  }
+ ],
+ "root": "main",
+ "nodes": [
+  {
+   "name": "main",
+   "kind": "loop",
+   "max": {
+    "value": 1,
+    "min": 1
+   },
+   "children": [
+    "route",
+    "final_gate"
+   ]
+  },
+  {
+   "name": "route",
+   "kind": "dispatch",
+   "entry": "router",
+   "max_depth": 2,
+   "max_children": 8,
+   "max_parallel": 2,
+   "deadline": 7200,
+   "join": "all",
+   "allow": {
+    "models": [
+     "opus",
+     "sonnet",
+     "haiku"
+    ],
+    "efforts": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "tools": [
+     "Read",
+     "Grep",
+     "Glob",
+     "Edit",
+     "Write",
+     "Bash"
+    ],
+    "skills": [
+     {
+      "name": "to-spec"
+     },
+     {
+      "name": "to-tickets"
+     },
+     {
+      "name": "tdd"
+     },
+     {
+      "name": "diagnosing-bugs"
+     },
+     {
+      "name": "codebase-design"
+     }
+    ],
+    "workspaces": [
+     "worktrees/child"
+    ]
+   },
+   "budget": {
+    "stalls": {
+     "min": 2,
+     "max": 5
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 4
+    }
+   },
+   "checks": [
+    "scope_gate",
+    "security_gate"
+   ]
+  },
+  {
+   "name": "router",
+   "kind": "agent",
+   "model": "opus",
+   "tools": [
+    "Read",
+    "Grep",
+    "Glob"
+   ],
+   "budget": {
+    "stalls": {
+     "min": 2,
+     "max": 5
+    },
+    "spend": {
+     "min": 0.05,
+     "max": 8
+    }
+   },
+   "deadline": 1200,
+   "skill": "ask-matt",
+   "may_spawn": true,
+   "output_key": "spawns",
+   "next": {
+    "fail": "exit:fail"
+   },
+   "instructions": "# Role: router\n\nYou decide what work a request needs and ask for it. You read the repository and the request. You change nothing yourself.\n\nThe limits you may ask within are in the `limits` field of your input: the allowed `skills`, `models`, `efforts`, `tools` and `workspaces`, and the budgets. Read them before you ask.\n\nYou run the skill you were given. Then turn its advice into requests for child agents. Each child is one fresh session with its own prompt, skill, and settings.\n\nReturn these fields beside `status` and `reasons`:\n\n- `spawns`: a list of requests, each `{prompt, skill, model, effort, tools, stalls, spend, deadline, workspace}`.\n  - Use exactly these field names. A request with any other field, such as `name`, `skills`, `budget` or `acceptance_commands`, is rejected whole, and so is a request that names an `id`, a `key` or a `name`: code assigns the identity.\n  - `prompt`: the full task for the child. The child sees nothing else from you, so state the goal, the paths, and the done condition.\n  - `skill`: one skill, as a string, from the allowed list. It is never a list, and a skill outside the allowed list is rejected.\n  - Every other field is optional and may only narrow the limits you were given.\n\nAsk for the fewest children that do the job. Use a cheaper model for reading and a stronger one for design. Give parallel children separate workspaces. Code checks each request against limits you cannot change. A request over any limit is rejected whole, so stay inside the limits.\nThree answers exist. Use the exact keys, never `children` or `tasks`:\n\n- Work to do: `{\"status\": \"pass\", \"spawns\": [ ... ]}`.\n- No child is needed: `{\"status\": \"fail\", \"spawns\": [], \"reasons\": [\"no_work\"]}`.\n- A human must act, or a fact you cannot check blocks the work: `{\"status\": \"needs-human\", \"reasons\": [\"<the one thing the owner must do or confirm>\"]}`. `spawns` may be absent.\n\nA handoff or notes file in the repository can be stale. When it disagrees with what you can read, or you cannot check the live state (open issues, branches), say so in `reasons` and ask a child with the tools to check it. Do not stop on a claim you did not verify.\n\nExample of one request, in `spawns`:\n\n```json\n{\"prompt\": \"Add a retry with backoff to uploader.py. Done when tests/test_uploader.py passes.\", \"skill\": \"tdd\", \"model\": \"sonnet\", \"effort\": \"medium\", \"tools\": [\"Read\", \"Edit\"], \"stalls\": 4, \"spend\": 1.0, \"workspace\": \"worktrees/uploader\"}\n```\n\n## Stopping rule\n\nRead what you need and no more. Spend at most about fifteen turns on reading. Then return the JSON object. If the request is still unclear, return `needs-human` and name the one question that would settle it. A run with no object is lost; a thin object is not.\n\n## This workflow: spec to tickets to build\n\nThe request asks for the flow spec, then tickets, then build. Run it as waves, reading the ledger each time you are called:\n\n1. No spec yet: ask one child with the `to-spec` skill to write the spec from the request and the repository, and to file it in the project's tracker.\n2. A spec and no tickets: ask one child with the `to-tickets` skill to split the spec into tickets that name their blockers.\n3. Tickets exist: ask children with the `tdd` skill, one per ready ticket (blockers landed), each in its own workspace. When every ticket has landed, return `{\"status\": \"pass\", \"spawns\": [], \"done\": true}`.\n\nBefore step 1, check the live tracker state through a read-only child (`gh issue list --state open`) when a handoff file claims a state. Do not trust the file alone."
+  },
+  {
+   "name": "scope_gate",
+   "kind": "gate",
+   "check": "scope",
+   "params": {
+    "allowed_generated": [
+     "package-lock.json"
+    ]
+   }
+  },
+  {
+   "name": "security_gate",
+   "kind": "gate",
+   "check": "security",
+   "params": {
+    "sensitive_paths": [
+     "auth",
+     "crypto",
+     ".env*"
+    ]
+   }
+  },
+  {
+   "name": "final_gate",
+   "kind": "gate",
+   "check": "ac-verify",
+   "params": {
+    "commands_from": "route"
+   },
+   "next": {
+    "fail": "exit:fail"
+   }
+  }
+ ]
+}

@@ -1,4 +1,4 @@
-"""Dispatch decisions and landing (ADR-0113, ADR-0114; ticket #124, parent spec #115).
+"""Dispatch decisions and landing.
 
 `Dispatch` owns the spawned children, their held reservations, the landed children, and the held-out
 baseline. It decides spawn requests ("decide these requests") and lands finished children ("land these
@@ -8,7 +8,7 @@ import subprocess
 
 import anyio
 
-from squad import actions, envelope, git
+from squad import actions, envelope, git, session, workcmd
 from squad import verdict as V
 from squad.engine_errors import Frontier
 
@@ -17,8 +17,8 @@ class Dispatch:
     def __init__(self, engine):
         self.e = engine
         self.children, self.held = {}, {}   # spawned children by name (their spawn_accepted event), and their held reservations
-        self.landed = {}       # dispatch child name -> its `land` event (ADR-0113 amendment, ticket #90)
-        self.ac_before = None  # {child: its held-out commands all passed}, as of the last landing (ADR-0113 rule 12)
+        self.landed = {}       # dispatch child name -> its `land` event
+        self.ac_before = None  # {child: its held-out commands all passed}, as of the last landing
 
     def absorb(self, ev):
         """Rebuild state from one record event on resume."""
@@ -33,7 +33,7 @@ class Dispatch:
         cmds = []
         for row in ledger:
             out = self.e.artifacts.get(row["child"], None)
-            for c in (out or {}).get("ac_commands", []) if row["outcome"] == "pass" and isinstance(out, dict) else []:
+            for c in session.ac_commands(out)[0] if row["outcome"] == "pass" else []:
                 if c not in cmds:
                     cmds.append(c)
         return ledger, cmds
@@ -81,7 +81,7 @@ class Dispatch:
         return ev
 
     def resolve_after(self, req, parent, pentry, req_ev):
-        """Turn `after` indexes into child names. Each index names an earlier request of the same list that was accepted (ADR-0113)."""
+        """Turn `after` indexes into child names. Each index names an earlier request of the same list that was accepted."""
         prior = self.spawn_events(parent, pentry)
         me = next(i for i, e in enumerate(prior) if e["pos"] == req_ev["pos"])
         names, errs = [], []
@@ -124,8 +124,8 @@ class Dispatch:
         return list(self.landed[name]["reasons"]) if name in self.landed and self.landed[name]["outcome"] != "pass" else reasons
 
     async def land(self, node, entry, sc, seen):
-        """Land every passing write child's branch into the target, in request order, once (ADR-0113 amendment, ticket #90).
-        A landing that turns an earlier child's held-out command red is undone (ADR-0113 rule 12, ticket #101).
+        """Land every passing write child's branch into the target, in request order, once.
+        A landing that turns an earlier child's held-out command red is undone.
         Code merges: no diff, conflict text or test output reaches a model. Return True in a dry walk when a landing is still owed."""
         for name, outcome, _ in seen:
             if outcome != "pass" or name in self.landed or not self.landable(name):
@@ -136,7 +136,7 @@ class Dispatch:
             path = self.e.runs.workspace(name, d)
             branch = actions.branch_name(self.e.run_id, path.name, None)
             if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
-                self.ac_before = await self.ac_survey()
+                self.ac_before, _ = await self.ac_survey()
             head_before = git.head(self.e.target)
             if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
                 r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
@@ -147,12 +147,22 @@ class Dispatch:
                     r = actions.ActionResult(False, ["land_timeout"], head_before)
             if r.ok:
                 r = await self.landing_check(name, head_before)
-                if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge (rule 14)
+                if r.ok and name in self.ac_before:      # the child's own command, run at its own landing: no earlier result, so it never undoes the merge
                     r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
             self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
                                                    outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
                                                    effect={"name": "merge_land", "head": r.head, **r.extra})
         return False
+
+    def prune(self):
+        """Remove the branch and worktree of every child that landed. The work is in the target's history now."""
+        for name, land in self.landed.items():
+            if land["outcome"] != "pass" or name not in self.children:
+                continue
+            path = self.e.runs.workspace(name, self.children[name]["definition"])
+            if path.exists():
+                git.run(["worktree", "remove", "--force", str(path)], self.e.target)
+            git.run(["branch", "-D", actions.branch_name(self.e.run_id, path.name, None)], self.e.target)
 
     def landed_commands(self, extra=None):
         """One row per landed child that declares held-out commands: (child, commands), in the order they landed."""
@@ -160,39 +170,38 @@ class Dispatch:
         rows = []
         for n in names:
             out = self.e.artifacts.get(n, None)
-            cmds = (out or {}).get("ac_commands", []) if isinstance(out, dict) else []
+            cmds = session.ac_commands(out)[0]
             if cmds:
                 rows.append((n, cmds))
         return rows
 
     async def ac_survey(self, extra=None):
-        """Run every landed child's held-out commands against the target: {child: all its commands passed}."""
-        got = {}
+        """Run the held-out commands of every landed child against the target. Use `workcmd`, the policy of the gate.
+        Return ({child: all its commands passed}, {child: {"ac_failed:<command>": output tail or timeout note}}).
+        The evidence holds every failing command of a child."""
+        got, evidence = {}, {}
         for name, cmds in self.landed_commands(extra):
-            ok = True
+            got[name] = True
             for c in cmds:
-                try:
-                    r = await anyio.to_thread.run_sync(lambda c=c: subprocess.run(c, shell=True, cwd=self.e.target, capture_output=True, timeout=120))
-                    ok = r.returncode == 0
-                except subprocess.TimeoutExpired:
-                    ok = False
-                if not ok:
-                    break
-            got[name] = ok
-        return got
+                r = await anyio.to_thread.run_sync(lambda c=c: workcmd.run(c, self.e.target))
+                if not r.ok:
+                    got[name] = False
+                    evidence.setdefault(name, {})[f"ac_failed:{c}"] = r.evidence
+        return got, evidence
 
     async def landing_check(self, name, head_before):
-        """ADR-0113 rule 12. A command that passed before this landing and fails after it is a regression: undo the merge.
+        """A command that passed before this landing and fails after it is a regression: undo the merge.
         A command already failing before it fails nothing: this rule asks only what the landing moved, and
-        ADR-0113 rule 13 leaves the final gate as the check on a command that was already red. A child's own
+        The rules leave the final gate as the check on a command that was already red. A child's own
         command at its own landing has no earlier result to move from, so the final gate stays the check on it."""
-        after = await self.ac_survey(extra=name)
+        after, evidence = await self.ac_survey(extra=name)
         moved = sorted(c for c, ok in self.ac_before.items() if ok and not after.get(c, False))
         if not moved:
             self.ac_before = after
             return actions.ActionResult(True, [], git.head(self.e.target))
         await anyio.to_thread.run_sync(lambda: git.run(["reset", "--hard", head_before], self.e.target, timeout=300 * self.e.scale))
-        return actions.ActionResult(False, [f"ac_regression:{c}" for c in moved], head_before)
+        return actions.ActionResult(False, [f"ac_regression:{c}" for c in moved], head_before,
+                                    {"evidence": {f"ac_regression:{c}": evidence.get(c, {}) for c in moved}})
 
     def ledger(self, disp):
         """One compact row per finished child of a dispatch, in request order: the only thing a router reads of its children's work."""
@@ -215,18 +224,17 @@ class Dispatch:
 
 class DispatchRunner:
     async def run(self, ctx, node, entry, sc):
-        e = ctx._e
-        d, t0, ent = e.dispatch, e.clock(), node["entry"]   # wall time of this entry, from reading its entry child to landing (ADR-0109)
+        d, t0, ent = ctx.dispatch, ctx.clock(), node["entry"]   # wall time of this entry, from reading its entry child to landing
         res = await ctx.exec_node(ent, sc)
         if res.outcome != "pass":
-            return ctx.finish(node, entry, sc, res.outcome, res.reasons, elapsed=e.clock() - t0)
-        pe, spawns = e.entries[(ent, sc.item)], e.artifacts.get(e.nodes[ent]["output_key"], sc.item)
-        if e.dry and d.lift_pending(ent, pe, spawns):
+            return ctx.finish(node, entry, sc, res.outcome, res.reasons, elapsed=ctx.clock() - t0)
+        pe, spawns = ctx.entry_count(ent, sc.item), ctx.artifacts.get(ctx.nodes[ent]["output_key"], sc.item)
+        if ctx.dry and d.lift_pending(ent, pe, spawns):
             raise Frontier([(node["name"], sc.item)])
-        stop = isinstance(spawns, list) and not spawns and (e.artifacts.get(ent, sc.item) or {}).get("done") is True
-        diag = e.done[(ent, pe, sc.item)].get("diagnostic") or {}
-        d.lift(node, ent, pe, 1, spawns, None, e.budget.available(), None, diag.get("session", "unknown"))   # the envelope's tool ceiling bounds a top-level child
-        seen = await e.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, e.clock() + node["deadline"] * e.scale))
+        stop = isinstance(spawns, list) and not spawns and (ctx.artifacts.get(ent, sc.item) or {}).get("done") is True
+        diag = ctx.outcome_event(ent, pe, sc.item).get("diagnostic") or {}
+        d.lift(node, ent, pe, 1, spawns, None, ctx.budget.available(), None, diag.get("session", "unknown"))   # the envelope's tool ceiling bounds a top-level child
+        seen = await ctx.runs.run_of(node, ent, pe, sc, min(sc.deadline_at, ctx.clock() + node["deadline"] * ctx.scale))
         if await d.land(node, entry, sc, seen):
             raise Frontier([(node["name"], sc.item)])
         seen = [(n, d.landed_outcome(n, o), d.landed_reasons(n, r)) for n, o, r in seen]
@@ -239,5 +247,5 @@ class DispatchRunner:
         if done:
             outcome, reasons = "pass", ["done"]
         ledger, cmds = d.payload(node["name"])
-        rel = e.artifacts.put(node["name"], sc.item, entry, {"children": [n for n, _, _ in seen], "ac_commands": cmds, "ledger": ledger})
-        return ctx.finish(node, entry, sc, outcome, reasons, rel, elapsed=e.clock() - t0, **({"routed": "exit:pass"} if done else {}))
+        rel = ctx.artifacts.put(node["name"], sc.item, entry, {"children": [n for n, _, _ in seen], "ac_commands": cmds, "ledger": ledger})
+        return ctx.finish(node, entry, sc, outcome, reasons, rel, elapsed=ctx.clock() - t0, **({"routed": "exit:pass"} if done else {}))

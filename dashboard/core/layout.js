@@ -1,4 +1,4 @@
-// Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function layoutModule() {
@@ -8,7 +8,7 @@ function layoutModule() {
     return [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(n.checks || [])] : [])];
   }
 
-  // A layered, dependency-free DAG layout (ADR-0111 keeps the dashboard pure and Node-tested; a layout library would break
+  // A layered, dependency-free DAG layout (a layout library would break
   // that, and a plain layered pass is enough for a graph this small). Two passes:
   //
   // 1. Layer: a node's column is the longest path from the root, by relaxation (as many rounds as there are nodes, which
@@ -52,7 +52,7 @@ function layoutModule() {
     return { layout: out, dropped };
   }
 
-  // The view is {k, tx, ty}: a graph point (x, y) shows at (x*k + tx, y*k + ty). Pure, so node can test it (ticket #72).
+  // The view is {k, tx, ty}: a graph point (x, y) shows at (x*k + tx, y*k + ty). Pure, so node can test it.
   const VIEW_MIN = 0.1, VIEW_MAX = 3;
   const clampK = (k) => Math.min(VIEW_MAX, Math.max(VIEW_MIN, k));
   function viewFit(layout, box, size, pad) {

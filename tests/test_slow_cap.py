@@ -22,7 +22,7 @@ SLEEP = "import time\n"
 def test_a_test_over_the_cap_fails_and_is_named(tmp_path):
     r = run_inner(tmp_path, SLEEP + "def test_slow():\n    time.sleep(0.5)\n")
     assert r.returncode == 1
-    assert "test_inner.py::test_slow took" in r.stdout and "ADR-0123" in r.stdout
+    assert "test_inner.py::test_slow took" in r.stdout
 
 
 def test_a_test_under_the_cap_passes(tmp_path):

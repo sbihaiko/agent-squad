@@ -1,10 +1,10 @@
-"""The gate runner: a deterministic check over the artifacts and facts (ADR-0109)."""
+"""The gate runner: a deterministic check over the artifacts and facts."""
 from squad.gates import GateInput, run_check
 
 
 class GateRunner:
     async def run(self, ctx, node, entry, sc):
-        t0 = ctx.clock()   # wall time of running the check (ADR-0109)
+        t0 = ctx.clock()   # wall time of running the check
         inp = GateInput(ctx.artifacts.view(sc.item), {n: f.value for (n, it), f in ctx.facts.values.items() if it in (None, sc.item)},
                         str(ctx.workspace_path(None, sc.item)))
         r = run_check(node["check"], node["params"], inp)

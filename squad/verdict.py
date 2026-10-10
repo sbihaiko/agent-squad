@@ -1,12 +1,13 @@
-"""The verdict module: one pure function folds a run record and a target observation (ADR-0019, ADR-0105, ADR-0112).
+"""The verdict module: one pure function folds a run record and a target observation.
 
 Nothing else computes a verdict or an exit code. The engine derives node outcomes and routes on them.
 The fold reads the record and the observation, never the graph.
 """
+import shlex
 from dataclasses import dataclass, field
 
 EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
-WORST = ("fail", "deadline", "needs-human", "pass")  # the join order of `each` and `dispatch` (ADR-0102 rule 9)
+WORST = ("fail", "deadline", "needs-human", "pass")  # the join order of `each` and `dispatch`
 DEFAULT_ROUTE = {"pass": "continue", "fail": "exit:fail", "deadline": "exit:deadline", "needs-human": "exit:needs-human"}
 
 
@@ -36,7 +37,7 @@ def join(outcomes, rule="all"):
 
 
 def fold_dispatch(child_outcomes, rule, accepted):
-    """A dispatch folds like `each`. A dispatch entry with no accepted child is fail, `no_dispatch` (ADR-0114 rule 7)."""
+    """A dispatch folds like `each`. A dispatch entry with no accepted child is fail, `no_dispatch`."""
     if accepted == 0:
         return "fail", ["no_dispatch"]
     return join(child_outcomes, rule), []
@@ -68,7 +69,7 @@ def _dedupe(xs):
     return list(dict.fromkeys(xs))
 
 
-def fold(events, observation=None, run_id=None):
+def fold(events, observation=None, run_id=None, run_folder=None):
     """Fold a run record and a target observation into one verdict.
 
     observation: {"conflict": [reasons], "effect_observed": bool}. A `conflict` comes from the target only.
@@ -88,14 +89,14 @@ def fold(events, observation=None, run_id=None):
     reasons = _dedupe([r for e in failing for r in e["reasons"]] + [f"{e['node']}:{e['outcome']}" for e in failing if not e["reasons"]])
     waits = _open_waits(events)
     since = max(e["pos"] for e in invocations)
-    paused = [e["node"] for e in events if e["event"] == "paused" and e["pos"] > since]     # a person paused the run after its last start (ADR-0128)
+    paused = [e["node"] for e in events if e["event"] == "paused" and e["pos"] > since]     # a person paused the run after its last start
     ran = {n for n, _ in last}
     remains = [n for n in plan if n not in ran]
     conflict = list(obs.get("conflict", [])) + ([pre["reason"]] if pre.get("status") == "conflict" else [])
 
     def make(v, rs, rem=True):
         rem_list = remains if v != "completed" and rem else []
-        msg = _message(v, rs, rem_list, run_id, opts)
+        msg = _message(v, rs, rem_list, _resume_ref(run_folder, run_id), opts)
         return Verdict(v, EXIT[v], _dedupe(rs), rem_list, folded, msg)
 
     if pre.get("status") == "failed":
@@ -129,12 +130,17 @@ def fold(events, observation=None, run_id=None):
     return make(base or "failed", rs)
 
 
-def _message(verdict, reasons, remains, run_id, opts):
+def _resume_ref(run_folder, run_id):
+    """What `squad resume` takes: the absolute run folder when known, so the hint works from any directory; else the run id."""
+    return shlex.quote(str(run_folder)) if run_folder else (run_id or "<run-id>")
+
+
+def _message(verdict, reasons, remains, ref, opts):
     lines = [f"verdict {verdict} (exit {EXIT[verdict]})"]
     if reasons:
         lines.append("reasons: " + ", ".join(reasons))
     if remains:
         lines.append("remains: " + ", ".join(remains))
     if verdict in ("needs-human", "stopped", "conflict") or (verdict == "failed" and remains):
-        lines.append(f"resume: squad resume {run_id or '<run-id>'}")
+        lines.append(f"resume: squad resume {ref}")
     return "\n".join(lines)

@@ -1,4 +1,4 @@
-"""Guard for the agent-doors rule in CLAUDE.md (ADR-0018): each door in `.agents/skills/agent-*` is symlinked into `.claude/skills/`, is named in CLAUDE.md, and points at its global skill."""
+"""Guard for the agent-doors rule in CLAUDE.md: each door in `.agents/skills/agent-*` is symlinked into `.claude/skills/`, is named in CLAUDE.md, and points at its global skill."""
 
 import re
 from pathlib import Path
@@ -49,7 +49,7 @@ def test_each_agent_door_finds_its_global_skill_by_name_not_by_path():
         want = door.name.removeprefix("agent-")
         text = (door / "SKILL.md").read_text()
         assert f"python3 -m squad.skillpath {want}`" in text, door.name
-        assert "~/.claude/skills" not in text, f"{door.name} hard-codes a path an upgrade can move (ADR-0129)"
+        assert "~/.claude/skills" not in text, f"{door.name} hard-codes a path an upgrade can move"
         assert "removed or renamed upstream" in text, f"{door.name} does not say what to do when the skill is gone"
 
 

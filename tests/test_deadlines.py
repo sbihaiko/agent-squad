@@ -1,4 +1,4 @@
-"""Guards for ticket #30: ADR-0051 (deadlines), ADR-0102 rules 1, 3, 4 (session, deadline, teardown)."""
+"""Guards for deadlines, sessions and teardown."""
 import json
 import os
 import sys

@@ -1,4 +1,4 @@
-"""Ticket #53: the spec-shape gate. A bad spec shape fails here and repeats the spec, not ac-verify (ADR-0100 rule 2, ADR-0018).
+"""Ticket #53: the spec-shape gate. A bad spec shape fails here and repeats the spec, not ac-verify.
 
 Guards: a spec with no ac_commands fails spec-shape and the spec node runs again; ac_commands beside spec gets a finding that
 names the misplacement; a good spec passes and a subject run still completes; the check id is in the registry and the fixture.

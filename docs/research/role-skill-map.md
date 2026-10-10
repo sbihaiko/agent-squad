@@ -1,6 +1,6 @@
 # Role to skill map
 
-This map names the best skill for each agent role in `prompts/`. It covers roles only. It does not wire anything (ticket #45).
+This map names the best skill for each agent role in `prompts/`. It covers roles only. It does not wire anything.
 Source of the skill list: [agent-sdk-command-map.md](agent-sdk-command-map.md), the observed list of 98 skills on this host. Skill descriptions were read from each `SKILL.md` on 2026-09-30. Bodies were not read, so fit is judged from descriptions.
 
 ## Table
@@ -33,7 +33,7 @@ Source of the skill list: [agent-sdk-command-map.md](agent-sdk-command-map.md), 
 
 ## Rules for the graph
 
-- A node gets one pinned skill at most. Pin it in the dispatch envelope, not in the prompt (ADR-0113).
+- A node gets one pinned skill at most. Pin it in the dispatch envelope, not in the prompt.
 - A skill with a side effect (`to-spec` publishes, `implement` commits) needs an `action` node or a declared workspace. A read-only role must not load it.
 - A role with `none` keeps its prompt alone. Do not invent a skill to fill the column.
 

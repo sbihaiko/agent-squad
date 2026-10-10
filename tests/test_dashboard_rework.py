@@ -1,4 +1,4 @@
-"""Issue #134, ADR-0125 amendment: a redo is its own card; the dashboard says which attempt passed and which was superseded, with no edge."""
+"""A redo is its own card; the dashboard says which attempt passed and which was superseded, with no edge."""
 import re
 
 from tests.dashboard_helpers import ROOT, run_node
@@ -92,3 +92,11 @@ def test_the_record_gives_no_link_between_attempts_and_the_page_draws_no_edge_fo
     graph_js = (ROOT / "dashboard" / "page" / "graph.js").read_text()
     drawn = [line for line in graph_js.splitlines() if "superseded_by" in line or "rework" in line]
     assert drawn and not [line for line in drawn if "<line" in line or "marker-end" in line]
+
+
+def test_a_child_that_folded_two_issues_is_superseded_when_later_children_passed_each_of_them():
+    # run 156: child 13 worked "13, 21", failed its landing; child 14 redid 13 and child 15 did 21.
+    ev = [_spawn(13, "13, 21", "issues/13-x.md"), _out(13), _land(13, "fail", ["ac_regression:route.router.12"]),
+          _spawn(14, "13", "issues/13-x.md"), _out(14), _land(14), _spawn(15, "21", "issues/21-z.md"), _out(15), _land(15)]
+    k = _kids(ev)["route.router.13"]
+    assert k["outcome"] == "fail" and k["superseded_by"] == 2 and k["rework"].startswith("superseded by 2")

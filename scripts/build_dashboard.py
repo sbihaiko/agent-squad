@@ -1,4 +1,4 @@
-"""Build dashboard/agent-squad-run-dashboard.html: one self-contained file with no server (ticket #56, ADR-0111).
+"""Build dashboard/agent-squad-run-dashboard.html: one self-contained file with no server.
 
 The schema, the gate registry, the rule constants, and a snapshot of the served lists are read from the
 engine and the repo, never typed by hand. The built page is committed; `test_the_built_dashboard_is_current` fails when it is stale.
@@ -28,7 +28,7 @@ def _skill_dirs(base):
 
 
 def served_lists(home=False):
-    """Suggestions for tools, skills, models, and efforts. A snapshot of what the repo uses; unknown values are never blocked (#60)."""
+    """Suggestions for tools, skills, models, and efforts. A snapshot of what the repo uses; unknown values are never blocked."""
     cfg = yaml.safe_load((ROOT / "config" / "agent-defaults.yaml").read_text())
     tools, models, efforts = set(graph.WRITE_TOOLS), set(), set()
     opts = cfg.get("options", {})
@@ -71,19 +71,19 @@ def engine_data():
     }
 
 
-# Dependency order: a file comes after every file it uses. make.js is the entry and comes last (#117).
+# Dependency order: a file comes after every file it uses. make.js is the entry and comes last.
 CORE_ORDER = ("canon.js", "figures.js", "record.js", "live.js", "failures.js", "children.js", "state.js", "totals.js", "replay.js", "groups.js", "stats.js", "schema.js", "edits.js", "layout.js", "review.js", "history.js", "sources.js", "control.js", "make.js")
 CORE_DIR = DASH / "core"
 
 
 def core_bundle():
     """The one script text of the dashboard core: every file of dashboard/core/ in CORE_ORDER, `</script` escaped.
-    The page inlines it and the node runner evaluates it, so the two cannot differ (#120)."""
+    The page inlines it and the node runner evaluates it, so the two cannot differ."""
     text = '"use strict";\n' + "".join((CORE_DIR / f).read_text() + "\n" for f in CORE_ORDER)
     return text.replace("</script", "<\\/script")
 
 
-# The page script: one file per concern in dashboard/page/, in source order (a later file may use an earlier one at load time) (#119).
+# The page script: one file per concern in dashboard/page/, in source order (a later file may use an earlier one at load time).
 PAGE_ORDER = ("shell.js", "graph.js", "panel.js", "edit.js", "menu.js", "review.js", "run.js", "save.js", "chrome.js")
 PAGE_DIR = DASH / "page"
 PAGE_CSS = DASH / "page.css"
@@ -97,7 +97,7 @@ def page_bundle():
 
 
 def page_sources():
-    """Every page source file, the markup and the CSS first: what the origin guard reads (#119)."""
+    """Every page source file, the markup and the CSS first: what the origin guard reads."""
     return [PAGE_HTML, PAGE_CSS, *(PAGE_DIR / f for f in PAGE_ORDER)]
 
 

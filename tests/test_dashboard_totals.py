@@ -1,6 +1,6 @@
 """Guards for the totals bar under the graph (owner request after #86).
 
-Rule: unknown stays unknown. A figure the record lacks reads "unknown" in the bar, never zero (ADR-0012, spec #70).
+Rule: unknown stays unknown. A figure the record lacks reads "unknown" in the bar, never zero.
 The cells come from the core, and the replay cursor cuts them like every other figure.
 """
 import json

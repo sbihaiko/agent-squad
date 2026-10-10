@@ -4,7 +4,10 @@
 Run: python3 scripts/archive/jev_real/probe_screen.py
 Input: scripts/archive/jev_data_real/fetched.json. Output: scripts/archive/jev_data_real/results_screen.json.
 """
-import json, subprocess, sys, time, urllib.error
+import json
+import subprocess
+import sys
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""Ticket #36: engine options and the command line (ADR-0106, ADR-0112)."""
+"""Ticket #36: engine options and the command line."""
 import json
 
 import pytest
@@ -125,14 +125,17 @@ def test_a_graph_error_and_a_missing_adapter_exit_2(tmp_path, capsys):
     assert cli.main(["run", g, "--run-dir", str(tmp_path / "r")]) == 2
 
 
-def test_adapter_sdk_builds_the_real_adapter_without_calling_it():
+def test_adapter_sdk_builds_the_real_adapter_without_calling_it(tmp_path):
+    """The CLI hands no adapter to the launch module, which builds the SDK adapter from the defaults file."""
+    from squad import launch
     from squad.sdk_adapter import SdkAdapter
     a = cli.parser().parse_args(["run", "g.json", "--adapter", "sdk"])
-    assert isinstance(cli._adapter(a), SdkAdapter)
+    assert cli._adapter(a) is None
+    assert isinstance(launch.launch(from_doc(two_agents()), tmp_path / "r").adapter, SdkAdapter)
 
 
 
-# Ticket #68: --expect-graph-hash binds a reviewed hash to the run (ADR-0106 rule 8, ADR-0111 rule 8).
+# Ticket #68: --expect-graph-hash binds a reviewed hash to the run.
 def test_a_matching_expected_graph_hash_runs_and_run_start_holds_it(tmp_path):
     d = two_agents()
     g, s = write(tmp_path, d)
@@ -243,7 +246,7 @@ def test_dashboard_never_starts_a_run(tmp_path, monkeypatch):
     assert called == []
 
 
-# The dashboard reads <run folder>/graph.json; a plain `squad run` writes the graph it ran there (ADR-0127).
+# The dashboard reads <run folder>/graph.json; a plain `squad run` writes the graph it ran there.
 def test_a_plain_run_leaves_the_graph_it_ran_in_its_run_folder_and_the_dashboard_serves_it(tmp_path):
     import http.client
     import threading
@@ -265,3 +268,109 @@ def test_a_plain_run_leaves_the_graph_it_ran_in_its_run_folder_and_the_dashboard
     body = resp.read()
     srv.server_close()
     assert resp.status == 200 and [n["name"] for n in json.loads(body)["nodes"]] == [n["name"] for n in two_agents()["nodes"]]
+
+
+# Ticket #176: `squad config show` lists every catalog setting with its effective value, unit and source layer.
+def _config_show(tmp_path, capsys, data=None):
+    import yaml
+    target = tmp_path / "proj"
+    target.mkdir(exist_ok=True)
+    if data is not None:
+        f = target / "docs" / "squad" / "defaults.yaml"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(yaml.safe_dump(data))
+    assert cli.main(["config", "--target", str(target), "show"]) == 0
+    return {ln.split()[0]: ln for ln in capsys.readouterr().out.splitlines() if ln.split() and "." in ln.split()[0]}
+
+
+def test_config_show_lists_every_catalog_key_with_value_unit_and_source(tmp_path, capsys):
+    from squad import project_settings
+    rows = _config_show(tmp_path, capsys)
+    assert set(project_settings.CATALOG) <= set(rows)
+    assert "tokens" in rows["limits.context_tokens"] and rows["limits.context_tokens"].rstrip().endswith("plugin")
+
+
+def test_config_show_names_the_project_file_as_the_source_of_a_key_it_sets(tmp_path, capsys):
+    rows = _config_show(tmp_path, capsys, {"limits": {"max_stalls": 77}, "roles": {"actor": {"effort": "low"}}})
+    assert "77" in rows["limits.max_stalls"] and rows["limits.max_stalls"].rstrip().endswith("project")
+    assert rows["limits.max_budget_usd"].rstrip().endswith("plugin")
+    assert "low" in rows["roles.actor.effort"] and rows["roles.actor.effort"].rstrip().endswith("project")
+
+
+def test_config_show_refuses_an_unsound_project_file_naming_the_key(tmp_path, capsys):
+    f = tmp_path / "docs" / "squad" / "defaults.yaml"
+    f.parent.mkdir(parents=True)
+    f.write_text("limits:\n  bogus: 1\n")
+    assert cli.main(["config", "--target", str(tmp_path), "show"]) == cli.USAGE
+    assert "limits.bogus" in capsys.readouterr().err
+
+def named_run(tmp_path, name="checkout-fix"):
+    """A run started with a name and stopped after its first node."""
+    import asyncio
+
+    from squad import launch
+    _, s = write(tmp_path, two_agents())
+    runs_dir = tmp_path / "runs"
+    eng = launch.launch(from_doc(two_agents()), runs_dir=runs_dir, adapter=ScriptedAdapter({"a": OK, "b": OK}), name=name, options={"stop_after": "a"})
+    asyncio.run(eng.run())
+    return runs_dir, s
+
+
+def test_resume_finds_a_run_by_its_name(tmp_path, capsys):
+    runs_dir, s = named_run(tmp_path)
+    capsys.readouterr()
+    assert cli.main(["resume", "checkout-fix", "--runs-dir", str(runs_dir), "--script", s]) == 0
+    assert len(events(runs_dir / "checkout-fix", "verdict")) == 2
+
+
+def test_resume_finds_a_run_by_its_run_id_when_the_folder_has_another_name(tmp_path, capsys):
+    runs_dir, s = named_run(tmp_path)
+    (runs_dir / "checkout-fix").rename(runs_dir / "moved")
+    capsys.readouterr()
+    g = str(tmp_path / "g.graph.json")   # the record names the graph copy by its old path
+    assert cli.main(["resume", "checkout-fix", "--runs-dir", str(runs_dir), "--script", s, "--graph", g]) == 0
+    assert events(runs_dir / "moved", "run_start")[0]["run_id"] == "checkout-fix"
+
+
+def test_dashboard_opens_a_run_by_its_name_and_list_shows_the_name(tmp_path, capsys):
+    runs_dir, _ = named_run(tmp_path)
+    other = runs_dir / "run-20261006-000000-abc123"
+    other.mkdir()
+    (other / "record.jsonl").write_text(json.dumps({"event": "run_start", "run_id": other.name, "ts": 1.0, "pos": 1}) + "\n")
+    assert cli.main(["dashboard", "checkout-fix", "--runs-dir", str(runs_dir), "--file", "--no-open"]) == 0
+    out = capsys.readouterr().out
+    assert "run 2: checkout-fix" in out and str(runs_dir.resolve() / "checkout-fix") in out
+    assert cli.main(["dashboard", "--runs-dir", str(runs_dir), "--list"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any(ln.split()[1:3] == ["checkout-fix", "checkout-fix"] for ln in lines) and any(other.name in ln for ln in lines)   # an unnamed run keeps its random id
+
+
+def test_a_numeric_reference_still_picks_by_number_when_no_run_has_that_name(tmp_path, capsys):
+    runs_dir, _ = named_run(tmp_path)
+    assert cli.main(["dashboard", "1", "--runs-dir", str(runs_dir), "--file", "--no-open"]) == 0
+    assert "run 1: checkout-fix" in capsys.readouterr().out
+
+
+
+def test_an_automatic_resume_appends_one_event_with_the_count_and_the_source(tmp_path):
+    g, s = write(tmp_path, wait_doc())
+    assert cli.main(["run", g, "--script", s, "--run-dir", str(tmp_path / "r")]) == 10
+    assert cli.main(["resume", "x", "--run-dir", str(tmp_path / "r"), "--script", s, "--answer", "pass", "--auto-source", "autonomy"]) == 0
+    auto = events(tmp_path / "r", "autonomy_resume")   # ticket #182
+    assert [(e["count"], e["source"]) for e in auto] == [(1, "autonomy")]
+
+
+def test_an_automatic_resume_refuses_at_the_cap_and_when_autonomy_is_off(tmp_path, capsys):
+    g, s = write(tmp_path, wait_doc())
+    assert cli.main(["run", g, "--script", s, "--run-dir", str(tmp_path / "r")]) == 10
+    rec = tmp_path / "r" / "record.jsonl"
+    lines = [json.loads(x) for x in rec.read_text().splitlines()]
+    lines[0]["autonomy"] = {"enabled": True, "max_resumes": 0}
+    rec.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    n = len(read(rec))
+    assert cli.main(["resume", "x", "--run-dir", str(tmp_path / "r"), "--script", s, "--auto-source", "autonomy"]) == 2
+    assert "cap reached" in capsys.readouterr().err and len(read(rec)) == n
+    lines[0]["autonomy"] = {"enabled": False, "max_resumes": 3}
+    rec.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    assert cli.main(["resume", "x", "--run-dir", str(tmp_path / "r"), "--script", s, "--auto-source", "autonomy"]) == 2
+    assert "autonomy is off" in capsys.readouterr().err and len(read(rec)) == n

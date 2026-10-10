@@ -3,9 +3,13 @@
 
 Run: python3 scripts/archive/jev_real/probe_skills.py
 Input: scripts/archive/jev_data_real/requests.json (raw text, git ignores it). Output: scripts/archive/jev_data_real/results_skills.json.
-Jev calls carry a 60 s total deadline incl. retries (ADR-0051). A credit or auth error stops the run.
+Jev calls carry a 60 s total deadline incl. retries. A credit or auth error stops the run.
 """
-import json, subprocess, sys, time, urllib.error
+import json
+import subprocess
+import sys
+import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 

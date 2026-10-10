@@ -19,11 +19,6 @@
     "sha256": "7d5f89c5e85197323d345ac37f69141e05acc1ccc8a7313eaac04cefdb9366dc",
     "source": "skill:ego-browser"
   },
-  "panel": {
-    "files": 1,
-    "sha256": "e50205130c40e2d75b95b6446060c49ae65c95d5cbd8792d1616dfb87a994bc0",
-    "source": ".agents/skills/panel"
-  },
   "tdd": {
     "files": 4,
     "sha256": "c4236fd83d4629d4aed684403fd277aece9feb347c798e964a9a78a2ae1eb654",

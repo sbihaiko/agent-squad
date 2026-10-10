@@ -1,4 +1,4 @@
-"""Ticket #107: the run server's one write route asks a launched run to pause or resume (ADR-0128, amends ADR-0118 rule 4)."""
+"""Ticket #107: the run server's one write route asks a launched run to pause or resume."""
 import http.client
 import json
 import threading

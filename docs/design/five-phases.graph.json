@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "dev-squad-default",
-  "description": "The five dev_squad phases in the ADR-0100 to ADR-0111 vocabulary. Fixture for the schema.",
+  "description": "The five dev_squad phases in the graph vocabulary. Fixture for the schema.",
   "run": {
     "deadline": 21600,
     "max_parallel": 2,
@@ -46,13 +46,13 @@
     {
       "name": "review_required",
       "type": "bool",
-      "instrument": "code: derived from diff size and sensitive; replaces the size backstop gate (ADR-0101)",
+      "instrument": "code: derived from diff size and sensitive; replaces the size backstop gate",
       "source_kind": "artifact"
     },
     {
       "name": "blocking_learnings",
       "type": "int",
-      "instrument": "code: count of blocking entries in the declared file learnings.json (ADR-0110: no cross-run input)",
+      "instrument": "code: count of blocking entries in the declared file learnings.json (no cross-run input)",
       "source_kind": "artifact"
     },
     {
@@ -64,7 +64,7 @@
     {
       "name": "run_spend",
       "type": "number",
-      "instrument": "code: sum of SDK result spend over agent entries (ADR-0108)",
+      "instrument": "code: sum of SDK result spend over agent entries",
       "source_kind": "run_record"
     }
   ],
@@ -147,9 +147,9 @@
         "Glob"
       ],
       "budget": {
-        "turns": {
-          "min": 5,
-          "max": 40
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.05,
@@ -189,9 +189,9 @@
         "Grep"
       ],
       "budget": {
-        "turns": {
-          "min": 5,
-          "max": 60
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.1,
@@ -207,7 +207,7 @@
         "kinds": [
           "set_model",
           "set_effort",
-          "shrink_turns",
+          "shrink_stalls",
           "shrink_spend"
         ],
         "models": [
@@ -244,9 +244,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 3,
-          "max": 20
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.05,
@@ -285,9 +285,9 @@
         "Grep"
       ],
       "budget": {
-        "turns": {
-          "min": 5,
-          "max": 60
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.1,
@@ -319,9 +319,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 3,
-          "max": 20
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.05,
@@ -395,9 +395,9 @@
         "Bash"
       ],
       "budget": {
-        "turns": {
-          "min": 10,
-          "max": 120
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.2,
@@ -415,7 +415,7 @@
           "set_model",
           "set_effort",
           "narrow_tools",
-          "shrink_turns",
+          "shrink_stalls",
           "shrink_spend"
         ],
         "models": [
@@ -475,9 +475,9 @@
         "Grep"
       ],
       "budget": {
-        "turns": {
-          "min": 3,
-          "max": 30
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.05,
@@ -496,7 +496,7 @@
       "adapt": {
         "kinds": [
           "set_model",
-          "shrink_turns"
+          "shrink_stalls"
         ],
         "models": [
           "opus",
@@ -589,9 +589,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 5,
-          "max": 40
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.05,
@@ -620,9 +620,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 3,
-          "max": 20
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.05,
@@ -651,9 +651,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 1,
-          "max": 10
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.01,
@@ -679,9 +679,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 1,
-          "max": 10
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.01,
@@ -707,9 +707,9 @@
         "Read"
       ],
       "budget": {
-        "turns": {
-          "min": 1,
-          "max": 10
+        "stalls": {
+          "min": 2,
+          "max": 5
         },
         "spend": {
           "min": 0.01,

@@ -1,4 +1,4 @@
-"""One test per exit of the metered call module (#128). A fake adapter drives it; each exit settles the reservation once."""
+"""One test per exit of the metered call module. A fake adapter drives it; each exit settles the reservation once."""
 import anyio
 import pytest
 
@@ -94,7 +94,7 @@ async def test_an_expired_deadline_releases_the_grant():
 
 
 def test_the_cap_reason_map():
-    assert session.cap_reason("turn_cap", 1.0) == "node_turn_cap"
+    assert session.cap_reason("stall_cap", 1.0) == "node_stall_cap"
     assert session.cap_reason("output_cap", 1.0) == "node_output_cap"
     assert session.cap_reason("spend_cap", 1.0, 2.0) == "run_spend_cap"
     assert session.cap_reason("spend_cap", 2.0, 2.0) == "node_spend_cap"

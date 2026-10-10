@@ -1,4 +1,4 @@
-"""The view and the layout file: pan, zoom, fit, theme, and the layout that lives outside the document (#72, #118)."""
+"""The view and the layout file: pan, zoom, fit, theme, and the layout that lives outside the document."""
 import json
 import re
 
@@ -7,7 +7,7 @@ from tests.dashboard_helpers import page_template, run_node
 from tests.helpers import five, node
 
 
-# --- layout lives outside the document (ADR-0111 rule 8) ---
+# --- layout lives outside the document ---
 def test_layout_is_a_sibling_file_the_document_never_holds_and_the_hash_ignores():
     d = five()
     lay = run_node([{"op": "layout", "doc": d}])[0]
@@ -20,7 +20,7 @@ def test_layout_is_a_sibling_file_the_document_never_holds_and_the_hash_ignores(
     assert '".layout.json"' in page and "S.doc.layout" not in page
 
 
-# --- the view: pan, zoom, and fit are pure functions of a view {k, tx, ty} (ticket #72) ---
+# --- the view: pan, zoom, and fit are pure functions of a view {k, tx, ty} ---
 BOX = {"w": 200, "h": 44}
 
 
@@ -55,7 +55,7 @@ def test_pan_moves_the_view_and_keeps_the_scale():
 def test_the_dashboard_has_a_dark_theme_a_side_panel_overlay_and_a_graph_area_that_fills_the_rest():
     page = page_template()
     assert "--bg:#0f1115" in page and "--panel:#161a21" in page and "--acc:#5aa9ff" in page  # the playground reference palette
-    assert re.search(r"#left \{[^}]*position:fixed[^}]*width:360px", page) and re.search(r"grid-template-columns:\s*1fr;", page)   # ADR-0124: the panel overlays, the graph keeps the width
+    assert re.search(r"#left \{[^}]*position:fixed[^}]*width:360px", page) and re.search(r"grid-template-columns:\s*1fr;", page)   # the panel overlays, the graph keeps the width
     assert "agent-squad-run-dashboard" in page and "graph editor" not in page
 
 

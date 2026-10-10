@@ -1,7 +1,7 @@
-"""Action nodes: deterministic code with declared side effects. No model, no spend (ADR-0101 rule 1, ADR-0102 rule 2).
+"""Action nodes: deterministic code with declared side effects. No model, no spend.
 
 Effects: worktree_create, worktree_revert, commit, merge_land. Each one returns an ActionResult. The engine
-records the workspace state in the outcome event, so a resume can tell what a person changed (ADR-0107 rule 5).
+records the workspace state in the outcome event, so a resume can tell what a person changed.
 """
 import re
 from dataclasses import dataclass, field

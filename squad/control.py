@@ -1,9 +1,9 @@
-"""Pause and resume requests for a launched run (ticket #107, ADR-0128).
+"""Pause and resume requests for a launched run.
 
 A request is one JSON line in `control.jsonl` in the run folder: `{"action": "pause"|"resume", "nodes": [...]}`.
 No `nodes` means the whole run. The file only grows. The engine folds it at each node entry and holds the nodes
 it names. It sits beside the record, never in it, because the engine rewrites the record on every event
-(ADR-0030) and a second writer would lose a request. A line that is not a valid request is skipped.
+ and a second writer would lose a request. A line that is not a valid request is skipped.
 """
 import json
 import os

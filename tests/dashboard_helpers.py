@@ -1,4 +1,4 @@
-"""Shared helpers of the dashboard tests: the node runner, the error-pair keys, the page source, and the finished-run loaders (#118)."""
+"""Shared helpers of the dashboard tests: the node runner, the error-pair keys, the page source, and the finished-run loaders."""
 import json
 import re
 import shutil
@@ -14,7 +14,7 @@ from squad import graph  # noqa: E402
 
 
 def run_node(ops):
-    assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips (#61 decision 4)"
+    assert shutil.which("node"), "node is not installed: the dashboard parity guard cannot run, and it never skips"
     p = subprocess.run(["node", str(ROOT / "tests" / "dashboard_runner.js")], input=json.dumps({"engine": engine_data(), "core": core_bundle(), "ops": ops}),
                        capture_output=True, text=True, timeout=300)
     assert p.returncode == 0, p.stderr
@@ -40,7 +40,7 @@ def js_pairs(errs):
 
 
 RUN22 = ROOT / "tests" / "fixtures" / "run-subject-22"
-RUN22_TOKENS = ROOT / "tests" / "fixtures" / "run-subject-22-tokens"  # the same run, with tokens on two nodes (ticket #82)
+RUN22_TOKENS = ROOT / "tests" / "fixtures" / "run-subject-22-tokens"  # the same run, with tokens on two nodes
 
 
 def _run22():

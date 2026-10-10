@@ -11,7 +11,7 @@ function renderOverlayRow(r) {
 <br><span class="note">instrument: ${esc(r.instrument)}<br>${esc(r.note)}</span></div>`;
 }
 
-// One failure, as the record has it: the code, what it names, and the tail of the output when the engine kept it (ticket #91).
+// One failure, as the record has it: the code, what it names, and the tail of the output when the engine kept it.
 function reasonHtml(r) {
   const ev = r.evidence === null ? `<div class="note">The record keeps no output for this failure.</div>` : `<pre class="ev">${esc(r.evidence)}</pre>`;
   return `<div class="cause"><b class="bad" title="${esc(r.detail || r.raw)}">${esc(r.code)}</b>${r.gate ? ` <span class="note">(${esc(r.gate)})</span>` : ""}${r.subject ? ` \u00b7 ${esc(r.subject)}` : ""}${ev}</div>`;
@@ -35,7 +35,7 @@ function childHtml(c) {
   const why = c.outcome === "fail" ? `<h2>Why it failed</h2><div class="runbox">${c.reasons.map((r) => reasonHtml({ ...core.reasonParts(r), evidence: evid[r] !== undefined ? evid[r] : null })).join("")}</div>` : "";
   return `<h2>Child ${esc(c.name)} <span class="note">(of ${esc(c.dispatch)}${c.proposer ? ", asked by " + esc(c.proposer) : ""})</span></h2><div class="runbox">${rows.join("<br>")}</div>${why}`;
 }
-// The roster of one dispatch's children (ADR-0125): one row each. A click on a row selects that child.
+// The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
   const rows = core.childRoster(S.children, dispatch);
   if (!rows.length) return "";
@@ -57,9 +57,9 @@ function nodeRunHtml(name) {
   return `<h2>Why it failed</h2><div class="runbox">${ns.reasons.map((r) => reasonHtml({ ...core.reasonParts(r), evidence: ev[r] !== undefined ? ev[r] : null })).join("")}</div>`;
 }
 
-// The available-vs-used harness of the selected node (issue #96): derived from the record and the graph, never authored.
+// The available-vs-used harness of the selected node: derived from the record and the graph, never authored.
 // A dispatch child's available harness is its resolved `definition`; its ceiling is the dispatch envelope's `allow` set
-// (ADR-0113 rule 2). A plain agent declares its own. A gate or a loop carries none, said plainly, never an empty list.
+//. A plain agent declares its own. A gate or a loop carries none, said plainly, never an empty list.
 const HARNESS_NONE = {
   gate: "A gate runs a deterministic check and carries no harness of its own.",
   loop: "A loop repeats its children and carries no harness of its own.",
@@ -80,7 +80,7 @@ function harnessHtml(h) {
       `model <b>${esc(a.model === null ? f.count(null) : a.model)}</b>`,
       `effort <b>${esc(a.effort === null ? f.count(null) : a.effort)}</b>`,
       `tools ${esc(listText(a.tools))}`,
-      `turn cap ${esc(capText(a.turns))}`,
+      `stall cap ${esc(capText(a.stalls))}`,
       `spend cap ${esc(capText(a.spend))}`,
       `deadline ${esc(f.seconds(a.deadline))}`,
     ].filter(Boolean).join(" · ");
@@ -94,7 +94,7 @@ function harnessHtml(h) {
       `allowed efforts ${esc(listText(a.efforts))}`,
       `allowed tools ${esc(listText(a.tools))}`,
       `allowed skills ${esc(listText(a.skills))}`,
-      `turn cap ${esc(capText(a.turns))}`,
+      `stall cap ${esc(capText(a.stalls))}`,
       `spend cap ${esc(capText(a.spend))}`,
       `deadline ${esc(f.seconds(a.deadline))}`,
     ].join(" · ");
@@ -114,8 +114,8 @@ function harnessHtml(h) {
   return `<h2>Available vs used</h2>${parts.join("")}`;
 }
 
-// --- pause and resume (ticket #107, ADR-0128): the one write this page makes, to the run server's control route ---
-// The page asks; the engine decides at its next node entry. It never starts a run (ADR-0117): a paused run is continued by `squad resume`.
+// --- pause and resume: the one write this page makes, to the run server's control route ---
+// The page asks; the engine decides at its next node entry. It never starts a run: a paused run is continued by `squad resume`.
 const CONTROL = { state: null };   // the server's control.json: what was asked, not what the engine did
 async function loadControl() {
   if (!FROM_SERVER) return;
@@ -180,7 +180,7 @@ function renderRunPanel() {
 
 function renderSide() {
   const side = $("side");
-  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash (ADR-0111).</p>`; return; }
+  if (!S.doc) { side.innerHTML = `<h2>Start</h2><p>Open a graph document, or load the five-phase example.</p><p class="note">The graph file stays as authored. A run record is read-only. Layout lives in a sibling file and never moves the graph hash.</p>`; return; }
   const parts = [];
   if (inEdit() || S.errors.length) parts.push(`<h2>Graph</h2><div>${esc(S.doc.name || "(no name)")} · ${nodesOf().length} nodes · ${S.errors.length ? `<span class="msg-bad">${S.errors.length} error${S.errors.length > 1 ? "s" : ""}</span>` : `<span class="msg-ok">valid</span>`}</div>`);
   const top = S.errors.filter((e) => !e.node);

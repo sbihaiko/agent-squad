@@ -1,4 +1,4 @@
-"""Thin git helpers. The engine never repairs a workspace; it observes (ADR-0107 rule 5)."""
+"""Thin git helpers. The engine never repairs a workspace; it observes."""
 import hashlib
 import shutil
 import subprocess

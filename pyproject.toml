@@ -43,6 +43,8 @@ ignore_missing_imports = true
 target-version = "py311"
 # Fits the longest line in the code as it is (285); reflowing 2000+ lines is out of scope.
 line-length = 290
+# Held-out acceptance tests are pinned by hash (tests/test_subject_key.py); a lint fix would break the pin.
+extend-exclude = ["bench/subject/acceptance"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "BLE", "UP"]
@@ -50,3 +52,7 @@ select = ["E", "F", "I", "B", "BLE", "UP"]
 [tool.ruff.lint.per-file-ignores]
 # Test fixtures pack setup into one line with semicolons; splitting them adds noise, not safety.
 "tests/**" = ["E702"]
+# One-off probes and design checks pack statements into one line, like the test fixtures.
+"scripts/**" = ["E701", "E702", "B905", "BLE001", "E501", "B007", "E741"]
+"docs/design/**" = ["E701", "E702", "B905", "E741"]
+"bench/subject/make_issues.py" = ["E702", "E731"]

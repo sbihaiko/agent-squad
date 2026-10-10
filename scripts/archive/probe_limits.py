@@ -2,7 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = ["claude-agent-sdk"]
 # ///
-"""Probe the defaults-file limits against a live Claude Agent SDK (ticket #46). Model spend is granted (CLAUDE.md); every call has caps.
+"""Probe the defaults-file limits against a live Claude Agent SDK. Model spend is granted (CLAUDE.md); every call has caps.
 
 Run: uv run scripts/archive/probe_limits.py [context|output|subagent|dontask|tools]...   (no argument runs all)
 Writes docs/research/limits-probe.json. Each probe runs in an empty scratch directory with setting_sources=[].

@@ -1,8 +1,8 @@
-// Dashboard core module: The one state a card shows, and the class it paints. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The one state a card shows, and the class it paints.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function stateModule({ num }) {
-  // ---- The one state a node's card shows (issue #97) ----
+  // ---- The one state a node's card shows ----
   // Every node the run has touched reads one definite state, so a root or a structural node is never an ambiguous
   // flat grey. A node that never ran (after the verdict) reads "not-run", not a plain card. The states reuse the
   // legend's: passed, failed, deadline, needs-human, running, started, and not-run.
@@ -43,7 +43,7 @@ function stateModule({ num }) {
   // The card class for a node's state, or null when the node is not in the record.
   const stateClass = (ns) => { const s = nodeState(ns); return s ? STATE_CLASS[s] || "o-" + s : null; };
 
-  // The class a child card paints (ticket #101). A child reads the same states a node reads, except the never-ran
+  // The class a child card paints. A child reads the same states a node reads, except the never-ran
   // marker: a child whose call has not started is queued, not done, so its card stays unmarked. Without this a child
   // in flight kept the static `started` outline for the whole call and showed a result only at the end.
   function childStateClass(c) {

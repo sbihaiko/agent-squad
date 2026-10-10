@@ -6,7 +6,7 @@ async function loadRunSource(src) {
   const pr = core.parseLive(rec);
   if (pr.error) { setStatus(pr.error, true); return false; }
   S.events = pr.events; S.recordBad = pr.bad || null; S.cursor = null; S.expanded = [];   // a new run starts with every group collapsed
-  // The issue set lives in the run folder, not the record: count target/issues for the top bar's total (issue #97).
+  // The issue set lives in the run folder, not the record: count target/issues for the top bar's total.
   S.issueTotal = src.issues ? await src.issues() : null;
   if (src.live) startFollow(src, rec); else stopFollow();
   const g = await src.graph();
@@ -97,9 +97,9 @@ async function restoreFolder() {
   b.textContent = `Reconnect ${dir.name}`;
   b.onclick = async () => { if ((await dir.requestPermission({ mode: "read" })) === "granted") { b.textContent = "Connect run folder"; b.onclick = connectFolder; await loadRunSource(handleSource(dir)); } };
 }
-// Served by `squad dashboard` (ticket #86, ADR-0118): the page comes from a loopback server that holds one run (its one write is a pause or resume request, ADR-0128), so the run loads with no click and no picker.
+// Served by `squad dashboard`: the page comes from a loopback server that holds one run (its one write is a pause or resume request), so the run loads with no click and no picker.
 const FROM_SERVER = location.protocol === "http:" || location.protocol === "https:";
-// The one place that knows about EventSource: it turns the browser's stream into the core's handlers (ticket #106).
+// The one place that knows about EventSource: it turns the browser's stream into the core's handlers.
 function openStream(path, h) {
   const es = new EventSource(path);
   es.onmessage = (m) => h.line(m.data);
@@ -109,7 +109,7 @@ function openStream(path, h) {
 }
 async function connectServed() {
   let name = "run", issues = null;
-  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; } } catch (e) { /* the server went away: the load below says so */ }
+  try { const r = await fetch("run/info.json", { cache: "no-store" }); if (r.ok) { const j = await r.json(); name = j.name || name; if (typeof j.issues === "number" && j.issues > 0) issues = j.issues; S.issueHeld = typeof j.held === "number" ? j.held : 0; } } catch (e) { /* the server went away: the load below says so */ }
   document.title = `${document.title} \u00b7 ${name}`;
   $("b-folder").style.display = "none"; $("l-folder").style.display = "none"; $("l-record").style.display = "none";
   const src = core.httpSource((p) => fetch(p, { cache: "no-store" }), name, openStream);

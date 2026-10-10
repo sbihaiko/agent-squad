@@ -1,4 +1,4 @@
-"""Run record statistics, following a live run, and the card state (#76, #80, #82, #97, #118)."""
+"""Run record statistics, following a live run, and the card state."""
 import json
 
 import pytest
@@ -8,12 +8,12 @@ from tests.dashboard_helpers import PAGE_SRC, ROOT, _run22, _run22_tokens, run_n
 from tests.helpers import DESIGN
 
 
-# --- run record and overlay (ADR-0111 rule 6) ---
+# --- run record and overlay ---
 def _applied_record(graph_hash):
     return [
         {"event": "run_start", "pos": 1, "run_id": "run-0001", "graph_name": "five", "graph_hash": graph_hash, "engine_options": {}, "root": "main", "plan": []},
         {"event": "outcome", "pos": 2, "node": "spec_draft", "entry": 1, "outcome": "fail", "reasons": ["x"], "artifact": "spec", "spend": 1.5, "turns": 10, "cap": None, "elapsed": 30.0},
-        {"event": "applied", "pos": 3, "proposal_id": "p1", "kind": "shrink_turns", "target": "spec_draft", "old": 20, "requested": 15, "range": {"min": 10, "max": 20},
+        {"event": "applied", "pos": 3, "proposal_id": "p1", "kind": "shrink_stalls", "target": "spec_draft", "old": 20, "requested": 15, "range": {"min": 10, "max": 20},
          "facts": [{"name": "run_spend", "value": 1.5, "instrument": "code: x", "source": "record", "timestamp": "t"}], "proposer": "spec_draft"},
         {"event": "outcome", "pos": 4, "node": "spec_draft", "entry": 2, "outcome": "pass", "reasons": [], "artifact": "spec", "spend": 1.25, "turns": 8, "cap": None, "elapsed": 20.0},
     ]
@@ -102,7 +102,7 @@ def test_a_graph_hash_mismatch_keeps_the_timeline_and_the_verdict_only():
     assert s["timeline"][0]["at"] == 0 and all(set(t) == {"pos", "at", "event", "node", "entry", "outcome"} for t in s["timeline"])
 
 
-# --- following a live run (ticket #80) ---
+# --- following a live run ---
 def _live(events, now):
     return run_node([{"op": "live", "events": events, "now": now}])[0]
 
@@ -202,7 +202,7 @@ def test_a_reread_that_catches_a_half_written_last_line_drops_it_and_keeps_the_c
     cut = run_node([{"op": "parse_live", "text": "\n".join(lines) + '\n{"event": "outc'}])[0]
     assert len(whole["events"]) == 3 and cut == whole
     mid = run_node([{"op": "parse_live", "text": lines[0] + "\nnot json\n" + lines[1] + "\n"}])[0]
-    assert len(mid["events"]) == 1 and mid["bad"]["line"] == 2    # a bad complete line ends the record there, and is named (ADR-0126)
+    assert len(mid["events"]) == 1 and mid["bad"]["line"] == 2    # a bad complete line ends the record there, and is named
     assert "error" in run_node([{"op": "parse_live", "text": "not json\n" + lines[0] + "\n"}])[0]   # no valid prefix: still an error
     assert "error" in run_node([{"op": "parse_live", "text": '{"event": "run_st'}])[0]                              # nothing complete yet
 
@@ -253,7 +253,7 @@ def test_tokens_and_the_rate_show_a_dash_when_missing_and_a_short_unit_when_pres
     assert f("rate", 52.2) == "52 tk/s" and f("rate", 3.14) == "3.1 tk/s" and f("rate", 0) == "0 tk/s"
 
 
-# --- the card's state, the top bar, and the issue a child ran (issue #97) ---
+# --- the card's state, the top bar, and the issue a child ran ---
 RUN_ISSUES = ROOT / "tests" / "fixtures" / "run-router-issues"
 
 
@@ -293,11 +293,28 @@ def test_the_top_bar_counts_the_landed_issues_of_a_multi_issue_run_over_the_issu
     assert run_node([{"op": "issuecells", "events": events, "total": None}])[0] == []
 
 
+def test_the_top_bar_counts_a_one_issue_run_by_its_passing_merge_once_it_completes():       # #154
+    merge = {"event": "outcome", "node": "merge", "outcome": "pass", "effect": {"name": "merge_land", "head": "abc"}}
+    running = run_node([{"op": "issues", "events": [merge], "total": 24}])[0]
+    done = run_node([{"op": "issues", "events": [merge, {"event": "verdict", "verdict": "completed"}], "total": 24}])[0]
+    failed = run_node([{"op": "issues", "events": [merge, {"event": "verdict", "verdict": "failed"}], "total": 24}])[0]
+    assert (running["done"], running["total"]) == (0, 1) and (failed["done"], failed["total"]) == (0, 1)
+    assert (done["done"], done["total"], done["text"]) == (1, 1, "1 of 1 issue")      # the folder's 24 issue files are the subject, not the run's set
+
+
+def test_the_top_bar_of_a_chained_run_counts_the_issues_its_start_tree_held():       # #157
+    merge = {"event": "outcome", "node": "merge", "outcome": "pass", "effect": {"name": "merge_land", "head": "abc"}}
+    p = run_node([{"op": "issues", "events": [merge, {"event": "verdict", "verdict": "completed"}], "total": 24, "held": 5}])[0]
+    assert (p["done"], p["total"], p["text"]) == (6, 24, "6 of 24 issues")
+    start = run_node([{"op": "issues", "events": [], "total": 24, "held": 5}])[0]       # the run has not merged yet: the held issues still count
+    assert (start["done"], start["total"]) == (5, 24)
+
+
 def test_the_page_shows_the_top_bar_not_run_state_and_child_issue_from_the_core():
     src = PAGE_SRC()
     assert 'id="progress"' in src and "core.progressCells(core.issueProgress(" in src     # the top bar, from the core
     assert "core.stateClass(ns)" in src and ".card.o-not-run rect" in src                  # a never-run node is not grey
-    assert "esc(c.label" in src and "c.skillLabel" in src   # a child card is titled by its task, its role on the line under (#99)
+    assert "esc(c.label" in src and "c.skillLabel" in src   # a child card is titled by its task, its role on the line under
     assert src.index('id="progress"') < src.index('id="mapbox"')                          # the bar sits above the map
 
 

@@ -1,4 +1,4 @@
-// Dashboard core module: the JSON Schema check and the engine rules (the port that tests/test_dashboard.py compares with squad.graph.validate) (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: the JSON Schema check and the engine rules (the port that tests/test_dashboard.py compares with squad.graph.validate). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
@@ -91,22 +91,22 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
   function nodeSchemaErrors(node) {
     const kind = node.kind;
     const name = typeof node.name === "string" ? node.name : null;
-    if (!KINDS.includes(kind)) return [E(name, `kind ${pyRepr(kind)} is not one of the seven kinds: ${KINDS.join(", ")} (ADR-0100 rule 1)`)];
+    if (!KINDS.includes(kind)) return [E(name, `kind ${pyRepr(kind)} is not one of the seven kinds: ${KINDS.join(", ")}`)];
     const explicit = [];
     const s = { ...node };
     if (kind === "gate") {
-      for (const [key, msg] of [["when", "a gate never carries a when (ADR-0100 rule 3)"], ["adapt", "a gate never adapts (ADR-0103 rule 1)"],
-        ["deadline", "a gate carries no deadline (ADR-0102 rule 3)"]]) {
+      for (const [key, msg] of [["when", "a gate never carries a when"], ["adapt", "a gate never adapts"],
+        ["deadline", "a gate carries no deadline"]]) {
         if (key in s) { explicit.push(E(name, msg)); delete s[key]; }
       }
       const nxt = s.next || {};
       if (isObj(nxt) && nxt.fail !== undefined && nxt.fail !== null && !["repeat", "exit:fail"].includes(nxt.fail)) {
-        explicit.push(E(name, `a gate's fail never names a node; got ${pyRepr(nxt.fail)} (ADR-0101 rule 2)`));
+        explicit.push(E(name, `a gate's fail never names a node; got ${pyRepr(nxt.fail)}`));
         const { fail, ...rest } = nxt;
         s.next = rest;
       }
     }
-    if (kind === "loop" && "deadline" in s) { explicit.push(E(name, "a loop carries no deadline (ADR-0102 rule 3)")); delete s.deadline; }
+    if (kind === "loop" && "deadline" in s) { explicit.push(E(name, "a loop carries no deadline")); delete s.deadline; }
     const errs = check(s, { $ref: `#/$defs/${kind}` }, SCHEMA.$defs, []).map((e) => E(name, `${e.path === "<root>" ? kind : e.path}: ${e.message}`));
     return [...explicit, ...errs];
   }
@@ -114,7 +114,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
   function whenErrors(nm, when, nodes, known, factDefs) {
     const f = when.fact;
     if (f.startsWith("outcome:")) return nodes[f.slice(8)] ? [] : [E(nm, `when names unknown node ${f.slice(8)}`)];
-    if (!known.has(f)) return [E(nm, `when reads unregistered fact ${f} (ADR-0104 rule 1)`)];
+    if (!known.has(f)) return [E(nm, `when reads unregistered fact ${f}`)];
     const d = factDefs[f], v = when.value;
     if (d && d.type === "enum" && !(d.values || []).some((x) => same(x, v))) return [E(nm, `when value ${pyRepr(v)} is not a value of fact ${f}`)];
     if (d && d.type === "bool" && typeof v !== "boolean") return [E(nm, `when value for bool fact ${f} must be a bool`)];
@@ -128,9 +128,9 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       const n = f.name;
       if (seen.has(n)) errs.push(E(null, `fact ${n}: registered twice`));
       seen.add(n);
-      if (FORBIDDEN_NAME.test(n)) errs.push(E(null, `fact ${n}: a gate rate, a finding count or trend, a self-report, or a judge score never triggers (ADR-0104 rule 5)`));
-      if (!f.instrument.startsWith("code:")) errs.push(E(null, `fact ${n}: instrument must be code, not a model (ADR-0104 rule 4)`));
-      else if (FORBIDDEN_INSTRUMENT.test(f.instrument)) errs.push(E(null, `fact ${n}: instrument names a model, a judge, a cross-run source, or the adaptation report (ADR-0104 rule 4, ADR-0109, ADR-0110)`));
+      if (FORBIDDEN_NAME.test(n)) errs.push(E(null, `fact ${n}: a gate rate, a finding count or trend, a self-report, or a judge score never triggers`));
+      if (!f.instrument.startsWith("code:")) errs.push(E(null, `fact ${n}: instrument must be code, not a model`));
+      else if (FORBIDDEN_INSTRUMENT.test(f.instrument)) errs.push(E(null, `fact ${n}: instrument names a model, a judge, a cross-run source, or the adaptation report`));
     }
     return errs;
   }
@@ -154,13 +154,13 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       created.set(w, [...(created.get(w) || []), n.name]);
     }
     const errs = [];
-    for (const [w, ns] of created) if (ns.length > 1) errs.push(E(nm, `parallel items share workspace ${pyRepr(w)}: created by ${ns.join(", ")} (ADR-0102 rule 2)`));
+    for (const [w, ns] of created) if (ns.length > 1) errs.push(E(nm, `parallel items share workspace ${pyRepr(w)}: created by ${ns.join(", ")}`));
     for (const n of sub) {
       if (!["agent", "action"].includes(n.kind)) continue;
       const writes = (n.kind === "action" && n.effect !== "worktree_create") || (n.kind === "agent" && n.tools.some((t) => WRITE_TOOLS.has(t)));
       if (!writes) continue;
       const ws = n.workspace === undefined ? null : n.workspace;
-      if (ws === null || ws === "." || !created.has(ws)) errs.push(E(nm, `parallel items share workspace ${pyRepr(ws)} at ${n.name}: no worktree_create makes one per item (ADR-0102 rule 2)`));
+      if (ws === null || ws === "." || !created.has(ws)) errs.push(E(nm, `parallel items share workspace ${pyRepr(ws)} at ${n.name}: no worktree_create makes one per item`));
     }
     return errs;
   }
@@ -171,7 +171,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     const errs = [];
     for (const n of Object.values(nodes)) for (const f of n.reads || []) {
       const w = (writers.get(f) || []).filter((x) => x !== n.name);
-      if (w.length) errs.push(E(n.name, `reads ${pyRepr(f)}, which ${w.join(", ")} writes: a declared input is never written by the graph (ADR-0110 rule 2)`));
+      if (w.length) errs.push(E(n.name, `reads ${pyRepr(f)}, which ${w.join(", ")} writes: a declared input is never written by the graph`));
     }
     return errs;
   }
@@ -184,8 +184,8 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       else if (!e.may_spawn) errs.push(E(nm, `entry ${n.entry} lacks may_spawn`));
       if ("when" in e) errs.push(E(nm, `entry ${n.entry} carries a when, which would bypass the dispatch`));
     }
-    for (const c of n.checks) if (nodes[c] && nodes[c].kind !== "gate") errs.push(E(nm, `check ${c} is not a gate (ADR-0113 rule 2)`));
-    for (const key of ["turns", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `child ${key} min above max`));
+    for (const c of n.checks) if (nodes[c] && nodes[c].kind !== "gate") errs.push(E(nm, `check ${c} is not a gate`));
+    for (const key of ["stalls", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `child ${key} min above max`));
     if (n.max_parallel > doc.run.max_parallel) errs.push(E(nm, "max_parallel above the run block"));
     const names = n.allow.skills.map((x) => x.name);
     if (names.length !== new Set(names).size) errs.push(E(nm, "duplicate skill in allow"));
@@ -209,8 +209,8 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     if (a.models && a.models.length && !a.models.includes(n.model)) errs.push(E(nm, "adapt models exclude the node's own model"));
     if (a.efforts && a.efforts.length && n.effort && !a.efforts.includes(n.effort)) errs.push(E(nm, "adapt efforts exclude the node's own effort"));
     for (const s of a.sees || []) {
-      if (SEES_FORBIDDEN.has(s)) errs.push(E(nm, `sees lists ${s}: a proposer may not see it (ADR-0104 rule 3)`));
-      else if (!known.has(s) && !s.startsWith("outcome:")) errs.push(E(nm, `sees unregistered fact ${s} (ADR-0104 rule 2)`));
+      if (SEES_FORBIDDEN.has(s)) errs.push(E(nm, `sees lists ${s}: a proposer may not see it`));
+      else if (!known.has(s) && !s.startsWith("outcome:")) errs.push(E(nm, `sees unregistered fact ${s}`));
     }
     return errs;
   }
@@ -234,7 +234,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     errs.push(...factErrors(doc));
     const gateIds = Object.fromEntries(doc.gates.map((g) => [g.id, new Set(g.params)]));
     for (const [gid, params] of Object.entries(gateIds)) {
-      if (!(gid in GATES)) errs.push(E(null, `gates registry: check id ${gid} is outside the engine registry (ADR-0111 rule 7)`));
+      if (!(gid in GATES)) errs.push(E(null, `gates registry: check id ${gid} is outside the engine registry`));
       else if (params.size !== GATES[gid].length || !GATES[gid].every((p) => params.has(p))) errs.push(E(null, `gates registry: params of ${gid} differ from the engine registry`));
     }
     if (!nodes[doc.root] || nodes[doc.root].kind !== "loop") errs.push(E(doc.root, "root must name a loop"));
@@ -255,7 +255,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     }
     const run = doc.run;
     const minSpend = Object.values(nodes).filter((n) => ["agent", "dispatch"].includes(n.kind)).map((n) => n.budget.spend.min);
-    if (minSpend.length && run.spend_cap < Math.max(...minSpend)) errs.push(E(null, `run spend cap ${run.spend_cap} is below an agent's spend minimum ${Math.max(...minSpend)} (ADR-0108 rule 9)`));
+    if (minSpend.length && run.spend_cap < Math.max(...minSpend)) errs.push(E(null, `run spend cap ${run.spend_cap} is below an agent's spend minimum ${Math.max(...minSpend)}`));
     for (const n of Object.values(nodes)) {
       const nm = n.name, k = n.kind;
       if (nm !== doc.root && !(nm in parents)) errs.push(E(nm, "orphan: no parent"));
@@ -264,7 +264,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       if (n.next && Object.values(n.next).includes("repeat") && !(par && par.kind === "loop")) errs.push(E(nm, "repeat is valid only on a child of a loop"));
       if ("when" in n) errs.push(...whenErrors(nm, n.when, nodes, known, factDefs));
       if (k === "gate") {
-        if (!(n.check in gateIds)) errs.push(E(nm, `unknown check ${n.check} (ADR-0111 rule 7)`));
+        if (!(n.check in gateIds)) errs.push(E(nm, `unknown check ${n.check}`));
         else {
           const ps = new Set(Object.keys(n.params));
           if (ps.size !== gateIds[n.check].size || ![...ps].every((p) => gateIds[n.check].has(p))) errs.push(E(nm, "params differ from the gates registry"));
@@ -273,12 +273,12 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
         if (!(n.items in factDefs) && !BUILTIN.has(n.items)) errs.push(E(nm, "items is not a registered fact"));
         errs.push(...eachWorkspaceErrors(nm, n, nodes, run));
       } else if (k === "agent") {
-        for (const key of ["turns", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `${key} min above max`));
+        for (const key of ["stalls", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `${key} min above max`));
         if (n.may_spawn && !(nm in entries)) errs.push(E(nm, "may_spawn on a node that is not a dispatch entry"));
         if (n.may_propose && !("adapt" in n)) errs.push(E(nm, "may_propose without an adapt block"));
       } else if (k === "loop") {
         if (n.max.min > n.max.value) errs.push(E(nm, "max min above value"));
-        if ("when" in n && !n.children.some((c) => nodes[c] && ["agent", "each", "action", "dispatch"].includes(nodes[c].kind))) errs.push(E(nm, "a loop with a when must hold an agent, each, action, or dispatch child (ADR-0101 rule 3)"));
+        if ("when" in n && !n.children.some((c) => nodes[c] && ["agent", "each", "action", "dispatch"].includes(nodes[c].kind))) errs.push(E(nm, "a loop with a when must hold an agent, each, action, or dispatch child"));
       } else if (k === "dispatch") errs.push(...dispatchErrors(doc, n, nodes));
       if (n.adapt) errs.push(...adaptErrors(nm, n, n.adapt, known));
     }

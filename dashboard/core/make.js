@@ -1,4 +1,4 @@
-// Dashboard core: the same JSON Schema and the same rules as squad/graph.py (ADR-0111 rule 4),
+// Dashboard core: the same JSON Schema and the same rules as squad/graph.py,
 // the canonical graph hash (squad.graph.canon_hash), and the adaptation overlay (squad/report.py).
 // No DOM here. A test runs the bundle under node and compares it with the engine (tests/test_dashboard.py).
 // ENGINE comes from scripts/build_dashboard.py: the schema and the registries, read from the engine's own modules.

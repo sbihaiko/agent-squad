@@ -3,7 +3,8 @@
 Usage: python3 docs/design/check_graph.py docs/design/graph.schema.json docs/design/<graph>.json
 The schema argument is ignored: the engine reads docs/design/graph.schema.json itself.
 """
-import json, sys
+import json
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))

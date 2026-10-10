@@ -1,11 +1,23 @@
-// Dashboard core module: The run record: parse, the live reread, and the adaptation overlay. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The run record: parse, the live reread, and the adaptation overlay.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function recordModule({ graphHash }) {
-  // ---- Run record (read-only) and the overlay (ADR-0111 rule 6, ADR-0109) ----
-  // A line that is not JSON ends the record there (ADR-0126): the lines before it are shown, the line and the lines after it are not, and
+  // ---- Run record (read-only) and the overlay ----
+  // A line that is not JSON ends the record there: the lines before it are shown, the line and the lines after it are not, and
   // `bad` names the line and what was wrong. The page never skips the bad line to read on: events after a gap would be a wrong run.
   // With no valid prefix (line 1 is bad, or the first event is not run_start) there is nothing to show, and `error` says why.
+  // Local patch: the SDK's spend is an estimate at the wrong list prices for non-Claude models; re-price from tokens (same table as the hub).
+  const PRICES = [[/deepseek-.*pro/, 0.044, 1.32, 3.96], [/deepseek/, 0.006, 0.3, 1.2], [/grok-4\.5/, 0.30, 2, 6], [/grok-4\.[67]/, 0.50, 2, 6],
+    [/gpt-5\.6-sol-fast/, 0.8, 8, 40], [/gpt-5\.6-sol/, 0.4, 4, 20], [/gpt-5\.6-terra-fast/, 0.4, 4, 24], [/gpt-5\.6-terra/, 0.2, 2, 12],
+    [/gpt-5\.5-fast/, 1.25, 12.5, 75], [/gpt-5\.5/, 0.5, 5, 30], [/gpt-6\.1-sol-fast/, 0.2, 4, 20], [/gpt-6\.1-sol/, 0.1, 2, 10]];
+  function repriced(ev) {
+    if (ev.event !== "outcome" || typeof ev.model !== "string" || typeof ev.tokens_in !== "number") return ev;
+    for (const [rx, hit, miss, out] of PRICES) if (rx.test(ev.model)) {
+      const cr = ev.cache_read || 0;
+      return { ...ev, spend_sdk: ev.spend, spend: (cr * hit + Math.max(ev.tokens_in - cr, 0) * miss + (ev.tokens_out || 0) * out) / 1e6 };
+    }
+    return ev;
+  }
   function parseRecord(text) {
     const events = [];
     const lines = text.split("\n");
@@ -14,7 +26,7 @@ function recordModule({ graphHash }) {
       if (!lines[n].trim()) continue;
       try {
         const ev = JSON.parse(lines[n]);
-        if (!ev || typeof ev !== "object" || Array.isArray(ev)) bad = { line: n + 1, message: "the line is not a JSON object" }; else events.push(ev);
+        if (!ev || typeof ev !== "object" || Array.isArray(ev)) bad = { line: n + 1, message: "the line is not a JSON object" }; else events.push(repriced(ev));
       } catch (e) { bad = { line: n + 1, message: e.message }; }
     }
     if (!events.length) return { error: bad ? `Record line ${bad.line} is not JSON: ${bad.message}` : "A run record starts with a run_start event." };
@@ -22,13 +34,13 @@ function recordModule({ graphHash }) {
     return bad ? { events, bad: { ...bad, shown: events.length } } : { events };
   }
 
-  // A reread of a record the engine is still writing can catch a half-written last line. Keep the complete lines only (ticket #80).
+  // A reread of a record the engine is still writing can catch a half-written last line. Keep the complete lines only.
   function parseLive(text) {
     const cut = text.lastIndexOf("\n");
     return parseRecord(cut < 0 ? "" : text.slice(0, cut + 1));
   }
 
-  const REPORT_NOTE = "one observation, not a measurement (ADR-0012): each entry is a fresh session, so the two entries may be different tasks";
+  const REPORT_NOTE = "one observation, not a measurement: each entry is a fresh session, so the two entries may be different tasks";
 
   const REPORT_INSTRUMENT = "code: outcome events of the run record; spend is the measured SDK result; elapsed is wall-clock";
 

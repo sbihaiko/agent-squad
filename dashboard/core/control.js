@@ -1,8 +1,8 @@
-// Dashboard core module: Where a pause leaves the run (ticket #107, ADR-0128).
+// Dashboard core module: Where a pause leaves the run.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function controlModule({ lastOf }) {
-  // The page shows what the engine recorded and never works the frontier out (ADR-0117 rule 10): the `paused` event is the resume point,
+  // The page shows what the engine recorded and never works the frontier out: the `paused` event is the resume point,
   // shown as the record holds it. A pause counts for the last start of the run only (`run_start`, or a `resume`), and only while the run
   // is without a verdict, or its verdict is the `stopped` that a pause writes.
   //   state "live"   : a run with no verdict yet. A request may still pause it.

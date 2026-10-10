@@ -1,4 +1,4 @@
-"""Node runners: one per node kind, behind one registry (ticket #121, parent spec #115).
+"""Node runners: one per node kind, behind one registry.
 
 A runner is `async run(ctx, node, entry, sc) -> Res`. `ctx` exposes only what a runner uses. The engine
 keeps the entry count, fast-forward, dry frontier, and `when` rules in `Engine.exec_node`, then looks the

@@ -8,7 +8,7 @@ Probe script: `/tmp/probe_ds.py`. Owner granted probe spend, 2026-09-30.
 
 The proxy serves an Anthropic-shaped stream for a model the CLI does not know. Does the CLI still report
 `total_cost_usd` and `num_turns`, and can `max_budget_usd` still fire? A zero would make the spend cap and the
-run's `spend_cap` decorative, because ADR-0108 rule 2 only refuses a call that reports nothing at all.
+run's `spend_cap` decorative, because the spend rule only refuses a call that reports nothing at all.
 
 ## Result
 
@@ -27,7 +27,7 @@ The call also logged `[claude-code:unrecognized_model]` once per invocation.
 
 - **Spend is reported.** The cap holds. The adapter already maps `error_max_budget_usd` to `spend_cap`
   (`squad/sdk_adapter.py:14`), so a capped node ends through its artifact with the reason, the spend and the
-  turns, per ADR-0108 rule 4.
+  turns.
 - **The figure is not DeepSeek's real price.** `0.042688` for 10,662 input tokens implies **$4.00 per 1M
   input tokens** — the CLI's fallback rate for a model it does not recognize. DeepSeek Flash costs about
   $0.28 per 1M input. The recorded spend is therefore roughly **14x the real spend**. A `max_budget_usd` or

@@ -1,10 +1,10 @@
-"""The replay cursor, unresolved children, and the hash mismatch (#81, #118)."""
+"""The replay cursor, unresolved children, and the hash mismatch."""
 
 
 from tests.dashboard_helpers import _run22, run_node
 
 
-# ---- the replay cursor, unresolved children, and the hash mismatch (#81, decision #63) ----
+# ---- the replay cursor, unresolved children, and the hash mismatch ----
 def _replay(events, cursor):
     return run_node([{"op": "replay", "events": events, "cursor": cursor}])[0]
 

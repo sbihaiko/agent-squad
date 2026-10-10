@@ -1,4 +1,4 @@
-// --- the inspector form: fields grouped by purpose; the core builds the groups and applies each edit (ticket #74, decision #60) ---
+// --- the inspector form: fields grouped by purpose; the core builds the groups and applies each edit ---
 const groupOpen = {};
 for (const k of ["models", "efforts", "skills"]) $("dl-" + k).innerHTML = SERVED[k].map((v) => `<option value="${esc(v)}">`).join("");
 function fieldHtml(f) {
@@ -40,7 +40,7 @@ function wireFields() {
   for (const b of side.querySelectorAll("[data-remove]")) b.addEventListener("click", () => setFieldFrom(name, b.dataset.remove, ""));
 }
 
-// --- add and remove a node: pure functions in the core, thin wiring here (ticket #73) ---
+// --- add and remove a node: pure functions in the core, thin wiring here ---
 const KIND_LIST = core.KINDS;
 $("s-kind").innerHTML = KIND_LIST.map((k) => `<option>${k}</option>`).join("");
 function renderAddbar() {
@@ -57,7 +57,7 @@ function renderAddbar() {
 }
 $("s-kind").addEventListener("change", renderAddbar);
 
-// Undo and redo (ticket #79). The history holds graph-and-layout snapshots, lives in this page only, and is never saved.
+// Undo and redo. The history holds graph-and-layout snapshots, lives in this page only, and is never saved.
 const snap = () => core.snapshot(S.doc, S.layout);
 function track(before) { S.hist = core.histRecord(S.hist, before); renderAddbar(); }
 async function stepHistory(dir) {
@@ -109,7 +109,7 @@ async function removeNode(name) {
   await commit(r.doc, before);
 }
 
-// --- rename a node and change its kind: pure functions in the core, thin wiring here (ticket #78) ---
+// --- rename a node and change its kind: pure functions in the core, thin wiring here ---
 function nkMessage(text) { const m = $("nk-msg"); if (m) { m.textContent = text; m.className = "msg-bad"; } setStatus(text, true); }
 function focusName() { const i = $("n-name"); if (i) { i.focus(); i.select(); } }
 

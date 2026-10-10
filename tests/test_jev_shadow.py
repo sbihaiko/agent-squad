@@ -1,7 +1,7 @@
-"""Jev in shadow mode (ticket #55). A real local HTTP server stands in for the endpoint; no key, no spend.
+"""Jev in shadow mode. A real local HTTP server stands in for the endpoint; no key, no spend.
 
-Guards: a Jev call has one total deadline that covers its retries and a timeout is no suggestion (ADR-0051);
-a Jev answer is a diagnostic that no gate, route, or verdict reads (ADR-0008); no key value reaches a run directory.
+Guards: a Jev call has one total deadline that covers its retries and a timeout is no suggestion;
+a Jev answer is a diagnostic that no gate, route, or verdict reads; no key value reaches a run directory.
 """
 import json
 import re
@@ -255,3 +255,11 @@ def test_pairs_join_each_diagnostic_to_the_held_out_outcome(tmp_path):
     (tmp_path / "subject-08-20260930-000001" / "run").mkdir(parents=True)
     got = jev_pairs.collect(tmp_path)
     assert len(got) == 1 and got[0]["issue"] == 7 and got[0]["held_out"] == "fail" and got[0]["jev"][0]["result"]["p"] == 0.2
+
+
+def test_pairs_read_a_run_that_keeps_its_record_in_the_run_folder(tmp_path):
+    from squad import jev_pairs
+    rec = record.Record(tmp_path / "subject-09-20261001-000000" / "record.jsonl")      # the layout since #151
+    rec.append("outcome", node="ac_verify", entry=1, outcome="pass", reasons=[], artifact=None, spend=None, turns=None, cap=None, elapsed=None)
+    got = jev_pairs.collect(tmp_path)
+    assert [(g["issue"], g["held_out"]) for g in got] == [(9, "pass")]

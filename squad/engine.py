@@ -1,4 +1,4 @@
-"""The engine: one scheduler, one node runner per kind, one run record for every flow (ADR-0100 to ADR-0114).
+"""The engine: one scheduler, one node runner per kind, one run record for every flow.
 
 The engine walks the graph and keeps the entry count, fast-forward, dry frontier, and `when` rules in
 `exec_node`. Then it looks the node runner up by kind in `squad/runners` (`async run(ctx, node, entry, sc) -> Res`).
@@ -9,7 +9,6 @@ the record into a verdict.
 """
 import math
 import time
-import uuid
 from pathlib import Path
 
 import anyio
@@ -27,7 +26,8 @@ from squad.engine_errors import Halt as Halt
 from squad.engine_errors import ResumeRefused as ResumeRefused
 from squad.facts import DeriveCtx, FactStore, refresh
 from squad.graph import plan_order
-from squad.record import Record
+from squad.outcomes import Outcomes
+from squad.record import Record, new_run_id
 from squad.replay import Replay
 from squad.runners import RunCtx, default_registry
 from squad.runners.children import Children
@@ -38,42 +38,48 @@ from squad.runners.types import Scope as Scope
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
-                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None):
-        self.shadow = shadow     # advisory observer (ticket #55): its output is recorded as `diagnostic` and read by nothing
+                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None):
+        self.shadow = shadow     # advisory observer: its output is recorded as `diagnostic` and read by nothing
         self.graph_path = graph_path
         self.g, self.adapter, self.run_dir = graph, adapter, Path(run_dir)
         self.options, run_cfg = opt.resolve(graph, options)
         self.target = Path(target or ".").resolve()
         self.scale, self.clock, self.wall, self.invoker = time_scale, clock, wall, invoker
-        self.run_id = run_id or f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        self.run_id = run_id or new_run_id()
         self.run_cfg = run_cfg
         self.nodes = dict(graph.nodes)
         self.record = Record(self.run_dir / "record.jsonl")
-        self.control = Control(self.run_dir)   # pause and resume requests from a person (ticket #107, ADR-0128)
-        self.eff = Effective(self.nodes)
+        self.control = Control(self.run_dir)   # pause and resume requests from a person
+        self.autonomy = autonomy       # {enabled, max_resumes}: recorded in run_start; a resume refuses when it differs
+        self.project = project or {}    # {record: {path, sha256}, limits: {...}}: the project settings file
+        self.limits = self.project.get("limits", {})
+        self.eff = Effective(self.nodes, self.limits)
         self.budget = Budget(self.run_cfg["spend_cap"])
         self.facts = FactStore(graph.doc["facts"], self.nodes, self.run_id, clock=wall)
         self.artifacts = ArtifactStore(self.run_dir / "artifacts")
-        self.done, self.entries, self.last = {}, {}, {}
+        self.entries = {}
+        self.outcomes = Outcomes(self.record, self.facts, refresh=lambda item: self._refresh(Scope(item, 0)),
+                                 stop_after=self.options.get("stop_after"), source=self._src)   # the one writer of done and last
+        self.done, self.last = self.outcomes.done, self.outcomes.last   # read-only views for the engine and the runners
         self.has_git = git.available(self.target)
         self.dry, self.forced, self.from_node = False, False, None
         self.waits, self.answer, self.default_applied = {}, None, []
         self.branches = {}
-        self.replay = Replay(self)   # the replay half of resume (ticket #126)
-        self.runs = Children(self)   # dispatch child execution (ticket #125)
-        self.dispatch = Dispatch(self)   # spawn decisions and landing; owns children, held, landed, ac_before (ticket #124)
+        self.replay = Replay(self)   # the replay half of resume
+        self.runs = Children(self)   # dispatch child execution
+        self.dispatch = Dispatch(self)   # spawn decisions and landing; owns children, held, landed, ac_before
         self.entry_of = {n["entry"]: n["name"] for n in self.nodes.values() if n["kind"] == "dispatch"}
         self.wt_lock = anyio.Lock()
-        self.vendor = Path(vendor) if vendor else skills.VENDOR   # where VERSIONS.json lives (ADR-0130)
-        self.defaults = defaults       # {path, sha256, engine}: the per-invocation engine-level defaults, recorded in run_start and resume (ticket #46)
+        self.vendor = Path(vendor) if vendor else skills.VENDOR   # where VERSIONS.json lives
+        self.defaults = defaults       # {path, sha256, engine}: the per-invocation engine-level defaults, recorded in run_start and resume
         if hasattr(adapter, "bind"):
             adapter.bind(lambda kind, **f: self.record.append(kind, **f))
         self.item_workspaces = self._item_workspaces()
-        self.runners = default_registry()   # kind -> runner; a test may wrap one entry (ticket #121)
+        self.runners = default_registry()   # kind -> runner; a test may wrap one entry
         self.ctx = RunCtx(self)
 
     def _item_workspaces(self):
-        """Logical workspaces that a worktree_create makes inside an `each`: one per item (ADR-0102 rule 2)."""
+        """Logical workspaces that a worktree_create makes inside an `each`: one per item."""
         out = set()
         for n in self.nodes.values():
             if n["kind"] != "each":
@@ -103,17 +109,8 @@ class Engine:
     def _finish(self, node, entry, sc, outcome, reasons, artifact=None, *, spend=None, turns=None, cap=None, elapsed=None, routed=None, **extra):
         name = node["name"]
         routed = routed or self._route(node, outcome)
-        fields = dict(node=name, entry=entry, outcome=outcome, reasons=list(reasons), artifact=artifact, spend=spend,
-                      turns=turns, cap=cap, elapsed=elapsed, routed=routed, **extra)
-        if sc.item is not None:
-            fields["item"] = sc.item
-        ev = self.record.append("outcome", **fields)
-        self.done[(name, entry, sc.item)] = ev
-        self.last[(name, sc.item)] = outcome
-        self.facts.produce(f"outcome:{name}", outcome, self._src(), item=sc.item)
-        self._refresh(sc)
-        if self.options.get("stop_after") == name:
-            raise Halt("stop", name)
+        fields = dict(reasons=list(reasons), artifact=artifact, spend=spend, turns=turns, cap=cap, elapsed=elapsed, routed=routed, **extra)
+        self.outcomes.node(name, entry, sc.item, outcome, **fields)
         return Res(outcome, list(reasons), routed)
 
     def _produce_builtin(self):
@@ -131,6 +128,7 @@ class Engine:
     def _call_deadline(self, node, sc):
         own = node.get("deadline", self.run_cfg["deadline"])     # null run deadline: no run limit, the node's own deadline is the cap
         own = math.inf if own is None else own * self.scale
+        own = min(own, self.limits.get("deadline_seconds", math.inf) * self.scale)    # the project's per-call ceiling
         return min(own, sc.deadline_at - self.clock())
 
     # ------------------------------------------------------------ the walk
@@ -158,7 +156,7 @@ class Engine:
         return await self.runners[node["kind"]].run(self.ctx, node, entry, sc)
 
     def hold(self, labels, node, item=None):
-        """Record where the run stands and return the `Halt` that ends the run here: a person paused these nodes (ADR-0128)."""
+        """Record where the run stands and return the `Halt` that ends the run here: a person paused these nodes."""
         completed = list(dict.fromkeys(x["node"] for x in self.record.events if x["event"] == "outcome"))
         extra = {} if item is None else {"item": item}
         self.record.append("paused", node=node, scope=self.control.scope(), held=labels, completed=completed, **extra)
@@ -199,7 +197,7 @@ class Engine:
         return self.run_dir / "ws" / (logical.replace("/", "_") + tag)
 
     def _ws_snapshot(self, node, sc):
-        """The workspace state after a node: what a later resume compares against (ADR-0107 rule 5)."""
+        """The workspace state after a node: what a later resume compares against."""
         logical = node.get("workspace")
         if logical in (None, ".") or not self.has_git:
             return None
@@ -216,7 +214,7 @@ class Engine:
 
     # ------------------------------------------------------------ run
     def _preflight_start(self):
-        """A graph with action nodes needs git. A missing git is a defect, never a swap (ADR-0106 rule 4)."""
+        """A graph with action nodes needs git. A missing git is a defect, never a swap."""
         acts = [n for n in self.nodes.values() if n["kind"] == "action"]
         if not acts:
             return {"status": "ok"}
@@ -229,12 +227,13 @@ class Engine:
         return {"status": "ok"}
 
     def _start(self):
-        if bad := skills.dirty(self.vendor):   # refuse before run_start, no record (ticket #140, ADR-0130)
-            raise opt.OptionError(f"vendor/skills is not clean: {'; '.join(bad)}. Nothing ran (ADR-0130)")
+        if bad := skills.dirty(self.vendor):   # refuse before run_start, no record
+            raise opt.OptionError(f"vendor/skills is not clean: {'; '.join(bad)}. Nothing ran")
         self.preflight = self._preflight_start()
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
+                           **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
                            skills=skills.snapshot(self.g.doc, self.vendor), skills_commit=skills.commit(self.vendor))
 
     def _seed_facts(self):
@@ -250,10 +249,10 @@ class Engine:
             return h
         return None
 
-    # ------------------------------------------------------------ resume (ADR-0107)
+    # ------------------------------------------------------------ resume
     async def resume(self, *, answer=None, from_node=None, release=False):
         """Continue one run from its record under the same run id. Return the verdict. The replay is `squad/replay.py`.
-        `release`: the person who runs the command releases every hold the control file still holds (ADR-0128)."""
+        `release`: the person who runs the command releases every hold the control file still holds."""
         self.run_id, self.answer, self.from_node = self.replay.refuse(from_node), answer, from_node
         if release and self.control.requests():
             self.control.append("resume", source="cli")
@@ -274,8 +273,7 @@ class Engine:
         try:
             await self._walk()
         except Defect as d:
-            self.record.append("outcome", node=self.g.root, entry=99, outcome="fail", reasons=[f"defect:{d}"], artifact=None,
-                               spend=None, turns=None, cap=None, elapsed=None)
+            self.outcomes.defect(self.g.root, d)
         return self._conclude()
 
     async def _dry_walk(self):
@@ -289,15 +287,17 @@ class Engine:
         return frontier
 
     def observe_target(self):
-        """The target observation that the verdict module folds: what the run will not overwrite (ADR-0105 rule 4)."""
+        """The target observation that the verdict module folds: what the run will not overwrite."""
         conflict = []
         if self.has_git:
             conflict += [f"unmerged:{p}" for p in git.unmerged(self.target)]
         return {"conflict": conflict}
 
     def _conclude(self):
-        v = V.fold(self.record.events, self.observe_target(), self.run_id)
+        v = V.fold(self.record.events, self.observe_target(), self.run_id, self.run_dir.resolve())
         self.record.append("verdict", **v.event_fields())
+        if v.verdict == "completed" and self.has_git:
+            self.dispatch.prune()      # a landed child's branch and worktree are clutter once the run passed; a failed run keeps them for resume
         return v
 
     async def run(self):
@@ -308,6 +308,5 @@ class Engine:
         try:
             await self._walk()
         except Defect as d:
-            self.record.append("outcome", node=self.g.root, entry=1, outcome="fail", reasons=[f"defect:{d}"], artifact=None,
-                               spend=None, turns=None, cap=None, elapsed=None)
+            self.outcomes.defect(self.g.root, d)
         return self._conclude()

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-09-29.
+Accepted.
 
 ## Context
 
@@ -17,6 +17,7 @@ A project that treats every past decision as binding becomes locked into old rul
 3. **`CLAUDE.md` follows the same rule.** Keep it current in the change that makes it stale.
 4. **Rafael's own words outrank every ADR.**
 5. **Follow a guide while it stands.** You are free to change an ADR. You are never free to ignore it. A red guard is still a defect (ADR-0018).
+6. **ADRs and instruction files are never ledgers.** They hold no dates, counts, statuses, issue numbers, run ids or amendment logs. A changed decision is rewritten in place.
 
 ## Guard
 

@@ -2,9 +2,11 @@
 """Analyze the real-usage Jev probes. Writes aggregate results (no raw text) to scripts/archive/jev_results_real/.
 
 Run: python3 scripts/archive/jev_real/analyze.py
-FIT: earliest 70% by time sets a threshold. TEST: latest 30% only reports (ADR-0012).
+FIT: earliest 70% by time sets a threshold. TEST: latest 30% only reports.
 """
-import json, math, random
+import json
+import math
+import random
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent

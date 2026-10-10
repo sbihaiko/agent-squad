@@ -1,4 +1,4 @@
-"""Guards for ticket #31: action nodes and worktrees (ADR-0101, ADR-0102 rule 2, ADR-0106 rule 4)."""
+"""Guards for ticket #31: action nodes and worktrees."""
 import subprocess
 from pathlib import Path
 

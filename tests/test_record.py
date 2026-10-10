@@ -1,4 +1,4 @@
-"""Guards for ticket #25: ADR-0102 rule 8, ADR-0105 rule 7, ADR-0030 (atomic write)."""
+"""Guards for the run record and its atomic write."""
 import json
 import signal
 import subprocess
@@ -33,7 +33,7 @@ def test_every_event_kind_keeps_its_contract_fields(tmp_path):
 
 
 def test_a_progress_event_carries_where_its_call_is_and_refuses_without_it(tmp_path):
-    """A call in flight records where it has got to (ticket #101). The reader refuses one that names no turn."""
+    """A call in flight records where it has got to. The reader refuses one that names no turn."""
     r = record.Record(tmp_path / "r.jsonl")
     r.append("run_start", **START)
     ev = {"node": "actor", "entry": 1, "item": None, "session": "s1", "messages": 4, "context_tokens": 61209, "tool": "Bash"}
@@ -84,7 +84,7 @@ def test_a_write_interrupted_before_the_rename_leaves_the_old_file(tmp_path, mon
 
 
 def test_a_writer_killed_mid_run_leaves_only_whole_events(tmp_path):
-    """ADR-0030 rule 5: kill the generator while it writes and read what is left."""
+    """Kill the generator while it writes and read what is left."""
     path = tmp_path / "r.jsonl"
     code = textwrap.dedent(f"""
         import sys
@@ -119,7 +119,7 @@ def test_the_router_fixture_reads_clean():
 
 
 def test_one_outcome_event_per_node_exit_holds_the_fold_fields(tmp_path):
-    """ADR-0105 rule 7: an outcome event holds node, entry, outcome, reasons list, artifact, position."""
+    """An outcome event holds node, entry, outcome, reasons list, artifact, position."""
     r = record.Record(tmp_path / "r.jsonl")
     r.append("run_start", **START)
     ev = r.append("outcome", **{**OUTCOME, "reasons": ["loop_max_exhausted"]})

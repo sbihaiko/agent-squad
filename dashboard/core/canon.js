@@ -1,4 +1,4 @@
-// Dashboard core module: canonical form, hash and import (ticket #120). The module the others depend on.
+// Dashboard core module: canonical form, hash and import. The module the others depend on.
 // A factory: it takes ENGINE and the modules it depends on, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
@@ -127,7 +127,7 @@ function canonModule(ENGINE) {
   }
   const graphHash = (text) => sha256Hex(canonFromText(text));
 
-  // ---- Import (ADR-0111 rule 5): any parseable JSON that holds a schema_version ----
+  // ---- Import: any parseable JSON that holds a schema_version ----
   function parseImport(text) {
     let doc;
     try { doc = JSON.parse(text); } catch (e) { return { error: "This file is not parseable JSON: " + e.message }; }

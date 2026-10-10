@@ -1,8 +1,8 @@
-// Dashboard core module: undo and redo history (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: undo and redo history. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function historyModule({ clone }) {
-  // ---- undo and redo (ticket #79): a pure history of graph-and-layout snapshots; it lives in the page and is never saved ----
+  // ---- undo and redo: a pure history of graph-and-layout snapshots; it lives in the page and is never saved ----
   const snapshot = (doc, layout) => ({ doc: clone(doc), layout: clone(layout) });
   const histNew = (limit) => ({ past: [], future: [], limit: limit > 0 ? limit : 100 });
   // `before` is the state an edit is about to change. A new edit clears redo; the oldest step goes when the limit is reached.

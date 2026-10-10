@@ -1,4 +1,4 @@
-# The models a subject run uses. Owner ruling, 2026-10-02 (latest): claude-sonnet-5-5 only, on every node of both subject graphs.
+# The models a subject run uses. Owner ruling: deepseek-flash only, on every node of both subject graphs.
 # `squad.subject.load_config` reads this file for the one-issue graph; `scripts/run_router.py` reads it for the router
 # graph. A missing or incomplete file refuses the run: a model is never guessed.
 #
@@ -13,7 +13,7 @@
 version: 1
 
 issue:                      # the five-phase graph of one issue (squad/subject.py)
-  model: claude-sonnet-5-5
+  model: deepseek-flash
   effort: medium
 
 router:                     # applies to docs/design/router.graph.json through squad.subject.apply_router_models
@@ -21,7 +21,8 @@ router:                     # applies to docs/design/router.graph.json through s
                             # its own wider model list. This file narrows it for a real run: the router node takes the
                             # model below, and the envelope's `models` becomes the child model alone, so a child that
                             # asks for anything else is rejected whole (squad/envelope.py:47).
-  model: claude-sonnet-5-5     # the node that reads the issue and asks for its children
+  model: deepseek-flash     # the node that reads the issue and asks for its children
   effort: medium
-  child_model: claude-sonnet-5-5   # the model every child the router may ask for
+  child_model: deepseek-flash   # the model every child the router may ask for
   child_effort: medium      # the effort the contract's example names; the envelope still allows the others
+  spend_cap: off            # `off`: no node and no run carries a spend cap. The default while the models are served through the proxy, whose cost figure is about 14x the real price.

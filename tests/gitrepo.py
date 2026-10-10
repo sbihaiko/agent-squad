@@ -11,7 +11,7 @@ _TEMPLATE = None
 
 
 def _template():
-    """The base repository, built once per session (ADR-0012: an outcome of fewer forks, not a target)."""
+    """The base repository, built once per session (an outcome of fewer forks, not a target)."""
     global _TEMPLATE
     if _TEMPLATE is None:
         import atexit

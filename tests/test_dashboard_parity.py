@@ -1,4 +1,4 @@
-"""Parity guards: the dashboard core and the engine share one schema, one set of rules, one hash, and one import rule (#56, #61, #118)."""
+"""Parity guards: the dashboard core and the engine share one schema, one set of rules, one hash, and one import rule."""
 import ast
 import copy
 import json
@@ -53,7 +53,7 @@ def _rule_cases():
     d = five(); node(d, "worktree")["next"] = {"pass": "repeat"}; add("repeat outside loop", d)
     d = five(); d["run"]["spend_cap"] = 0.01; add("spend cap below minimum", d)
     d = five(); node(d, "scout")["kind"] = "subagent"; add("fifth kind", d)
-    d = five(); node(d, "scout")["budget"]["turns"] = {"min": 50, "max": 5}; add("agent turns min above max", d)
+    d = five(); node(d, "scout")["budget"]["stalls"] = {"min": 50, "max": 5}; add("agent turns min above max", d)
     d = five(); node(d, "scout")["budget"]["spend"] = {"min": 5, "max": 0.5}; add("agent spend min above max", d)
     d = five(); node(d, "scout")["may_spawn"] = True; add("may_spawn not an entry", d)
     d = five(); node(d, "scout")["may_propose"] = True; add("may_propose without adapt", d)
@@ -78,7 +78,7 @@ def _rule_cases():
     d = router(); node(d, "route")["checks"] = ["ghost"]; add("dispatch unknown check", d)
     d = router(); node(d, "route")["entry"] = "scope_gate"; add("dispatch entry not an agent", d)
     d = router(); node(d, "route")["max_parallel"] = 99; add("dispatch max_parallel", d)
-    d = router(); node(d, "route")["budget"]["turns"] = {"min": 9, "max": 1}; add("dispatch turns min above max", d)
+    d = router(); node(d, "route")["budget"]["stalls"] = {"min": 9, "max": 1}; add("dispatch turns min above max", d)
     d = router(); node(d, "route")["budget"]["spend"] = {"min": 9, "max": 1}; add("dispatch spend min above max", d)
     d = router(); node(d, "route")["allow"]["skills"].append(copy.deepcopy(node(d, "route")["allow"]["skills"][0])); add("dispatch duplicate skill", d)
     d = router(); node(d, "router")["may_spawn"] = False; add("entry lacks may_spawn", d)
@@ -117,7 +117,7 @@ def _field_cases():
     return cases
 
 
-@pytest.mark.slow(reason="about 1500 documents through node and the engine: 9 s alone, and parallel workers share the CPU (#129)")
+@pytest.mark.slow(reason="about 1500 documents through node and the engine: 9 s alone, and parallel workers share the CPU")
 def test_dashboard_validation_parity():
     """The dashboard and the engine give the same (node, rule) pairs and the same hash on both fixtures, one mutation per rule, and every node-field mutation."""
     rules, fields = _rule_cases(), _field_cases()
@@ -190,7 +190,7 @@ def test_changing_a_node_changes_the_dashboard_hash_and_a_key_order_change_does_
     assert h[0] == h[1] != h[2]
 
 
-# --- import (ADR-0111 rule 5) ---
+# --- import ---
 def test_import_refuses_unparseable_and_schema_less_files_and_loads_an_invalid_graph():
     bad = run_node([{"op": "import", "text": "{nope"}, {"op": "import", "text": '{"name": "x"}'}, {"op": "import", "text": "[1]"}])
     assert all("error" in r for r in bad)

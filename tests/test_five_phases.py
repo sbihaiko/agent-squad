@@ -1,4 +1,4 @@
-"""Ticket #41: the five-phase graph end to end on the scripted adapter (ADR-0100 to ADR-0107)."""
+"""Ticket #41: the five-phase graph end to end on the scripted adapter."""
 from pathlib import Path
 
 import pytest

@@ -1,4 +1,4 @@
-"""ADR-0125: children of one dispatch group by status (done with one outcome, running with one harness); child cards clip, carry unique titles and share a bus."""
+"""Children of one dispatch group by status (done with one outcome, running with one harness); child cards clip, carry unique titles and share a bus."""
 import json
 import re
 

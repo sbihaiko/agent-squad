@@ -1,10 +1,13 @@
-"""Check a run record against its graph: dispatch envelope, request keys, resume frontier, folded verdict (ADR-0113, ADR-0114)."""
-import hashlib, json, sys
+"""Check a run record against its graph: dispatch envelope, request keys, resume frontier, folded verdict."""
+import hashlib
+import json
+import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from squad.verdict import EXIT, fold
 
-WORST = ["fail", "deadline", "needs-human", "pass"]  # order of the join (ADR-0102 rule 9)
+WORST = ["fail", "deadline", "needs-human", "pass"]  # order of the join
 
 def canon_hash(doc):
     return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -20,7 +23,7 @@ def limit_errors(req, disp, parent_tools, parent_spend_left):
         if t not in a["tools"]: e.append(f"tool_outside_allow:{t}")
         elif parent_tools is not None and t not in parent_tools: e.append(f"tool_outside_parent:{t}")
     if {"name": r["skill"]["name"], "version": r["skill"]["version"]} not in a["skills"]: e.append("skill_outside_allow")
-    if not b["turns"]["min"] <= r["turns"] <= b["turns"]["max"]: e.append("turns_outside_budget")
+    if not b["stalls"]["min"] <= r["stalls"] <= b["stalls"]["max"]: e.append("stalls_outside_budget")
     if not b["spend"]["min"] <= r["spend"] <= b["spend"]["max"]: e.append("spend_outside_budget")
     if r["spend"] > parent_spend_left: e.append("spend_over_remainder")
     if r["deadline"] > disp["deadline"]: e.append("deadline_over_dispatch")
@@ -29,7 +32,6 @@ def limit_errors(req, disp, parent_tools, parent_spend_left):
 
 def check(graph, events):
     errs = []
-    nodes = {n["name"]: n for n in graph["nodes"]}
     disp = {n["name"]: n for n in graph["nodes"] if n["kind"] == "dispatch"}
     d = next(iter(disp.values())) if disp else None
     for i, ev in enumerate(events, 1):
@@ -66,7 +68,7 @@ def check(graph, events):
     for ev in accepted.values():
         k = (ev["parent"], ev.get("parent_entry"))
         per_parent[k] = per_parent.get(k, 0) + 1
-        if "definition" not in ev: errs.append(f"accepted {ev['child']}: no full child definition (ADR-0114 rule 2)")
+        if "definition" not in ev: errs.append(f"accepted {ev['child']}: no full child definition")
     for k, n in per_parent.items():
         if n > d["max_children"]: errs.append(f"{n} accepted children of {k[0]} entry {k[1]} exceed max_children {d['max_children']}")
     for key, ev in rejected.items():
@@ -83,16 +85,16 @@ def check(graph, events):
         done = {e["node"] for e in events if e["event"] == "outcome" and e["pos"] < ev["pos"]}
         frontier = sorted(seen - done)
         if ev["frontier"] != frontier: errs.append(f"resume {ev['pos']}: lists {ev['frontier']} but the record gives {frontier}")
-    # verdict fold (ADR-0114): dispatch joins its children worst-of; zero children is fail
+    # verdict fold: dispatch joins its children worst-of; zero children is fail
     children = [x["child"] for x in accepted.values()]
-    if not children: dres, reason = "fail", "no_dispatch"
+    if not children: dres = "fail"
     else:
         res = []
         for c in children:
             o = outcomes.get(c, [])
             res.append("fail" if not o else o[-1]["outcome"])
             if o and any(v != "pass" for v in o[-1].get("checks", {}).values()): res[-1] = "fail"
-        dres = next((w for w in WORST if w in res), "pass"); reason = None
+        dres = next((w for w in WORST if w in res), "pass")
     rec = outcomes.get(d["name"], [{}])[-1].get("outcome")
     if rec and rec != dres: errs.append(f"dispatch outcome {rec} differs from the fold {dres}")
     verdict = fold([e for e in events if e["event"] != "verdict"]).verdict

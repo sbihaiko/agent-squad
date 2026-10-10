@@ -1,4 +1,4 @@
-// The page chrome (ADR-0124): a collapsible side panel, a Run | Edit mode, a verdict chip, and the toast. No run logic lives here.
+// The page chrome: a collapsible side panel, a Run | Edit mode, a verdict chip, and the toast. No run logic lives here.
 const UI_KEY = "agent-squad-dashboard-ui";
 const UI = (() => { try { return JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { return {}; } })();
 function saveUI() { try { localStorage.setItem(UI_KEY, JSON.stringify(UI)); } catch (e) { /* no storage: the choice lasts this page only */ } }
@@ -13,6 +13,9 @@ function sideOpen() { return !document.body.classList.contains("noside"); }
 function openSide() { if (!sideOpen()) setSide(true, true); }
 setSide(!!UI.side, true);
 $("b-panel").addEventListener("click", () => setSide(!sideOpen()));
+// The panel is a popup: a click on the dimmed page behind it, or Escape, closes it.
+document.addEventListener("click", (e) => { if (e.target === document.body && sideOpen()) setSide(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sideOpen() && !e.defaultPrevented) setSide(false); });
 $("vchip").addEventListener("click", () => setSide(!sideOpen()));
 
 // Run mode reads a run; Edit mode shows every control that changes the graph. A loaded run opens in Run mode, a bare page in Edit mode, until the person picks.
@@ -41,7 +44,7 @@ function renderChrome() {
     chip.className = VERDICT_CLASS[st.state] || "v-bad";
     chip.title = v && v.reasons.length ? core.causeSummary(v.reasons) : "The run's verdict. Click to open the details.";
   }
-  // A record cut at a bad line shows its valid prefix under a banner that names the line (ADR-0126). The banner takes height from the map.
+  // A record cut at a bad line shows its valid prefix under a banner that names the line. The banner takes height from the map.
   const rb = $("recbad"), bad = S.events ? S.recordBad : null, shown = !rb.hidden;
   rb.hidden = !bad;
   if (bad) rb.textContent = `Record line ${bad.line} is not JSON (${bad.message}). Showing the ${bad.shown} events before it; the line and everything after it are not shown.`;

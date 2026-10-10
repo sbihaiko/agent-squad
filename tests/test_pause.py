@@ -1,4 +1,4 @@
-"""Ticket #107: pause and resume a launched run through a control file (ADR-0128)."""
+"""Ticket #107: pause and resume a launched run through a control file."""
 import pytest
 
 from squad.adapter import ScriptedAdapter

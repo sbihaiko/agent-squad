@@ -1,4 +1,4 @@
-// Dashboard core module: The totals bar and the top bar of issue progress. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The totals bar and the top bar of issue progress.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
@@ -20,7 +20,7 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
       wall: num(start.ts) ? (num(now) && !v ? now - start.ts : num(end.ts) ? end.ts - start.ts : null) : null };
   }
 
-  // The bar's cells as data: a label, the text, and a tooltip that names the rule. Unknown tokens read "unknown", never 0 (ADR-0012, spec #70).
+  // The bar's cells as data: a label, the text, and a tooltip that names the rule. Unknown tokens read "unknown", never 0.
   function totalsCells(t) {
     const f = fmt, unk = "unknown", floor = t.partial_tokens ? "≥ " : "";
     return [
@@ -37,12 +37,22 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
     ];
   }
 
-  // ---- The top bar: the issues the run landed, of the issue set (issue #97) ----
+  // ---- The top bar: the issues the run landed, of the issue set ----
   // The record carries no issue-set size, so `total` comes from the run folder the page was given (the page counts
   // `target/issues/*.md` and passes the number in). `done` is the distinct issues a `land` event landed, read from
   // the record's own ledger: no new event type. Both figures stay null-ish when the record shows nothing.
-  function issueProgress(events, total) {
-    const done = new Set(events.filter((e) => e.event === "land" && e.outcome === "pass").map((e) => e.node)).size;
+  function issueProgress(events, total, held) {
+    const lands = new Set(events.filter((e) => e.event === "land" && e.outcome === "pass").map((e) => e.node));
+    // A one-issue run lands through the merge_land action, which logs no `land` event. Its issue is delivered when
+    // the merge passed and the run completed, so the gate after the merge held; the set is that one issue, not the folder's.
+    const merged = events.some((e) => e.event === "outcome" && e.outcome === "pass" && e.effect && e.effect.name === "merge_land");
+    if (lands.size === 0 && (merged || (num(held) && held > 0))) {
+      const done = merged && events.some((e) => e.event === "verdict" && e.verdict === "completed") ? 1 : 0;
+      // A chained run starts from a tree that already holds `held` issues: the strip counts them, of the folder's set.
+      if (num(held) && held > 0 && num(total)) return { done: held + done, total, text: `${held + done} of ${total} issues` };
+      return { done, total: 1, text: `${done} of 1 issue` };
+    }
+    const done = lands.size;
     const t = num(total) ? total : null;
     return { done, total: t, text: t === null ? `${done} landed` : `${done} of ${t} issue${t === 1 ? "" : "s"}` };
   }
@@ -52,7 +62,7 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
   function progressCells(p) {
     if (p.total === null) return [];
     return [{ id: "issues", label: "Issues", text: p.text,
-      title: "Issues the run landed, of the issue set in the run folder. A land event marks one landed issue; the run folder's target/issues holds the set. The record itself carries no issue count." }];
+      title: "Issues the run landed, of the issue set in the run folder. A land event marks one landed issue, and a one-issue run counts its passing merge once the run completes; the run folder's target/issues holds the set of a multi-issue run. The record itself carries no issue count." }];
   }
 
   // One place for the unit and the dash. A missing value is a dash, never a zero.

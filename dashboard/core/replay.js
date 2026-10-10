@@ -1,8 +1,8 @@
-// Dashboard core module: The replay cursor. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The replay cursor.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function replayModule({ num, orNull }) {
-  // ---- The replay cursor (ticket #81, decision #63) ----
+  // ---- The replay cursor ----
   // The cursor is one record `pos`. It folds nothing into the record and keeps no index: events are in file order, so `pos` is sorted and a
   // binary search finds the cut. A null cursor means "pinned to the end": a live run keeps the cursor there until the owner moves it.
   function countUpTo(events, pos) {

@@ -1,4 +1,4 @@
-"""Child processes behind an adapter: stop the whole process group when the call is cancelled (ADR-0051, ADR-0102 rule 4).
+"""Child processes behind an adapter: stop the whole process group when the call is cancelled.
 
 A deadline cancels the calling task. The child and every process it started must be gone when the
 teardown ends, so no orphan keeps spending. The teardown time is an engine constant, measured at about
@@ -14,21 +14,6 @@ import anyio
 from squad.adapter import AdapterError, CallResult
 
 TEARDOWN_S = 5.0
-
-
-def clean_env(environ):
-    """A copy of the environment without a virtualenv.
-
-    A gate command that calls `python3` must reach the project's python3, not the orchestrator's virtualenv. `uv run`
-    puts its own venv first on PATH and sets VIRTUAL_ENV, and the target project's tools are elsewhere. Seen in the
-    first live subject run (2026-09-30) and again under `uv run pytest`, where `python3 -m pytest` inside a gate found
-    no pytest at all.
-    """
-    env = dict(environ)
-    venv = env.pop("VIRTUAL_ENV", None)
-    if venv and "PATH" in env:
-        env["PATH"] = ":".join(p for p in env["PATH"].split(":") if not p.startswith(venv))
-    return env
 
 
 def _signal_group(proc, sig):

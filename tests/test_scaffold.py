@@ -28,7 +28,7 @@ def test_a_read_only_role_gets_no_write_tool_and_the_actor_does():
 
 def test_caps_come_from_the_limits_block_and_the_name_can_differ_from_the_role():
     n = scaffold.agent_node(CFG, "actor", "actor_2")
-    assert n["name"] == "actor_2" and n["budget"] == {"turns": {"min": 1, "max": 30}, "spend": {"min": 0.05, "max": 2.0}} and n["deadline"] == 600
+    assert n["name"] == "actor_2" and n["budget"] == {"stalls": {"min": 1, "max": 5}, "spend": {"min": 0.05, "max": 2.0}} and n["deadline"] == 600
 
 
 def test_the_graph_hash_covers_the_copied_values_so_a_later_defaults_edit_changes_no_graph():
@@ -56,8 +56,9 @@ async def test_the_adapter_appends_the_role_text_after_the_shared_contract():
     seen = []
     a = SdkAdapter.from_defaults(CFG, query=stub([ResultMessage(result="{}")], seen), options_cls=Options, hook_cls=lambda hooks, timeout: (hooks, timeout))
     await a.call(request(instructions="ROLE TEXT"))
+    shared = (defaults.ROOT / "prompts/_contract.md").read_text() + "\n" + defaults.AUTONOMY_FRAGMENT.read_text()   # autonomy is on by default
     sp = seen[0][1].kw["system_prompt"]
-    assert sp["preset"] == "claude_code" and sp["append"] == (defaults.ROOT / "prompts/_contract.md").read_text() + "\n\nROLE TEXT"
+    assert sp["preset"] == "claude_code" and sp["append"] == shared + "\n\nROLE TEXT"
     seen.clear()
     await a.call(request())
-    assert seen[0][1].kw["system_prompt"]["append"] == (defaults.ROOT / "prompts/_contract.md").read_text()
+    assert seen[0][1].kw["system_prompt"]["append"] == shared

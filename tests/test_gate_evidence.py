@@ -1,11 +1,12 @@
-"""Ticket #91: a failed gate outcome carries the tail of the output that explains it (ADR-0100 amendment).
+"""Ticket #91: a failed gate outcome carries the tail of the output that explains it.
 
-The record keeps the evidence. No agent prompt reads it: the gate artifact and the ledger stay small (ADR-0113 rule 3).
+The record keeps the evidence. No agent prompt reads it: the gate artifact and the ledger stay small.
 """
 import pytest
 
-from squad.gates import EVIDENCE_TAIL, GateInput, run_check
+from squad.gates import GateInput, run_check
 from squad.record import read
+from squad.workcmd import EVIDENCE_TAIL
 from tests.test_dispatch import CHILD, make, req, routed
 
 

@@ -1,4 +1,4 @@
-// --- save, draft copy, hash chip, and the changed-file stop (decision #62, ticket #75) ---
+// --- save, draft copy, hash chip, and the changed-file stop ---
 const PICKER = !!window.showOpenFilePicker;
 const JSON_TYPES = [{ description: "JSON", accept: { "application/json": [".json"] } }];
 const stampOf = async (h) => { const f = await h.getFile(); return { lastModified: f.lastModified, text: await f.text() }; };
@@ -74,7 +74,7 @@ async function offerDraft() {
   $("b-discard").onclick = async () => { S.offerPending = null; box.hidden = true; try { await draftIdb("readwrite", (st) => st.delete(S.name)); } catch (e) { noRecovery(e); } setStatus("Discarded the draft."); };
 }
 
-// One save path for the graph file and the layout file. A save stops for a file conflict only, never for a validation error (ADR-0111 rule 4).
+// One save path for the graph file and the layout file. A save stops for a file conflict only, never for a validation error.
 const TARGETS = {
   graph: { label: "graph", handle: () => S.handle, stamp: () => S.stamp, setStamp: (v) => { S.stamp = v; }, text: () => core.saveText(S.text), copyName: () => S.name + ".copy.graph.json", done: async (text) => { S.baseText = text; S.baseLayout = JSON.stringify(S.layout); try { S.baseHash = (await core.hashChip(text)).full; } catch (e) { S.baseHash = null; } },
     reload: async (cur, h) => { const keep = S.layout; try { await draftIdb("readwrite", (st) => st.delete(S.name)); } catch (e) { noRecovery(e); } if (await loadGraph(cur.text, h.name)) { S.handle = h; S.stamp = cur; S.layout = keep && Object.keys(keep).length ? { ...S.layout, ...keep } : S.layout; refreshMode(); render(); } } },

@@ -1,33 +1,44 @@
-"""Tests that load the page: headless Chrome, the served source, and the push stream (#86, #106, #118)."""
+"""Tests that load the page: ego-browser, the served source, and the push stream."""
 import json
-import os
 import re
-import signal
+import shutil
 import subprocess
-from pathlib import Path
+import uuid
 
 import pytest
 
 from tests.dashboard_helpers import OUT, PAGE_SRC, run_node
 from tests.helpers import DESIGN, five, node
 
-# --- the real page, in headless Chrome when it exists (the parity guard above never needs it) ---
-CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+# --- the real page, in ego-browser when it exists (the parity guard above never needs it) ---
+EGO = shutil.which("ego-browser")
+
+EGO_SCRIPT = """
+const task = await taskSpace(SPACE_NAME);
+try {
+  const page = task.page("p1");
+  await page.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });   // a tab in the background still counts as focused, so :focus-visible rings draw
+  await page.goto(FILE_URL);
+  let title = "";
+  for (let i = 0; i < 60 && !title.startsWith("RESULT "); i++) {
+    title = await page.evaluate(() => document.title);
+    if (!title.startsWith("RESULT ")) await new Promise(r => setTimeout(r, 250));
+  }
+  console.log("EGO_TITLE:" + title);
+} finally {
+  try { await task.page("p1").evaluate(async (tag) => { for (const d of await indexedDB.databases()) if (d.name.startsWith(tag)) indexedDB.deleteDatabase(d.name); }, DB_TAG); } catch (e) {}
+  await task.finish({ keep: [] });
+}
+"""
 
 
-def _chrome_dump(page):
-    """Headless Chrome on the page, one retry on a hang. A fresh profile hangs every call here, so the default one is used; the whole process group is killed on a hang so no
-    helper keeps the pipe open. The `chrome` marker also makes `_one_chrome` queue the tests."""
-    for attempt in (1, 2):
-        proc = subprocess.Popen([str(CHROME), "--headless=new", "--disable-gpu", "--virtual-time-budget=5000", "--dump-dom", page.as_uri()],
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
-        try:
-            return proc.communicate(timeout=9)[0]
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate()
-            if attempt == 2:
-                raise
+def _ego_title(page, tag):
+    """The page's final title from ego-browser: one new Agent-owned task space per call, so calls run side by side. The space holds a local file only and is closed on exit."""
+    head = f"const SPACE_NAME = {json.dumps(f'agent-squad test {uuid.uuid4().hex}')}; const FILE_URL = {json.dumps(page.as_uri())}; const DB_TAG = {json.dumps(tag)};"
+    run = subprocess.run([EGO, "nodejs"], input=head + EGO_SCRIPT, capture_output=True, text=True, timeout=30)
+    out = run.stdout + run.stderr
+    m = re.search(r"^EGO_TITLE:(.*)$", out, re.M)
+    return m.group(1) if m else ""
 
 
 def drive(tmp_path, steps):
@@ -36,19 +47,22 @@ def drive(tmp_path, steps):
              'const i=document.getElementById(id);i.files=dt.files;i.dispatchEvent(new Event("change"));};'
              'const wait=()=>new Promise(r=>setTimeout(r,200));' + steps + '})();</script></body>')
     p = tmp_path / "probe.html"
-    p.write_text(OUT.read_text().replace("</body>", probe))
-    out = _chrome_dump(p)
-    m = re.search(r"<title>RESULT (.*?)</title>", out, re.S)
-    assert m is not None, "the headless probe produced no RESULT title"
-    return json.loads(m.group(1).replace("&quot;", '"').replace("&amp;", "&"))
+    # A file page shares one storage origin with every other file page in the browser: each probe gets an empty in-memory localStorage and its own IndexedDB names.
+    tag = uuid.uuid4().hex
+    store = ('<script>(()=>{const m=new Map();Object.defineProperty(window,"localStorage",{value:{getItem:k=>m.has(k)?m.get(k):null,setItem:(k,v)=>m.set(k,String(v)),removeItem:k=>m.delete(k),clear:()=>m.clear()}});'
+             f'const real=window.indexedDB;Object.defineProperty(window,"indexedDB",{{value:{{open:(n,v)=>real.open("{tag}"+n,v),deleteDatabase:n=>real.deleteDatabase(n),databases:()=>real.databases()}}}});}})();</script>')
+    p.write_text(OUT.read_text().replace("<head>", "<head>" + store, 1).replace("</body>", probe))
+    title = _ego_title(p, tag)
+    assert title.startswith("RESULT "), "the ego-browser probe produced no RESULT title"
+    return json.loads(title[len("RESULT "):])
 
 
-def needs_chrome(fn):
-    """Skip without Chrome; mark the test `chrome` so the xdist workers take turns (tests/conftest.py)."""
-    return pytest.mark.chrome(pytest.mark.skipif(not CHROME.exists(), reason="Chrome is needed to drive the page")(fn))
+def needs_ego(fn):
+    """Skip without ego-browser. No lock: each call has its own task space."""
+    return pytest.mark.skipif(EGO is None, reason="ego-browser is needed to drive the page")(fn)
 
 
-@needs_chrome
+@needs_ego
 def test_the_page_loads_the_five_phase_fixture_from_disk_and_shows_every_node(tmp_path):
     text = (DESIGN / "five-phases.graph.json").read_text()
     got = drive(tmp_path, f'put("f-graph",{json.dumps(text)},"five-phases.graph.json");await wait();'
@@ -57,7 +71,7 @@ def test_the_page_loads_the_five_phase_fixture_from_disk_and_shows_every_node(tm
     assert "valid" in got["side"] and "Served lists" in got["side"] and "never blocked" in got["side"]
 
 
-@needs_chrome
+@needs_ego
 def test_the_page_marks_a_bad_node_never_blocks_save_and_refuses_a_gate_edit(tmp_path):
     d = five()
     del node(d, "scout")["budget"]
@@ -73,7 +87,7 @@ def test_the_page_marks_a_bad_node_never_blocks_save_and_refuses_a_gate_edit(tmp
     assert "read-only" in got["msg"]
 
 
-# --- the run that a loopback server serves (ticket #86, ADR-0118) ---
+# --- the run that a loopback server serves ---
 
 def test_the_served_source_reads_the_record_and_the_graph_by_path_and_is_live():
     r = run_node([{"op": "httpsource", "name": "run-a", "files": {"run/record.jsonl": "REC", "run/graph.json": "GRAPH"}}])[0]
@@ -94,7 +108,7 @@ def test_a_page_served_over_http_loads_its_run_with_no_folder_click_and_the_file
     assert "showDirectoryPicker" in src and "restoreFolder" in src   # the file:// path stays
 
 
-# --- the served page follows a run by push (ticket #106, ADR-0122) ---
+# --- the served page follows a run by push ---
 
 def _ev(pos, event="progress", **kw):
     return {"pos": pos, "event": event, **kw}

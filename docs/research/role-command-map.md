@@ -1,6 +1,6 @@
 # Role to command map
 
-This map names the tools and controls each agent role in `prompts/` should reach. It is a proposal. `config/agent-defaults.yaml` does not use it yet (ticket #46).
+This map names the tools and controls each agent role in `prompts/` should reach. It is a proposal. `config/agent-defaults.yaml` does not use it yet.
 Source: [agent-sdk-command-map.md](agent-sdk-command-map.md) sections 2 and 3, and [claude-agent-sdk.md](claude-agent-sdk.md) sections 9 and 16. Skills per role are in [role-skill-map.md](role-skill-map.md).
 Permission mode is `bypassPermissions`, so `allowed_tools` restricts nothing. A role gets a tool by omission from `disallowed_tools`.
 
@@ -49,7 +49,7 @@ These are client methods the engine uses. An agent never calls them.
 | `get_context_usage` | Record context use at each call end. It gives data for the compaction log. |
 | `interrupt`, `stop_task` | Enforce the per-call deadline without waiting for the turn. |
 | `rewind_files` | Revert an actor's files when a scope or security gate fails. Needs `enable_file_checkpointing: true` on `actor`. |
-| `set_model` | Not needed. A model change applies at the next entry as a new call (ADR-0103 rule 6). |
+| `set_model` | Not needed. A model change applies at the next entry as a new call. |
 
 ## Built-in commands
 

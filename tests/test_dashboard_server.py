@@ -1,4 +1,4 @@
-"""The read-only loopback server of `squad dashboard` (ticket #86, ADR-0118): what a client sees, never how the server is built."""
+"""The read-only loopback server of `squad dashboard`: what a client sees, never how the server is built."""
 import http.client
 import json
 import os
@@ -65,8 +65,16 @@ def test_it_serves_the_page_the_record_and_the_graph_of_one_run(served):
     assert st == 200 and json.loads(data)["name"] == "run-a"
 
 
+def test_the_info_counts_the_issues_a_chained_run_started_with(tmp_path):       # #157
+    assert ds.held_count(tmp_path) == 0
+    (tmp_path / "holds.json").write_text(json.dumps({"held": [1, 2, 4]}))
+    assert ds.held_count(tmp_path) == 3
+    (tmp_path / "holds.json").write_text("not json")
+    assert ds.held_count(tmp_path) == 0
+
+
 def test_the_info_names_the_issue_set_the_run_folder_holds(tmp_path):
-    """The record carries no issue-set size, so the page reads it from the run folder (issue #97): target/issues."""
+    """The record carries no issue-set size, so the page reads it from the run folder: target/issues."""
     d = tmp_path / "run-i"
     (d / "target" / "issues").mkdir(parents=True)
     for n in range(3):
@@ -246,10 +254,10 @@ def test_the_server_module_has_no_route_that_writes_or_starts_a_run():
         assert banned not in src.replace("tmp.write_text", "")
 
 
-# --- the stream route: a client sees the events the record gains (ticket #105, ADR-0122) ---
+# --- the stream route: a client sees the events the record gains ---
 
 def append(run, *events):
-    """Append events to the record the way the run does: a whole-file rewrite by atomic replace (ADR-0030)."""
+    """Append events to the record the way the run does: a whole-file rewrite by atomic replace."""
     p = run / "record.jsonl"
     text = (p.read_text() if p.exists() else "") + "".join(json.dumps(e) + "\n" for e in events)
     tmp = p.parent / (p.name + ".tmp")

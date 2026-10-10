@@ -1,6 +1,9 @@
 """One-off: turn the v5 catalog entries into plain issue files. Drops Touches, Independence, Units (the answer key)."""
-import json, re, sys
+import json
+import re
+import sys
 from pathlib import Path
+
 cat = Path(sys.argv[1]).read_text()
 man = json.load(open(sys.argv[2]))["tasks"]
 out = Path(sys.argv[3]); out.mkdir(parents=True, exist_ok=True)

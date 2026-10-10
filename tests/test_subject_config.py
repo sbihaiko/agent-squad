@@ -1,6 +1,6 @@
 """The subject model configuration (config/subject.yaml) and the graphs that read it.
 
-Guards: the owner's ruling of 2026-10-02 (claude-sonnet-5-5 only) is the shipped file's value; a missing or
+Guards: the owner's ruling (deepseek-flash only) is the shipped file's value; a missing or
 incomplete file refuses the run rather than defaulting a model; both subject graphs take every model they name from
 the file, so a change of model is a change of one file.
 """
@@ -27,8 +27,8 @@ def cfg_file(tmp_path, **over):
 
 def test_the_shipped_config_names_the_owner_ruling():
     cfg = subject.load_config(ROOT / "config" / "subject.yaml")
-    assert cfg["issue"]["model"] == "claude-sonnet-5-5"
-    assert cfg["router"]["model"] == "claude-sonnet-5-5" and cfg["router"]["child_model"] == "claude-sonnet-5-5"
+    assert cfg["issue"]["model"] == "deepseek-flash"
+    assert cfg["router"]["model"] == "deepseek-flash" and cfg["router"]["child_model"] == "deepseek-flash"
 
 
 def test_a_missing_config_refuses(tmp_path):
@@ -68,7 +68,7 @@ def test_the_shipped_router_graph_allows_only_an_off_catalog_child_model():
     cfg = subject.load_config(ROOT / "config" / "subject.yaml")
     doc = subject.apply_router_models(json.loads((ROOT / "docs" / "design" / "router.graph.json").read_text()), cfg)
     disp = next(n for n in doc["nodes"] if n["kind"] == "dispatch")
-    assert disp["allow"]["models"] == ["claude-sonnet-5-5"]
+    assert disp["allow"]["models"] == ["deepseek-flash"]
 
 
 def test_the_spawn_example_names_the_configured_child_model(tmp_path):
@@ -76,3 +76,11 @@ def test_the_spawn_example_names_the_configured_child_model(tmp_path):
     cfg = subject.load_config(cfg_file(tmp_path))
     ex = json.loads(subject.spawn_example(cfg))["spawns"][0]
     assert (ex["model"], ex["effort"]) == ("m-child", "eff-child")
+
+
+def test_the_shipped_config_sets_no_spend_cap_and_the_example_asks_for_none():
+    cfg = subject.load_config(ROOT / "config" / "subject.yaml")
+    assert subject.no_spend_cap(cfg)
+    assert "spend" not in json.loads(subject.spawn_example(cfg))["spawns"][0]
+    cfg["router"]["spend_cap"] = "on"
+    assert not subject.no_spend_cap(cfg) and json.loads(subject.spawn_example(cfg))["spawns"][0]["spend"] == 1.0

@@ -1,6 +1,6 @@
-"""The repository is left clean: no worktree survives the work it was made for (ADR-0120).
+"""The repository is left clean: no worktree survives the work it was made for.
 
-A worktree made for a piece of work is removed when that work merges into `main` (ADR-0116), and its branch goes
+A worktree made for a piece of work is removed when that work merges into `main`, and its branch goes
 with it. A worktree whose HEAD holds no commit that `main` does not already have is finished work left behind:
 it costs a checkout, it confuses the next reader, and it can hide a stale build. Twelve such worktrees sat under
 `.claude/worktrees/` on 2026-10-02, every one of them fully merged.
@@ -8,7 +8,7 @@ it costs a checkout, it confuses the next reader, and it can hide a stale build.
 The main checkout and the worktree this test runs in are exempt. The current worktree is the one being worked in,
 and a fresh one holding no commit yet is not stale — it is in use.
 
-Guard for ADR-0120.
+Guard for the clean-repository rule.
 """
 import subprocess
 from pathlib import Path

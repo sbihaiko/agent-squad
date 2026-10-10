@@ -3,7 +3,7 @@
 Pinned to `claude-agent-sdk` **0.2.161**. It bundles Claude Code CLI **2.1.284** (`_version.py`, `_cli_version.py`).
 
 Install it with the `sdk` extra (`uv sync --extra sdk`). The engine and its tests run without it; `squad/sdk_adapter.py` imports the SDK late.
-Researched on 2026-09-29. Language: US English, Concise STE100 (ADR-0001).
+Researched on 2026-09-29. Language: US English, Concise STE100.
 
 ## How to read this note
 
@@ -228,7 +228,7 @@ async def stop_gate(input_data, tool_use_id, context):
 hooks = {"Stop": [HookMatcher(hooks=[stop_gate])]}
 ```
 
-**Design rule (ADR-0012, ADR-0018).** A Stop hook is a stop condition for the agent. It is not the pipeline gate. Run the real gate in Python after `ResultMessage`. Use Stop only for cheap self-checks.
+**Design rule.** A Stop hook is a stop condition for the agent. It is not the pipeline gate. Run the real gate in Python after `ResultMessage`. Use Stop only for cheap self-checks.
 
 ### 6.4 `PreToolUse`
 
@@ -302,7 +302,7 @@ Fields in 0.2.161: `description`, `prompt`, `tools`, `disallowedTools`, `model`,
 | Pattern | How | Fit |
 |---|---|---|
 | Critic as subagent | Actor session has `agents={"critic": ...}`. The actor calls it. | Cheap. The actor sees the critic text. The critic cannot be forced to run. |
-| Critic as separate `query()` | Python calls the critic with the actor output as its prompt. Python owns the loop and the verdict. | Deterministic. Recommended for gates (ADR-0012). Costs one more session. |
+| Critic as separate `query()` | Python calls the critic with the actor output as its prompt. Python owns the loop and the verdict. | Deterministic. Recommended for gates. Costs one more session. |
 
 Tested critic-as-subagent run: [P:final4]. The actor asked the `critic` agent, then returned a Pydantic-valid verdict in `structured_output`. The Stop gate ran twice (`[False, True]`). Cost US$0.054, 5 turns.
 
@@ -441,7 +441,7 @@ Rules:
 
 - Test `is_error`, not only `subtype`. [P:p4] saw `subtype="success"` with `is_error=True` and `terminal_reason="prompt_too_long"`.
 - `terminal_reason` values seen: `completed`, `max_turns`, `budget_exhausted`, `prompt_too_long`. Docs also list `api_error`, `aborted_streaming`, `aborted_tools`. [P:p1,p2,p4,dbg2] [D:python]
-- Map each outcome to one verdict in one module (ADR-0019). Map needs-human separately (ADR-0029).
+- Map each outcome to one verdict in one module. Map needs-human separately.
 
 ## 14. Concurrency
 
@@ -508,13 +508,13 @@ Rules:
 
 ## 18. Implications for agent-squad
 
-Design stance: Python owns the pipeline, the loops, and every gate. The SDK runs one agent session per unit of work. This follows ADR-0012, ADR-0018, ADR-0019, and ADR-0025.
+Design stance: Python owns the pipeline, the loops, and every gate. The SDK runs one agent session per unit of work.
 
 ### 18.1 Phase mapping
 
 | Phase | Session shape | SDK features |
 |---|---|---|
-| Scout | Read-only, one `query()`. | `permission_mode="dontAsk"`, `allowed_tools=["Read","Grep","Glob"]`, `output_format` for a findings schema, `effort="low"`, small `max_budget_usd`. Use subagents for wide reads (ADR-0025). |
+| Scout | Read-only, one `query()`. | `permission_mode="dontAsk"`, `allowed_tools=["Read","Grep","Glob"]`, `output_format` for a findings schema, `effort="low"`, small `max_budget_usd`. Use subagents for wide reads. |
 | Spec | Actor writes the spec. Critic reviews. | `output_format` (spec schema). Critic as separate `query()`. `resume=` to revise in the same context. |
 | Decompose | One structured call. | `output_format` (task list schema). Validate with Pydantic. Python checks the graph. |
 | Execute | One session per task, in a worktree `cwd`. | `permission_mode="acceptEdits"`, scoped `allowed_tools` (`Bash(uv run pytest *)`), `disallowed_tools`, `PreToolUse` hook for path guards, `enable_file_checkpointing`, `max_turns`, `max_budget_usd`. |
@@ -535,11 +535,11 @@ Design stance: Python owns the pipeline, the loops, and every gate. The SDK runs
 | Pipeline gate (pass or fail a phase) | Python code after the last `ResultMessage`. Inputs: `structured_output`, real command exit codes, `is_error`. |
 | Self-check before the agent stops | `Stop` hook with `stop_hook_active` guard. |
 | Tool-level guard (paths, commands) | `PreToolUse` hook (runs first, cannot be bypassed by modes) and `disallowed_tools`. |
-| Human approval (needs-human, ADR-0029) | `can_use_tool` or `PreToolUse` returning `defer`. Then return the needs-human exit code. |
+| Human approval (needs-human) | `can_use_tool` or `PreToolUse` returning `defer`. Then return the needs-human exit code. |
 | Spend limit | `max_budget_usd` per session plus a Python sum per run. |
-| Live-write approval (ADR-0024) | `PreToolUse` deny by default. Allow only with a recorded grant. |
+| Live-write approval | `PreToolUse` deny by default. Allow only with a recorded grant. |
 
-Tag a red gate as a defect, not a retry target (ADR-0018). Retry only on `ResultError` with a transient `api_error_status`.
+Tag a red gate as a defect, not a retry target. Retry only on `ResultError` with a transient `api_error_status`.
 
 ### 18.4 Playground
 
@@ -575,7 +575,7 @@ This block is a starting point. It was not run as one unit.
 2. Root cause of "Prompt is too long" (G6) with `haiku` and a restricted `tools` list. Is it a CLI bug, a tool-search interaction, or the alias? Test with pinned full model IDs.
 3. Nested slash commands (finding 1b). Test with a project skill that echoes `$ARGUMENTS`.
 4. `disable-model-invocation` with the Skill tool. Re-probe on CLI 2.1.284 to confirm the docs.
-5. Wall-clock deadlines (ADR-0051). Is `asyncio.timeout` plus `client.interrupt()` enough? Does cancelling `query()` kill the subprocess cleanly?
+5. Wall-clock deadlines. Is `asyncio.timeout` plus `client.interrupt()` enough? Does cancelling `query()` kill the subprocess cleanly?
 6. Are parallel `query()` calls safe at scale? Check process count, file locks on `~/.claude`, and session file races.
 7. Which `HookMatcher.timeout` default is right: 60 s or 600 s (G12)?
 8. Does the Python `StopHookInput` payload include `last_assistant_message` at runtime? Log one payload.

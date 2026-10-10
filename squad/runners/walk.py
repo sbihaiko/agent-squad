@@ -1,4 +1,4 @@
-"""The child walk of a container, once: loop and each both read the reserved `next` words here (ADR-0100)."""
+"""The child walk of a container, once: loop and each both read the reserved `next` words here."""
 
 
 def next_word(ctx, node, res):

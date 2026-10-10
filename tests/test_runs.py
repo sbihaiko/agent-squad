@@ -1,4 +1,4 @@
-"""Run folder resolution for `squad dashboard` (ticket #83). Resolves a reference to one run folder; it never starts a run."""
+"""Run folder resolution for `squad dashboard`. Resolves a reference to one run folder; it never starts a run."""
 import json
 import os
 from pathlib import Path

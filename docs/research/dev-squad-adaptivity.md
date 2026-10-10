@@ -34,7 +34,7 @@ Some items can be modeled either way. The note says so where it matters.
 3. Everything else is a node-setting change: loop caps, model choice, prompt blocks from memory, and gate parameters. Most of these settings are constants in code. Only 17 keys are configurable (section 3).
 4. The only part of the graph that is already data is the task DAG. The Decompose node returns `tasks`, `batches`, and `dependsOn` under a schema (`W:2263-2300`). The engine runs it. The phase graph above it is not data.
 5. Defects that trace to "pipeline as code" are in section 5. The largest classes are: one fact in many places, a sandbox that forces duplicate code, settings with no consumer, and gates wired to state that does not exist yet.
-6. dev_squad adapts by skipping review nodes (tier routing). The map says gates never adapt (map #1, ADR-0012, ADR-0018). Section 7 lists this as a question for the schema.
+6. dev_squad adapts by skipping review nodes (tier routing). The map says gates never adapt (map #1). Section 7 lists this as a question for the schema.
 
 ## 2. Run-time adaptations
 

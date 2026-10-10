@@ -1,4 +1,4 @@
-"""The runner registry covers every node kind in the graph (ticket #121)."""
+"""The runner registry covers every node kind in the graph."""
 from squad.graph import KINDS
 from squad.runners import default_registry
 
@@ -54,3 +54,30 @@ def test_child_execution_lives_in_the_children_module_and_the_engine_does_not(  
     assert len(body) < 30, f"the child session is {len(body)} lines"
     for step in ("prepare", "request", "close", "settle", "check", "worktree", "snapshot"):
         assert callable(getattr(Children, step))
+
+
+def test_no_runner_reaches_the_engine_through_ctx_private():  # ticket #149
+    """A runner reads the run through the RunCtx interface; only ctx.py holds the engine (`_e`)."""
+    import pathlib
+    import re
+
+    import squad.runners as pkg
+    root = pathlib.Path(pkg.__file__).parent
+    bad = [f"{p.name}:{n}" for p in sorted(root.glob("*.py")) if p.name != "ctx.py"
+           for n, line in enumerate(p.read_text().splitlines(), 1) if re.search(r"\._e\b", line)]
+    assert not bad, f"runners read ctx._e: {bad}"
+
+
+def test_the_run_ctx_names_what_the_dispatch_runner_needs():  # ticket #149
+    from types import SimpleNamespace
+
+    from squad.runners.ctx import RunCtx
+
+    class Eng:
+        dispatch, runs, dry, entries = "D", "R", True, {("a", None): 2}
+        outcomes = SimpleNamespace(event=lambda n, e, i: {"outcome": "pass"} if (n, e, i) == ("c", 1, None) else None)
+    ctx = RunCtx(Eng())
+    assert (ctx.dispatch, ctx.runs, ctx.dry) == ("D", "R", True)
+    assert ctx.entry_count("a", None) == 2 and ctx.entry_count("b", None) == 0
+    assert ctx.outcome_event("c", 1, None) == {"outcome": "pass"}
+    assert ctx.outcome_event("c", 2, None) is None

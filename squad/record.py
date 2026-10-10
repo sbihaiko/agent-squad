@@ -1,4 +1,4 @@
-"""The run record: one append-only JSONL file, one atomic write per event (ADR-0102 rule 8, ADR-0030).
+"""The run record: one append-only JSONL file, one atomic write per event.
 
 A write forms the whole new content, writes a temporary file in the same directory, and renames it.
 A reader sees the old file or the new file, never a partial line. The record is the only run truth.
@@ -7,8 +7,10 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
+# `outcome.cap` is the spend granted to the call, in US dollars (`res.amount`); it is not a turn cap.
 REQUIRED = {
     "run_start": ["run_id", "graph_name", "graph_hash", "engine_options", "root", "plan"],
     "call_start": ["node", "entry", "session", "pid", "limit", "started_at"],
@@ -26,10 +28,16 @@ REQUIRED = {
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
     "paused": ["node", "scope", "held", "completed"],
     "resume": ["run_id", "graph_hash", "frontier", "invoker", "engine_options", "preflight"],
+    "autonomy_resume": ["count", "source"],   # ticket #182: one per automatic resume; `count` is its number, `source` who decided (the autonomy skill)
     "diagnostic": ["source", "node", "entry", "payload"],
     "verdict": ["verdict", "exit_code", "reasons", "remains", "folded"],
 }
 OUTCOMES = {"pass", "fail", "deadline", "needs-human"}
+
+
+def new_run_id():
+    """The one source of a run id: the launch module and the engine default both call it."""
+    return f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
 
 class RecordError(Exception):
@@ -76,7 +84,7 @@ def read(path):
 
 
 def atomic_write(path, content):
-    """Replace a file with new content so that a reader never sees a partial file (ADR-0030 rules 1, 2)."""
+    """Replace a file with new content so that a reader never sees a partial file."""
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:

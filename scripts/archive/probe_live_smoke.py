@@ -10,7 +10,13 @@ Modes:
   deadline  a call killed by anyio.fail_after; print whether any cost was visible and whether the CLI child is gone
 Owner grant in chat: OAuth runs use usage limits, so Sonnet 5.5 at medium effort; the $2 cap per call is a guard only. Auth: the CLI login (OAuth).
 """
-import json, os, subprocess, sys, tempfile, time
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
 

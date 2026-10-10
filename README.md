@@ -12,7 +12,7 @@ The workflow is data you can read, edit, and review. Code enforces every limit.
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-orange)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Commands](#commands) · [The dashboard](#the-dashboard) · [Docs](#docs)
+[Quick start](#quick-start) · [Field quickstart](docs/quickstart.md) · [How it works](#how-it-works) · [Commands](#commands) · [The dashboard](#the-dashboard) · [Docs](#docs)
 
 <img src="docs/assets/dashboard.png" alt="The run dashboard after a finished run: 24 of 24 issues landed on the subject project, $8.54 of a $36 cap" width="900">
 
@@ -33,7 +33,7 @@ agent-squad splits the work across short, focused sessions and puts a graph arou
 - **A model never merges.** A child that passes its checks lands in your repo in request order. A conflict fails that child and nothing else.
 - **Gates are deterministic.** A gate runs code, not a model. It stops the run or repeats a loop. Nothing tunes a gate to make it pass.
 - **Every run leaves a record.** One append-only file holds every event. You replay a run, resume it after a crash, or hand it to someone else.
-- **A run has caps.** Spend, turns, and wall-clock time are limited per node and per run. Reaching a deadline is its own outcome, not a failure.
+- **A run has caps.** Spend and wall-clock time are limited per node and per run. A call also stops when it keeps failing at one step with the same failure; total turns are not capped. Reaching a deadline is its own outcome, not a failure.
 
 ## Quick start
 
@@ -66,6 +66,8 @@ Run one narrow task instead of a request:
 /agent-squad:task fix the failing date parser test
 ```
 
+The step-by-step page, with setup, config, resume and the run folder, is [docs/quickstart.md](docs/quickstart.md).
+
 > Requires Python 3.11 or later, [`uv`](https://docs.astral.sh/uv/), and a logged-in Claude Code.
 
 ## Commands
@@ -76,6 +78,7 @@ Run one narrow task instead of a request:
 | `/agent-squad:task <task>` | Starts a run for one task. The router asks for the fewest children that finish it. |
 | `/agent-squad:dashboard [run]` | Opens the dashboard page for one run; the latest when empty. It never starts a run. |
 | `/agent-squad:skill-update` | After a skill update, checks that every borrowed skill still resolves. It never edits `~`. |
+| `/agent-squad:config <show\|set\|reset\|init\|check>` | Shows or changes the project settings file `docs/squad/defaults.yaml`. |
 | `/agent-squad:editor [id]` | Opens the workflow editor on a workflow. No id opens the dynamic workflow. |
 
 Every start command takes `--workflow <id>`. Without it, the run uses the **dynamic workflow**. With it, the run uses `docs/squad/workflows/<id>.graph.json`. The editor saves to the same folder.
@@ -83,8 +86,8 @@ Every start command takes `--workflow <id>`. Without it, the run uses the **dyna
 The same commands exist as a CLI:
 
 ```bash
-squad start "add a retry with backoff to the uploader"
-squad start --task "fix the failing date parser test" --workflow five-phases
+squad work "add a retry with backoff to the uploader"          # same as `squad start`
+squad task "fix the failing date parser test" --workflow five-phases   # same as `squad start --task`
 squad editor
 squad dashboard            # latest run
 squad resume <run-id>      # continue after a crash or a wait
@@ -147,6 +150,19 @@ The replay above scrubs the same run from event 1 to event 296.
 <p align="center"><img src="docs/assets/editor.png" alt="Edit mode with the router agent selected: model, effort, skill, and tools" width="900"></p>
 
 The page is one HTML file with no build step. A loopback server feeds it, and the server exits when idle.
+
+## Subject runs
+
+The subject is a billing engine with 24 issues (`bench/subject/`). Two scripts run it:
+
+```bash
+uv run scripts/run_subject.py 7                    # one issue, the five-phase graph
+uv run scripts/run_router.py 1,2,3,...,24          # a set, with the dynamic router graph
+```
+
+[`config/subject.yaml`](config/subject.yaml) names the model of every node. It ships with `deepseek-flash`, served by the local DeepSeek proxy at `127.0.0.1:8016` (`ANTHROPIC_BASE_URL` must point at it; start the proxy first).
+
+The CLI prices a model it does not know at about 14 times its real rate, so a spend cap sized for Anthropic fires early. The file sets `router.spend_cap: "off"`: no node and no run carries a spend cap, and the router asks for children without a `spend`. Set it to `"on"` to restore the caps. A turn or stall cap still stops a child that keeps failing.
 
 ## Principles
 

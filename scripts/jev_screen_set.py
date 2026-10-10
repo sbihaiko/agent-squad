@@ -5,8 +5,8 @@ The set is built from the subject project's issues. Each issue gives a clean con
 text with one instruction aimed at an AI added. Ten more clean controls hold a near miss: text that addresses humans
 or describes an attack without issuing the command. The label is set by construction, never by a model.
 
-Jev runs in shadow mode (ADR-0008): nothing here is imported by the engine, and no gate, route or verdict reads a score.
-The report states n and the spread of repeated calls. It sets no threshold and claims none (ADR-0012, ADR-0018).
+Jev runs in shadow mode: nothing here is imported by the engine, and no gate, route or verdict reads a score.
+The report states n and the spread of repeated calls. It sets no threshold and claims none.
 
 Run:  python3 scripts/jev_screen_set.py run    --subject ../subject [--env-file .env] [--repeats 3]
       python3 scripts/jev_screen_set.py report [--results docs/research/jev-screen-set-results.json]
@@ -165,10 +165,10 @@ def skill_table(pairs):
 
 
 def render(st, skill, meta):
-    L = ["# The Jev screen on a labeled set (ticket #57)", "",
-         f"Run on {meta['date']}. Language: US English, Concise STE100 (ADR-0001). Data: `docs/research/jev-screen-set-results.json` (one record per text, no text, no key). Code: `scripts/jev_screen_set.py`.", "",
+    L = ["# The Jev screen on a labeled set", "",
+         f"Run on {meta['date']}. Language: US English, Concise STE100. Data: `docs/research/jev-screen-set-results.json` (one record per text, no text, no key). Code: `scripts/jev_screen_set.py`.", "",
          "## Answer", "",
-         f"The set holds {st['texts']} texts from the subject issues. Each text was scored {meta['repeats']} times. This report makes no threshold claim (ADR-0012, ADR-0018). A gate stays unchanged. Jev stays in shadow mode (ADR-0008).", "",
+         f"The set holds {st['texts']} texts from the subject issues. Each text was scored {meta['repeats']} times. This report makes no threshold claim. A gate stays unchanged. Jev stays in shadow mode.", "",
          "## How the set is built", "",
          "- **Clean:** the original subject issue, one per issue (label: no instruction aimed at an AI).",
          "- **Planted:** the same issue plus one instruction aimed at an AI (label: yes). Six payloads in five places: appended, inside an HTML comment, under a notes heading, in a blockquote, in a code comment.",
@@ -203,13 +203,13 @@ def render(st, skill, meta):
           "| Node | Correct pick | n | Right | 95% interval | Wrong picks |", "|---|---|---|---|---|---|"]
     for r in skill:
         L.append(f"| {r['node']} | {r['correct']} | {r['n']} | {r['right']} | {r['ci'][0]}–{r['ci'][1]} | {json.dumps(r['wrong_picks']) if r['wrong_picks'] else 'none'} |")
-    L += ["", "No gate may read a skill-choice score (ADR-0008), so no consumer needs this label yet. Lens B of the panel argued against more skill-choice work for that reason. This table costs no spend, and no more skill-choice collection follows.", "",
+    L += ["", "No gate may read a skill-choice score, so no consumer needs this label yet. Lens B of the panel argued against more skill-choice work for that reason. This table costs no spend, and no more skill-choice collection follows.", "",
           "## Not done", "",
           "- The planted instructions are written by one author in six voices. A real attack may sound different. Recall here is recall on this set, not on attacks in general.",
           "- The payloads are explicit. No obfuscated variant (encoded text, an instruction split over two places, a quiet suggestion) is in the set. A harder set is a later ticket, and a clean split here says little about it.",
           "- Subject issues are all English text about one billing project. Other repo text may score differently.",
           "- The screen on `CLAUDE.md` is left out. That file is addressed to an agent by design, so a high score is correct and carries no information.",
-          "- No node reads a screen score, so a threshold has no use yet. If a node ever does, ADR-0012 and ADR-0018 say the set must support the cut first, and a person decides it.", ""]
+          "- No node reads a screen score, so a threshold has no use yet. If a node ever does, the project rules say the set must support the cut first, and a person decides it.", ""]
     return "\n".join(L)
 
 

@@ -9,7 +9,8 @@ PATH = ROOT / "config" / "agent-defaults.yaml"
 EFFORTS = {"low", "medium", "high", "max"}
 MODES = {"default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"}
 MIN_CONTEXT = 100000
-CAPS = ("max_turns", "max_budget_usd", "deadline_seconds", "max_output_tokens", "context_tokens")
+MAX_RESUMES = 10
+CAPS = ("max_stalls", "max_budget_usd", "deadline_seconds", "max_output_tokens", "context_tokens")
 
 
 def load(path=PATH):
@@ -18,14 +19,16 @@ def load(path=PATH):
 
 def check(cfg):
     """Return a list of defects; empty means the file is sound."""
-    bad, o, lim = [], cfg.get("options", {}), cfg.get("limits", {})
-    if o.get("effort") not in EFFORTS:
-        bad.append("options.effort")
-    if o.get("permission_mode") not in MODES:
-        bad.append("options.permission_mode")
-    if isinstance(lim.get("context_tokens"), (int, float)) and lim["context_tokens"] < MIN_CONTEXT:
-        bad.append("limits.context_tokens")      # probed 2026-09-30: the CLI clamps a smaller window up to 100000
-    bad += [f"limits.{k}" for k in CAPS if not isinstance(lim.get(k), (int, float)) or lim[k] <= 0]
+    from squad import project_settings as P  # the one catalog: this checker and `squad config check` read the same ranges
+    bad, o = [], cfg.get("options", {})
+    for key, spec in P.CATALOG.items():
+        sec, _, name = key.partition(".")
+        v = cfg.get(sec, {}).get(name) if isinstance(cfg.get(sec), dict) else None
+        if v is None:
+            if key in P.REQUIRED:
+                bad.append(key)
+        elif P.value_defect(spec, v, key):
+            bad.append(key)
     if cfg.get("hooks", {}).get("log_compaction") is not True:
         bad.append("hooks.log_compaction")
     if "dashboard" in cfg:
@@ -41,12 +44,38 @@ def check(cfg):
         p = cfg["progress"].get("seconds") if isinstance(cfg["progress"], dict) else None
         if p is not None and (isinstance(p, bool) or not isinstance(p, (int, float)) or p < 0):
             bad.append("progress.seconds")
-    run = cfg.get("run", {})
-    if run.get("deadline") is not None and run["deadline"] <= 0:
-        bad.append("run.deadline")
-    bad += [f"run.{k}" for k in ("max_parallel", "spend_cap") if not isinstance(run.get(k), (int, float)) or run[k] <= 0]
+    a = cfg.get("autonomy", {})                  # ticket #180: both keys are plugin defaults; a missing key takes the default
+    a = a if isinstance(a, dict) else {}
+    if "enabled" in a and not isinstance(a["enabled"], bool):
+        bad.append("autonomy.enabled")
+    if "max_resumes" in a and (isinstance(a["max_resumes"], bool) or not isinstance(a["max_resumes"], int) or not 0 <= a["max_resumes"] <= MAX_RESUMES):
+        bad.append("autonomy.max_resumes")
+    if "watch" in cfg:
+        w = cfg["watch"] if isinstance(cfg["watch"], dict) else {}
+        if not isinstance(w.get("dashboard"), bool):
+            bad.append("watch.dashboard")       # ticket #183: open the dashboard on a new run
+        if "monitor" in w and not isinstance(w["monitor"], bool):
+            bad.append("watch.monitor")         # ticket #184: the run-scoped monitor
+        if "monitor_seconds" in w and (isinstance(w["monitor_seconds"], bool) or not isinstance(w["monitor_seconds"], (int, float)) or not 5 <= w["monitor_seconds"] <= 600):
+            bad.append("watch.monitor_seconds")
     bad += [f"roles.{r}.{k}" for r, v in cfg.get("roles", {}).items() for k in v if k not in o]
     return bad
+
+
+def autonomy(cfg):
+    """The autonomy setting as run_start records it: {enabled, max_resumes}. A missing key takes the plugin default."""
+    a = cfg.get("autonomy") or {}
+    return {"enabled": a.get("enabled", True), "max_resumes": a.get("max_resumes", 3)}
+
+
+AUTONOMY_FRAGMENT = ROOT / "prompts" / "_autonomy.md"
+
+
+def owner_only(text=None):
+    """The owner-only list, parsed from the line `Owner-only list: a; b; c.` of the autonomy fragment, or of `text`. The one list the fragment and the plugin commands share."""
+    import re
+    m = re.search(r"^Owner-only list: (.+)\.$", text if text is not None else AUTONOMY_FRAGMENT.read_text(), re.M)
+    return [x.strip() for x in m.group(1).split(";")] if m else []
 
 
 def call_env(cfg):
@@ -68,15 +97,21 @@ FLAGS = ("enable_file_checkpointing", "include_partial_messages", "include_hook_
 
 
 def engine_view(cfg):
-    """The engine-level keys, as run_start records them. Node-level keys are a scaffold and live in the graph (ADR-0106)."""
+    """The engine-level keys, as run_start records them. Node-level keys are a scaffold and live in the graph."""
     o = cfg["options"]
     view = {"options": {k: o[k] for k in ENGINE_OPTIONS if k in o}, "limits": {k: cfg["limits"][k] for k in ("max_output_tokens", "context_tokens")},
             "env": call_env(cfg), "hooks": cfg["hooks"], "auth": cfg["auth"], "log": cfg["log"]}
     if "dashboard" in cfg:
         view["dashboard"] = {k: cfg["dashboard"][k] for k in ("reread_seconds", "watch_seconds") if k in cfg["dashboard"]}   # the page reads the re-read interval; a record from before ticket #105 lacks the watch step and the server uses its own default
     if "progress" in cfg:
-        view["progress"] = {"seconds": cfg["progress"]["seconds"]}                   # how often a call in flight wrote its progress (ticket #101)
+        view["progress"] = {"seconds": cfg["progress"]["seconds"]}                   # how often a call in flight wrote its progress
     return view
+
+
+def watch_view(cfg):
+    """The watch setting, as run_start records it. A file with no `watch` block means the default: the dashboard opens."""
+    w = cfg.get("watch") or {}
+    return {"dashboard": w.get("dashboard", True), "monitor": w.get("monitor", True), "monitor_seconds": w.get("monitor_seconds", 30)}
 
 
 def sdk_kwargs(cfg, root=ROOT):
@@ -88,6 +123,8 @@ def sdk_kwargs(cfg, root=ROOT):
     sp = dict(o["system_prompt"])
     if "append_file" in sp:
         sp["append"] = (root / sp.pop("append_file")).read_text()
+        if autonomy(cfg)["enabled"]:       # ticket #181: with the setting on, the contract carries the autonomy fragment; off leaves it out
+            sp["append"] += "\n" + (root / "prompts" / "_autonomy.md").read_text()
     kw["system_prompt"] = sp
     kw.update({k: True for k in FLAGS if o.get(k)})
     kw.update({k: o[k] for k in ("fallback_model", "thinking") if o.get(k) is not None})

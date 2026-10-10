@@ -1,4 +1,4 @@
-"""Guards for ticket #27: ADR-0104 (closed registry, sees, forbidden triggers, freshness), ADR-0106 rule 6."""
+"""Guards for the closed facts registry: sees, forbidden triggers, freshness."""
 import json
 
 import pytest

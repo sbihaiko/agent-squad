@@ -1,4 +1,4 @@
-"""Guards for ADR-0051 rules 3 to 6: the monitor reads run records and never calls an agent."""
+"""Guards for the stuck-call monitor: the monitor reads run records and never calls an agent."""
 import json
 import os
 

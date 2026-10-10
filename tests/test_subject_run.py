@@ -1,6 +1,6 @@
-"""The subject run harness on a tiny fake subject and a scripted adapter (ticket #44). No live call.
+"""The subject run harness on a tiny fake subject and a scripted adapter. No live call.
 
-Guards: the subject repo is never written (ADR-0024: a run lands in a clone); the held-out test stays outside the
+Guards: the subject repo is never written (a run lands in a clone); the held-out test stays outside the
 project until verify; a wrong patch fails ac-verify and the verdict is failed.
 """
 import json
@@ -61,6 +61,13 @@ def test_prepare_clones_the_subject_and_builds_a_valid_graph(tmp_path):
     assert "issues/01-add.md" in next(n for n in g.doc["nodes"] if n["name"] == "actor")["instructions"]
 
 
+def test_prepare_takes_relative_paths_and_every_path_it_returns_is_absolute(tmp_path, monkeypatch):
+    repo, bench = fake_subject(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    prep = subject.prepare(1, repo, bench.relative_to(tmp_path), "out", runs_dir="runs")
+    assert prep.run_dir.is_absolute() and prep.target.is_absolute() and prep.graph_path.is_absolute()
+
+
 async def test_a_correct_patch_passes_the_held_out_test_and_the_verdict_is_completed(tmp_path):
     repo, bench = fake_subject(tmp_path)
     before = sh(repo, "git", "rev-parse", "HEAD")
@@ -91,21 +98,13 @@ def test_an_issue_with_an_open_blocker_is_refused(tmp_path):
         subject.prepare(1, repo, bench, tmp_path / "out")
 
 
-def test_clean_env_drops_a_virtualenv_so_python3_is_the_system_python(tmp_path):
-    venv = str(tmp_path / "venv")
-    env = {"VIRTUAL_ENV": venv, "PATH": f"{venv}/bin:/usr/bin:/bin", "HOME": "/h"}
-    out = subject.clean_env(env)
-    assert "VIRTUAL_ENV" not in out and out["PATH"] == "/usr/bin:/bin" and out["HOME"] == "/h"
-    assert subject.clean_env({"PATH": "/a"}) == {"PATH": "/a"}
-
-
 def test_the_held_out_file_name_cannot_collide_with_a_test_the_actor_writes(tmp_path):
     repo, bench = fake_subject(tmp_path)
     prep = subject.prepare(1, repo, bench, tmp_path / "out")
     assert "tests/api/test_zz_heldout_01.py" in prep.ac_commands[0]
 
 
-# ---------------------------------------------------------------- chained runs (ticket #54)
+# ---------------------------------------------------------------- chained runs
 # Guards: a blocked issue starts only when each blocker has a completed run record; the blocker's merge commit comes
 # from that record, never from a model's claim; the fixture and the subject are never written.
 
@@ -164,6 +163,12 @@ def test_a_blocker_with_no_run_record_refuses_and_names_the_blocker(tmp_path):
     assert not (tmp_path / "out").exists()
 
 
+def test_a_blocker_the_tree_holds_needs_no_completed_run(tmp_path):
+    repo, bench = chain_subject(tmp_path)
+    prep = subject.prepare(2, repo, bench, tmp_path / "out", runs_dir=tmp_path / "runs", holds={1})   # a chained run
+    assert prep.chain == [] and json.loads((prep.run_dir / "holds.json").read_text()) == {"held": [1]}
+
+
 async def test_a_blocker_whose_run_failed_refuses(tmp_path):
     repo, bench = chain_subject(tmp_path)
     runs = tmp_path / "runs"
@@ -220,3 +225,34 @@ def test_an_issue_the_router_gave_up_on_is_undelivered_even_when_the_run_complet
         return {"event": "land", "node": child, "outcome": outcome, "effect": {"held_out": held_out}}
     ev = [acc("c1", "1"), acc("c2", "2"), acc("c3", "3"), acc("c4", "3"), land("c1"), land("c2", held_out="fail"), land("c3", "fail", None), land("c4")]
     assert subject.undelivered(ev, [1, 2, 3, 4]) == [2, 4]   # 2 landed red, 3 was repaired, 4 was never asked for
+
+
+def test_delivery_is_judged_by_the_held_out_test_on_the_final_tree_not_by_the_task_field():    # #153
+    from squad import subject
+    acc = lambda c, task, prompt: {"event": "spawn_accepted", "child": c, "definition": {"task": task, "prompt": prompt}}  # noqa: E731
+    land = lambda c: {"event": "land", "node": c, "outcome": "pass", "effect": {"held_out": "pass"}}  # noqa: E731
+    # the router left `task` empty on both children: only the prompt names the issue
+    ev = [acc("c1", None, "Do issues/08-x.md"), acc("c2", "", "Do issues/09-y.md"), land("c1"), land("c2")]
+    assert subject.undelivered(ev, [8, 9]) == []
+    assert subject.undelivered(ev, [8, 9, 10], passing={8, 9}) == [10]
+    assert subject.undelivered([], [8, 9], passing={8, 9}) == []                  # the tree decides: no land needed to be delivered
+    assert subject.delivery_mismatches([], [8, 9], {8, 9}) == [8, 9]               # a pass with no land is recorded as a mismatch
+    assert subject.delivery_mismatches(ev, [8, 9], {8, 9}) == []
+    folded = [acc("c3", "13, 21", "x"), land("c3")]
+    assert subject.undelivered(folded, [13, 21]) == []
+
+
+async def test_a_run_made_through_prepare_resumes_by_folder_name_with_no_run_dir(tmp_path):
+    from squad import cli, launch
+    from squad.engine_errors import ResumeRefused
+    repo, bench = fake_subject(tmp_path)
+    prep = subject.prepare(1, repo, bench, tmp_path / "runs" / "subject-01-x")
+    sc = script(prep, write_calc("def add(a, b):\n    return a + b\n"))
+    eng = launch.launch(load(prep.graph_path), prep.run_dir, adapter=ScriptedAdapter(sc), graph_path=prep.graph_path, target=prep.target)
+    assert (await eng.run()).exit_code == 0 and (prep.run_dir / "record.jsonl").exists()
+    sfile = tmp_path / "s.json"
+    plain = {k: {f: v for f, v in row.items() if f != "effect"} for k, row in sc.items()}      # an effect is a function: not JSON
+    sfile.write_text(json.dumps({"script": plain, "repeat_last": True}))
+    argv = ["resume", "subject-01-x", "--runs-dir", str(tmp_path / "runs"), "--script", str(sfile)]
+    with pytest.raises(ResumeRefused, match="graph ran to its end"):      # the record is found by folder name; a finished run refuses, a missing record would return a failure instead
+        await cli._resume(cli.parser().parse_args(argv))

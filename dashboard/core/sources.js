@@ -1,9 +1,9 @@
-// Dashboard core module: page constants and run sources: legend, help, httpSource, followPush (ticket #117). A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
+// Dashboard core module: page constants and run sources: legend, help, httpSource, followPush. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function sourcesModule({ STATES }) {
   // The legend and the help are data. The page draws a swatch as a card group, so the card CSS paints it, and a Python test
-  // holds the legend to the colors the page paints and the help to the controls the page answers (ticket #85).
+  // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend })),   // the card states: from the one STATES table
@@ -40,9 +40,9 @@ function sourcesModule({ STATES }) {
     { how: "Esc", what: "Close the menu and this help.", covers: ["key:Escape"] },
   ];
 
-  // The source of a run that a loopback server serves (ticket #86): fetch the record and the graph by path. A missing file is null, like the other sources.
+  // The source of a run that a loopback server serves: fetch the record and the graph by path. A missing file is null, like the other sources.
   // `fetchFn(path)` returns {ok, text()}; the page passes fetch with no-store, a test passes a map.
-  // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream` (ticket #106).
+  // `streamFn(path, handlers)` opens a push stream and returns {close()}; a source built with it offers `stream`.
   function httpSource(fetchFn, name, streamFn) {
     const get = async (p) => { try { const r = await fetchFn(p); return r && r.ok ? await r.text() : null; } catch (e) { return null; } };
     const src = { name, live: true, graph: () => get("run/graph.json"), record: () => get("run/record.jsonl") };
@@ -50,7 +50,7 @@ function sourcesModule({ STATES }) {
     return src;
   }
 
-  // Follow a run by push (ticket #106, ADR-0122). `events` is what the page already read; each pushed line is one more event.
+  // Follow a run by push. `events` is what the page already read; each pushed line is one more event.
   // hooks: changed(events), ended(), fail(reason), status(text, bad). A repeated position is skipped; a skipped one is a gap and is never painted.
   // A stream that errors reconnects by itself (the browser sends Last-Event-ID); after MAX_STREAM_ERRORS errors with no event between, the follow gives up.
   const MAX_STREAM_ERRORS = 3;

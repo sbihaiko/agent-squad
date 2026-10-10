@@ -10,21 +10,6 @@
     "reason": "Builds vendor/skills; tests/test_vendor_skills.py"
   },
   {
-    "path": "scripts/guard_add.py",
-    "status": "live",
-    "reason": "Adds guard tests to docs/design/guards.json"
-  },
-  {
-    "path": "scripts/guard_matrix.py",
-    "status": "live",
-    "reason": "Writes docs/design/guard-matrix.md; tests/test_dashboard.py"
-  },
-  {
-    "path": "scripts/sync_guards.py",
-    "status": "live",
-    "reason": "Syncs ADR Guard sections with guards.json; tests/test_two_flows.py"
-  },
-  {
     "path": "scripts/jev_screen_set.py",
     "status": "live",
     "reason": "Labeled set for the Jev screen; tests/test_jev_screen_set.py"
@@ -32,12 +17,17 @@
   {
     "path": "scripts/run_router.py",
     "status": "live",
-    "reason": "Router run named in config/subject.yaml (ADR-0113)"
+    "reason": "Router run named in config/subject.yaml"
   },
   {
     "path": "scripts/run_subject.py",
     "status": "live",
     "reason": "Subject run driver; results in docs/research/subject-run-01.md"
+  },
+  {
+    "path": "scripts/run_subject_chain.py",
+    "status": "live",
+    "reason": "Chains every subject issue on one growing tree with the fixed graph"
   },
   {
     "path": "scripts/jev_shadow_report.py",
@@ -98,5 +88,10 @@
     "status": "archived",
     "reason": "Raw results of jev_real; result in docs/research/jev-real-usage.md",
     "result": "docs/research/jev-real-usage.md"
+  },
+  {
+    "path": "scripts/probe_gateway_cache.py",
+    "status": "live",
+    "reason": "Probes whether a gateway returns cache_read; tests/test_probe_gateway_cache.py"
   }
 ]

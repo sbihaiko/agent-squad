@@ -1,7 +1,7 @@
 """Ticket #96: a selected node shows its own available-vs-used harness (tools, skills, models, caps), not the global snapshot.
 
 A dispatch child's available harness is its resolved `definition` (squad/envelope.py); its ceiling is the dispatch
-envelope's `allow` set (ADR-0113 rule 2). A plain agent declares its own. A gate or a loop carries no harness, said plainly
+envelope's `allow` set. A plain agent declares its own. A gate or a loop carries no harness, said plainly
 never an empty list. The fixture is the real four-wave run: four children, each with a real resolved harness and a real outcome.
 """
 import json
@@ -35,15 +35,15 @@ def test_a_dispatch_child_shows_its_resolved_harness_the_envelope_ceiling_and_wh
     assert h["available"] == {
         "skill": "tdd@1", "model": "sonnet", "effort": "medium",
         "tools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep"],
-        "turns": 60, "spend": 2, "deadline": 900,
+        "stalls": 4, "spend": 2, "deadline": 900,
     }
-    # The ceiling it inherited from the dispatch envelope (ADR-0113 rule 2).
+    # The ceiling it inherited from the dispatch envelope.
     assert h["allow"] == {
         "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
         "skills": ["grill-with-docs", "tdd", "code-review", "research"],
         "models": ["opus", "sonnet", "haiku"],
         "efforts": ["low", "medium", "high"],
-        "turns": {"min": 3, "max": 60},
+        "stalls": {"min": 2, "max": 5},
         "spend": {"min": 0.05, "max": 4},
         "deadline": 4800,
     }
@@ -61,7 +61,7 @@ def test_a_plain_agent_shows_its_own_declared_harness_and_the_measured_use():
     assert h["kind"] == "agent"
     assert h["available"] == {
         "skill": "ask-matt", "model": "opus", "effort": None, "tools": ["Read", "Grep", "Glob"],
-        "turns": {"min": 3, "max": 30}, "spend": {"min": 0.05, "max": 2}, "deadline": 600,
+        "stalls": {"min": 2, "max": 5}, "spend": {"min": 0.05, "max": 2}, "deadline": 600,
     }
     outs = _outcomes(events, "router")
     assert h["used"]["model"] == "opus" and h["used"]["effort"] is None and h["used"]["skill"] == "ask-matt"
@@ -82,7 +82,7 @@ def test_a_child_with_no_outcome_yet_still_shows_its_resolved_harness_with_unkno
     doc, events = _run()
     cut = [e for e in events if e["pos"] <= 6]                                            # child 1 accepted and started, no outcome
     h = _harness(doc, cut, "route.router.1")
-    assert h["kind"] == "child" and h["available"]["skill"] == "tdd@1" and h["available"]["turns"] == 60
+    assert h["kind"] == "child" and h["available"]["skill"] == "tdd@1" and h["available"]["stalls"] == 4
     assert h["used"]["model"] is None and h["used"]["turns"] is None and h["used"]["spend"] is None   # nothing ran yet
 
 

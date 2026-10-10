@@ -20,7 +20,7 @@ reached through the proxy at `127.0.0.1:8016`.
 - A child that returns `next: "repeat"` re-enters the node with a new entry and a new session (`engine.py:242-252`).
   The retry pays for the whole prefix again.
 - `usage_of` **sums** `cache_creation_input_tokens` and `cache_read_input_tokens` into `tokens_in`
-  (`squad/sdk_adapter.py:20-25`). The record keeps no split, so no run can show its own reuse (#102).
+  (`squad/sdk_adapter.py:20-25`). The record keeps no split, so no run can show its own reuse.
 - `call_env` sets three variables and no cache control (`squad/defaults.py:43-49`): the spawn depth, the output
   token cap, and the auto-compact window. The default cache TTL applies unchanged (5 minutes).
 - The CLI child inherits `ANTHROPIC_BASE_URL` from the shell (`squad/subject.py:21-22`), so the DeepSeek proxy

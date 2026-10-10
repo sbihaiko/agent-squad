@@ -2,7 +2,7 @@
 
 This map lists what the `typesafe-ai` skill covers. It lists the 18 cookbooks and 4 patterns the skill points to.
 It lists the best practices in the TypeSafe docs. It ends with a note on fit for agent-squad.
-Language: US English, Concise STE100 (ADR-0001).
+Language: US English, Concise STE100.
 
 Source: skill body `typesafe` plugin 0.5.7, and the live docs at `https://docs.typesafe.ai`, read on 2026-09-29.
 No API call was made and no key was used. Every claim comes from the skill or the docs, not from a probe.
@@ -232,7 +232,7 @@ Each result is the cookbook's own number on its own data. None is re-run here.
 **Hierarchical classification** [D:cookbooks/hierarchical_classification]
 - One Choice per taxonomy node. Beam search keeps `K` paths by the geometric mean of edge probabilities. The ratio of the top two path scores measures separation.
 - With `K` = 3, beam search hit 4 of 4 expected leaves. Greedy hit 2 of 4.
-- Caveat: four examples. Under ADR-0012 that is an illustration, not a measurement.
+- Caveat: four examples. A gate is never tuned to a small sample, so that is an illustration, not a measurement.
 - For depth over 10 layers, use `exp(mean(log(p)))` to avoid precision loss.
 
 **Autoresearch feature discovery** [D:cookbooks/autoresearch_feature_discovery]
@@ -380,15 +380,15 @@ This section is a suggestion. Nothing here is decided. Each item needs a ticket 
 | --- | --- | --- |
 | Pick a skill or agent for a node | Skill suggestion | The cookbook targets an agent with a large skill roster. |
 | Cheap critic in an actor-critic loop | SDE cascade, citation check | Per-criterion Noul, maximum aggregate, escalate to a reasoning model. |
-| A run stops for a person | Confidence-gated routing | A low-confidence branch maps to a declared needs-human node (ADR-0029). |
+| A run stops for a person | Confidence-gated routing | A low-confidence branch maps to a declared needs-human node. |
 | Screen node inputs and outputs | Guardrails | One request per message. |
 | Propose an adaptation from run facts | Choice over a fixed menu | The wayfinder map decided that code validates and applies a model's proposal. |
 
 **Rules from the ADRs that apply**
 
-- A threshold taken from your own data must first be shown to stand for the property it claims. It stays a stop condition, never a target (ADR-0012, ADR-0018).
+- A threshold taken from your own data must first be shown to stand for the property it claims. It stays a stop condition, never a target.
 - Cookbook thresholds are examples. Do not copy them into a gate.
-- A Jev answer is a judgment, so it sits on the model side of the observation seam in ADR-0008. It is not a measured fact.
+- A Jev answer is a judgment, so it sits on the model side of the observation seam of the observation contract. It is not a measured fact.
 - The SDE cascade lists an independent, cheap verifier as a trait of a good signal. No agent-squad ADR that I read sets this rule (UNVERIFIED).
 
 **Owner-only actions this would trigger**

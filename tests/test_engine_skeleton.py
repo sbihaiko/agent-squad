@@ -1,4 +1,4 @@
-"""Guards for ticket #28: the walking skeleton on a scripted adapter (ADR-0105 rule 8, ADR-0101 rules 4 and 5)."""
+"""Guards for ticket #28: the walking skeleton on a scripted adapter."""
 import json
 
 import pytest
@@ -32,6 +32,21 @@ async def test_loop_exhaustion_is_fail_with_the_reason_loop_max_exhausted(tmp_pa
     work = [e for e in events if e["event"] == "outcome" and e["node"] == "work"][0]
     assert work["outcome"] == "fail" and work["reasons"][0] == "loop_max_exhausted" and "scope:generated_file:gen.lock" in work["reasons"]
     assert [e["entry"] for e in events if e["event"] == "outcome" and e["node"] == "actor"] == [1, 2]  # no third entry
+
+
+async def test_a_loop_counts_only_entries_that_fail_the_same_way(tmp_path):
+    """ADR-0134: a changed failure restarts the streak, so five entries run on `max` 2 while the failure keeps changing, and two alike end it."""
+    other = {"output": {"diff": {"files": [{"path": "gen2.lock", "generated": True}]}}, "spend": 0.1}
+    eng = run_engine(actor_gate_loop(2), {"actor": [BAD, other, BAD, other, GOOD]}, tmp_path)
+    v = await eng.run()
+    assert (v.verdict, v.exit_code) == ("completed", 0)
+    events = record.read(tmp_path / "record.jsonl")
+    assert [e["entry"] for e in events if e["event"] == "outcome" and e["node"] == "actor"] == [1, 2, 3, 4, 5]
+    eng = run_engine(actor_gate_loop(2), {"actor": [BAD, other, other, GOOD]}, tmp_path / "again")
+    v = await eng.run()
+    assert v.verdict == "failed" and "loop_max_exhausted" in v.reasons          # entries 2 and 3 failed alike
+    events = record.read(tmp_path / "again" / "record.jsonl")
+    assert [e["entry"] for e in events if e["event"] == "outcome" and e["node"] == "actor"] == [1, 2, 3]
 
 
 async def test_a_when_is_read_on_every_entry_and_a_skip_is_recorded(tmp_path):
@@ -77,6 +92,13 @@ async def test_every_entry_starts_a_fresh_session_and_the_artifact_decides_the_o
     assert len({c.session_id for c in eng.adapter.calls}) == 3
     outs = [e for e in record.read(tmp_path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "a"]
     assert [e["reasons"] for e in outs] == [["artifact_missing"], ["artifact_missing"], []]
+
+
+async def test_a_needs_human_answer_without_the_output_key_is_still_needs_human(tmp_path):    # #158
+    a = agent("a", output_key="spawns")
+    eng = run_engine(doc([a], ["a"]), {"a": [{"output": {"children": [], "status": "needs-human", "reasons": ["map not ready"]}, "spend": 0.1}]}, tmp_path)
+    v = await eng.run()
+    assert v.verdict == "needs-human" and v.exit_code == 10 and "map not ready" in v.reasons
 
 
 async def test_an_agent_that_yields_needs_human_ends_the_run_needs_human(tmp_path):
@@ -130,7 +152,7 @@ async def test_an_outcome_with_unknown_usage_carries_no_token_field_and_still_re
 
 async def test_a_loop_a_gate_and_the_dispatch_node_record_their_own_elapsed_wall_time(tmp_path):
     """A loop, a gate, or a dispatch node never calls the model itself, but it still takes real
-    wall time to run its children and land their work. ADR-0109 puts `elapsed` on every outcome
+    wall time to run its children and land their work. The record puts `elapsed` on every outcome
     event, not only on an agent's: found while checking the dashboard with the owner, a loop and
     a gate node showed null and the dashboard read it as "—" for a node that plainly ran."""
     eng = run_engine(actor_gate_loop(), {"actor": [GOOD]}, tmp_path)
@@ -146,3 +168,9 @@ async def test_loop_exhaustion_still_records_elapsed_on_its_failing_exit(tmp_pat
     await eng.run()
     work = [e for e in record.read(tmp_path / "record.jsonl") if e["event"] == "outcome" and e["node"] == "work"][0]
     assert work["outcome"] == "fail" and work["elapsed"] is not None and work["elapsed"] >= 0
+
+
+def test_a_childs_own_out_of_budget_claim_is_not_recorded_as_a_cap():    # #169: no cap fired at $0.36 of $1.50; the model wrote the reason itself
+    from squad import session
+    res = type("R", (), {"output": {"status": "fail", "reasons": ["out_of_budget"]}})()
+    assert session.agent_outcome({}, res, None) == ("fail", ["child_said_out_of_budget"], None)

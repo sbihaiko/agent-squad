@@ -1,18 +1,18 @@
-// Dashboard core module: The children a dispatch spawned: their rows, layout and checks. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: The children a dispatch spawned: their rows, layout and checks.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function childrenModule({ num, openCalls, orNull, skillName }) {
   // The issue a spawn ran, read from its own prompt ("issues/14-slug.md" -> 14). The record does not carry the number
-  // apart; the prompt names the issue file (issue #97). A request with no such prompt names none.
+  // apart; the prompt names the issue file. A request with no such prompt names none.
   const issueNumber = (prompt) => { const m = /(\d\d)-[\w-]+\.md/.exec(typeof prompt === "string" ? prompt : ""); return m ? Number(m[1]) : null; };
 
-  // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip (issue #99).
+  // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
 
   // The children of every dispatch, in request order. Each carries what its call recorded and what landing did to it.
-  // An outcome that is not pass after landing is fail (ticket #90), so a landing failure shows on the child, not only in its own event.
+  // An outcome that is not pass after landing is fail, so a landing failure shows on the child, not only in its own event.
   // `now` (epoch seconds) makes a child that is running now read as running, with its time and its live figures; without
-  // it a child in flight keeps the static `started` state (ticket #101).
+  // it a child in flight keeps the static `started` state.
   function runChildren(events, now) {
     const last = (kind) => new Map(events.filter((e) => e.event === kind).map((e) => [e.node, e]));
     const outs = last("outcome"), lands = last("land"), started = new Set(events.filter((e) => e.event === "call_start").map((e) => e.node));
@@ -30,7 +30,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
         running_for: run ? run.running_for : null, live: run ? run.live : null,   // a child in flight: how long it has run, and what it last reported
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
-        // apart, while the issue does. A child with no task falls back to its skill, then to its own name (issue #99).
+        // apart, while the issue does. A child with no task falls back to its skill, then to its own name.
         label: issue === null ? skill || short : `issue ${issue}`,
         model: o && o.model ? o.model : orNull(d.model), effort: o && o.effort ? o.effort : orNull(d.effort), after: Array.isArray(d.after) ? d.after : [],
         workspace: orNull(d.workspace), spend: o ? orNull(o.spend) : null, turns: o ? orNull(o.turns) : null, elapsed: o ? orNull(o.elapsed) : null,
@@ -42,7 +42,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null,
       elapsed: null, tokens_in: null, tokens_out: null, tps: null, land: null, issue: null }));
     // The position of each child among the children of its dispatch, and a title no two children share: "issue 11" can
-    // repeat across waves, "3 · issue 11" cannot (ADR-0125).
+    // repeat across waves, "3 · issue 11" cannot.
     const seen = {};
     const all = [...kids, ...bad];
     for (const c of all) { c.index = seen[c.dispatch] = (seen[c.dispatch] || 0) + 1; c.title = `${c.index} · ${c.label}`; }
@@ -50,7 +50,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     return all;
   }
 
-  // Which children are attempts at one task (issue #134, ADR-0125 amendment). Attempts are the children of one dispatch that share a task
+  // Which children are attempts at one task. Attempts are the children of one dispatch that share a task
   // key: the spawn's own `task`, else the issue its prompt names. The marks are derived text. The record holds no "redo of" fact, so
   // no edge is drawn, and a failed attempt stays failed. It reads superseded once a later attempt of the same task passed.
   // A child passed when its call and its landing passed and its held-out command did not fail.
@@ -64,32 +64,38 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     return `attempt ${c.attempt}${why ? ", " + why : ""}`;
   }
 
+  // The tasks one child worked: its `task` split at commas, else the issue its prompt names. A router may fold two issues into one child
+  // ("13, 21"), so a child can belong to more than one task.
+  const taskKeys = (c) => {
+    if (c.rejected) return [];
+    const t = c.task === null || c.task === undefined ? "" : String(c.task);
+    const parts = t.split(/[,\s]+/).filter(Boolean);
+    return parts.length ? parts : c.issue === null ? [] : [String(c.issue)];
+  };
+
   function markRework(all) {
-    const taskKey = (c) => {
-      if (c.rejected) return null;
-      const t = c.task === null || c.task === undefined ? "" : String(c.task);
-      return t !== "" ? t : c.issue === null ? null : String(c.issue);
-    };
-    const byTask = new Map();
+    const keys = new Map(all.map((c) => [c, taskKeys(c)]));
+    for (const c of all) Object.assign(c, { attempt: null, superseded_by: null, rework: null });
+    const same = (c) => all.filter((o) => o.dispatch === c.dispatch && keys.get(o).some((t) => keys.get(c).includes(t)));
     for (const c of all) {
-      Object.assign(c, { attempt: null, superseded_by: null, rework: null });
-      const t = taskKey(c);
-      if (t !== null) byTask.set(JSON.stringify([c.dispatch, t]), [...(byTask.get(JSON.stringify([c.dispatch, t])) || []), c]);
-    }
-    for (const attempts of byTask.values()) {
-      if (attempts.length < 2) continue;
-      attempts.forEach((c, i) => {
-        c.attempt = i + 1;
-        const winner = passedClean(c) ? null : attempts.slice(i + 1).find(passedClean);
-        c.superseded_by = winner ? winner.index : null;
-        c.rework = reworkText(c, winner);
-      });
+      const mine = keys.get(c);
+      if (!mine.length) continue;
+      const related = same(c);
+      if (related.length < 2) continue;
+      const i = related.indexOf(c);
+      c.attempt = i + 1;
+      // superseded: every task of this child has a later clean attempt. The first such attempt is the one named.
+      const later = related.slice(i + 1).filter(passedClean);
+      const covered = !passedClean(c) && mine.every((t) => later.some((o) => keys.get(o).includes(t)));
+      const winner = covered ? later.find((o) => keys.get(o).some((t) => mine.includes(t))) : null;
+      c.superseded_by = winner ? winner.index : null;
+      c.rework = reworkText(c, winner);
     }
   }
 
-  // The available-vs-used harness of one selected node (issue #96), read from the record and the graph, never authored.
+  // The available-vs-used harness of one selected node, read from the record and the graph, never authored.
   // A dispatch child resolves its own harness in `definition` (squad/envelope.py) and inherits the allow ceiling from its
-  // dispatch envelope (ADR-0113 rule 2). A plain agent declares its own fields. A gate or a loop carries no harness, so the
+  // dispatch envelope. A plain agent declares its own fields. A gate or a loop carries no harness, so the
   // caller says so plainly instead of showing an empty list. A missing field stays null, never zero.
   const skillLabel = (s) => (typeof s === "string" ? s : s && typeof s.name === "string" ? (s.version ? `${s.name}@${s.version}` : s.name) : null);
 

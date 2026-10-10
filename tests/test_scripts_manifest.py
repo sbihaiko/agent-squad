@@ -1,4 +1,4 @@
-"""Guard: every tracked path under scripts/ has one manifest row with a reason (#113, ADR-0018).
+"""Guard: every tracked path under scripts/ has one manifest row with a reason.
 
 A row names a file or a directory; a directory row covers the tracked files under it.
 Untracked paths (scripts/archive/jev_data_real/) are not required.

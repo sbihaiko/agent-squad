@@ -1,4 +1,4 @@
-"""The SDK adapter seam: one call is one session (ADR-0102 rule 1). The engine knows only this interface.
+"""The SDK adapter seam: one call is one session. The engine knows only this interface.
 
 A later step swaps the scripted adapter for the real Claude Agent SDK. The real adapter owns its child
 process and must stop it when its task is cancelled (see squad.procs).
@@ -20,13 +20,15 @@ class CallRequest:
     model: str
     effort: str | None
     tools: list
-    max_turns: int
+    max_stalls: int          # failed attempts at one step with no change in the failure (squad.stall); not a count of turns
     max_spend: float
     workspace: str | None
     deadline: float          # seconds the engine allows, after time scaling
     session_id: str          # always new: a repeat never resumes a session
     skill: str | None = None
-    instructions: str | None = None   # the node's role text: a system prompt addition, not part of the user message (ticket #45)
+    instructions: str | None = None   # the node's role text: a system prompt addition, not part of the user message
+    max_output_tokens: int | None = None   # set by the project settings file; None leaves the adapter's own value
+    context_tokens: int | None = None      # same: the context window before compaction
 
 
 @dataclass
@@ -35,10 +37,11 @@ class CallResult:
     output: dict | None
     spend: float | None
     turns: int | None = None
-    stop_reason: str | None = None   # "turn_cap" | "spend_cap" | "output_cap" | None
-    subagents: int = 0               # diagnostic only: a subagent is never a node (ADR-0100 rule 1)
+    stop_reason: str | None = None   # "stall_cap" | "spend_cap" | "output_cap" | None
+    subagents: int = 0               # diagnostic only: a subagent is never a node
     session_id: str | None = None
     usage: dict | None = None        # {"tokens_in", "tokens_out", optional "cache_read", "cache_write"} when the result reports them; None means unknown, never zero
+    ended: dict | None = None        # {"subtype", "is_error", "last"}: how the session ended and its last text, kept on an artifact_missing outcome
 
 
 class ScriptedAdapter:

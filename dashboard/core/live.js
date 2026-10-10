@@ -1,4 +1,4 @@
-// Dashboard core module: A run still being written: the read delay, the calls in flight, the live state. (ticket #116). Moved from rest.js with no change.
+// Dashboard core module: A run still being written: the read delay, the calls in flight, the live state.. Moved from rest.js with no change.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function liveModule({ lastOf, num, orNull }) {
@@ -6,9 +6,9 @@ function liveModule({ lastOf, num, orNull }) {
   // its outcome all carry the same three, so the record's own fields pair them without a new index.
   const callKey = (e) => `${e.node}|${e.entry}|${orNull(e.item)}`;
 
-  // Where each call in flight has got to, as the call itself last reported it (ticket #101). A running call records a
+  // Where each call in flight has got to, as the call itself last reported it. A running call records a
   // `progress` event now and then; the last one for a call wins. A call that reported nothing has no entry here, so its
-  // figures stay unknown, never zero (ADR-0012).
+  // figures stay unknown, never zero.
   function callProgress(events) {
     const out = new Map();
     for (const e of events) if (e.event === "progress") out.set(callKey(e), { messages: orNull(e.messages), context_tokens: orNull(e.context_tokens), tool: orNull(e.tool) });
@@ -19,7 +19,7 @@ function liveModule({ lastOf, num, orNull }) {
   // the map is keyed by the node; where two entries of one node are open, the longer-running one is the one shown.
   // A call whose call_start carries no start time has no duration, so it makes no entry: unknown time stays unknown.
   // A run with a verdict has nothing in flight (liveState says the same): a call_start left open by a killed call must
-  // never read as running again (ADR-0051 rule 4).
+  // never read as running again.
   function openCalls(events, now) {
     const prog = callProgress(events), out = new Map();
     if (lastOf(events.filter((e) => e.event === "verdict"))) return out;
@@ -30,7 +30,7 @@ function liveModule({ lastOf, num, orNull }) {
     return out;
   }
 
-  // ---- A live run (ticket #80) ----
+  // ---- A live run ----
   // The reread interval is an engine setting that run_start records. A record made before it, or a bad value, gets one second.
   function readDelay(events) {
     const d = events && events[0] && events[0].defaults && events[0].defaults.engine && events[0].defaults.engine.dashboard;
@@ -38,7 +38,7 @@ function liveModule({ lastOf, num, orNull }) {
     return num(r) && r > 0 ? r : 1;
   }
 
-  // Stalled is a display state, not a gate (ADR-0012): no new event for longer than the longest call in flight may take, plus a grace.
+  // Stalled is a display state, not a gate: no new event for longer than the longest call in flight may take, plus a grace.
   // With no call in flight, a gate command or an effect can be quiet for a while, so the idle period is longer.
   const STALL_IDLE = 300, STALL_GRACE = 60;
 

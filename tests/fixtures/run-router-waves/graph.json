@@ -1,7 +1,7 @@
 {
  "schema_version": 1,
  "name": "router-dynamic",
- "description": "A dynamic flow. A router agent runs the ask-matt skill and requests children inside the dispatch envelope (ADR-0113).",
+ "description": "A dynamic flow. A router agent runs the ask-matt skill and requests children inside the dispatch envelope.",
  "run": {
   "deadline": 5400,
   "max_parallel": 2,
@@ -17,7 +17,7 @@
   {
    "name": "run_spend",
    "type": "number",
-   "instrument": "code: sum of SDK result spend over agent entries (ADR-0108)",
+   "instrument": "code: sum of SDK result spend over agent entries",
    "source_kind": "run_record"
   }
  ],
@@ -102,9 +102,9 @@
     ]
    },
    "budget": {
-    "turns": {
-     "min": 3,
-     "max": 60
+    "stalls": {
+     "min": 2,
+     "max": 5
     },
     "spend": {
      "min": 0.05,
@@ -130,9 +130,9 @@
     "Glob"
    ],
    "budget": {
-    "turns": {
-     "min": 3,
-     "max": 30
+    "stalls": {
+     "min": 2,
+     "max": 5
     },
     "spend": {
      "min": 0.05,

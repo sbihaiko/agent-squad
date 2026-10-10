@@ -15,10 +15,10 @@ Run reviewed: run 51 (done, `needs-human`), plus the empty state. Screenshots in
 
 ## Constraints (do not break)
 
-- Read-only on a run (ADR-0117, 0118). Follow by push (ADR-0122).
+- Read-only on a run. Follow by push.
 - Dashboard tests: `tests/test_dashboard*.py`, `test_runs.py`, `test_dashboard_server.py`.
 
-## Running and failed states (after ADR-0124)
+## Running and failed states (after the panel and group-card change)
 
 Reviewed: run 51 at replay events 8 and 40 (running), run 46 (failed, exit 1) with the panel hidden and with `ac-verify` selected. Screenshots in `/tmp/ui-review/state-running.png`, `state-running-early.png`, `state-failed.png`, `state-failed-selected.png` (not committed).
 
@@ -33,12 +33,12 @@ Reviewed: run 51 at replay events 8 and 40 (running), run 46 (failed, exit 1) wi
 9. **Replay bar and toast cover content.** The bar sits over the bottom cards (`issue 8`, `issue 23` are half hidden at 80% zoom), and the "Opened run ... Rereading the record every 1 s" toast (`page.css:152`, `page/run.js:21`) stays after load, overlapping the legend and, with the panel open, the bar. It repeats the full folder name already known from the top bar.
 10. **Legend carries the whole status code.** Eight swatches in two rows at 11px are the only key to fill-and-stroke color; "Passed / Failed" differ by hue only, no icon or text mark on the card itself (the earlier problem 6 stands).
 
-## Final state (after ADR-0126)
+## Final state (after the corrupt-record banner)
 
 Reviewed with ego-browser on a 120-child synthetic run at 800, 1024 and 1440 px wide, and on a real run of six parallel haiku calls, live and in replay. Screenshots in `/tmp/ui-review/` (not committed).
 
 - **120 children, expanded.** The view stays at 70%. Card text is 12px at that zoom and readable; 28, 42 and 56 cards show at 800, 1024 and 1440 px, and a pan reaches the rest. The first row starts at the dispatch. No change needed.
-- **Six running children, live.** One group card, "route - 6 running", six running squares; it turns into "6 failed" with six failed squares when the calls end, and a double-press expands it to six cards. In replay a call that only started reads "started" on its square while the card still says "running" (ADR-0125 counts a started call as in flight).
+- **Six running children, live.** One group card, "route - 6 running", six running squares; it turns into "6 failed" with six failed squares when the calls end, and a double-press expands it to six cards. In replay a call that only started reads "started" on its square while the card still says "running" (a started call counts as in flight).
 - **Fixes from the review.** The group card says "of calls" after the time, because the children run side by side and the sum can exceed the run's time. At 900px or less the toast sits above the replay bar, not over its buttons. The failure line of a card sits one pixel higher, inside the card edge.
 - **Corrupt record while live.** A half-written last line shows no banner; a completed bad line plus later lines shows the banner and keeps the valid prefix (`tests/test_dashboard_groups_page.py`).
-- **Closed.** A plain `squad run` now writes `graph.json` into its run folder (ADR-0127), so the page opens with nodes.
+- **Closed.** A plain `squad run` now writes `graph.json` into its run folder, so the page opens with nodes.

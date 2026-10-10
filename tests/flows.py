@@ -5,7 +5,7 @@ from squad.graph import from_doc
 
 
 def agent(name, **kw):
-    n = {"name": name, "kind": "agent", "model": "sonnet", "tools": ["Read"], "budget": {"turns": {"min": 1, "max": 10}, "spend": {"min": 0.01, "max": 1.0}},
+    n = {"name": name, "kind": "agent", "model": "sonnet", "tools": ["Read"], "budget": {"stalls": {"min": 1, "max": 10}, "spend": {"min": 0.01, "max": 1.0}},
          "deadline": 30, "next": {"fail": "repeat"}}
     n.update(kw)
     return n

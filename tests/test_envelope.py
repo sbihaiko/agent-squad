@@ -1,4 +1,4 @@
-"""Ticket #98: the spawn request field `task` names the work item a child advances (ADR-0113 amendment).
+"""Ticket #98: the spawn request field `task` names the work item a child advances.
 
 The task key is content, not identity: a model may supply it, and it narrows nothing, so it has no limit rule.
 """
@@ -27,7 +27,7 @@ def test_a_task_key_carries_no_limit_rule_of_its_own():
         assert errs == [] and req["task"] == task
 
 
-# --- ADR-0130 (#141): a dispatch skill version is a hash ---
+# --- a dispatch skill version is a hash ---
 HASH = "a" * 64
 OTHER = "b" * 64
 

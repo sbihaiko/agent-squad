@@ -1,13 +1,15 @@
-"""Effective node settings: the graph document plus the proposals applied in this run (ADR-0103).
+"""Effective node settings: the graph document plus the proposals applied in this run.
 
-The overlay lives in the run only. The graph document and its hash never change (ADR-0114 rule 1).
+The overlay lives in the run only. The graph document and its hash never change.
 """
+import math
 
 
 class Effective:
-    def __init__(self, nodes):
+    def __init__(self, nodes, caps=None):
         self.nodes = nodes
         self.over = {}
+        self.caps = caps or {}    # project ceilings: max_stalls, max_budget_usd. A node may only narrow them.
 
     def set(self, name, key, value):
         self.over.setdefault(name, {})[key] = value
@@ -18,16 +20,16 @@ class Effective:
     def agent(self, node):
         n, o = node, self.over.get(node["name"], {})
         return {"model": o.get("model", n["model"]), "effort": o.get("effort", n.get("effort")),
-                "tools": list(o.get("tools", n["tools"])), "turns_max": o.get("turns_max", n["budget"]["turns"]["max"]),
-                "spend_max": o.get("spend_max", n["budget"]["spend"]["max"])}
+                "tools": list(o.get("tools", n["tools"])), "stalls_max": min(o.get("stalls_max", n["budget"]["stalls"]["max"]), self.caps.get("max_stalls", math.inf)),
+                "spend_max": min(o.get("spend_max", n["budget"]["spend"]["max"]), self.caps.get("max_budget_usd", math.inf))}
 
     def loop_max(self, node):
         return self.over.get(node["name"], {}).get("loop_max", node["max"]["value"])
 
 
-KINDS = ("set_model", "set_effort", "narrow_tools", "shrink_turns", "shrink_spend", "shrink_loop_max")
+KINDS = ("set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend", "shrink_loop_max")
 # The overlay key each kind changes, and the node kind it targets.
-KEY = {"set_model": "model", "set_effort": "effort", "narrow_tools": "tools", "shrink_turns": "turns_max",
+KEY = {"set_model": "model", "set_effort": "effort", "narrow_tools": "tools", "shrink_stalls": "stalls_max",
        "shrink_spend": "spend_max", "shrink_loop_max": "loop_max"}
 TARGET_KIND = {k: "agent" for k in KINDS} | {"shrink_loop_max": "loop"}
 
@@ -46,7 +48,7 @@ def _current(eff, node, kind):
 def validate(p, proposer, nodes, eff, facts, item):
     """Check one proposal against its proposer and its target. Return (old, range, cited). Raise Rejected.
 
-    Nothing is clamped and nothing is applied in part (ADR-0103 rule 8).
+    Nothing is clamped and nothing is applied in part.
     """
     if not isinstance(p, dict):
         raise Rejected("proposal_malformed")
@@ -92,7 +94,7 @@ def validate(p, proposer, nodes, eff, facts, item):
         if set(value) == set(old):
             raise Rejected("tools_not_narrowed")
         return old, {"allowed": allowed}, cited
-    lo = node["max"]["min"] if kind == "shrink_loop_max" else node["budget"]["turns" if kind == "shrink_turns" else "spend"]["min"]
+    lo = node["max"]["min"] if kind == "shrink_loop_max" else node["budget"]["stalls" if kind == "shrink_stalls" else "spend"]["min"]
     if isinstance(value, bool) or not isinstance(value, (int, float)) or (kind != "shrink_spend" and not isinstance(value, int)):
         raise Rejected("proposal_malformed")
     if value < lo or value >= old:
@@ -101,7 +103,7 @@ def validate(p, proposer, nodes, eff, facts, item):
 
 
 def replay(events, eff, before=None):
-    """Put the applied proposals of a record on an overlay, in record order (ADR-0107 rule 1). Return their count."""
+    """Put the applied proposals of a record on an overlay, in record order. Return their count."""
     n = 0
     for e in events:
         if e["event"] == "applied" and (before is None or e["pos"] < before):

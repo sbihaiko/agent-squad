@@ -1,4 +1,4 @@
-"""The action runner: one git effect in a workspace (ADR-0102)."""
+"""The action runner: one git effect in a workspace."""
 import subprocess
 
 from squad import actions, git

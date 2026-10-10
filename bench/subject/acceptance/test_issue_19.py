@@ -140,7 +140,7 @@ def test_a_non_positive_quantity_is_not_a_restock():
 
     The exception type is deliberately left open between `TypeError` and
     `ValueError`: `InvalidQuantity` lives in `sales/cart.py` and `catalog/`
-    may import only `core/` (ADR 0003), so the catalog cannot raise the
+    may import only `core/`, so the catalog cannot raise the
     name `Cart.add` raises. Only the rejection is the contract.
     """
     catalog = build_catalog()

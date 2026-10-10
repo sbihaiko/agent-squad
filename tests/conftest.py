@@ -10,21 +10,26 @@ pytest_plugins = ["tests.slowcap"]
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 
 
-def pytest_configure(config):
-    config.addinivalue_line("markers", "chrome: drives headless Chrome; one such test runs at a time across the xdist workers")
+@pytest.fixture(autouse=True)
+def _no_real_page(monkeypatch):
+    """No test opens a page in the Owner's browser: `launch` opens the dashboard by default, so every test that starts a run without its own opener would. A test that checks the opening injects its opener or patches `launch.headless`."""
+    monkeypatch.setenv("SQUAD_HEADLESS", "1")
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open", lambda *a, **k: False)
 
 
 @pytest.fixture(autouse=True)
-def _one_chrome(request):
-    """A `chrome` test waits here, in setup, for its turn: the wait is not part of the call the slow cap times (ADR-0123)."""
-    if request.node.get_closest_marker("chrome") is None:
-        yield
-        return
-    import fcntl
-    import tempfile
-    with open(Path(tempfile.gettempdir()) / "agent-squad-chrome.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+def _own_memory_dir(monkeypatch, tmp_path_factory):
+    """`squad setup` writes a memory index outside the project: no test touches the Owner's ~/.claude."""
+    monkeypatch.setenv("SQUAD_MEMORY_DIR", str(tmp_path_factory.mktemp("memory")))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stop_test_dashboard_servers():
+    """A run a test starts may leave a dashboard server on its tmp folder; stop those when the session ends."""
+    yield
+    import subprocess
+    subprocess.run(["pkill", "-f", r"squad\.dashboard_server .*pytest-of-"], check=False)
 
 
 @pytest.fixture
@@ -34,7 +39,7 @@ def anyio_backend():
 
 @pytest.fixture(scope="session", autouse=True)
 def _real_git_first_on_path():
-    """On macOS `/usr/bin/git` is a shim that runs xcrun on every call, which doubles the cost of each fork. Put the real binary first: same git, one resolve per session (#132).
+    """On macOS `/usr/bin/git` is a shim that runs xcrun on every call, which doubles the cost of each fork. Put the real binary first: same git, one resolve per session.
 
     Guard: the git-running tests; a missing xcrun leaves PATH as it was."""
     import os

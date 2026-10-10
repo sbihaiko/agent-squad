@@ -4,7 +4,7 @@
 `Money.seeded_from(source)`; `Cart`, `Order` and `RevenueReport` each report a
 currency of their own; and an empty collection that cannot find out what
 currency it is in raises instead of answering USD. The issue text (17-*.md) names no exception
-class for that refusal, so the test asks only that it raises (ADR-0119).
+class for that refusal, so the test asks only that it raises.
 
 **Why the fixtures are EUR.** A restructuring states a shape, and a suite can
 only see behavior, so every assertion below is pinned against a non-USD

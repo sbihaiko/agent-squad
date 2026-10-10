@@ -6,7 +6,7 @@ them, and `Cart.expected_fill(sku)` projecting when a backorder will be
 filled.
 
 Every assertion below is one the issue text (21-*.md, with 20-*.md and
-19-*.md) states (ADR-0119). The text names no ledger-row attribute for a
+19-*.md) states. The text names no ledger-row attribute for a
 remainder, a closed flag or a lead time, no exception class for a refused
 projection, no anchor date for the projection, and no shape for a ranking
 entry. So the test reads a ledger row as the pair the text names (a request

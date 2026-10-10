@@ -1,4 +1,4 @@
-"""Ticket #32: the each node (ADR-0101, CONTEXT: Each)."""
+"""The each node (CONTEXT: Each)."""
 import anyio
 import pytest
 

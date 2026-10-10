@@ -1,4 +1,4 @@
-"""A gate command runs in the project's environment, not the orchestrator's (squad.procs.clean_env).
+"""A gate command runs in the project's environment, not the orchestrator's (squad.workcmd.clean_env).
 
 Guards: `ac-verify` strips `VIRTUAL_ENV` and the virtualenv's bin directory from `PATH`, so `python3 -m pytest`
 inside a command reaches the project's python3 instead of ours. Without it, `uv run` makes the command find our

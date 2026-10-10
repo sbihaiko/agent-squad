@@ -1,5 +1,5 @@
 // Test door for the dashboard core under node. Reads {engine, core, ops} on stdin, prints one result per op.
-// `core` is the bundle text of scripts/build_dashboard.py::core_bundle, the same text the page inlines (#120).
+// `core` is the bundle text of scripts/build_dashboard.py::core_bundle, the same text the page inlines.
 let make;
 // One history run: apply each edit like the page does (graph and layout together), record the state before it, then undo all and redo all.
 function runHistory(core, o) {
@@ -74,7 +74,7 @@ process.stdin.on("end", async () => {
     else if (o.op === "cause") out.push(core.causeSummary(o.reasons));
     else if (o.op === "causes") out.push(core.failureCauses(o.events));
     else if (o.op === "children") out.push(core.runChildren(o.events, o.now));
-    else if (o.op === "issues") out.push(core.issueProgress(o.events, o.total));
+    else if (o.op === "issues") out.push(core.issueProgress(o.events, o.total, o.held));
     else if (o.op === "issuecells") out.push(core.progressCells(core.issueProgress(o.events, o.total)));
     else if (o.op === "issuenumber") out.push(core.issueNumber(o.prompt));
     else if (o.op === "pause") out.push(core.pauseView(o.events));

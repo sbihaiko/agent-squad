@@ -1,4 +1,4 @@
-"""Engine options: how one invocation runs the same graph (ADR-0106).
+"""Engine options: how one invocation runs the same graph.
 
 An option may name nodes and may lower a run-block value. It never sets a node's model or budget.
 """
@@ -19,7 +19,7 @@ def resolve(graph, options):
     opts, cfg = dict(options or {}), dict(graph.run)
     for k in opts:
         if k not in (*LOWER, *NODE_OPTIONS, *OTHER):
-            raise OptionError(f"{k} is not an engine option: a node's model and budget change only by a graph edit or an applied proposal (ADR-0106 rule 9)")
+            raise OptionError(f"{k} is not an engine option: a node's model and budget change only by a graph edit or an applied proposal")
     for k in NODE_OPTIONS:
         if k in opts:
             bad = check_node_names(graph.doc, [opts[k]])
@@ -31,13 +31,13 @@ def resolve(graph, options):
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
                 raise OptionError(f"{k} must be a positive number")
             if cfg[k] is not None and v > cfg[k]:     # a null run deadline has no ceiling to lower from
-                raise OptionError(f"{k} {v} is above the run block value {cfg[k]}: an option may only lower it (ADR-0106 rule 7)")
+                raise OptionError(f"{k} {v} is above the run block value {cfg[k]}: an option may only lower it")
             cfg[k] = v
     mins = [n["budget"]["spend"]["min"] for n in graph.nodes.values() if n["kind"] == "agent"]
     if "spend_cap" in opts and mins and cfg["spend_cap"] < max(mins):
-        raise OptionError(f"spend_cap {cfg['spend_cap']} is below an agent's spend minimum {max(mins)} (ADR-0108 rule 9)")
+        raise OptionError(f"spend_cap {cfg['spend_cap']} is below an agent's spend minimum {max(mins)}")
     if "tier_pin" in opts and opts["tier_pin"] not in TIERS:
         raise OptionError(f"tier_pin must be one of {', '.join(TIERS)}")
     if "expect_graph_hash" in opts and opts["expect_graph_hash"] != graph.hash:
-        raise OptionError(f"graph hash mismatch: expected {opts['expect_graph_hash']}, the loaded graph is {graph.hash}. Nothing ran (ADR-0106 rule 8)")
+        raise OptionError(f"graph hash mismatch: expected {opts['expect_graph_hash']}, the loaded graph is {graph.hash}. Nothing ran")
     return opts, cfg

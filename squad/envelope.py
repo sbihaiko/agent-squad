@@ -1,11 +1,11 @@
-"""Validate a spawn request against a dispatch envelope (ADR-0113 rules 3 to 5).
+"""Validate a spawn request against a dispatch envelope.
 
 Code checks every value. A value may only narrow. A request over any limit is rejected whole:
-no clamp, no partial apply. A model never supplies an identity (rule 4).
+no clamp, no partial apply. A model never supplies an identity.
 """
 from squad import skills
 
-REQUEST_FIELDS = {"prompt", "skill", "model", "effort", "tools", "turns", "spend", "deadline", "workspace", "inputs", "after", "task"}
+REQUEST_FIELDS = {"prompt", "skill", "model", "effort", "tools", "stalls", "spend", "deadline", "workspace", "inputs", "after", "task"}
 IDENTITY_FIELDS = {"id", "key", "child", "name", "request_key", "parent", "depth"}
 
 
@@ -19,7 +19,7 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR):
     pinned = {s["name"]: s.get("version") for s in dispatch["allow"]["skills"]}
     if isinstance(skill, str):
         skill = {"name": skill}
-    if isinstance(skill, dict) and "version" not in skill:   # no pin in the request: use the allow pin, else the current hash (ADR-0130)
+    if isinstance(skill, dict) and "version" not in skill:   # no pin in the request: use the allow pin, else the current hash
         skill = {**skill, "version": pinned.get(skill.get("name")) or skills.hash_of(skill.get("name"), vendor)}
     if not isinstance(skill, dict) or not skill.get("name"):
         errs.append("missing_skill")
@@ -32,11 +32,11 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR):
     req = {
         "prompt": raw.get("prompt", ""), "skill": {"name": skill["name"], "version": skill.get("version", "")},
         "model": raw.get("model", a["models"][0]), "effort": raw.get("effort", a["efforts"][0]),
-        "tools": list(raw.get("tools", a["tools"])), "turns": raw.get("turns", b["turns"]["max"]),
+        "tools": list(raw.get("tools", a["tools"])), "stalls": raw.get("stalls", b["stalls"]["max"]),
         "spend": raw.get("spend", b["spend"]["max"]), "deadline": raw.get("deadline", dispatch["deadline"]),
         "workspace": raw.get("workspace", a["workspaces"][0]), "inputs": list(raw.get("inputs", [])),
-        "after": list(after),   # indexes of earlier requests in the same list; the engine turns them into child names (ADR-0113, 2026-10-01)
-        "task": raw.get("task"),   # the work item this child advances, a string or None; a task key narrows nothing, so no limit rule (ADR-0113, #98)
+        "after": list(after),   # indexes of earlier requests in the same list; the engine turns them into child names
+        "task": raw.get("task"),   # the work item this child advances, a string or None; a task key narrows nothing, so no limit rule
     }
     return req, errs
 
@@ -60,10 +60,10 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
     name, version = req["skill"]["name"], req["skill"]["version"]
     if name not in allowed or (allowed[name] and allowed[name] != version):
         e.append("skill_outside_allow")
-    elif version != skills.hash_of(name, vendor):   # a pin that differs from VERSIONS.json is rejected whole (ADR-0130)
+    elif version != skills.hash_of(name, vendor):   # a pin that differs from VERSIONS.json is rejected whole
         e.append(f"skill_pin_mismatch:{name}")
-    if not b["turns"]["min"] <= req["turns"] <= b["turns"]["max"]:
-        e.append("turns_outside_budget")
+    if not b["stalls"]["min"] <= req["stalls"] <= b["stalls"]["max"]:
+        e.append("stalls_outside_budget")
     if not b["spend"]["min"] <= req["spend"] <= b["spend"]["max"]:
         e.append("spend_outside_budget")
     if req["spend"] > parent_spend_left:

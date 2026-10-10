@@ -1,9 +1,10 @@
-"""Find a run folder for `squad dashboard` (ticket #83). It reads records and never starts a run (ADR-0117).
+"""Find a run folder for `squad dashboard`. It reads records and never starts a run.
 
 A run folder holds `record.jsonl`, or `run/record.jsonl` (a run that a harness wrapped with a graph and a target).
 Runs are numbered from 1, oldest first, so a number stays the same when a newer run appears.
 """
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -42,6 +43,20 @@ def _start(record):
     return run_id, float(ts) if isinstance(ts, (int, float)) else record.stat().st_mtime
 
 
+def request_of(folder, width=60):
+    """The request a run started from, cut to `width` characters: the text `with_request` appended to the entry agent in the run's graph.json."""
+    try:
+        g = json.loads((Path(folder) / "graph.json").read_text())
+    except (OSError, ValueError):
+        return ""
+    for n in g.get("nodes", []):
+        m = re.search(r"\n\n(?:Work|Task):\n(.*)\Z", n.get("instructions") or "", re.S)
+        if m:
+            text = " ".join(m.group(1).split())
+            return text if len(text) <= width else text[:width - 1] + "…"
+    return ""
+
+
 def list_runs(runs_dir):
     found = []
     root = Path(runs_dir)
@@ -53,19 +68,24 @@ def list_runs(runs_dir):
     return [Run(i, d.resolve(), rec.resolve(), rid, ts) for i, ((rid, ts), d, rec) in enumerate(found, 1)]
 
 
+def find(every, name):
+    """The run whose folder name or run id is `name` (a run's name is both, #188); a name wins over a number."""
+    return next((r for r in every if name in (r.folder.name, r.run_id)), None)
+
+
 def resolve(runs_dir, ref=None):
-    """The run named by `ref`: None is the latest, digits are a number, anything else a folder name or a run id."""
+    """The run named by `ref`: None is the latest; a folder name, a run id or a run name; else digits are a number."""
     every = list_runs(runs_dir)
     if not every:
         raise RunNotFound(f"no runs under {runs_dir}")
     if ref is None or ref == "":
         return every[-1]
     text = str(ref)
+    named = find(every, text)
+    if named:
+        return named
     if text.isdigit() and 1 <= int(text) <= len(every):
         return every[int(text) - 1]
-    for r in every:
-        if text in (r.folder.name, r.run_id):
-            return r
     raise RunNotFound(f"no run {text!r}: {runs_dir} has {len(every)} run{'s' if len(every) != 1 else ''} (1-{len(every)}); `squad dashboard --list` shows them")
 
 

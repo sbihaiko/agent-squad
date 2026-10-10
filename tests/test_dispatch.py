@@ -1,4 +1,4 @@
-"""Tickets #38 to #40: the dispatch node (ADR-0113, ADR-0114)."""
+"""Tickets #38 to #40: the dispatch node."""
 import json
 import shutil
 from pathlib import Path
@@ -17,7 +17,7 @@ from tests.helpers import node, router
 
 def req(skill="tdd", **kw):
     return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": "sonnet", "effort": "medium", "tools": ["Read", "Edit"],
-            "turns": 10, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child", **kw}
+            "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child", **kw}
 
 
 def routed(*spawns, **out):
@@ -52,7 +52,7 @@ async def test_one_child_runs_as_its_skill_and_writes_the_three_events_and_the_a
     assert v.verdict == "completed"
     r, a = ev(tmp_path, "spawn_requested")[0], ev(tmp_path, "spawn_accepted")[0]
     assert a["request_key"] == r["pos"] and a["child"] == "route.router.1" and a["parent"] == "router" and a["depth"] == 1
-    assert a["definition"]["skill"] == {"name": "tdd", "version": skills.load()["tdd"]["hash"]} and a["definition"]["turns"] == 10 and a["reservation"] == 1.0
+    assert a["definition"]["skill"] == {"name": "tdd", "version": skills.load()["tdd"]["hash"]} and a["definition"]["stalls"] == 4 and a["reservation"] == 1.0
     call = [c for c in eng.adapter.calls if c.node == "route.router.1"][0]
     assert call.prompt == "/tdd Run tdd on the task." and call.skill == "tdd" and call.max_spend == 1.0
     out = child_outs(tmp_path)["route.router.1"]
@@ -60,7 +60,7 @@ async def test_one_child_runs_as_its_skill_and_writes_the_three_events_and_the_a
     disp = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
     assert disp["outcome"] == "pass"
     assert (tmp_path / disp["artifact"]).exists()
-    assert disp["elapsed"] is not None and disp["elapsed"] >= 0   # the dispatch node's own wall time, not only its children's (ADR-0109)
+    assert disp["elapsed"] is not None and disp["elapsed"] >= 0   # the dispatch node's own wall time, not only its children's
 
 
 @pytest.mark.anyio
@@ -77,7 +77,7 @@ async def test_code_assigns_the_request_key_and_child_name_and_a_model_id_is_ref
 BAD = [
     (dict(model="gpt"), "model_outside_allow:gpt"), (dict(effort="max"), "effort_outside_allow"),
     (dict(tools=["Read", "WebFetch"]), "tool_outside_allow:WebFetch"), (dict(skill="evil"), "skill_outside_allow"),
-    (dict(turns=999), "turns_outside_budget"), (dict(turns=1), "turns_outside_budget"), (dict(spend=50.0), "spend_outside_budget"),
+    (dict(stalls=999), "stalls_outside_budget"), (dict(stalls=1), "stalls_outside_budget"), (dict(spend=50.0), "spend_outside_budget"),
     (dict(deadline=99999), "deadline_over_dispatch"), (dict(workspace="elsewhere"), "workspace_outside_allow"),
 ]
 
@@ -187,7 +187,7 @@ async def test_max_children_per_entry_is_enforced(tmp_path):
 @pytest.mark.anyio
 async def test_children_run_in_parallel_up_to_max_parallel(tmp_path):
     slow = dict(CHILD, delay=0.6)
-    ro = {"tools": ["Read"]}    # read-only children get no worktree (#47), so the timing shows the fan-out alone
+    ro = {"tools": ["Read"]}    # read-only children get no worktree, so the timing shows the fan-out alone
     eng = make(tmp_path, {"router": routed(req(**ro), req("diagnosing-bugs", **ro), req("codebase-design", **ro)), "route.router.1": slow, "route.router.2": slow, "route.router.3": slow})
     t0 = anyio.current_time()
     v = await eng.run()
@@ -276,6 +276,7 @@ def copy_target(src, dst, ran):
 async def two_children(tmp_path, **kw):
     slow = dict(CHILD, delay=0.3)
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": CHILD, "route.router.2": slow}, **kw)
+    eng.dispatch.prune = lambda: None      # these fixtures cut a finished run into a crashed one: they need the worktrees that a completed run prunes
     await eng.run()
     return eng
 
@@ -399,6 +400,7 @@ async def test_parallel_writing_children_run_in_distinct_worktrees_and_a_reader_
 async def test_a_request_never_picks_its_workspace_and_each_child_worktree_starts_from_the_target_head(tmp_path):
     repo = sibling_repo(tmp_path)
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": CHILD, "route.router.2": CHILD})
+    eng.dispatch.prune = lambda: None      # the test reads the child worktrees after the run
     await eng.run()
     from squad import git
     heads = {git.head(c.workspace) for c in eng.adapter.calls if c.node.startswith("route.")}
@@ -466,7 +468,7 @@ async def test_a_read_only_child_starts_in_a_directory_that_exists_when_its_name
 
 @pytest.mark.anyio
 async def test_a_child_with_after_starts_only_when_the_children_it_names_have_passed(tmp_path):
-    """ADR-0113 amendment (2026-10-01): `after` holds indexes of earlier requests; code turns them into child names."""
+    """`after` holds indexes of earlier requests; code turns them into child names."""
     order = []
 
     def impl(r):
@@ -528,17 +530,17 @@ async def test_a_read_only_child_that_runs_after_a_writer_starts_in_the_writers_
 
 @pytest.mark.anyio
 async def test_a_capped_child_with_a_valid_artifact_passes_and_its_cap_rides_as_a_diagnostic(tmp_path):
-    """#100: ADR-0108 rule 4 holds for a dispatch child as for an agent node."""
-    capped = {**CHILD, "stop_reason": "turn_cap"}
+    """The spend rule holds for a dispatch child as for an agent node."""
+    capped = {**CHILD, "stop_reason": "stall_cap"}
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": capped})
     await eng.run()
     out = child_outs(tmp_path)["route.router.1"]
-    assert out["outcome"] == "pass" and out["reasons"] == [] and out["diagnostic"] == {"cap": "node_turn_cap"}
+    assert out["outcome"] == "pass" and out["reasons"] == [] and out["diagnostic"] == {"cap": "node_stall_cap"}
 
 
 @pytest.mark.anyio
 async def test_a_dispatch_with_no_accepted_child_names_why_each_request_was_refused(tmp_path):
-    wrong = req(name="P.12", skills=["tdd"], budget={"turns": 5}, acceptance_commands=["true"])      # the shape a model invented for a repo it did not know
+    wrong = req(name="P.12", skills=["tdd"], budget={"stalls": 5}, acceptance_commands=["true"])      # the shape a model invented for a repo it did not know
     del wrong["skill"]
     eng = make(tmp_path, {"router": routed(wrong)})
     v = await eng.run()
@@ -563,8 +565,27 @@ async def test_the_router_is_given_the_limits_it_may_ask_within(tmp_path):
     call = next(c for c in eng.adapter.calls if c.node == "router")
     limits = json.loads(call.prompt.split(" ", 1)[1] if call.prompt.startswith("/") else call.prompt)["limits"]
     assert "tdd" in limits["skills"] and "evil" not in limits["skills"]
-    assert set(limits) >= {"skills", "models", "efforts", "tools", "workspaces", "turns", "spend", "deadline", "max_children"}
+    assert set(limits) >= {"skills", "models", "efforts", "tools", "workspaces", "stalls", "spend", "deadline", "max_children"}
     assert not [c for c in eng.adapter.calls if c.node == "route.router.1" and "limits" in c.prompt]       # a child sees no limits, only its own task
+
+
+def _seed_router():
+    from squad.workflows import DYNAMIC_SEED
+    return next(n for n in json.loads(DYNAMIC_SEED.read_text())["nodes"] if n["name"] == "router")
+
+
+def test_the_router_role_names_a_stopping_rule():          # #150 acceptance 3
+    root = Path(__file__).resolve().parent.parent
+    for text in ((root / "prompts" / "router.md").read_text(), _seed_router().get("instructions", "")):
+        assert "## Stopping rule" in text and "about fifteen turns" in text and "needs-human" in text
+        assert text.index("## Stopping rule") > text.index("Return these fields")      # after the role text
+
+
+def test_the_dynamic_seed_router_carries_its_role_text_and_the_raised_budget():     # #150
+    root = Path(__file__).resolve().parent.parent
+    r = _seed_router()
+    assert r.get("instructions") == (root / "prompts" / "router.md").read_text().strip()
+    assert r["budget"] == {"stalls": {"min": 2, "max": 5}, "spend": {"min": 0.05, "max": 8}} and r["deadline"] == 1200
 
 
 def test_the_dynamic_seed_allows_only_skills_the_plugin_ships():
@@ -572,3 +593,21 @@ def test_the_dynamic_seed_allows_only_skills_the_plugin_ships():
     doc = json.loads(DYNAMIC_SEED.read_text())
     allowed = {s["name"] for n in doc["nodes"] if n["kind"] == "dispatch" for s in n["allow"]["skills"]}
     assert allowed and allowed <= set(skills.load()), f"{sorted(allowed - set(skills.load()))} are allowed but not vendored: a child cannot load them"
+
+
+def test_the_router_prompt_names_the_three_answers_and_warns_that_a_handoff_may_be_stale():    # #159, #161
+    text = (Path(__file__).resolve().parent.parent / "prompts" / "router.md").read_text()
+    assert '"status": "needs-human"' in text and '"spawns": []' in text and "`children`" in text
+    assert "stale" in text and "ask a child" in text
+
+
+def test_a_child_with_no_artifact_records_how_its_session_ended():
+    from squad.adapter import CallResult
+    from squad.runners import children  # noqa: F401  the runner reads `ended` from the result
+    r = CallResult(None, 1.0, 5, None, ended={"subtype": "success", "is_error": False, "last": "I ran out of room"})
+    assert r.ended["last"] == "I ran out of room"
+    from squad.sdk_adapter import ended_of
+    class R:
+        result = "x" * 900
+        is_error = False
+    assert ended_of(R(), "success") == {"subtype": "success", "is_error": False, "last": "x" * 500}

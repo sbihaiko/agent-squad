@@ -1,4 +1,4 @@
-"""Guards for ticket #29: ADR-0108 (run spend, caps, funding, the optional floor)."""
+"""Guards for run spend, caps, funding and the optional floor."""
 import pytest
 
 from squad import record
@@ -60,17 +60,17 @@ async def test_the_engine_passes_the_lesser_of_the_node_cap_and_the_run_remainde
 
 async def test_a_cap_ends_a_node_through_its_artifact_with_a_reason(tmp_path):
     d = doc([agent("a", output_key="x")], ["a"])
-    for stop, reason in (("turn_cap", "node_turn_cap"), ("spend_cap", "node_spend_cap")):
+    for stop, reason in (("stall_cap", "node_stall_cap"), ("spend_cap", "node_spend_cap")):
         t = tmp_path / stop
         eng = run_engine(d, {"a": {"output": None, "spend": 0.2, "stop_reason": stop}}, t)
         await eng.run()
         e = outs(t, "a")[0]
         assert e["outcome"] == "fail" and e["reasons"] == [reason]
     t = tmp_path / "valid"
-    eng = run_engine(d, {"a": {"output": {"x": 1}, "spend": 0.2, "stop_reason": "turn_cap"}}, t)
+    eng = run_engine(d, {"a": {"output": {"x": 1}, "spend": 0.2, "stop_reason": "stall_cap"}}, t)
     v = await eng.run()
     e = outs(t, "a")[0]
-    assert e["outcome"] == "pass" and e["reasons"] == [] and e["diagnostic"]["cap"] == "node_turn_cap" and v.verdict == "completed"
+    assert e["outcome"] == "pass" and e["reasons"] == [] and e["diagnostic"]["cap"] == "node_stall_cap" and v.verdict == "completed"
 
 
 async def test_a_spend_cap_hit_under_a_small_remainder_names_the_run_cap(tmp_path):

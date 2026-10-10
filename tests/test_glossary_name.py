@@ -1,10 +1,10 @@
 """The domain glossary is `GLOSSARY.md`, and the old name is gone (Owner ruling, 2026-10-05).
 
 The upstream skills renamed the glossary file, so this repo follows. A live file that still names the old file
-sends a reader to a path that does not exist. ADRs are guides (ADR-0000) and were renamed with a plain
+sends a reader to a path that does not exist. ADRs are guides and were renamed with a plain
 substitution; `scripts/archive/` holds recorded data and is left as it was.
 
-Guard (ADR-0018): GLOSSARY.md exists at the root, the old file does not, and no tracked file outside
+Guard: GLOSSARY.md exists at the root, the old file does not, and no tracked file outside
 `scripts/archive/` names the old file.
 """
 import re

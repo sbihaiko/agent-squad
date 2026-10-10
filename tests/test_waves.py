@@ -1,4 +1,4 @@
-"""Ticket #90: a dispatch lands passing write children in request order, a wave ledger feeds the router, a stop word ends the waves (ADR-0113 amendment, 2026-10-01)."""
+"""Ticket #90: a dispatch lands passing write children in request order, a wave ledger feeds the router, a stop word ends the waves."""
 import json
 import shutil
 from pathlib import Path
@@ -97,7 +97,7 @@ async def test_a_conflicting_second_writer_fails_with_merge_conflict_and_the_fir
 
 @pytest.mark.anyio
 async def test_a_landing_that_breaks_an_earlier_childs_held_out_command_is_undone(tmp_path):
-    """ADR-0113 rule 12, from run-20261001-234426: the land of issue 06 turned issue 13's held-out command red,
+    """The land of issue 06 turned issue 13's held-out command red,
     and the final gate was the first thing to notice, fifteen lands later. The child that broke it passed its own.
 
     Both worktrees are cut from the target before either lands, so the second child deletes a file the base commit
@@ -286,16 +286,31 @@ async def test_a_task_loop_that_names_a_new_task_each_entry_runs_past_a_small_ma
 
 
 @pytest.mark.anyio
-async def test_a_task_retried_max_times_exits_fail_task_max_exhausted(tmp_path):
-    """#98: one task asked for `max` (3) times ends the loop `fail` with `task_max_exhausted`, distinct from
-    `loop_max_exhausted` and `waves_stalled`."""
+async def test_a_task_that_reaches_max_is_dropped_and_the_loop_goes_on_to_the_other_tasks(tmp_path):
+    """#168 (run router-all24: issue 7 spent its attempts and nine issues were never asked for): the task reaches `max` (2), a diagnostic
+    records it, the next wave asks task 15, and the run still fails at the end, naming the dropped task."""
+    ask14, ask15 = routed(req("tdd", task="14", tools=["Read"])), routed(req("tdd", task="15", tools=["Read"]))
+    eng = make(tmp_path, {"router": [ask14, ask14, ask15, routed(done=True)]},
+               tweak=waves(2, task=True), target=sibling_repo(tmp_path), adapter={"default": CHILD})
+    v = await eng.run()
+    routes = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"]
+    dropped = [e["payload"] for e in ev(tmp_path, "diagnostic") if e["source"] == "loop"]
+    assert [e["entry"] for e in routes] == [1, 2, 3, 4]                      # the loop went past the dropped task
+    assert [d["task_dropped"] for d in dropped] == ["14"] and dropped[0]["attempts"] == 2
+    assert v.verdict == "failed" and v.reasons == ["task_exhausted:14"]      # the dropped task is never hidden
+
+
+@pytest.mark.anyio
+async def test_a_router_that_asks_a_dropped_task_again_ends_the_loop_task_max_exhausted(tmp_path):
+    """#98, #168: asking a dropped task once more ends the loop `fail` with `task_max_exhausted`, distinct from `loop_max_exhausted`
+    and `waves_stalled`, and the verdict still names the task."""
     eng = make(tmp_path, {"router": [routed(req("tdd", task="14", tools=["Read"]))] * 3},
-               tweak=waves(3, task=True), target=sibling_repo(tmp_path), adapter={"default": CHILD})
+               tweak=waves(2, task=True), target=sibling_repo(tmp_path), adapter={"default": CHILD})
     v = await eng.run()
     routes = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"]
     waves_out = [e for e in ev(tmp_path, "outcome") if e["node"] == "waves"][0]
-    assert v.verdict == "failed" and v.reasons == ["task_max_exhausted"]
-    assert [e["entry"] for e in routes] == [1, 2, 3]                              # the 3rd attempt reaches max
+    assert v.verdict == "failed" and v.reasons == ["task_max_exhausted", "task_exhausted:14"]
+    assert [e["entry"] for e in routes] == [1, 2, 3]
     assert waves_out["outcome"] == "fail" and waves_out["reasons"][0] == "task_max_exhausted"
 
 

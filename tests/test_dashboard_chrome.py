@@ -1,9 +1,9 @@
-"""ADR-0124: the page chrome. The side panel starts hidden, a bare page opens in Edit mode, a node press opens the panel and a second press closes it."""
+"""The page chrome. The side panel starts hidden, a bare page opens in Edit mode, a node press opens the panel and a second press closes it."""
 import json
 
 from tests.dashboard_helpers import PAGE_SRC
 from tests.helpers import DESIGN
-from tests.test_dashboard_page import drive, needs_chrome
+from tests.test_dashboard_page import drive, needs_ego
 
 
 def test_every_control_that_changes_the_graph_is_marked_edit_only():
@@ -19,7 +19,7 @@ def test_the_left_panel_holds_no_tool_buttons():
     assert "<button" not in left and 'class="tools"' not in left, "tools live in the top bar and on the canvas"
 
 
-@needs_chrome
+@needs_ego
 def test_the_panel_starts_hidden_a_bare_page_is_in_edit_mode_and_a_node_press_toggles_the_panel(tmp_path):
     text = (DESIGN / "five-phases.graph.json").read_text()
     steps = (f'put("f-graph",{json.dumps(text)},"five-phases.graph.json");await wait();'

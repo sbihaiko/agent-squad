@@ -3,7 +3,7 @@ description: Check that every skill the plugin borrows still resolves, after `np
 allowed-tools: Bash(uv run:*)
 ---
 
-Check the borrowed skills after a skill update (ADR-0129).
+Check the borrowed skills after a skill update.
 
 ```
 uv run --project "${CLAUDE_PLUGIN_ROOT}" python -m squad.skillpath --check

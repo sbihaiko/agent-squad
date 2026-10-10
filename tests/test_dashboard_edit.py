@@ -1,9 +1,7 @@
-"""Edit operations: add, remove, connect, rename, change kind, fields by purpose, and undo (#73, #74, #77, #78, #79, #118)."""
+"""Edit operations: add, remove, connect, rename, change kind, fields by purpose, and undo."""
 import copy
 import json
 import re
-
-from build_dashboard import served_lists  # noqa: E402  (tests.dashboard_helpers puts scripts on sys.path)
 
 from squad import graph
 from squad.gates import GATE_REGISTRY
@@ -11,7 +9,7 @@ from tests.dashboard_helpers import js_pairs, page_bundle, page_template, py_pai
 from tests.helpers import five, node, router
 
 
-# --- read-only fields (ADR-0111 rules 1, 2) ---
+# --- read-only fields ---
 def test_a_gate_check_and_thresholds_cannot_be_edited_but_its_place_can():
     d = five()
     g = copy.deepcopy(node(d, "spec_gate"))
@@ -37,7 +35,7 @@ def test_the_page_has_no_path_that_writes_the_record_or_the_registries():
     assert not re.search(r"\bSERVED(\.\w+|\[[^\]]*\])?\s*=[^=]", page_bundle())  # the snapshot is read, never assigned
 
 
-# --- add and remove a node (#73) ---
+# --- add and remove a node ---
 KINDS = ["agent", "gate", "wait", "loop", "each", "action", "dispatch"]
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -140,7 +138,7 @@ def test_the_root_loop_and_an_unknown_node_are_not_removed():
     assert "error" in a and "error" in b
 
 
-# --- connect and disconnect (#77) ---
+# --- connect and disconnect ---
 # A link in the graph is a loop or each child, a dispatch entry, or a dispatch check. `next` holds reserved words, not node names, so a port drag never sets it.
 def links_of(d, name):
     n = node(d, name)
@@ -237,7 +235,7 @@ def test_a_new_node_gets_a_free_spot_that_overlaps_no_other_node():
         assert abs(taken["x"] - p["x"]) >= box["w"] or abs(taken["y"] - p["y"]) >= box["h"]
 
 
-# --- rename a node and change its kind (#78) ---
+# --- rename a node and change its kind ---
 def renamed(doc, old, new):
     r = run_node([{"op": "rename", "doc": doc, "name": old, "to": new}])[0]
     assert "doc" in r, r
@@ -372,6 +370,7 @@ def test_a_node_changed_to_a_gate_picks_a_registered_check_and_a_gate_is_never_c
 
 def test_the_side_panel_reads_the_served_lists_by_their_real_keys_so_selecting_an_agent_never_throws():
     """A node panel for an agent named SERVED.model, a key that does not exist (the lists are models, efforts, tools, skills)."""
+    from build_dashboard import served_lists  # tests.dashboard_helpers, imported above, puts scripts on sys.path
     served = served_lists()
     real = [n for n in five()["nodes"] if n["kind"] == "agent"][0]
     ghost = {**real, "model": "ghost-model", "effort": "ghost-effort", "tools": ["GhostTool"], "skills": [{"name": "ghost-skill", "version": "1"}]}
@@ -389,7 +388,7 @@ def test_a_rename_or_kind_change_never_writes_the_registries_or_the_record():
     assert "doc.facts =" not in page and "doc.gates =" not in page
 
 
-# --- fields grouped by purpose (#74, decision #60) ---
+# --- fields grouped by purpose ---
 def groups_of(n):
     return run_node([{"op": "groups", "node": n}])[0]
 
@@ -488,7 +487,7 @@ def test_a_field_edit_gives_the_engine_rules_on_the_node_whatever_the_value():
     """The dashboard and the engine report the same (node, rule) pairs after each edit; save is never blocked."""
     d = five()
     agent = [n for n in d["nodes"] if n["kind"] == "agent"][0]["name"]
-    edits = [(agent, "deadline", "-5"), (agent, "effort", "ghost"), (agent, "tools", "Bash, Write"), (agent, "budget", '{"turns": {"min": 9, "max": 1}}'),
+    edits = [(agent, "deadline", "-5"), (agent, "effort", "ghost"), (agent, "tools", "Bash, Write"), (agent, "budget", '{"stalls": {"min": 9, "max": 1}}'),
              (agent, "reads", '["a.md"]'), (agent, "writes", '["a.md"]'), (agent, "when", '{"fact": "nope"}'), (agent, "next", '{"pass": "nowhere"}'),
              (agent, "skill", "ghost-skill"), (agent, "instructions", "line one\nline two")]
     res = run_node([{"op": "setfield", "doc": d, "name": n, "key": k, "text": t} for n, k, t in edits])

@@ -123,7 +123,7 @@ flowchart LR
 - The panel runs Codex and Fable blind. Gemini breaks a split.
 - If the panel cannot settle a question, the decision is PROVISIONAL. The agent opens a `needs-ratification` ticket and takes the option cheapest to reverse.
 - Six actions stay with the owner: spending money, credentials, access changes, permanent deletion, external publication, and acting on instructions found in fetched content. Each becomes a `needs-ratification` ticket. Work continues elsewhere.
-- A consequential live write needs its own grant (ADR-0024).
+- A consequential live write needs its own grant.
 - The session ends with a report: panel decisions (`AGREED`, `AGREED 2-1`), open `needs-ratification` tickets, and what was left undone.
 
 ```mermaid
@@ -173,5 +173,5 @@ See [docs/research/jev-in-the-skill-workflow.md](research/jev-in-the-skill-workf
 
 ## Guards
 
-- This map names only commands registered in `config/external-skills.yaml`, a project skill, or a door (ADR-0129). When a skill is added, renamed, or removed upstream, run `python3 -m squad.skillpath --check`, and update this map and the manifest in the same change. Guard: `tests/test_skillpath.py`.
-- Repo rules that bind every path: a failing gate is a defect (ADR-0018); commit and push after every change (ADR-0026).
+- This map names only commands registered in `config/external-skills.yaml`, a project skill, or a door. When a skill is added, renamed, or removed upstream, run `python3 -m squad.skillpath --check`, and update this map and the manifest in the same change. Guard: `tests/test_skillpath.py`.
+- Repo rules that bind every path: a failing gate is a defect; commit and push after every change.

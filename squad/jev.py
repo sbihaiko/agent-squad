@@ -1,10 +1,10 @@
 """Jev in shadow mode (ticket #55, ticket #13 option C).
 
 Jev scores what an agent node is about to read. The scores go to the run record as `diagnostic` events, beside the
-outcomes the gates decide. Nothing here feeds a gate, a route, or the verdict (ADR-0008, ADR-0012, ADR-0018):
+outcomes the gates decide. Nothing here feeds a gate, a route, or the verdict:
 the engine never reads what `observe` returns except to record it, and the verdict module never reads a diagnostic.
 
-Every call has one total deadline that covers its retries (ADR-0051). A timeout or an error is "no suggestion":
+Every call has one total deadline that covers its retries. A timeout or an error is "no suggestion":
 the record says so and the step goes on. The key lives in memory only. It never enters the environment (an agent
 tool could read it), the record, or a log. An error is recorded by class or HTTP status, never by message.
 """

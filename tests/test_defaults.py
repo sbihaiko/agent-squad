@@ -9,7 +9,7 @@ def test_the_defaults_file_is_sound():
 
 def test_every_role_file_has_a_role_entry():
     roles = defaults.load()["roles"]
-    files = {p.stem for p in Path("prompts").glob("*.md")} - {"_contract", "README"}
+    files = {p.stem for p in Path("prompts").glob("*.md")} - {"_contract", "_autonomy", "README"}
     assert files == set(roles)
 
 
@@ -21,8 +21,8 @@ def test_a_role_key_outside_options_is_a_defect():
 
 def test_a_missing_cap_is_a_defect():
     cfg = defaults.load()
-    del cfg["limits"]["max_turns"]
-    assert defaults.check(cfg) == ["limits.max_turns"]
+    del cfg["limits"]["max_stalls"]
+    assert defaults.check(cfg) == ["limits.max_stalls"]
 
 
 def test_a_read_only_role_drops_the_write_tools():
@@ -70,3 +70,19 @@ def test_a_context_window_below_the_probed_minimum_is_refused():
     cfg = defaults.load()
     cfg["limits"]["context_tokens"] = 50000      # the CLI clamps it up to 100000 (probe 2026-09-30)
     assert "limits.context_tokens" in defaults.check(cfg)
+
+
+def test_autonomy_defaults_are_on_with_three_resumes_and_sound():
+    cfg = defaults.load()
+    assert defaults.autonomy(cfg) == {"enabled": True, "max_resumes": 3} and defaults.check(cfg) == []
+
+
+def test_autonomy_values_outside_the_range_are_defects():
+    for key, val in (("max_resumes", 11), ("max_resumes", -1), ("max_resumes", True), ("max_resumes", 1.5), ("enabled", "yes"), ("enabled", 1)):
+        cfg = defaults.load()
+        cfg["autonomy"][key] = val
+        assert defaults.check(cfg) == [f"autonomy.{key}"], (key, val)
+    cfg = defaults.load()
+    cfg["autonomy"]["max_resumes"] = 0
+    cfg["autonomy"]["enabled"] = False
+    assert defaults.check(cfg) == []

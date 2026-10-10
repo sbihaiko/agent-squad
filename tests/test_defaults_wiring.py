@@ -1,4 +1,4 @@
-"""Guards for ticket #46: the engine-level defaults load per invocation, reach the SDK options, and are recorded (ADR-0106 rules 5, 8, 9)."""
+"""Guards for ticket #46: the engine-level defaults load per invocation, reach the SDK options, and are recorded."""
 
 import pytest
 
@@ -31,9 +31,10 @@ async def test_the_engine_level_keys_reach_the_sdk_options_and_the_node_keys_do_
     assert kw["permission_mode"] == "bypassPermissions" and kw["setting_sources"] == ["project"]
     assert kw["disallowed_tools"] == ["WebFetch", "WebSearch", "Task", "Agent"] and kw["strict_mcp_config"] is True
     assert kw["plugins"] == [{"type": "local", "path": str(defaults.ROOT / "vendor/skills")}]
-    assert kw["system_prompt"]["preset"] == "claude_code" and kw["system_prompt"]["append"] == (defaults.ROOT / "prompts/_contract.md").read_text()
+    assert kw["system_prompt"]["preset"] == "claude_code" and kw["system_prompt"]["append"] == (defaults.ROOT / "prompts/_contract.md").read_text() + "\n" + defaults.AUTONOMY_FRAGMENT.read_text()
     assert kw["env"]["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "32000" and kw["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "200000"
-    assert (kw["model"], kw["effort"], kw["max_turns"], kw["max_budget_usd"], kw["tools"]) == ("claude-sonnet-5-5", "medium", 12, 2.0, ["Read", "Edit"])
+    assert (kw["model"], kw["effort"], kw["max_budget_usd"], kw["tools"]) == ("claude-sonnet-5-5", "medium", 2.0, ["Read", "Edit"])
+    assert "max_turns" not in kw and "max_stalls" not in kw
 
 
 async def test_a_precompact_hook_logs_each_compaction_to_the_run_record_with_its_timeout():
@@ -101,7 +102,7 @@ def test_an_unsound_reread_interval_refuses_the_run(tmp_path, bad_value):
 
 
 def test_the_progress_interval_is_a_setting_and_an_unsound_one_refuses_the_run(tmp_path):
-    """How often a call in flight tells the record where it is (ticket #101) is a setting, checked like the reread interval."""
+    """How often a call in flight tells the record where it is is a setting, checked like the reread interval."""
     assert CFG["progress"]["seconds"] == 10
     assert defaults.check(CFG) == []
     for bad_value in ["-1", "-0.5", '"often"', "true"]:

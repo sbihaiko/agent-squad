@@ -141,7 +141,7 @@ const NODES = {
   impl:{l:'/implement',s:'',x:425,y:364},
   tdd:{l:'/tdd',s:'red-green slice',x:425,y:420},
   review:{l:'/code-review',s:'Standards + Spec',x:425,y:476},
-  ship:{l:'Commit + push',s:'ADR-0026',x:425,y:532},
+  ship:{l:'Commit + push',s:'automatic',x:425,y:532},
   panel:{l:'/panel',s:'Codex + Fable, Gemini splits',x:760,y:196,w:200,ov:1},
   nr:{l:'needs-ratification ticket',s:'PROVISIONAL or carve-out',x:760,y:140,w:200,ov:1},
   report:{l:'Session report',s:'AGREED, open tickets, undone',x:760,y:532,w:200,ov:1},
@@ -275,7 +275,7 @@ function updatePrompt(path){
       (parts.length?parts.join('\n')+'\n\n':'')+
       `The resulting path is:\n${path.filter(p=>!NODES[p].ov).map((p,i)=>`${i+1}. ${label(p)}`).join('\n')}\n`+
       (cm.length?`\nNode comments:\n${cm.join('\n')}\n`:'')+
-      `\nKeep US English, Concise STE100 (ADR-0001). Update the guard that lists skills if a skill is added, renamed, or removed. Commit and push after the change (ADR-0026).`;
+      `\nKeep US English, Concise STE100. Update the guard that lists skills if a skill is added, renamed, or removed. Commit and push after the change.`;
   }
   $('out').textContent=out;
 }

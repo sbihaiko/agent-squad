@@ -1,4 +1,4 @@
-"""Artifacts: what a node leaves for code to read (ADR-0102 rule 1, rule 8). One JSON file per entry.
+"""Artifacts: what a node leaves for code to read. One JSON file per entry.
 
 Context travels between nodes only through artifacts. A node's outcome derives from its artifact.
 """

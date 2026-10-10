@@ -4,7 +4,10 @@
 Raw text goes to scripts/archive/jev_data_real/ (git ignores it). Only aggregate counts are printed.
 Run: python3 scripts/archive/jev_real/extract.py
 """
-import hashlib, json, re, subprocess, sys
+import hashlib
+import json
+import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent

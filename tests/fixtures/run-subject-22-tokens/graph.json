@@ -65,9 +65,9 @@
    "output_key": "spec",
    "instructions": "Read issues/22-an-order-ships-in-parts.md and CLAUDE.md in this repository. Do not change any file. Reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"spec\": {\"summary\": \"<one paragraph>\", \"ac_commands\": [\"cp /Users/rafaelaguilherdacosta/sources/agent-squad/bench/subject/acceptance/test_issue_22.py tests/api/test_zz_heldout_22.py && python3 -m pytest -q\"]}}. Copy ac_commands exactly.",
    "budget": {
-    "turns": {
+    "stalls": {
      "min": 2,
-     "max": 15
+     "max": 5
     },
     "spend": {
      "min": 0.05,
@@ -115,9 +115,9 @@
    "output_key": "diff",
    "instructions": "Implement the issue in issues/22-an-order-ships-in-parts.md. Your working directory is the project. Follow CLAUDE.md. Write a test for each acceptance criterion and run `python3 -m pytest -q` until it passes. Do not run git commit: the harness commits. When done, reply with one JSON object in a ```json fence: {\"status\": \"pass\", \"diff\": {\"files\": [{\"path\": \"<changed file>\", \"generated\": false}]}} listing every file you changed. If you cannot finish, reply {\"status\": \"fail\", \"reasons\": [\"<why>\"]}.",
    "budget": {
-    "turns": {
-     "min": 10,
-     "max": 80
+    "stalls": {
+     "min": 2,
+     "max": 5
     },
     "spend": {
      "min": 0.2,

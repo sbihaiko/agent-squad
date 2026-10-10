@@ -1,8 +1,5 @@
 """Ticket #42: the authored flow and the dynamic flow run on one engine with the same guards."""
-import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -63,25 +60,3 @@ async def test_both_flows_use_one_engine_one_verdict_module_and_the_same_event_k
 def test_the_engine_holds_no_code_for_one_flow():
     src = (ROOT / "squad" / "engine.py").read_text()
     assert not re.search(r"five-phases|router\.graph|\"scout\"|\"spec_draft\"|\"router\"", src)
-
-
-def collected():
-    out = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", str(ROOT / "tests")], capture_output=True, text=True, cwd=ROOT).stdout
-    return [line.strip() for line in out.splitlines() if "::" in line]
-
-
-def test_every_adr_guard_line_names_a_test_that_exists():
-    guards = json.loads((ROOT / "docs" / "design" / "guards.json").read_text())
-    ids = collected()
-    missing = []
-    for num, e in guards.items():
-        assert e["tests"], f"ADR-{num} names no test"
-        for t in e["tests"]:
-            if not any(i == t or i.startswith(t + "[") for i in ids):
-                missing.append(f"ADR-{num}: {t}")
-    assert missing == []
-
-
-def test_the_adr_guard_sections_and_the_matrix_agree_with_guards_json():
-    assert subprocess.run([sys.executable, "scripts/sync_guards.py", "--check"], cwd=ROOT).returncode == 0
-    assert subprocess.run([sys.executable, "scripts/guard_matrix.py", "--check"], cwd=ROOT).returncode == 0

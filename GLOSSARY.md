@@ -51,7 +51,7 @@ One predicate `{fact, op, value}` on a node, over a closed set of facts, that sa
 _Avoid_: condition, expression, rule, all, any
 
 **Budget**:
-The turn cap and the spend cap on a node or a run, each with a minimum and a maximum.
+The stall cap and the spend cap on a node or a run, each with a minimum and a maximum.
 _Avoid_: cap, limit, quota, token floor
 
 **Run spend**:
@@ -92,6 +92,10 @@ _Avoid_: skill version, skill revision
 Code merges a passing write child of a dispatch into the target, in request order, and logs a `land` event. A model never merges. A conflict fails that child with `merge_conflict`; the children that landed before it stay landed.
 _Avoid_: merge step, integration child
 
+**Delivered issue**:
+An issue of a subject whose held-out acceptance test passes on the final target tree of the run. A landing records which child delivered it; it does not decide whether the issue is delivered.
+_Avoid_: landed issue, done issue
+
 **Ledger**:
 The one input a dispatch entry agent reads of its children's work: a compact row per finished child with its task, outcome after landing, changed paths, checks, and landed HEAD. It holds no diff, test output or conflict text.
 _Avoid_: history, summary, report
@@ -120,6 +124,14 @@ _Avoid_: pending child, queued child
 The seconds between two reads of `record.jsonl` while the dashboard follows a live run through a browser file handle. An engine setting that `run_start` records (`defaults.engine.dashboard.reread_seconds`). The page has no control for it, and uses one second when a record lacks it. A page served by the run server follows by push instead.
 _Avoid_: refresh rate, poll period
 
+**Setup**:
+The one-time preparation of a project for the skills and the squad: the issue tracker and labels, `GLOSSARY.md`, `docs/adr/` with the default ADRs, `CLAUDE.md` with a bullet and a guard for each rule ADR, and `AGENTS.md` linked to it. `squad setup` plans, `--apply` adds what is missing, and `--check` reports drift. A rerun changes nothing it already made.
+_Avoid_: init, bootstrap
+
+**Watch**:
+The dashboard and the monitor that start with a run (`watch.dashboard`, `watch.monitor`, `watch.monitor_seconds`). The monitor reads the run's record on a timer and writes each stuck, abandoned or deadline-missed finding once to `monitor.log` in the run folder. It never calls a model and never changes the run.
+_Avoid_: tracking, polling
+
 **Watch step**:
 The seconds between two checks of `record.jsonl` while the run server holds a push stream. An engine setting (`defaults.engine.dashboard.watch_seconds`), passed to the server when `squad dashboard` starts it. Each new record event reaches an open page within one step of the write.
 _Avoid_: poll interval, tick
@@ -133,7 +145,7 @@ A display state of a run with no verdict and no new record event for longer than
 _Avoid_: hung, dead, crashed
 
 **Proposal kind**:
-One entry in the closed list of changes a proposal may ask for. Six exist: `set_model`, `set_effort`, `narrow_tools`, `shrink_turns`, `shrink_spend`, `shrink_loop_max`. Each changes one setting on one node and never widens a bound. Skip and repeat are not kinds.
+One entry in the closed list of changes a proposal may ask for. Six exist: `set_model`, `set_effort`, `narrow_tools`, `shrink_stalls`, `shrink_spend`, `shrink_loop_max`. Each changes one setting on one node and never widens a bound. Skip and repeat are not kinds.
 _Avoid_: proposal type, menu, move
 
 **Adapt block**:
@@ -182,6 +194,10 @@ _Avoid_: context, input list, allowlist
 
 ### Runs
 
+**Watch**:
+The dashboard page and the monitor that start with a run. The page shows the run; the monitor writes each stuck, abandoned or deadline-missed call once to `monitor.log` in the run folder.
+_Avoid_: tail, observer
+
 **Engine option**:
 An invocation setting that changes how one run executes the same graph: where it stops, its run directory, a lower cap. It is logged in the `run_start` event and changes no node. It may name nodes, and it never overrides a node's model or budget.
 _Avoid_: flag, config key, run mode
@@ -206,6 +222,10 @@ _Avoid_: retry, restart, replay (as the whole act), continue
 The result of one node in a run: pass, fail, deadline, or needs-human. A loop's outcome follows its control flow; an `each` joins by worst-of. A reason, such as `deadline` or `loop_max_exhausted`, rides beside the outcome in the record.
 _Avoid_: status, result code, state
 
+**Outcomes**:
+The one module (`squad/outcomes.py`) that records an outcome: the `outcome` event, `done`, `last`, and for a graph node the `outcome:<name>` fact, the fact refresh and `stop_after`. The engine and the dispatch children both go through it. A child makes no fact, because the registry knows only graph nodes. The defect fallback of the root takes its entry here. A run and a resume use the same rule. Guards: `tests/test_outcomes.py`, and `tests/test_runners.py::test_no_runner_reaches_the_engine_through_ctx_private` for the runners. Not the dispatch Ledger above.
+_Avoid_: outcome ledger
+
 **Verdict**:
 The single result of a run, owned by one module: completed, needs-human, conflict, failed, or stopped. A `dispatch` folds like `each`, and a dispatch entry with no accepted child is `fail`, reason `no_dispatch`. The module folds the run record and the target: a run truncated by `--stop-after` whose nodes all passed is stopped (exit 30), root pass is completed, root fail or deadline is failed, root needs-human is needs-human, and conflict comes from the target. No graph field sets it.
 _Avoid_: status, exit status, result
@@ -219,11 +239,11 @@ A model call inside one agent node. It is never a node and never an edge.
 _Avoid_: task, background task, child agent
 
 **Run server**:
-The loopback process that `squad dashboard` starts for one run folder. It serves the page and the run paths on `127.0.0.1`, checks the Host header, starts no run, and exits after two idle hours. Its one write is `POST /run/control`: a pause or resume request that goes to the **Control file** and to nothing else (ADR-0128). `--file` skips it and prints the `file://` URL.
+The loopback process that `squad dashboard` starts for one run folder. It serves the page and the run paths on `127.0.0.1`, checks the Host header, starts no run, and exits after two idle hours. Its one write is `POST /run/control`: a pause or resume request that goes to the **Control file** and to nothing else. `--file` skips it and prints the `file://` URL.
 _Avoid_: dashboard backend, helper
 
 **Control file**:
-`control.jsonl` in a run folder: one JSON line per pause or resume request, with no `nodes` for the whole run. It only grows. The engine folds it at each node entry and holds the nodes it names, then records a `paused` event with where the run stands. `squad resume` releases every hold and continues the run (ADR-0128).
+`control.jsonl` in a run folder: one JSON line per pause or resume request, with no `nodes` for the whole run. It only grows. The engine folds it at each node entry and holds the nodes it names, then records a `paused` event with where the run stands. `squad resume` releases every hold and continues the run.
 _Avoid_: stop file, lock
 
 **Side panel**:
@@ -241,3 +261,7 @@ _Avoid_: child cluster, fan-out card
 **Verdict chip**:
 The top-bar badge that shows the run's state and exit code, with the failure reason as its tooltip. It shows the record's verdict at the replay cursor and never computes one.
 _Avoid_: status badge, result pill
+
+**Project settings file**:
+`docs/squad/defaults.yaml` under the target. It holds only the keys the owner changed and overlays the plugin defaults: plugin defaults, project file, `roles`, graph run block, node. It is the one layer that may raise a plugin default. `run_start` records its path and sha256 (`project_settings`), and a resume refuses when it changed. Keys outside its catalog (`squad/project_settings.py`) and credential keys are refused.
+_Avoid_: user config, local defaults

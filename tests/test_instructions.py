@@ -1,6 +1,6 @@
-"""An agent node may carry `instructions`: the role text the model reads before its inputs (ticket #44).
+"""An agent node may carry `instructions`: the role text the model reads before its inputs.
 
-Guard: the graph hash covers it (ADR-0114 rule 1); the schema and the validator accept it.
+Guard: the graph hash covers it; the schema and the validator accept it.
 """
 import json
 

@@ -1,6 +1,6 @@
-# Jev in shadow mode on the subject runs (ticket #55)
+# Jev in shadow mode on the subject runs
 
-Run on 2026-09-30. Language: US English, Concise STE100 (ADR-0001). Data: `docs/research/jev-shadow-pairs.json` (one record per run).
+Run on 2026-09-30. Language: US English, Concise STE100. Data: `docs/research/jev-shadow-pairs.json` (one record per run).
 
 ## What was wired
 
@@ -15,8 +15,8 @@ The research check (map 3.3) has no step in the subject graph, so it is not wire
 
 Guards (all in `tests/test_jev_shadow.py`):
 
-- One total deadline per call (20 s), retries included. A timeout, an error or a bad answer is `no_suggestion`. A shadow that hangs or raises is cut and recorded, and the step goes on (ADR-0051).
-- No gate, route or verdict reads a diagnostic. A test refuses the words `jev` and `diagnostic` in the verdict, gate, fact and artifact modules, and a run with Jev at p = 1.0 keeps its verdict (ADR-0008).
+- One total deadline per call (20 s), retries included. A timeout, an error or a bad answer is `no_suggestion`. A shadow that hangs or raises is cut and recorded, and the step goes on.
+- No gate, route or verdict reads a diagnostic. A test refuses the words `jev` and `diagnostic` in the verdict, gate, fact and artifact modules, and a run with Jev at p = 1.0 keeps its verdict.
 - The key is read once and removed from the environment, so no agent tool inherits it. A test sends a key to a local server that echoes it in an error, then searches the run directory for it. `scripts/run_subject.py` repeats that search after every real run and exits 3 on a hit. It found none in 36 runs.
 - The model of every node stays `claude-sonnet-5-5`. Jev is pinned to `jev-1.13.0`.
 
@@ -24,7 +24,7 @@ Guards (all in `tests/test_jev_shadow.py`):
 
 36 runs of 17 issues (02 to 13, 15 to 19, 22), two per issue. Every run was labeled by the held-out test (`ac_verify`): 25 passed, 11 failed. 144 Jev calls, none without a suggestion. Measured Claude spend 10.84 USD (OAuth login, not a billed amount). Jev spend is unverified.
 
-n is 36 runs, and each issue gives 2 runs. The runs of one issue are not independent. This report makes no threshold claim (ADR-0012, ADR-0018). A gate stays unchanged.
+n is 36 runs, and each issue gives 2 runs. The runs of one issue are not independent. This report makes no threshold claim. A gate stays unchanged.
 
 Observations only:
 

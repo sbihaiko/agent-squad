@@ -1,4 +1,4 @@
-"""Find a borrowed skill by name (ADR-0129).
+"""Find a borrowed skill by name.
 
 A skill this repo borrows lives outside it: in `~/.claude/skills`, or in a plugin that `claude plugin update` moves
 to a new versioned folder. A hard-coded path breaks on the first upgrade, move or removal. This module looks the

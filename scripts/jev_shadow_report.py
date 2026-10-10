@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Print the (Jev score, held-out outcome) pairs of the subject runs as Markdown tables (ticket #55).
+"""Print the (Jev score, held-out outcome) pairs of the subject runs as Markdown tables.
 
 Run: python3 scripts/jev_shadow_report.py runs [--json pairs.json]
-It states n. It sets no threshold and makes no claim about one (ADR-0012, ADR-0018).
+It states n. It sets no threshold and makes no claim about one.
 """
 import json
 import statistics

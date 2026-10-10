@@ -1,4 +1,4 @@
-"""Guards for ADR-0100, 0101, 0102, 0103, 0104, 0106, 0108, 0109, 0110, 0111, 0113 (ticket #24)."""
+"""Guards for the graph rules."""
 import json
 
 import pytest
@@ -27,7 +27,7 @@ def test_false_positive_valid_documents_raise_no_error():
     assert errors(five()) == [] and errors(router()) == []
 
 
-# --- ADR-0100: kinds, gate rules ---
+# --- kinds, gate rules ---
 def test_refuses_a_fifth_kind_and_an_eighth_kind():
     for kind in ("subagent", "router"):
         d = five()
@@ -53,7 +53,7 @@ def test_refuses_a_gate_next_that_names_a_node():
     has(d, "spec_gate", "never names a node")
 
 
-# --- ADR-0101: when holds one predicate ---
+# --- when holds one predicate ---
 def test_refuses_a_when_with_two_predicates():
     d = five()
     node(d, "spec")["when"] = [{"fact": "tier", "op": "eq", "value": "large"}, {"fact": "git", "op": "eq", "value": True}]
@@ -71,7 +71,7 @@ def test_refuses_a_loop_with_a_when_that_holds_only_gates():
     has(d, "spec", "must hold an agent")
 
 
-# --- ADR-0102: deadlines, workspaces ---
+# --- deadlines, workspaces ---
 def test_refuses_a_deadline_on_a_gate_and_on_a_loop():
     d = five()
     node(d, "spec_gate")["deadline"] = 60
@@ -106,7 +106,7 @@ def test_accepts_a_sequence_each_on_one_workspace():
     assert errors(d) == []
 
 
-# --- ADR-0103: proposal kinds, ranges ---
+# --- proposal kinds, ranges ---
 def test_refuses_a_seventh_proposal_kind():
     d = five()
     node(d, "spec_draft")["adapt"]["kinds"].append("set_tier")
@@ -131,7 +131,7 @@ def test_refuses_shrink_loop_max_on_an_agent_and_a_model_kind_on_a_loop():
     has(d, "work", "non-agent")
 
 
-# --- ADR-0104: facts registry ---
+# --- facts registry ---
 def test_refuses_an_unregistered_fact_in_a_when_and_a_sees_name():
     d = five()
     node(d, "spec")["when"]["fact"] = "mystery"
@@ -180,7 +180,7 @@ def test_refuses_a_fact_instrument_that_names_the_report_or_a_past_run():
         has(d, "x_fact")
 
 
-# --- ADR-0106, ADR-0111: names, registry, schema version ---
+# --- names, registry, schema version ---
 def test_refuses_stop_after_naming_an_unknown_node():
     d = five()
     assert graph.check_node_names(d, ["scout", "execute"]) == []
@@ -208,14 +208,14 @@ def test_refuses_a_when_over_a_fact_of_the_wrong_type_or_value():
     has(d, "spec", "not a value of fact tier")
 
 
-# --- ADR-0108: caps ---
+# --- caps ---
 def test_refuses_a_run_cap_below_an_agent_spend_minimum():
     d = five()
     d["run"]["spend_cap"] = 0.15
     has(d, "run spend cap")
 
 
-# --- ADR-0109, ADR-0110 ---
+# --- adaptation report, learnings ---
 def test_adaptation_report_is_never_a_registered_source():
     schema = json.loads((DESIGN / "graph.schema.json").read_text())
     assert schema["$defs"]["fact"]["properties"]["source_kind"]["enum"] == ["artifact", "run_record", "target"]
@@ -227,7 +227,7 @@ def test_a_cross_run_fact_is_refused_at_load():
     has(d, "prior_failures")
 
 
-# --- ADR-0111: hash and layout ---
+# --- hash and layout ---
 def test_moving_a_layout_leaves_the_hash_equal(tmp_path):
     d = five()
     p = tmp_path / "flow.graph.json"
@@ -252,7 +252,7 @@ def test_a_layout_key_inside_the_document_is_refused():
     has(d, "layout")
 
 
-# --- ADR-0113: dispatch ---
+# --- dispatch ---
 def test_refuses_a_dispatch_with_no_checks():
     d = router()
     del node(d, "route")["checks"]
@@ -268,7 +268,7 @@ def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
     _, errs = validate_request(disp, ok, 1, None, 10.0)
     assert errs == []
     cases = [({"model": "gpt"}, "model_outside_allow:gpt"), ({"tools": ["WebFetch"]}, "tool_outside_allow:WebFetch"),
-             ({"skill": {"name": "tdd", "version": "2"}}, "skill_pin_mismatch:tdd"), ({"turns": 999}, "turns_outside_budget"),
+             ({"skill": {"name": "tdd", "version": "2"}}, "skill_pin_mismatch:tdd"), ({"stalls": 999}, "stalls_outside_budget"),
              ({"spend": 99.0}, "spend_outside_budget"), ({"deadline": 99999}, "deadline_over_dispatch"),
              ({"workspace": "/etc"}, "workspace_outside_allow"), ({"effort": "extreme"}, "effort_outside_allow")]
     for patch, rule in cases:
@@ -300,7 +300,7 @@ def test_refuses_a_node_that_reads_a_file_another_node_writes():
     a, b = _agents(d)[:2]
     node(d, a)["writes"] = ["docs/notes.md"]
     node(d, b)["reads"] = ["docs/notes.md"]
-    has(d, b, "docs/notes.md", "ADR-0110")
+    has(d, b, "docs/notes.md", "never written by the graph")
 
 
 def test_accepts_a_declared_read_that_no_node_writes_and_the_fixtures_still_load():
@@ -324,7 +324,7 @@ def test_reads_and_writes_are_lists_of_nonempty_strings_and_change_the_hash():
     assert graph.from_doc(d2).hash != h0
 
 
-# --- ADR-0115: control is order-based; next takes reserved words only ---
+# --- control is order-based; next takes reserved words only ---
 def test_refuses_a_next_that_names_a_node_on_every_node_kind():
     kinds_seen = set()
     for make in (five, router):

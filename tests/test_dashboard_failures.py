@@ -1,7 +1,7 @@
 """Ticket #91: the dashboard shows the children of a dispatch and the cause of a failure on the graph.
 
 The fixture is a real run: four waves, four children landed, the final gate failed on three held-out tests (issues 20, 21, 22).
-The page only reads the record (ADR-0117). A figure the record lacks reads unknown, never zero. Evidence the record lacks reads "no output".
+The page only reads the record. A figure the record lacks reads unknown, never zero. Evidence the record lacks reads "no output".
 """
 import copy
 import json
@@ -135,7 +135,7 @@ def test_evidence_in_the_record_reaches_the_failure_list_and_the_node():
 
 
 def test_a_dispatch_child_names_the_issue_its_prompt_ran():
-    """Each child card names the issue it ran (issue #97), read from its own request prompt, not a new event."""
+    """Each child card names the issue it ran, read from its own request prompt, not a new event."""
     _, events = _run()
     kids = run_node([{"op": "children", "events": events}])[0]
     assert [c["issue"] for c in kids] == [19, 20, 21, 22]                    # the four prompts name issues/19..22
@@ -144,7 +144,7 @@ def test_a_dispatch_child_names_the_issue_its_prompt_ran():
 
 
 def test_the_root_node_after_a_finished_run_reads_a_definite_state_never_grey():
-    """A root or structural node the run has touched is never an ambiguous flat grey (issue #97)."""
+    """A root or structural node the run has touched is never an ambiguous flat grey."""
     doc, events = _run()
     nodes = _stats(events, doc)["nodes"]
     assert nodes["main"]["outcome"] == "fail"

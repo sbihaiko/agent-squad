@@ -1,6 +1,6 @@
 """Load and validate a graph document; compute the hash that a layout change never moves.
 
-Rules: ADR-0100 to ADR-0111, ADR-0113. The JSON Schema in docs/design states the shape.
+The JSON Schema in docs/design states the shape.
 The cross-reference rules a schema cannot state live here. Every error names its node.
 """
 import hashlib
@@ -16,7 +16,7 @@ from squad.gates import GATE_REGISTRY
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "docs" / "design" / "graph.schema.json"
 KINDS = ("agent", "gate", "wait", "loop", "each", "action", "dispatch")
 BUILTIN_FACTS = {"depth", "children_count", "spawn_rejected_count", "run_spend", "run_spend_remaining", "tier_pin"}
-SEES_FORBIDDEN = {"tier"}  # ADR-0104 rule 3: a `when` may read tier, a proposer may not
+SEES_FORBIDDEN = {"tier"}  # a `when` may read tier, a proposer may not
 WRITE_TOOLS = {"Edit", "Write", "Bash", "NotebookEdit"}
 FORBIDDEN_NAME = re.compile(r"(pass_rate|finding|trend|self_report|judge|confidence|effectiveness|learning_count)")
 FORBIDDEN_INSTRUMENT = re.compile(r"(\bmodel\b|\bjudge\b|self-report|self report|confidence|pass rate|finding count|\btrend\b|\b(another|other|previous|past|earlier) run\b|adaptation report)", re.I)
@@ -57,20 +57,20 @@ def _node_schema_errors(node, schema):
     kind = node.get("kind")
     name = node.get("name") if isinstance(node.get("name"), str) else None
     if kind not in KINDS:
-        return [GraphError(name, f"kind {kind!r} is not one of the seven kinds: {', '.join(KINDS)} (ADR-0100 rule 1)")]
+        return [GraphError(name, f"kind {kind!r} is not one of the seven kinds: {', '.join(KINDS)}")]
     explicit, stripped = [], dict(node)
     if kind == "gate":
-        for key, msg in (("when", "a gate never carries a when (ADR-0100 rule 3)"), ("adapt", "a gate never adapts (ADR-0103 rule 1)"),
-                         ("deadline", "a gate carries no deadline (ADR-0102 rule 3)")):
+        for key, msg in (("when", "a gate never carries a when"), ("adapt", "a gate never adapts"),
+                         ("deadline", "a gate carries no deadline")):
             if key in stripped:
                 explicit.append(GraphError(name, msg))
                 del stripped[key]
         nxt = stripped.get("next") or {}
         if isinstance(nxt, dict) and nxt.get("fail") not in (None, "repeat", "exit:fail"):
-            explicit.append(GraphError(name, f"a gate's fail never names a node; got {nxt['fail']!r} (ADR-0101 rule 2)"))
+            explicit.append(GraphError(name, f"a gate's fail never names a node; got {nxt['fail']!r}"))
             stripped["next"] = {k: v for k, v in nxt.items() if k != "fail"}
     if kind == "loop" and "deadline" in stripped:
-        explicit.append(GraphError(name, "a loop carries no deadline (ADR-0102 rule 3)"))
+        explicit.append(GraphError(name, "a loop carries no deadline"))
         del stripped["deadline"]
     sub = {"$ref": f"#/$defs/{kind}", "$defs": schema["$defs"]}
     errs = [GraphError(name, f"{'/'.join(map(str, e.absolute_path)) or kind}: {e.message}") for e in Draft202012Validator(sub).iter_errors(stripped)]
@@ -82,7 +82,7 @@ def _when_errors(nm, when, nodes, known, fact_defs):
     if f.startswith("outcome:"):
         return [] if f[8:] in nodes else [GraphError(nm, f"when names unknown node {f[8:]}")]
     if f not in known:
-        return [GraphError(nm, f"when reads unregistered fact {f} (ADR-0104 rule 1)")]
+        return [GraphError(nm, f"when reads unregistered fact {f}")]
     d, v = fact_defs.get(f), when["value"]
     if d and d["type"] == "enum" and v not in d.get("values", []):
         return [GraphError(nm, f"when value {v!r} is not a value of fact {f}")]
@@ -101,11 +101,11 @@ def _fact_errors(doc):
             errs.append(GraphError(None, f"fact {n}: registered twice"))
         seen.add(n)
         if FORBIDDEN_NAME.search(n):
-            errs.append(GraphError(None, f"fact {n}: a gate rate, a finding count or trend, a self-report, or a judge score never triggers (ADR-0104 rule 5)"))
+            errs.append(GraphError(None, f"fact {n}: a gate rate, a finding count or trend, a self-report, or a judge score never triggers"))
         if not f["instrument"].startswith("code:"):
-            errs.append(GraphError(None, f"fact {n}: instrument must be code, not a model (ADR-0104 rule 4)"))
+            errs.append(GraphError(None, f"fact {n}: instrument must be code, not a model"))
         elif FORBIDDEN_INSTRUMENT.search(f["instrument"]):
-            errs.append(GraphError(None, f"fact {n}: instrument names a model, a judge, a cross-run source, or the adaptation report (ADR-0104 rule 4, ADR-0109, ADR-0110)"))
+            errs.append(GraphError(None, f"fact {n}: instrument names a model, a judge, a cross-run source, or the adaptation report"))
     return errs
 
 
@@ -128,24 +128,24 @@ def _each_workspace_errors(nm, each, nodes, run):
     for n in sub:
         if n["kind"] == "action" and n["effect"] == "worktree_create":
             created.setdefault(n.get("workspace"), []).append(n["name"])
-    errs = [GraphError(nm, f"parallel items share workspace {w!r}: created by {', '.join(ns)} (ADR-0102 rule 2)") for w, ns in created.items() if len(ns) > 1]
+    errs = [GraphError(nm, f"parallel items share workspace {w!r}: created by {', '.join(ns)}") for w, ns in created.items() if len(ns) > 1]
     for n in sub:
         ws = n.get("workspace")
         writes = n["kind"] == "action" and n["effect"] != "worktree_create" or (n["kind"] == "agent" and WRITE_TOOLS & set(n["tools"]))
         if n["kind"] not in ("agent", "action") or not writes:
             continue
         if ws is None or ws == "." or ws not in created:
-            errs.append(GraphError(nm, f"parallel items share workspace {ws!r} at {n['name']}: no worktree_create makes one per item (ADR-0102 rule 2)"))
+            errs.append(GraphError(nm, f"parallel items share workspace {ws!r} at {n['name']}: no worktree_create makes one per item"))
     return errs
 
 
 def _file_errors(nodes):
-    """A declared input file is one a person keeps: no other node may write it (ADR-0110 rule 2)."""
+    """A declared input file is one a person keeps: no other node may write it."""
     writers = {}
     for n in nodes.values():
         for f in n.get("writes", []):
             writers.setdefault(f, []).append(n["name"])
-    return [GraphError(n["name"], f"reads {f!r}, which {', '.join(w)} writes: a declared input is never written by the graph (ADR-0110 rule 2)")
+    return [GraphError(n["name"], f"reads {f!r}, which {', '.join(w)} writes: a declared input is never written by the graph")
             for n in nodes.values() for f in n.get("reads", []) if (w := [x for x in writers.get(f, []) if x != n["name"]])]
 
 
@@ -175,7 +175,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
     gate_ids = {g["id"]: set(g["params"]) for g in doc["gates"]}
     for gid, params in gate_ids.items():
         if gid not in gate_registry:
-            errs.append(GraphError(None, f"gates registry: check id {gid} is outside the engine registry (ADR-0111 rule 7)"))
+            errs.append(GraphError(None, f"gates registry: check id {gid} is outside the engine registry"))
         elif params != set(gate_registry[gid]):
             errs.append(GraphError(None, f"gates registry: params of {gid} differ from the engine registry"))
     if doc["root"] not in nodes or nodes[doc["root"]]["kind"] != "loop":
@@ -202,7 +202,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
     run = doc["run"]
     min_spend = [n["budget"]["spend"]["min"] for n in nodes.values() if n["kind"] in ("agent", "dispatch")]
     if min_spend and run["spend_cap"] < max(min_spend):
-        errs.append(GraphError(None, f"run spend cap {run['spend_cap']} is below an agent's spend minimum {max(min_spend)} (ADR-0108 rule 9)"))
+        errs.append(GraphError(None, f"run spend cap {run['spend_cap']} is below an agent's spend minimum {max(min_spend)}"))
     for n in nodes.values():
         nm, k = n["name"], n["kind"]
         if nm != doc["root"] and nm not in parents:
@@ -215,7 +215,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
             errs += _when_errors(nm, n["when"], nodes, known, fact_defs)
         if k == "gate":
             if n["check"] not in gate_ids:
-                errs.append(GraphError(nm, f"unknown check {n['check']} (ADR-0111 rule 7)"))
+                errs.append(GraphError(nm, f"unknown check {n['check']}"))
             elif set(n["params"]) != gate_ids[n["check"]]:
                 errs.append(GraphError(nm, "params differ from the gates registry"))
         elif k == "each":
@@ -223,7 +223,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
                 errs.append(GraphError(nm, "items is not a registered fact"))
             errs += _each_workspace_errors(nm, n, nodes, run)
         elif k == "agent":
-            for key in ("turns", "spend"):
+            for key in ("stalls", "spend"):
                 if n["budget"][key]["min"] > n["budget"][key]["max"]:
                     errs.append(GraphError(nm, f"{key} min above max"))
             if n.get("may_spawn") and nm not in entries:
@@ -234,7 +234,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
             if n["max"]["min"] > n["max"]["value"]:
                 errs.append(GraphError(nm, "max min above value"))
             if "when" in n and not any(nodes[c]["kind"] in ("agent", "each", "action", "dispatch") for c in n["children"] if c in nodes):
-                errs.append(GraphError(nm, "a loop with a when must hold an agent, each, action, or dispatch child (ADR-0101 rule 3)"))
+                errs.append(GraphError(nm, "a loop with a when must hold an agent, each, action, or dispatch child"))
         elif k == "dispatch":
             errs += _dispatch_errors(doc, n, nodes)
         a = n.get("adapt")
@@ -255,8 +255,8 @@ def _dispatch_errors(doc, n, nodes):
             errs.append(GraphError(nm, f"entry {n['entry']} carries a when, which would bypass the dispatch"))
     for c in n["checks"]:
         if c in nodes and nodes[c]["kind"] != "gate":
-            errs.append(GraphError(nm, f"check {c} is not a gate (ADR-0113 rule 2)"))
-    for key in ("turns", "spend"):
+            errs.append(GraphError(nm, f"check {c} is not a gate"))
+    for key in ("stalls", "spend"):
         if n["budget"][key]["min"] > n["budget"][key]["max"]:
             errs.append(GraphError(nm, f"child {key} min above max"))
     if n["max_parallel"] > doc["run"]["max_parallel"]:
@@ -287,16 +287,16 @@ def _adapt_errors(nm, n, a, known):
         errs.append(GraphError(nm, "adapt efforts exclude the node's own effort"))
     for s in a.get("sees", []):
         if s in SEES_FORBIDDEN:
-            errs.append(GraphError(nm, f"sees lists {s}: a proposer may not see it (ADR-0104 rule 3)"))
+            errs.append(GraphError(nm, f"sees lists {s}: a proposer may not see it"))
         elif s not in known and not s.startswith("outcome:"):
-            errs.append(GraphError(nm, f"sees unregistered fact {s} (ADR-0104 rule 2)"))
+            errs.append(GraphError(nm, f"sees unregistered fact {s}"))
     if n.get("may_propose") is None and a and k == "agent":
         pass
     return errs
 
 
 def check_node_names(doc, names):
-    """An engine option may name only nodes of the graph (ADR-0106 rule 2). Return the errors."""
+    """An engine option may name only nodes of the graph. Return the errors."""
     have = {n["name"] for n in doc["nodes"]}
     return [GraphError(None, f"unknown node name {x!r}") for x in names if x not in have]
 

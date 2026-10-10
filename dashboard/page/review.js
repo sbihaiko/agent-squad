@@ -1,4 +1,4 @@
-// --- review panel (ticket #84, decision #64, ADR-0117): it shows what the graph declares and prepares a command; it starts nothing ---
+// --- review panel: it shows what the graph declares and prepares a command; it starts nothing ---
 const R = { open: false, prior: null, opts: { adapter: "sdk", script: "", stopAfter: "", spendCap: "", deadline: "", maxParallel: "", tierPin: "" } };
 const divs = (arr) => arr.map((x) => `<div>${x}</div>`).join("");
 const dText = (v) => (v === null ? "(absent)" : esc(v));

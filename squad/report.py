@@ -1,11 +1,11 @@
-"""The adaptation report: a read-only view for a person (ADR-0109).
+"""The adaptation report: a read-only view for a person.
 
 It joins each applied proposal to its target's previous and next entry and shows the deltas.
 It has no label and no threshold. No engine code path imports this module, and it is never a fact.
 """
 from squad import record
 
-NOTE = "one observation, not a measurement (ADR-0012): each entry is a fresh session, so the two entries may be different tasks"
+NOTE = "one observation, not a measurement: each entry is a fresh session, so the two entries may be different tasks"
 INSTRUMENT = "code: outcome events of the run record; spend is the measured SDK result; elapsed is wall-clock"
 FIELDS = ("outcome", "spend", "turns", "elapsed")
 

@@ -1,15 +1,13 @@
-"""The gates registry and the deterministic checks (ADR-0100 rule 2, ADR-0111 rule 7).
+"""The gates registry and the deterministic checks.
 
 The registry is the one source. The graph validator and the editor read it; a graph document
 lists the ids it uses and they must match. A check reads artifacts and facts only. It never
-calls a model, and its thresholds never change at run time (ADR-0012).
+calls a model, and its thresholds never change at run time.
 """
-import os
-import subprocess
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 
-from squad.procs import clean_env
+from squad import workcmd
 
 GATE_REGISTRY = {
     "spec-shape": [],
@@ -22,9 +20,6 @@ GATE_REGISTRY = {
     "visual-guard": [],
     "learning-check": [],
 }
-
-
-EVIDENCE_TAIL = 1500      # characters kept from the end of a failed command's output
 
 
 @dataclass
@@ -47,7 +42,7 @@ def _diff(inp):
 
 
 def spec_shape(_params, inp):
-    """The spec artifact holds `ac_commands`, inside `spec`, as a non-empty list of non-empty strings (ticket #53)."""
+    """The spec artifact holds `ac_commands`, inside `spec`, as a non-empty list of non-empty strings."""
     spec = inp.artifacts.get("spec")
     if spec is None:
         return GateResult(False, ["spec_missing"])
@@ -111,14 +106,10 @@ def ac_verify(params, inp):
         return GateResult(False, ["no_ac_commands"])
     bad, evidence = [], {}
     for c in cmds:
-        try:
-            r = subprocess.run(c, shell=True, cwd=inp.cwd, capture_output=True, timeout=120, env=clean_env(os.environ))
-            if r.returncode != 0:
-                bad.append(c)
-                evidence[f"ac_failed:{c}"] = (r.stdout + r.stderr).decode("utf-8", "replace").strip()[-EVIDENCE_TAIL:]
-        except subprocess.TimeoutExpired:
+        r = workcmd.run(c, inp.cwd)
+        if not r.ok:
             bad.append(c)
-            evidence[f"ac_failed:{c}"] = "timeout after 120 s"
+            evidence[f"ac_failed:{c}"] = r.evidence
     return GateResult(not bad, [f"ac_failed:{c}" for c in bad], evidence)
 
 

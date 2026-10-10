@@ -38,7 +38,7 @@ export function validate(graph) {
   for (const n of graph.nodes) {
     if (!KINDS.includes(n.kind)) errors.push(`${n.name}: kind "${n.kind}" is not one of ${KINDS.join(', ')}`);
     if (n.kind === 'gate') {
-      if (n.when) errors.push(`${n.name}: a gate never carries a when (ADR-0100)`);
+      if (n.when) errors.push(`${n.name}: a gate never carries a when`);
       if (!gateIds.has(n.check)) errors.push(`${n.name}: check "${n.check}" is not a registered gate`);
     }
     if (n.kind === 'agent') {
@@ -104,7 +104,7 @@ export function walk(graph, facts, script = {}) {
   function runLeaf(n, how) {
     let outcome = scripted(n);
     if (n.kind === 'wait' && outcome === 'deadline') {
-      events.push({ node: n.name, kind: n.kind, how, note: `deadline expired; default "${n.default}" applied (ADR-0029 rule 7)` });
+      events.push({ node: n.name, kind: n.kind, how, note: `deadline expired; default "${n.default}" applied` });
       outcome = n.default;
     }
     lastOutcome.set(n.name, outcome);

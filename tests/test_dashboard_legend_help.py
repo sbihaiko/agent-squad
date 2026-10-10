@@ -1,4 +1,4 @@
-"""The legend and the help overlay (#85, #118)."""
+"""The legend and the help overlay."""
 import re
 
 from tests.dashboard_helpers import PAGE_SRC, run_node

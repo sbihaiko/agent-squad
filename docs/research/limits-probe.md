@@ -1,7 +1,7 @@
-# Probe of the agent-defaults limits (ticket #46)
+# Probe of the agent-defaults limits
 
 Run 2026-09-30 with `uv run scripts/archive/probe_limits.py`. Raw data: `limits-probe.json`. Model `claude-sonnet-5-5`, CLI 2.1.286 (the SDK that `uv` fetched), OAuth login, scratch directory, `setting_sources=[]`.
-Spend was granted for probes (CLAUDE.md). The total was about 5.5 USD by `total_cost_usd`, a client estimate. One run each: these are facts about behavior, not measurements of a rate (ADR-0012).
+Spend was granted for probes (CLAUDE.md). The total was about 5.5 USD by `total_cost_usd`, a client estimate. One run each: these are facts about behavior, not measurements of a rate.
 
 ## Findings
 

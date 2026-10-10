@@ -1,4 +1,4 @@
-"""Guards for ticket #26: ADR-0105 (fold rows), ADR-0112 (stopped), ADR-0029 (five codes), ADR-0114 rule 7."""
+"""Guards for the verdict fold, the stopped verdict and the five exit codes."""
 import pytest
 
 from squad import verdict as V
@@ -26,7 +26,7 @@ def out(node, outcome="pass", reasons=None, routed=None, item=None, entry=1):
 
 @pytest.mark.parametrize("rows,obs,verdict,code,reasons", [
     ([out("a"), out("b"), out("c"), out("main")], {}, "completed", 0, []),
-    ([out("a", "fail", ["node_turn_cap"]), out("main", "fail", ["loop_max_exhausted"])], {}, "failed", 1, ["loop_max_exhausted", "node_turn_cap"]),
+    ([out("a", "fail", ["node_stall_cap"]), out("main", "fail", ["loop_max_exhausted"])], {}, "failed", 1, ["loop_max_exhausted", "node_stall_cap"]),
     ([out("a", "deadline", ["deadline"]), out("main", "deadline", ["deadline"])], {}, "failed", 1, ["deadline"]),
     ([out("a", "deadline"), out("main", "deadline", ["deadline"])], {"effect_observed": True}, "completed", 0, []),
     ([out("a", "needs-human"), out("main", "needs-human", ["question"])], {}, "needs-human", 10, ["question"]),

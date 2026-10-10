@@ -1,7 +1,7 @@
-"""The real SDK adapter against a stub of `query()` (ticket #44). No live call, no spend.
+"""The real SDK adapter against a stub of `query()`. No live call, no spend.
 
-Guards: ADR-0102 rule 1 (one call, one session), ADR-0102 rule 4 (a deadline stops the child),
-ADR-0108 rule 2 (a killed call has unknown spend, never zero).
+Guards: one call is one session, a deadline stops the child,
+a killed call has unknown spend, never zero.
 """
 import json
 from dataclasses import dataclass, field
@@ -49,7 +49,7 @@ class Options:
 
 def request(**over):
     base = dict(node="actor", entry=1, item=None, prompt="do it", model="claude-sonnet-5-5", effort="medium",
-                tools=["Read", "Edit"], max_turns=12, max_spend=2.0, workspace="/tmp/ws", deadline=30.0, session_id="run-s1")
+                tools=["Read", "Edit"], max_stalls=12, max_spend=2.0, workspace="/tmp/ws", deadline=30.0, session_id="run-s1")
     base.update(over)
     return CallRequest(**base)
 
@@ -80,15 +80,14 @@ async def test_node_settings_map_onto_sdk_options():
     prompt, opt = seen[0]
     kw = opt.kw
     assert prompt == "do it"
-    assert (kw["model"], kw["effort"], kw["tools"], kw["max_turns"], kw["max_budget_usd"], kw["cwd"]) == \
-        ("claude-sonnet-5-5", "medium", ["Read", "Edit"], 12, 2.0, "/tmp/ws")
+    assert (kw["model"], kw["effort"], kw["tools"], kw["max_budget_usd"], kw["cwd"]) == \
+        ("claude-sonnet-5-5", "medium", ["Read", "Edit"], 2.0, "/tmp/ws")
+    assert "max_turns" not in kw and "max_stalls" not in kw   # total turns are never capped; the stall watch lives in the adapter
     assert kw["permission_mode"] == "bypassPermissions"
     assert kw["setting_sources"] == ["project"]   # the project's own CLAUDE.md applies, as in any repo
 
 
-async def test_turn_and_spend_caps_are_reported_with_measured_spend():
-    r = await adapter([ResultMessage(subtype="error_max_turns", is_error=True, total_cost_usd=0.7)]).call(request())
-    assert (r.stop_reason, r.spend, r.output) == ("turn_cap", 0.7, None)
+async def test_a_spend_cap_is_reported_with_measured_spend():
     r = await adapter([ResultMessage(subtype="error_max_budget_usd", is_error=True, total_cost_usd=2.01)]).call(request())
     assert (r.stop_reason, r.spend) == ("spend_cap", 2.01)
 
@@ -128,7 +127,7 @@ async def test_cancellation_closes_the_stream():
 
 
 async def test_a_cancellation_from_the_stream_propagates_and_the_stream_closes():
-    # Guard (ADR-0018): the broad `except Exception` in SdkAdapter.call must not swallow cancellation (a BaseException).
+    # Guard: the broad `except Exception` in SdkAdapter.call must not swallow cancellation (a BaseException).
     import asyncio
     closed = []
 
@@ -160,19 +159,13 @@ async def test_an_output_cap_error_after_a_result_keeps_the_measured_spend_and_r
     assert (r.stop_reason, r.spend) == ("output_cap", 0.022)
 
 
-async def test_a_turn_or_spend_cap_error_after_a_result_keeps_its_reason_spend_and_turns():
+async def test_a_spend_cap_error_after_a_result_keeps_its_reason_spend_and_turns():
     """Found on run-20261001-234426: the real SDK raises on a capped call the same way it raises on an output cap.
 
     Three children of that run died `adapter_error` with `spend: null, turns: null`, though each had already
-    delivered a ResultMessage naming the cap. ADR-0108 rule 4 ends a capped node through its artifact, so the
+    delivered a ResultMessage naming the cap. the spend rules end a capped node through its artifact, so the
     reason must survive the raise.
     """
-    async def query(*, prompt, options):
-        yield ResultMessage(subtype="error_max_turns", is_error=True, num_turns=60, total_cost_usd=0.31, result="cut off")
-        raise RuntimeError("Claude Code returned an error result: Reached maximum number of turns (60) (exit code: 1)")
-    r = await SdkAdapter(query=query, options_cls=Options).call(request())
-    assert (r.stop_reason, r.spend, r.turns) == ("turn_cap", 0.31, 60)
-
     async def budget(*, prompt, options):
         yield ResultMessage(subtype="error_max_budget_usd", is_error=True, num_turns=4, total_cost_usd=2.4)
         raise RuntimeError("Claude Code returned an error result: Reached maximum budget ($2) (exit code: 1)")
@@ -205,7 +198,7 @@ async def test_a_result_with_no_usage_leaves_tokens_unknown_never_zero():
     assert r.usage is None
 
 
-# --- a call in flight tells the record where it is (ticket #101) ---
+# --- a call in flight tells the record where it is ---
 def bound(messages, seconds, seen=None):
     """An adapter whose progress interval is `seconds` and whose sink collects the events it writes."""
     events = []
@@ -286,7 +279,7 @@ async def test_a_progress_event_with_no_usage_yet_leaves_the_context_unknown_nev
 
 
 async def test_a_message_that_reports_no_whole_count_leaves_the_last_context_reading_alone():
-    """A usage dict whose input keys hold no number is not a reading of zero: the earlier figure stands (ADR-0012)."""
+    """A usage dict whose input keys hold no number is not a reading of zero: the earlier figure stands."""
     msgs = [turn(ToolUseBlock("Read"), usage={"input_tokens": 4000}),
             turn(ToolUseBlock("Read"), usage={"input_tokens": None, "cache_read_input_tokens": None}),
             ResultMessage(result="{}")]
@@ -295,14 +288,12 @@ async def test_a_message_that_reports_no_whole_count_leaves_the_last_context_rea
     assert [e["context_tokens"] for e in events] == [4000, 4000]
 
 
-def test_pyproject_declares_the_sdk_extra_at_the_adr_0102_pin():
-    """Guard for #109: the `sdk` extra exists and carries the exact ADR-0102 pin (ADR-0018)."""
+def test_pyproject_declares_the_sdk_extra_at_an_exact_pin():
+    """The `sdk` extra exists and carries the exact pin."""
     import re
     import tomllib
     from pathlib import Path
 
     root = Path(__file__).resolve().parent.parent
-    adr = next((root / "docs" / "adr").glob("0102-*.md")).read_text()
-    pinned = re.search(r"claude-agent-sdk`\s+(\d+\.\d+\.\d+)", adr).group(1)
     extras = tomllib.loads((root / "pyproject.toml").read_text())["project"]["optional-dependencies"]
-    assert extras.get("sdk") == [f"claude-agent-sdk=={pinned}"]
+    assert re.fullmatch(r"claude-agent-sdk==\d+\.\d+\.\d+", extras["sdk"][0]) and len(extras["sdk"]) == 1

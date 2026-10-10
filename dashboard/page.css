@@ -4,7 +4,8 @@
   body.noside #left { display:none; }
   #left { grid-row:2; overflow:auto; border-right:1px solid var(--line); background:var(--panel); padding:4px 12px 12px; min-height:0; }
   #graph { grid-column:1; grid-row:2; }
-  #left { position:fixed; top:37px; bottom:0; left:0; width:360px; z-index:8; box-shadow:4px 0 16px #0006; }
+  #left { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; bottom:auto; z-index:9; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 48px #000b; padding:8px 20px 20px; }
+  body:not(.noside)::after { content:""; position:fixed; inset:37px 0 0 0; background:#0008; z-index:8; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
   button, label.btn { cursor:pointer; }
@@ -57,7 +58,7 @@
   #totals .cell b { color:var(--fg); font:600 13px var(--mono); }
   #totals .cell b.unk { color:var(--mute); font-weight:400; }
   #totals .past { color:#e0a030; }
-  /* #progress is the top bar (issue #97), parallel to #totals under the graph: the issue set the run landed. */
+  /* #progress is the top bar, parallel to #totals under the graph: the issue set the run landed. */
   #progress { display:none; flex:none; align-items:center; gap:4px 22px; flex-wrap:wrap; padding:6px 14px; background:var(--panel); border-bottom:1px solid var(--line); font-size:12px; color:var(--mute); }
   #progress.on { display:flex; }
   #progress .cell { display:inline-flex; align-items:baseline; gap:6px; cursor:help; }
@@ -72,7 +73,7 @@
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
   #r-pos.past { color:var(--warn); }
-  /* #footer holds #hint and #legend as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap (#95). */
+  /* #footer holds #hint and #legend as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap. */
   #footer { position:absolute; left:12px; right:12px; bottom:10px; display:flex; justify-content:space-between; align-items:flex-end; gap:12px; pointer-events:none; }
   #hint { color:var(--mute); font-size:11px; white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
@@ -86,8 +87,8 @@
   .card .bd-e { fill:var(--err); font-size:10px; }
   .card .bd-o { fill:var(--warn); font-size:10px; }
   .card .st { fill:var(--mute); font-size:10px; }
-  .card .bd-c { fill:#ffb8b8; font-size:12px; font-weight:600; }   /* a failure reason: 12 px, light on the dark red card (ADR-0125) */
-  .card .rw { fill:var(--ok); font-size:11px; font-weight:600; }   /* a redo that passed, or a later attempt (issue #134) */
+  .card .bd-c { fill:#ffb8b8; font-size:12px; font-weight:600; }   /* a failure reason: 12 px, light on the dark red card */
+  .card .rw { fill:var(--ok); font-size:11px; font-weight:600; }   /* a redo that passed, or a later attempt */
   .card.child.superseded > g { opacity:.72; }   /* a failed attempt a later one replaced: still failed, only quieter */
   .card .gl { fill:var(--mute); font:bold 14px sans-serif; pointer-events:none; }   /* the state glyph: status is never hue alone */
   pre.ev { margin:4px 0 8px; padding:6px; background:#07090c; border:1px solid var(--line); border-radius:4px; font:11px/1.4 var(--mono); white-space:pre-wrap; word-break:break-all; max-height:200px; overflow:auto; color:#e8b9b9; }
@@ -105,7 +106,7 @@
   .runbox b { color:var(--fg); }
   .state-completed { color:var(--ok); } .state-none { color:var(--none); } .state-running { color:var(--acc); } .state-stalled { color:var(--warn); font-weight:600; }
   .card.running rect { stroke:var(--run); stroke-width:3.5; fill:#0f262a; }   /* running: a thick teal outline and the ▶ glyph; nothing moves, so prefers-reduced-motion has nothing to switch off */
-  /* The group card (ADR-0125): one square per child; the fill and the glyph both show the outcome. Selectors avoid `.card.<x> rect`, which the legend guard reads as a card color. */
+  /* The group card: one square per child; the fill and the glyph both show the outcome. Selectors avoid `.card.<x> rect`, which the legend guard reads as a card color. */
   .group-card { cursor:pointer; }
   .group-card.s-passed > rect { stroke:var(--ok); } .group-card.s-failed > rect { stroke:var(--err); stroke-width:1.8; }
   .group-card.s-deadline > rect, .group-card.s-needs-human > rect { stroke:var(--warn); } .group-card.s-running > rect { stroke:var(--run); stroke-width:3.5; }
@@ -125,7 +126,7 @@
   .group-card .sq.s-deadline rect, .group-card .sq.s-needs-human rect { fill:#2a2212; stroke:var(--warn); } .group-card .sq.s-deadline text, .group-card .sq.s-needs-human text { fill:var(--warn); }
   .group-card .sq.s-running rect { fill:#12263d; stroke:var(--run); } .group-card .sq.s-running text { fill:var(--run); }
   .group-card .sq.s-started rect { stroke:var(--acc); stroke-dasharray:3 2; }
-  .group-card .sq.sup rect { stroke-dasharray:3 2; }   /* a failed child a later attempt replaced (issue #134) */
+  .group-card .sq.sup rect { stroke-dasharray:3 2; }   /* a failed child a later attempt replaced */
   .group-card .sq:hover rect { stroke:#fff; }
   .group-card .sq:focus { outline:none; } .group-card g.sq.sq rect.fr { fill:none; stroke:none; } .group-card g.sq.sq:focus-visible rect.fr { stroke:#fff; stroke-width:2; }   /* the keyboard ring: an outer white ring, so a focused selected square still differs from a selected one */
   .group-card .sq.sel rect { stroke:#fff; stroke-width:2.5; }
@@ -161,7 +162,7 @@
   #help td:first-child { font:12px var(--mono); color:var(--fg); white-space:nowrap; }
   #help #help-legend { display:flex; flex-wrap:wrap; gap:6px 16px; }
 
-  /* The top bar holds identity, verdict, mode and files. The side panel is an inspector that opens on a selection (ADR-0124). */
+  /* The top bar holds identity, verdict, mode and files. The side panel is an inspector that opens on a selection. */
   #topbar { grid-column:1; height:37px; display:flex; align-items:center; gap:8px; padding:6px 12px; background:var(--panel); border-bottom:1px solid var(--line); min-width:0; }
   #topbar .grow { flex:1; }
   #ident { font-weight:600; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -195,3 +196,4 @@
   #side details.ref { margin-top:14px; }
   /* A narrow window gives the map its height back: the legend lives in the help (?) too, so below 900 px it is not drawn on the map. */
   @media (max-width:900px) { #legend { display:none; } }
+

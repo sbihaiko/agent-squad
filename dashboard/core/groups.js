@@ -1,4 +1,4 @@
-// Dashboard core module: how the children of one dispatch are drawn: the group card, the roster, the bus edge (ADR-0125).
+// Dashboard core module: how the children of one dispatch are drawn: the group card, the roster, the bus edge.
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf }) {
@@ -50,7 +50,7 @@ function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, chil
       // The summary strings come from core.fmt, the one formatter, so the card, its tooltip and the panel read the same text; tests pin them.
       const lineTime = `${fmt.seconds(time)} of calls · ${fmt.usd(cost)}`, lineTokens = `${fmt.tokens(tin)} in · ${fmt.tokens(tout)} out`;
       for (const c of kids) grouped.add(c.name);
-      // A failed group says how many of its children a later attempt replaced, so a collapsed card never reads as an open failure (issue #134).
+      // A failed group says how many of its children a later attempt replaced, so a collapsed card never reads as an open failure.
       const redone = kids.filter((c) => c.superseded_by !== null && c.superseded_by !== undefined).length;
       groups.push({ key, dispatch: first.dispatch, state: running ? "running" : st, label, harness: running ? harnessOf(first) : "", redone, name: `${first.dispatch} · ${kids.length} ${label}${redone ? ` · ${redone} redone` : ""}`, kids, time, cost, tokens_in: tin, tokens_out: tout, lineTime, lineTokens, line: `${lineTime} · ${lineTokens}` });
     }

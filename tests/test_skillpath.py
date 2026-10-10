@@ -1,4 +1,4 @@
-"""Guards for ADR-0129 (ticket #135): a borrowed skill is found by name, so an upgrade, a move or a removal cannot break a door silently."""
+"""Guards: a borrowed skill is found by name, so an upgrade, a move or a removal cannot break a door silently."""
 import importlib.util
 import json
 import re
@@ -264,7 +264,7 @@ LIVE = pytest.mark.skipif(not (Path.home() / ".claude" / "skills").is_dir(), rea
 @LIVE
 def test_on_this_machine_every_skill_a_door_opens_or_the_vendor_builder_copies_still_resolves():
     problems, _ = sp.check(ROOT)
-    assert not problems, f"{problems}; a plugin or npx update moved or removed it (ADR-0129): reinstall it or retire its door"
+    assert not problems, f"{problems}; a plugin or npx update moved or removed it: reinstall it or retire its door"
 
 
 @LIVE
@@ -281,7 +281,7 @@ def test_on_this_machine_every_command_the_ask_matt_router_names_is_registered_a
     unknown = skills - sp.registered(ROOT)
     assert not unknown, f"/ask-matt now routes to {sorted(unknown)}: register them in config/external-skills.yaml"
     gone = {n for n in skills - set(m["optional"]) if sp.resolve(n) is None}
-    assert not gone, f"/ask-matt routes to {sorted(gone)}, which no longer resolves (ADR-0129)"
+    assert not gone, f"/ask-matt routes to {sorted(gone)}, which no longer resolves"
 
 
 @LIVE

@@ -1,9 +1,9 @@
-"""Build vendor/skills: the local plugin of researched skills that agent nodes load (ticket #46).
+"""Build vendor/skills: the local plugin of researched skills that agent nodes load.
 
 Usage: python3 scripts/build_vendor_skills.py [--check] [--config FILE] [--out DIR]
-Copies each skill in config/vendor-skills.yaml (a `skill:NAME` source is found by name, ADR-0129) into <out>/skills/<name>/, writes the plugin manifest, and writes
+Copies each skill in config/vendor-skills.yaml (a `skill:NAME` source is found by name) into <out>/skills/<name>/, writes the plugin manifest, and writes
 VERSIONS.json with a tree hash per skill. `--check` builds nothing: it exits 1 if a source differs from the copy, or
-the copy differs from VERSIONS.json. Update the copy when a skill changes, and commit the result (ADR-0026).
+the copy differs from VERSIONS.json. Update the copy when a skill changes, and commit the result.
 """
 import hashlib
 import json
@@ -39,7 +39,7 @@ def tree_hash(base, rels):
 
 
 def resolve(src):
-    """A `skill:NAME` source is found by name (ADR-0129); anything else is a path."""
+    """A `skill:NAME` source is found by name; anything else is a path."""
     if str(src).startswith("skill:"):
         hit = skillpath.resolve(str(src)[6:])
         return hit.folder if hit else ROOT / "no-such-skill" / str(src)[6:]

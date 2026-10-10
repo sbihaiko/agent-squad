@@ -1,29 +1,29 @@
 # Global defaults for every agent node. Source: docs/research/claude-agent-sdk.md (sections 3, 12, 14, 15, 16, 18.5).
-# Status: values set by the owner, 2026-09-30. `squad run --adapter sdk` loads the engine-level keys per invocation and records the file hash (ticket #46). A node or graph value always wins over it.
-# How it reaches a node (panel 2026-09-30, ADR-0106): engine-level keys (permission_mode, setting_sources, plugins, system_prompt,
-# env, hooks, auth, log, token limits) load per invocation and are recorded in run_start. Node-level keys (model, effort, turns,
+# Values set by the owner. `squad run --adapter sdk` loads the engine-level keys per invocation and records the file hash. A node or graph value always wins over it.
+# How it reaches a node : engine-level keys (permission_mode, setting_sources, plugins, system_prompt,
+# env, hooks, auth, log, token limits) load per invocation and are recorded in run_start. Node-level keys (model, effort, stalls,
 # spend, deadline, tools, skills, run block) are an authoring-time scaffold: they are copied into the graph document, so the hash covers them.
-# Precedence, lowest first: this file, `roles`, the graph `run` block, the node. A layer may only narrow a cap (ADR-0106).
+# Precedence, lowest first: this file, `roles`, the graph `run` block, the node. A layer may only narrow a cap.
 # Keys under `options` are ClaudeAgentOptions field names; `env` merges over the process environment.
 
 version: 1
 
 options:
-  model: claude-sonnet-5-5          # owner ruling 2026-09-30; record init.data["model"] in every run log
+  model: claude-sonnet-5-5          # owner ruling; record init.data["model"] in every run log
   fallback_model: null              # alias or full id; unset means no fallback
   effort: medium                    # low | medium | high | max; Sonnet 5.5 API default is high
   thinking: null                    # supersedes max_thinking_tokens; unset keeps the model default
   permission_mode: bypassPermissions  # owner ruling. allowed_tools then restricts nothing (G7): read-only roles use disallowed_tools
   setting_sources: [project]        # the target project's CLAUDE.md, ADRs and rules load and take precedence over ours
   plugins:                          # owner ruling: researched skills are always available, from a vendored copy
-    - {type: local, path: vendor/skills}   # versioned copy; rebuild with scripts/build_vendor_skills.py, check with --check (ticket #46)
+    - {type: local, path: vendor/skills}   # versioned copy; rebuild with scripts/build_vendor_skills.py, check with --check
   system_prompt:
     type: preset
     preset: claude_code             # the SDK default omits the preset and its safety text
-    append_file: prompts/_contract.md   # role file is appended per node (ticket #45)
+    append_file: prompts/_contract.md   # role file is appended per node
   tools: null                       # G6: a restricted `tools` list broke haiku; use disallowed_tools
   allowed_tools: [Read, Grep, Glob] # auto-approve only; it does not restrict (G7)
-  disallowed_tools: [WebFetch, WebSearch, Task, Agent]   # panel 2026-09-30: no subagent in any role (G3, G13); a role list replaces this one
+  disallowed_tools: [WebFetch, WebSearch, Task, Agent]   # panel ruling: no subagent in any role (G3, G13); a role list replaces this one
   skills: []                        # pin per node (docs/research/role-skill-map.md); [] loads none
   strict_mcp_config: true           # ignore .mcp.json and plugin servers
   enable_file_checkpointing: false
@@ -33,7 +33,7 @@ options:
   verbatim_prompts: false           # true turns off @path and slash-command expansion
 
 limits:                             # every session gets all three caps (G5)
-  max_turns: 30                     # counts tool-use turns; the cap can be passed by one turn
+  max_stalls: 5                      # PROVISIONAL (ADR-0012, ADR-0018): a first guess. It counts failed attempts at one step (a Bash command, a file) with the same failure each time; a changed failure or a success restarts it. Total turns are never capped: spend and the deadline bound a call
   max_budget_usd: 2.0               # includes subagent spend; checked after a response, so spend can pass it
   max_output_tokens: 32000          # per response; passed as env CLAUDE_CODE_MAX_OUTPUT_TOKENS. Probed: a longer response ends the call (error after a result); the engine records node_output_cap (docs/research/limits-probe.md)
   context_tokens: 200000            # context size; an agent cannot call /compact (a CLI built-in), so the CLI compacts at this size; passed as env CLAUDE_CODE_AUTO_COMPACT_WINDOW. Probed: it sets the window; auto-compact fires 33000 below it; values under 100000 clamp up (the checker refuses them)
@@ -42,15 +42,28 @@ limits:                             # every session gets all three caps (G5)
 
 run:                                # mirrors the graph run block (schema run_block)
   deadline: null                    # owner ruling: no run cap; runs may last days. The per-call deadline bounds each agent. The schema accepts null.
-  max_parallel: 20                  # safe: each item and each writing dispatch child gets its own worktree (ADR-0102 rule 2, #47)
+  max_parallel: 20                  # safe: each item and each writing dispatch child gets its own worktree
   spend_cap: 25.0
 
-dashboard:                          # the run dashboard page (ticket #80); run_start records it, the page reads it from the record
+dashboard:                          # the run dashboard page; run_start records it, the page reads it from the record
   reread_seconds: 1                 # how often the page rereads record.jsonl while a run lives. The page has no control for it. The page uses 1 when a record lacks it.
-  watch_seconds: 0.2                # ticket #105: how often the server stats the record path while a stream is open. A pushed event follows a write within this step. A record from before it, or a file:// page, uses reread_seconds.
+  watch_seconds: 0.2                # how often the server stats the record path while a stream is open. A pushed event follows a write within this step. A record from before it, or a file:// page, uses reread_seconds.
 
-progress:                           # what the record holds while a call is in flight (ticket #101): one `progress` event with the assistant
+watch:                              # what starts with a run from `work` or `task`
+  dashboard: true                   # open the run dashboard page on the new run. A headless environment prints the URL. A failed open is a warning, never a verdict. A resume reuses a page already open.
+  monitor: true                     # a run-scoped monitor reads the record on a timer and logs a stuck, abandoned or deadline-missed call to monitor.log in the run folder and to the command output. It never calls a model and never changes the run.
+  monitor_seconds: 30               # how often the monitor looks (5 to 600)
+
+progress:                           # what the record holds while a call is in flight: one `progress` event with the assistant
   seconds: 10                       # messages so far, the context the newest one read and the last tool. At most one per call per this many seconds; null writes none.
+
+autonomy:                           # anything that needs a human or a decision goes to /autonomy first. run_start records both values; a resume refuses when one differs.
+  enabled: true                     # plugin default on; the owner turns it off per project
+  max_resumes: 3                    # automatic resumes after a needs-human end; 0 to 10
+
+claude_md:                          # `squad setup --check` flags ledger content in CLAUDE.md. A project may change both in docs/squad/defaults.yaml.
+  max_line_width: 300               # PROVISIONAL: a first guess, not measured. It holds until a labeled sample of real CLAUDE.md files supports a value.
+  max_section_lines: 40             # PROVISIONAL, same status as max_line_width
 
 dispatch:                           # subagent fan-out (section 14)
   max_depth: 3                      # owner ruling; same as the SDK default
@@ -63,7 +76,7 @@ hooks:
 env:
   CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: "3"
   # CLAUDE_CODE_MAX_OUTPUT_TOKENS and CLAUDE_CODE_AUTO_COMPACT_WINDOW come from limits.max_output_tokens and
-  # limits.context_tokens. The adapter sets them per call (ticket #46). No ClaudeAgentOptions field sets either.
+  # limits.context_tokens. The adapter sets them per call. No ClaudeAgentOptions field sets either.
   # Multi-tenant runs also need CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" and setting_sources: [].
 
 auth:

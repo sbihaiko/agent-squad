@@ -1,6 +1,6 @@
 """Ticket #99: every node card's title is a role label derived from what the node is, not its internal name.
 
-Display only: the label never writes the graph and never enters the graph hash (ADR-0111). A gate shows its check id, an
+Display only: the label never writes the graph and never enters the graph hash. A gate shows its check id, an
 action its effect, a wait its owner, an agent its skill (else its own name), and a dispatch child the task it ran (the issue
 number, since every child of one dispatch usually runs the same skill and the skill alone would title them all alike). A
 node the rule does not cover falls back to its name, so the label is never empty. A loop, an each, and a dispatch carry no

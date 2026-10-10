@@ -1,11 +1,11 @@
-"""The subject's answer key asserts what its issue text states (ADR-0119).
+"""The subject's answer key asserts what its issue text states.
 
 The 24 held-out tests in `bench/subject/acceptance/` were authored one issue at a time against the base tree.
-Ten assertions demanded more than their issue text states, in five groups. ADR-0119 re-anchors each to the
+Ten assertions demanded more than their issue text states, in five groups. The answer key re-anchors each to the
 property its text states, so the 24 files can pass together on one tree. The pins below make a further edit a
 deliberate act: a squad run that "fixes" a held-out test to pass cannot move one unnoticed.
 
-Guard for ADR-0119.
+Guard for the answer-key rule.
 """
 import hashlib
 import json
@@ -33,11 +33,11 @@ PINS = {
     "test_issue_14.py": "0a32af7be3c70e17",
     "test_issue_15.py": "0f3e7af38a094844",
     "test_issue_16.py": "7c7f895868ad1802",
-    "test_issue_17.py": "103ef0c18101f2d9",
+    "test_issue_17.py": "63913348a61c685c",
     "test_issue_18.py": "7e6a206233fd397f",
-    "test_issue_19.py": "d713d3f317c74fa5",
-    "test_issue_20.py": "1f400ad29a275d2d",
-    "test_issue_21.py": "9bac7bcdf8150063",
+    "test_issue_19.py": "7847f828dd746e15",
+    "test_issue_20.py": "3322efabae1ad9fc",
+    "test_issue_21.py": "920b887813bb504d",
     "test_issue_22.py": "b1e375616da21a51",
     "test_issue_23.py": "40c54bfc392fc635",
     "test_issue_24.py": "24957b074ff37365",

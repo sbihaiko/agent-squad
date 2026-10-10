@@ -1,4 +1,4 @@
-"""The skill versions of a run (ADR-0130). This module owns the hash rule. Record, envelope, replay and display call it.
+"""The skill versions of a run. This module owns the hash rule. Record, envelope, replay and display call it.
 
 A skill's version is its tree hash in `vendor/skills/VERSIONS.json` (the `sha256` field, from `skillpath.tree_hash`).
 
@@ -8,7 +8,7 @@ A skill's version is its tree hash in `vendor/skills/VERSIONS.json` (the `sha256
     snapshot(doc, vendor=VENDOR)  `load` limited to graph_skills(doc): the `skills` map of run_start
     commit(vendor=VENDOR)         the git commit that last changed `vendor`, or None
     commit_label(commit)          the commit as text for a message
-    dirty(vendor=VENDOR)          what blocks a start (#140): a changed, staged or untracked path, a failed git status, or a skill with wrong bytes
+    dirty(vendor=VENDOR)          what blocks a start: a changed, staged or untracked path, a failed git status, or a skill with wrong bytes
 """
 import json
 import subprocess

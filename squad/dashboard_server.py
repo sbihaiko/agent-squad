@@ -1,14 +1,14 @@
-"""A loopback server for `squad dashboard` (ticket #86, ADR-0118, ADR-0128).
+"""A loopback server for `squad dashboard`.
 
 One server serves one run folder. It serves the built dashboard page and five read-only paths for that run:
 `/run/record.jsonl`, `/run/graph.json`, `/run/info.json`, `/run/control.json` and `/run/events`. It binds 127.0.0.1
 only and checks the Host header, so a web page on another origin cannot read a run through DNS rebinding.
-It never starts a run (ADR-0117). Its one write is `POST /run/control`: a pause or resume request that it appends
-to the run's control file and to nothing else (ADR-0128). Every other method is refused. It exits when no request
+It never starts a run. Its one write is `POST /run/control`: a pause or resume request that it appends
+to the run's control file and to nothing else. Every other method is refused. It exits when no request
 came for the idle time.
 
 A page that asks for `/run/events` gets a push stream: the server watches the record and sends each new event
-as it lands, so the page shows a live run without re-reading the record (ticket #105, ADR-0122).
+as it lands, so the page shows a live run without re-reading the record.
 """
 import hashlib
 import http.client
@@ -34,10 +34,10 @@ WATCH_SECONDS = 0.2          # how often the watcher stats the record path while
 HEARTBEAT_SECONDS = 15.0     # a quiet stream still writes this often, so a dead peer is found
 STREAM_CTYPE = "text/event-stream; charset=utf-8"
 RECORD_RELS = ("record.jsonl", "run/record.jsonl")
-CONTROL_PATH = "/run/control"    # the one write route (ADR-0128)
+CONTROL_PATH = "/run/control"    # the one write route
 MAX_BODY = 4096                  # a request is a few names; a larger body is refused unread
 MAX_NODES = 100
-NODE_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}")     # a node or a child, never one `each` item: a hold is by name (ADR-0128)
+NODE_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,200}")     # a node or a child, never one `each` item: a hold is by name
 BODY_TIMEOUT = 5.0                                    # a client that stalls on its body frees the thread
 ENDED = ("completed", "failed", "conflict", "needs-human")
 
@@ -56,7 +56,7 @@ def _inside(path, folder):
 def issue_count(folder):
     """The issue set a run folder holds: the .md files under `target/issues`, or under `run/target/issues`, else 0.
 
-    The record carries no issue-set size (issue #97), so the page reads the count here for its top bar. Read-only:
+    The record carries no issue-set size, so the page reads the count here for its top bar. Read-only:
     a fixed relative folder is read, no part of a request joins a path.
     """
     for rel in ("target/issues", "run/target/issues"):
@@ -64,6 +64,14 @@ def issue_count(folder):
         if d.is_dir():
             return sum(1 for p in d.iterdir() if p.is_file() and p.suffix == ".md")
     return 0
+
+
+def held_count(folder):
+    """How many issues the run's start tree already carried: `holds.json`, written by a chained run, else 0."""
+    try:
+        return len(json.loads((Path(folder) / "holds.json").read_text())["held"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
 
 
 def run_ended(folder):
@@ -112,9 +120,9 @@ def record_path(folder):
 
 
 class RecordFeed:
-    """The run record as it grows, read once for every open stream (ticket #105, ADR-0122).
+    """The run record as it grows, read once for every open stream.
 
-    Every append rewrites the whole file by atomic replace (ADR-0030), so the feed watches the path: its size
+    Every append rewrites the whole file by atomic replace, so the feed watches the path: its size
     and its modification time. It holds no descriptor between reads, and the file on that path is never the old
     one. Each new line goes to every open stream, in the order the record holds it.
 
@@ -256,7 +264,7 @@ class RunServer(ThreadingHTTPServer):
         return {"whole": whole, "nodes": sorted(held), "released": sorted(released)}
 
     def info(self):
-        return {"name": self.folder.name, "folder": str(self.folder), "issues": issue_count(self.folder), "watch_seconds": self.watch}
+        return {"name": self.folder.name, "folder": str(self.folder), "issues": issue_count(self.folder), "held": held_count(self.folder), "watch_seconds": self.watch}
 
     def serve_until_idle(self):
         while self.clock() - self.last < self.idle:
@@ -324,7 +332,7 @@ class _Handler(BaseHTTPRequestHandler):
             return 0
 
     def _stream(self):
-        """Send the record's new lines as they land, then the reason the run ended (ticket #105, ADR-0122).
+        """Send the record's new lines as they land, then the reason the run ended.
 
         The connection answers as a chunked `text/event-stream`, so the client reads each event as it arrives.
         The stream closes when the run ends; a client that went away ends its own handler thread with no noise.
@@ -360,7 +368,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(405, b"read only\n")
 
     def do_POST(self):
-        """The one write: a pause or resume request goes to the run's control file (ADR-0128).
+        """The one write: a pause or resume request goes to the run's control file.
 
         The page's own origin and a JSON content type are both required, so a form or a script on another site
         cannot send it; the Host check stops DNS rebinding. The body is small and validated before anything is written.

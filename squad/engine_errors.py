@@ -18,8 +18,8 @@ class Frontier(Exception):
 
 
 class ResumeRefused(Exception):
-    """A resume that the record or the graph forbids (ADR-0107 rules 1 and 6). No event is written."""
+    """A resume that the record or the graph forbids. No event is written."""
 
 
 class Defect(Exception):
-    """The engine or its inputs are wrong. The run ends failed (ADR-0018)."""
+    """The engine or its inputs are wrong. The run ends failed."""

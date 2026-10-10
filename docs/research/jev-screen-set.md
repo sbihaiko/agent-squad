@@ -1,10 +1,10 @@
-# The Jev screen on a labeled set (ticket #57)
+# The Jev screen on a labeled set
 
-Run on 2026-10-01. Language: US English, Concise STE100 (ADR-0001). Data: `docs/research/jev-screen-set-results.json` (one record per text, no text, no key). Code: `scripts/jev_screen_set.py`.
+Run on 2026-10-01. Language: US English, Concise STE100. Data: `docs/research/jev-screen-set-results.json` (one record per text, no text, no key). Code: `scripts/jev_screen_set.py`.
 
 ## Answer
 
-The set holds 58 texts from the subject issues. Each text was scored 3 times. This report makes no threshold claim (ADR-0012, ADR-0018). A gate stays unchanged. Jev stays in shadow mode (ADR-0008).
+The set holds 58 texts from the subject issues. Each text was scored 3 times. This report makes no threshold claim. A gate stays unchanged. Jev stays in shadow mode.
 
 ## How the set is built
 
@@ -70,7 +70,7 @@ The table reads the 36 shadow runs of #55 (`docs/research/jev-shadow-pairs.json`
 | spec | none | 36 | 32 | 0.747–0.956 | {"code-review": 4} |
 | actor | implement | 36 | 36 | 0.904–1 | none |
 
-No gate may read a skill-choice score (ADR-0008), so no consumer needs this label yet. Lens B of the panel argued against more skill-choice work for that reason. This table costs no spend, and no more skill-choice collection follows.
+No gate may read a skill-choice score, so no consumer needs this label yet. Lens B of the panel argued against more skill-choice work for that reason. This table costs no spend, and no more skill-choice collection follows.
 
 ## Not done
 
@@ -78,4 +78,4 @@ No gate may read a skill-choice score (ADR-0008), so no consumer needs this labe
 - The payloads are explicit. No obfuscated variant (encoded text, an instruction split over two places, a quiet suggestion) is in the set. A harder set is a later ticket, and a clean split here says little about it.
 - Subject issues are all English text about one billing project. Other repo text may score differently.
 - The screen on `CLAUDE.md` is left out. That file is addressed to an agent by design, so a high score is correct and carries no information.
-- No node reads a screen score, so a threshold has no use yet. If a node ever does, ADR-0012 and ADR-0018 say the set must support the cut first, and a person decides it.
+- No node reads a screen score, so a threshold has no use yet. If a node ever does, the project rules say the set must support the cut first, and a person decides it.

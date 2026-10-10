@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/mmctech-ai/agent-squad/docs/design/graph.schema.json",
   "title": "agent-squad graph document",
-  "description": "One flat JSON document. Edges are name references. Rules: ADR-0100 to ADR-0111. Rules that a schema cannot express live in check_graph.py.",
+  "description": "One flat JSON document. Edges are name references. Rules that a schema cannot express live in check_graph.py.",
   "type": "object",
   "required": [
     "schema_version",
@@ -119,15 +119,15 @@
       }
     },
     "budget": {
-      "description": "Turn cap and spend cap, each with a minimum and a maximum (ADR-0100 rule 5). A proposal shrinks toward min and never raises max (ADR-0103).",
+      "description": "Turn cap and spend cap, each with a minimum and a maximum. A proposal shrinks toward min and never raises max.",
       "type": "object",
       "required": [
-        "turns",
+        "stalls",
         "spend"
       ],
       "additionalProperties": false,
       "properties": {
-        "turns": {
+        "stalls": {
           "$ref": "#/$defs/range_int"
         },
         "spend": {
@@ -136,7 +136,7 @@
       }
     },
     "run_block": {
-      "description": "Run-level defaults. An engine option may only lower them (ADR-0106 rules 7, 9).",
+      "description": "Run-level defaults. An engine option may only lower them.",
       "type": "object",
       "required": [
         "deadline",
@@ -167,7 +167,7 @@
       }
     },
     "fact": {
-      "description": "A registered fact: only code produces it (ADR-0104 rule 1). The families outcome:<node>, run_spend, run_spend_remaining are built in.",
+      "description": "A registered fact: only code produces it. The families outcome:<node>, run_spend, run_spend_remaining are built in.",
       "type": "object",
       "required": [
         "name",
@@ -241,7 +241,7 @@
       }
     },
     "when": {
-      "description": "One predicate over a registered fact, read on every entry and never bypassed (ADR-0101 rules 4, 5).",
+      "description": "One predicate over a registered fact, read on every entry and never bypassed.",
       "type": "object",
       "required": [
         "fact",
@@ -285,7 +285,7 @@
       ]
     },
     "next": {
-      "description": "Reserved words only, per outcome (ADR-0115).",
+      "description": "Reserved words only, per outcome.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -304,7 +304,7 @@
       }
     },
     "adapt": {
-      "description": "The node's own range for run-time proposals (ADR-0103 rule 3, ADR-0104 rule 2). No block means the node is not adaptable.",
+      "description": "The node's own range for run-time proposals. No block means the node is not adaptable.",
       "type": "object",
       "required": [
         "kinds"
@@ -320,7 +320,7 @@
               "set_model",
               "set_effort",
               "narrow_tools",
-              "shrink_turns",
+              "shrink_stalls",
               "shrink_spend",
               "shrink_loop_max"
             ]
@@ -411,7 +411,7 @@
         },
         "skill": {
           "type": "string",
-          "description": "A skill the entry agent runs through the /name prefix (ADR-0113 rule 6)."
+          "description": "A skill the entry agent runs through the /name prefix."
         },
         "instructions": {
           "type": "string",
@@ -419,7 +419,7 @@
         },
         "may_spawn": {
           "type": "boolean",
-          "description": "Valid only on the entry agent of a dispatch node (ADR-0113 rule 2). Its output carries a spawns list."
+          "description": "Valid only on the entry agent of a dispatch node. Its output carries a spawns list."
         },
         "reads": {
           "$ref": "#/$defs/paths"
@@ -430,7 +430,7 @@
       }
     },
     "gate": {
-      "description": "A deterministic check. No model, no when, no deadline, no adapt. Its fail is repeat or exit:fail and never names a node (ADR-0100, ADR-0101).",
+      "description": "A deterministic check. No model, no when, no deadline, no adapt. Its fail is repeat or exit:fail and never names a node.",
       "type": "object",
       "required": [
         "name",
@@ -505,7 +505,7 @@
       }
     },
     "loop": {
-      "description": "Repeats its ordered children up to max. Max may only shrink at run time. Carries no deadline (ADR-0102 rule 3).",
+      "description": "Repeats its ordered children up to max. Max may only shrink at run time. Carries no deadline.",
       "type": "object",
       "required": [
         "name",
@@ -557,7 +557,7 @@
           "$ref": "#/$defs/adapt"
         },
         "stall_after": {
-          "description": "Opt-in: exit `fail` with reason waves_stalled once this many consecutive entries land nothing, before `max` is ever reached (#93). An entry that lands at least one child resets the count. Omit for the old count-only behavior.",
+          "description": "Opt-in: exit `fail` with reason waves_stalled once this many consecutive entries land nothing, before `max` is ever reached. An entry that lands at least one child resets the count. Omit for the old count-only behavior.",
           "type": "object",
           "required": [
             "count"
@@ -575,7 +575,7 @@
           }
         },
         "max_by": {
-          "description": "Opt-in: make `max` the ceiling of one task's attempts, not of the loop's entries (#98). Each entry adds one attempt to every `task` key its accepted children name; a task that reaches `max` attempts ends the loop `fail` with reason task_max_exhausted, and a loop that advances to a new task never spends the ceiling. An entry that names no task key adds one unnamed attempt. Omit for the old count-every-entry behavior.",
+          "description": "Opt-in: make `max` the ceiling of one task's attempts, not of the loop's entries. Each entry adds one attempt to every `task` key its accepted children name; a task that reaches `max` attempts is dropped and recorded, and the loop goes on; an entry that names only dropped tasks ends the loop `fail` with reason task_max_exhausted, and a loop that would end `pass` with a dropped task ends `fail` with task_exhausted:<task>. A loop that advances to a new task never spends the ceiling. An entry that names no task key adds one unnamed attempt. Omit for the old count-every-entry behavior.",
           "const": "task"
         }
       }
@@ -638,7 +638,7 @@
       }
     },
     "action": {
-      "description": "Deterministic code with declared side effects. No model, no spend (ADR-0101).",
+      "description": "Deterministic code with declared side effects. No model, no spend.",
       "type": "object",
       "required": [
         "name",
@@ -682,7 +682,7 @@
       }
     },
     "dispatch": {
-      "description": "An agent requests children inside an author-fixed envelope. Code validates each request (ADR-0113). A model never widens a field here.",
+      "description": "An agent requests children inside an author-fixed envelope. Code validates each request. A model never widens a field here.",
       "type": "object",
       "required": [
         "name",
@@ -814,7 +814,7 @@
       }
     },
     "paths": {
-      "description": "Repo file paths a node declares (ADR-0110 rule 2). A path in one node's `reads` is never in another node's `writes`.",
+      "description": "Repo file paths a node declares. A path in one node's `reads` is never in another node's `writes`.",
       "type": "array",
       "items": {
         "type": "string",

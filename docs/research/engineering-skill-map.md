@@ -90,17 +90,17 @@ Five principles: write for the reader, lead with the most useful fact, show, kee
 
 | `/engineering:*` skill | Nearest repo or user skill | Which one to use here |
 | --- | --- | --- |
-| `architecture` | `/domain-modeling` (ADRs) | `/domain-modeling`. It follows `docs/adr/` and ADR-0000. |
+| `architecture` | `/domain-modeling` (ADRs) | `/domain-modeling`. It follows `docs/adr/`. |
 | `system-design` | `/codebase-design`, `/grill-with-docs` | `/grill-with-docs` first. `/codebase-design` for module shape. |
 | `code-review` | `/code-review` (Standards plus Spec) | `/code-review`. It checks the repo's standards and the spec. |
 | `debug` | `/diagnosing-bugs`, `/systematic-debugging` | `/diagnosing-bugs`. |
 | `testing-strategy` | `/tdd` | `/tdd`. |
-| `documentation` | `/writing-for-agents`, ADR-0001 | Repo rules win: US English, Concise STE100. |
+| `documentation` | `/writing-for-agents` | Repo rules win: US English, Concise STE100. |
 | `tech-debt` | `/improve-codebase-architecture` | `/improve-codebase-architecture`. |
 | `deploy-checklist`, `incident-response`, `standup` | none | Use the engineering skill. |
 
 Rule of thumb: a repo skill knows this repo's ADRs and gates. An engineering skill does not.
-Output from an engineering skill must still follow ADR-0001 in this repo.
+Output from an engineering skill must still follow the repo language rule (US English, Concise STE100).
 
 ## 5. Connectors
 

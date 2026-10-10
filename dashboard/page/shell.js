@@ -16,7 +16,7 @@ const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CAR
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
 const REPLAY_GAP = 24, REPLAY_BAR_H = 44, REVEAL_INSET = 16, FOOTER_PAD = 12;
 
-const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
+const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
 
 function setStatus(msg, bad) { const el = $("status"); el.textContent = msg; el.className = bad ? "msg-bad" : ""; toast(); }
 
@@ -28,10 +28,10 @@ async function recompute(opts) {
   // The cursor cuts the record: every card, total and the verdict fold only the events up to it. A null cursor is the end, so a live run keeps following.
   S.replay = S.events ? core.replayAt(S.events, S.cursor) : null;
   S.stats = S.events ? core.runStats(S.replay.events, S.doc, !!(S.overlay && S.overlay.shown), S.replay.at_end ? nowSec() : undefined) : null;
-  // The children of a dispatch are run-only cards: placed here, never written to the layout (ticket #91).
+  // The children of a dispatch are run-only cards: placed here, never written to the layout.
   const had = Object.keys(S.childPos).length + Object.keys(S.groupPos).length;
   S.children = S.stats && S.stats.children ? S.stats.children : [];
-  // Children group by status (ADR-0125): done with one outcome, or running with one harness, three or more to a group card. The keys
+  // Children group by status: done with one outcome, or running with one harness, three or more to a group card. The keys
   // the owner expanded live in S.expanded (page state, not the record), so they survive a live update and a move of the replay cursor.
   const plan = core.childPlan(S.children, S.expanded, S.layout, BOX, CARD_GAP, S.doc);
   S.groups = plan.groups; S.groupOf = plan.groupOf; S.childPos = plan.childPos;
@@ -74,11 +74,11 @@ function renderTotals() {
 }
 setInterval(() => { if (S.replay && S.replay.at_end && S.stats && S.stats.state === "running") renderTotals(); }, 1000);   // a running run's time keeps counting between rereads
 
-// The top bar above the graph: how many issues the run landed, of the issue set in the run folder (issue #97). The
+// The top bar above the graph: how many issues the run landed, of the issue set in the run folder. The
 // cells are core data (core.progressCells), and the replay cursor cuts them like every other figure.
 function renderProgress() {
   const bar = $("progress"), r = S.replay, was = bar.classList.contains("on");
-  const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal)) : [];
+  const cells = r ? core.progressCells(core.issueProgress(r.events, S.issueTotal, S.issueHeld)) : [];
   bar.classList.toggle("on", cells.length > 0);
   bar.innerHTML = cells.map((c) => `<span class="cell" title="${esc(c.title)}">${esc(c.label)} <b>${esc(c.text)}</b></span>`).join("")
     + (cells.length && !r.at_end ? `<span class="cell past" title="The bar shows the run up to the replay cursor, not the whole run.">replay: up to event ${r.cursor} of ${r.last}</span>` : "");

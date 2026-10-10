@@ -1,7 +1,7 @@
 # What the Agent SDK can express per graph node
 
 Research for wayfinder ticket #3. Pinned to `claude-agent-sdk` **0.2.161**, bundled CLI **2.1.284**. Researched on 2026-09-29.
-Language: US English, Concise STE100 (ADR-0001).
+Language: US English, Concise STE100.
 
 Builds on [claude-agent-sdk.md](claude-agent-sdk.md) (called NOTE below) and [agent-sdk-command-map.md](agent-sdk-command-map.md). This file re-checks the claims a graph decision will rest on. It adds new facts. It runs no new probes and spends no money.
 
@@ -110,7 +110,7 @@ Decision input: a graph node is a `query()`. A subagent is a detail inside a nod
 - A hook `deny` blocks even in `bypassPermissions`. [N:5.1] [D:permissions via N]
 - Hooks may not fire once `max_turns` is reached. [N:6.3] UNVERIFIED here.
 
-**Rule for the graph (ADR-0012).** Hooks enforce tool-level guards and cheap self-checks. The node gate runs in Python after the real `ResultMessage`. A `Stop` hook is not a gate. [N:6.3]
+**Rule for the graph.** Hooks enforce tool-level guards and cheap self-checks. The node gate runs in Python after the real `ResultMessage`. A `Stop` hook is not a gate. [N:6.3]
 
 ## 6. Sessions, resume, and checkpoints per node
 

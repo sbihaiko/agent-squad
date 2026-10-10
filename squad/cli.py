@@ -1,21 +1,22 @@
-"""The command line: `squad run` and `squad resume` (ADR-0106, ADR-0107).
+"""The command line: `squad run` and `squad resume`.
 
-The exit code is the verdict's exit code (ADR-0019). A usage or graph error exits 2.
+The exit code is the verdict's exit code. A usage or graph error exits 2.
 `--script` runs the scripted adapter; `--adapter sdk` runs the real Claude Agent SDK adapter (squad.sdk_adapter).
 """
 import argparse
 import asyncio
+import importlib.util
 import json
+import re
+import shlex
 import sys
-import time
-import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from squad import defaults, record
+from squad import defaults, launch, record
 from squad import graph as G
 from squad.adapter import ScriptedAdapter
-from squad.engine import Engine, ResumeRefused
+from squad.engine import ResumeRefused
 from squad.options import OptionError
 
 USAGE = 2
@@ -27,26 +28,10 @@ def _opts(a):
     return {k: v for k, v in m.items() if v is not None}
 
 
-def _defaults(a):
-    """The per-invocation load of the engine-level defaults. None unless the SDK adapter runs or --defaults names a file."""
-    if a.adapter != "sdk" and not a.defaults:
-        return None
-    path = Path(a.defaults) if a.defaults else defaults.PATH
-    cfg = defaults.load(path)
-    bad = defaults.check(cfg)
-    if bad:
-        raise SystemExit(_fail(f"{path} is unsound: {', '.join(bad)}"))
-    return {"path": str(path.resolve()), "sha256": defaults.digest(path), "engine": defaults.engine_view(cfg), "_cfg": cfg}
-
-
-def _recorded(dflt):
-    return {k: v for k, v in dflt.items() if k != "_cfg"} if dflt else None
-
-
-def _adapter(a, dflt=None):
+def _adapter(a):
+    """The scripted adapter, or None: `launch` then builds the SDK adapter from the defaults file."""
     if a.adapter == "sdk":
-        from squad.sdk_adapter import SdkAdapter
-        return SdkAdapter.from_defaults(dflt["_cfg"]) if dflt else SdkAdapter()
+        return None
     if not a.script:
         raise SystemExit(_fail("pass --adapter sdk, or --script FILE (a JSON object of node name to steps)"))
     data = json.loads(Path(a.script).read_text())
@@ -78,22 +63,50 @@ def parser():
     db.add_argument("--idle", type=float, default=None, help="seconds with no request before the server exits (default 7200)")
     db.add_argument("--defaults", default=None, help="agent defaults file, for the stream's watch step (default config/agent-defaults.yaml)")
     db.add_argument("--list", action="store_true", help="list the runs with their numbers")
-    ed = sub.add_parser("editor", help="open the editor on a workflow in docs/squad/workflows/ (the dynamic workflow when no id)")
+    ed = sub.add_parser("editor", help="open the editor on a workflow in docs/squad/workflows/ (the `default` workflow when no id)")
     ed.add_argument("workflow", nargs="?", help="workflow id: the file docs/squad/workflows/<id>.graph.json")
     ed.add_argument("--no-open", action="store_true", help="print the file and the page, open nothing")
-    for name in ("run", "resume", "start"):
-        s = sub.add_parser(name, **({"help": "start a run from a request or a task; the dynamic workflow unless --workflow names one"} if name == "start" else {}))
+    su = sub.add_parser("setup", help="print the plan to prepare a project (an ADR index); --apply writes it, only adding")
+    su.add_argument("--target", default=".", help="the project directory (default: the current one)")
+    su.add_argument("--apply", action="store_true", help="write the missing files; an existing file is never overwritten")
+    su.add_argument("--language", help="the language of the project's record; adds the language rule (omit to skip it)")
+    su.add_argument("--test-command", help="the project's test command, named in the ADRs")
+    su.add_argument("--tracker", help="the project's issue tracker, named in the ADRs")
+    su.add_argument("--check", action="store_true", help="fail when a rule ADR has no CLAUDE.md bullet or a bullet does not resolve; writes nothing")
+    su.add_argument("--memory-dir", help="the project's memory directory (default: SQUAD_MEMORY_DIR, else the Claude Code project folder)")
+    su.add_argument("--approve-memory", action="store_true", help="with --apply, also write the memory files proposed for ledger lines of CLAUDE.md")
+    su.add_argument("--no-auto-commit", action="store_true", help="the owner declines the commits-and-pushes-are-automatic rule")
+    cf = sub.add_parser("config", help="change the project settings file docs/squad/defaults.yaml")
+    cf.add_argument("--target", default=".", help="the project directory (default: the current one)")
+    cf.add_argument("--stdin", action="store_true", help="read the subcommand and its words from standard input")
+    cs = cf.add_subparsers(dest="config_cmd", required=True)
+    c = cs.add_parser("set", help="write one key, for example limits.max_stalls 8")
+    c.add_argument("key")
+    c.add_argument("value")
+    c = cs.add_parser("reset", help="remove one key; the file keeps the others")
+    c.add_argument("key")
+    cs.add_parser("check", help="report every defect of the project file (unknown key, credential key, bad type, out-of-range value); exit 1 on a defect")
+    cs.add_parser("init", help="create the file with only the keys changed so far")
+    c = cs.add_parser("show", help="print every setting with its value, unit and source layer")
+    c.add_argument("--defaults", help="agent defaults file (default config/agent-defaults.yaml)")
+    for name in ("run", "resume", "start", "work", "task"):
+        helps = {"start": "start a run from a request or a task; the `default` workflow unless --workflow names one",
+                 "work": "alias of `start`: start a run from a request", "task": "alias of `start --task`: start a run for one task"}
+        s = sub.add_parser(name, **({"help": helps[name]} if name in helps else {}))
         if name == "run":
             s.add_argument("graph")
-        elif name == "start":
-            s.add_argument("text", nargs="+", help="the request, or with --task the task")
-            s.add_argument("--workflow", help="workflow id in docs/squad/workflows/ (default: the dynamic workflow)")
+        elif name in ("start", "work", "task"):
+            s.add_argument("text", nargs="*", help="the request, or with --task the task")
+            s.add_argument("--stdin", action="store_true", help="read the request from standard input; a `--workflow <id>` in it names the workflow")
+            s.add_argument("--workflow", help="workflow id in docs/squad/workflows/ (default: the `default` workflow)")
+            s.add_argument("--name", default=None, help="the run id and the run folder name (letters, digits, '.', '_', '-'); default: a random id")
             s.add_argument("--task", action="store_true", help="the text is one task, not a request")
         else:
             s.add_argument("run_id")
             s.add_argument("--graph")
             s.add_argument("--from", dest="from_node")
             s.add_argument("--answer", choices=["pass", "fail"])
+            s.add_argument("--auto-source", help="an automatic resume: the decision source (`autonomy`). Records one autonomy_resume event with the resume count; refuses at the cap")
         s.add_argument("--runs-dir", default="runs")
         s.add_argument("--run-dir")
         s.add_argument("--target")
@@ -109,8 +122,19 @@ def parser():
     return p
 
 
+def _config_argv(argv):
+    """`config --stdin`: a slash command passes the subcommand in a quoted here-document, so no character of it reaches the shell."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["config"] and "--stdin" in argv:
+        argv.remove("--stdin")
+        argv += shlex.split(sys.stdin.read())
+    return argv
+
+
 def main(argv=None):
-    a = parser().parse_args(argv)
+    a = parser().parse_args(_config_argv(argv))
+    if a.cmd in ("work", "task"):      # aliases of `start`, as the plugin commands are
+        a.task, a.cmd = a.task or a.cmd == "task", "start"
     try:
         if a.cmd == "report":
             return _report(a)
@@ -122,6 +146,10 @@ def main(argv=None):
             return _editor(a)
         if a.cmd == "start":
             return _start(a)
+        if a.cmd == "setup":
+            return _setup(a)
+        if a.cmd == "config":
+            return _config(a)
         return asyncio.run(_run(a) if a.cmd == "run" else _resume(a))
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else USAGE
@@ -141,13 +169,77 @@ def _new_node(a):
     return 0
 
 
+def _setup(a):
+    from squad import setup
+    if not Path(a.target).is_dir():
+        return _fail(f"no directory {a.target}")
+    if a.check:
+        problems = setup.check(a.target)
+        for m in problems:
+            print(f"drift: {m}")
+        print("setup check: " + (f"{len(problems)} drift" if problems else "ok, CLAUDE.md and the rule ADRs agree"))
+        return 1 if problems else 0
+    opts = {"language": a.language, "test_command": a.test_command, "tracker": a.tracker, "auto_commit": not a.no_auto_commit,
+            "memory_dir": a.memory_dir, "approve_memory": a.approve_memory}
+    for action, rel, text in setup.plan(a.target, **opts):
+        if action in ("keep", "report"):
+            print(f"{action}: {rel}" + (f": {text}" if action == "report" else ""))
+        else:
+            verb = {"append": "append to", "link": "link", "propose": "propose"}.get(action, "create")
+            done = a.apply and (action != "propose" or a.approve_memory)
+            print(f"{verb if done else 'would ' + verb}: {rel}")
+    if a.apply:
+        setup.apply(a.target, **opts)
+    else:
+        print("plan only; nothing written. Pass --apply to write it.")
+    return 0
+
+
+def _config(a):
+    from squad import project_settings as P
+    path = P.path_for(a.target)
+    if a.config_cmd == "show":
+        data, _ = P.load(a.target)
+        merged, sources = P.overlay(defaults.load(a.defaults or defaults.PATH), data)
+        rows = []
+        for key, (_, _, _, unit, _) in P.CATALOG.items():
+            sec, _, name = key.partition(".")
+            v = merged.get(sec, {}).get(name)
+            rows.append((key, "(unset)" if v is None else json.dumps(v), unit, sources.get(key, "plugin")))
+        for role, over in sorted((merged.get("roles") or {}).items()):
+            for k, v in over.items():
+                rows.append((f"roles.{role}.{k}", json.dumps(v), P.CATALOG.get(f"options.{k}", ("", 0, 0, "option"))[3], sources.get(f"roles.{role}.{k}", "plugin")))
+        w = [max(len(r[i]) for r in rows) for i in range(3)]
+        print(f"project file: {P.path_for(a.target)}" + ("" if data is not None else " (none)"))
+        for r in rows:
+            print("  ".join(r[i].ljust(w[i]) for i in range(3)) + "  " + r[3])
+        return 0
+    if a.config_cmd == "check":
+        _, bad = P.check_file(a.target)
+        for key, why in bad:
+            print(f"{path}: {key}: {why}")
+        if bad:
+            return _fail(f"{len(bad)} defect(s) in {path}")
+        print(f"{path}: ok" if path.is_file() else f"no project file at {path}; the plugin defaults apply")
+        return 0
+    if a.config_cmd == "set":
+        changed = P.set_key(a.target, a.key, a.value)
+        print(f"{'set' if changed else 'unchanged'}: {a.key} in {path}")
+    elif a.config_cmd == "reset":
+        changed = P.reset_key(a.target, a.key)
+        print(f"{'reset' if changed else 'unchanged'}: {a.key} in {path}")
+    else:
+        print(f"{'created' if P.init(a.target) else 'kept'}: {path}")
+    return 0
+
+
 def _dashboard(a):
     from squad import dashboard_server, defaults, runs
     try:
         if a.list:
             listed = runs.list_runs(a.runs_dir)
             for r in listed:
-                print(f"{r.number} {r.run_id or r.folder.name} {r.folder.name}")
+                print(f"{r.number} {r.run_id or r.folder.name} {r.folder.name} {runs.request_of(r.folder)}".rstrip())
             if not listed:
                 print(f"squad: no runs under {a.runs_dir}", file=sys.stderr)   # an empty list says why it is empty
             return 0
@@ -168,7 +260,7 @@ def _dashboard(a):
             return _fail(str(e))
         url = f"http://{dashboard_server.LOOPBACK}:{port}/"
         note = "the page reads this run from a loopback server on this machine; its one write is a pause or resume request; it exits when idle"
-    print(f"run {run.number}: {run.run_id or run.folder.name}\nfolder: {run.folder}\n{note}\n{url}")
+    print(f"run {run.number}: {run.run_id or run.folder.name}\nrequest: {runs.request_of(run.folder) or '(none)'}\nfolder: {run.folder}\n{note}\n{url}")
     if not a.no_open:
         import webbrowser
         webbrowser.open(url)
@@ -189,26 +281,43 @@ def _editor(a):
     return 0
 
 
+def _stdin_request(a):
+    """The request from standard input: a slash command passes its arguments in a quoted here-document, so no character of the
+    request reaches the shell. A `--workflow <id>` or `--name <name>` token in it is the flag; the rest is the text."""
+    raw = sys.stdin.read()
+    for flag in ("workflow", "name"):
+        m = re.search(rf"(?:^|\s)--{flag}\s+(\S+)", raw)
+        if m:
+            setattr(a, flag, m.group(1))
+            raw = raw[:m.start()] + " " + raw[m.end():]
+    return " ".join(raw.split())
+
+
 def _start(a):
     from squad import workflows
+    text = _stdin_request(a) if a.stdin else " ".join(a.text)
+    if not text:
+        return _fail("start needs a request: give the text or use --stdin")
+    if workflows.names_only_a_skill(text):
+        return _fail(f"the request {text!r} names a skill and no work. Name the work: an issue number, a URL or a path.")
     try:
-        g = workflows.with_request(workflows.load(workflows.resolve(a.workflow)), " ".join(a.text), "task" if a.task else "work")
+        g = workflows.with_request(workflows.load(workflows.resolve(a.workflow)), text, "task" if a.task else "work")
     except workflows.WorkflowError as e:
         return _fail(str(e))
-    G.from_doc(g)   # an invalid graph stops here, before a run folder exists
+    graph = G.from_doc(g)   # an invalid graph stops here, before a run folder exists
+    cannot = workflows.unrunnable_skills(g, text)
+    if cannot:
+        known = ", ".join(workflows.ids()) or "none"
+        print(f"squad: warning: the request names {', '.join('/' + c for c in cannot)}, which this workflow cannot run. Workflows: {known}. Use --workflow <id>.", file=sys.stderr)
     if not a.script:
         a.adapter = "sdk"
-    run_id = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    run_dir = Path(a.run_dir) if a.run_dir else Path(a.runs_dir) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "graph.json").write_text(json.dumps(g, indent=2))   # the graph that runs: the workflow plus the request
-    a.graph, a.run_dir = str(run_dir / "graph.json"), str(run_dir)
-    print(f"run folder: {run_dir}")
-    return asyncio.run(_run(a))
+        if importlib.util.find_spec("claude_agent_sdk") is None:      # a bare install: stop before a run folder exists, not in a traceback
+            return _fail("the claude-agent-sdk package is missing. Install it with `pip install 'agent-squad[sdk]'`, or run with `uv run --extra sdk squad start ...`.")
+    return asyncio.run(_run(a, graph))
 
 
 def _report(a):
-    from squad import report  # the only importer: the engine never reads the report (ADR-0109 rule 2)
+    from squad import report  # the only importer: the engine never reads the report
     rec = (Path(a.run_dir) if a.run_dir else Path(a.runs_dir) / a.run_id) / "record.jsonl"
     if not rec.exists():
         return _fail(f"no run record at {rec}")
@@ -217,23 +326,40 @@ def _report(a):
     return 0
 
 
-async def _run(a):
-    g = G.load(a.graph)
-    run_id = f"run-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    run_dir = Path(a.run_dir) if a.run_dir else Path(a.runs_dir) / run_id
-    dflt = _defaults(a)
-    eng = Engine(g, _adapter(a, dflt), run_dir, options=_opts(a), target=a.target, run_id=run_id, graph_path=Path(a.graph).resolve(),
-                 defaults=_recorded(dflt))
-    run_dir.mkdir(parents=True, exist_ok=True)
-    if not (run_dir / "graph.json").exists():   # the dashboard reads this copy; the engine never does (ADR-0127)
-        (run_dir / "graph.json").write_text(json.dumps(g.doc, indent=2))
+async def _run(a, g=None):
+    """Start the run. `g` is a graph already loaded (the `start` command, whose graph file is the run folder's copy); else `a.graph` is the file."""
+    graph = g or G.load(a.graph)
+    eng = launch.launch(graph, a.run_dir, runs_dir=a.runs_dir, adapter=_adapter(a), defaults=a.defaults, graph_path=None if g else a.graph,
+                        target=a.target, options=_opts(a), name=getattr(a, "name", None))
+    if g:
+        print(f"run: {eng.run_id}\nrun folder: {Path(eng.run_dir).resolve()}")
     v = await eng.run()
     print(v.message)
     return v.exit_code
 
 
+def _run_folder(runs_dir, ref):
+    """The folder of the run `ref` names: its folder name, else its run id or name. No match: the folder `ref` would be."""
+    from squad import runs
+    run = runs.find(runs.list_runs(runs_dir), ref)
+    return run.folder if run else Path(runs_dir) / ref
+
+
+def _auto_resume(rec, source):
+    """Ticket #182: record one automatic resume. Return a refusal text when autonomy is off or the cap is reached, else None. The CLI never calls a model."""
+    events = rec.events
+    setting = events[0].get("autonomy") or {"enabled": True, "max_resumes": 3}
+    done = sum(1 for e in events if e["event"] == "autonomy_resume")
+    if not setting["enabled"]:
+        return "autonomy is off for this run: no automatic resume"
+    if done >= setting["max_resumes"]:
+        return f"autonomy resume cap reached ({done} of {setting['max_resumes']}): the run stays as its verdict says"
+    rec.append("autonomy_resume", count=done + 1, source=source)
+    return None
+
+
 async def _resume(a):
-    run_dir = Path(a.run_dir) if a.run_dir else Path(a.runs_dir) / a.run_id
+    run_dir = Path(a.run_dir) if a.run_dir else _run_folder(a.runs_dir, a.run_id)
     rec = run_dir / "record.jsonl"
     if not rec.exists():
         return _fail(f"no run record at {rec}")
@@ -241,10 +367,13 @@ async def _resume(a):
     graph = a.graph or (events[0].get("graph_path") if events else None)
     if not graph:
         return _fail("the record names no graph file: pass --graph")
-    dflt = _defaults(a)
-    eng = Engine(G.load(graph), _adapter(a, dflt), run_dir, options=_opts(a), target=a.target or events[0].get("target"), invoker="cli",
-                 defaults=_recorded(dflt))
-    v = await eng.resume(answer=a.answer, from_node=a.from_node, release=True)   # the person who resumes lets go of every hold (ADR-0128)
+    eng = launch.resume_engine(G.load(graph), run_dir, adapter=_adapter(a), defaults=a.defaults, target=a.target or events[0].get("target"),
+                               options=_opts(a))
+    if a.auto_source:
+        refused = _auto_resume(eng.record, a.auto_source)
+        if refused:
+            return _fail(refused)
+    v = await eng.resume(answer=a.answer, from_node=a.from_node, release=True)   # the person who resumes lets go of every hold
     print(v.message)
     return v.exit_code
 

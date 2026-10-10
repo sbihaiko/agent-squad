@@ -1,4 +1,4 @@
-"""The agent runner: one fresh session behind the adapter seam, then its proposals (ADR-0102, ADR-0103, ADR-0108)."""
+"""The agent runner: one fresh session behind the adapter seam, then its proposals."""
 import json
 
 import anyio
@@ -8,10 +8,10 @@ from squad.adapter import CallRequest, new_session_id
 
 
 def prompt(ctx, node, entry, sc):
-    inputs = {"ledger": ctx.ledger(node["name"])} if ctx.is_dispatch_entry(node["name"]) else ctx.artifacts.view(sc.item)   # a router reads the ledger, never a child's artifact (#90)
+    inputs = {"ledger": ctx.ledger(node["name"])} if ctx.is_dispatch_entry(node["name"]) else ctx.artifacts.view(sc.item)   # a router reads the ledger, never a child's artifact
     doc = {"node": node["name"], "entry": entry, "inputs": inputs}
     if ctx.is_dispatch_entry(node["name"]):
-        doc["limits"] = ctx.limits(node["name"])      # the router asks inside these; code still checks every request (ADR-0113)
+        doc["limits"] = ctx.limits(node["name"])      # the router asks inside these; code still checks every request
     body = json.dumps(doc, sort_keys=True, default=str)
     return f"/{node['skill']} {body}" if node.get("skill") else body
 
@@ -35,7 +35,7 @@ async def shadow(ctx, node, entry, sc):
 
 
 def apply_proposals(ctx, node, entry, sc, r):
-    """Lift the proposals from an agent's output, validate each, and apply it to the overlay (ADR-0103 rules 6 to 8)."""
+    """Lift the proposals from an agent's output, validate each, and apply it to the overlay."""
     out = r.output
     if not isinstance(out, dict) or "proposals" not in out:
         return
@@ -67,8 +67,9 @@ class AgentRunner:
 
         def make(res):
             return CallRequest(node["name"], entry, sc.item, prompt(ctx, node, entry, sc), eff["model"], eff["effort"], eff["tools"],
-                               eff["turns_max"], res.amount, str(ctx.workspace_path(node.get("workspace"), sc.item)), deadline,
-                               new_session_id(ctx.run_id), node.get("skill"), node.get("instructions"))
+                               eff["stalls_max"], res.amount, str(ctx.workspace_path(node.get("workspace"), sc.item)), deadline,
+                               new_session_id(ctx.run_id), node.get("skill"), node.get("instructions"),
+                               ctx.project_limits.get("max_output_tokens"), ctx.project_limits.get("context_tokens"))
 
         out = await session.run_call(
             lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"]), deadline, make, adapter=ctx.adapter,
@@ -91,6 +92,8 @@ class AgentRunner:
         rel = ctx.artifacts.put(node["name"], sc.item, entry, r.output, node.get("output_key")) if isinstance(r.output, dict) else None
         extra = {**who, **(r.usage or {})}
         diagnostic = {k: v for k, v in (("cap", diag_cap), ("subagents", r.subagents or None), ("session", r.session_id)) if v}
+        if not isinstance(r.output, dict) and r.ended:      # an artifact_missing outcome says how the session ended
+            diagnostic["ended"] = r.ended
         if diagnostic:
             extra["diagnostic"] = diagnostic
         ws = ctx.ws_snapshot(node, sc)

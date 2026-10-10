@@ -1,4 +1,4 @@
-"""Ticket #37: the adaptation report (ADR-0109, ADR-0111 rule 6)."""
+"""Ticket #37: the adaptation report."""
 import re
 from pathlib import Path
 
@@ -21,7 +21,7 @@ def looped():
     return doc(nodes, ["work"], facts=[FLAG])
 
 
-SCRIPT = {"prop": [{"output": {"x": 1}, "spend": 0.05}, prop(p("shrink_turns", 5)), {"output": {"x": 1}, "spend": 0.05}],
+SCRIPT = {"prop": [{"output": {"x": 1}, "spend": 0.05}, prop(p("shrink_stalls", 5)), {"output": {"x": 1}, "spend": 0.05}],
           "target": [{"output": {"x": 1, "status": "fail", "reasons": ["too_big"]}, "spend": 0.4, "turns": 9},
                      {"output": {"x": 1}, "spend": 0.1, "turns": 4}]}
 
@@ -36,7 +36,7 @@ async def ran(tmp_path):
 async def test_the_report_joins_an_applied_proposal_to_the_previous_and_next_entry_with_deltas(tmp_path):
     eng, events = await ran(tmp_path)
     (r,) = report.build(events)
-    assert (r["kind"], r["target"], r["old"], r["requested"]) == ("shrink_turns", "target", 10, 5)
+    assert (r["kind"], r["target"], r["old"], r["requested"]) == ("shrink_stalls", "target", 10, 5)
     assert r["previous"]["entry"] == 1 and r["next"]["entry"] == 2
     assert r["delta"]["outcome"] == "fail -> pass" and r["delta"]["spend"] == -0.3 and r["delta"]["turns"] == -5
     assert isinstance(r["delta"]["elapsed"], float) or r["delta"]["elapsed"] is None
@@ -83,5 +83,5 @@ def test_no_engine_module_imports_the_report():
 async def test_the_cli_prints_the_report(tmp_path, capsys):
     await ran(tmp_path / "r")
     assert cli.main(["report", "x", "--run-dir", str(tmp_path / "r")]) == 0
-    assert "shrink_turns on target: 10 -> 5" in capsys.readouterr().out
+    assert "shrink_stalls on target: 10 -> 5" in capsys.readouterr().out
     assert cli.main(["report", "x", "--run-dir", str(tmp_path / "none")]) == 2

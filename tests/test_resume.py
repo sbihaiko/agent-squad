@@ -1,4 +1,4 @@
-"""Tickets #33 and #35: the wait node and resume (ADR-0107)."""
+"""Tickets #33 and #35: the wait node and resume."""
 from pathlib import Path
 
 import pytest
@@ -158,7 +158,7 @@ async def test_from_refuses_an_unknown_node(tmp_path):
         await eng2.resume(from_node="nope")
 
 
-# ---- workspace preflight (ADR-0107 rule 5)
+# ---- workspace preflight
 
 GIT_FACT = {"name": "git", "type": "bool", "instrument": "code: git is available in the target", "source_kind": "target"}
 

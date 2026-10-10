@@ -1,6 +1,6 @@
-"""Guards for the run dashboard build: the built file is current, one source, one bundle, and the origin rule (#56, #72, #120).
+"""Guards for the run dashboard build: the built file is current, one source, one bundle, and the origin rule.
 
-The other dashboard tests live in tests/test_dashboard_<concern>.py (#118); shared helpers in tests/dashboard_helpers.py.
+The other dashboard tests live in tests/test_dashboard_<concern>.py; shared helpers in tests/dashboard_helpers.py.
 """
 import hashlib
 import json
@@ -56,7 +56,7 @@ def test_every_page_source_is_built_once_and_the_page_bundle_is_the_one_script()
 
 
 def test_the_dashboard_reaches_only_its_own_origin_and_only_the_run_paths():
-    """ADR-0117 rule 6 as amended by ADR-0118: a page from file:// makes no request. A page that `squad dashboard` serves fetches
+    """A page from file:// makes no request. A page that `squad dashboard` serves fetches
     only relative paths of its own origin: the run info, the record and the graph. No absolute URL, no other transport."""
     text = "".join(p.read_text() for p in [PAGE_HTML, PAGE_CSS, *sorted(PAGE_DIR.glob("*.js")), *sorted(CORE_DIR.glob("*.js"))])  # every source file on disk, so none escapes  # code only; the schema's $id is an identifier
     text = text.replace("http://www.w3.org/2000/svg", "")  # the SVG namespace is an identifier, not an address to fetch
@@ -64,10 +64,10 @@ def test_the_dashboard_reaches_only_its_own_origin_and_only_the_run_paths():
     assert not re.search(r"/\*(ENGINE|EXAMPLE|SERVED|CORE|CSS|PAGE)\*/", OUT.read_text()), "a placeholder is left in the built page"
     for word in ("http://", "https://", "XMLHttpRequest", "WebSocket", "sendBeacon", "import(", " src="):
         assert word not in text, word
-    assert re.findall(r"new EventSource\(([^)]*)\)", text) == ["path"]   # ADR-0122: one push stream, and its path is the one the served source names
+    assert re.findall(r"new EventSource\(([^)]*)\)", text) == ["path"]   # one push stream, and its path is the one the served source names
     assert re.findall(r'streamFn\("(run/[a-z.]+)"', text) == ["run/events"]
     calls = re.findall(r"fetch\(([^,)]+)", text)
-    assert sorted(set(calls)) == ['"run/control"', '"run/control.json"', '"run/info.json"', "p"], calls   # the info call, the control state and its one write (ADR-0128), and the one that the served source wraps
+    assert sorted(set(calls)) == ['"run/control"', '"run/control.json"', '"run/info.json"', "p"], calls   # the info call, the control state and its one write, and the one that the served source wraps
     assert sorted(re.findall(r'get\("(run/[a-z.]+)"\)', text)) == ["run/graph.json", "run/record.jsonl"]
 
 

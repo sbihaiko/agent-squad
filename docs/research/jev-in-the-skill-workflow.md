@@ -3,7 +3,7 @@
 This note maps where Jev could optionally help the skill flow in `docs/skill-workflow-map.md`.
 It lists the fit, the shape to copy, the fallback, and the risk for each step.
 It also lists the steps where Jev does not fit.
-Language: US English, Concise STE100 (ADR-0001).
+Language: US English, Concise STE100.
 
 Sources: `docs/research/typesafe-ai-skill-map.md` (tags `[T:section]` point into it) and `docs/skill-workflow-map.md` (tags `[W:section]`).
 No API call was made. No key was used. Every fit below is a design suggestion, not a measurement.
@@ -27,8 +27,8 @@ Each use must meet all five conditions:
 
 1. **Off by default.** The workflow runs with no key and no network. The fallback is today's behavior.
 2. **One switch per use.** Turn one use on without the others.
-3. **Advisory.** A Jev answer never closes a gate, a ticket, or a decision. It is a judgment, not an observation (ADR-0008). [T:10]
-4. **Thresholds from data.** A cookbook threshold is an example. It is not copied into a gate (ADR-0012, ADR-0018). [T:10]
+3. **Advisory.** A Jev answer never closes a gate, a ticket, or a decision. It is a judgment, not an observation. [T:10]
+4. **Thresholds from data.** A cookbook threshold is an example. It is not copied into a gate. [T:10]
 5. **Owner grants the key.** A key is a credential and calls spend money. Both are owner-only. [T:10]
 
 ## 3. Fit by step
@@ -61,7 +61,7 @@ Ranked by value over risk. "Shape" names the TypeSafe pattern or cookbook to cop
 - **Today:** two parallel sub-agents review Standards and Spec.
 - **Jev fit:** one Noul per documented standard, framed so `true` means violation. Aggregate with the maximum. Escalate a flagged rule to the sub-agent. Shape: SDE cascade. [T:5.2, T:7 rule 35]
 - **Gain:** the sub-agents read only the flagged rules. Cost falls on large diffs.
-- **Risk:** a Noul reads literally and cannot count or compare numbers. Keep arithmetic and exact lookups in code. The 32k token limit for state means a large diff needs a filter first. A clean Jev pass must not skip the sub-agent review on its own (ADR-0062: red is fixed, but green needs its own proof).
+- **Risk:** a Noul reads literally and cannot count or compare numbers. Keep arithmetic and exact lookups in code. The 32k token limit for state means a large diff needs a filter first. A clean Jev pass must not skip the sub-agent review on its own (red is fixed, but green needs its own proof).
 
 ### 3.5 Skill choice at each node [W:Main flow]
 
@@ -75,7 +75,7 @@ Ranked by value over risk. "Shape" names the TypeSafe pattern or cookbook to cop
 - **Today:** the agent picks one of Continue, `/clear`, subagent, `/handoff`, `/compact`. The map says to rule out Continue first.
 - **Jev fit:** a Choice over the five options, fed by facts that code measures (tokens used, next phase, open side task). Shape: select instead of generate.
 - **Gain:** a consistent choice. The rule is already a short decision list.
-- **Risk:** low value. Code can decide most of it from the token count. Prefer plain code here (rule 16). [T:7]
+- **Risk:** low value. Code can decide most of it from the token count. Prefer plain code here. [T:7]
 
 ### 3.7 `/autonomy` guard: fetched content and carve-outs [W:Under /autonomy]
 
@@ -98,7 +98,7 @@ Ranked by value over risk. "Shape" names the TypeSafe pattern or cookbook to cop
 | `/to-spec`, `/to-tickets` text | Same reason. |
 | `/implement`, `/tdd`, `/diagnosing-bugs` | These write code and reason about failures. |
 | `/wayfinder` frontier | The frontier is a graph fact: all blockers done. Code computes it. |
-| Gate results, test verdicts | A gate is a measured fact, not a judgment (ADR-0008, ADR-0012). |
+| Gate results, test verdicts | A gate is a measured fact, not a judgment. |
 | Non-English text | Accuracy is lower outside English. The record is English, so this is a small limit. [T:1] |
 
 ## 5. Suggested order to try
@@ -117,8 +117,8 @@ Skip 3.6 and 3.8.
 
 ## 6. Guards and owner-only actions
 
-- **Guard for the optional rule.** A test runs the workflow with no `TYPESAFE_API_KEY` and expects today's behavior. Without this test, "optional" is a draft (ADR-0018).
-- **Guard for thresholds.** A threshold from repo data first needs a labeled set. It shows the property it claims, and it stays a stop condition (ADR-0012).
+- **Guard for the optional rule.** A test runs the workflow with no `TYPESAFE_API_KEY` and expects today's behavior. Without this test, "optional" is a draft.
+- **Guard for thresholds.** A threshold from repo data first needs a labeled set. It shows the property it claims, and it stays a stop condition.
 - **Owner-only.** A key, spend, and text leaving the repo need the owner. Record the decision as a `needs-ratification` issue when someone proposes adoption. This note does not propose it.
 - **Version.** Pin the versioned model ID, not the `jev-latest` alias. Most cookbooks ran `jev-1.12`, so their numbers may not carry over. [T:9]
 
@@ -132,20 +132,20 @@ Checked against the repo and ADRs. No Jev call was made.
 - So `/triage` has no labeled history (3.2). A code-review standards set has no violations labeled (3.4). A citation set has no planted failures (3.3).
 - Result: no threshold can be set from repo data today. Build the labeled set first, then set the threshold. Until then a use runs in shadow mode: it logs the answer, and the agent ignores it.
 
-**ADR-0051 (deadline): it applies, and it adds a condition.**
+**Deadline rule: it applies, and it adds a condition.**
 - Rule 1 says every agent call carries a deadline. A Jev request is a network call in the workflow, so it needs one.
 - The Python SDK retries 429 and 529 with exponential backoff by default. [T:7 rule 39] The retries can outlast a caller's deadline. Set a total deadline that covers the retries.
-- A Jev deadline needs its own outcome, distinct from failure (rule 2). The fallback is today's behavior, so a timeout means "no suggestion". It never blocks a step.
-- ADR-0051 has no guard yet, so this condition is a draft until a guard test exists (ADR-0018).
+- A Jev deadline needs its own outcome, distinct from failure. The fallback is today's behavior, so a timeout means "no suggestion". It never blocks a step.
+- The deadline rule has no guard yet, so this condition is a draft until a guard test exists.
 
-**ADR-0008 (observation contract): confirmed.**
+**Observation contract: confirmed.**
 - A Jev answer is a verdict. `validate()` refuses an observation that carries a verdict. So a Jev answer stays on the model side. It never enters an observation.
 
 ## 8. Probe results (2026-09-29)
 
 The owner granted the key and left the probe design to the agent. Script: `scripts/archive/probe_jev.py`. Data and raw results: `scripts/archive/jev_data/`.
 
-**Design choice: option B.** Text sent was synthetic requests, skill descriptions, and public web pages. No private repo text left the repo. Reason: the squad objective is a reviewed pipeline with gates. A probe that leaks private text or tunes a gate on its own data would break ADR-0012. Public and synthetic text answers the three gaps at no such risk.
+**Design choice: option B.** Text sent was synthetic requests, skill descriptions, and public web pages. No private repo text left the repo. Reason: the squad objective is a reviewed pipeline with gates. A probe that leaks private text or tunes a gate on its own data would turn a gate into a target. Public and synthetic text answers the three gaps at no such risk.
 Model `jev-1.13.0`, pinned. Baseline: `claude -p --model haiku`, no tools, one call per item.
 Cost: about 350 Jev calls, about 2,700 input tokens each for skills and about 500 for screens. That is under US$0.05 at the documented rate (unverified: billing).
 
@@ -200,6 +200,6 @@ The synthetic results above do not transfer. On real requests, Jev top-1 is abou
 
 ## 9. Open questions
 
-- Which run facts may reach a Jev question, under the observation contract (ADR-0008)?
+- Which run facts may reach a Jev question, under the observation contract?
 - Does a given node need a model call, or does code decide? Test 3.6 first: it is the likeliest to need none.
 - Which use gets its labeled set next? The `/research` citation check (3.3) needs the smallest set: planted bad citations.
