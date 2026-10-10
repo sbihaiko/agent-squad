@@ -93,5 +93,20 @@
     "path": "scripts/probe_gateway_cache.py",
     "status": "live",
     "reason": "Probes whether a gateway returns cache_read; tests/test_probe_gateway_cache.py"
+  },
+  {
+    "path": "scripts/gui_test_run_script.py",
+    "status": "live",
+    "reason": "Runs a whole gui-test/1 script end to end; the /to-test-scenario Run step; tests/test_gui_test_e2e.py"
+  },
+  {
+    "path": "scripts/make_gui_vision_fixtures.py",
+    "status": "live",
+    "reason": "Draws the fixed screenshot set of the vision verdict; tests/test_gui_test_vision.py"
+  },
+  {
+    "path": "scripts/measure_gui_vision.py",
+    "status": "live",
+    "reason": "Measures the vision model on the fixed screenshot set; tests/test_gui_test_vision.py"
   }
 ]

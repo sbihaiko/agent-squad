@@ -27,8 +27,8 @@ class Session:
         try:
             self.proc.stdin.write((json.dumps({"call": name, "args": list(args)}) + "\n").encode())
             self.proc.stdin.flush()
-        except OSError:
-            raise self._end(Crash)
+        except OSError as e:
+            raise self._end(Crash) from e
         deadline = time.monotonic() + self.timeout
         fd = self.proc.stdout.fileno()
         while b"\n" not in self.buf:
@@ -51,7 +51,7 @@ class Session:
         return kind(self.output())
 
     def kill(self):
-        for attempt in (0, 1):
+        for _ in (0, 1):
             try:
                 os.killpg(self.proc.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -85,6 +85,10 @@ class AdapterError(Exception):
     pass
 
 
+class VariantUnsupported(RuntimeError):
+    """The run must be in a variant the adapter cannot switch to: raised before that batch launches anything."""
+
+
 def _snapshot(paths):
     return {p: (Path(p).read_bytes() if Path(p).exists() else None) for p in paths}
 
@@ -108,13 +112,52 @@ def _precondition(session, text):
     return True if not sep else bool(session.call("check", key, {"is": want}))
 
 
+def _known_id(ex):
+    """True when an adapter error is the adapter saying the check named an id the application does not have.
+
+    mesen-gui raises UnknownId; the worker reports it as `<Type>: <message>` and the step fails, never the batch.
+    """
+    return isinstance(ex, AdapterError) and "UnknownId" in str(ex)
+
+
+def _switch(session, variant):
+    """Put the adapter in the selected variant, before it launches: the optional `set_variant` hook, as in-process.
+
+    An adapter without the hook is refused, never ignored: a run whose steps were tagged for a window mode nothing
+    switched would report the mode it never entered.
+    """
+    axis, value = variant
+    try:
+        session.call("set_variant", axis, value)
+    except AdapterError as ex:
+        raise VariantUnsupported(f"the adapter cannot switch to variant {axis}={value}: {ex}") from ex
+
+
+def _fail(sid, verdict, emit):
+    emit("gui_verdict", sid, verdict=verdict)
+    return {"id": sid, "verdict": verdict, "capture": None}, False
+
+
+def _check_verdict(got, check):
+    """The verdict of one check: the adapter may answer a bool (the reference fake) or, like mesen-gui, the
+    observed value with it — `{"passed": ..., "observed": ...}` — which is what lets a failed step name both."""
+    if isinstance(got, dict) and "passed" in got:
+        if got["passed"]:
+            return "passed"
+        expected = True if check["name"] == "ui.visible" else (check.get("args") or {}).get("is")
+        if expected is None:
+            return f"failed (observed {got.get('observed')})"
+        return f"failed (expected {expected}, observed {got.get('observed')})"
+    if got == "unknown id":
+        return "failed (unknown id)"
+    return "passed" if got else "failed"
+
+
 def _step(session, s, emit, tick_args):
     emit("gui_step", s["id"])
     pre = s.get("precondition")
     if not _precondition(session, pre):
-        verdict = f"failed (precondition {pre})"
-        emit("gui_verdict", s["id"], verdict=verdict)
-        return {"id": s["id"], "verdict": verdict, "capture": None}, False
+        return _fail(s["id"], f"failed (precondition {pre})", emit)
     if s["mode"] != "automated":
         return None, True
     if s.get("action"):
@@ -129,17 +172,26 @@ def _step(session, s, emit, tick_args):
         if "check" not in s:
             verdict = "passed"
         else:
-            got = session.call("check", s["check"]["name"], s["check"].get("args", {}))
-            verdict = "failed (unknown id)" if got == "unknown id" else "passed" if got else "failed"
+            try:
+                got = session.call("check", s["check"]["name"], s["check"].get("args", {}))
+            except AdapterError as ex:
+                if not _known_id(ex):
+                    raise
+                verdict = "failed (unknown id)"
+            else:
+                verdict = _check_verdict(got, s["check"])
     emit("gui_verdict", s["id"], verdict=verdict)
     return {"id": s["id"], "verdict": verdict, "capture": capture}, verdict == "passed"
 
 
-def run_supervised(script, spec, kwargs=None, *, step_timeout_s=10, out_dir, record=None, report_dir=None):
+def run_supervised(script, spec, kwargs=None, *, step_timeout_s=10, out_dir, record=None, report_dir=None,
+                   variant=None):
     """Run each batch in a fresh adapter process; return {"results": [...], "batches": [...], "restore": [...]}.
 
     `spec` is "module:Class", built in the worker with `kwargs` (+ out_dir). Files listed in
-    script["fixtures"]["restore"] are put back byte for byte before every batch and after the run.
+    script["fixtures"]["restore"] are put back byte for byte before every batch and after the run. `variant` is an
+    (axis, value) the whole run must be in: each batch's process is switched through the optional `set_variant` hook
+    before it launches, and an adapter without that hook raises `VariantUnsupported` with nothing launched.
     """
     out_dir, kwargs, pos = Path(out_dir), dict(kwargs or {}), 0
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -162,6 +214,8 @@ def run_supervised(script, spec, kwargs=None, *, step_timeout_s=10, out_dir, rec
                               out_dir / f"{batch['id']}.log")
             info, done, current = {"id": batch["id"], "verdict": "passed"}, set(), None
             try:
+                if variant is not None:
+                    _switch(session, variant)
                 session.call("launch", fixtures)
                 body = batch["setup"] + batch["steps"]
                 for s in body:

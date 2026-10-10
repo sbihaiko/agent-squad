@@ -388,6 +388,10 @@ def test_the_emulator_process_runs_with_the_hook_flags_and_an_isolated_home(tmp_
 # --- #1183: the real emulator. These need a build of MesenAI main (with the hook) and fail, never skip, without one ---
 
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
+# The home batch opens with a `home.first-focus` setup step (#1251): the focus its first case used to assume is now
+# waited for. A slice keeps the setup its batch needs, the way `--case` does (#1241), so the three cases run as four
+# steps - and every one of them still has to pass.
+THREE_PILOT_RUN = ["launch.first-run-home", "launch.open-rom-focused", "home.first-focus", "home.focus-holds-up"]
 
 
 def _env_path(name, what):
@@ -405,9 +409,9 @@ def test_three_pilot_steps_run_on_the_real_emulator_with_no_pad_attached(tmp_pat
     validate(d, adapter.capabilities())
     events = []
     results = run_launched(d, adapter, record=events.append)
-    assert [(r["id"], r["verdict"]) for r in results] == [(i, "passed") for i in THREE_PILOT_STEPS], results
+    assert [(r["id"], r["verdict"]) for r in results] == [(i, "passed") for i in THREE_PILOT_RUN], results
     nodes = run_node([{"op": "guirun", "events": events}])[0]
-    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS]
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN]
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG")
     assert len({n["capture"]["sha256"] for n in nodes}) >= 1
@@ -942,8 +946,7 @@ def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
     assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"
 # --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
 
-from squad.gui_test_variants import (  # noqa: E402
-    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+from squad.gui_test_variants import PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants  # noqa: E402
 
 
 class _Modal(TickingFake):
@@ -1180,8 +1183,8 @@ def test_1200_the_dialogs_scope_only_judges_dialog_screens(tmp_path):
 
 
 def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
-    from tests.gui_test_fakes import GraphAdapter
     from squad.gui_test_goal import Navigator
+    from tests.gui_test_fakes import GraphAdapter
     edges = {"play.home": {"Enter": "play.dead"}}
     d = _sweep_script(_sweep_step())
     d["batches"][0]["steps"][0]["action"]["args"]["input"] = "key"
@@ -1191,7 +1194,7 @@ def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
 
 def test_1200_a_sweep_replays_without_asking_jev_and_with_no_navigator_ends_pending(tmp_path):
     from squad.gui_test_goal import Navigator, recorded_moves
-    from tests.gui_test_fakes import GraphAdapter, TRAP_APP
+    from tests.gui_test_fakes import TRAP_APP, GraphAdapter
     d = _sweep_script(_sweep_step())
     events = []
     run(d, GraphAdapter(tmp_path, TRAP_APP), record=events.append, goal=Navigator(_Chooser()))
@@ -1279,7 +1282,6 @@ def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
 # --- #1183: the emulator adapter lives in MesenAI (ADR-0272 item 6, P1-A); the fork only loads it from MESENAI_ROOT ---
 
 import sys  # noqa: E402
-import time  # noqa: E402
 
 PILOT = "play-pad-only.gui-test.json"
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
@@ -1377,7 +1379,7 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
             mark = len(events)
             try:
                 results += run({**d, "batches": [batch]}, _Shot(session, tmp_path / "shots"), record=events.append)
-            except Exception as e:  # what run_supervised does with an adapter error: the step in flight fails with it
+            except Exception as e:  # noqa: BLE001 - what run_supervised does with an adapter error: the step in flight fails with it
                 open_step = [ev["node"] for ev in events[mark:] if ev["event"] == "gui_step"][-1]
                 verdict = f"failed ({e})"
                 events.append({"event": "gui_verdict", "node": open_step, "pos": len(events), "verdict": verdict})
@@ -1391,8 +1393,8 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
 @pytest.mark.slow(reason="starts the real emulator twice (one process per batch) and waits on its window")
 def test_three_pilot_steps_are_executed_through_the_mesenai_adapter_with_a_capture_each(tmp_path, short_work):
     results, nodes = _run_pilot_on_the_real_app(tmp_path, short_work, THREE_PILOT_STEPS)
-    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS], nodes
-    assert [r["verdict"] for r in results] == ["passed"] * 3, results
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN], nodes
+    assert [r["verdict"] for r in results] == ["passed"] * len(THREE_PILOT_RUN), results
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), n
 
@@ -1436,7 +1438,10 @@ class _Shot:
 
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
 def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
-    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line."""
+    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line.
+
+    The runner requires its whole hook e2e case set, and #1242 made that two: the Home walk over the socket and the
+    fresh home's library drive. So the summary this asserts is two passed, none failed, none skipped."""
     root = _mesenai_root()
     lib = _need("MESEN_CORE_LIB", "the MesenCore library built from the MesenAI checkout")
     assert lib.is_file(), f"MESEN_CORE_LIB {lib} is not a file"
@@ -1444,7 +1449,7 @@ def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
                        env={**os.environ, "MESEN_CORE_LIB": str(lib)}, capture_output=True, text=True, timeout=1500)
     out = p.stdout + p.stderr
     assert p.returncode == 0, out[-2000:]
-    assert re.search(r"Failed:\s*0,\s*Passed:\s*1,\s*Skipped:\s*0,\s*Total:\s*1", out), out[-2000:]
+    assert re.search(r"Failed:\s*0,\s*Passed:\s*2,\s*Skipped:\s*0,\s*Total:\s*2", out), out[-2000:]
     assert HEADLESS_CASE.split(".")[1] in out or "Passed!" in out
 
 
@@ -1827,6 +1832,503 @@ def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
     # The pilot predates content hashes, so nothing is reusable until a conversion records them per step.
     assert report["reusable"] is False
     assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
+# --- #1222: a command that runs a whole gui-test/1 script end to end (the /to-test-scenario Run step) ---
+
+
+RUN_SCRIPT = FORK / "scripts" / "gui_test_run_script.py"
+SMOKE = FORK / "tests" / "fixtures" / "gui_test" / "run-script-smoke.json"
+SHAPE_SPEC = "tests.gui_test_run_script_fake:ShapeAdapter"
+
+
+def _shape(**switches):
+    """A supervised run of a one-step script on the adapter that answers like mesen-gui."""
+    d = _two_batch_script([step("b1.one", **switches)])
+    return d
+
+
+def test_1222_a_failed_check_names_expected_and_observed_from_the_adapters_answer(tmp_path):
+    """mesen-gui answers a check with {"passed": ..., "observed": ...}; a bool-only reader calls that a pass."""
+    d = _shape(check={"name": "ui.screen", "args": {"is": "play.library"}})
+    out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
+    assert _verdicts(out)["b1.one"] == "failed (expected play.library, observed play.home)"
+
+
+def test_1222_an_unknown_id_fails_that_step_and_leaves_the_next_batch_running(tmp_path):
+    """mesen-gui raises UnknownId; the step fails (unknown id), the batch is not the unit that fails."""
+    d = _shape(check={"name": "ui.focused", "args": {"is": "play.ghost"}})
+    out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
+    assert _verdicts(out) == {"b1.one": "failed (unknown id)", "b2.a": "passed"}
+
+
+def _run_script_cmd(script_path, out, *extra, spec=SHAPE_SPEC, env=None, artifacts=None):
+    args = [sys.executable, str(RUN_SCRIPT), str(script_path), "--adapter", spec, "--out", str(out),
+            "--artifacts", str(artifacts or Path(str(out) + ".artifacts")), *extra]
+    return subprocess.run(args, cwd=FORK, capture_output=True, text=True, timeout=600,
+                          env={**os.environ, **(env or {})})
+
+
+def test_1222_the_command_runs_a_fixture_script_and_writes_one_result_per_step(tmp_path):
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(SMOKE, out)
+    assert p.returncode == 1, p.stdout + p.stderr
+    r = json.loads(out.read_text())
+    assert r["format"] == "gui-test-results/1"
+    assert r["run_id"] and r["platform"] and r["adapter"] == SHAPE_SPEC and r["build_sha"]
+    assert r["script"]["path"] == str(SMOKE)
+    assert r["script"]["sha256"] == hashlib.sha256(SMOKE.read_bytes()).hexdigest()
+    verdicts = {s["id"]: s["verdict"] for s in r["steps"]}
+    assert verdicts == {
+        "smoke.open-library": "passed",
+        "smoke.still-home": "failed (expected play.home, observed play.library)",
+        "smoke.unknown-id": "failed (unknown id)",
+        "smoke.manual": "pending",
+        "smoke.unchecked": "needs review",
+    }
+    assert r["status"] == "failed" and r["summary"]["executed"] == 4
+    assert r["bug"]["filed"] is False and "opt-in" in r["bug"]["reason"]
+    assert r["steps"][0]["capture"]["path"].startswith(str(tmp_path))
+
+
+def test_1222_a_script_with_no_failed_step_exits_zero(tmp_path):
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps(script(step("b1.one"))))
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(clean, out)
+    assert p.returncode == 0, p.stdout + p.stderr
+    r = json.loads(out.read_text())
+    assert r["status"] == "passed" and [s["verdict"] for s in r["steps"]] == ["passed"]
+
+
+def test_1222_a_script_naming_what_the_adapter_does_not_advertise_is_rejected_before_launch(tmp_path):
+    d = json.loads(SMOKE.read_text())
+    first = d["batches"][0]["steps"][0]
+    d["requires"]["actions"] = ["pad.press", "key.press"]
+    d["requires"]["checks"] = ["ui.screen", "ui.focused", "ui.dialogs"]
+    first["action"] = {"name": "key.press", "args": {"key": "Enter", "ticks": 4}}
+    first["wait"] = {"timeout_ticks": 4}
+    first["check"] = {"name": "ui.dialogs", "args": {"is": []}}
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(d))
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(bad, out)
+    text = p.stdout + p.stderr
+    assert p.returncode != 0
+    assert "adapter does not advertise action key.press" in text
+    assert "adapter does not advertise check ui.dialogs" in text
+    assert not Path(str(out) + ".artifacts").exists(), "the application must not be launched for a rejected script"
+
+
+def test_1222_missing_environment_makes_the_run_fail_and_never_skip(tmp_path):
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(SMOKE, out, spec="mesen-gui",
+                        env={"MESENAI_ROOT": "", "MESEN_GUI_BINARY": "", "MESEN_CORE_LIB": ""})
+    text = p.stdout + p.stderr
+    assert p.returncode != 0
+    for name in ("MESENAI_ROOT", "MESEN_GUI_BINARY", "MESEN_CORE_LIB"):
+        assert name in text, text
+    assert "skipped" not in text
+    assert json.loads(out.read_text())["status"] == "failed"
+
+
+def test_1222_a_core_that_cannot_be_loaded_fails_the_run(tmp_path):
+    root = tmp_path / "mesenai"
+    (root / "scripts" / "gui_test").mkdir(parents=True)
+    binary = tmp_path / "Mesen"
+    binary.write_bytes(b"#!/bin/sh\n")
+    lib = tmp_path / "MesenCore.dylib"
+    lib.write_bytes(b"this is not a shared library")
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(SMOKE, out, spec="mesen-gui",
+                        env={"MESENAI_ROOT": str(root), "MESEN_GUI_BINARY": str(binary), "MESEN_CORE_LIB": str(lib)})
+    text = p.stdout + p.stderr
+    assert p.returncode != 0 and "cannot be loaded" in text and "skipped" not in text
+
+
+def test_1222_a_run_that_executed_no_step_is_a_failure(tmp_path):
+    only = step("b1.manual-only")
+    for key in ("action", "wait", "check"):
+        only.pop(key)
+    only["mode"] = "manual"
+    manual = tmp_path / "manual.json"
+    manual.write_text(json.dumps(script(only)))
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(manual, out)
+    assert p.returncode != 0
+    r = json.loads(out.read_text())
+    assert [s["verdict"] for s in r["steps"]] == ["pending"] and r["summary"]["executed"] == 0
+    assert r["reasons"] == ["no step executed"]
+
+
+def _run_script_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gui_test_run_script", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
+    mod = _run_script_module()
+    d = script(step("a"), step("b"), step("c"))
+    for s in d["batches"][0]["steps"]:
+        s["expect"] = f"what {s['id']} shows"
+    rows = [{"id": "a", "verdict": "failed (expected x, observed y)", "capture": None, "held": False,
+             "batch": "b1", "mode": "automated", "expect": "what a shows"},
+            {"id": "b", "verdict": "failed (unknown id)", "capture": None, "held": False,
+             "batch": "b1", "mode": "automated", "expect": "what b shows"},
+            {"id": "c", "verdict": "passed", "capture": None, "held": False,
+             "batch": "b1", "mode": "automated", "expect": "what c shows"}]
+    calls = []
+    url = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
+                           runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
+    assert len(calls) == 1, calls
+    title, body = calls[0][1], calls[0][2]
+    assert title == "GUI test `tiny`: 2 failed steps"
+    assert "### `a`" in body and "### `b`" in body and "### `c`" not in body
+    assert "failed (expected x, observed y)" in body
+    assert url == "https://example.invalid/1"
+
+
+# `home.first-focus` is the home batch's setup step (#1251): a run reports the batch's setup with its cases, so it is
+# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from.
+HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
+                  "home.first-focus",
+                  "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
+                  "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
+HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-by-pad-gap"}
+# `home.open-library` waits on `ui.screen == play.library`, and no control in the application carries that id yet: the
+# pilot says its ids are provisional until the in-app AutomationIds land (#1182). It is the one step this can fail on
+# today, and it is asserted as a subset so the case keeps its meaning when that slice lands and the step passes.
+HOME_BATCH_MAY_FAIL = {"home.open-library"}
+
+
+@pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
+def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work):
+    """AC 4: the committed pilot's Home batch, through the command, on the built application."""
+    root = _mesenai_root()
+    _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
+    _need("MESEN_CORE_LIB", "the MesenCore library built from the same checkout")
+    d = _pilot_for_the_real_app(HOME_BATCH_IDS)
+    # The committed Home batch's steps that need pad.release or pad.chord are `manual` (#1251): mesen-gui advertises
+    # pad.press alone, so a person walks those and the run reports them as pending. What is left to inject is the
+    # batch's setup and the steps that press the pad with an advertised button.
+    d["fixtures"]["note"] = "steps needing pad.release or pad.chord are manual: mesen-gui advertises pad.press only"
+    script_path = tmp_path / "pilot-home.json"
+    script_path.write_text(json.dumps(d))
+    out = short_work / "results.json"
+    p = _run_script_cmd(script_path, out, "--step-timeout", "180", spec="mesen-gui",
+                        env={"MESENAI_ROOT": str(root)})
+    r = json.loads(out.read_text())
+    assert {s["id"] for s in r["steps"]} == set(HOME_BATCH_IDS)
+    assert {s["id"] for s in r["steps"] if s["verdict"] == "pending"} == HOME_BATCH_MANUAL
+    failed = {s["id"] for s in r["steps"] if s["verdict"].startswith("failed")}
+    assert failed <= HOME_BATCH_MAY_FAIL and not [b for b in r["batches"] if "crash" in b["verdict"] or "hang" in b["verdict"]]
+    assert p.returncode == (1 if failed else 0), p.stdout + p.stderr
+    passed = {s["id"] for s in r["steps"] if s["verdict"] == "passed"}
+    assert passed >= set(HOME_BATCH_IDS) - HOME_BATCH_MANUAL - HOME_BATCH_MAY_FAIL - {"home.back-to-home"}
+    assert r["summary"]["executed"] >= 6 and r["build_sha"] != "unknown"
+    for result_step in r["steps"]:
+        if result_step["verdict"] == "passed":
+            assert Path(result_step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), result_step
+# --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
+
+class _ScenarioGitHub:
+    """A recorded-call stand-in for the real REST runner: no network, no `gh`."""
+
+    def __init__(self):
+        self.calls = []
+        self._next = 100
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        if op == "create_issue":
+            self._next += 1
+            return {"number": self._next, "id": 900 + self._next}
+        return {}
+
+    def of(self, op):
+        return [kw for o, kw in self.calls if o == op]
+
+
+def _pilot_1223():
+    return json.loads((_mesenai() / "docs" / "validation" / "process"
+                       / "play-pad-only.gui-test.json").read_text(encoding="utf-8"))
+
+
+def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them_ready_for_agent():
+    from squad import to_test_scenario as tts
+    d = _pilot_1223()
+    validate(d)
+    plan = tts.build_plan(d, script_path="docs/validation/process/play-pad-only.gui-test.json",
+                          purpose="the pad-only Play script")
+    planned = [c for i in plan["issues"] for c in i["cases"]]
+    assert planned == tts.step_ids(d) and len(planned) > 100
+    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
+    # `goals` is the plan's own derivation - the steps that navigate by `nav.goal`/`nav.sweep` - and the committed
+    # pad-only pilot has none: #1228 replaced its goal navigation with the pad press the case describes, so every case
+    # it carries is planned above and the goal list is honestly empty.
+    assert plan["manual"] and plan["goals"] == []
+
+
+def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
+    from squad import to_test_scenario as tts
+    d = _pilot_1223()
+    plan = tts.build_plan(d, granularity="per-batch")
+    gh = _ScenarioGitHub()
+    first = tts.publish(plan, gh)
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
+    again = _ScenarioGitHub()
+    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
+    assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
+
+
+# --- #1241: the run command files its bug only when asked, and a partial run records its selection ---
+
+
+def _bug_helper(tmp_path, output="Issue created: https://example.invalid/1241", exit_code=0):
+    """A `scripts/report-bug.sh` stand-in, because that helper is the only route a run's bug takes.
+
+    It logs every call it gets — the title in one file, the body in another — so a case can say how many bugs a run
+    filed and what they said. `exit_code` is the helper failing the way a missing token or no network does.
+    """
+    root = tmp_path / "mesenai"
+    helper = root / "scripts" / "report-bug.sh"
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    script_text = '#!/bin/sh\nprintf "%s\\n" "$1" >> ' + json.dumps(str(root / "bug-titles.log")) + "\n"
+    script_text += 'printf "%s" "$2" >> ' + json.dumps(str(root / "bug-body.log")) + "\n"
+    script_text += f'echo "no network" >&2\nexit {exit_code}\n' if exit_code else \
+        "printf '%s\\n' " + json.dumps(output) + "\n"
+    helper.write_text(script_text)
+    helper.chmod(0o755)
+    return root, root / "bug-titles.log"
+
+
+def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True):
+    """The run command driven in-process on its own contract: argv in, one results file out.
+
+    The adapter registry is how a fake adapter gets a name the command accepts; a literal `module:Class` spec is never
+    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug.
+    """
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    monkeypatch.setenv("MESENAI_ROOT", str(root if root is not None else tmp_path / "mesenai"))
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1241", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    adapter = "shape-1241"
+    if registered:
+        monkeypatch.setitem(mod.ADAPTERS, adapter, {"spec": spec, "env": (), "repo": "example/1241"})
+    else:
+        adapter = spec
+    out = tmp_path / "results.json"
+    code = mod.main([str(script_path), "--adapter", adapter, "--out", str(out),
+                     "--artifacts", str(tmp_path / "artifacts"), *extra])
+    return code, json.loads(out.read_text())
+
+
+def _two_batch_file(tmp_path):
+    path = tmp_path / "two-batches.json"
+    path.write_text(json.dumps(_two_batch_script([step("b1.one")])))
+    return path
+
+
+def test_1241_a_red_run_files_no_bug_unless_it_is_asked(tmp_path, monkeypatch):
+    """A red run used to file a bug by default: acceptance runs of #1222 left 9 duplicates on the real board."""
+    root, titles = _bug_helper(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, root=root)
+    assert code == 1 and r["status"] == "failed" and r["summary"]["failed"] == 2
+    assert r["bug"]["filed"] is False and "--file-bug" in r["bug"]["reason"]
+    assert not titles.exists(), "a run nobody asked for a bug must leave the board alone"
+
+
+def test_1241_asked_it_files_exactly_one_bug_for_every_failed_step_and_records_its_url(tmp_path, monkeypatch):
+    root, titles = _bug_helper(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1
+    assert titles.read_text().splitlines() == ["GUI test `run-script-smoke`: 2 failed steps"], "one bug, never one per step"
+    body = (root / "bug-body.log").read_text()
+    assert "### `smoke.still-home`" in body and "### `smoke.unknown-id`" in body, "every failed step, in one bug"
+    assert "### `smoke.open-library`" not in body, "a step that passed is not a failed step of this bug"
+    assert r["bug"]["filed"] is True and r["bug"]["url"] == "https://example.invalid/1241"
+
+
+def test_1241_asked_but_not_the_emulator_adapter_it_still_files_nothing(tmp_path, monkeypatch):
+    root, titles = _bug_helper(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root, registered=False)
+    assert code == 1 and r["bug"]["filed"] is False and "registered emulator adapter" in r["bug"]["reason"]
+    assert not titles.exists(), "a run against a fake adapter never touches GitHub"
+
+
+def test_1241_a_filing_that_fails_is_recorded_and_leaves_the_exit_code_alone(tmp_path, monkeypatch):
+    """No token, no network: the run still ends red on its steps, and the file says why no bug is there."""
+    root, _ = _bug_helper(tmp_path, exit_code=3)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1 and r["status"] == "failed" and r["summary"]["failed"] == 2
+    assert r["bug"]["filed"] is False and "report-bug.sh failed" in r["bug"]["reason"]
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps(script(step("b1.one"))))
+    code, r = _run_cmd(monkeypatch, tmp_path, clean, "--file-bug", root=root)
+    assert code == 0 and r["bug"]["filed"] is False and r["bug"]["reason"] == "no step failed"
+
+
+def test_1241_a_bug_helper_that_cannot_run_is_recorded_and_never_raised(tmp_path, monkeypatch):
+    root, _ = _bug_helper(tmp_path)
+    (root / "scripts" / "report-bug.sh").chmod(0o644)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1 and r["bug"]["filed"] is False and "report-bug.sh failed" in r["bug"]["reason"]
+
+
+def test_1241_the_opt_out_flag_is_gone_because_filing_is_opt_in(tmp_path, monkeypatch):
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1241_flag", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    with pytest.raises(SystemExit):
+        mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"), "--no-report-bug"])
+
+
+def test_1241_a_full_run_records_no_selection_and_a_narrowed_one_names_it(tmp_path, monkeypatch):
+    path = _two_batch_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path)
+    assert code == 0 and "selection" not in r, "a full run is not a partial run"
+    assert {s["id"] for s in r["steps"]} == {"b1.one", "b2.a"}
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--batch", "b2")
+    assert r["selection"] == {"kind": "batch", "value": "b2"}
+    assert {s["id"] for s in r["steps"]} == {"b2.a"}
+
+
+def test_1241_a_case_selection_keeps_the_setup_steps_it_needs(tmp_path, monkeypatch):
+    d = _two_batch_script([step("b1.two"), step("b1.three")])
+    d["batches"][0]["setup"] = [step("b1.setup-one")]
+    path = tmp_path / "with-setup.json"
+    path.write_text(json.dumps(d))
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--case", "b1.two")
+    assert code == 0 and r["selection"] == {"kind": "case", "value": "b1.two"}
+    assert [s["id"] for s in r["steps"]] == ["b1.setup-one", "b1.two"]
+
+
+def test_1241_an_unknown_selector_is_refused_before_anything_is_launched(tmp_path, monkeypatch):
+    path = _two_batch_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--case", "b1.ghost")
+    assert code != 0 and r["status"] == "failed"
+    assert any("b1.ghost" in reason for reason in r["reasons"]), r["reasons"]
+    assert any("b1.two" in reason or "b2.a" in reason for reason in r["reasons"]), "it names what the script does have"
+    assert "selection" not in r
+    assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step():
+    """The whole committed pilot script against a target that advertises less than `mesen-gui` does: the pilot as
+    committed is refused before launch (item 6) - dozens of its steps observe `ui.focused`, which this target has no
+    check for - and the narrowing is a `gui-test/1` script the same validator accepts, with every step of the pilot
+    still in it, `manual` where it must be, naming what it is missing (MesenAI #1242).
+
+    The committed pilot is already #1251's narrowing against the real adapter, so what this takes away is the
+    capability drift moves: the day the hook loses a check, the script committed against it narrows again instead of
+    going stale in silence."""
+    from squad import to_test_scenario as tts
+    from squad.gui_test_subset import runnable
+    pilot = _pilot_1223()
+    caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.visible", "ui.dialogs"],
+            "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}
+    with pytest.raises(ScriptError):
+        validate(pilot, caps)
+    out = runnable(pilot, caps)
+    validate(out["script"], caps)
+    assert tts.step_ids(out["script"]) == tts.step_ids(pilot)
+    steps = [s for b in out["script"]["batches"] for p in ("setup", "steps", "teardown") for s in (b.get(p) or [])]
+    assert len(steps) == len(tts.step_ids(pilot))  # converted steps are counted once, and none is dropped
+    assert all(s["mode"] == "manual" or (s.get("check") or {}).get("name") in caps["checks"] for s in steps)
+    by_id = {s["id"]: s for s in steps}
+    assert all(e["missing"] and by_id[e["id"]]["mode"] == "manual" for e in out["manual"])
+    assert all(m in by_id[e["id"]]["expect"] for e in out["manual"] for m in e["missing"])  # a person reads why
+
+
+# --- #1243: the run command runs one variant of a script, and records it as a partial run ---
+
+VARIANT_SPEC = "tests.gui_test_run_script_fake:VariantAdapter"
+ONE_MODE_SPEC = "tests.gui_test_run_script_fake:OneModeAdapter"
+
+
+def _variant_file(tmp_path):
+    """Two batches: b1 carries one case per window mode plus an untagged one, b2 a single untagged case."""
+    d = _two_batch_script([step("b1.any"),
+                           step("b1.win", variants={"window.mode": "windowed"}),
+                           step("b1.fs", variants={"window.mode": "fullscreen"})])
+    path = tmp_path / "variants.json"
+    path.write_text(json.dumps(d))
+    return path
+
+
+def test_1243_a_variant_selection_runs_that_variant_only_and_records_it(tmp_path, monkeypatch):
+    """A full run of this script runs all three cases; one variant runs the cases it applies to, and says so."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen",
+                       spec=VARIANT_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.fs", "b2.a"], \
+        "the windowed case is not run, and an untagged case runs in every variant"
+    switched = (tmp_path / "artifacts" / "variant.log").read_text().splitlines()
+    assert switched == ["window.mode=fullscreen"] * 2, "each batch's fresh process is switched before it launches"
+
+
+def test_1243_an_axis_that_runs_one_way_needs_no_switch(tmp_path, monkeypatch):
+    """The emulator adapter advertises `window.mode: [windowed]` and has no hook: selecting it filters, nothing switches."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=windowed",
+                       spec=ONE_MODE_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=windowed"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.win", "b2.a"]
+
+
+def test_1243_an_unknown_variant_is_refused_before_anything_is_launched(tmp_path, monkeypatch):
+    path = _variant_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=huge")
+    assert code != 0 and r["status"] == "failed" and "selection" not in r
+    assert any("window.mode=huge" in reason for reason in r["reasons"]), r["reasons"]
+    assert any("fullscreen" in reason for reason in r["reasons"]), "it names what the script does have"
+    assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "screen.size=large")
+    assert code != 0 and any("screen.size" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_that_is_not_an_axis_value_pair_is_refused(tmp_path, monkeypatch):
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "fullscreen")
+    assert code != 0 and any("<axis>=<value>" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_the_adapter_cannot_switch_to_is_refused_before_any_launch(tmp_path, monkeypatch):
+    """The shape fake advertises both window modes and has no `set_variant` hook: nothing would switch the window, so
+    running its fullscreen cases anyway would report a mode that was never entered."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen")
+    assert code != 0 and r["status"] == "failed" and r["steps"] == [] and r["batches"] == []
+    assert any("window.mode=fullscreen" in reason for reason in r["reasons"]), r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_a_variant_no_case_applies_to_executes_nothing_and_is_red(tmp_path, monkeypatch):
+    """A run that executed no step is a failure, and a variant selection does not change that (#1222's rule)."""
+    d = script(step("b1.win", variants={"window.mode": "windowed"}))  # one batch, and no case runs in fullscreen
+    path = tmp_path / "one-mode.json"
+    path.write_text(json.dumps(d))
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=fullscreen", spec=VARIANT_SPEC)
+    assert code == 1 and r["status"] == "failed"
+    assert r["reasons"] == ["no step executed"] and r["steps"] == []
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_the_three_selectors_stay_mutually_exclusive(tmp_path, monkeypatch):
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1243", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    with pytest.raises(SystemExit):
+        mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"),
+                  "--batch", "b1", "--variant", "window.mode=windowed"])
+
 
 
 # --- to_test_scenario (#1225): publishing the plan is idempotent, resumable and paced -------------
