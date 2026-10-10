@@ -147,7 +147,7 @@ def test_pilot_script_opens_as_a_diagram_and_every_node_shows_its_text():
         assert svg.count("data-step=") == len(steps)
         for s in steps:
             assert f'data-step="{s["id"]}"' in svg
-            assert s["expect"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:30] in svg
+            assert s["expect"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")[:30] in svg
         assert svg.count('class="step manual"') == sum(s["mode"] == "manual" for s in steps)
 
 
