@@ -20,7 +20,7 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
  | while IFS=$'\x1f' read -r pr sha iss labels base; do   # unit separator: a tab IFS collapses empty fields (no labels) and shifts the rest
   [ -n "$iss" ] && [ "$iss" -ge "$MIN" ] 2>/dev/null || continue
   if [ -n "$base" ] && [ "$base" != "$SG_BASE" ]; then   # stacked: retarget once the parent PR (head = our base) is merged
-    par=$(gh api "repos/$SG_REPO/pulls?state=closed&head=${SG_REPO%%/*}:$base&per_page=5" -q '[.[]|select(.merged_at!=null)][0]|"\(.number) \(.head.sha)"' 2>/dev/null)
+    par=$(gh api "repos/$SG_REPO/pulls?state=closed&head=${SG_REPO%%/*}:$base&per_page=5" -q '[.[]|select(.merged_at!=null)][0]|select(.)|"\(.number) \(.head.sha)"' 2>/dev/null)
     if [ -n "$par" ] && [ "$par" != null ] && [ "$(cat "$A/stack-$pr" 2>/dev/null)" != "${par#* }" ]; then   # once per parent (the list API can lag)
       echo "${par#* }" > "$A/stack-$pr"; gh api -X PATCH repos/$SG_REPO/pulls/$pr -f base="$SG_BASE" >/dev/null 2>&1 \
         && { printf "PR #%s retargeted to %s: its parent PR #%s was merged. A conflict from the squash is fixed by replaying only this PR's commits onto %s.\n" $pr "$SG_BASE" "${par%% *}" "$SG_BASE" > "$SG_STATE/cq/$iss-retarget$pr.md"; echo "RETARGET #$pr -> $SG_BASE (parent #${par%% *} merged)"; }
@@ -44,9 +44,9 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   if [ $prob = 1 ]; then
     [ -e "$A/nofix" ] && continue
     [ -e "$A/queued-$pr-$s9" ] && continue; touch "$A/queued-$pr-$s9"
-    n=$(grep -c . "$A/rounds-$pr" 2>/dev/null || echo 0)
+    n=$(grep -c . "$A/rounds-$pr" 2>/dev/null | head -1); n=${n:-0}
     # the round cap bounds review/CI ping-pong; threads- or conflict-only rounds don't count (own cap: 3 per PR)
-    if [ $hard = 0 ]; then k=$(grep -c . "$A/softfix-$pr" 2>/dev/null || echo 0)
+    if [ $hard = 0 ]; then k=$(grep -c . "$A/softfix-$pr" 2>/dev/null | head -1); k=${k:-0}
       [ "$k" -lt 3 ] && { echo "$s9" >> "$A/softfix-$pr"; AF_SOFT=1 bg autofix.sh $pr $iss; echo "AUTOFIX queued #$pr @ $s9 (threads/conflict only)"; continue; }
       bg autopanel.sh $pr $iss; echo "ROUND CAP #$pr issue #$iss: 3 thread/conflict rounds spent -> panel"; continue; fi
     if [ "$n" -lt "$MAX" ]; then bg autofix.sh $pr $iss; echo "AUTOFIX queued #$pr @ $s9 (round $((n+1))/$MAX)"
@@ -62,6 +62,9 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
     [ "$(gh api repos/$SG_REPO/pulls/$d -q .state 2>/dev/null)" = open ] && continue 2; done
   st=$(gh api repos/$SG_REPO/pulls/$pr -q '.head.sha+" "+.mergeable_state')
   [ "$st" = "$sha clean" ] || continue
+  if [ "$(gh api repos/$SG_REPO/pulls/$pr -q .changed_files 2>/dev/null)" = 0 ]; then   # a fix round that undid everything: nothing to merge
+    [ -e "$A/empty-$pr-${sha:0:9}" ] || { touch "$A/empty-$pr-${sha:0:9}"; printf "NEEDS OWNER: PR #%s @ %s has an empty diff against %s (a fix round undid the change); not merged.\n" $pr ${sha:0:9} "$SG_BASE" > "$SG_STATE/cq/$iss-empty$$.md"; echo "NEEDS OWNER #$pr issue #$iss: empty diff at ${sha:0:9}, not merged"; }
+    continue; fi
   [ "$(bash "$here/autofix.sh" --threads $pr)" = 0 ] || { rm -f "$tf"; continue; }   # a thread opened after the cache: re-ask next pass
   if m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
     touch "$A/merged-$pr"

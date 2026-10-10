@@ -61,6 +61,7 @@ for _ in range(90):
 else:
     sys.exit(f"no run folder appeared in 180 s; see {log}")
 run = new[-1]
+(runs / run / "request.txt").write_text(req_file.read_text())   # consult.sh reads the request from the run folder
 # make sure the hub is up so the run's dashboard shows up there on its own (it discovers dashboard servers by itself)
 _s = socket.socket(); _s.settimeout(0.5)
 try: _s.connect(("127.0.0.1", 7700))

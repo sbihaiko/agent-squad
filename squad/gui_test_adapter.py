@@ -96,3 +96,21 @@ class FakeAdapter:
 
     def teardown(self):
         return []
+
+
+KEYS = {"Enter", "Space"}
+
+
+class KeyboardFake(FakeAdapter):
+    """The emulator adapter's keyboard surface: `key.press` names a literal key the hook knows; Enter acts as A."""
+
+    def capabilities(self):
+        caps = super().capabilities()
+        return caps | {"actions": caps["actions"] + ["key.press"]}
+
+    def inject(self, name, args):
+        if name != "key.press":
+            return super().inject(name, args)
+        self.log.append((name, args))
+        if args.get("key") in KEYS and self.screen == "play.home":
+            self._opens_at = self.tick + OPEN_AFTER

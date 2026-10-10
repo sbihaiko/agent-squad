@@ -21,3 +21,4 @@
 # : "${SG_FRONTIER_PREAMBLE:=$here/profiles/<name>.frontier.txt}"   # shared rules prepended to every frontier request
 # Fork-only work (forkclose.py): an issue delivered as a branch in a local fork, no PR, closes on merge + fork suite green
 # : "${SG_FORK_DIR:=$HOME/src/fork}"; : "${SG_FORK_BASE:=main}"; : "${SG_FORK_BRANCH:=issue/%n}"; : "${SG_FORK_TEST_CMD:=make test}"
+# : "${SG_E2E_BUILD_DIR:=$HOME/src/app-build}"; : "${SG_E2E_BUILD_CMD:=make}"   # app build the fork suite drives, rebuilt at the base head before each fork test

@@ -798,3 +798,184 @@ def test_1199_the_jev_chooser_sends_the_typed_ui_state_and_the_options_as_one_ch
     [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(jev_chooser(Client(), "ui.screen == play.library")))
     assert r["verdict"] == "passed" and len(asked) == 1  # the last offered move is A
     assert asked[0][0]["ui"]["screen"] == "play.home" and "image" not in json.dumps(asked[0]).lower()
+# --- #1187: key.* through the hook: a keyboard-driven step runs unattended and its node shows its check ---
+
+from squad.gui_test_adapter import KeyboardFake  # noqa: E402
+
+
+def _keyboard_script():
+    d = script(
+        step("b1.key-open", action={"name": "key.press", "args": {"key": "Enter", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+    )
+    d["requires"] = {"actions": ["key.press"], "checks": ["ui.screen"]}
+    return d
+
+
+def test_a_keyboard_step_runs_unattended_and_its_node_shows_its_check(tmp_path):
+    d, adapter, events = _keyboard_script(), KeyboardFake(tmp_path), []
+    validate(d, adapter.capabilities())
+    results = run(d, adapter, record=events.append)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.key-open", "passed")]
+    assert adapter.log == [("key.press", {"key": "Enter", "ticks": 4})]
+    [n] = run_node([{"op": "guirun", "events": events}])[0]
+    assert n["check"] == {"name": "ui.screen", "args": {"is": "play.library"}}
+    assert n["action"] == "key.press"
+
+
+def test_the_emulator_adapter_advertises_key_press_and_the_pad_only_fake_does_not(tmp_path):
+    assert "key.press" in KeyboardFake(tmp_path).capabilities()["actions"]
+    assert "key.press" not in TickingFake(tmp_path).capabilities()["actions"]
+
+
+def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
+    d = _keyboard_script()
+    d["batches"][0]["steps"][0]["action"]["args"]["key"] = "NoSuchKey"
+    d["batches"][0]["steps"][0]["wait"] = {"check": "ui.screen == play.library", "timeout_ticks": 6}
+    [r] = run(d, KeyboardFake(tmp_path))
+    assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"
+# --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
+
+from squad.gui_test_variants import (  # noqa: E402
+    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+
+
+class _Modal(TickingFake):
+    def __init__(self, out_dir):
+        super().__init__(out_dir)
+        self.modes = []
+
+    def set_variant(self, axis, value):
+        self.modes.append(value)
+
+
+def _v1191_script(*steps):
+    d = script(*steps)
+    d["requires"] = {"actions": ["pad.press", "pointer.click", "text.type", "window.mode"],
+                     "checks": ["ui.screen", "ui.focused"]}
+    return d
+
+
+def test_1191_a_step_tagged_for_both_window_modes_runs_once_per_mode(tmp_path):
+    both = step("b1.both", variants={"window.mode": ["windowed", "fullscreen"]})
+    win = step("b1.win", variants={"window.mode": "windowed"})
+    untagged = step("b1.any")
+    d = _v1191_script(both, win, untagged)
+    a = _Modal(tmp_path)
+    out = run_variants(d, a, axis="window.mode")
+    assert [(r["id"], r["variant"]) for r in out] == [
+        ("b1.both", "windowed"), ("b1.win", "windowed"), ("b1.any", "windowed"),
+        ("b1.both", "fullscreen"), ("b1.any", "fullscreen")]
+    assert [m for m in a.modes] == ["windowed", "fullscreen"]
+
+
+def test_1191_pointer_and_text_actions_reach_the_adapter(tmp_path):
+    click = step("b1.click", action={"name": "pointer.click", "args": {"x": 10, "y": 20, "button": "left"}})
+    typed = step("b1.type", action={"name": "text.type", "args": {"text": "contra"}})
+    d = _v1191_script(click, typed)
+    a = TickingFake(tmp_path)
+    validate(d, {**a.capabilities(), "actions": a.capabilities()["actions"] + ["pointer.click", "text.type"],
+                 "variants": a.capabilities()["variants"]})
+    run_variants(d, a, axis="window.mode")
+    assert ("pointer.click", {"x": 10, "y": 20, "button": "left"}) in a.log
+    assert ("text.type", {"text": "contra"}) in a.log
+
+
+def test_1191_a_full_screen_pilot_case_runs_locally_in_the_real_window_mode(tmp_path):
+    fs = step("b1.fs", variants={"window.mode": "fullscreen"})
+    a = RealWindowAdapter(TickingFake(tmp_path), env={}, permissions=lambda: {"accessibility", "screen-recording"})
+    out = run_variants(_v1191_script(fs), a, axis="window.mode")
+    assert [(r["id"], r["variant"], r["verdict"]) for r in out] == [("b1.fs", "fullscreen", "passed")]
+    assert a.real_window is True
+
+
+def test_1191_the_real_window_mode_refuses_to_start_without_the_permissions(tmp_path):
+    a = RealWindowAdapter(TickingFake(tmp_path), env={}, permissions=lambda: {"accessibility"})
+    with pytest.raises(PermissionsMissing) as e:
+        a.launch({})
+    assert "screen-recording" in str(e.value) and "accessibility" not in str(e.value)
+    assert a.inner.log == []
+
+
+def test_1191_the_real_window_mode_is_not_used_in_ci(tmp_path):
+    for env in ({"CI": "true"}, {"GITHUB_ACTIONS": "true"}):
+        a = RealWindowAdapter(TickingFake(tmp_path), env=env,
+                              permissions=lambda: {"accessibility", "screen-recording"})
+        with pytest.raises(RealWindowRefused):
+            a.launch({})
+
+
+def test_1210_a_failed_objective_check_names_expected_and_observed_and_skips_the_model(tmp_path):
+    from squad.gui_test_vision import Vision
+
+    asked = []
+
+    def model(png, expect):
+        asked.append(expect)
+        return {"answer": "compatible", "saw": "x", "cost": 0.01}
+
+    d = script(step("b1.wrong", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+                    check={"name": "ui.screen", "args": {"is": "play.home"}}))
+    [r] = run(d, TickingFake(tmp_path), vision=Vision(model))
+    assert r["verdict"] == "failed (expected ui.screen == play.home, observed play.library)"
+    assert asked == [] and "vision" not in r
+# --- #1193: the pilot's Library, Favorites and opening-and-playing cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake import PilotFake  # noqa: E402
+
+CASES_1193 = ([f"LIB-0{n}" for n in range(1, 10)] + ["FAV-01", "FAV-02"] + [f"GAME-0{n}" for n in range(1, 5)])
+PILOT_1193 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1193.json"
+
+
+def _pilot_1193():
+    d = json.loads(PILOT_1193.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1193(d, *batches):
+    return [s for b in d["batches"] if b["id"] in batches for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def test_1193_every_library_favorites_and_game_case_is_converted_none_dropped():
+    d = _pilot_1193()
+    steps = _steps_1193(d, "library", "favorites", "favorites-home", "game", "game-archive", "game-bios")
+    for case in CASES_1193:
+        assert any(s["expect"].startswith(case + ":") or f" {case}:" in s["expect"] or f"({case})" in s["expect"]
+                   for s in steps), f"{case} has no step"
+
+
+def _run_1193(tmp_path, d, **fixtures):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in ("launch", "home", "home-after-game"):
+            continue
+        view = {**d, "batches": [batch]}
+        adapter = PilotFake(tmp_path, **fixtures.get(batch["id"], {}))
+        results += [{**r, "batch": batch["id"]} for r in run_variants(view, adapter, axis="window.mode")]
+    return results
+
+
+def test_1193_the_batches_run_end_to_end_in_both_window_modes(tmp_path):
+    d = _pilot_1193()
+    results = _run_1193(tmp_path, d, **{"game-archive": {"tile": "zip"}, "game-bios": {"tile": "fds"},
+                                    "favorites-home": {"favorites": 1}})
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results
+           if r["verdict"].startswith("failed")]
+    assert bad == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    manual = {s["id"] for s in _steps_1193(d, "library", "favorites", "favorites-home", "game", "game-archive",
+                                           "game-bios") if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
+
+
+def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
+    d = _pilot_1193()
+    results = _run_1193(tmp_path, d, library={"y_focuses_search": False})
+    failed = [r["id"] for r in results if r["verdict"].startswith("failed")]
+    assert "lib.search-y-focuses-field" in failed
+    from squad.gui_test_run import failed as run_failed
+    assert run_failed(results)

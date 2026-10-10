@@ -9,10 +9,10 @@ threads() { gh api graphql -f query="query{repository(owner:\"$own\",name:\"$nam
   -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false and .isOutdated==false)]|length' 2>/dev/null; }
 [ "$1" = --threads ] && { threads "$2"; exit; }
 pr=$1 iss=$2 notes=${3:-}
-read -r ref sha ms < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha+" "+.mergeable_state') || exit 1
+read -r ref sha ms pbase < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha+" "+.mergeable_state+" "+.base.ref') || exit 1; pbase=${pbase:-$SG_BASE}   # pbase: the PR's base, a parent PR's branch while stacked
 s9=${sha:0:9}; [ -e "$A/fix-$pr-$s9" ] && [ -z "${AF_DRY:-}" ] && exit 0
 b=$(mktemp); probs=""
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $SG_REPO). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
+{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $SG_REPO). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo "Fix every problem below on head $s9; do not change scope beyond them."
   line=$(grep "^#$pr $s9 " "$SG_STATE/revci-$pr.out" 2>/dev/null | tail -1)
   if [[ $line == *CHANGES* ]]; then probs+=" review"
@@ -23,7 +23,8 @@ b=$(mktemp); probs=""
     echo; echo "[ci] CI failed on $s9:"; echo "$bad"
     echo "Read each log (gh run view <run-id> --repo $SG_REPO --log-failed; the run id is in the URL). Reproduce locally and fix the root cause, never by weakening the test. A failure that is clearly infrastructure (runner died, network timeout, rate limit) gets 'gh run rerun <run-id> --repo $SG_REPO --failed' instead of a code change; say which in the PR comment."; fi
   if [ "$ms" = dirty ]; then probs+=" conflict"
-    echo; echo "[conflict] The branch conflicts with $SG_BASE. Rebase onto origin/$SG_BASE (no merge commits), resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."
+    if [ "$pbase" != "$SG_BASE" ]; then echo; echo "[conflict] This PR is STACKED on the open parent branch $pbase and conflicts with it (the parent was rewritten or advanced). Rebase onto origin/$pbase (git fetch origin $pbase first; no merge commits), never onto $SG_BASE: that would replay the parent's commits. If the parent was rewritten, this branch still carries the parent's OLD commits: replay only this PR's own commits (message says Refs #$iss; list them with git log --reverse --format=%h --grep='Refs #$iss' origin/$ref ^origin/$pbase) with git rebase --onto origin/$pbase <the commit just before the first of them> HEAD, or cherry-pick them onto origin/$pbase. Resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."
+    else echo; echo "[conflict] The branch conflicts with $SG_BASE. Rebase onto origin/$SG_BASE (no merge commits), resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."; fi
     [ -s "$A/stack-$pr" ] && echo "This PR was stacked on a parent PR that has since been squash-merged: replay only this PR's own commits with git rebase --onto origin/$SG_BASE $(cat "$A/stack-$pr") HEAD (the parent's last commit), never the parent's commits again."; fi
   nt=$(threads $pr)
   if [ "${nt:-0}" -gt 0 ]; then probs+=" threads"
@@ -37,6 +38,7 @@ b=$(mktemp); probs=""
 touch "$A/fix-$pr-$s9"; [ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap
 req=$(bash "$(dirname "$0")/mkreq.sh" "auto-fix-$pr-$s9" "$b") || exit 1; rm -f "$b"
 run=$(cd "$SG_CHECKOUT" && python3 "$(dirname "$0")/launch.py" "$req" 2>/dev/null | tail -1)
+[ -n "${run:-}" ] && echo "$run" > "$A/runof-$pr-$s9"   # retryfix.sh re-arms this sha if the run fails or dies
 git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place; the run already copied it
 printf "Fix run dispatched automatically on PR #%s @ %s for:%s. Run: %s. Refs #%s\n" $pr $s9 "$probs" "${run:-launch failed}" $iss > "$SG_STATE/cq/$iss-autofix$$.md"
 echo "AUTOFIX #$pr @ $s9 (issue #$iss):$probs -> ${run:-LAUNCH FAILED}"
