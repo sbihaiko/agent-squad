@@ -4,7 +4,7 @@
 # otherwise label needs-human, queue the question on the issue, and print NEEDS OWNER.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; pr=$1 iss=$2; cfg="$(dirname "$0")/models.json"
 read -r ref sha < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha'); s9=${sha:0:9}
-max=${AP_PANEL_MAX:-2}; used=$(grep -c . "$A/panel-$pr" 2>/dev/null || echo 0)
+max=${AP_PANEL_MAX:-2}; used=$(grep -c . "$A/panel-$pr" 2>/dev/null | head -1); used=${used:-0}
 owner() { gh api -X POST repos/$SG_REPO/issues/$pr/labels -f "labels[]=needs-human" >/dev/null 2>&1
   printf "Needs the owner — PR #%s @ %s: %s\nThe fix loop is paused on this PR (label needs-human). Refs #%s\n" $pr $s9 "$1" $iss > "$SG_STATE/cq/$iss-owner$$.md"
   echo "NEEDS OWNER #$pr issue #$iss: $1"; exit 0; }

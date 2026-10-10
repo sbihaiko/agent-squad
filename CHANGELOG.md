@@ -2,6 +2,8 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- autopilot/autopanel: `grep -c . f || echo 0` printed "0" twice on an empty round file, so a PR went to the panel with 0 rounds spent; counts now default to 0.
+- review.sh: the Claude reviewer reads its effort from `models.json` `efforts.review_models` (default medium).
 - squad-goal: `review_models` starts with `claude:claude-opus-5-5` again (owner, 2026-10-10: "ponha o opus de volta na frente"); after the rc fix (bug #1215) Gemini still answered empty with exit 0 and Grok timed out, about 5 min per review before Opus.
 
 - squad-goal: FIX (bug #1215) `review.sh` read `rc=$?` after the superseded test, so every reviewer was logged rc=1 and no PR was reviewed for ~15 min; `rc` is now captured first, and `scripts/test-review.sh` (stubbed gh and claude, RED 3 of 4 on the old order, GREEN 4 of 4) guards it. The same pass adds `janitor.sh`: leftover processes of finished runs, idle dashboards of finished runs, zombie runs dropped from `active-runs.txt`, duplicate-run report, stale `disp-` markers (only for a failed request, an open issue and no PR); dry-run reviewed on live state before enabling.

@@ -51,7 +51,7 @@ for m in $(jq -r '.review_models[]' "$cfg"); do
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)
     case $m in
-      claude:*) cap claude -p --model "${m#claude:}" --effort medium --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
+      claude:*) cap claude -p --model "${m#claude:}" --effort "$(jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
       grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode plan --disable-web-search) > "$out" 2>"$SG_STATE/review-$pr.err";;
       gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --print-timeout 1800s -p "$(cat "$p")") > "$out" 2>"$SG_STATE/review-$pr.err";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
