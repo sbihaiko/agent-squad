@@ -703,104 +703,6 @@ def test_ci_a_clean_run_is_green(tmp_path):
     assert code == 0
 
 
-# ---- #1199: goal navigation (ADR-0271) ----
-
-def _goal_step(sid, goal="ui.screen == play.library", family="pad", **over):
-    over.setdefault("role", "setup")
-    return step(sid, action={"name": "nav.goal", "args": {"goal": goal, "input": family}},
-                wait={"check": goal, "timeout_ticks": 10}, check={"name": "ui.screen", "args": {"is": "play.library"}}, **over)
-
-
-class _Chooser:
-    """A stand-in for Jev: always picks the first option offered, so only the withdrawal of failed moves gets it anywhere."""
-
-    def __init__(self, cost=0.00002):
-        self.calls, self.cost = [], cost
-
-    def __call__(self, state, options):
-        self.calls.append((state, list(options)))
-        return {"choice": options[0], "probabilities": {o: 1 / len(options) for o in options}, "cost": self.cost}
-
-
-@pytest.mark.parametrize("family", ["pad", "key"])
-def test_1199_a_goal_is_reached_from_home_with_no_fixed_path_by_pad_and_by_keyboard(tmp_path, family):
-    from squad.gui_test_goal import Navigator
-    d = script(_goal_step("b1.pre", family=family))
-    validate(d)
-    chooser = _Chooser()
-    events = []
-    [r] = run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(chooser))
-    assert r["verdict"] == "passed"
-    assert len(chooser.calls) > 1  # the first pick fails from home, so it is withdrawn and Jev is asked again
-    first, second = chooser.calls[0][1], chooser.calls[1][1]
-    assert first[0] not in second and len(second) == len(first) - 1
-    assert all("png" not in json.dumps(s).lower() for s, _ in chooser.calls)  # state is typed JSON, never pixels
-    assert {"screen", "focus", "controls", "options"} <= set(chooser.calls[0][0])
-
-
-def test_1199_each_decision_is_a_sub_node_with_options_choice_probabilities_snapshot_and_cost_and_counts_against_the_cap(tmp_path):
-    from squad.gui_test_goal import Navigator
-    from squad.gui_test_vision import Vision
-    vision = Vision(lambda png, expect: {"answer": "compatible", "saw": "", "cost": 0}, cap=1.0)
-    events = []
-    run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(cost=0.25), max_spend=5.0), vision=vision)
-    [node] = [n for n in run_node([{"op": "guirun", "events": events}])[0] if n["id"] == "b1.pre"]
-    kids = node["decisions"]
-    assert len(kids) >= 2 and kids[-1]["choice"] in kids[-1]["options"]
-    assert set(kids[0]) >= {"options", "choice", "probabilities", "state", "cost"}
-    assert vision.spent == pytest.approx(0.25 * len(kids))
-    assert node["cost"] == pytest.approx(0.25 * len(kids))
-
-
-def test_1199_caps_end_the_step_failed_goal_not_reached_with_the_last_state(tmp_path):
-    from squad.gui_test_goal import Navigator
-    events = []
-    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(), max_decisions=1))
-    assert r["verdict"].startswith("failed (goal not reached")
-    assert "play.home" in r["verdict"]
-    [r2] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(_Chooser(cost=0.5), max_spend=0.6))
-    assert r2["verdict"].startswith("failed (goal not reached") and "spend" in r2["verdict"]
-
-
-def test_1199_the_validator_rejects_a_goal_as_the_action_of_a_step_under_test():
-    d = script(_goal_step("b1.bad", role="under-test"))
-    with pytest.raises(ScriptError, match="nav.goal is not allowed on a step under test"):
-        validate(d)
-    no_goal = script(step("b1.nogoal", role="setup", action={"name": "nav.goal", "args": {}}))
-    with pytest.raises(ScriptError, match="nav.goal needs a goal"):
-        validate(no_goal)
-
-
-def test_1199_a_replay_reuses_the_recorded_moves_and_makes_no_jev_call(tmp_path):
-    from squad.gui_test_goal import Navigator, recorded_moves
-    d = script(_goal_step("b1.pre"))
-    events = []
-    run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser()))
-    chooser = _Chooser()
-    again = TickingFake(tmp_path)
-    [r] = run(d, again, goal=Navigator(chooser, replay=recorded_moves(events)))
-    assert r["verdict"] == "passed" and chooser.calls == []
-    assert again.screen == "play.library"
-
-
-def test_1199_with_no_navigator_a_goal_step_is_pending_never_failed(tmp_path):
-    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path))
-    assert r["verdict"] == "pending"
-
-
-def test_1199_the_jev_chooser_sends_the_typed_ui_state_and_the_options_as_one_choice(tmp_path):
-    from squad.gui_test_goal import Navigator, jev_chooser
-    asked = []
-
-    class Client:
-        def ask(self, state, questions):
-            asked.append((state, questions))
-            opts = list(questions["move"]["criteria"])
-            return {"move": {"choice": opts[-1], "probabilities": {o: 1 / len(opts) for o in opts}}}, "jev"
-
-    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(jev_chooser(Client(), "ui.screen == play.library")))
-    assert r["verdict"] == "passed" and len(asked) == 1  # the last offered move is A
-    assert asked[0][0]["ui"]["screen"] == "play.home" and "image" not in json.dumps(asked[0]).lower()
 # --- #1187: key.* through the hook: a keyboard-driven step runs unattended and its node shows its check ---
 
 from squad.gui_test_adapter import KeyboardFake  # noqa: E402
@@ -924,6 +826,196 @@ def test_1210_a_failed_objective_check_names_expected_and_observed_and_skips_the
     [r] = run(d, TickingFake(tmp_path), vision=Vision(model))
     assert r["verdict"] == "failed (expected ui.screen == play.home, observed play.library)"
     assert asked == [] and "vision" not in r
+# ---- #1199: goal navigation (ADR-0271) ----
+
+def _goal_step(sid, goal="ui.screen == play.library", family="pad", **over):
+    over.setdefault("role", "setup")
+    return step(sid, action={"name": "nav.goal", "args": {"goal": goal, "input": family}},
+                wait={"check": goal, "timeout_ticks": 10}, check={"name": "ui.screen", "args": {"is": "play.library"}}, **over)
+
+
+class _Chooser:
+    """A stand-in for Jev: always picks the first option offered, so only the withdrawal of failed moves gets it anywhere."""
+
+    def __init__(self, cost=0.00002):
+        self.calls, self.cost = [], cost
+
+    def __call__(self, state, options):
+        self.calls.append((state, list(options)))
+        return {"choice": options[0], "probabilities": {o: 1 / len(options) for o in options}, "cost": self.cost}
+
+
+@pytest.mark.parametrize("family", ["pad", "key"])
+def test_1199_a_goal_is_reached_from_home_with_no_fixed_path_by_pad_and_by_keyboard(tmp_path, family):
+    from squad.gui_test_goal import Navigator
+    d = script(_goal_step("b1.pre", family=family))
+    validate(d)
+    chooser = _Chooser()
+    events = []
+    [r] = run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(chooser))
+    assert r["verdict"] == "passed"
+    assert len(chooser.calls) > 1  # the first pick fails from home, so it is withdrawn and Jev is asked again
+    first, second = chooser.calls[0][1], chooser.calls[1][1]
+    assert first[0] not in second and len(second) == len(first) - 1
+    assert all("png" not in json.dumps(s).lower() for s, _ in chooser.calls)  # state is typed JSON, never pixels
+    assert {"screen", "focus", "controls", "options"} <= set(chooser.calls[0][0])
+
+
+def test_1199_each_decision_is_a_sub_node_with_options_choice_probabilities_snapshot_and_cost_and_counts_against_the_cap(tmp_path):
+    from squad.gui_test_goal import Navigator
+    from squad.gui_test_vision import Vision
+    vision = Vision(lambda png, expect: {"answer": "compatible", "saw": "", "cost": 0}, cap=1.0)
+    events = []
+    run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(cost=0.25), max_spend=5.0), vision=vision)
+    [node] = [n for n in run_node([{"op": "guirun", "events": events}])[0] if n["id"] == "b1.pre"]
+    kids = node["decisions"]
+    assert len(kids) >= 2 and kids[-1]["choice"] in kids[-1]["options"]
+    assert set(kids[0]) >= {"options", "choice", "probabilities", "state", "cost"}
+    assert vision.spent == pytest.approx(0.25 * len(kids))
+    assert node["cost"] == pytest.approx(0.25 * len(kids))
+
+
+def test_1199_caps_end_the_step_failed_goal_not_reached_with_the_last_state(tmp_path):
+    from squad.gui_test_goal import Navigator
+    events = []
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser(), max_decisions=1))
+    assert r["verdict"].startswith("failed (goal not reached")
+    assert "play.home" in r["verdict"]
+    [r2] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(_Chooser(cost=0.5), max_spend=0.6))
+    assert r2["verdict"].startswith("failed (goal not reached") and "spend" in r2["verdict"]
+
+
+def test_1199_the_validator_rejects_a_goal_as_the_action_of_a_step_under_test():
+    d = script(_goal_step("b1.bad", role="under-test"))
+    with pytest.raises(ScriptError, match="nav.goal is not allowed on a step under test"):
+        validate(d)
+    no_goal = script(step("b1.nogoal", role="setup", action={"name": "nav.goal", "args": {}}))
+    with pytest.raises(ScriptError, match="nav.goal needs a goal"):
+        validate(no_goal)
+
+
+def test_1199_a_replay_reuses_the_recorded_moves_and_makes_no_jev_call(tmp_path):
+    from squad.gui_test_goal import Navigator, recorded_moves
+    d = script(_goal_step("b1.pre"))
+    events = []
+    run(d, TickingFake(tmp_path), record=events.append, goal=Navigator(_Chooser()))
+    chooser = _Chooser()
+    again = TickingFake(tmp_path)
+    [r] = run(d, again, goal=Navigator(chooser, replay=recorded_moves(events)))
+    assert r["verdict"] == "passed" and chooser.calls == []
+    assert again.screen == "play.library"
+
+
+def test_1199_with_no_navigator_a_goal_step_is_pending_never_failed(tmp_path):
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path))
+    assert r["verdict"] == "pending"
+
+
+def test_1199_the_jev_chooser_sends_the_typed_ui_state_and_the_options_as_one_choice(tmp_path):
+    from squad.gui_test_goal import Navigator, jev_chooser
+    asked = []
+
+    class Client:
+        def ask(self, state, questions):
+            asked.append((state, questions))
+            opts = list(questions["move"]["criteria"])
+            return {"move": {"choice": opts[-1], "probabilities": {o: 1 / len(opts) for o in opts}}}, "jev"
+
+    [r] = run(script(_goal_step("b1.pre")), TickingFake(tmp_path), goal=Navigator(jev_chooser(Client(), "ui.screen == play.library")))
+    assert r["verdict"] == "passed" and len(asked) == 1  # the last offered move is A
+    assert asked[0][0]["ui"]["screen"] == "play.home" and "image" not in json.dumps(asked[0]).lower()
+
+
+# ---- #1200: the exploratory trap sweep (ADR-0271) ----
+
+def _sweep_step(sid="b1.sweep", bound=40, **args):
+    return step(sid, role="under-test", action={"name": "nav.sweep", "args": {"input": "pad", "bound": bound, **args}},
+                wait={"timeout_ticks": 600}, expect="No screen reachable by pad is one no advertised action leaves.")
+
+
+def _sweep_script(*steps):
+    d = script(*steps)
+    d["requires"]["actions"].append("nav.sweep")
+    return d
+
+
+def _sweep(tmp_path, edges, step_=None, **kw):
+    from squad.gui_test_goal import Navigator
+    from tests.gui_test_fakes import GraphAdapter
+    events = []
+    d = _sweep_script(step_ or _sweep_step())
+    validate(d)
+    [r] = run(d, GraphAdapter(tmp_path, edges, dialogs=kw.pop("dialogs", ())), record=events.append,
+              goal=Navigator(_Chooser(), **kw))
+    return r, events
+
+
+def test_1200_a_planted_trap_screen_is_caught_naming_the_screen_and_the_path_that_reached_it(tmp_path):
+    from tests.gui_test_fakes import TRAP_APP
+    r, events = _sweep(tmp_path, TRAP_APP)
+    assert r["verdict"].startswith("failed (trap screen play.about")
+    assert "play.home -[pad.press A]-> play.settings -[pad.press A]-> play.about" in r["verdict"]
+    assert any(e["event"] == "gui_decision" for e in events)  # same mechanism as nav.goal: Jev's Choice per move
+
+
+def test_1200_a_trap_free_fixture_passes_within_the_bound(tmp_path):
+    from tests.gui_test_fakes import CLEAN_APP
+    r, events = _sweep(tmp_path, CLEAN_APP)
+    assert r["verdict"] == "passed"
+    assert sum(e["event"] == "gui_decision" for e in events) <= 40
+
+
+def test_1200_a_sweep_that_cannot_finish_within_the_bound_fails_naming_the_bound(tmp_path):
+    from tests.gui_test_fakes import CLEAN_APP
+    r, _ = _sweep(tmp_path, CLEAN_APP, step_=_sweep_step(bound=2))
+    assert r["verdict"].startswith("failed (sweep bound 2 reached")
+
+
+def test_1200_the_dialogs_scope_only_judges_dialog_screens(tmp_path):
+    from tests.gui_test_fakes import TRAP_APP
+    r, _ = _sweep(tmp_path, TRAP_APP, step_=_sweep_step(scope="dialogs"))
+    assert r["verdict"] == "passed"  # About is a dead end but not a dialog
+    r, _ = _sweep(tmp_path, TRAP_APP, step_=_sweep_step(scope="dialogs"), dialogs=["play.about"])
+    assert r["verdict"].startswith("failed (trap screen play.about")
+
+
+def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
+    from tests.gui_test_fakes import GraphAdapter
+    from squad.gui_test_goal import Navigator
+    edges = {"play.home": {"Enter": "play.dead"}}
+    d = _sweep_script(_sweep_step())
+    d["batches"][0]["steps"][0]["action"]["args"]["input"] = "key"
+    [r] = run(d, GraphAdapter(tmp_path, edges), goal=Navigator(_Chooser()))
+    assert r["verdict"].startswith("failed (trap screen play.dead") and "key.press Enter" in r["verdict"]
+
+
+def test_1200_a_sweep_replays_without_asking_jev_and_with_no_navigator_ends_pending(tmp_path):
+    from squad.gui_test_goal import Navigator, recorded_moves
+    from tests.gui_test_fakes import GraphAdapter, TRAP_APP
+    d = _sweep_script(_sweep_step())
+    events = []
+    run(d, GraphAdapter(tmp_path, TRAP_APP), record=events.append, goal=Navigator(_Chooser()))
+    [r] = run(d, GraphAdapter(tmp_path, TRAP_APP), goal=Navigator(None, replay=recorded_moves(events)))
+    assert r["verdict"].startswith("failed (trap screen play.about")
+    [p] = run(d, GraphAdapter(tmp_path, TRAP_APP))
+    assert p["verdict"] == "pending"
+
+
+def test_1200_the_validator_needs_a_positive_integer_bound():
+    d = _sweep_script(_sweep_step(bound=0))
+    with pytest.raises(ScriptError, match="nav.sweep needs a positive integer bound"):
+        validate(d)
+
+
+def test_1200_the_pilot_dialogs_no_trap_sweep_is_one_nav_sweep_step():
+    root = _mesenai()
+    d = json.loads((root / "docs/validation/process/play-pad-only.gui-test.json").read_text())
+    validate(d)
+    sweeps = [s for b in d["batches"] for s in b["setup"] + b["steps"] + b["teardown"] if s.get("action", {}).get("name") == "nav.sweep"]
+    if not sweeps:  # the pilot step lands with MesenAI's #1200 PR; until it is on main the read-only checkout lacks it
+        pytest.skip("MESENAI_REPO's pilot script has no nav.sweep step yet")
+    [s] = sweeps
+    assert s["action"]["args"]["scope"] == "dialogs" and s["id"] == "dialogs.no-trap"
 # --- #1193: the pilot's Library, Favorites and opening-and-playing cases, converted and run end to end ---
 
 from tests.gui_test_pilot_fake import PilotFake  # noqa: E402
@@ -1025,6 +1117,9 @@ def _pilot_for_the_real_app(ids):
     # The three steps need no rom and none of the pilot's other fixture kinds (packs, second rom, zip, fds, library):
     # the adapter refuses kinds it does not support, so only its settings profiles are kept.
     d["fixtures"] = {"settings": d["fixtures"]["settings"]}
+    # The three steps need no rom and no pack: keep only the settings fixture, the one kind every adapter build supports
+    # (the pilot also declares pack/rom-* kinds for its later batches, which the adapter rejects at launch).
+    d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k == "settings"}
     return d
 
 
@@ -1176,6 +1271,8 @@ BATCHES_1194 = ("pause", "settings", "pause-pack-multi", "settings-menu-sounds")
 
 def _steps_1194(d):
     return [s for b in d["batches"] if b["id"] in BATCHES_1194 for k in ("setup", "steps", "teardown")
+def _steps_1194(d):
+    return [s for b in d["batches"] if b["id"] in ("pause", "settings") for k in ("setup", "steps", "teardown")
             for s in b[k]]
 
 
@@ -1184,6 +1281,10 @@ def _run_1194(tmp_path, d, **switches):
     results = []
     for batch in d["batches"]:
         if batch["id"] in BATCHES_1194:
+    """The Pause batch needs a running game and the Settings batch needs W-P4 open: each runs on its own fake."""
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in ("pause", "settings"):
             view = {**d, "batches": [batch]}
             results += [{**r, "batch": batch["id"]}
                         for r in run_variants(view, PauseSettingsFake(tmp_path, **switches), axis="window.mode")]
@@ -1191,12 +1292,14 @@ def _run_1194(tmp_path, d, **switches):
 
 
 def test_1194_every_pause_and_settings_case_is_converted_none_dropped_across_the_four_batches():
+def test_1194_every_pause_and_settings_case_is_converted_none_dropped():
     steps = _steps_1194(_pilot_1194())
     for case in CASES_1194:
         assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
 
 
 def test_1194_the_four_batches_run_end_to_end_in_both_window_modes(tmp_path):
+def test_1194_the_pause_and_settings_batches_run_end_to_end_in_both_window_modes(tmp_path):
     d = _pilot_1194()
     results = _run_1194(tmp_path, d)
     bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
@@ -1228,3 +1331,148 @@ def test_1194_a_done_the_pad_cannot_reach_fails_every_tab(tmp_path):
     results = _run_1194(tmp_path, _pilot_1194(), done_unreachable=True)
     failed = {r["id"] for r in results if r["verdict"].startswith("failed")}
     assert {f"settings.{t}-done-reachable" for t in ("display", "look", "audio", "controls", "system")} <= failed
+
+
+# --- #1195: the pilot's controller sheet, port lamps, hot-plug, focus-loss and pad-loss cases ---
+
+from tests.gui_test_pilot_fake_1195 import ControllerFake  # noqa: E402
+
+CASES_1195 = [f"CTL-0{n}" for n in range(1, 6)] + [f"LAMP-0{n}" for n in range(1, 4)] + [f"LOSS-0{n}" for n in range(1, 5)]
+BATCHES_1195 = ("controller", "controller-done", "controller-b", "controller-no-game", "lamps", "lamps-game", "loss")
+PILOT_1195 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1195.json"
+PHYSICAL_1195 = {"lamp.four-lamps-p1", "lamp.second-pad-hotplug", "loss.focus-lost-pauses", "loss.pad-unplug-pauses",
+                 "loss.pad-off-mid-menu", "loss.pad-sleep", "ctl.bind-extra-button"}
+
+
+def _pilot_1195():
+    d = json.loads(PILOT_1195.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1195(d):
+    return [s for b in d["batches"] if b["id"] in BATCHES_1195 for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def _run_1195(tmp_path, d, **switches):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in BATCHES_1195:
+            view = {**d, "batches": [batch]}
+            results += [{**r, "batch": batch["id"]}
+                        for r in run_variants(view, ControllerFake(tmp_path, **switches), axis="window.mode")]
+    return results
+
+
+def test_1195_every_controller_lamp_and_loss_case_is_converted_none_dropped():
+    steps = _steps_1195(_pilot_1195())
+    for case in CASES_1195:
+        assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
+
+
+def test_1195_the_batches_run_end_to_end_and_physical_cases_stay_manual(tmp_path):
+    d = _pilot_1195()
+    results = _run_1195(tmp_path, d)
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
+    assert bad == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    manual = {s["id"] for s in _steps_1195(d) if s["mode"] == "manual"}
+    assert PHYSICAL_1195 <= manual
+    assert {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
+    automated = {s["id"] for s in _steps_1195(d) if s["mode"] == "automated"}
+    assert automated <= {r["id"] for r in results if r["verdict"] == "passed"}
+
+
+def test_1195_a_physical_only_step_has_no_action_so_nothing_is_faked():
+    for s in _steps_1195(_pilot_1195()):
+        if s["id"] in PHYSICAL_1195:
+            assert s["mode"] == "manual" and "action" not in s and "check" not in s
+
+
+def test_1195_a_sheet_that_does_not_open_fails_that_step_and_the_run(tmp_path):
+    from squad.gui_test_run import failed as run_failed
+    results = _run_1195(tmp_path, _pilot_1195(), sheet_opens=False)
+    assert "ctl.open-sheet" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+    assert run_failed(results)
+
+
+def test_1195_a_capture_that_b_does_not_cancel_fails_the_step(tmp_path):
+    results = _run_1195(tmp_path, _pilot_1195(), b_cancels_capture=False)
+    assert "ctl.b-cancels-capture" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+
+
+# --- #1196: the pilot's full screen, sizes and dialogs no-trap cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake_1196 import TRAP_SURFACES, TrapFake  # noqa: E402
+
+BATCHES_1196 = ("fullscreen-switch", "fullscreen-exit", "fullscreen-notes", "fullscreen-extra-large", "trap")
+PILOT_1196 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1196.json"
+CASES_1196 = [f"FS-0{n}" for n in range(1, 6)] + [f"TRAP-0{n}" for n in range(1, 5)]
+
+
+def _pilot_1196():
+    d = json.loads(PILOT_1196.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1196(d):
+    return [s for b in d["batches"] if b["id"] in BATCHES_1196 for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def _run_1196(tmp_path, d, **switches):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in BATCHES_1196:
+            view = {**d, "batches": [batch]}
+            results += [{**r, "batch": batch["id"]}
+                        for r in run_variants(view, TrapFake(tmp_path, **switches), axis="window.mode")]
+    return results
+
+
+def test_1196_every_full_screen_sizes_and_trap_case_is_converted_none_dropped():
+    steps = _steps_1196(_pilot_1196())
+    for case in CASES_1196:
+        assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
+
+
+def test_1196_every_trap_01_surface_the_pilot_names_has_a_b_step():
+    ids = {s["id"] for s in _steps_1196(_pilot_1196())}
+    for surface in TRAP_SURFACES:
+        assert f"trap.{surface}-b-closes" in ids or f"trap.{surface}-b" in ids, surface
+    assert len(TRAP_SURFACES) == 23 and {"trap.setup-sheet-b", "trap.tools-sheets-b"} <= ids
+
+
+def test_1196_the_batches_run_end_to_end_in_the_modes_they_are_tagged_for(tmp_path):
+    d = _pilot_1196()
+    results = _run_1196(tmp_path, d)
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
+    assert bad == []
+    steps = _steps_1196(d)
+    tagged = {s["id"]: s.get("variants", {}).get("window.mode") for s in steps}
+    for r in results:
+        assert tagged[r["id"]] in (None, r["variant"]), r
+    assert {r["variant"] for r in results if tagged[r["id"]] == "fullscreen"} == {"fullscreen"}
+    assert {r["variant"] for r in results if tagged[r["id"]] == "windowed"} == {"windowed"}
+    manual = {s["id"] for s in steps if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    automated = {s["id"] for s in steps if s["mode"] == "automated"}
+    assert automated <= {r["id"] for r in results if r["verdict"] == "passed"}
+
+
+def test_1196_a_surface_b_does_not_close_fails_that_surface_and_the_run(tmp_path):
+    from squad.gui_test_run import failed as run_failed
+    results = _run_1196(tmp_path, _pilot_1196(), stuck={"play.pack.detail"})
+    assert {r["id"] for r in results if r["verdict"].startswith("failed")} >= {"trap.pack-detail-b-closes"}
+    assert run_failed(results)
+
+
+def test_1196_a_native_dialog_left_open_fails_the_no_native_dialog_check(tmp_path):
+    results = _run_1196(tmp_path, _pilot_1196(), native_dialog_on={"play.cheats.add-code"})
+    assert "trap.add-a-code-no-native-dialog" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+
+
+def test_1196_exit_full_screen_that_drops_the_sheet_fails_fs_02(tmp_path):
+    results = _run_1196(tmp_path, _pilot_1196(), exit_drops_sheet=True)
+    assert "fs.exit-a-sheet-stays" in [r["id"] for r in results if r["verdict"].startswith("failed")]
