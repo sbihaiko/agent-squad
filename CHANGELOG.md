@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: the pre-push checklist forbids an invented owner go-ahead: an ADR amendment needs a quote present word for word in the request, else the conflicting change is undone.
 - squad-goal: `stack.sh` dispatches on Code Complete (owner's pick 2026-10-10): a Code Complete blocker no longer gates; with a PR it stacks, with fork-only work its unmerged fork branch is named (`READY FORK <br>`) and `autofrontier.sh` tells the child to merge it into its own fork branch first.
 - squad-goal: `wtclean.sh` also drops stale `acpr.sh` trees (and `acpr.sh` removes its tree on kill), closed fork-only issue worktrees with their merged branch, `~/wt-*` worktrees of merged PRs, and each child worktree as soon as that child has an outcome (no longer waiting for the whole run).
 - squad-goal forkclose: a merge conflict launches a conflict-fix squad run on the fork branch (base merged in, both sides kept); its new head re-arms the close. The hub labels such runs `merge #N`.
