@@ -1,0 +1,199 @@
+{
+  "format": "gui-test/1",
+  "name": "composition-editor-runbook",
+  "target": "compose-editor",
+  "requires": {
+    "actions": [
+      "pointer.click",
+      "key.press"
+    ],
+    "checks": [
+      "ui.screen",
+      "ui.focused",
+      "fs.exists",
+      "log.contains"
+    ]
+  },
+  "variants": {},
+  "fixtures": {
+    "pack": "a compose-ready pack recorded through the F9 pipeline whose textures/sheets/adjacency.json exists (F9.17+)",
+    "note": "Runbook section 1 (F9.18, ADR-0164/0165/0166): the tkinter view driven by pointer and text input, judged by files on disk; the pass lines that need a person stay manual. Control ids are provisional."
+  },
+  "batches": [
+    {
+      "id": "compose",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "compose.seed",
+          "role": "under-test",
+          "precondition": "the editor is open on the pack",
+          "action": {
+            "name": "pointer.click",
+            "args": {
+              "target": "compose.cell.obj-0",
+              "ticks": 1
+            }
+          },
+          "wait": {
+            "check": "ui.focused == compose.cell.obj-0",
+            "timeout_ticks": 20
+          },
+          "expect": "seeding a cell selects it",
+          "severity": "major",
+          "mode": "automated",
+          "check": {
+            "name": "ui.focused",
+            "args": {
+              "is": "compose.cell.obj-0"
+            }
+          }
+        },
+        {
+          "id": "compose.lock",
+          "role": "under-test",
+          "precondition": "the editor is open on the pack",
+          "action": {
+            "name": "pointer.click",
+            "args": {
+              "target": "compose.neighbor.strongest",
+              "ticks": 1
+            }
+          },
+          "wait": {
+            "check": "ui.screen == compose.locked",
+            "timeout_ticks": 20
+          },
+          "expect": "locking the strongest neighbor on the object layer recomputes the scene",
+          "severity": "major",
+          "mode": "automated",
+          "check": {
+            "name": "ui.screen",
+            "args": {
+              "is": "compose.locked"
+            }
+          }
+        },
+        {
+          "id": "compose.floor-band",
+          "role": "under-test",
+          "precondition": "the editor is open on the pack",
+          "action": {
+            "name": "pointer.click",
+            "args": {
+              "target": "compose.band.sprite-0",
+              "ticks": 1
+            }
+          },
+          "wait": {
+            "check": "ui.screen == compose.banded",
+            "timeout_ticks": 20
+          },
+          "expect": "a floor band of the sprite layer composes",
+          "severity": "major",
+          "mode": "automated",
+          "check": {
+            "name": "ui.screen",
+            "args": {
+              "is": "compose.banded"
+            }
+          }
+        },
+        {
+          "id": "compose.export",
+          "role": "under-test",
+          "precondition": "the editor is open on the pack",
+          "action": {
+            "name": "pointer.click",
+            "args": {
+              "target": "compose.export",
+              "ticks": 1
+            }
+          },
+          "wait": {
+            "check": "fs.exists auto/textures/sheets/usr001.png == true",
+            "timeout_ticks": 20
+          },
+          "expect": "export writes a kept usrNNN sheet",
+          "severity": "major",
+          "mode": "automated",
+          "check": {
+            "name": "fs.exists",
+            "args": {
+              "path": "auto/textures/sheets/usr001.png",
+              "is": true
+            }
+          }
+        },
+        {
+          "id": "compose.save",
+          "role": "under-test",
+          "precondition": "the editor is open on the pack",
+          "action": {
+            "name": "pointer.click",
+            "args": {
+              "target": "compose.save",
+              "ticks": 1
+            }
+          },
+          "wait": {
+            "check": "fs.exists mep/textures/sheets/usr001.png == true",
+            "timeout_ticks": 20
+          },
+          "expect": "save promotes the edited sheet from auto/ to mep/ (ADR-0164 4) and says so",
+          "severity": "major",
+          "mode": "automated",
+          "check": {
+            "name": "fs.exists",
+            "args": {
+              "path": "mep/textures/sheets/usr001.png",
+              "is": true
+            }
+          }
+        },
+        {
+          "id": "compose.save-says-so",
+          "role": "under-test",
+          "precondition": "the editor is open on the pack",
+          "action": {
+            "name": "key.press",
+            "args": {
+              "key": "Return",
+              "ticks": 1
+            }
+          },
+          "wait": {
+            "check": "log.contains == promoted to mep/",
+            "timeout_ticks": 20
+          },
+          "expect": "the save dialog names the promotion",
+          "severity": "major",
+          "mode": "automated",
+          "check": {
+            "name": "log.contains",
+            "args": {
+              "is": "promoted to mep/"
+            }
+          }
+        },
+        {
+          "id": "compose.reslice",
+          "role": "under-test",
+          "precondition": "an exported composed sheet exists",
+          "expect": "the exported sheet re-slices headless without error and its painted crops reproduce the composed cells",
+          "severity": "major",
+          "mode": "manual"
+        },
+        {
+          "id": "compose.survives-bootstrap",
+          "role": "under-test",
+          "precondition": "an edit was saved to mep/",
+          "expect": "the saved edit survives a re-run of the bootstrap",
+          "severity": "major",
+          "mode": "manual"
+        }
+      ]
+    }
+  ]
+}
