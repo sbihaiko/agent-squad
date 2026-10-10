@@ -2,7 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
-- autofix.sh: a conflict on a PR stacked on an OPEN parent now asks for a rebase onto the parent's branch (the PR's base), not onto `main`, which would replay the parent's commits; `test-autofix.sh` covers both cases.
+- autofix.sh: a conflict on a PR stacked on an OPEN parent now asks for a rebase onto the parent's branch (the PR's base), not onto `main`, which would replay the parent's commits; the text also tells the run to replay only the PR's own commits when the parent was rewritten; `test-autofix.sh` covers it.
 - autopilot/autopanel: `grep -c . f || echo 0` printed "0" twice on an empty round file, so a PR went to the panel with 0 rounds spent; counts now default to 0.
 - review.sh: the Claude reviewer reads its effort from `models.json` `efforts.review_models` (default medium).
 - squad-goal: `review_models` starts with `claude:claude-opus-5-5` again (owner, 2026-10-10: "ponha o opus de volta na frente"); after the rc fix (bug #1215) Gemini still answered empty with exit 0 and Grok timed out, about 5 min per review before Opus.

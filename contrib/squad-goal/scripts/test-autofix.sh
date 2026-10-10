@@ -20,4 +20,5 @@ unset GH_BASE; r=$(run); case "$r" in *"Rebase onto origin/main"*) ok "main base
 export GH_BASE=feat/parent; r=$(run)
 case "$r" in *"Rebase onto origin/feat/parent"*) ok "stacked on an open parent: rebase onto the parent's branch";; *) ko "stacked: '$r'";; esac
 case "$r" in *"onto origin/main"*) ko "stacked: still mentions rebasing onto main";; *) ok "stacked: no rebase onto main";; esac
+case "$r" in *"only this PR's own commits (message says Refs #8"*) ok "stacked: replays only the PR's own commits";; *) ko "stacked: no own-commits hint";; esac
 rm -rf "$T"; exit $fail
