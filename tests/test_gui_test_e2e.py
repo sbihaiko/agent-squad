@@ -266,28 +266,11 @@ def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
     assert caps["input_families"] == ["ticks"]
 
 
-def _slice_batch(b, ids):
-    """Keep only the asked-for steps of `b`, in every role.
-
-    A batch's `setup`/`teardown` are steps too, and the runner runs `setup + steps` in the batch's own process
-    (`squad.gui_test_supervise.run_supervised`), so a setup step left behind by the id filter is not inert: it
-    opens a process the caller did not ask for and lands in the results as a row of its own. The pilot's `home`
-    batch carries one (`home.ring-at-launch`, #1232, "the home has settled with the ring on its one action"), and
-    keeping it while dropping the batch's other steps turned the continuation below into a second batch. Dropping it
-    costs nothing: every slice that asks for the batch's steps also asks for `launch.open-rom-focused`, which waits
-    for the same `ui.focused == play.home.open-rom` inside the same (merged) process.
-    """
-    for role in ("setup", "teardown"):
-        b[role] = [s for s in b.get(role, []) if s["id"] in ids]
-    b["steps"] = [s for s in b["steps"] if s["id"] in ids]
-    return b
-
-
 def _pilot_slice(ids):
     """The pilot's own steps by id, in their own batches, with `requires` trimmed to what the adapter advertises."""
     d = json.loads((_mesenai() / "docs" / "validation" / "process" / PILOT).read_text(encoding="utf-8"))
     for b in d["batches"]:
-        _slice_batch(b, ids)
+        b["steps"] = [s for s in b["steps"] if s["id"] in ids]
     d["batches"] = [b for b in d["batches"] if b["steps"]]
     d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
     d["variants"] = {"window.mode": ["windowed"]}
@@ -1326,25 +1309,20 @@ def _adapter_class(root):
 
 
 def _pilot_for_the_real_app(ids):
-    """The pilot's own steps, each batch keeping only `ids` (in every role); the launch/home steps need no rom or pack, so those fixtures are dropped."""
+    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom, so the rom and the other fixtures are dropped."""
+    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom or pack, so those fixtures are dropped."""
     d = json.loads((_mesenai_root() / "docs" / "validation" / "process" / PILOT).read_text(encoding="utf-8"))
     for b in d["batches"]:
-        _slice_batch(b, ids)
+        b["steps"] = [s for s in b["steps"] if s["id"] in ids]
     d["batches"] = [b for b in d["batches"] if b["steps"]]
-    # The runner opens one fresh application process per batch (ADR-0272 item 6), so a batch that carries no setup
-    # step can only run as the continuation of the batch before it. The pilot's `home` batch is exactly that: its
-    # steps are preconditioned on `ui.focused == play.home.open-rom`, the state its preceding `launch` batch
-    # establishes, and the Home's first focus lands a few ticks after the window opens. A second process would press
-    # the pad at a Home that has focused nothing yet, so the continuation stays in the session of the batch before.
-    kept = []
-    for b in d["batches"]:
-        if kept and not b["setup"]:
-            kept[-1]["steps"] = kept[-1]["steps"] + b["steps"]
-        else:
-            kept.append(b)
-    d["batches"] = kept
     d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
     d["variants"] = {"window.mode": ["windowed"]}
+    # The three steps need no rom and none of the pilot's other fixture kinds (packs, second rom, zip, fds, library):
+    # the adapter refuses kinds it does not support, so only its settings profiles are kept.
+    d["fixtures"] = {"settings": d["fixtures"]["settings"]}
+    # The pilot also declares fixtures for its other steps (rom-second, rom-zip, rom-fds, pack, ...); these three
+    # need none of them, and the adapter refuses a kind it does not place, so only the profile and the note stay.
+    d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k in ("settings", "note")}
     # The three steps need no rom and no pack: keep only the settings fixture, the one kind every adapter build supports
     # (the pilot also declares pack/rom-* kinds for its later batches, which the adapter rejects at launch).
     d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k == "settings"}
@@ -2022,15 +2000,6 @@ HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-
 # pilot says its ids are provisional until the in-app AutomationIds land (#1182). It is the one step this can fail on
 # today, and it is asserted as a subset so the case keeps its meaning when that slice lands and the step passes.
 HOME_BATCH_MAY_FAIL = {"home.open-library"}
-
-
-def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
-    """The runner opens one process per batch (ADR-0272 item 6), so the pilot's launch -> home continuation stays one batch."""
-    d = _pilot_for_the_real_app(HOME_BATCH_IDS)
-    assert [b["id"] for b in d["batches"]] == ["launch"], [b["id"] for b in d["batches"]]
-    assert [s["id"] for b in d["batches"] for s in b["steps"]] == HOME_BATCH_IDS
-    for b in d["batches"][1:]:
-        assert b["setup"], f"batch {b['id']} carries no setup step, so only the batch before it can open it"
 
 
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
