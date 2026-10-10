@@ -6,6 +6,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- wtclean.sh: cleans the worktrees of a zombie run (no verdict, record.jsonl idle >20 min, no process inside the run folder) under the usual clean-tree / HEAD-on-a-remote-branch rules; before, a run that died without a verdict kept its worktree forever (the #1177 run). `test-wtclean.sh` covers it.
 - autofix.sh: a fix run is told that findings needing a push to the agent-squad fork are out of its scope (it has no write access; forkclose.sh lands them after the merge), so PRs with a fork-only finding stop ending the run needs-human and burning a round (#1209, #1212); `test-autofix.sh` covers it.
 - review.sh: when the reviewer narrates before the verdict, the saved review now starts with the `VERDICT: APPROVE|CHANGES` line (revci/autopilot read line 1; a narrated first line left PR #1211 unclassified); `test-review.sh` covers it.
 - janitor rule F (report-only): an open issue named `(#N)` in a `local/next` commit subject older than 30 min, with no open PR naming it, prints `FIXED-NOT-CLOSED #N` once; it never closes. janitor.sh passes SG_FORK_DIR/SG_FORK_BASE/SG_REPO; `test-janitor-f.sh` covers it.
