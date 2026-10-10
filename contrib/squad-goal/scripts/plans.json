@@ -1,0 +1,28 @@
+{
+  "claude": {
+    "plan": "max20",
+    "amount": 200,
+    "currency": "USD",
+    "quota": null,
+    "qwin": null
+  },
+  "grok": {
+    "plan": "super",
+    "amount": 30,
+    "currency": "USD",
+    "quota": null,
+    "qwin": null
+  },
+  "gpt": {
+    "plan": "plus",
+    "amount": 20,
+    "currency": "USD",
+    "quota": null,
+    "qwin": null
+  },
+  "gemini": {
+    "plan": "custom",
+    "amount": 24.99,
+    "currency": "BRL"
+  }
+}
