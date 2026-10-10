@@ -16,9 +16,18 @@ echo $$ > "$L/pid"
 trap 'rm -rf "$L"' EXIT
 G="/usr/bin/git -C $SG_FORK_DIR"
 now=$(date +%s)
+# The branches a live run is working on: a squad child runs from its own run ws, so a `git -C` on the fork worktree leaves
+# no cwd inside it and the test below would call every branch orphaned while its fix run is mid-edit. A run is live when
+# its record was touched inside the orphan window, and it names the branch it was launched for.
+livebrs=" $(for r in $(ls -t "$SG_CHECKOUT/runs" 2>/dev/null | head -60); do
+  f="$SG_CHECKOUT/runs/$r/record.jsonl"; [ -f "$f" ] || continue
+  [ $(( now - $(stat -f %m "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+  grep -oE 'gui/[0-9]+' "$SG_CHECKOUT/runs/$r/request.txt" 2>/dev/null | sort -u | tr '\n' ' '
+done) "
 # A branch ahead of the base with nobody on it and no recent commit: the fix run meant to move it is gone. Without this its
 # card (In Progress) and its marker (fork-<n>-<head>) would park it forever: a wait whose only release is a process that died.
 orphan() { local b=$1 w t
+  case "$livebrs" in *" $b "*) return 1;; esac
   w=$($G worktree list --porcelain | awk -v x="refs/heads/$b" '/^worktree /{p=$2} $0=="branch "x{print p}')
   [ -n "$w" ] || return 1
   printf '%s\n' "$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" | grep -qF "$w/" && return 1

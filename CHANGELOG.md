@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.11 (local fork, 2026-10-10)
+- squad-goal: the orphan guard tells a live fix run from a dead one. It called `gui/1222` orphaned while its fix run was mid-edit, because a squad child works the fork branch from its own run ws (`git -C`), so no cwd ever sits inside the branch worktree and the cwd test could never see it. `forkclose.sh` now builds the set of branches a live run names (record touched inside the orphan window, branch read from the run's `request.txt`) once per pass, and treats those as worked on. Without it the card was re-armed on every cycle the fix ran, which is the churn the guard was written to prevent.
+- squad-goal: an atomic script rewrite keeps the file's mode. `forkclose.sh` is the one script `single.sh` executes by path, so losing `+x` to a `tmp` + `mv` rewrite stopped the fork-close step with `Permission denied` for a cycle; the rewrite helper now restores 0755.
+
+
 ## 0.2.10 (local fork, 2026-10-10)
 - squad-goal: one red is not proof the base is broken. The base-red guard fired on `local/next` at 915361e13 over a single full-suite failure (`home.focus-holds-right`, a hold step that loses the window to a suite running in parallel), and parked every branch on it - while that same test passes in isolation on the same head. `forkclose.sh` now requires `${SG_FORK_BASERED_TRIES:-2}` consecutive reds per base head before it writes `basered-<sha>` (`FORKCLOSE BASE-FLAKE` names the retry, which just skips the cycle), and clears the counter on a green.
 
