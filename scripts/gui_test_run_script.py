@@ -15,7 +15,9 @@ variant value the adapter does not advertise is rejected before launch, naming w
 
 The environment is a precondition, never a skip: `MESENAI_ROOT` without `scripts/gui_test`, `MESEN_GUI_BINARY` that is
 not a file, or a native core that cannot be loaded makes the run fail with a non-zero exit and no step result at all.
-A skipped run is exactly the green-but-blind CI the ADR names as the trap.
+A skipped run is exactly the green-but-blind CI the ADR names as the trap. `MESEN_GUI_WINDOW` is part of that
+environment but not a precondition: the adapter reads it from its own environment, so the runner hands it on unchanged
+and never checks it — unset is the mode the adapter already defaults to.
 
 Verdicts, one per step in script order: `passed`, `failed (expected X, observed Y)`, `failed (unknown id)`,
 `failed (timeout waiting for ...)`, `needs review` (an automated step nothing objective decided and no model saw,
@@ -79,7 +81,7 @@ EXECUTED = ("passed", "failed", "needs review")  # `pending` is a step nobody ra
 ADAPTERS = {
     "mesen-gui": {
         "spec": "mesen_gui_adapter:MesenGuiAdapter",
-        "env": ("MESENAI_ROOT", "MESEN_GUI_BINARY", "MESEN_CORE_LIB"),
+        "env": ("MESENAI_ROOT", "MESEN_GUI_BINARY", "MESEN_CORE_LIB", "MESEN_GUI_WINDOW"),
         "repo": "sbihaiko/MesenAI",
     },
 }
@@ -102,7 +104,12 @@ def build_sha(root):
 
 
 def env_problems(names):
-    """Every problem with the environment the adapter needs; an empty list means it can run."""
+    """Every problem with the environment the adapter needs; an empty list means it can run.
+
+    Only the names with a precondition of their own are checked. A declared name that is a pass-through — the
+    adapter's own `MESEN_GUI_WINDOW`, which it reads itself, unset meaning the mode it defaults to — is handed on
+    unchanged and is never a problem here, so naming it never turns a run red on its own account.
+    """
     bad = []
     root = os.environ.get("MESENAI_ROOT", "")
     if "MESENAI_ROOT" in names and not (root and (Path(root) / "scripts" / "gui_test").is_dir()):
