@@ -2274,6 +2274,10 @@ function scriptModule() {
       if (e.event === "gui_capture") { n.held = e.held === true; n.capture = { path: n.held ? null : e.path, size: e.size, sha256: e.sha256 }; sources.set(e.node, e.path); }
       if (e.event === "gui_approve" && n.capture && n.capture.sha256 === e.sha256) { n.held = false; n.capture.path = sources.get(e.node); }
       if (e.event === "gui_verdict") { n.verdict = e.verdict; n.status = e.verdict === "pending" ? "pending" : n.capture ? "executed" : "failed"; }
+      // A vision verdict shows what the model saw and what the call cost; a run stopped by its spend cap marks the skipped steps.
+      if (e.event === "gui_vision") { n.vision = { answer: e.answer, saw: e.saw, cost: e.cost }; n.cost = e.cost; }
+      if (e.event === "gui_stop") n.stop = e.reason;
+      if (e.event === "gui_verdict" && String(e.verdict).startsWith("skipped")) n.status = "skipped";
     }
     return [...nodes.values()];
   }
