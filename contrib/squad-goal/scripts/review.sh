@@ -49,6 +49,9 @@ hours_ok() { local k=$1 m=$2 w h a b; w=$(jq -r --arg k "$k" --arg m "$m" '.hour
   if [ "$a" -le "$b" ]; then { [ "$h" -ge "$a" ] && [ "$h" -lt "$b" ]; } else { [ "$h" -ge "$a" ] || [ "$h" -lt "$b" ]; }; fi; }
 r=$(python3 "$(dirname "$0")/codex-reset.py"); [ -n "$r" ] && echo "$r" > "$SG_STATE/codex-limited"   # a full Codex window (hub quota) skips codex before any try
 out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev=""
+# autopilot's age SLA (a PR open past SG_AGE_MINUTES) pins the review to one model and one try: an old PR may not
+# spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
+[ -n "${SG_REVIEW_RETRY_BUDGET:-}" ] && tries=$SG_REVIEW_RETRY_BUDGET
 # fast lane: a PR whose files are all docs (docs/**, *.md) or tests (*Tests*/**, test_*, *_test.*, tests/**) is reviewed by the
 # FASTEST review model (median latency of its successful tries in review-times.tsv; config order breaks ties), at low effort;
 # the rest of the chain is only its infrastructure fallback. Product code keeps the configured order. SG_REVIEW_FASTLANE=no: off.
@@ -71,6 +74,9 @@ PY
 )
   fi
 fi
+# SG_REVIEW_CHAIN_DEPTH bounds how many models an aging PR may burn (autopilot sets 1). It counts only models that
+# are actually tried, so a chain whose head is out of quota still falls through instead of ending BLOCKED untried.
+used=0
 for m in $chain; do
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
   case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && continue;; esac
@@ -80,8 +86,11 @@ for m in $chain; do
   if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # outside its window the model is skipped like an unhealthy one: the chain moves on, and no MODEL_FAIL is written
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$SG_STATE/cq/$iss-mhours$$.md"; continue; }
+  [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
+  used=$((used+1))
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s for PR #%s (previous model failed %s times).\n" "$prev" "$m" "$pr" "$tries" > "$SG_STATE/cq/$iss-mswitch$$.md"
-  tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
+  tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for an aging PR
+  [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)
     case $m in

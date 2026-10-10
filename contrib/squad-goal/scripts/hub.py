@@ -320,9 +320,14 @@ def speed():
     kills = []
     try: kills = [int(x.split()[0]) for x in open(HUBDIR / "hub-kills.log") if x.strip()]
     except OSError: pass
+    openp = []; now_ts = time.time()   # epoch arithmetic: dt.UTC needs 3.11 and this must run on the system python3 too
+    for x in board_cache.get("prs", []):
+        try: openp.append({"n": x["n"], "min": round((now_ts - dt.datetime.fromisoformat(x["o"].replace("Z", "+00:00")).timestamp()) / 60)})
+        except Exception: pass
+    openp.sort(key=lambda r: -r["min"])
     done = [r["dur"] for r in all_runs() if r["done"] and r["dur"] > 0]
     today = [r["dur"] for r in all_runs() if r["done"] and r["dur"] > 0 and time.localtime(r["t0"])[:3] == time.localtime()[:3]]
-    return {"baseline": BASE, "pr": {"after": agg(after), "series": [{"n": r["n"], "min": r["min"], "after": r["merged"] >= cut} for r in rows[-40:]], "stale": bool(prs_cache["err"]) or time.time() - prs_cache["t"] > 1800},
+    return {"baseline": BASE, "pr": {"open": openp[:8], "after": agg(after), "series": [{"n": r["n"], "min": r["min"], "after": r["merged"] >= cut} for r in rows[-40:]], "stale": bool(prs_cache["err"]) or time.time() - prs_cache["t"] > 1800},
             "runs": {"today_median": round(st.median(today), 1) if today else None, "all_median": round(st.median(done), 1) if done else None},
             "rounds": {"prs": len(rounds), "mean": round(st.mean(rounds), 2) if rounds else None}, "kills": {"count": len(kills), "last": max(kills) if kills else None}}
 
@@ -592,7 +597,9 @@ async function pollStats(){try{pollSubs();
    +kr("PRs merged since then","sample size",n,"",0,false)
    +kr("Review rounds per PR","average",sp.rounds.mean,"",null)
    +kr("Hung runs killed","by the heartbeat",sp.kills.count,"",null)
-   +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
+   +((sp.pr.open&&sp.pr.open.length)?`<h4>Open now <small>oldest first · the loop ages a PR past 30 min</small></h4>`
+     +sp.pr.open.map(o=>`<div class=kr><div class=l>#${o.n}</div><b${o.min>=30?' style="color:var(--warn)"':''}>${o.min}<small>min</small></b></div>`).join(""):"")
+  +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
