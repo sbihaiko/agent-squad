@@ -19,7 +19,8 @@ def run(script, adapter, record=None):
             if s["mode"] != "automated":
                 continue
             emit("gui_step", s["id"])
-            adapter.inject(s["action"]["name"], s["action"].get("args", {}))
+            if "action" in s:
+                adapter.inject(s["action"]["name"], s["action"].get("args", {}))
             cond = s["wait"].get("check")
             capture = None
             if adapter.wait(cond, s["wait"].get("timeout_ticks") or s["wait"]["timeout_frames"]) != "met":
