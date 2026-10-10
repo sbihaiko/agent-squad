@@ -82,21 +82,23 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=
                 emit("gui_verdict", s["id"], verdict=verdict)
                 results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": False})
                 continue
-            emit("gui_step", s["id"], action=s["action"]["name"], **({"check": s["check"]} if "check" in s else {}))
-            if s["action"]["name"] == "nav.goal":
+            action = s.get("action")  # an observe-only step (the validator allows it) injects nothing
+            emit("gui_step", s["id"], **({"action": action["name"]} if action else {}),
+                 **({"check": s["check"]} if "check" in s else {}))
+            if action and action["name"] == "nav.goal" and "nav.goal" not in adapter.capabilities()["actions"]:
                 missed = "pending" if goal is None else goal.reach(adapter, s, emit, vision)
                 if missed:
                     emit("gui_verdict", s["id"], verdict="pending" if goal is None else f"failed ({missed})")
                     results.append({"id": s["id"], "verdict": "pending" if goal is None else f"failed ({missed})", "capture": None, "held": False})
                     continue
-            elif s["action"]["name"] == "nav.sweep":
+            elif action and action["name"] == "nav.sweep":
                 missed = "pending" if goal is None else goal.sweep(adapter, s, emit, vision)
                 verdict = "pending" if goal is None else f"failed ({missed})" if missed else "passed"
                 emit("gui_verdict", s["id"], verdict=verdict)
                 results.append({"id": s["id"], "verdict": verdict, "capture": None, "held": False})
                 continue
-            else:
-                adapter.inject(s["action"]["name"], s["action"].get("args", {}))
+            elif action:
+                adapter.inject(action["name"], action.get("args", {}))
             cond = s["wait"].get("check")
             capture = None
             timeout = s["wait"].get("timeout_ticks") or s["wait"]["timeout_frames"]

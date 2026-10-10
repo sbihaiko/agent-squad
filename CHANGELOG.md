@@ -2,6 +2,19 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- review.sh: when the reviewer narrates before the verdict, the saved review now starts with the `VERDICT: APPROVE|CHANGES` line (revci/autopilot read line 1; a narrated first line left PR #1211 unclassified); `test-review.sh` covers it.
+- janitor rule F (report-only): an open issue named `(#N)` in a `local/next` commit subject older than 30 min, with no open PR naming it, prints `FIXED-NOT-CLOSED #N` once; it never closes. janitor.sh passes SG_FORK_DIR/SG_FORK_BASE/SG_REPO; `test-janitor-f.sh` covers it.
+- autofix.sh: a conflict on a PR stacked on an OPEN parent now asks for a rebase onto the parent's branch (the PR's base), not onto `main`, which would replay the parent's commits; the text also tells the run to replay only the PR's own commits when the parent was rewritten; `test-autofix.sh` covers it.
+- autopilot/autopanel: `grep -c . f || echo 0` printed "0" twice on an empty round file, so a PR went to the panel with 0 rounds spent; counts now default to 0.
+- review.sh: the Claude reviewer reads its effort from `models.json` `efforts.review_models` (default medium).
+- squad-goal: `review_models` starts with `claude:claude-opus-5-5` again (owner, 2026-10-10: "ponha o opus de volta na frente"); after the rc fix (bug #1215) Gemini still answered empty with exit 0 and Grok timed out, about 5 min per review before Opus.
+
+- squad-goal: FIX (bug #1215) `review.sh` read `rc=$?` after the superseded test, so every reviewer was logged rc=1 and no PR was reviewed for ~15 min; `rc` is now captured first, and `scripts/test-review.sh` (stubbed gh and claude, RED 3 of 4 on the old order, GREEN 4 of 4) guards it. The same pass adds `janitor.sh`: leftover processes of finished runs, idle dashboards of finished runs, zombie runs dropped from `active-runs.txt`, duplicate-run report, stale `disp-` markers (only for a failed request, an open issue and no PR); dry-run reviewed on live state before enabling.
+
+- squad-goal: review speed round (Fable audit, 54 min open-to-merge, 21.8 min of it in the review chain). `gemini-3.8-flash-medium` leaves the review chain (0 of 30 verdicts headless) and `review_timeout_seconds` is 210; `review.sh` kills the reviewer when the PR head moves during the review; `revci.sh` pins the head sha before the review, so a push during it ends as SUPERSEDED instead of reporting the old verdict on the new head; `retryfix.sh` re-arms a PR sha whose autofix run failed or died (max 2 retries, test-covered with a fake state); `watch.sh` logs any step of 5 s or more to `cycle.log`.
+
+- squad-goal: `revci.sh` reports a conflicting head (`mergeable_state` dirty on two polls, 15 s apart) at once, as `CI=none`, instead of waiting 45 min for checks that never start (a conflicting PR gets no CI); autopilot already turns a dirty line into the conflict-only autofix round. Stub-tested.
+
 - squad-goal: review chain puts `claude:claude-opus-5-5` first. Measured (49 tries): `gemini-3.8-flash-high` ran 30 s and returned no VERDICT in headless mode (a tool call was auto-denied, "no output produced"), twice per PR; `grok-4.6` timed out at 300 s in 12 of 19 tries; Opus averaged 77 s with 0 failures. Every review paid about 6 min before Opus answered; Gemini, Grok and GPT stay as fallbacks.
 - squad-goal: a run that ends `failed` with `no_dispatch` gets one consult: `consult.sh` asks the coding model (`coding_models[0]`, claude-sonnet-5-5) through the CLI whether the request is valid; GO relaunches it once with the answer appended. `launch.py` keeps the request in the run folder (`request.txt`).
 - squad-goal: `autofix.sh` and `forkclose.sh` requests also say "Spawn the child with spend 8"; an autofix run for #1209 was rejected with `spawn_rejected:spend_outside_budget` (router asked for 40).
