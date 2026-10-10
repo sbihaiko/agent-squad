@@ -64,6 +64,8 @@ def _step(s, in_steps, ctx, bad):
         if act["name"] == "nav.goal" and not (act.get("args") or {}).get("goal"):
             bad.append(f"{sid}: nav.goal needs a goal predicate")
         args = act.get("args") or {}
+        if act["name"] == "nav.sweep" and (type(args.get("bound")) is not int or args["bound"] < 1):
+            bad.append(f"{sid}: nav.sweep needs a positive integer bound")
         if "ticks" in args and "frames" in args:
             bad.append(f"{sid}: action has both ticks and frames")
         family = "ticks" if "ticks" in args else "frames" if "frames" in args else None
