@@ -7,8 +7,12 @@
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; own=${SG_REPO%/*} name=${SG_REPO#*/}
 threads() { gh api graphql -f query="query{repository(owner:\"$own\",name:\"$name\"){pullRequest(number:$1){reviewThreads(first:100){nodes{isResolved isOutdated}}}}}" \
   -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false and .isOutdated==false)]|length' 2>/dev/null; }
+dupissue() { local v; v=$(gh api repos/$SG_REPO/issues/$1 -q '.state+" "+(.state_reason//"-")+" "+.title' 2>/dev/null) || return 1
+  [[ $v == "closed not_planned "* || $v == "closed "*" [duplicate"* ]]; }   # exit 0: the issue is closed as a duplicate / not planned
 [ "$1" = --threads ] && { threads "$2"; exit; }
+[ "$1" = --dupissue ] && { dupissue "$2"; exit; }
 pr=$1 iss=$2 notes=${3:-}
+dupissue $iss && { echo "AUTOFIX SKIPPED #$pr: issue #$iss is closed as a duplicate / not planned (the PR is superseded)"; exit 0; }
 read -r ref sha ms pbase < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha+" "+.mergeable_state+" "+.base.ref') || exit 1; pbase=${pbase:-$SG_BASE}   # pbase: the PR's base, a parent PR's branch while stacked
 s9=${sha:0:9}; [ -e "$A/fix-$pr-$s9" ] && [ -z "${AF_DRY:-}" ] && exit 0
 b=$(mktemp); probs=""

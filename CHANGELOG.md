@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3 (local fork, 2026-10-10)
+- squad-goal: a PR whose issue is closed as a duplicate / not planned is superseded, not stuck. `autopilot.sh` checks the issue (every 10 min per PR), writes `auto/dupiss-<pr>-<issue>`, comments once (`SUPERSEDED-ISSUE`) and skips review, fix and merge; `autofix.sh` refuses to launch for such an issue (`--dupissue <n>` exposes the check); janitor rule M no longer reports these PRs as PR-STUCK. The cause: rule I killed every fix run on those PRs, retryfix re-armed them, and the conflict-fix loop (and the `stuck-prs` health cause) never ended. Test: `test-autofix.sh` cases 4.
+- squad-goal: `watch.sh` honours `SG_FORKCLOSE_PAUSED` (profile switch that pauses the fork-close step); `models.json` reorders the coding/review/vision chains and gives the Sonnet vision fallback `low` effort.
+
 ## 0.2.2 (local fork, 2026-10-10)
 - squad-goal: four guards against silent stalls. Janitor rule K re-arms stale `queued-*` markers via `retryfix.sh` when a fix run never started; rule M alerts on PRs stuck (conflict / red CI, no live run); `wtclean.sh` rule L culls loose clean+pushed `~/wt-*` worktrees (never `~/wt-e2e*`: removing them killed every real-emulator launch with `exited (-15) before opening its hook`); `health.sh` + `health-install.sh` publish `health.json` and notify via a launchd agent. Tests: `test-janitor-kmn.sh`, `test-wtclean.sh` (loose cases), `test-health.sh`.
 - squad-goal: runs that never started no longer pile up as "starting" panels: janitor rule J drops a run with no `record.jsonl` after 5 min (kills its dashboard), and `vendor-guard.sh` re-vendors drifted personal skills so `squad start` stops refusing with "vendor/skills is not clean" (the cause: `to-test-scenario` bytes differed from VERSIONS.json, so every dispatch since then did nothing).

@@ -28,6 +28,14 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   fi
   s9=${sha:0:9}; out="$SG_STATE/revci-$pr.out"
   case ",$labels," in *,hold,*|*,needs-human,*) grep -q "^#$pr $s9 .*APPROVE" "$out" 2>/dev/null && { [ -e "$A/hold-$pr-$s9-label" ] || { touch "$A/hold-$pr-$s9-label"; echo "HOLD #$pr @ $s9: label hold/needs-human ($labels)"; }; }; continue;; esac
+  # an issue closed as a duplicate / not planned: its PR is superseded; no review, fix or merge (janitor I kills such runs,
+  # so a fix dispatched here would die and be retried forever). Re-asked every 10 min per PR (an issue can be reopened).
+  ck="$A/isschk-$pr"; [ -e "$A/dupiss-$pr-$iss" ] && [ -n "$(find "$ck" -mmin -10 2>/dev/null)" ] && continue
+  if [ -z "$(find "$ck" -mmin -10 2>/dev/null)" ]; then touch "$ck"
+    if bash "$here/autofix.sh" --dupissue $iss; then
+      [ -e "$A/dupiss-$pr-$iss" ] || { touch "$A/dupiss-$pr-$iss"; printf "PR #%s is superseded: issue #%s is closed as a duplicate / not planned, so the loop will not review, fix or merge it. Close the PR, or point its Refs at the live issue.\n" $pr $iss > "$SG_STATE/cq/$iss-dupiss$pr.md"; echo "SUPERSEDED-ISSUE #$pr: issue #$iss closed as duplicate/not planned; no review, fix or merge"; }
+      continue
+    fi; rm -f "$A/dupiss-$pr-$iss"; fi
   line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
