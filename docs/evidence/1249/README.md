@@ -29,7 +29,7 @@ doors are the fake runner.
 ## RED, before the change
 
 ```bash
-cd ~/wt-as-1249 && MESENAI_REPO=~/wt-e2e uv run --extra dev pytest tests/test_gui_test_e2e.py -k 1249 -q
+cd ~/wt-as-1249 && uv run --extra dev pytest tests/test_gui_test_e2e.py -k 1249 -q
 # ImportError: cannot import name 'bug_title' from 'squad.gui_test_report'
 ```
 
@@ -43,12 +43,21 @@ ERROR tests/test_gui_test_e2e.py
 ## GREEN, at this branch's head
 
 ```bash
-cd ~/wt-as-1249 && MESENAI_REPO=~/wt-e2e uv run --extra dev pytest tests/test_gui_test_e2e.py -k 1249 -q
-# 6 passed, exit 0
-cd ~/wt-as-1249 && MESENAI_REPO=~/wt-e2e uv run --extra dev pytest tests/test_gui_test_e2e.py -p no:randomly -k "1190 or 1241 or 1222"
-# 1 failed, 24 passed: the one failure is environment-gated (test_1222_the_pilot_home_batch_runs_through_the_command_
-# against_the_native_core asserts MESENAI_ROOT, a MesenAI checkout holding scripts/gui_test), and is pre-existing
+cd ~/wt-as-1249 && uv run --extra dev pytest tests/test_gui_test_e2e.py -k 1249 -p no:randomly
+# 6 passed, exit 0 — the #1249 cases need no MESENAI_REPO and no built launcher
+cd ~/wt-as-1249 && uv run --extra dev pytest tests/test_gui_test_e2e.py -p no:randomly -k "1249 or 1190 or 1241"
+# 21 passed
+cd ~/wt-as-1249 && uv run --extra dev pytest tests/test_gui_test_e2e.py -p no:randomly -k "1222 and not pilot"
+# 9 passed
 ```
+
+The rest of that suite needs things this machine has not got: `MESENAI_APP` (a built launcher carrying the test hook)
+and `MESENAI_ROOT` (the checkout holding `scripts/gui_test`). `~/wt-e2e`, the read-only checkout of MesenAI `main` the
+pilot cases read, was removed by another session part-way through this work — the failures it explains
+(`test_reverse_drift_*`, the pilot diagram/publish cases) name the missing checkout, and none of them touch the report
+path this issue changes. `tests/test_scripts_manifest.py::test_manifest_is_complete_and_true` and
+`tests/test_repo_hygiene.py::test_no_finished_worktree_is_left_behind` fail on `local/next` untouched too (no manifest
+row for `scripts/gui_test_run_script.py`; the sibling worktrees this shared fork currently holds).
 
 ## Two runs proving the interface
 
