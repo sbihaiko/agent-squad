@@ -8,7 +8,7 @@ While waiting for the run folder it watches the child: if squad exits first, it 
 import json, os, pathlib, socket, subprocess, sys, time
 
 here = pathlib.Path(__file__).resolve().parent
-if not os.environ.get("SG_PROFILE"):   # pick up the profile's SG_* values when env.sh was not sourced
+if not os.environ.get("SG_SQUAD"):   # env.sh not sourced (SG_PROFILE alone selects a profile, it does not load it): pick up its SG_* values, else the run silently uses the installed plugin instead of the profile's fork
     out = subprocess.run(["bash", "-c", f'. "{here}/env.sh" >/dev/null && env'], capture_output=True, text=True).stdout
     os.environ.update(dict(l.split("=", 1) for l in out.splitlines() if l.startswith("SG_") and "=" in l))
 squad = os.environ.get("SG_SQUAD") or json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")))["plugins"]["agent-squad@agent-squad"][0]["installPath"]

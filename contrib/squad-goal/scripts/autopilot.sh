@@ -1,6 +1,7 @@
 #!/bin/bash
 # One pass per watch cycle. Open PRs that name an issue ("Refs #N"):
-#  1. new head sha, no review yet -> start revci.sh detached (review + CI wait)
+#  1. new head sha, no review yet -> prepush.sh gate (process-only problems become a CHANGES verdict with no model review),
+#     else start revci.sh detached (review + CI wait)
 #  2. review+CI done on the head sha: CHANGES, failed CI, merge conflict or unresolved review threads
 #     -> autofix.sh (one agent-squad fix run on the PR branch, every problem in one request), up to AP_MAX_ROUNDS;
 #     past the cap -> autopanel.sh (Opus ruling: one more round, or label needs-human + NEEDS OWNER on the issue)
@@ -40,15 +41,22 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
     [ -e "$A/launched-$pr-$s9" ] && continue
-    touch "$A/launched-$pr-$s9"; nohup bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
+    touch "$A/launched-$pr-$s9"
+    # prepush gate: process-only problems (closing keyword, a cited file missing from the head, profile checks) skip the
+    # model review and go straight to a fix round as a CHANGES verdict (autofix reads review-<pr>.md as usual)
+    pp=; if [ "${SG_PREPUSH_GATE:-yes}" = yes ] && pp=$(bash "$here/prepush.sh" $pr 2>/dev/null; exit $?) ; then :; elif [ -n "$pp" ]; then
+      printf 'Prepush gate (no model review ran)\nVERDICT: CHANGES\n%s\n' "$pp" > "$SG_STATE/review-$pr.md"
+      echo "#$pr $s9 $(gh api repos/$SG_REPO/pulls/$pr -q .mergeable_state 2>/dev/null || echo unknown) CI=skipped VERDICT: CHANGES (prepush)" >> "$out"
+      echo "PREPUSH #$pr @ $s9: $(printf '%s' "$pp" | wc -l | tr -d ' ') process problem(s), fix round without a model review"; continue; fi
+    nohup bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started"; continue
   fi
   [[ $line == *SUPERSEDED* || $line == *CI_TIMEOUT* ]] && continue
   # unresolved threads: asked once per head sha after review+CI (CodeRabbit has posted by then), cached
   tf="$A/threads-$pr-$s9"; [ -e "$tf" ] || bash "$here/autofix.sh" --threads $pr > "$tf"; nt=$(cat "$tf"); nt=${nt:-0}
   ms=$(awk '{print $3}' <<<"$line"); ci=$(sed -n 's/.*CI=\([^ ]*\).*/\1/p' <<<"$line")
-  prob=0 hard=0; [[ $line == *CHANGES* ]] && hard=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
-  [ $hard = 1 ] || [ "$ms" = dirty ] || [ "$nt" -gt 0 ] && prob=1
+  prob=0 hard=0; [[ $line == *CHANGES* && $line != *"(prepush)"* ]] && hard=1; [[ $line == *"(prepush)"* ]] && prob=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
+  [ $hard = 1 ] || [ "$ms" = dirty ] || [ "$nt" -gt 0 ] && prob=1   # a prepush CHANGES is a soft round (process, not code)
   if [ $prob = 1 ]; then
     [ -e "$A/nofix" ] && continue
     [ -e "$A/queued-$pr-$s9" ] && continue; touch "$A/queued-$pr-$s9"
