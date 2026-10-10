@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- review.sh: when the reviewer narrates before the verdict, the saved review now starts with the `VERDICT: APPROVE|CHANGES` line (revci/autopilot read line 1; a narrated first line left PR #1211 unclassified); `test-review.sh` covers it.
 - janitor rule F (report-only): an open issue named `(#N)` in a `local/next` commit subject older than 30 min, with no open PR naming it, prints `FIXED-NOT-CLOSED #N` once; it never closes. janitor.sh passes SG_FORK_DIR/SG_FORK_BASE/SG_REPO; `test-janitor-f.sh` covers it.
 - autofix.sh: a conflict on a PR stacked on an OPEN parent now asks for a rebase onto the parent's branch (the PR's base), not onto `main`, which would replay the parent's commits; the text also tells the run to replay only the PR's own commits when the parent was rewritten; `test-autofix.sh` covers it.
 - autopilot/autopanel: `grep -c . f || echo 0` printed "0" twice on an empty round file, so a PR went to the panel with 0 rounds spent; counts now default to 0.

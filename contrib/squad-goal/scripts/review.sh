@@ -63,6 +63,9 @@ for m in $(jq -r '.review_models[]' "$cfg"); do
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_STATE/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on PR #%s after %ss; next model.\n" "$m" "$pr" "$tmo" > "$SG_STATE/cq/$iss-mtimeout$$.md"; break; }
+    # a reviewer that narrates first leaves the verdict off line 1, which revci/autopilot read: put the (last) APPROVE|CHANGES verdict on line 1
+    if [ $rc = 0 ] && ! head -1 "$out" 2>/dev/null | tr -d '*' | grep -q '^ *VERDICT' && w=$(grep -oE 'VERDICT: *(APPROVE|CHANGES)' "$out" 2>/dev/null | tail -1 | sed -E 's/VERDICT: *//') && [ -n "$w" ]; then
+      { echo "VERDICT: $w"; sed -E 's/VERDICT: *(APPROVE|CHANGES)//' "$out"; } > "$out.n" && mv "$out.n" "$out"; fi
     grep -q 'VERDICT' "$out" 2>/dev/null && [ $rc = 0 ] && { echo "$head" > "$last"; echo "model=$m${delta:+ (fix round, delta)} $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
   done
   printf "MODEL_FAIL review %s on PR #%s: exit %s, %s\n" "$m" "$pr" "$rc" "$(tail -c 300 "$SG_STATE/review-$pr.err" | tr '\n' ' ')" > "$SG_STATE/cq/$iss-mfail$$-$i.md"; prev=$m

@@ -20,7 +20,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > /dev/null; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; echo "VERDICT: APPROVE"; echo "1. fine"
+cat > /dev/null; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; echo "VERDICT: APPROVE"; echo "1. fine"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 out=$(bash "$T/s/review.sh" 7 8); rc=$?
@@ -29,4 +29,6 @@ case "$out" in model=claude:claude-opus-5-5*) ok "reports the model";; *) ko "re
 [ "$(tail -1 "$T/st/review-times.tsv" | awk -F'\t' '{print $5}')" = 0 ] && ok "logs rc 0" || ko "logs rc 0: $(tail -1 "$T/st/review-times.tsv")"
 rm -f "$T/st/review-7.sha"; export GH_MOVE="$T/moved" CLAUDE_SLOW=1; t=$(date +%s); out=$(bash "$T/s/review.sh" 7 8); rc=$?; el=$(( $(date +%s) - t ))
 [ $rc = 1 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && [ $el -lt 35 ] && ok "a push during the review ends it BLOCKED in ${el}s" || ko "superseded: rc=$rc ${el}s $(head -1 "$T/st/review-7.md")"
+# 3) a reviewer that narrates before the verdict: the saved review still starts with the VERDICT line (revci/autopilot read line 1)
+unset GH_MOVE CLAUDE_SLOW; export CLAUDE_NARRATE=1; rm -f "$T/st/review-7.sha"; bash "$T/s/review.sh" 7 8 >/dev/null; [ "$(head -1 "$T/st/review-7.md")" = "VERDICT: CHANGES" ] && ok "narration before the verdict: line 1 is VERDICT" || ko "line 1 is '$(head -1 "$T/st/review-7.md")'"
 rm -rf "$T"; exit $fail
