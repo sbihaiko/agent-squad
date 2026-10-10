@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal forkclose: a merge conflict launches a conflict-fix squad run on the fork branch (base merged in, both sides kept); its new head re-arms the close. The hub labels such runs `merge #N`.
 - squad-goal **autofrontier** (`scripts/autofrontier.sh`): the loop dispatches the startable frontier itself as soon as a blocker falls (one squad start, free slots, wave order, profile preamble).
 - squad-goal **forkclose** (`scripts/forkclose.sh`): fork-only Code Complete work is merged into the fork base, tested through `test.sh` and closed with evidence, or the merge is reverted (`git revert -m 1`) on a red suite.
 - squad-goal `stack.sh`: optimism keys on the blocker's card being in Testing, not on a merged PR that says "Refs #N" (a docs PR citing an issue had unblocked its dependents).
