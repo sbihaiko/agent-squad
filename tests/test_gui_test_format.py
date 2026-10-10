@@ -125,3 +125,23 @@ def reasons_caps(doc, caps):
 def test_unit_must_match_one_unit_per_step():
     s = step("b1.one", action={"name": "pad.press", "args": {"button": "A", "ticks": 1, "frames": 1}})
     assert "ticks and frames" in reasons(script(s))
+
+
+@pytest.mark.parametrize("args,wait_key,family", [
+    ({"frames": 4}, "timeout_ticks", "frames"),
+    ({"ticks": 4}, "timeout_frames", "ticks"),
+])
+def test_action_family_must_match_wait_family(args, wait_key, family):
+    s = step("b1.one", action={"name": "pad.press", "args": {"button": "A", **args}},
+             wait={"check": "ui.focused == a", wait_key: 4})
+    assert f"b1.one: action counts {family} but wait uses {wait_key}" in reasons(script(s))
+
+
+def test_matching_families_are_accepted():
+    validate(script(step("b1.one", action={"name": "pad.press", "args": {"button": "A", "frames": 4}},
+                         wait={"check": "ui.focused == a", "timeout_frames": 4})))
+
+
+def test_action_without_a_family_is_not_compared():
+    validate(script(step("b1.one", action={"name": "nav.goal", "args": {"goal": "ui.screen == play.home"}},
+                         role="setup", wait={"check": "ui.screen == play.home", "timeout_frames": 600})))

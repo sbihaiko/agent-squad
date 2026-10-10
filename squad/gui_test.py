@@ -28,6 +28,8 @@ def _name(kind, ns, name, requires, caps, where, bad):
         bad.append(f"{where}: adapter does not advertise {kind} {name}")
 
 
+# Preconditions are free text in gui-test/1 until a later slice parses them; only
+# actions, checks, waits and variants are validated here.
 def _wait(w, where, bad):
     units = [k for k in ("timeout_frames", "timeout_ticks") if k in w]
     if not units:
@@ -58,6 +60,10 @@ def _step(s, in_steps, ctx, bad):
         args = act.get("args") or {}
         if "ticks" in args and "frames" in args:
             bad.append(f"{sid}: action has both ticks and frames")
+        family = "ticks" if "ticks" in args else "frames" if "frames" in args else None
+        waited = [k for k in ("timeout_frames", "timeout_ticks") if k in (s.get("wait") or {})]
+        if family and len(waited) == 1 and waited[0] != "timeout_" + family:
+            bad.append(f"{sid}: action counts {family} but wait uses {waited[0]}")
     if s.get("check"):
         _name("check", CHECK_NS, s["check"]["name"], ctx["requires"], ctx["caps"], sid, bad)
     if "wait" in s:
