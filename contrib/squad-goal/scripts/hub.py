@@ -218,7 +218,7 @@ def refresh_board():
             if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
         except Exception as e: board_cache["err"] = str(e)[:80]
         time.sleep(60)
-ORDER = ["In Progress", "Testing", "Todo", "Blocked", "No status", "Done"]
+ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
     Worst first: draft, conflict, ci-failed, changes, ci-running, reviewing, ready, merged-soon, awaiting-review."""
@@ -633,10 +633,10 @@ g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEve
 document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const h=new Set(bo.hidden||[]),g=t.dataset.eye;h.has(g)?h.delete(g):h.add(g);bo.hidden=[...h];saveB();pollBoard()},true);
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Testing","Done"],   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
-const col={"Open PRs":"var(--run)","Closed PRs":"var(--run)","In Progress":"var(--warn)",Testing:"var(--pin)",Todo:"#c9d1d9",Blocked:"var(--err)","No status":"#b48ead",Done:"var(--ok)"};
+const col={"Open PRs":"var(--run)","Closed PRs":"var(--run)","In Progress":"var(--warn)","Code Complete":"#a371f7",Testing:"var(--pin)",Todo:"#c9d1d9",Blocked:"var(--err)","No status":"#b48ead",Done:"var(--ok)"};
 $("#bt").textContent=b.err?"(stale)":"";
 const fam=ls=>ls.reduce((o,l)=>{const k=l.includes(":")?l.split(":")[0]:"";(o[k]=o[k]||[]).push(l);return o},{});   // label group = prefix before ":"
 if(bo.label!==undefined){bo.labels=bo.label?[bo.label]:[];delete bo.label;saveB()}   // the single-label filter of the previous version

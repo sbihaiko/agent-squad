@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Board reconciler: derive each tracked issue's Status from GitHub facts and move the card.
-Facts only (no comment-text inference): issue closed -> Done; an open PR naming the issue as "Refs #N" -> Testing
+Facts only (no comment-text inference): issue closed -> Done; an open PR naming the issue as "Refs #N" -> Code Complete (Testing = e2e on the merge, set by the loop)
 (only from Todo/In Progress/Blocked); an open issue whose `## Blocked by` lists an open #M -> Blocked (only from Todo), back to Todo when all are closed; an open `bug` issue absent from the board -> added as Todo.
-Never downgrades (Done stays Done, Testing never goes back). Dry run by default: RECONCILE=apply writes.
+Never downgrades (Done stays Done, Code Complete/Testing never go back). Dry run by default: RECONCILE=apply writes.
 Scope: issues already on board 4 with number >= RECONCILE_MIN (default 1102) plus new `bug` issues."""
 import json, os, re, subprocess, sys
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
@@ -55,7 +55,7 @@ for n, it in sorted(items.items()):
     if not st: continue
     deps = blockers(st.get("body"))
     if st["state"] == "closed" and cur != "Done": move(n, "Done", "issue closed")
-    elif st["state"] == "open" and n in refs and cur in ("Todo", "In Progress", "Blocked", None): move(n, "Testing", f"open PR #{refs[n]}")
+    elif st["state"] == "open" and n in refs and cur in ("Todo", "In Progress", "Blocked", None): move(n, "Code Complete", f"open PR #{refs[n]}")
     elif st["state"] == "open" and deps:
         open_deps = [d for d in deps if is_open(d)]
         if open_deps and cur in ("Todo", None): move(n, "Blocked", "blocked by open " + ", ".join(f"#{d}" for d in open_deps))
@@ -63,7 +63,7 @@ for n, it in sorted(items.items()):
     elif st["state"] == "open" and cur in ("Todo", None) and has_freetext_blocker(st.get("body")): print(f"BOARD NOTE #{n}: 'Blocked by' names no #N, fix the issue body")
 for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or []:
     if "pull_request" in i or i["number"] < MIN or i["number"] in items: continue
-    to = "Testing" if i["number"] in refs else "Todo"
+    to = "Code Complete" if i["number"] in refs else "Todo"
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {to} (new bug)")
     if APPLY:
         o = js("project", "item-add", str(BOARD), "--owner", OWNER, "--url", i["html_url"], "--format", "json")

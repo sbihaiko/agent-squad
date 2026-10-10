@@ -331,11 +331,11 @@ Status options:
 - Blocked
 - Todo
 - In Progress
-- Code Complete (landed on the integration branch, not yet being tested)
-- Testing (only while its tests actually run: promotion PR CI or e2e on staging)
+- Code Complete (PR open: review, CI, fix rounds and merge; `revci.sh` and `reconcile.py` set it)
+- Testing (only while a test pass actually runs: the e2e on the merge SHA, which `autopilot.sh` sets on merge, or the fork suite for fork-only work, set by hand)
 - Done
 
-A landed child goes to Code Complete; Testing starts when the PR carrying it is open and CI/e2e is really running.
+A PR opened for an issue moves it to Code Complete; Testing starts at the merge, when the e2e on the merge SHA starts; Done when it passes and the issue closes. A failed e2e sends the card back to In Progress.
 
 The comment queue is a durability mechanism, not permission to postpone creating the update. Queue the update at the moment the event happens.
 
@@ -343,7 +343,7 @@ The comment queue is a durability mechanism, not permission to postpone creating
 
 | Event | Action |
 |---|---|
-| `NEW PR #n` | Queue the PR-opened event on the issue immediately. Start `nohup scripts/revci.sh <pr> <issue> > ~/.cache/squad-goal/revci-<pr>.out 2>&1 &`. Move the card to Testing only when CI/e2e is running on it (a landed-on-dev card is Code Complete). Review with the preferred independent review model, currently **GPT Terra fast** (`codex exec -m gpt-5.6-terra -c service_tier=fast`; owner, 2026-10-07), automatically falling back to the next configured review model on model/provider failure. Wait for CI inside the detached review machinery, not in the orchestration loop. Recompute the frontier immediately. |
+| `NEW PR #n` | Queue the PR-opened event on the issue immediately. Start `nohup scripts/revci.sh <pr> <issue> > ~/.cache/squad-goal/revci-<pr>.out 2>&1 &`. `revci.sh` moves the card to Code Complete; Testing waits for the merge. Review with the preferred independent review model, currently **GPT Terra fast** (`codex exec -m gpt-5.6-terra -c service_tier=fast`; owner, 2026-10-07), automatically falling back to the next configured review model on model/provider failure. Wait for CI inside the detached review machinery, not in the orchestration loop. Recompute the frontier immediately. |
 | `REVIEW … CHANGES` or CI red | Queue findings on the issue immediately. Read `review-<pr>.md`. Fix real defects through a squad fix run on the PR branch, never by hand. Card back to In Progress. A wrong base means rebase on `origin/$SG_BASE`. Recompute the frontier before launching so compatible fixes/work are grouped when safe. |
 | `REVIEW … APPROVE` + CI green + clean | Queue approval/CI evidence. Merge via REST: `gh api -X PUT repos/$SG_REPO/pulls/<pr>/merge -f merge_method=$SG_MERGE_METHOD` (only when `SG_AUTO_MERGE=yes`; otherwise stop at approval and list the PR for the owner). Never merge into a protected branch the repo rules reserve for the owner; promotion between branches stays with the owner. Respect declared merge order, including an ADR before PRs that cite it. Then start e2e detached on the exact merged SHA. Recompute the frontier immediately rather than waiting for e2e. |
 | `RUN … verdict` | Queue the verdict if meaningful. Remove that run's worktrees only after the run is no longer alive: `git worktree remove --force <abs path>`, then `git worktree prune`. Drop it from `active-runs.txt`. Recompute the frontier and fill freed slots immediately. |
