@@ -2,6 +2,8 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `revci.sh` reports a conflicting head (`mergeable_state` dirty on two polls, 15 s apart) at once, as `CI=none`, instead of waiting 45 min for checks that never start (a conflicting PR gets no CI); autopilot already turns a dirty line into the conflict-only autofix round. Stub-tested.
+
 - squad-goal: review chain puts `claude:claude-opus-5-5` first. Measured (49 tries): `gemini-3.8-flash-high` ran 30 s and returned no VERDICT in headless mode (a tool call was auto-denied, "no output produced"), twice per PR; `grok-4.6` timed out at 300 s in 12 of 19 tries; Opus averaged 77 s with 0 failures. Every review paid about 6 min before Opus answered; Gemini, Grok and GPT stay as fallbacks.
 - squad-goal: a run that ends `failed` with `no_dispatch` gets one consult: `consult.sh` asks the coding model (`coding_models[0]`, claude-sonnet-5-5) through the CLI whether the request is valid; GO relaunches it once with the answer appended. `launch.py` keeps the request in the run folder (`request.txt`).
 - squad-goal: `autofix.sh` and `forkclose.sh` requests also say "Spawn the child with spend 8"; an autofix run for #1209 was rejected with `spawn_rejected:spend_outside_budget` (router asked for 40).
