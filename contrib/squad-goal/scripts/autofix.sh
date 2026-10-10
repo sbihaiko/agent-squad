@@ -14,6 +14,7 @@ s9=${sha:0:9}; [ -e "$A/fix-$pr-$s9" ] && [ -z "${AF_DRY:-}" ] && exit 0
 b=$(mktemp); probs=""
 { echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $SG_REPO). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo "Fix every problem below on head $s9; do not change scope beyond them."
+  echo "Out of scope for a fix run: any finding that needs a push to, or a change in, the agent-squad fork (a gui/<n> branch to land on local/next, fork-side validator or runner code). The run has no write access to the fork; forkclose.sh lands those after the merge. Do not end the run needs-human for them: list each in your PR comment as 'fork-only, pending the close step' and fix everything else."
   line=$(grep "^#$pr $s9 " "$SG_STATE/revci-$pr.out" 2>/dev/null | tail -1)
   if [[ $line == *CHANGES* ]]; then probs+=" review"
     echo; echo "[review] The latest automated review says VERDICT: CHANGES. Address every numbered finding (fix it, or explain in the PR comment why it is wrong, with file:line evidence):"
