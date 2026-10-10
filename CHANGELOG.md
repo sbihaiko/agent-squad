@@ -20,6 +20,7 @@
     logs latency to `review-times.tsv`, and reviews fix rounds on the delta since the last reviewed sha
     with the previous findings (full review on a first pass, a rebase or a big delta).
   - **Optimistic stacking**: `stack.sh` lets an issue start on its only open blocker's PR branch (one level, parent CI not red); the autopilot holds the stacked PR until the parent merges, then retargets it to the base branch and fixes the squash conflict with `rebase --onto`; its review covers only its own diff over the parent.
+  - **Done check**: every request asks the child for `ac_commands` (wrapped in `acpr.sh <branch> -- <cmd>` for PR-branch work, since the final gate runs in the main checkout), so `ac-verify` verifies instead of failing with `no_ac_commands`; the hub shows a landed run with nothing verified as `unverified`, in its own color.
   - **Worktrees**: `wtclean.sh` removes finished, pushed child worktrees and leaves the run folder and its dashboard server alone (the hub lists runs from live servers); unpushed ones are kept and reported.
   - **Issue comments**: dispatch, PR opened, run verdict, review/CI result, fix, panel, merge and e2e are
     queued and posted on the issue by `cqflush.sh`.

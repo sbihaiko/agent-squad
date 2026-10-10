@@ -104,7 +104,7 @@ def scan(p):
 def state_of(r, age):
     ver, reasons = r["verdict"], r["reasons"]
     if ver is None: return "running" if age < 1800 else "stale"
-    if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "landed"
+    if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     return ver
 
 def project_dirs():
@@ -324,7 +324,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .r.show{background:#1f2a3a;box-shadow:inset 3px 0 0 var(--pin)}.r.pinned .pn{color:var(--pin)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 .b{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;border:1px solid}
-.running,.starting{color:var(--run)}.stale{color:var(--mute)}.landed,.pass,.ok{color:var(--ok)}.needs-human,.stalled{color:var(--warn)}.failed{color:var(--err)}
+.running,.starting{color:var(--run)}.stale{color:var(--mute)}.landed,.pass,.ok{color:var(--ok)}.unverified{color:#4fb8d6}.needs-human,.stalled{color:var(--warn)}.failed{color:var(--err)}
 .m{color:var(--mute);font-size:11px;margin-top:2px}
 #q{width:100%;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
 .sp{border-bottom:1px solid var(--line);font-size:11px}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:12px;font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:none}
