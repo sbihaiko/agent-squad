@@ -320,3 +320,88 @@ def test_script_diagram_marks_a_sensitive_step():
     svg = _svg(_privacy_script())
     assert re.search(r'class="step auto sensitive"[^>]*data-step="b1\.file-dialog"', svg)
     assert re.search(r'class="step auto"[^>]*data-step="b1\.plain"', svg)
+
+# --- #1185: batches with fixtures, crash/hang supervision and state restored ---
+
+import time  # noqa: E402
+
+from squad.gui_test_supervise import run_supervised  # noqa: E402
+
+
+def _batch(bid, *steps, setup=(), teardown=()):
+    return {"id": bid, "setup": list(setup), "teardown": list(teardown), "steps": list(steps)}
+
+
+def _two_batch_script(b1_steps, **over):
+    d = script(**over)
+    d["batches"] = [_batch("b1", *b1_steps),
+                    _batch("b2", step("b2.a", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+                                      wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+                                      check={"name": "ui.screen", "args": {"is": "play.library"}}))]
+    return d
+
+
+def _verdicts(out):
+    return {r["id"]: r["verdict"] for r in out["results"]}
+
+
+def test_a_crash_mid_batch_fails_that_batch_and_the_next_batch_runs_in_a_fresh_process(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    d = _two_batch_script([step("b1.one"), step("b1.two")])
+    out = run_supervised(d, "tests.gui_test_fakes:CrashAdapter",
+                         {"marker": str(tmp_path / "m"), "report_dir": str(reports)},
+                         out_dir=tmp_path / "out", report_dir=reports)
+    b1, b2 = out["batches"]
+    assert (b1["id"], b1["verdict"]) == ("b1", "failed (process crash)")
+    assert "native fault in the render thread" in b1["output"]
+    assert [Path(p).name for p in b1["crash_reports"]] == ["Fake-crash.ips"]
+    assert _verdicts(out) == {"b1.one": "failed (process crash)", "b1.two": "skipped (batch failed)",
+                              "b2.a": "passed"}
+    assert b2["verdict"] == "passed"
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def test_a_hang_is_killed_after_the_step_timeout_and_leaves_no_orphan(tmp_path):
+    pid_file = tmp_path / "grandchild.pid"
+    d = _two_batch_script([step("b1.one")])
+    d["batches"] = d["batches"][:1]
+    t0 = time.monotonic()
+    out = run_supervised(d, "tests.gui_test_fakes:HangAdapter", {"pid_file": str(pid_file)},
+                         step_timeout_s=1, out_dir=tmp_path / "out")
+    assert time.monotonic() - t0 < 8
+    assert out["batches"][0]["verdict"] == "failed (hang)"
+    assert _verdicts(out) == {"b1.one": "failed (hang)"}
+    pid = int(pid_file.read_text())
+    for _ in range(50):
+        if not _alive(pid):
+            break
+        time.sleep(0.1)
+    assert not _alive(pid)
+
+
+def test_a_failed_precondition_skips_the_rest_of_its_batch_only(tmp_path):
+    d = _two_batch_script([step("b1.one", precondition="ui.screen == play.library"), step("b1.two")])
+    out = run_supervised(d, "squad.gui_test_adapter:FakeAdapter", out_dir=tmp_path / "out")
+    assert _verdicts(out) == {"b1.one": "failed (precondition ui.screen == play.library)",
+                              "b1.two": "skipped (batch failed)", "b2.a": "passed"}
+    assert [b["verdict"] for b in out["batches"]] == ["failed (precondition ui.screen == play.library)", "passed"]
+
+
+def test_settings_and_fixtures_are_byte_identical_after_the_run_even_when_the_app_mutates_them(tmp_path):
+    settings, rom = tmp_path / "settings.json", tmp_path / "Contra.nes"
+    settings.write_bytes(b'{"volume": 7}\n')
+    rom.write_bytes(bytes(range(256)))
+    ghost = tmp_path / "created-by-run.cfg"
+    before = (settings.read_bytes(), rom.read_bytes())
+    d = _two_batch_script([step("b1.one")], fixtures={"restore": [str(settings), str(rom), str(ghost)]})
+    run_supervised(d, "tests.gui_test_fakes:SettingsAdapter", out_dir=tmp_path / "out")
+    assert (settings.read_bytes(), rom.read_bytes()) == before
+    assert not ghost.exists()
