@@ -444,8 +444,7 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar{flex:none;align-self:flex-start;padding:8px 10px;color:var(--mute);font-size:11px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line);min-width:120px}.chip b{font-weight:600;color:var(--pin)}.chip{display:flex;justify-content:space-between;gap:10px;align-items:center;cursor:pointer;background:#2a303b;border-radius:9px;padding:1px 8px;color:var(--fg)}
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 </style>
-<div id=side><div id=top><b>RUNS</b> <span id=mode class=m></span>
-<div class=row id=lay></div><div class=row><button id=unpin>unpin all (auto-follow)</button></div></div>
+<div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>cost &amp; speed<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
@@ -456,8 +455,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <script>
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
-let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=ls.N||1,pins=new Set(ls.pins||[]),slots=[],frames=new Map();
-const save=()=>localStorage.hub=JSON.stringify({...ls,N,pins:[...pins],q,per,src});
+let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],frames=new Map();
+const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 // a run's name says what it is for: "fix PR #1202 · #1178", "panel · #1179 #1182", "#1183"; the run id moves to the detail line
@@ -487,17 +486,13 @@ function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   const filled=GROUPS.filter(g=>by[g[0]]);
   if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(label(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="pin">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(label(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>`<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr>${by[k].length} · ${usd(by[k].reduce((a,r)=>a+r.spend,0))}</span></div>${openGroup===k?by[k].map(row).join(""):""}`).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id)}
     save();refresh(true)});
-  $("#mode").textContent=pins.size?pins.size+" pinned":"auto-follow";
-  $("#unpin").disabled=!pins.size;
 }
-function drawLayout(){$("#lay").innerHTML=Object.keys(LAYOUTS).map(k=>`<button data-n=${k} class="${+k===N?"on":""}">${k}</button>`).join("");
-  document.querySelectorAll("#lay button").forEach(b=>b.onclick=()=>{N=+b.dataset.n;save();slots=[];refresh(true)})}
 let built="";
 function drawMain(force){
   const [c,rw]=LAYOUTS[N],key=N+":"+slots.join(",");
@@ -505,13 +500,12 @@ function drawMain(force){
   const byId=new Map(runs.map(r=>[r.id,r]));
   if(key!==built){built=key;
     for(const id of [...frames.keys()])if(!slots.includes(id))frames.delete(id);
-    main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">No open runs. Pin a finished run from the list to look at it; the next run that starts shows up here on its own.</div>";
+    main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.</div>";
     slots.forEach(id=>{const r=byId.get(id);let f=frames.get(id);
       if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
       const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${label(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
 }
-function refresh(){plan();drawLayout();drawList();drawMain()}
-$("#unpin").onclick=()=>{pins.clear();save();slots=[];refresh()};
+function refresh(){plan();drawList();drawMain()}
 function applyFilter(){runs=allRuns}
 let known=null;   // run ids already seen: a run that appears open after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
@@ -602,7 +596,7 @@ async function pollStats(){try{pollSubs();
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
-const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,N,pins:[...pins],q,per,bo})};
+const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
 const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off?(bo.h||320)+"px":""};
 const applyDock=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");sizeBoard();$("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;"};
