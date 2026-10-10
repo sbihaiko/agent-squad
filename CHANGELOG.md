@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 (local fork, 2026-10-10)
+
+- gui-test: the emulator adapter stays in MesenAI (ADR-0272 item 6, P1-A); `squad.gui_test_worker` puts `<MESENAI_ROOT>/scripts/gui_test` on `sys.path` so a `module:cls` target resolves to `mesen_gui_adapter:MesenGuiAdapter`. `tests/test_gui_test_e2e.py` gains: the worker loader case; the pilot's `launch.first-run-home`, `launch.open-rom-focused`, `home.focus-holds-up` on the real app with no pad attached (screenshot and `executed` per step in the `guirun` model); `scripts/gui_test/run_headless_e2e.py` required to report exactly 1 passed, 0 skipped, 0 failed; a missing ROM fixture or a wrong sha1 fails with a clear message. The real-app cases fail, never skip, without `MESENAI_ROOT`, `MESEN_GUI_BINARY` or `MESEN_CORE_LIB`. Refs sbihaiko/MesenAI#1183.
+
 ## 0.2.1 (local fork, 2026-10-09)
 
 - review.sh: when the reviewer narrates before the verdict, the saved review now starts with the `VERDICT: APPROVE|CHANGES` line (revci/autopilot read line 1; a narrated first line left PR #1211 unclassified); `test-review.sh` covers it.
