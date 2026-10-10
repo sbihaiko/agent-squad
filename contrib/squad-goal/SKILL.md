@@ -339,6 +339,8 @@ A PR opened for an issue moves it to Code Complete; Testing starts at the merge,
 
 The comment queue is a durability mechanism, not permission to postpone creating the update. Queue the update at the moment the event happens.
 
+A child that finishes with outcome pass moves its issue to Code Complete at once (`scripts/childcc.py`, every watch loop, live runs only, once per child), with a comment carrying its first reason; the panel may still be running its siblings.
+
 Coordinator test passes (post-merge e2e, a fork suite for fork-only work) go through `scripts/test.sh <issue> [-C <dir>] -- <command>`: it moves the card to Testing, logs to `$SG_STATE/tests/`, queues the result on the issue, and the hub lists it as `test #N` with the live log as its panel. A test run by hand outside it is invisible on the hub.
 
 Automatic bug fixing: `scripts/autobug.sh` (watch.sh, every ~6 min) dispatches every open `bug` issue with no open PR naming it, no `auto/bug-<n>` marker and no skip label (`needs-owner`, `no-auto`, `wontfix`, `question`), all in one squad start within the free run slots: one child and one PR each, TDD with the RED output in the PR, accepted ADRs binding, owner carve-outs returned as fail. It comments the dispatch on each issue and moves the cards (task board, and the bug board when the profile sets `SG_BUG_PROJECT`). The loop never retries: delete `auto/bug-<n>` to dispatch again. `SG_AUTO_BUGFIX=no` turns it off.

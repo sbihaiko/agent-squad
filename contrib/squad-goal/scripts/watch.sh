@@ -37,6 +37,7 @@ if v:
     [ -n "$(find "$f" -mmin +$rs 2>/dev/null)" ] && case "$stalled" in *" $k "*) ;; *) echo "STALL REVIEW ${k#revci-} no result for ${rs}m"; stalled="$stalled$k "; echo "stall $k" >> "$W";; esac; done
   tick=$((tick+1)); [ $((tick % 8)) -eq 1 ] && RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /"   # card Status from GitHub facts, every ~12 min (GraphQL budget)
   [ $((tick % 4)) -eq 1 ] && "$(dirname "$0")/autobug.sh" 2>&1   # open bug issues dispatched automatically, every ~6 min
+  python3 "$(dirname "$0")/childcc.py" 2>&1   # a child that passed moves its issue to Code Complete
   "$(dirname "$0")/autopilot.sh" 2>&1   # auto review, auto merge on APPROVE+CI green, round cap
   "$(dirname "$0")/heartbeat.sh"   # hung test hosts (0% CPU) and dead runs
   "$(dirname "$0")/wtclean.sh" 2>&1   # finished, pushed child worktrees

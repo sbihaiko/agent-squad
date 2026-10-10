@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal `scripts/childcc.py`: a child that finishes with outcome pass moves its issue to Code Complete during the run (live runs only, once per child; the issue is read from the child's spawn prompt).
 - squad-goal hub: a run whose final gate failed but whose work landed and whose issues were all closed afterwards (verified by hand, evidence on the issue) shows as `verified`, not `failed`.
 - squad-goal `scripts/test.sh`: a coordinator test pass (post-merge e2e, fork suite) moves the card to Testing, logs under `$SG_STATE/tests/`, queues the result on the issue, and shows on the hub as `test #N` with its live log as the panel.
 - squad-goal hub: a bug-fix run (request says "(bug)" or names a `fix/` branch) is labeled `fix #N`, not `code #N`.
