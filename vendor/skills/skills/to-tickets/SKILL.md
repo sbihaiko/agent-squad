@@ -37,6 +37,10 @@ Break the work into **tracer bullet** tickets.
 
 Give each ticket its **blocking edges**: the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
+Give each ticket its **wave**: `1` when it has no blockers, otherwise one more than the highest wave among its blockers (the longest blocking path). Every ticket in a wave can run in parallel once the previous waves are done, and a ticket never shares a wave with one of its blockers. Write it with two digits (`01`, `02`, …) so it sorts.
+
+Give each ticket its **labels**: the triage label (`ready-for-agent` unless instructed otherwise), its wave as `wave:NN`, and any type label the tracker's vocabulary defines that fits (for example `bug` for a defect). Reuse existing labels; never invent a near-duplicate of one that exists.
+
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket; green is promised only there.
 
 ### 4. Quiz the user
@@ -45,12 +49,14 @@ Present the proposed breakdown as a numbered list. For each ticket, show:
 
 - **Title**: short descriptive name
 - **Blocked by**: which other tickets (if any) must complete first
+- **Wave** and **labels**: `wave:NN` and the labels it will be published with
 - **What it delivers**: the end-to-end behaviour this ticket makes work
 
 Ask the user:
 
 - Does the granularity feel right? (too coarse / too fine)
 - Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
+- Do the waves match the order you expect (they follow from the blocking edges; fix an edge, not a wave)?
 - Should any tickets be merged or split further?
 
 Iterate until the user approves the breakdown.
@@ -61,6 +67,7 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
 
 - **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
 - **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the `ready-for-agent` triage label unless instructed otherwise; the tickets are agent-grabbable by construction.
+  Apply every ticket's labels when it is created: the triage label, its `wave:NN` label and any type label. Before the first issue, make sure each `wave:NN` label you need exists (on GitHub: `gh label create "wave:NN" --color <hex> --description "Wave NN: startable once waves before it are done" --force`, one color per wave or one shared color). If a later edge change moves a ticket to another wave, move its label too: a ticket carries exactly one `wave:` label.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
@@ -75,6 +82,10 @@ Do NOT close or modify any parent issue.
 **Blocked by:** the numbers/titles of the tickets that gate this one, or "None (can start immediately)".
 
 **Status:** ready-for-agent
+
+**Wave:** NN
+
+**Labels:** ready-for-agent, wave:NN
 
 - [ ] Acceptance criterion 1
 - [ ] Acceptance criterion 2
@@ -99,6 +110,8 @@ The end-to-end behaviour this ticket makes work, from the user's perspective, no
 ## Blocked by
 
 - A reference to each blocking ticket, or "None (can start immediately)".
+
+(The wave and the other labels are applied as tracker labels, `wave:NN`, not written in the body.)
 
 </issue-template>
 

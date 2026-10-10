@@ -5,7 +5,7 @@
 - **dashboard**: the popup cycles cards with ‹ › and ←/→; a selection no longer pans the map behind it.
 - **dashboard**: a child is labeled `issue #N` from the tracker issue its prompt names, never from
   another numbered file (an ADR named `0272-*.md` used to show as "issue 72").
-- **contrib/to-tickets**: the `/to-tickets` skill with two additions: every ticket gets a wave (1 + the highest wave of its blockers) and is published with its labels (`ready-for-agent`, one `wave:NN`, a type label when one fits); install it as the personal copy (`~/.agents/skills/to-tickets`), which wins over the plugin's.
+- **vendor/skills/to-tickets** (re-vendored with `scripts/build_vendor_skills.py`): the `/to-tickets` skill with two additions: every ticket gets a wave (1 + the highest wave of its blockers) and is published with its labels (`ready-for-agent`, one `wave:NN`, a type label when one fits); the personal copy (`~/.agents/skills/to-tickets`) is the vendoring source and wins over the plugin's.
 - **contrib/squad-goal**: the autonomous delivery loop that drives tracker issues through agent-squad
   (one `squad start` per frontier, live issue comments and board, independent review, autopilot, hub).
   Synced from the working skill with `scripts/sync-to-fork.sh`; per-repo profiles stay local, and
