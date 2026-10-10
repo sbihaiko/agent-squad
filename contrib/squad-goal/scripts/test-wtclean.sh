@@ -29,4 +29,19 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 case "$out" in *"WT PUSHED run-landed"*) ok "P: landed-unpushed fix pushed as a fast-forward";; *) ko "P: not pushed: $out";; esac
 [ "$($G rev-parse "refs/remotes/origin/fix/9-x" 2>/dev/null || $G ls-remote origin fix/9-x | cut -f1)" ] && [ "$($G ls-remote origin refs/heads/fix/9-x | cut -c1-9)" = "$($G -C runs/run-landed/ws/w rev-parse HEAD 2>/dev/null | cut -c1-9)" ] && ok "P: remote branch now at the landed head" || ok "P: remote branch advanced (tree may be cleaned)"
 case "$out" in *"WT PUSHED run-moved"*) ko "P: diverged branch was pushed";; *"WT UNPUSHED run-moved"*) ok "P: diverged branch: no push (never a force push), reported";; *) ko "P: run-moved not reported: $out";; esac
+# F: a fork-only tree (SG_FORK_DIR, ~/wt-as-<n>) a run is still using must survive the close of a sibling issue. The tree is
+# named nowhere in the record until the final gate writes its outcome, so the old liveness test (grep the record for the tree's
+# name) never saw a live run and deleted the tree out from under the gate: every ac_command failed with "cd: No such file or
+# directory" and a correct run was marked failed (gui/1227, run 45a682, 2026-10-10).
+printf '#!/bin/bash\ncase "$*" in *pulls?state=open*head=*) echo 77;; *issues/*) echo closed;; *) echo "";; esac\n' > "$T/bin/gh"
+for d in run-zombie run-fresh run-busy run-landed run-moved; do rm -rf "$T/co/runs/$d"; done
+$G init -q -b local/next "$T/fork"; cd "$T/fork"; $G -c user.email=a@b -c user.name=t commit -q --allow-empty -m base; $G branch gui/7
+$G worktree add -q "$T/hm/wt-as-7" gui/7
+mkdir -p "$T/co/runs/run-live/ws"; echo '{"event": "call_start"}' > "$T/co/runs/run-live/record.jsonl"
+printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_REPO=x/y SG_OWNER=x\n' "$T/co" "$T/st" "$T/fork" > "$T/s/env.sh"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ -d "$T/hm/wt-as-7" ] && ok "F: fork tree of a run with no verdict kept (issue #7 is closed)" || ko "F: live run's fork tree was removed: $out"
+echo '{"event": "verdict"}' > "$T/co/runs/run-live/record.jsonl"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d "$T/hm/wt-as-7" ] && ok "F: fork tree removed once the run has a verdict" || ko "F: fork tree kept after the verdict: $out"
 kill $spid 2>/dev/null; rm -rf "$T"; exit $fail

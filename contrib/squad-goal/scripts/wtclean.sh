@@ -50,8 +50,15 @@ done
 if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
   $G -C "$SG_FORK_DIR" worktree list --porcelain | sed -En 's#^worktree (.*/wt-(as|fr)-[0-9]+)$#\1#p' | while read -r w; do
     n=${w##*-}; b=$($G -C "$w" branch --show-current 2>/dev/null)
-    live=0; for r in "$SG_CHECKOUT"/runs/run-*/record.jsonl; do   # a live run's final gate still cds into it
-      grep -q '"event": *"verdict"' "$r" || ! grep -qF "${w##*/}" "$r" || { live=1; break; }; done
+    # A live run's final gate still cds into this tree, and a run in flight does not name the tree anywhere in its record yet:
+    # that only happens once the gate writes its outcome. So a run without a verdict is live unless it is a zombie -- exactly
+    # the rule the ws trees above use. The old test grepped the record for the tree's name, found nothing until the gate had
+    # already run, and deleted a live run's worktree the moment a sibling issue closed: every ac_command then failed with
+    # "cd: No such file or directory" and a correct run was marked failed (gui/1227, run 45a682, 2026-10-10).
+    live=0; for r in "$SG_CHECKOUT"/runs/run-*/record.jsonl; do
+      grep -q '"event": *"verdict"' "$r" 2>/dev/null && continue
+      [ -n "$(find "$r" -mmin +20 2>/dev/null)" ] && ! printf '%s\n' "$cwds" | grep -qF "${r%/record.jsonl}/" && continue
+      live=1; break; done
     [ $live = 0 ] || continue
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
     [ "$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null)" = closed ] || continue
