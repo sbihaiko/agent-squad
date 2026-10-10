@@ -4,7 +4,8 @@
  B  finished run (1 h old): kill its idle dashboard_server.
  C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt.
  D  two live runs that accepted the same issue: report once (never kills).
- E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again."""
+ E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
+ F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence)."""
 import json, os, pathlib, re, signal, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 acts = []
@@ -90,6 +91,19 @@ for d in (st / "auto").glob("disp-*"):
     if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged): the issue is past dispatch
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
+fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
+if fd and fb:
+    repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+    for l in sh("git", "-C", fd, "log", "-n", "200", "--format=%h %ct %s", fb).splitlines():
+        h, ct, subj = (l.split(None, 2) + ["", ""])[:3]
+        m = re.search(r"\(#(\d+)\)", subj)
+        if not (m and ct.isdigit() and now - int(ct) > 1800): continue
+        n = m.group(1); mk = st / "auto" / f"janitor-fixed-{n}-{h}"
+        if mk.exists(): continue
+        if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
+        if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr is:open \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue
+        say(f"FIXED-NOT-CLOSED #{n}: fork commit {h} \"{subj[:60]}\" names it, the issue is still open")
+        if not dry: mk.touch()
 if acts and not dry:
     kinds = {}
     for a in acts: k = a.split()[0] if not a.startswith("kill") else ("kill " + ("dashboard" if "dashboard" in a else "leftover")); kinds[k] = kinds.get(k, 0) + 1
