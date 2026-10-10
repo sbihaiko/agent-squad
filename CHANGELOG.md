@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: `autopilot.sh` never merges a PR whose diff is empty (a fix round that undid the change); it raises NEEDS OWNER instead. The fork test command runs every `tests/test_gui_test_*.py`.
 - squad-goal: `forkclose.sh` sweeps every fork branch; an issue with a MesenAI PR waits for its merge, then its fork half lands with no close; each fork test first rebuilds `SG_E2E_BUILD_DIR` at the base head (`SG_E2E_BUILD_CMD`).
 - squad-goal: `autopilot.sh` no longer retargets a stacked PR whose parent was never merged (an empty jq match printed "null null", read as a merged parent).
 - squad-goal: a red fork suite no longer strands the branch: after the revert, `forkclose.sh` re-applies the work on the branch (merge base in, revert the revert) and launches a fix run with the log tail; the fix commit re-arms the close.

@@ -62,6 +62,9 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
     [ "$(gh api repos/$SG_REPO/pulls/$d -q .state 2>/dev/null)" = open ] && continue 2; done
   st=$(gh api repos/$SG_REPO/pulls/$pr -q '.head.sha+" "+.mergeable_state')
   [ "$st" = "$sha clean" ] || continue
+  if [ "$(gh api repos/$SG_REPO/pulls/$pr -q .changed_files 2>/dev/null)" = 0 ]; then   # a fix round that undid everything: nothing to merge
+    [ -e "$A/empty-$pr-${sha:0:9}" ] || { touch "$A/empty-$pr-${sha:0:9}"; printf "NEEDS OWNER: PR #%s @ %s has an empty diff against %s (a fix round undid the change); not merged.\n" $pr ${sha:0:9} "$SG_BASE" > "$SG_STATE/cq/$iss-empty$$.md"; echo "NEEDS OWNER #$pr issue #$iss: empty diff at ${sha:0:9}, not merged"; }
+    continue; fi
   [ "$(bash "$here/autofix.sh" --threads $pr)" = 0 ] || { rm -f "$tf"; continue; }   # a thread opened after the cache: re-ask next pass
   if m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
     touch "$A/merged-$pr"
