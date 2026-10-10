@@ -4,7 +4,7 @@
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
 # card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
-# conflict aborts and is reported. One issue at a time (lock); the fork checkout must be clean and on the base branch.
+# conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); the fork checkout must be clean and on the base branch.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ] || exit 0; [ -e "$A/off" ] && exit 0
@@ -24,8 +24,14 @@ for n in $cc; do
   touch "$mk"
   if ! $G merge --no-ff -q -m "Merge $br (Refs #$n)" "$br" >/dev/null 2>&1; then
     $G merge --abort 2>/dev/null
-    printf "Fork-only close: merging %s (%s) into %s conflicts; left in Code Complete for the coordinator.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" > "$SG_STATE/cq/$n-forkconflict$$.md"
-    echo "FORKCLOSE CONFLICT #$n $br into $SG_FORK_BASE"; continue; fi
+    files=$($G merge-tree --write-tree --name-only "$SG_FORK_BASE" "$br" 2>/dev/null | sed -n '2,/^$/p' | grep . | tr '\n' ' ')
+    nm="forkrebase-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"
+    { echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. One child, a CONFLICT FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
+      echo "In $SG_FORK_DIR the branch $br (head ${head:0:9}) no longer merges into $SG_FORK_BASE: conflict in $files. Work in a worktree: \`git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br\` (or reuse the existing worktree of $br), then \`git merge $SG_FORK_BASE\` into $br and resolve every conflict KEEPING BOTH SIDES (sibling issues appended their own cases; never drop one). Run \`$SG_FORK_TEST_CMD\` there until it passes, commit the merge on $br, NEVER push, keep the worktree. Do not change anything beyond the conflict resolution."
+      echo "GitHub issue #$n: the issue is already implemented; only the conflict is in scope."; } > "$body"
+    req=$("$here/mkreq.sh" "$nm" "$body") && (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$SG_STATE/$nm.log")
+    printf "Fork-only close: merging %s (%s) into %s conflicts (%s). A conflict-fix squad run (%s) merges the base into the branch keeping both sides; the loop retries the close when the branch head moves.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "$files" "$nm" > "$SG_STATE/cq/$n-forkconflict$$.md"
+    echo "FORKCLOSE CONFLICT #$n $br into $SG_FORK_BASE ($files) -> fix run $nm"; continue; fi
   m=$($G rev-parse HEAD)
   [ -n "${SG_E2E_DIR:-}" ] && [ -d "$SG_E2E_DIR" ] && [ -z "$(/usr/bin/git -C "$SG_E2E_DIR" status --porcelain --untracked-files=no)" ] \
     && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"

@@ -14,7 +14,7 @@ def _screenshot(path):
 
 
 def run(script, adapter, record=None, prompt=None):
-    """Run every step in order; return [{id, verdict, capture}]. Never raises on a wait timeout.
+    """Run every step in order; return [{id, verdict, capture, held}]. Never raises on a wait timeout.
 
     A `manual` step is put to `prompt(step)`, which returns {"verdict": "passed"|"failed", "screenshot": path}; with no
     prompt, or when it returns None, the step ends `pending`. With no adapter (unavailable) every step is a manual step,
@@ -41,7 +41,7 @@ def run(script, adapter, record=None, prompt=None):
                     emit("gui_capture", s["id"], **capture)
                 verdict = answer["verdict"] if answer else "pending"
                 emit("gui_verdict", s["id"], verdict=verdict)
-                results.append({"id": s["id"], "verdict": verdict, "capture": capture})
+                results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": False})
                 continue
             emit("gui_step", s["id"])
             adapter.inject(s["action"]["name"], s["action"].get("args", {}))
@@ -51,12 +51,12 @@ def run(script, adapter, record=None, prompt=None):
                 verdict = f"failed (timeout waiting for {cond})"
             else:
                 capture = adapter.capture()
-                emit("gui_capture", s["id"], **capture)
+                emit("gui_capture", s["id"], held=bool(s.get("sensitive")), **capture)
                 if "check" not in s:
                     verdict = "passed"
                 else:
                     got = adapter.check(s["check"]["name"], s["check"].get("args", {}))
                     verdict = "failed (unknown id)" if got == "unknown id" else "passed" if got else "failed"
             emit("gui_verdict", s["id"], verdict=verdict)
-            results.append({"id": s["id"], "verdict": verdict, "capture": capture})
+            results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": bool(s.get("sensitive"))})
     return results
