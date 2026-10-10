@@ -61,6 +61,7 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   if [[ $line == *BLOCKED* ]] && [[ $ci != *failure* && $ci != *timed_out* && $ci != *cancelled* ]] && [ "$ms" != dirty ]; then
     rf="$A/rereview-$pr-$s9"
     [ -e "$rf" ] && [ $(( $(date +%s) - $(stat -f %m "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] && continue
+    /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue   # a review of this PR is already in flight: two would race on review-<pr>.md
     touch "$rf"; nohup bash "$here/revci.sh" $pr $iss >> "$SG_STATE/revci-$pr.out" 2>&1 </dev/null &
     echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
     continue

@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.14 (local fork, 2026-10-10)
+- squad-goal: the BLOCKED re-queue checks for a review already in flight before it launches one, mirroring the guard the new-head path already had. Defensive, not a fix for something seen: `ps` on PR #1285 during the first re-queue showed what looked like two `revci.sh`/`review.sh` pairs, but it is one review — bash reports a script's own name for its subshells (`revci` → `revci` → `review.sh` → `cap`'s fork → the model). With the guard the re-queue cannot ever start a second review of the same PR and race it on `review-<pr>.md`.
+
 ## 0.2.13 (local fork, 2026-10-10)
 - squad-goal: a BLOCKED review (no model in the chain could answer at all: a spent quota, a window that has not opened, a model that hit its cap) is re-queued instead of leaving the PR parked. `autopilot.sh` read BLOCKED as "nothing to do": no CHANGES, no failing CI, no threads means no fix round and no merge, so PR #1285 sat with a clean head and no verdict until something else moved it. Now, when BLOCKED is the only problem, the review is re-run on the same head at most once every `SG_REREVIEW_MINUTES` (20) per head, so a transient outage heals on its own without spending a fix round or moving the head.
 
