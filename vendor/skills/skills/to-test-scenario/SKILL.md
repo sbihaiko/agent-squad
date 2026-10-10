@@ -8,14 +8,14 @@ disable-model-invocation: true
 
 Take a **test scenario** (a Markdown script a person follows, whose cases each have an id, a precondition, steps and an expected result) and make it executable: a `gui-test/1` script, a parent issue with one sub-issue per case, and a run whose verdicts land on those sub-issues.
 
-Sibling of `/to-tickets`: that skill slices **work** into tracer-bullet tickets; this one slices a **scenario** into cases that are **run**, not built. Reuse its publishing mechanics (issue template, `## Blocked by`, `wave:NN`, `gh` + REST sub-issues), never its slicing rules.
+Sibling of `/to-tickets`: that skill slices **work** into tracer-bullet tickets; this one slices a **scenario** into cases that are **run**, not built. Reuse its publishing mechanics (issue template, `## Blocked by`, `wave:NN`, REST sub-issues), never its slicing rules.
 
 Only a person invokes this skill (`disable-model-invocation`): it publishes issues. Never run it on your own initiative.
 
 ## Two halves
 
 - **Judgment** — reading the Markdown, converting a case into steps, deciding whether an action or a check is decidable — is yours, here, in this file.
-- **Mechanics** — coverage, the plan, publishing, idempotence, writing results back — live in one deterministic module, `squad.to_test_scenario` (agent-squad). Call it; never reimplement it by hand, and never publish an issue the module did not plan.
+- **Mechanics** — coverage, the plan, publishing, idempotence, starting a run, writing results back — live in one deterministic module, `squad.to_test_scenario` (agent-squad), with three commands: `publish`, `start-run`, `write-back`. Call them; never reimplement them by hand, and never publish an issue the module did not plan.
 
 ## Process
 
@@ -39,11 +39,9 @@ Converting: one step per case, and **the step id is the case id**. Each step car
 
 - `under-test` (default) — the case itself.
 - `setup` / `recovery` — a step that only reaches a state. It gates the other steps of its batch: the module puts each of them one wave later and names the setup case in their `## Blocked by`.
-- `mode: manual` — a case that needs a physical pad, audio or a haptic reading. Keep it in the same script: it is tracked and commented like any other case.
+- `mode: manual` — a case that needs a physical pad, audio or a human reading. Keep it in the same script: it is tracked and commented like any other case.
 
 `nav.goal` belongs to setup, preconditions and recovery only, never to a step under test (ADR-0271); `nav.goal` and sweep cases end `pending` in CI, because no model key exists there (ADR-0271 Decision 6 A).
-
-Batches follow the Markdown sections, each with its own setup and teardown.
 
 Ask the user about any case whose action or check you cannot decide, and never invent an id the adapter does not advertise. Validate the result against the adapter's capabilities (`squad.gui_test.validate(script, capabilities)`) **before anything is published**: an unsupported action must be rejected naming what is missing. Then render the Markdown view with `squad/gui_test_render.py` — the JSON is the source, and the rendered Markdown is never edited by hand.
 
@@ -54,57 +52,59 @@ Fixtures (ROM by No-Intro sha1, pack, settings profile) are declared in the scri
 Build the plan and present it before any issue exists:
 
 ```bash
-python3 -c "from squad.to_test_scenario import build_plan; import json,pathlib; \
-print(json.dumps(build_plan(json.loads(pathlib.Path('<name>.gui-test.json').read_text()), \
-pathlib.Path('<scenario>.md').read_text(), granularity='per-case', \
-script_path='<scenario>.md'), indent=2))"
+python3 -c "from squad.to_test_scenario import build_plan, read_scenario, read_script; import json; \
+print(json.dumps(build_plan(read_scenario('<scenario>.md'), read_script('<name>.gui-test.json'), granularity='case'), indent=2))"
 ```
+
+A script whose steps carry no content hash is stale in every case: the plan stops on it until `publish --stamp` records the hashes.
 
 Show: parent title, batches with case counts, the `manual` cases, the `goals` cases, the variants the run covers, and the labels. Ask whether the granularity is right (**one sub-issue per case**, the default, or **per batch** when a large scenario would flood the board), whether any case should be merged or dropped, and whether the run may start right after publishing. Iterate until approved.
 
 ### 4. Publish
 
-Publish **the plan the user approved**, through the module, with the real REST runner. Everything written for GitHub is **en-US** (repo CLAUDE.md), with no `Co-Authored-By` and no "Generated with Claude Code" line.
+Publish **the plan the user approved**, through the module's `publish` command, with the real REST runner. Everything written for GitHub is **en-US**, with no `Co-Authored-By` and no tool-attribution line. Run it from the agent-squad fork checkout:
 
 ```bash
-python3 - <<'PY'
-from squad.to_test_scenario import rest_runner, run_scenario
-...
-PY
+python3 -m squad.to_test_scenario publish <scenario>.md <name>.gui-test.json \
+  --repo <owner/name> --board users/<owner>/projects/<n> [--granularity case|batch] [--stamp]
 ```
 
-- `rest_runner(repo, project=..., bug_helper=...)` — REST through `gh api`, never GraphQL: a scenario creates dozens of sub-issues and would spend the GraphQL quota. `project` is the board every issue joins at Status "To triage"; `bug_helper` is the checkout's `scripts/report-bug.sh`, the one route a failed run's bug takes.
+- REST through `gh api`, never GraphQL: a scenario creates dozens of sub-issues and would spend the GraphQL quota. Only the parent joins the board (`--board`, Status "To triage"); a sub-issue gets no card.
+- `--stamp` records each case's content hash on its step in the script file. A script that predates hashes is stale in every case and the command stops without creating anything until it is stamped; stamp only a script you reviewed, and commit the change.
 - The parent carries `ready-for-agent` and `wave:01`. Each case carries `test-case` and its `wave:NN`, and **never `ready-for-agent`**: a case is run, not built, and the autofrontier must not pick it up as work.
-- Sub-issues are linked natively through `POST /repos/<repo>/issues/<parent>/sub_issues` with the sub-issue's numeric `id`, never its number.
-- The case-id → issue-number map is saved beside the script (`<name>.gui-test.issues.json`) by passing `map_path=`. Pass `saved=` and `parent=` from that map on every later invocation: publishing twice **updates** the parent and the existing sub-issues and creates nothing. A case the script no longer has is listed in `removed` and left open — only a person closes a case.
-- What the module creates, so you can check its work: the labels (`test-case`, `ready-for-agent`, one `wave:NN`); the parent (`Test scenario: <name>`, body = purpose, script path, fixtures, variants, a case table and a `## Blocked by` section, `None` unless the scenario depends on an unfinished feature); one sub-issue per case in script order, labels `test-case` and the batch's `wave:NN` (a case blocked by its batch's setup case gets one more than the setup), body = case id, precondition, steps, expected result, variant tags, `manual` or `automated`, and `## Blocked by` naming the setup case it needs; and everything on the board at Status "To triage". The parent tracks the run: it is closed only by a person after reading the results.
+- Sub-issues are linked natively with the sub-issue's numeric `id`, never its number. GitHub allows **100 sub-issues per parent**: a plan with more is refused before anything is created, so publish it per batch or split the scenario.
+- The map (`<name>.gui-test.issues.json`: the parent, and per case the issue number and content hash) is written beside the script after every issue. Publishing again **updates** what the map knows and creates nothing twice; an interrupted publish resumes from it. A case the script no longer has is listed in `removed` and left open — only a person closes a case.
 
 Do not close or edit any issue the scenario came from.
 
-### 5. Run
+### 5. Start the run, and return
 
-The run command is MesenAI `scripts/gui_test_run_script.py` (MesenAI #1222, its own issue): one script in, one run report out — `run_id`, the script sha, `platform`, `build_sha` and one result per step (`passed`, `failed (expected X, observed Y)`, `failed (unknown id)`, `needs review`, `pending`). Run the script on the squad's GUI test infrastructure:
+A run takes minutes, so this skill **never waits on it**. Start it through the run command and report; the results file is the run's own output.
 
 ```bash
-python3 scripts/gui_test_run_script.py <script.json> --adapter mesen-gui [--out <results.json>] [--batch <id> | --case <id>] [--file-bug]
+python3 -m squad.to_test_scenario start-run <name>.gui-test.json [--batch <id>] [--out-dir <dir>] \
+  --repo <owner/name> --board users/<owner>/projects/<n> --bug-helper <MesenAI>/scripts/report-bug.sh
 ```
 
-It needs `MESENAI_ROOT` (a MesenAI checkout holding `scripts/gui_test/mesen_gui_adapter.py`), `MESEN_GUI_BINARY` (the built launcher of a build carrying the test hook) and `MESEN_CORE_LIB` (the `MesenCore` library of that same build); a missing variable, or a native core that cannot be loaded, is a **failure, never a skip**. It validates the script against the adapter's advertised capabilities *before* launching anything, rejecting a script naming an action, check or variant the adapter does not advertise and naming what is missing. It exits non-zero on a failed step, lists `needs review`/`pending` without turning the run red, and reports a run that executed no step as a failure.
+It launches `scripts/gui_test_run_script.py` (the `gui-test/1` runner of the squad fork, MesenAI #1222) detached, and prints at once: the **results file** it will write, the pid, the log, and the **write-back command** to run afterwards. Show the user those three and stop. The run needs `MESENAI_ROOT` (a MesenAI checkout holding `scripts/gui_test/mesen_gui_adapter.py`), `MESEN_GUI_BINARY` (the built launcher of a build carrying the test hook) and `MESEN_CORE_LIB` (the `MesenCore` library of that build); a missing variable or a core that cannot load is a **failure, never a skip**. The runner validates the script against the adapter's capabilities before launching anything and files **at most one bug** for a red run.
 
-It writes one result per step — `passed`, `failed (expected X, observed Y)`, `failed (unknown id)`, `needs review`, `pending` — plus the run id, the script sha, the platform and the build SHA, to `--out` (default `./gui-test-results/<name>-<run id>.json`), with the batch logs and the captures beside it. `--batch <id>` or `--case <id>` narrows the run to that batch, or to that case with the setup it needs, and the results file records the `selection` it covered, so a partial run is never read as the health of the whole scenario; a full run records none, and a selector the script does not have is refused before anything is launched. Filing a bug is **opt-in**: with `--file-bug` a red run files **one** bug for the whole run through `scripts/report-bug.sh` (never one per step), and without it nobody's board is touched — the file still says why nothing was filed (`bug.filed=false` with the reason), and a filing that fails is recorded, never raised.
+**If the run command is not there**, `start-run` starts nothing and says `run command unavailable`: report that the scenario is published and stop. Never simulate a run, never hand a verdict to a case.
 
-Inject it as the module's `run_command`: a callable that runs the command on the script and returns the report it wrote (`--out`, default `./gui-test-results/<name>-<run id>.json`), with `core_available` set from whether the core and the binary loaded. **If the command does not exist yet, publish, say the run is unavailable and stop** — the module returns `reason: "run command unavailable"`, no verdict is written, and you never simulate a run or hand a verdict to a case.
+### 6. Write results back (a separate step)
 
-That results file is the run report step 6 reads. Never simulate a run, and never hand a verdict to a case the report does not carry.
+Once the results file exists — later, by the user or by CI, never by this skill waiting — run the command `start-run` printed:
 
-### 6. Write results back
+```bash
+python3 -m squad.to_test_scenario write-back <results file> --map <name>.gui-test.issues.json \
+  --repo <owner/name> --board users/<owner>/projects/<n> --bug-helper <MesenAI>/scripts/report-bug.sh
+```
 
-Read the run's results file and, for every case, comment on its sub-issue with the verdict, the observed value, the variant and the evidence link (screenshots go through the privacy gate and reach an issue only via the evidence branch, never as a CI artifact). A case with no result in the report is reported as such, never passed. The module does this from the run report:
+It reads the file and the map and writes:
 
 - `passed` → comment and close the case's sub-issue.
-- `failed` → comment the verdict with expected and observed, leave the case open, and link the run's **one** bug for the whole run (the run is asked for it with `--file-bug`, and it lists every failed case). Never one bug per case.
+- `failed` → comment the verdict with expected and observed, leave the case open, and link the one bug the run opened. The write-back never files a bug itself, and never one per case.
 - `needs review` / `pending` / `manual` → comment, leave open, and list on the parent. They are doubt and human residue: visible, never red.
-- A case with no result in the run is reported, not passed; an empty run writes nothing.
+- A case with no result in the run (a partial `--batch` run, a case the run did not reach) is reported as missing, not passed; an empty run writes nothing. Writing the same file back twice adds no case comment and reopens nothing.
 
 Screenshots reach an issue only through the **privacy gate** and the evidence branch — the skill never uploads a capture itself, and no resident or personal data goes into a script, an issue or a screenshot.
 
@@ -112,9 +112,8 @@ The parent gets one final comment with counts per verdict, the run id, the scrip
 
 ## Rules
 
+- Never wait on a run: start it, name the results file and the write-back command, and return.
 - A run that executed no step is not a pass, and a missing core fails rather than skips.
 - Never fabricate a result, a hash or a case id.
 - Nothing is published before the user approves the plan, and nothing is published on a coverage gap.
 - The script format, the target adapter and the runner are not this skill's to change (`gui-test/1`, ADR-0272).
-- Never put resident or private data in a script, issue or screenshot.
-- Do not invent fixture hashes: `<no-intro sha1 ...>` placeholders stay placeholders and the run reports the missing fixture.

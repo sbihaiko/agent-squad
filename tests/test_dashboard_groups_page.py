@@ -69,12 +69,14 @@ def test_every_card_is_a_keyboard_stop_enter_selects_and_space_opens_and_folds_a
 
 
 @needs_ego
-def test_fit_with_the_panel_open_keeps_every_card_right_of_the_panel(tmp_path):
-    steps = (LOAD + 'document.getElementById("b-panel").click();await wait();document.getElementById("b-fit").click();await wait();'
-             'const panel=document.getElementById("left").getBoundingClientRect().right,left=Math.min(...q(".card[data-name]").map(c=>c.getBoundingClientRect().left));'
-             'document.title="RESULT "+JSON.stringify({open:panel>300,clear:left>=panel});')
+def test_fit_with_the_panel_open_fits_the_whole_map_as_when_it_is_closed(tmp_path):
+    """The panel is a popup over the map, so it takes no room from the fit."""
+    steps = (LOAD + 'const edge=()=>Math.min(...q(".card[data-name]").map(c=>c.getBoundingClientRect().left));'
+             'document.getElementById("b-fit").click();await wait();const shut=edge();'
+             'document.getElementById("b-panel").click();await wait();document.getElementById("b-fit").click();await wait();'
+             'document.title="RESULT "+JSON.stringify({open:document.getElementById("left").getBoundingClientRect().right>300,same:edge()===shut});')
     got = drive(tmp_path, steps)
-    assert got == {"open": True, "clear": True}
+    assert got == {"open": True, "same": True}
 
 
 @needs_ego

@@ -49,7 +49,7 @@ class Navigator:
             moves = {label(m): m for m in adapter.moves(family)}
             options = [o for o in moves if o not in failed.get(key, set())]
             why = ("decision cap " + str(self.max_decisions) if decisions >= self.max_decisions
-                   else "spend cap $%.2f" % self.max_spend if spent >= self.max_spend
+                   else f"spend cap ${self.max_spend:.2f}" if spent >= self.max_spend
                    else "run spend cap" if budget is not None and budget.exhausted
                    else "no move left" if not options else None)
             if why:
@@ -104,8 +104,8 @@ class Navigator:
             untried = [m for m in moves_by_label if m not in node["tried"]]
             if not untried:
                 if not any(to != here and to is not None for to in node["tried"].values()) and self._judged(node["state"], scope):
-                    return "trap screen %s: no advertised action leaves it; path %s" % (
-                        node["state"].get("screen"), self._path(start, path))
+                    return (f"trap screen {node['state'].get('screen')}: no advertised action leaves it; "
+                            f"path {self._path(start, path)}")
                 hop = route(here)
                 if hop is None:
                     return None  # every reachable screen explored, none a trap
@@ -117,7 +117,7 @@ class Navigator:
                     path.append((m, to))
                 continue
             if played >= bound or (budget is not None and budget.exhausted) or (self.replay is None and spent >= self.max_spend):
-                why = f"sweep bound {bound}" if played >= bound else "run spend cap" if budget is not None and budget.exhausted else "spend cap $%.2f" % self.max_spend
+                why = f"sweep bound {bound}" if played >= bound else "run spend cap" if budget is not None and budget.exhausted else f"spend cap ${self.max_spend:.2f}"
                 return f"{why} reached after {played} moves with screens left to explore; path {self._path(start, path)}"
             if replayed is not None:
                 nxt = next(replayed, None)
@@ -149,7 +149,7 @@ class Navigator:
 
     @staticmethod
     def _path(start, path):
-        return start + "".join(" -[%s]-> %s" % (m, json.loads(to)["screen"]) for m, to in path)
+        return start + "".join(f" -[{m}]-> {json.loads(to)['screen']}" for m, to in path)
 
     def _replay(self, adapter, goal, moves):
         for m in moves:

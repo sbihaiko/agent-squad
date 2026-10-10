@@ -45,7 +45,7 @@ def main(spec, kwargs):
             if call == "launch":
                 session = out["ok"] if out["ok"] is not None else adapter
                 out["ok"] = None  # the runner reads the session through later calls, not from this answer
-        except Exception as e:  # an adapter error is reported, a crash is not
+        except Exception as e:  # noqa: BLE001 - an adapter may fail in any way; the error is reported, a crash is not
             out = {"error": f"{type(e).__name__}: {e}"}
         proto.write(json.dumps(out, default=str) + "\n")
         proto.flush()

@@ -1,7 +1,18 @@
 #!/bin/bash
 # usage: mkreq.sh <name> <body-file>   writes ~/.cache/squad-goal/req/<name>.txt = body + pre-push checklist
 set -e
-cm=$(jq -r ".coding_models[0] // empty" "$(cd "$(dirname "$0")" && pwd)/models.json"); fb=$(jq -r ".coding_models[1] // empty" "$(cd "$(dirname "$0")" && pwd)/models.json")
+# The model this request names is the first coding_models entry whose `hours` window contains the current local hour (an
+# absent window always matches), the same rule launch.py enforces: naming entry [0] blindly would ask for a model the hours
+# gate is about to refuse, or quietly use an Anthropic model during the day.
+mjson="$(cd "$(dirname "$0")" && pwd)/models.json"; hh=$((10#$(date +%H)))
+inwin() { local w; w=$(jq -r --arg m "$1" '.hours.coding_models[$m] // empty' "$mjson"); [ -n "$w" ] || return 0
+  local a=$((10#${w%%-*})) b=$((10#${w##*-}))
+  if [ "$a" -le "$b" ]; then [ "$hh" -ge "$a" ] && [ "$hh" -lt "$b" ]; else [ "$hh" -ge "$a" ] || [ "$hh" -lt "$b" ]; fi; }
+cm=""; fb=""
+for m in $(jq -r '.coding_models[]' "$mjson"); do inwin "$m" || continue
+  if [ -z "$cm" ]; then cm=$m; elif [ -z "$fb" ]; then fb=$m; fi; done
+[ -n "$cm" ] || cm=$(jq -r '.coding_models[0] // empty' "$mjson")   # every entry out of window: name [0], launch.py refuses loudly
+[ -n "$fb" ] || fb=$(jq -r --arg c "$cm" 'first(.coding_models[]|select(.!=$c)) // empty' "$mjson")
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"; out="$HOME/.cache/squad-goal/req/$1.txt"
 grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body lacks the 'IMPORTANT: your first and only action' line" >&2; exit 1; }

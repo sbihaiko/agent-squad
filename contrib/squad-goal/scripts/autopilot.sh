@@ -1,6 +1,7 @@
 #!/bin/bash
 # One pass per watch cycle. Open PRs that name an issue ("Refs #N"):
-#  1. new head sha, no review yet -> start revci.sh detached (review + CI wait)
+#  1. new head sha, no review yet -> prepush.sh gate (process-only problems become a CHANGES verdict with no model review),
+#     else start revci.sh detached (review + CI wait)
 #  2. review+CI done on the head sha: CHANGES, failed CI, merge conflict or unresolved review threads
 #     -> autofix.sh (one agent-squad fix run on the PR branch, every problem in one request), up to AP_MAX_ROUNDS;
 #     past the cap -> autopanel.sh (Opus ruling: one more round, or label needs-human + NEEDS OWNER on the issue)
@@ -28,19 +29,45 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
   fi
   s9=${sha:0:9}; out="$SG_STATE/revci-$pr.out"
   case ",$labels," in *,hold,*|*,needs-human,*) grep -q "^#$pr $s9 .*APPROVE" "$out" 2>/dev/null && { [ -e "$A/hold-$pr-$s9-label" ] || { touch "$A/hold-$pr-$s9-label"; echo "HOLD #$pr @ $s9: label hold/needs-human ($labels)"; }; }; continue;; esac
+  # an issue closed as a duplicate / not planned: its PR is superseded; no review, fix or merge (janitor I kills such runs,
+  # so a fix dispatched here would die and be retried forever). Re-asked every 10 min per PR (an issue can be reopened).
+  ck="$A/isschk-$pr"; [ -e "$A/dupiss-$pr-$iss" ] && [ -n "$(find "$ck" -mmin -10 2>/dev/null)" ] && continue
+  if [ -z "$(find "$ck" -mmin -10 2>/dev/null)" ]; then touch "$ck"
+    if bash "$here/autofix.sh" --dupissue $iss; then
+      [ -e "$A/dupiss-$pr-$iss" ] || { touch "$A/dupiss-$pr-$iss"; printf "PR #%s is superseded: issue #%s is closed as a duplicate / not planned, so the loop will not review, fix or merge it. Close the PR, or point its Refs at the live issue.\n" $pr $iss > "$SG_STATE/cq/$iss-dupiss$pr.md"; echo "SUPERSEDED-ISSUE #$pr: issue #$iss closed as duplicate/not planned; no review, fix or merge"; }
+      continue
+    fi; rm -f "$A/dupiss-$pr-$iss"; fi
   line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
     [ -e "$A/launched-$pr-$s9" ] && continue
-    touch "$A/launched-$pr-$s9"; nohup bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
+    touch "$A/launched-$pr-$s9"
+    # prepush gate: process-only problems (closing keyword, a cited file missing from the head, profile checks) skip the
+    # model review and go straight to a fix round as a CHANGES verdict (autofix reads review-<pr>.md as usual)
+    pp=; if [ "${SG_PREPUSH_GATE:-yes}" = yes ] && pp=$(bash "$here/prepush.sh" $pr 2>/dev/null; exit $?) ; then :; elif [ -n "$pp" ]; then
+      printf 'Prepush gate (no model review ran)\nVERDICT: CHANGES\n%s\n' "$pp" > "$SG_STATE/review-$pr.md"
+      echo "#$pr $s9 $(gh api repos/$SG_REPO/pulls/$pr -q .mergeable_state 2>/dev/null || echo unknown) CI=skipped VERDICT: CHANGES (prepush)" >> "$out"
+      echo "PREPUSH #$pr @ $s9: $(printf '%s' "$pp" | wc -l | tr -d ' ') process problem(s), fix round without a model review"; continue; fi
+    nohup bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started"; continue
   fi
   [[ $line == *SUPERSEDED* || $line == *CI_TIMEOUT* ]] && continue
   # unresolved threads: asked once per head sha after review+CI (CodeRabbit has posted by then), cached
   tf="$A/threads-$pr-$s9"; [ -e "$tf" ] || bash "$here/autofix.sh" --threads $pr > "$tf"; nt=$(cat "$tf"); nt=${nt:-0}
   ms=$(awk '{print $3}' <<<"$line"); ci=$(sed -n 's/.*CI=\([^ ]*\).*/\1/p' <<<"$line")
-  prob=0 hard=0; [[ $line == *CHANGES* ]] && hard=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
-  [ $hard = 1 ] || [ "$ms" = dirty ] || [ "$nt" -gt 0 ] && prob=1
+  # BLOCKED means no model in the chain could answer at all (a spent quota, a window that has not opened, a model that
+  # hit its cap): the PR itself is not accused of anything, so an autofix would spend a round on nothing. Re-run the
+  # review instead, at most once per head per SG_REREVIEW_MINUTES, so a transient outage heals without moving the head.
+  if [[ $line == *BLOCKED* ]] && [[ $ci != *failure* && $ci != *timed_out* && $ci != *cancelled* ]] && [ "$ms" != dirty ]; then
+    rf="$A/rereview-$pr-$s9"
+    [ -e "$rf" ] && [ $(( $(date +%s) - $(stat -f %m "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] && continue
+    /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue   # a review of this PR is already in flight: two would race on review-<pr>.md
+    touch "$rf"; nohup bash "$here/revci.sh" $pr $iss >> "$SG_STATE/revci-$pr.out" 2>&1 </dev/null &
+    echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
+    continue
+  fi
+  prob=0 hard=0; [[ $line == *CHANGES* && $line != *"(prepush)"* ]] && hard=1; [[ $line == *"(prepush)"* ]] && prob=1; [[ $ci == *failure* || $ci == *timed_out* || $ci == *cancelled* ]] && hard=1
+  [ $hard = 1 ] || [ "$ms" = dirty ] || [ "$nt" -gt 0 ] && prob=1   # a prepush CHANGES is a soft round (process, not code)
   if [ $prob = 1 ]; then
     [ -e "$A/nofix" ] && continue
     [ -e "$A/queued-$pr-$s9" ] && continue; touch "$A/queued-$pr-$s9"
