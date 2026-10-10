@@ -698,3 +698,74 @@ def test_ci_a_clean_run_is_green(tmp_path):
     results = _three_step_run(tmp_path)[3]
     code, _ = ci_verdict(results, core_available=True)
     assert code == 0
+
+
+# --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
+
+from squad.gui_test_variants import (  # noqa: E402
+    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+
+
+class _Modal(TickingFake):
+    def __init__(self, out_dir):
+        super().__init__(out_dir)
+        self.modes = []
+
+    def set_variant(self, axis, value):
+        self.modes.append(value)
+
+
+def _v1191_script(*steps):
+    d = script(*steps)
+    d["requires"] = {"actions": ["pad.press", "pointer.click", "text.type", "window.mode"],
+                     "checks": ["ui.screen", "ui.focused"]}
+    return d
+
+
+def test_1191_a_step_tagged_for_both_window_modes_runs_once_per_mode(tmp_path):
+    both = step("b1.both", variants={"window.mode": ["windowed", "fullscreen"]})
+    win = step("b1.win", variants={"window.mode": "windowed"})
+    untagged = step("b1.any")
+    d = _v1191_script(both, win, untagged)
+    a = _Modal(tmp_path)
+    out = run_variants(d, a, axis="window.mode")
+    assert [(r["id"], r["variant"]) for r in out] == [
+        ("b1.both", "windowed"), ("b1.win", "windowed"), ("b1.any", "windowed"),
+        ("b1.both", "fullscreen"), ("b1.any", "fullscreen")]
+    assert [m for m in a.modes] == ["windowed", "fullscreen"]
+
+
+def test_1191_pointer_and_text_actions_reach_the_adapter(tmp_path):
+    click = step("b1.click", action={"name": "pointer.click", "args": {"x": 10, "y": 20, "button": "left"}})
+    typed = step("b1.type", action={"name": "text.type", "args": {"text": "contra"}})
+    d = _v1191_script(click, typed)
+    a = TickingFake(tmp_path)
+    validate(d, {**a.capabilities(), "actions": a.capabilities()["actions"] + ["pointer.click", "text.type"],
+                 "variants": a.capabilities()["variants"]})
+    run_variants(d, a, axis="window.mode")
+    assert ("pointer.click", {"x": 10, "y": 20, "button": "left"}) in a.log
+    assert ("text.type", {"text": "contra"}) in a.log
+
+
+def test_1191_a_full_screen_pilot_case_runs_locally_in_the_real_window_mode(tmp_path):
+    fs = step("b1.fs", variants={"window.mode": "fullscreen"})
+    a = RealWindowAdapter(TickingFake(tmp_path), env={}, permissions=lambda: {"accessibility", "screen-recording"})
+    out = run_variants(_v1191_script(fs), a, axis="window.mode")
+    assert [(r["id"], r["variant"], r["verdict"]) for r in out] == [("b1.fs", "fullscreen", "passed")]
+    assert a.real_window is True
+
+
+def test_1191_the_real_window_mode_refuses_to_start_without_the_permissions(tmp_path):
+    a = RealWindowAdapter(TickingFake(tmp_path), env={}, permissions=lambda: {"accessibility"})
+    with pytest.raises(PermissionsMissing) as e:
+        a.launch({})
+    assert "screen-recording" in str(e.value) and "accessibility" not in str(e.value)
+    assert a.inner.log == []
+
+
+def test_1191_the_real_window_mode_is_not_used_in_ci(tmp_path):
+    for env in ({"CI": "true"}, {"GITHUB_ACTIONS": "true"}):
+        a = RealWindowAdapter(TickingFake(tmp_path), env=env,
+                              permissions=lambda: {"accessibility", "screen-recording"})
+        with pytest.raises(RealWindowRefused):
+            a.launch({})
