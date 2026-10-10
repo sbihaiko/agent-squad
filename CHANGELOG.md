@@ -18,7 +18,7 @@
   - **Review** (`review.sh`): walks `review_models` with a per-model timeout (`review_timeout_seconds`),
     logs latency to `review-times.tsv`, and reviews fix rounds on the delta since the last reviewed sha
     with the previous findings (full review on a first pass, a rebase or a big delta).
-  - **Worktrees**: `wtclean.sh` removes finished, pushed child worktrees; unpushed ones are kept and reported.
+  - **Worktrees**: `wtclean.sh` removes finished, pushed child worktrees and leaves the run folder and its dashboard server alone (the hub lists runs from live servers); unpushed ones are kept and reported.
   - **Issue comments**: dispatch, PR opened, run verdict, review/CI result, fix, panel, merge and e2e are
     queued and posted on the issue by `cqflush.sh`.
   - **Hub** (`hub.py`): live run dashboards, board columns with live totals (closed PRs counted from the
