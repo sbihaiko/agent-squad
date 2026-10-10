@@ -9,6 +9,7 @@ G=/usr/bin/git; C=$SG_CHECKOUT
 $G -C "$C" fetch -q origin "$b" || { echo "acpr: cannot fetch origin/$b" >&2; exit 2; }
 t=$(mktemp -d "${TMPDIR:-/tmp}/acpr.XXXXXX"); rmdir "$t"
 $G -C "$C" worktree add -q --detach "$t" "origin/$b" || { echo "acpr: cannot check out origin/$b" >&2; exit 2; }
+trap '$G -C "$C" worktree remove --force "$t" 2>/dev/null' EXIT; trap 'exit 143' TERM INT HUP   # a gate timeout kills us: still drop the tree
 echo "acpr: origin/$b @ $($G -C "$t" rev-parse --short=9 HEAD): $*"
 (cd "$t" && bash -c "$*"); rc=$?
-$G -C "$C" worktree remove --force "$t"; exit $rc
+exit $rc

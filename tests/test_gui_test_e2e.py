@@ -512,3 +512,104 @@ def test_the_recorded_vision_measurement_covers_the_fixed_screenshot_set():
     assert rec["total"] == len(cases) and rec["correct"] == rec["total"] and rec["model"]
     assert [(c["image"], c["expect"], c["want"]) for c in rec["cases"]] == [(c["image"], c["expect"], c["answer"]) for c in cases]
     assert all(c["got"] == c["want"] for c in rec["cases"])
+
+
+# --- #1190: a failed run opens one bug with its evidence ---
+
+from squad.gui_test_report import evidence_store, file_bug_with, report_failures  # noqa: E402
+
+
+def _two_failures_script():
+    return script(
+        step("b1.ok"),
+        step("b1.bad-screen", expect="the library is showing",
+             action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.home"}}),
+        step("b1.never", expect="the dialog appears",
+             wait={"check": "ui.screen == nowhere", "timeout_ticks": 2}),
+    )
+
+
+class _Sinks:
+    def __init__(self):
+        self.stored, self.bugs = [], []
+
+    def store(self, path, name):
+        self.stored.append((path, name))
+        return f"https://evidence.example/{name}"
+
+    def file_bug(self, title, body, priority=None):
+        self.bugs.append((title, body, priority))
+        return "https://github.com/sbihaiko/MesenAI/issues/9999"
+
+
+def test_1190_failed_run_opens_one_bug_listing_both_steps_with_inline_evidence(tmp_path):
+    d = _two_failures_script()
+    results = run(d, TickingFake(tmp_path))
+    sinks = _Sinks()
+    url = report_failures(d, results, sinks.store, sinks.file_bug, tmp_path / "approvals.json")
+    assert url == "https://github.com/sbihaiko/MesenAI/issues/9999"
+    [(title, body, _)] = sinks.bugs
+    assert "tiny" in title
+    for sid, expect in (("b1.bad-screen", "the library is showing"), ("b1.never", "the dialog appears")):
+        assert f"`{sid}`" in body and expect in body
+    assert "failed (timeout waiting for ui.screen == nowhere)" in body
+    # the failed step's own screenshot and the previous step's render inline as images
+    shot = results[1]["capture"]["sha256"][:12]
+    prev = results[0]["capture"]["sha256"][:12]
+    assert re.search(rf"!\[[^\]]*\]\(https://evidence\.example/[^)]*{shot}[^)]*\)", body)
+    assert re.search(rf"!\[[^\]]*\]\(https://evidence\.example/[^)]*{prev}[^)]*\)", body)
+    # the timed-out step took no capture, so it says so instead of linking one
+    assert "no screenshot" in body
+
+
+def test_1190_clean_run_creates_no_issue_and_stores_nothing(tmp_path):
+    d = script(step("b1.a"), step("b1.b"))
+    sinks = _Sinks()
+    assert report_failures(d, run(d, TickingFake(tmp_path)), sinks.store, sinks.file_bug,
+                           tmp_path / "approvals.json") is None
+    assert sinks.bugs == [] and sinks.stored == []
+
+
+def test_1190_a_pending_step_alone_does_not_open_a_bug(tmp_path):
+    d = _mixed_script()
+    sinks = _Sinks()
+    results = run(d, None)
+    assert report_failures(d, results, sinks.store, sinks.file_bug, tmp_path / "a.json") is None
+
+
+def test_1190_a_held_screenshot_is_never_stored_and_the_bug_says_it_is_held(tmp_path):
+    d = _privacy_script()
+    d["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.home"
+    results = run(d, TickingFake(tmp_path))
+    sinks = _Sinks()
+    report_failures(d, results, sinks.store, sinks.file_bug, tmp_path / "approvals.json")
+    held_sha = results[1]["capture"]["sha256"]
+    assert all(held_sha[:12] not in name for _, name in sinks.stored)
+    assert "held pending approval" in sinks.bugs[0][1]
+
+
+def test_1190_evidence_store_commits_to_a_dedicated_branch_and_returns_a_rendering_url(tmp_path):
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG-bytes")
+    calls = []
+
+    def runner(args, **kw):
+        calls.append(args)
+        return ""
+
+    store = evidence_store("sbihaiko/MesenAI", branch="gui-test-evidence", runner=runner)
+    url = store(str(png), "run1/b1.bad-screen-abc123.png")
+    assert url == ("https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/"
+                   "run1/b1.bad-screen-abc123.png?raw=true")
+    [args] = calls
+    assert args[:4] == ["gh", "api", "--method", "PUT"]
+    assert "repos/sbihaiko/MesenAI/contents/run1/b1.bad-screen-abc123.png" in args
+
+
+def test_1190_the_bug_goes_through_report_bug_sh(tmp_path):
+    calls = []
+    fb = file_bug_with("/repo", runner=lambda args, **kw: calls.append(args) or "Issue created: u/1\n")
+    fb("t", "b", "P1")
+    assert calls == [["/repo/scripts/report-bug.sh", "t", "b", "P1"]]
