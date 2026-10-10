@@ -34,7 +34,7 @@ def test_duplicate_step_id_across_batches():
     assert "duplicate step id x.a" in reasons(d)
 
 
-@pytest.mark.parametrize("field", ["id", "role", "precondition", "action", "wait",
+@pytest.mark.parametrize("field", ["id", "role", "precondition", "wait",
                                    "expect", "severity", "mode"])
 def test_missing_step_field(field):
     s = step("b1.one")
@@ -145,3 +145,18 @@ def test_matching_families_are_accepted():
 def test_action_without_a_family_is_not_compared():
     validate(script(step("b1.one", action={"name": "nav.goal", "args": {"goal": "ui.screen == play.home"}},
                          role="setup", wait={"check": "ui.screen == play.home", "timeout_frames": 600})))
+
+
+def test_observe_only_automated_step_needs_no_action():
+    s = step("b1.one")
+    del s["action"]
+    validate(script(s))
+
+
+def test_observe_only_step_still_needs_wait_and_check():
+    s = step("b1.one")
+    del s["action"], s["check"]
+    assert "b1.one: observe-only step needs check" in reasons(script(s))
+    s = step("b1.one")
+    del s["action"], s["wait"]
+    assert "b1.one: missing field wait" in reasons(script(s))

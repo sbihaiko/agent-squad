@@ -43,8 +43,12 @@ def _wait(w, where, bad):
 def _step(s, in_steps, ctx, bad):
     sid = s.get("id", "?")
     for f in STEP:
-        if f not in s and not (s.get("mode") == "manual" and f in MANUAL_OPTIONAL):
+        if f not in s and not (s.get("mode") == "manual" and f in MANUAL_OPTIONAL) \
+                and f != "action":
             bad.append(f"{sid}: missing field {f}")
+    # An automated step may only observe: no action, but then it needs wait and check.
+    if "action" not in s and s.get("mode") == "automated" and "check" not in s:
+        bad.append(f"{sid}: observe-only step needs check")
     if s.get("id") in ctx["ids"]:
         bad.append(f"duplicate step id {sid}")
     ctx["ids"].add(s.get("id"))
