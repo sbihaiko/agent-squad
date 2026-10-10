@@ -70,7 +70,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from squad.gui_test import ScriptError, validate  # noqa: E402
-from squad.gui_test_report import comment_on_bug_with, file_bug_with, find_open_bug_with, report_failures_detail  # noqa: E402
+from squad.gui_test_report import (comment_on_bug_with, evidence_lock, evidence_store,  # noqa: E402
+                                   file_bug_with, find_open_bug_with, report_failures,
+                                   report_failures_detail, upload_evidence)
 from squad.gui_test_supervise import Crash, Hang, Session, VariantUnsupported, run_supervised  # noqa: E402
 
 RESULTS_FORMAT = "gui-test-results/1"
@@ -189,6 +191,18 @@ def summary_of(rows):
         counts[kind(r["verdict"])] += 1
     return {**counts, "steps": len(rows),
             "executed": len(rows) - counts["pending"] - counts["not executed"]}
+
+
+def attach_evidence(rows, repo, approvals_path, store=None, lock=None):
+    """Give the run's failed and needs-review rows their evidence URL, or `withheld` when the gate holds the capture.
+
+    With no `repo` nothing is published: a command a person runs keeps its captures local (ADR-0135 rule 5, `local_store`).
+    With one, every push is serialized on the branch's lock, so two runs never collide on the evidence branch (#1244).
+    """
+    if not repo:
+        return rows
+    return upload_evidence(rows, store or evidence_store(repo), approvals_path,
+                           lock_path=lock or evidence_lock(repo))
 
 
 def local_store(path, name=None):
@@ -349,6 +363,8 @@ def main(argv=None):
     sel = ap.add_mutually_exclusive_group()
     sel.add_argument("--batch", help="run only this batch: a partial run, and the results file records the selection")
     sel.add_argument("--case", help="run only this case id, with the setup and teardown steps it needs")
+    ap.add_argument("--evidence-repo", help="owner/name whose gui-test-evidence branch holds this run's failed and "
+                                            "needs-review captures; without it nothing is published (ADR-0135)")
     sel.add_argument("--variant", metavar="AXIS=VALUE",
                      help="run only the steps this variant of an axis applies to, e.g. window.mode=fullscreen")
     ap.add_argument("--file-bug", action="store_true",
@@ -425,7 +441,7 @@ def main(argv=None):
                                  variant=switch)
     except VariantUnsupported as ex:
         return _failed(record, out, "gui test run", [f"nothing was launched: {ex}"])
-    rows = rows_for(script, out_dir)
+    rows = attach_evidence(rows_for(script, out_dir), args.evidence_repo, artifacts / "approvals.json")
     record.update({"script": {**record["script"], "name": script["name"]},
                    "batches": out_dir["batches"], "steps": rows,
                    "summary": summary_of(rows)})

@@ -348,7 +348,10 @@ def run_launched(script, adapter, record=None, only=None):
 def main(argv=None):
     """python -m squad.gui_test_emulator <script.json> --app <cmd> --out <dir> [--library <dir>] [--only <id,id>]
 
-    Runs the script unattended and writes replay events (events.jsonl) and verdicts (results.json) to --out."""
+    Runs the script unattended and writes replay events (events.jsonl) and verdicts (results.json) to --out.
+
+    With `--evidence-repo`, every failed and needs-review capture goes through the privacy gate and onto that repo's
+    evidence branch, and the step records the URL (or `withheld`); a green run uploads nothing (#1244)."""
     import argparse
     ap = argparse.ArgumentParser(prog="squad.gui_test_emulator")
     ap.add_argument("script")
@@ -357,6 +360,8 @@ def main(argv=None):
     ap.add_argument("--library")
     ap.add_argument("--portable", action="store_true", help="run from a clone of the app folder with its own settings.json")
     ap.add_argument("--only", help="comma-separated step ids to run")
+    ap.add_argument("--evidence-repo", help="owner/name whose evidence branch holds this run's failed screenshots")
+    ap.add_argument("--approvals", help="the privacy gate's approvals file (default: <out>/approvals.json)")
     a = ap.parse_args(argv)
     from squad.gui_test import validate
     script = json.loads(Path(a.script).read_text(encoding="utf-8"))
@@ -373,6 +378,10 @@ def main(argv=None):
     validate(script, adapter.capabilities())
     events = []
     results = run_launched(script, adapter, record=events.append, only=only)
+    if a.evidence_repo:
+        from squad.gui_test_report import evidence_lock, evidence_store, upload_evidence
+        results = upload_evidence(results, evidence_store(a.evidence_repo), a.approvals or out / "approvals.json",
+                                  lock_path=evidence_lock(a.evidence_repo))
     (out / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
     (out / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     for r in results:
