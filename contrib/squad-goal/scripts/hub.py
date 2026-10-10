@@ -436,7 +436,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=list></div></div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bd title="dock right / bottom"></button> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
 <script>
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
@@ -580,10 +580,9 @@ async function pollStats(){try{pollSubs();
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,N,pins:[...pins],q,per,bo})};
-if(/dock=bottom/.test(location.hash))bo.dock="bottom";
+bo.dock="bottom";   // the board always docks at the bottom
 const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off?(bo.h||320)+"px":""};
-const applyDock=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");$("#bd").textContent=bo.dock==="bottom"?"▯ right":"▭ bottom";sizeBoard();$("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;"};
-$("#bd").onclick=()=>{bo.dock=bo.dock==="bottom"?"right":"bottom";applyDock();saveB();pollBoard()};
+const applyDock=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");sizeBoard();$("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;"};
 $("#board").classList.toggle("off",!!bo.off);applyDock();$("#bx").onclick=()=>{bo.off=!bo.off;$("#board").classList.toggle("off",bo.off);applyDock();saveB()};
 const isPR=n=>n==="Open PRs"||n==="Closed PRs";
 const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
