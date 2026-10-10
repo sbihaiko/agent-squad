@@ -1,6 +1,6 @@
 {
   "name": "agent-squad",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "agent-squad: a self-adapting orchestration graph on the Claude Agent SDK. Edit workflows, start work from a request or a task.",
   "author": { "name": "Rafael Aguilher da Costa" },
   "repository": "https://github.com/mmctech-ai/agent-squad"
