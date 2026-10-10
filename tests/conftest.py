@@ -19,6 +19,12 @@ def _no_real_page(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_host_pytest_plugins(monkeypatch):
+    """A gate command that runs `python3 -m pytest` in a fake subject must not load the plugins of the host's global python3: a broken one (deepeval on an old tenacity) crashes pytest at import, and the gate fails for a reason the test never set up."""
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+
+
+@pytest.fixture(autouse=True)
 def _own_memory_dir(monkeypatch, tmp_path_factory):
     """`squad setup` writes a memory index outside the project: no test touches the Owner's ~/.claude."""
     monkeypatch.setenv("SQUAD_MEMORY_DIR", str(tmp_path_factory.mktemp("memory")))

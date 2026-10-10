@@ -35,6 +35,7 @@ import subprocess
 from pathlib import Path
 
 from squad.gui_test import validate
+
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
 CASE_LABEL = "test-case"
 TRIAGE_LABEL = "ready-for-agent"

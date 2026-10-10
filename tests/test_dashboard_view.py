@@ -55,7 +55,7 @@ def test_pan_moves_the_view_and_keeps_the_scale():
 def test_the_dashboard_has_a_dark_theme_a_side_panel_overlay_and_a_graph_area_that_fills_the_rest():
     page = page_template()
     assert "--bg:#0f1115" in page and "--panel:#161a21" in page and "--acc:#5aa9ff" in page  # the playground reference palette
-    assert re.search(r"#left \{[^}]*position:fixed[^}]*width:360px", page) and re.search(r"grid-template-columns:\s*1fr;", page)   # the panel overlays, the graph keeps the width
+    assert re.search(r"#left \{[^}]*position:fixed[^}]*width:min\(720px,92vw\)", page) and re.search(r"grid-template-columns:\s*1fr;", page)   # the panel is a popup over the map, the graph keeps the width
     assert "agent-squad-run-dashboard" in page and "graph editor" not in page
 
 

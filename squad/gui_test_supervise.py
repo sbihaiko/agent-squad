@@ -27,8 +27,8 @@ class Session:
         try:
             self.proc.stdin.write((json.dumps({"call": name, "args": list(args)}) + "\n").encode())
             self.proc.stdin.flush()
-        except OSError:
-            raise self._end(Crash)
+        except OSError as e:
+            raise self._end(Crash) from e
         deadline = time.monotonic() + self.timeout
         fd = self.proc.stdout.fileno()
         while b"\n" not in self.buf:
@@ -51,7 +51,7 @@ class Session:
         return kind(self.output())
 
     def kill(self):
-        for attempt in (0, 1):
+        for _ in (0, 1):
             try:
                 os.killpg(self.proc.pid, signal.SIGKILL)
             except ProcessLookupError:
