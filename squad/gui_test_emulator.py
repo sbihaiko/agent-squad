@@ -27,6 +27,31 @@ KNOWN_PROFILES = tuple(PROFILES)
 NES_HEADER = 16
 
 
+# #1282: the checks that read what a player sees (the hook's own state, ADR-0271) and the vocabularies
+# they name - the action bar's closed id list, the Play surfaces, and the ports the lamps label.
+# #1282: the checks that read what a player sees (the hook's own state, ADR-0271). The advertised four are
+# the ones a gui-test/1 script may name - `ui.*` is the snapshot namespace. Issue #1282 also names
+# `emu.paused`, `pad.lamps` and `pad.haptics`; ADR-0272 item 7 reserves `emu.*` (not part of v1) and makes
+# `pad.*` the ACTION namespace, so the validator refuses them in a script: the adapter answers them (a
+# direct `session.check`, used by the emulator-side adapter and by the MesenAI hook), and they are NOT
+# advertised, because a name a script cannot write is not a capability of the format. The mismatch is
+# flagged for the owner rather than resolved by amending the accepted ADR.
+CHECKS = ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs", "ui.ring", "ui.footer", "ui.surface", "ui.items"]
+PLAYER_VISIBLE_CHECKS = {"ui.ring", "ui.footer", "ui.surface", "emu.paused", "pad.lamps", "ui.items", "pad.haptics"}
+FOOTER_IDS = ("move", "confirm", "favorite", "search", "settings", "console-filter", "back")
+SURFACES = ("play.quit-game", "play.select-rom", "play.shader", "play.tool", "play.bios",
+            "play.controller-setup", "play.settings.system", "play.settings", "play.controller-sheet",
+            "play.pack-dep", "play.pack-picker", "play.enhancements", "play.pack-detail", "play.cheats",
+            "play.replays", "play.save-states", "play.pause", "play.library", "play.library-browse",
+            "play.library-folders")
+NONE_ID = "none"
+
+
+def _port(value):
+    """One of the four ports the lamps label ("P1"), 1-based; anything else is not a port."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 4 else None
+
+
 class AdapterError(Exception):
     """The hook refused a request or answered nothing."""
 
@@ -61,7 +86,7 @@ class EmulatorAdapter:
         self.command, self.env, self.token, self._id, self._captures = [], {}, "", 0, 0
 
     def capabilities(self):
-        return {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"],
+        return {"actions": ["pad.press"], "checks": list(CHECKS),
                 "input_families": ["ticks"], "variants": {"window.mode": ["windowed"]}}
 
     # ---- fixtures, placed before the process starts ----
@@ -228,7 +253,12 @@ class EmulatorAdapter:
             time.sleep(0.02)
 
     def check(self, name, args):
-        state, want = self._state(), args["is"]
+        state = self._state()
+        # #1282: what a player judges by eye, read from the hook's own UI state - never a pixel. The
+        # ids are the application's own; one the application does not have is "unknown id", never false.
+        if name in PLAYER_VISIBLE_CHECKS:
+            return self._check_player_visible(name, state, args)
+        want = args["is"]
         controls = state.get("controls", [])
         known = {c["id"] for c in controls} | {state.get("screen"), state.get("focus")} | set(state.get("dialogs", []))
         if name == "ui.dialogs" and want == "none":
@@ -243,6 +273,50 @@ class EmulatorAdapter:
             # The first-run and populated Homes both carry play.home.open-rom; one is on screen at a time.
             return any(c["visible"] for c in controls if c["id"] == want)
         return want in state.get("dialogs", [])
+
+    def _check_player_visible(self, name, state, args):
+        """#1282: the ring, the action bar, the open surface, paused, the port lamps, the focused
+        list's entries and the haptic ticks the menu asked for since the last step."""
+        controls = {c["id"] for c in state.get("controls", [])} | {state.get("screen"), state.get("focus")} | set(state.get("dialogs", []))
+        if name == "ui.ring":
+            ring = state.get("ring") or {}
+            if args["is"] != NONE_ID and args["is"] not in controls:
+                return "unknown id"
+            return (ring.get("target") if ring.get("visible") else NONE_ID) == args["is"]
+        if name == "ui.surface":
+            if args["is"] != NONE_ID and args["is"] not in SURFACES:
+                return "unknown id"
+            return state.get("surface", NONE_ID) == args["is"]
+        if name == "ui.footer":
+            bar = [str(action) for action in state.get("footer", [])]
+            if "contains" in args:
+                if args["contains"] not in FOOTER_IDS:
+                    return "unknown id"
+                return args["contains"] in bar
+            if any(word and word not in FOOTER_IDS for word in str(args["is"]).split(",")):
+                return "unknown id"
+            return ",".join(bar) == args["is"]
+        if name == "ui.items":
+            items = [str(item) for item in state.get("items", [])]
+            return items == list(args["is"]) if "is" in args else args["contains"] in items
+        if name == "emu.paused":
+            return bool(state.get("paused")) == bool(args["is"])
+        if name == "pad.lamps":
+            port = _port(args["port"])
+            if port is None:
+                return "unknown id"
+            lamps = state.get("lamps") or {}
+            if not lamps.get("shown"):
+                got = "hidden"
+            else:
+                got = next((("lit" if lamp["lit"] else "dim") for lamp in lamps.get("ports", [])
+                            if lamp["port"] == port), "hidden")
+            return got == args["is"]
+        port = _port(args["pad"])
+        if port is None:
+            return "unknown id"
+        count = next((entry["count"] for entry in state.get("haptics", []) if entry["pad"] == port), 0)
+        return count >= args["at_least"] if "at_least" in args else count == args["is"]
 
     def _settled(self):
         """The window has drawn its screen: a named control other than the screen's root is on it. The hook names

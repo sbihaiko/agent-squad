@@ -262,7 +262,8 @@ def test_the_emulator_adapter_passes_the_shared_contract_suite(tmp_path):
 def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
     caps = _emulator(tmp_path).capabilities()
     assert caps["actions"] == ["pad.press"]
-    assert set(caps["checks"]) == {"ui.screen", "ui.focused", "ui.visible", "ui.dialogs"}
+    assert set(caps["checks"]) == {"ui.screen", "ui.focused", "ui.visible", "ui.dialogs",
+                                   "ui.ring", "ui.footer", "ui.surface", "ui.items"}
     assert caps["input_families"] == ["ticks"]
 
 
@@ -293,6 +294,70 @@ def test_a_script_runs_unattended_through_the_adapter_with_a_capture_per_step(tm
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG")
     assert adapter.teardown() == []
+
+
+def test_a_run_reads_what_the_player_sees_through_the_adapter(tmp_path):
+    """#1282: the ring, the action bar, the open surface and the focused list's entries, driven through the
+    runner against the stub application - each one answered from the hook's own UI state, never a pixel."""
+    d = script(
+        step("b1.ring", check={"name": "ui.ring", "args": {"is": "play.home.open-rom"}}),
+        step("b1.bar", check={"name": "ui.footer", "args": {"is": "confirm"}}),
+        step("b1.surface", check={"name": "ui.surface", "args": {"is": "none"}}),
+        step("b1.open", action={"name": "pad.press", "args": {"button": "A", "ticks": 2}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 40},
+             check={"name": "ui.surface", "args": {"is": "play.library"}}),
+        # The library is up: its own wait, or the runner's default (the Home's focus) would time out.
+        step("b1.items", wait={"check": "ui.screen == play.library", "timeout_ticks": 40},
+             check={"name": "ui.items", "args": {"contains": "play.library.tile.Contra (USA).nes"}}),
+        step("b1.bar-again", wait={"check": "ui.screen == play.library", "timeout_ticks": 40},
+             check={"name": "ui.footer", "args": {"contains": "back"}}),
+    )
+    d["requires"] = {"actions": ["pad.press"],
+                     "checks": ["ui.ring", "ui.footer", "ui.surface", "ui.items", "ui.screen"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    adapter = _emulator(tmp_path)
+    validate(d, adapter.capabilities())
+    try:
+        results = run_launched(d, adapter, record=lambda e: None)
+        assert [(r["id"], r["verdict"]) for r in results] == [
+            ("b1.ring", "passed"), ("b1.bar", "passed"), ("b1.surface", "passed"),
+            ("b1.open", "passed"), ("b1.items", "passed"), ("b1.bar-again", "passed")]
+    finally:
+        adapter.teardown()
+
+
+def test_a_player_visible_check_naming_an_unknown_id_is_unknown_id(tmp_path):
+    """A renamed control or surface breaks the run loudly, never answers false (ADR-0272 item 6)."""
+    adapter = _emulator(tmp_path)
+    adapter.launch({})
+    try:
+        assert adapter.check("ui.surface", {"is": "play.renamed"}) == "unknown id"
+        assert adapter.check("ui.footer", {"contains": "quit"}) == "unknown id"
+        assert adapter.check("ui.ring", {"is": "play.home.renamed"}) == "unknown id"
+    finally:
+        adapter.teardown()
+
+
+def test_the_names_issue_1282_asks_for_outside_the_ui_namespace_are_refused_by_the_format(tmp_path):
+    """`emu.paused`, `pad.lamps` and `pad.haptics` are names issue #1282 asks for that ADR-0272 item 7 puts
+    outside a gui-test/1 check: `emu.*` is reserved (not part of v1) and `pad.*` is the action namespace.
+    The adapter answers all three when asked directly; a script may not name them, and the validator says so
+    rather than the run quietly checking nothing. Resolving this is the owner's - the ADR is not amended."""
+    adapter = _emulator(tmp_path)
+    adapter.launch({})
+    try:
+        assert adapter.check("emu.paused", {"is": False}) is True
+        assert adapter.check("pad.lamps", {"port": 1, "is": "lit"}) is True
+        assert adapter.check("pad.haptics", {"pad": 1, "at_least": 1}) is True
+        assert adapter.check("pad.lamps", {"port": 9, "is": "lit"}) == "unknown id"
+    finally:
+        adapter.teardown()
+    d = script(step("b1.paused", check={"name": "emu.paused", "args": {"is": False}}),
+               step("b1.lamps", check={"name": "pad.lamps", "args": {"port": 1, "is": "lit"}}))
+    with pytest.raises(ScriptError) as refused:
+        validate(d, adapter.capabilities())
+    assert "emu.paused is reserved and not part of gui-test/1" in str(refused.value)
+    assert "unknown check namespace pad" in str(refused.value)
 
 
 def test_a_missing_rom_fails_the_batch_clearly_before_any_launch(tmp_path):
