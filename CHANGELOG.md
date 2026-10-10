@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.23 (local fork, 2026-10-10)
+- **A head no workflow has run on is no longer merged as if it were green.** `autopilot.sh` read CI out of the revci line, where `CI=none` falls through every failure test — so a PR whose checks had never been created reached the merge path carrying only "nothing is wrong". The merge gate now asks GitHub for the head's check runs directly (`commits/<sha>/check-runs`), and when the list is empty it holds the merge, emits `CI MISSING` on the watch log, writes the reason to the issue's comment queue, and re-dispatches the CI workflow (`SG_CI_WORKFLOW`, `checks.yml` for this profile — the workflow whose jobs the `main` ruleset requires). PR #1285 sat at `CI=none` on a head with zero check runs while every earlier head of the same branch had ten, and the five required contexts had never reported on it.
+
 ## 0.2.22 (local fork, 2026-10-10)
 - **Hub: two panels can no longer carry the same name.** A panel is labelled with the issue it belongs to, and more than one run per issue is normal — three runs carried `#1281` and three `#1282` at the same time today, so the list showed the same row twice and the panel header read `#1281 · running` on two different runs. A label that repeats is now suffixed with the run's start time (`#1281 · 18:50`, `#1281 · 19:07`), read off the id, which both shapes carry (`run-YYYYMMDD-HHMMSS-xxxx` and `test-<issue>-YYYYMMDD-HHMMSS`). Unique labels are untouched.
 

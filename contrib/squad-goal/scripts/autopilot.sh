@@ -14,7 +14,7 @@
 #  SG_REVIEW_CHAIN_DEPTH=1 model, SG_REVIEW_RETRY_BUDGET=1 try, SG_REVIEW_TIMEOUT=120 s. An old PR may not spend the whole
 #  chain again while a fresh one waits. AGING fires once, STALLED every 15 min after, so a stuck PR is visible in watch.log.
 # Kill switch: touch $SG_STATE/auto/off (everything) or $SG_STATE/auto/nofix (review+merge only). Hold a PR: label `hold` or `needs-human`.
-# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED.
+# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; [ -e "$A/off" ] && exit 0
 L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo 0); tot=$(wc -l < "$L" | tr -d ' ')
 [ "$tot" -gt "$seen" ] && tail -n +$((seen+1)) "$L" | grep -E "^(AUTOFIX|AUTOPANEL|NEEDS OWNER)"; echo "$tot" > "$A/.logseen"
@@ -110,6 +110,17 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     continue
   fi
   [[ $line == *APPROVE* ]] || continue
+  # A head no workflow has run on is not a green head. `CI=none` reaches this point untouched, and an empty check list used to
+  # read as "nothing is wrong" -- so a PR would merge having never run the five contexts the `main` ruleset requires. Ask
+  # GitHub for the head's check runs directly (the revci line is a snapshot from when the review finished) and re-dispatch
+  # the workflow rather than merging. PR #1285 sat at `CI=none` on a head whose checks had never been created at all.
+  ck=$(gh api "repos/$SG_REPO/commits/$sha/check-runs" -q '[.check_runs[].conclusion//.status]|join(",")' 2>/dev/null)
+  if [ -z "$ck" ]; then
+    if [ ! -e "$A/noci-$pr-$s9" ]; then touch "$A/noci-$pr-$s9"
+      [ -n "${SG_CI_WORKFLOW:-}" ] && gh workflow run "$SG_CI_WORKFLOW" --repo "$SG_REPO" --ref "$(gh api repos/$SG_REPO/pulls/$pr -q .head.ref 2>/dev/null)" >/dev/null 2>&1
+      printf "PR #%s carries review APPROVE at %s but GitHub has no check run for that head at all, so the required checks of the %s ruleset never reported and a green head cannot be claimed. The merge is held and %s was re-dispatched. If no run appears, start it by hand: gh workflow run %s --repo %s --ref <head branch>.\n" $pr $s9 "$SG_BASE" "${SG_CI_WORKFLOW:-the CI workflow}" "${SG_CI_WORKFLOW:-the CI workflow}" "$SG_REPO" > "$SG_STATE/cq/$iss-noci$$.md"
+      echo "CI MISSING #$pr @ $s9: no check run exists for this head; merge held${SG_CI_WORKFLOW:+, $SG_CI_WORKFLOW re-dispatched}"; fi
+    continue; fi
   hold() { [ -e "$A/hold-$pr-$s9-$1" ] || { touch "$A/hold-$pr-$s9-$1"; echo "HOLD #$pr @ $s9: $2"; }; }   # an APPROVE that does not merge says why, once per head and reason
   [ "$SG_AUTO_MERGE" = yes ] || { hold auto "SG_AUTO_MERGE is not yes"; continue; }
   [ "$base" = "$SG_BASE" ] || { hold stacked "base is $base, not $SG_BASE (waits for the parent's merge and the retarget)"; continue; }
