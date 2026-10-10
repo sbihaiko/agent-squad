@@ -615,6 +615,58 @@ def test_1190_the_bug_goes_through_report_bug_sh(tmp_path):
     assert calls == [["/repo/scripts/report-bug.sh", "t", "b", "P1"]]
 
 
+# ---- #1184: objective checks (ui.*, emu.ram, fs.*, log.*) ----
+def _one(adapter, check=None, wait=None, root=None, **kw):
+    s = step("c.one", check=check, wait=wait or {"timeout_ticks": 3}, **kw)
+    if check is None:
+        del s["check"]
+    [r] = run(script(s), adapter, root=root)
+    return r["verdict"]
+
+
+def _ck(name, **args):
+    return {"name": name, "args": args}
+
+
+def test_objective_check_families_each_pass_and_fail(tmp_path):
+    a = TickingFake(tmp_path)
+    a.ram[0xF0] = 3
+    a.log_lines.append("library opened")
+    (tmp_path / "out.txt").write_text("saved ok")
+    assert _one(a, _ck("ui.screen", **{"is": "play.home"}), root=tmp_path) == "passed"
+    assert _one(a, _ck("emu.ram", addr="0xF0", **{"is": "0x03"}), root=tmp_path) == "passed"
+    assert _one(a, _ck("fs.exists", path="out.txt", **{"is": True}), root=tmp_path) == "passed"
+    assert _one(a, _ck("fs.contains", path="out.txt", **{"is": "saved"}), root=tmp_path) == "passed"
+    assert _one(a, _ck("log.contains", **{"is": "library opened"}), root=tmp_path) == "passed"
+    v = _one(a, _ck("ui.screen", **{"is": "play.library"}), root=tmp_path)
+    assert v == "failed (expected ui.screen == play.library, observed play.home)"
+    v = _one(a, _ck("emu.ram", addr="0xF0", **{"is": "0x04"}), root=tmp_path)
+    assert v == "failed (expected emu.ram 0xF0 == 0x04, observed 3)"
+    v = _one(a, _ck("fs.exists", path="gone.txt", **{"is": True}), root=tmp_path)
+    assert v == "failed (expected fs.exists gone.txt == True, observed false)"
+    assert _one(a, _ck("fs.contains", path="out.txt", **{"is": "nope"}), root=tmp_path) == \
+        "failed (expected 'out.txt' contains 'nope', observed saved ok)".replace("'out.txt'", "out.txt")
+    assert _one(a, _ck("log.contains", **{"is": "crash"}), root=tmp_path) == \
+        "failed (expected log contains 'crash', observed library opened)"
+
+
+def test_wait_on_runner_predicate_that_never_holds_times_out_naming_it(tmp_path):
+    v = _one(TickingFake(tmp_path), wait={"check": "fs.exists never.txt == true", "timeout_ticks": 5}, root=tmp_path)
+    assert v == "failed (timeout waiting for fs.exists never.txt == true)"
+    v = _one(TickingFake(tmp_path), wait={"check": "emu.ram 0x10 == 0x99", "timeout_ticks": 5}, root=tmp_path)
+    assert v == "failed (timeout waiting for emu.ram 0x10 == 0x99)"
+    v = _one(TickingFake(tmp_path), wait={"check": "log.contains == ready", "timeout_ticks": 5}, root=tmp_path)
+    assert v == "failed (timeout waiting for log.contains == ready)"
+
+
+def test_wait_on_runner_predicate_met_once_it_appears(tmp_path):
+    a = TickingFake(tmp_path)
+    (tmp_path / "late.txt").write_text("x")
+    v = _one(a, wait={"check": "fs.exists late.txt == true", "timeout_ticks": 5}, root=tmp_path,
+             check=_ck("fs.exists", path="late.txt", **{"is": True}))
+    assert v == "passed"
+
+
 # --- #1186: CI verdict: a missing native core or a failed step is red; needs-review/pending alone is green ---
 
 from squad.gui_test_ci import ci_verdict  # noqa: E402

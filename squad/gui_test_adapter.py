@@ -7,6 +7,8 @@ import struct
 import zlib
 from pathlib import Path
 
+from squad.gui_test_checks import UNKNOWN, parse
+
 SCREENS = {"play.home", "play.library"}
 CONTROLS = {"play.home.open-rom"}
 OPEN_AFTER = 3
@@ -25,6 +27,7 @@ class FakeAdapter:
     def __init__(self, out_dir):
         self.out_dir, self.log, self.captured_screens = Path(out_dir), [], []
         self.screen, self.focus, self.tick, self._opens_at = "play.home", "play.home.open-rom", 0, None
+        self.ram, self.log_lines = {}, []
 
     def capabilities(self):
         return {"actions": ["pad.press"], "checks": ["ui.focused", "ui.screen"], "input_families": ["ticks"],
@@ -51,15 +54,27 @@ class FakeAdapter:
             self._advance()
         return "timeout"
 
+    def advance(self):
+        self._advance()
+
+    def log_text(self):
+        return "\n".join(self.log_lines)
+
+    def observe(self, name, args):
+        if name == "emu.ram":
+            return self.ram.get(int(args["addr"], 0), 0)
+        if args["is"] not in SCREENS | CONTROLS:
+            return UNKNOWN
+        return {"ui.screen": self.screen, "ui.focused": self.focus}[name]
+
     def _holds(self, cond):
-        key, _, want = cond.partition(" == ")
-        return {"ui.screen": self.screen, "ui.focused": self.focus}[key] == want
+        name, args = parse(cond)
+        got = self.observe(name, args)
+        return got == int(args["is"], 0) if name == "emu.ram" else got == args["is"]
 
     def check(self, name, args):
-        want = args["is"]
-        if want not in SCREENS | CONTROLS:
-            return "unknown id"
-        return self._holds(f"{name} == {want}")
+        got = self.observe(name, args)
+        return got if got == UNKNOWN else got == args["is"]
 
     def capture(self):
         self.captured_screens.append(self.screen)
