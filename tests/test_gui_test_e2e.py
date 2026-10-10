@@ -1808,6 +1808,201 @@ def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_
     assert bad == {"compose.save", "compose.save-says-so"}
 
 
+# --- #1222: a command that runs a whole gui-test/1 script end to end (the /to-test-scenario Run step) ---
+
+from tests.gui_test_run_script_fake import ShapeAdapter  # noqa: E402
+
+RUN_SCRIPT = FORK / "scripts" / "gui_test_run_script.py"
+SMOKE = FORK / "tests" / "fixtures" / "gui_test" / "run-script-smoke.json"
+SHAPE_SPEC = "tests.gui_test_run_script_fake:ShapeAdapter"
+
+
+def _shape(**switches):
+    """A supervised run of a one-step script on the adapter that answers like mesen-gui."""
+    d = _two_batch_script([step("b1.one", **switches)])
+    return d
+
+
+def test_1222_a_failed_check_names_expected_and_observed_from_the_adapters_answer(tmp_path):
+    """mesen-gui answers a check with {"passed": ..., "observed": ...}; a bool-only reader calls that a pass."""
+    d = _shape(check={"name": "ui.screen", "args": {"is": "play.library"}})
+    out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
+    assert _verdicts(out)["b1.one"] == "failed (expected play.library, observed play.home)"
+
+
+def test_1222_an_unknown_id_fails_that_step_and_leaves_the_next_batch_running(tmp_path):
+    """mesen-gui raises UnknownId; the step fails (unknown id), the batch is not the unit that fails."""
+    d = _shape(check={"name": "ui.focused", "args": {"is": "play.ghost"}})
+    out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
+    assert _verdicts(out) == {"b1.one": "failed (unknown id)", "b2.a": "passed"}
+
+
+def _run_script_cmd(script_path, out, *extra, spec=SHAPE_SPEC, env=None, artifacts=None):
+    args = [sys.executable, str(RUN_SCRIPT), str(script_path), "--adapter", spec, "--out", str(out),
+            "--artifacts", str(artifacts or Path(str(out) + ".artifacts")), *extra]
+    return subprocess.run(args, cwd=FORK, capture_output=True, text=True, timeout=600,
+                          env={**os.environ, **(env or {})})
+
+
+def test_1222_the_command_runs_a_fixture_script_and_writes_one_result_per_step(tmp_path):
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(SMOKE, out)
+    assert p.returncode == 1, p.stdout + p.stderr
+    r = json.loads(out.read_text())
+    assert r["format"] == "gui-test-results/1"
+    assert r["run_id"] and r["platform"] and r["adapter"] == SHAPE_SPEC and r["build_sha"]
+    assert r["script"]["path"] == str(SMOKE)
+    assert r["script"]["sha256"] == hashlib.sha256(SMOKE.read_bytes()).hexdigest()
+    verdicts = {s["id"]: s["verdict"] for s in r["steps"]}
+    assert verdicts == {
+        "smoke.open-library": "passed",
+        "smoke.still-home": "failed (expected play.home, observed play.library)",
+        "smoke.unknown-id": "failed (unknown id)",
+        "smoke.manual": "pending",
+        "smoke.unchecked": "needs review",
+    }
+    assert r["status"] == "failed" and r["summary"]["executed"] == 4
+    assert r["bug"]["filed"] is False and "registered emulator adapter" in r["bug"]["reason"]
+    assert r["steps"][0]["capture"]["path"].startswith(str(tmp_path))
+
+
+def test_1222_a_script_with_no_failed_step_exits_zero(tmp_path):
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps(script(step("b1.one"))))
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(clean, out)
+    assert p.returncode == 0, p.stdout + p.stderr
+    r = json.loads(out.read_text())
+    assert r["status"] == "passed" and [s["verdict"] for s in r["steps"]] == ["passed"]
+
+
+def test_1222_a_script_naming_what_the_adapter_does_not_advertise_is_rejected_before_launch(tmp_path):
+    d = json.loads(SMOKE.read_text())
+    first = d["batches"][0]["steps"][0]
+    d["requires"]["actions"] = ["pad.press", "key.press"]
+    d["requires"]["checks"] = ["ui.screen", "ui.focused", "ui.dialogs"]
+    first["action"] = {"name": "key.press", "args": {"key": "Enter", "ticks": 4}}
+    first["wait"] = {"timeout_ticks": 4}
+    first["check"] = {"name": "ui.dialogs", "args": {"is": []}}
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(d))
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(bad, out)
+    text = p.stdout + p.stderr
+    assert p.returncode != 0
+    assert "adapter does not advertise action key.press" in text
+    assert "adapter does not advertise check ui.dialogs" in text
+    assert not Path(str(out) + ".artifacts").exists(), "the application must not be launched for a rejected script"
+
+
+def test_1222_missing_environment_makes_the_run_fail_and_never_skip(tmp_path):
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(SMOKE, out, spec="mesen-gui",
+                        env={"MESENAI_ROOT": "", "MESEN_GUI_BINARY": "", "MESEN_CORE_LIB": ""})
+    text = p.stdout + p.stderr
+    assert p.returncode != 0
+    for name in ("MESENAI_ROOT", "MESEN_GUI_BINARY", "MESEN_CORE_LIB"):
+        assert name in text, text
+    assert "skipped" not in text
+    assert json.loads(out.read_text())["status"] == "failed"
+
+
+def test_1222_a_core_that_cannot_be_loaded_fails_the_run(tmp_path):
+    root = tmp_path / "mesenai"
+    (root / "scripts" / "gui_test").mkdir(parents=True)
+    binary = tmp_path / "Mesen"
+    binary.write_bytes(b"#!/bin/sh\n")
+    lib = tmp_path / "MesenCore.dylib"
+    lib.write_bytes(b"this is not a shared library")
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(SMOKE, out, spec="mesen-gui",
+                        env={"MESENAI_ROOT": str(root), "MESEN_GUI_BINARY": str(binary), "MESEN_CORE_LIB": str(lib)})
+    text = p.stdout + p.stderr
+    assert p.returncode != 0 and "cannot be loaded" in text and "skipped" not in text
+
+
+def test_1222_a_run_that_executed_no_step_is_a_failure(tmp_path):
+    only = step("b1.manual-only")
+    for key in ("action", "wait", "check"):
+        only.pop(key)
+    only["mode"] = "manual"
+    manual = tmp_path / "manual.json"
+    manual.write_text(json.dumps(script(only)))
+    out = tmp_path / "results.json"
+    p = _run_script_cmd(manual, out)
+    assert p.returncode != 0
+    r = json.loads(out.read_text())
+    assert [s["verdict"] for s in r["steps"]] == ["pending"] and r["summary"]["executed"] == 0
+    assert r["reasons"] == ["no step executed"]
+
+
+def _run_script_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gui_test_run_script", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
+    mod = _run_script_module()
+    d = script(step("a"), step("b"), step("c"))
+    for s in d["batches"][0]["steps"]:
+        s["expect"] = f"what {s['id']} shows"
+    rows = [{"id": "a", "verdict": "failed (expected x, observed y)", "capture": None, "held": False,
+             "batch": "b1", "mode": "automated", "expect": "what a shows"},
+            {"id": "b", "verdict": "failed (unknown id)", "capture": None, "held": False,
+             "batch": "b1", "mode": "automated", "expect": "what b shows"},
+            {"id": "c", "verdict": "passed", "capture": None, "held": False,
+             "batch": "b1", "mode": "automated", "expect": "what c shows"}]
+    calls = []
+    url = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
+                           runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
+    assert len(calls) == 1, calls
+    title, body = calls[0][1], calls[0][2]
+    assert title == "GUI test `tiny`: 2 failed steps"
+    assert "### `a`" in body and "### `b`" in body and "### `c`" not in body
+    assert "failed (expected x, observed y)" in body
+    assert url == "https://example.invalid/1"
+
+
+HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
+                  "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
+                  "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
+HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-by-pad-gap"}
+# `home.open-library` waits on `ui.screen == play.library`, and no control in the application carries that id yet: the
+# pilot says its ids are provisional until the in-app AutomationIds land (#1182). It is the one step this can fail on
+# today, and it is asserted as a subset so the case keeps its meaning when that slice lands and the step passes.
+HOME_BATCH_MAY_FAIL = {"home.open-library"}
+
+
+@pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
+def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work):
+    """AC 4: the committed pilot's Home batch, through the command, on the built application."""
+    root = _mesenai_root()
+    _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
+    _need("MESEN_CORE_LIB", "the MesenCore library built from the same checkout")
+    d = _pilot_for_the_real_app(HOME_BATCH_IDS)
+    # The committed Home batch also names pad.release and pad.chord, which mesen-gui does not advertise: item 6 of
+    # ADR-0272 rejects such a script before launch, so the run covers every step the adapter can drive.
+    d["fixtures"]["note"] = "steps naming pad.release or pad.chord are left out: mesen-gui advertises pad.press only"
+    script_path = tmp_path / "pilot-home.json"
+    script_path.write_text(json.dumps(d))
+    out = short_work / "results.json"
+    p = _run_script_cmd(script_path, out, "--step-timeout", "180", spec="mesen-gui",
+                        env={"MESENAI_ROOT": str(root)})
+    r = json.loads(out.read_text())
+    assert {s["id"] for s in r["steps"]} == set(HOME_BATCH_IDS)
+    assert {s["id"] for s in r["steps"] if s["verdict"] == "pending"} == HOME_BATCH_MANUAL
+    failed = {s["id"] for s in r["steps"] if s["verdict"].startswith("failed")}
+    assert failed <= HOME_BATCH_MAY_FAIL and not [b for b in r["batches"] if "crash" in b["verdict"] or "hang" in b["verdict"]]
+    assert p.returncode == (1 if failed else 0), p.stdout + p.stderr
+    passed = {s["id"] for s in r["steps"] if s["verdict"] == "passed"}
+    assert passed >= set(HOME_BATCH_IDS) - HOME_BATCH_MANUAL - HOME_BATCH_MAY_FAIL - {"home.back-to-home"}
+    assert r["summary"]["executed"] >= 6 and r["build_sha"] != "unknown"
+    for step in r["steps"]:
+        if step["verdict"] == "passed":
+            assert Path(step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), step
 # --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
 
 class _ScenarioGitHub:

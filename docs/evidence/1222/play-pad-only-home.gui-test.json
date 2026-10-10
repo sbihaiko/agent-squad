@@ -1,0 +1,263 @@
+{
+  "format": "gui-test/1",
+  "name": "play-pad-only-home",
+  "target": "mesen-gui",
+  "requires": {
+    "actions": [
+      "pad.press"
+    ],
+    "checks": [
+      "ui.screen",
+      "ui.focused",
+      "ui.visible",
+      "ui.dialogs"
+    ]
+  },
+  "variants": {
+    "window.mode": [
+      "windowed"
+    ]
+  },
+  "fixtures": {
+    "settings": {
+      "profiles": {
+        "fresh": "no play history, no favorites",
+        "history-one-favorite": "one game in play history (so Continue and Recent exist) and that game favorited (so Favorites exists, ADR-0268 Decision 4)",
+        "history-no-favorite": "one game in play history (so Continue and Recent exist) and no favorites (FAV-01 starts from an empty Favorites shelf)",
+        "history-two-favorites": "two games in play history (so Continue and Recent exist) and both favorited, with the Continue game (the most recently played, fixture rom) as the newest favorite and so the first Favorites tile (ADR-0268 Decision 3), and the older game (fixture rom-second) as the other favorite; unfavoriting the Continue game via X leaves the Favorites shelf visible (ADR-0268 Decision 4)"
+      }
+    },
+    "note": "steps naming pad.release or pad.chord are left out: mesen-gui advertises pad.press only, and ADR-0272 item 6 rejects a script naming what the adapter does not advertise"
+  },
+  "batches": [
+    {
+      "id": "launch",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "launch.first-run-home",
+          "role": "under-test",
+          "precondition": "fixture settings.profiles.fresh",
+          "wait": {
+            "check": "ui.screen == play.home",
+            "timeout_ticks": 120
+          },
+          "check": {
+            "name": "ui.screen",
+            "args": {
+              "is": "play.home"
+            }
+          },
+          "expect": "No wizard appears (ADR-0256 Decision 8); Home W-P1 is on screen.",
+          "variants": {
+            "window.mode": "windowed"
+          },
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "launch.open-rom-focused",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "wait": {
+            "check": "ui.focused == play.home.open-rom",
+            "timeout_ticks": 120
+          },
+          "check": {
+            "name": "ui.focused",
+            "args": {
+              "is": "play.home.open-rom"
+            }
+          },
+          "expect": "The one control, Open a ROM, is already focused at launch.",
+          "variants": {
+            "window.mode": "windowed"
+          },
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "launch.port-lamp-p1",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "expect": "The ring is visible on Open a ROM and the pad port lamps show P1 lit (ADR-0261); judged by eye, the hook exposes neither.",
+          "variants": {
+            "window.mode": "windowed"
+          },
+          "severity": "minor",
+          "mode": "manual"
+        }
+      ]
+    },
+    {
+      "id": "home",
+      "setup": [],
+      "teardown": [],
+      "steps": [
+        {
+          "id": "home.focus-holds-up",
+          "role": "under-test",
+          "precondition": "ui.focused == play.home.open-rom",
+          "action": {
+            "name": "pad.press",
+            "args": {
+              "button": "Up",
+              "ticks": 4
+            }
+          },
+          "wait": {
+            "timeout_ticks": 4
+          },
+          "check": {
+            "name": "ui.focused",
+            "args": {
+              "is": "play.home.open-rom"
+            }
+          },
+          "expect": "Focus stays on Open a ROM after D-pad Up.",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "home.focus-holds-down",
+          "role": "under-test",
+          "precondition": "ui.focused == play.home.open-rom",
+          "action": {
+            "name": "pad.press",
+            "args": {
+              "button": "Down",
+              "ticks": 4
+            }
+          },
+          "wait": {
+            "timeout_ticks": 4
+          },
+          "check": {
+            "name": "ui.focused",
+            "args": {
+              "is": "play.home.open-rom"
+            }
+          },
+          "expect": "Focus stays on Open a ROM after D-pad Down.",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "home.focus-holds-left",
+          "role": "under-test",
+          "precondition": "ui.focused == play.home.open-rom",
+          "action": {
+            "name": "pad.press",
+            "args": {
+              "button": "Left",
+              "ticks": 4
+            }
+          },
+          "wait": {
+            "timeout_ticks": 4
+          },
+          "check": {
+            "name": "ui.focused",
+            "args": {
+              "is": "play.home.open-rom"
+            }
+          },
+          "expect": "Focus stays on Open a ROM after D-pad Left.",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "home.focus-holds-right",
+          "role": "under-test",
+          "precondition": "ui.focused == play.home.open-rom",
+          "action": {
+            "name": "pad.press",
+            "args": {
+              "button": "Right",
+              "ticks": 4
+            }
+          },
+          "wait": {
+            "timeout_ticks": 4
+          },
+          "check": {
+            "name": "ui.focused",
+            "args": {
+              "is": "play.home.open-rom"
+            }
+          },
+          "expect": "Focus stays on Open a ROM after D-pad Right.",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "home.ring-visible",
+          "role": "under-test",
+          "precondition": "ui.focused == play.home.open-rom",
+          "expect": "The focus ring never disappears through the four presses.",
+          "severity": "minor",
+          "mode": "manual"
+        },
+        {
+          "id": "home.open-library",
+          "role": "under-test",
+          "precondition": "ui.focused == play.home.open-rom",
+          "action": {
+            "name": "pad.press",
+            "args": {
+              "button": "A",
+              "ticks": 4
+            }
+          },
+          "wait": {
+            "check": "ui.screen == play.library",
+            "timeout_ticks": 120
+          },
+          "check": {
+            "name": "ui.screen",
+            "args": {
+              "is": "play.library"
+            }
+          },
+          "expect": "A on Open a ROM opens the library sheet (LIB-01).",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "home.back-to-home",
+          "role": "under-test",
+          "precondition": "ui.screen == play.library",
+          "action": {
+            "name": "pad.press",
+            "args": {
+              "button": "B",
+              "ticks": 4
+            }
+          },
+          "wait": {
+            "check": "ui.screen == play.home",
+            "timeout_ticks": 120
+          },
+          "check": {
+            "name": "ui.screen",
+            "args": {
+              "is": "play.home"
+            }
+          },
+          "expect": "B on the sheet returns to Home.",
+          "severity": "major",
+          "mode": "automated"
+        },
+        {
+          "id": "home.settings-by-pad-gap",
+          "role": "under-test",
+          "precondition": "ui.screen == play.home",
+          "expect": "Y opens the Settings sheet from Home with no game loaded (bug #1177, ADR-0256 W-P8); B returns to Home.",
+          "severity": "major",
+          "mode": "manual"
+        }
+      ]
+    }
+  ]
+}

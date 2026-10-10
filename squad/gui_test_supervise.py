@@ -108,13 +108,39 @@ def _precondition(session, text):
     return True if not sep else bool(session.call("check", key, {"is": want}))
 
 
+def _known_id(ex):
+    """True when an adapter error is the adapter saying the check named an id the application does not have.
+
+    mesen-gui raises UnknownId; the worker reports it as `<Type>: <message>` and the step fails, never the batch.
+    """
+    return isinstance(ex, AdapterError) and "UnknownId" in str(ex)
+
+
+def _fail(sid, verdict, emit):
+    emit("gui_verdict", sid, verdict=verdict)
+    return {"id": sid, "verdict": verdict, "capture": None}, False
+
+
+def _check_verdict(got, check):
+    """The verdict of one check: the adapter may answer a bool (the reference fake) or, like mesen-gui, the
+    observed value with it — `{"passed": ..., "observed": ...}` — which is what lets a failed step name both."""
+    if isinstance(got, dict) and "passed" in got:
+        if got["passed"]:
+            return "passed"
+        expected = True if check["name"] == "ui.visible" else (check.get("args") or {}).get("is")
+        if expected is None:
+            return f"failed (observed {got.get('observed')})"
+        return f"failed (expected {expected}, observed {got.get('observed')})"
+    if got == "unknown id":
+        return "failed (unknown id)"
+    return "passed" if got else "failed"
+
+
 def _step(session, s, emit, tick_args):
     emit("gui_step", s["id"])
     pre = s.get("precondition")
     if not _precondition(session, pre):
-        verdict = f"failed (precondition {pre})"
-        emit("gui_verdict", s["id"], verdict=verdict)
-        return {"id": s["id"], "verdict": verdict, "capture": None}, False
+        return _fail(s["id"], f"failed (precondition {pre})", emit)
     if s["mode"] != "automated":
         return None, True
     if s.get("action"):
@@ -129,8 +155,14 @@ def _step(session, s, emit, tick_args):
         if "check" not in s:
             verdict = "passed"
         else:
-            got = session.call("check", s["check"]["name"], s["check"].get("args", {}))
-            verdict = "failed (unknown id)" if got == "unknown id" else "passed" if got else "failed"
+            try:
+                got = session.call("check", s["check"]["name"], s["check"].get("args", {}))
+            except AdapterError as ex:
+                if not _known_id(ex):
+                    raise
+                verdict = "failed (unknown id)"
+            else:
+                verdict = _check_verdict(got, s["check"])
     emit("gui_verdict", s["id"], verdict=verdict)
     return {"id": s["id"], "verdict": verdict, "capture": capture}, verdict == "passed"
 
