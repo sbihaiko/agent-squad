@@ -2676,3 +2676,59 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
     assert again.of("create_issue") == [] and again.of("add_sub_issue") == []
     assert dropped["removed"] == [plan["issues"][-1]["id"]]
     assert "close" not in again.ops()                         # a removed case is reported, never closed
+
+
+# --- #1276: the runner hands MESEN_GUI_WINDOW, the emulator adapter's own window switch, on unchanged ---
+
+# The adapter reads the switch out of its own environment (`mesen_gui_adapter.window_mode()`), so a run can only carry
+# it if the runner starts the adapter's process with it set. The runner's `env` tuple names the environment, and the
+# three preconditions are the only names it checks: the switch is a pass-through, unset meaning the adapter's default.
+# The stand-in below is the real adapter's class under its real spec, in a throwaway MESENAI_ROOT, so the case reads
+# what the command actually handed a worker without a build behind it.
+_WINDOW_MODE_LOGGER = '''"""A stand-in for MesenAI's adapter that records the window switch it was started with (#1276)."""
+import os
+from pathlib import Path
+
+from tests.gui_test_run_script_fake import ShapeAdapter
+
+
+class MesenGuiAdapter(ShapeAdapter):
+    def __init__(self, out_dir, **kw):
+        super().__init__(out_dir)
+        (Path(out_dir) / "window-mode.log").write_text(os.environ.get("MESEN_GUI_WINDOW", "(unset)") + "\\n")
+'''
+
+
+def test_1276_a_run_hands_the_window_switch_to_the_adapter_unchanged(tmp_path):
+    """MESEN_GUI_WINDOW is part of the emulator adapter's environment: a run must reach the adapter with it set."""
+    import ctypes
+    import sysconfig
+
+    mod = _run_script_module()
+    assert "MESEN_GUI_WINDOW" in mod.ADAPTERS["mesen-gui"]["env"], \
+        "the emulator adapter's environment must carry the window switch the adapter itself reads"
+
+    pkg = tmp_path / "mesenai" / "scripts" / "gui_test"
+    pkg.mkdir(parents=True)
+    (pkg / "mesen_gui_adapter.py").write_text(_WINDOW_MODE_LOGGER)
+    binary = tmp_path / "Mesen"
+    binary.write_bytes(b"#!/bin/sh\n")
+    # The gate loads the core, so the stand-in points it at a shared library that really loads: this interpreter's own.
+    name = sysconfig.get_config_var("INSTSONAME") or sysconfig.get_config_var("LDLIBRARY")
+    core = Path(sysconfig.get_config_var("LIBDIR") or "") / name
+    assert core.is_file() and ctypes.CDLL(str(core)), core
+
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps(script(step("b1.one"))))
+    # `any` is the escape hatch a runner without a primary display sets; `""` is the value the adapter reads as its own
+    # default. Both reach the adapter byte for byte, and neither makes the run red: the switch is handed on, not checked.
+    for value in ("any", ""):
+        out = tmp_path / f"results-{value or 'default'}.json"
+        p = _run_script_cmd(clean, out, spec="mesen-gui",
+                            env={"MESENAI_ROOT": str(tmp_path / "mesenai"), "MESEN_GUI_BINARY": str(binary),
+                                 "MESEN_CORE_LIB": str(core), "MESEN_GUI_WINDOW": value})
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert json.loads(out.read_text())["status"] == "passed"
+        seen = sorted(Path(str(out) + ".artifacts").rglob("window-mode.log"))
+        assert seen, "the run started no adapter process to record the switch"
+        assert {f.read_text().strip() for f in seen} == {value}, [f.read_text() for f in seen]
