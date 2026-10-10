@@ -15,6 +15,9 @@ if ! mkdir "$L" 2>/dev/null; then kill -0 "$(cat "$L/pid" 2>/dev/null)" 2>/dev/n
 echo $$ > "$L/pid"
 trap 'rm -rf "$L"' EXIT
 G="/usr/bin/git -C $SG_FORK_DIR"
+lost() { for f in $($G diff --name-only --diff-filter=AM "$1~1" "$1" 2>/dev/null); do $G cat-file -e "$SG_FORK_BASE:$f" 2>/dev/null || echo "$f"; done; }   # files the branch tip adds/modifies that the base lacks: a sibling's reverted merge took them along
+relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
+  t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") && $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
 ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null | tr '\n' ' ') "
 pat=${SG_FORK_BRANCH//%n/}; cc=$($G for-each-ref --format='%(refname:short)' "refs/heads/$pat*" | sed "s#^$pat##" | grep -E '^[0-9]+$')   # every fork branch, so a closed issue's fork half still lands
 [ -n "$cc" ] || exit 0
@@ -24,15 +27,15 @@ for n in $cc; do
   st=$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null) || continue
   mixed=""; if [ "$st" = closed ]; then mixed=1; else case "$ready" in *" $n "*) ;; *) continue;; esac; fi   # closed: its PR half landed, merge the fork half without touching the issue
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
-  [ "$($G rev-list --count "$SG_FORK_BASE..$br")" -gt 0 ] || continue
+  reland=""; if [ "$($G rev-list --count "$SG_FORK_BASE..$br")" = 0 ]; then lf=$(lost "$br"); [ -n "$lf" ] || continue; reland=1; fi   # 0 ahead and nothing lost: landed
   wait=""; for d in $(gh api repos/$SG_REPO/issues/$n -q .body 2>/dev/null | awk '/^## Blocked by/{f=1;next}/^## /{f=0}f' | grep -oE '#[0-9]+' | tr -d '#'); do   # a blocker whose fork half is not in the base yet: merging this one now only goes red (it imports the blocker's files)
-    bb=${SG_FORK_BRANCH//%n/$d}; $G rev-parse -q --verify "refs/heads/$bb" >/dev/null && [ "$($G rev-list --count "$SG_FORK_BASE..$bb")" -gt 0 ] && wait="$wait #$d"; done
+    bb=${SG_FORK_BRANCH//%n/$d}; $G rev-parse -q --verify "refs/heads/$bb" >/dev/null && { [ "$($G rev-list --count "$SG_FORK_BASE..$bb")" -gt 0 ] || [ -n "$(lost "$bb")" ]; } && wait="$wait #$d"; done
   [ -z "$wait" ] || { wm="$A/forkwait-$n${wait// /-}"; [ -e "$wm" ] || { touch "$wm"; echo "FORKCLOSE WAIT #$n: the fork half of$wait is not in $SG_FORK_BASE yet (Blocked by)"; }; continue; }
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; [ -e "$mk" ] && continue
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   if [ "$($G branch --show-current)" != "$SG_FORK_BASE" ] || [ -n "$($G status --porcelain --untracked-files=no)" ]; then echo "FORKCLOSE WAIT #$n: $SG_FORK_DIR is not a clean $SG_FORK_BASE checkout"; exit 0; fi
   touch "$mk"
-  if ! $G merge --no-ff -q -m "Merge $br (Refs #$n)" "$br" >/dev/null 2>&1; then
+  if ! { if [ -n "$reland" ]; then relandbr; else $G merge --no-ff -q -m "Merge $br (Refs #$n)" "$br" >/dev/null 2>&1; fi; }; then
     $G merge --abort 2>/dev/null
     files=$($G merge-tree --write-tree --name-only "$SG_FORK_BASE" "$br" 2>/dev/null | sed -n '2,/^$/p' | grep . | tr '\n' ' ')
     nm="forkrebase-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"
