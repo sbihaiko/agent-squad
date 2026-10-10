@@ -346,6 +346,12 @@ def test_a_player_visible_check_naming_an_unknown_id_is_unknown_id(tmp_path):
         assert adapter.check("ui.surface", {"is": "play.renamed"}) == "unknown id"
         assert adapter.check("ui.footer", {"contains": "quit"}) == "unknown id"
         assert adapter.check("ui.ring", {"is": "play.home.renamed"}) == "unknown id"
+        # The focused list's entries resolve the same way (#1282): the shared contract suite asks every
+        # advertised check with one id, and a check that answers a bare False there reads as a state
+        # mismatch instead of the renamed entry the run has to break on. An empty `is` stays a comparison.
+        assert adapter.check("ui.items", {"is": "play.home.renamed"}) == "unknown id"
+        assert adapter.check("ui.items", {"contains": "play.home.renamed"}) == "unknown id"
+        assert adapter.check("ui.items", {"is": []}) is True
     finally:
         adapter.teardown()
 

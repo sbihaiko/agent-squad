@@ -298,7 +298,17 @@ class EmulatorAdapter:
             return ",".join(bar) == args["is"]
         if name == "ui.items":
             items = [str(item) for item in state.get("items", [])]
-            return items == list(args["is"]) if "is" in args else args["contains"] in items
+            # #1282: an entry the application does not draw is "unknown id", never a list that happens to
+            # differ - a renamed entry has to break the run loudly, the way a renamed control does. `is`
+            # names the whole list (a bare id names the one entry, the way the shared contract suite asks
+            # every advertised check); `contains` names the one entry that has to be drawn.
+            if "is" in args:
+                named = args["is"] if isinstance(args["is"], (list, tuple)) else [args["is"]]
+                named = [str(entry) for entry in named]
+                return items == named if all(entry in items for entry in named) else "unknown id"
+            if str(args["contains"]) not in items:
+                return "unknown id"
+            return True
         if name == "emu.paused":
             return bool(state.get("paused")) == bool(args["is"])
         if name == "pad.lamps":
