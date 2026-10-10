@@ -78,6 +78,7 @@ for m in $chain; do
   # outside its window the model is skipped like an unhealthy one: the chain moves on, and no MODEL_FAIL is written
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$SG_STATE/cq/$iss-mhours$$.md"; continue; }
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s for PR #%s (previous model failed %s times).\n" "$prev" "$m" "$pr" "$tries" > "$SG_STATE/cq/$iss-mswitch$$.md"
+  tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)
     case $m in
