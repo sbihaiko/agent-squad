@@ -1152,3 +1152,74 @@ def test_a_missing_rom_fixture_or_a_wrong_sha1_fails_clearly(tmp_path, short_wor
     with pytest.raises(Exception, match=rf"sha1 {sha1} is not the expected {'0' * 40}"):
         adapter.launch({"rom": {"path": str(rom), "sha1": "0" * 40}})
     assert not list(short_work.glob("**/hook.sock"))
+# --- #1194: the pilot's Pause overlay and Settings cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake_1194 import PauseSettingsFake  # noqa: E402
+
+CASES_1194 = [f"P4-0{n}" for n in range(1, 10)] + [f"SET-0{n}" for n in range(1, 8)]
+PILOT_1194 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1194.json"
+
+
+def _pilot_1194():
+    d = json.loads(PILOT_1194.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+BATCHES_1194 = ("pause", "settings", "pause-pack-multi", "settings-menu-sounds")
+
+
+def _steps_1194(d):
+    return [s for b in d["batches"] if b["id"] in BATCHES_1194 for k in ("setup", "steps", "teardown")
+            for s in b[k]]
+
+
+def _run_1194(tmp_path, d, **switches):
+    """Each batch needs its own state (a running game, W-P4 open): each runs on its own fake."""
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in BATCHES_1194:
+            view = {**d, "batches": [batch]}
+            results += [{**r, "batch": batch["id"]}
+                        for r in run_variants(view, PauseSettingsFake(tmp_path, **switches), axis="window.mode")]
+    return results
+
+
+def test_1194_every_pause_and_settings_case_is_converted_none_dropped_across_the_four_batches():
+    steps = _steps_1194(_pilot_1194())
+    for case in CASES_1194:
+        assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
+
+
+def test_1194_the_four_batches_run_end_to_end_in_both_window_modes(tmp_path):
+    d = _pilot_1194()
+    results = _run_1194(tmp_path, d)
+    bad = [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")]
+    assert bad == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    for batch in BATCHES_1194:
+        assert {r["variant"] for r in results if r["batch"] == batch} == {"windowed", "fullscreen"}, batch
+    manual = {s["id"] for s in _steps_1194(d) if s["mode"] == "manual"}
+    assert manual and {r["id"] for r in results if r["verdict"] == "pending"} == manual
+    assert {r["id"] for r in results if r["verdict"] == "passed"}.isdisjoint(manual)
+    automated = {s["id"] for s in _steps_1194(d) if s["mode"] == "automated"}
+    assert automated <= {r["id"] for r in results if r["verdict"] == "passed"}
+
+
+def test_1194_exit_full_screen_is_checked_in_full_screen_only(tmp_path):
+    results = _run_1194(tmp_path, _pilot_1194())
+    ran = {r["variant"] for r in results if r["id"] == "settings.exit-fullscreen-left-of-done"}
+    assert ran == {"fullscreen"}
+
+
+def test_1194_a_pause_that_b_does_not_resume_fails_that_step_and_the_run(tmp_path):
+    from squad.gui_test_run import failed as run_failed
+    results = _run_1194(tmp_path, _pilot_1194(), b_resumes=False)
+    assert "pause.b-resumes" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+    assert run_failed(results)
+
+
+def test_1194_a_done_the_pad_cannot_reach_fails_every_tab(tmp_path):
+    results = _run_1194(tmp_path, _pilot_1194(), done_unreachable=True)
+    failed = {r["id"] for r in results if r["verdict"].startswith("failed")}
+    assert {f"settings.{t}-done-reachable" for t in ("display", "look", "audio", "controls", "system")} <= failed
