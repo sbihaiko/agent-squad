@@ -352,11 +352,11 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .kr .d{grid-column:2;justify-self:end;font-size:9px;padding:1px 6px;border-radius:9px;white-space:nowrap;background:#1c222b;color:var(--mute)}.kr .d.good{background:#14301f;color:#5fd38d}.kr .d.bad{background:#3a1a1a;color:#ff7b7b}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:12px;font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:11px;color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:12px}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
-.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;gap:4px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:72px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}
-.mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:26px;height:26px;padding:0;font-size:13px;line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
+.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;overflow:hidden;gap:3px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10.5px;height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:none;border-color:var(--pin)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
+.mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:24px;height:24px;padding:0;font-size:12px;line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
 .madd{display:flex;gap:5px;margin-top:4px}.madd input{flex:1;min-width:0;height:28px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:0 8px;font:inherit;font-size:12px}.madd input:focus{outline:none;border-color:var(--pin)}.madd button{height:28px;padding:0 12px}
-.msave{position:sticky;bottom:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 10px;margin:0 -10px -10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;z-index:1}.msave.dirty{background:#1f1b12;border-top-color:#6b5223}.msave button{height:28px;padding:0 12px}.msave button#msv:not(:disabled){background:var(--warn);color:#1a1300;border-color:var(--warn);font-weight:600}.msave button:disabled{opacity:.35;cursor:default}
-.msave .st{flex:1 1 100%;color:var(--mute)}.msave .st.err{color:var(--err)}.msave .st .dot{display:inline-block;width:8px;height:8px;border-radius:4px;background:var(--warn);margin-right:5px;vertical-align:middle}.msave .st.okm{color:var(--ok)}.sub{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:8px 10px;background:#10141a;border:1px solid var(--line);border-radius:8px;font-size:11px}
+.msave{position:sticky;bottom:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 0 0;margin:12px 0 0;background:var(--panel);border-top:1px solid var(--line);font-size:11px;z-index:1}.msave.dirty{background:#1f1b12;border-top-color:#6b5223}.msave button{height:28px;padding:0 12px}.msave button#msv:not(:disabled){background:var(--warn);color:#1a1300;border-color:var(--warn);font-weight:600}.msave button:disabled{opacity:.35;cursor:default}
+.msave .st{flex:1 1 100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute)}.msave .st.err{color:var(--err)}.msave .st .dot{display:inline-block;width:8px;height:8px;border-radius:4px;background:var(--warn);margin-right:5px;vertical-align:middle}.msave .st.okm{color:var(--ok)}.sub{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:8px 10px;background:#10141a;border:1px solid var(--line);border-radius:8px;font-size:11px}
 .sub .hd{display:flex;align-items:center;gap:6px;margin-bottom:2px}.sub .nm{font-weight:600;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sub .sv{font-weight:600;font-size:14px}.sub .sv.good{color:#5fd38d}.sub .sv.bad{color:#ff7b7b}.sub .sv.none{color:var(--mute);font-size:11px;font-weight:400}
 .sub .qw{display:flex;flex-direction:column;gap:3px}.sub .ql{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:11px;color:var(--mute)}.sub .ql b{color:var(--fg);font-weight:600;font-size:12px}.sub .ql .rst{white-space:nowrap;font-size:10px}
 .sub .qw.sm .ql{font-size:10px}.sub .qw.sm .ql b{font-size:10.5px;color:#b9c0cc}.sub .qw .tr{position:relative;height:8px;border-radius:4px;background:#1c222b}.sub .qw.sm .tr{height:4px;border-radius:2px}.sub .qw .fl{height:100%;border-radius:inherit;transition:width .3s}
@@ -527,14 +527,20 @@ function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class
 let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images."},EFF=["low","medium","high","max"];
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
+const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
+function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
+function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
 function mdlProv(m){const x=m.replace(/^claude:/,"");return /^claude-(sonnet|opus|haiku|fable)/.test(x)||x==="claude-session"?"Claude":/^claude-/.test(x)?"via CLI":/^gpt/.test(x)?"Codex":/^grok/.test(x)?"xAI":/^gemini/.test(x)?"Google":""}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  $("#mdsr").textContent=(mdl.coding_models||[])[0]||"";
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
- b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),pv=mdlProv(m);return`<div class="mr${i?"":" p"}"><span class=rk title="${i?"fallback "+i:"primary"}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${i?"fallback "+i:"primary"}${pv?" · "+pv:""}">${pv||(i?"fallback "+i:"primary")}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m);return`<div class="mr${i?"":" p"}"><span class=rk title="${i?"fallback "+i:"primary"}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${i?"fallback "+i:"primary"}${pv?" · "+pv:""}">${pv||(i?"fallback "+i:"primary")}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Written per model, beside the chains, in models.json.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
-$("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl||!t.dataset.ef)return;const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value);mdlMsg="";mdlRender()});
+$("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
+ else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
+ else return;mdlRender()});
 $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"")}
@@ -868,17 +874,35 @@ def known_models(d):
         except Exception: pass
     return sorted({m for m in out if MODEL_ID.match(m)})
 EFFORTS = ("low", "medium", "high", "max")
+# local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
+HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
+def model_hours(d, chain, mid):
+    """The window for one model, or "" when it may always run."""
+    h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
+    hk = h.get(chain) if isinstance(h.get(chain), dict) else {}
+    v = hk.get(mid)
+    return v if isinstance(v, str) and HOURS.match(v) and v[:2] != v[3:] and mid in d.get(chain, []) else ""
+def in_hours(d, chain, mid, when=None):
+    """True when the model may run at `when` (default: now), local hour, and its own window is a rotation."""
+    w = model_hours(d, chain, mid)
+    if not w: return True
+    h = (when or dt.datetime.now()).hour; a, b = int(w[:2]), int(w[3:])
+    return a <= h < b if a <= b else (h >= a or h < b)
+def hours_of(d):
+    """Per-chain {model-id: "HH-HH"} from models.json's optional top-level `hours`; only entries whose model is in that chain."""
+    h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
+    return {k: {m: v for m, v in (h.get(k) or {}).items() if model_hours(d, k, m) == v} for k in CHAINS}
 def efforts_of(d):
     """Per-chain {model-id: effort} from models.json's optional top-level `efforts`; every chain present, only entries whose model is in that chain."""
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
 def models_get():
-    d = json.loads(MODELS.read_text()); return {**{k: d.get(k, []) for k in CHAINS}, "efforts": efforts_of(d), "known": known_models(d)}
+    d = json.loads(MODELS.read_text()); return {**{k: d.get(k, []) for k in CHAINS}, "efforts": efforts_of(d), "hours": hours_of(d), "known": known_models(d)}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
     new = {k: v for k, v in new.items() if k != "known"} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts"}: return {"err": "unknown chain"}
-    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None)
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours"}: return {"err": "unknown chain"}
+    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None)
     for k, v in new.items():
         if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v) or len(set(v)) != len(v):
             return {"err": f"{k}: need 1-8 distinct model ids"}
@@ -890,6 +914,16 @@ def models_set(new):
             if not isinstance(ek, dict) or not all(isinstance(m, str) and m in d.get(k, []) and v in EFFORTS for m, v in ek.items()):
                 return {"err": f"efforts.{k}: model must be in the chain, effort one of {'|'.join(EFFORTS)}"}
         d["efforts"] = {k: {m: v for m, v in (eff.get(k) or {}).items() if v != "medium"} for k in CHAINS}  # medium is the default: absent
+    if hrs is not None:
+        # hours live beside the chains, like efforts; a window equal at both ends is meaningless, so it is dropped
+        if not isinstance(hrs, dict) or set(hrs) - set(CHAINS): return {"err": "hours: unknown chain"}
+        for k, hk in hrs.items():
+            if not isinstance(hk, dict) or not all(isinstance(m, str) and m in d.get(k, []) and isinstance(v, str) and HOURS.match(v) for m, v in hk.items()):
+                return {"err": f"hours.{k}: model must be in the chain, window HH-HH (00-23)"}
+        d["hours"] = {k: {m: v for m, v in (hrs.get(k) or {}).items() if v[:2] != v[3:]} for k in CHAINS}
+    if "hours" in d:
+        d["hours"] = {k: v for k, v in hours_of(d).items() if v}
+        if not d["hours"]: del d["hours"]
     if "efforts" in d:
         d["efforts"] = {k: v for k, v in efforts_of(d).items() if v}
         if not d["efforts"]: del d["efforts"]

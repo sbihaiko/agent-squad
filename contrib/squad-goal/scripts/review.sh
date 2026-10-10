@@ -41,6 +41,12 @@ cap() { capraw "$@" <&0 & local pid=$! n=0   # <&0: a background job would other
   while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); [ $((n % 5)) = 0 ] || continue
     [ "$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha 2>/dev/null || echo $head)" = "$head" ] || { touch "$p.superseded"; pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null; break; }; done
   wait $pid 2>/dev/null; }
+# hours: a model whose window in models.json's `hours` does not contain the current local hour is skipped
+# (empty window = always; "22-07" wraps midnight, start inclusive, end exclusive). Set from the hub's models panel.
+hours_ok() { local k=$1 m=$2 w h a b; w=$(jq -r --arg k "$k" --arg m "$m" '.hours[$k][$m] // empty' "$cfg" 2>/dev/null)
+  [ -n "$w" ] || return 0
+  h=$((10#$(date +%H))); a=$((10#${w%%-*})); b=$((10#${w##*-}))
+  if [ "$a" -le "$b" ]; then { [ "$h" -ge "$a" ] && [ "$h" -lt "$b" ]; } else { [ "$h" -ge "$a" ] || [ "$h" -lt "$b" ]; }; fi; }
 r=$(python3 "$(dirname "$0")/codex-reset.py"); [ -n "$r" ] && echo "$r" > "$SG_STATE/codex-limited"   # a full Codex window (hub quota) skips codex before any try
 out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev=""
 # fast lane: a PR whose files are all docs (docs/**, *.md) or tests (*Tests*/**, test_*, *_test.*, tests/**) is reviewed by the
@@ -69,6 +75,8 @@ for m in $chain; do
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
   case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && continue;; esac
   if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
+  # outside its window the model is skipped like an unhealthy one: the chain moves on, and no MODEL_FAIL is written
+  hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$SG_STATE/cq/$iss-mhours$$.md"; continue; }
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s for PR #%s (previous model failed %s times).\n" "$prev" "$m" "$pr" "$tries" > "$SG_STATE/cq/$iss-mswitch$$.md"
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)

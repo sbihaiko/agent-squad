@@ -1,5 +1,5 @@
 {
-  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. Squad ids must be in the allow-list of docs/squad/workflows/dynamic.graph.json; review ids are codex models unless prefixed 'claude:'.",
+  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. Squad ids must be in the allow-list of docs/squad/workflows/dynamic.graph.json; review ids are codex models unless prefixed 'claude:'. `efforts` and `hours` are optional per-chain {model: value} maps set from the hub's models panel: hours is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
   "stall_timeout_minutes": 15,
   "review_stall_minutes": 60,
   "model_retry_budget": 2,
@@ -11,29 +11,32 @@
     "claude:claude-sonnet-5-5"
   ],
   "coding_models": [
-    "claude-deepseek-v4-flash",
     "claude-sonnet-5-5",
+    "claude-deepseek-v4-flash",
     "gpt-5.6-terra"
   ],
   "review_models": [
-    "grok-4.5",
     "claude:claude-opus-5-5",
+    "grok-4.5",
     "gemini-3.8-flash-medium"
   ],
   "vision_models": [
     "grok-4.5",
     "grok-4.6",
-    "gpt-5.6-terra",
-    "claude-sonnet-5-5"
+    "claude-sonnet-5-5",
+    "gpt-5.6-terra"
   ],
-  "review_timeout_seconds": 210,
+  "review_timeout_seconds": 360,
   "review_delta_max_lines": 3000,
-  "efforts": {
+  "hours": {
+    "coding_models": {
+      "claude-sonnet-5-5": "19-07"
+    },
     "review_models": {
-      "claude:claude-opus-5-5": "low"
+      "claude:claude-opus-5-5": "19-07"
     },
     "vision_models": {
-      "claude-sonnet-5-5": "low"
+      "claude-sonnet-5-5": "19-07"
     }
   }
 }

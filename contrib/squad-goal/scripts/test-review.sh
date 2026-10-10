@@ -41,4 +41,15 @@ case "$out" in "model=claude:fast (fast lane"*) ok "docs/tests-only PR: fastest 
 /usr/bin/grep -q -- "--model fast --effort low" "$T/args" && ok "fast lane runs at low effort" || ko "effort: $(tail -1 "$T/args")"
 rm -f "$T/st/review-7.sha"; out=$(GH_FILES="docs/a.md UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:slow*) case "$out" in *"fast lane"*) ko "product PR got the fast lane";; *) ok "product code keeps the configured chain";; esac;; *) ko "product chain: '$out'";; esac
+# 5) hours: a model whose window in models.json does not contain the current local hour is skipped and the chain moves on
+h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wa '%02d-%02d' $a $b
+printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:slow":"%s"}}}' "$wa" > "$T/s/models.json"
+rm -f "$T/st/review-7.sha"; out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:fast*) ok "hours: a model outside its window is skipped ($wa)";; *) ko "hours skip: '$out'";; esac
+# and the default is all day: the same model with no window in the map runs (the config just wrote none for claude:fast)
+/usr/bin/grep -q 'claude:fast' "$T/st/cq/8-mhours"* 2>/dev/null && ko "hours: claude:fast was skipped with no window (default must be all day)" || ok "hours: no window = runs all day"
+h2=$(( (h+23)%24 )); h3=$(( (h+1)%24 )); printf -v wb '%02d-%02d' $h2 $h3   # a window that does contain now (an hour either side)
+printf '{"review_models":["claude:slow"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:slow":"%s"}}}' "$wb" > "$T/s/models.json"
+rm -f "$T/st/review-7.sha" "$T/st/cq/8-mhours"*; out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:slow*) ok "hours: inside the window the model runs ($wb)";; *) ko "hours inside: '$out'";; esac
 rm -rf "$T"; exit $fail
