@@ -3,7 +3,7 @@
 Facts only (no comment-text inference): issue closed -> Done; an open PR naming the issue as "Refs #N" -> Code Complete (Testing = e2e on the merge, set by the loop)
 (only from Todo/In Progress/Blocked); an open issue whose `## Blocked by` lists an open #M -> Blocked (only from Todo), back to Todo when all are closed; an open `bug` issue absent from the board -> added as Todo.
 Never downgrades (Done stays Done, Code Complete/Testing never go back). Dry run by default: RECONCILE=apply writes.
-Scope: issues already on board 4 with number >= RECONCILE_MIN (default 1102) plus new `bug` issues."""
+Scope: issues already on board 4 (open ones only from number >= RECONCILE_MIN, default 1102; a closed issue of any number is derived to Done) plus new `bug` issues."""
 import json, os, re, subprocess, sys
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
@@ -22,7 +22,7 @@ _kind = "users"; _sf = _status_field()
 _raw = gh("api", "--paginate", f"/{_kind}/{OWNER}/projectsV2/{BOARD}/items?per_page=100&fields[]={_sf}", "--jq",
           '.[]|select(.content_type=="Issue")|{n:.content.number,id:.id,status:((.fields[]?|select(.name=="Status")|.value.name.raw)//null)}')   # REST: no GraphQL quota
 if _raw is None: sys.exit("board unreadable")
-items = {i["n"]: i for i in (json.loads(l) for l in _raw.splitlines() if l.strip()) if i["n"] and i["n"] >= MIN}
+items = {i["n"]: i for i in (json.loads(l) for l in _raw.splitlines() if l.strip()) if i["n"]}   # the MIN floor applies to open issues, checked in the loop below
 prs = js("api", f"repos/{REPO}/pulls?state=open&per_page=100") or []
 refs = {}
 for p in prs:
@@ -45,6 +45,7 @@ def has_freetext_blocker(body):
 for n, it in sorted(items.items()):
     cur = it.get("status"); st = js("api", f"repos/{REPO}/issues/{n}")
     if not st: continue
+    if st["state"] != "closed" and n < MIN: continue
     deps = blockers(st.get("body"))
     if st["state"] == "closed" and cur != "Done": move(n, "Done", "issue closed")
     elif st["state"] == "open" and n in refs and cur in ("Todo", "In Progress", "Blocked", None): move(n, "Code Complete", f"open PR #{refs[n]}")
