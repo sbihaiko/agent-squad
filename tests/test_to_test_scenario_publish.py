@@ -13,6 +13,7 @@ from squad.to_test_scenario import (  # noqa: F401
     CASE_LABEL,
     PARENT_LABEL,
     RateLimited,
+    ScenarioError,
     build_plan,
     case_hash,
     issues_path,
@@ -314,8 +315,9 @@ def test_rest_runner_creates_and_links_issues_over_rest_and_adds_only_what_it_is
     assert "labels[]=test-case" in post and "labels[]=wave:01" in post
     sub = next(a for a in seen if a[4].endswith("/sub_issues"))
     assert sub[4] == "repos/sbihaiko/MesenAI/issues/7/sub_issues" and "sub_issue_id=800" in sub
+    assert sub[sub.index("sub_issue_id=800") - 1] == "-F"   # an integer field: `-f` would send a string, a 422
     item = next(a for a in seen if a[:3] == ["gh", "project", "item-add"])
-    assert item[3] == "users/sbihaiko/projects/3" and item[5].endswith("/issues/7")
+    assert item[3:6] == ["3", "--owner", "sbihaiko"] and item[item.index("--url") + 1].endswith("/issues/7")
     assert not [a for a in seen if a[:3] == ["gh", "project", "item-edit"]]
 
 
@@ -326,3 +328,13 @@ def test_rest_runner_turns_a_secondary_rate_limit_answer_into_a_back_off():
     gh = rest_runner("sbihaiko/MesenAI", shell=shell)
     with pytest.raises(RateLimited):
         gh("create_issue", title="t", body="b", labels=["test-case"])
+
+
+def test_a_plan_over_the_sub_issue_cap_is_refused_before_anything_is_created(tmp_path):
+    """GitHub allows 100 sub-issues per parent: the 101st create would leave an issue linked to nothing."""
+    _, _, plan = tiny_plan(tmp_path)
+    plan["issues"] = [dict(plan["issues"][0], id=f"c{n}") for n in range(101)]
+    gh = FakeGitHub()
+    with pytest.raises(ScenarioError, match="100 sub-issues"):
+        publish(plan, gh, map_path=tmp_path / "m.json")
+    assert gh.calls == []

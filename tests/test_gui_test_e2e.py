@@ -2089,9 +2089,10 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     first = tts.publish(plan, gh)
     assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
     again = _ScenarioGitHub()
-    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
+    second = tts.publish(plan, again, saved={"parent": first["parent"], "boarded": True, "cases": first["cases"]})
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
 # --- to_test_scenario write-back (#1226): the committed run's results land on the pilot's issues ---------------
+# --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
 
 class _IssueTracker:
     """A GitHub stand-in that remembers what it was told, so a second write-back sees the first one's state.
@@ -2144,7 +2145,7 @@ def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(t
     """One real results file and the pilot's map: comments, closes, pending cases and the run's own bug, no network."""
     tts, results, plan, mapping, cases = _write_back_fixture()
     map_path = tmp_path / "play-pad-only.gui-test.issues.json"
-    tts.save_map(map_path, {**mapping, "parent": 1999})
+    map_path.write_text(json.dumps({**mapping, "parent": 1999}))
     tracker = _IssueTracker(list(mapping.values()) + [1999])
     out = tts.write_back(results, map_path, tracker, plan=plan)
 
@@ -2167,7 +2168,7 @@ def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(t
 def test_1226_the_same_run_written_back_twice_adds_no_case_comment_and_reopens_nothing(tmp_path):
     tts, results, plan, mapping, cases = _write_back_fixture()
     map_path = tmp_path / "play-pad-only.gui-test.issues.json"
-    tts.save_map(map_path, {**mapping, "parent": 1999})
+    map_path.write_text(json.dumps({**mapping, "parent": 1999}))
     tracker = _IssueTracker(list(mapping.values()) + [1999])
     first = tts.write_back(results, map_path, tracker, plan=plan)
     before = {number: len(bodies) for number, bodies in tracker.comments.items() if number != 1999}
@@ -2744,6 +2745,7 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     going stale in silence."""
     from squad import to_test_scenario as tts
     from squad.gui_test_subset import runnable
+    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes, script_steps
     pilot = _pilot_1223()
     caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.visible", "ui.dialogs"],
             "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}
@@ -2758,6 +2760,19 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     by_id = {s["id"]: s for s in steps}
     assert all(e["missing"] and by_id[e["id"]]["mode"] == "manual" for e in out["manual"])
     assert all(m in by_id[e["id"]]["expect"] for e in out["manual"] for m in e["missing"])  # a person reads why
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    script, scenario = read_script(script_path), read_scenario(md_path)
+    ids = [s["id"] for s in script_steps(script)]
+    report = coverage(scenario, script)
+    assert len(ids) == len(set(ids)) >= 67
+    assert (report["total_cases"], report["total_steps"]) == (len(ids), len(ids))
+    assert report["missing_steps"] == [] and report["steps_without_case"] == []
+    # The pilot predates content hashes, so nothing is reusable until a conversion records them per step.
+    assert report["reusable"] is False
+    assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
 
 
 # --- #1243: the run command runs one variant of a script, and records it as a partial run ---
@@ -2898,7 +2913,9 @@ def _pilot_1225():
     if not (script_path.exists() and md_path.exists()):
         pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
     scenario = read_scenario(md_path)
-    return script_path, build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+    plan = build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+    # The pilot outgrew GitHub's 100 sub-issues per parent (#1227): these cases exercise the first parent's worth.
+    return script_path, dict(plan, issues=plan["issues"][:100])
 
 
 def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
@@ -2947,6 +2964,40 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
     assert again.of("create_issue") == [] and again.of("add_sub_issue") == []
     assert dropped["removed"] == [plan["issues"][-1]["id"]]
     assert "close" not in again.ops()                         # a removed case is reported, never closed
+
+
+# --- to_test_scenario close-out (#1227): the pilot publishes through the command, within GitHub's sub-issue cap ----
+
+def test_1227_the_pilot_publishes_per_batch_and_per_case_is_refused_over_the_sub_issue_cap(tmp_path):
+    import shutil
+
+    from squad import to_test_scenario as tts
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    if not (docs / "play-pad-only.gui-test.json").exists():
+        pytest.skip("MESENAI_REPO holds no committed pilot script")
+    md, script = tmp_path / "pilot.md", tmp_path / "pilot.gui-test.json"
+    shutil.copy(docs / "play-pad-only.gui-test.md", md)
+    shutil.copy(docs / "play-pad-only.gui-test.json", script)
+    cases = len(tts.read_scenario(md)["cases"])
+
+    class Fake:
+        def __init__(self):
+            self.n, self.creates = 100, 0
+
+        def __call__(self, op, **kw):
+            if op != "create_issue":
+                return {}
+            self.n, self.creates = self.n + 1, self.creates + 1
+            return {"number": self.n, "id": 9000 + self.n}
+
+    per_case = Fake()
+    if cases > tts.SUB_ISSUE_CAP:
+        assert tts.main(["publish", str(md), str(script), "--stamp"], github=per_case) == 1 and per_case.creates == 0
+    per_batch = Fake()
+    assert tts.main(["publish", str(md), str(script), "--granularity", "batch"], github=per_batch) == 0
+    assert per_batch.creates == len(tts.read_script(script)["batches"]) + 1
+    assert tts.read_issues(tts.issues_path(script))["parent"] is not None
 # --- #1286: every case of the committed pad-only pilot, run on the squad's GUI test infrastructure ---
 
 from squad.gui_test_scenario import cases as scenario_cases  # noqa: E402

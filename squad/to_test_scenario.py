@@ -62,7 +62,6 @@ AUTO_MODES = {"automated"}
 SETUP_STATUSES = {"needs review", "pending"}
 RESULTS_FORMAT = "gui-test-results/1"
 VERDICT_FAMILIES = ("passed", "failed", "needs review", "pending", "skipped")
-EVIDENCE_FAMILIES = ("failed", "needs review")
 _VERDICT_LINE = re.compile(r"\*\*(passed|failed|needs review|pending)\*\*")
 
 
@@ -72,6 +71,7 @@ HASH_FIELD = "content_hash"
 PARENT_LABEL = "ready-for-agent"
 CASE_LABEL = "test-case"
 
+SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
 
 _SCRIPT_SUFFIXES = (".gui-test.json", ".gui-test")
@@ -404,119 +404,6 @@ def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
                        "labels": [PARENT_LABEL, f"wave:{wave}"],
                        "body": _scenario_parent_body(scenario, script, steps, edges)},
             "issues": issues}
-
-
-# --- publishing the plan, idempotently, resumably and paced (#1225) -------------------------------
-
-def issues_path(script_path):
-    """The map of a script's issues, beside the script: `<script>.gui-test.issues.json`.
-
-    The script keeps its own name without its format suffix, so `play-pad-only.gui-test.json` maps to
-    `play-pad-only.gui-test.issues.json` — one committed file per script, and no state inside the script itself.
-    """
-    path = Path(script_path)
-    name = path.name
-    for suffix in _SCRIPT_SUFFIXES:
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    else:
-        name = Path(name).stem
-    return path.with_name(name + MAP_SUFFIX)
-
-
-def read_issues(path):
-    """The map beside the script, or an empty one: the parent's number, whether it is on the board, and per case."""
-    if not path:
-        return {"parent": None, "boarded": False, "cases": {}}
-    try:
-        saved = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {"parent": None, "boarded": False, "cases": {}}
-    return {"parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
-            "cases": {key: {"number": value.get("number"), "hash": value.get("hash")}
-                      for key, value in (saved.get("cases") or {}).items()}}
-
-
-def _publish_resumable(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4,
-                       backoff=1.0):
-    """Publish the plan: one parent, one natively linked sub-issue per case, and only the parent on the board.
-
-    Idempotent and resumable through the map beside the script, flushed after every issue is created: a case the map
-    knows is updated, never created twice, so an interrupted publish — or another machine — resumes from it. A case
-    the map knows and the plan no longer covers is reported in `removed` and stays open. Creations are paced: a
-    secondary rate limit (`RateLimited` from the runner) is waited out and retried, never a failure.
-    """
-    if script_path is None and map_path is None and saved:
-        path = None
-    else:
-        path = Path(map_path) if map_path else (issues_path(script_path) if script_path else None)
-    state = read_issues(path) if saved is None else {
-        "parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
-        "cases": {key: dict(value) for key, value in (saved.get("cases") or {}).items()}}
-    wait = sleep or time.sleep
-    call = _paced(github, wait=wait, attempts=attempts, backoff=backoff)
-
-    def flush():
-        if path:
-            Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    issues, created, updated = {}, [], []
-    for label in _resumable_labels(plan):
-        call("ensure_label", name=label)
-    if state["parent"]:
-        call("update_issue", number=state["parent"], title=plan["parent"]["title"],
-             body=plan["parent"]["body"], labels=plan["parent"]["labels"])
-        updated.append("parent")
-    else:
-        made = call("create_issue", title=plan["parent"]["title"], body=plan["parent"]["body"],
-                    labels=plan["parent"]["labels"])
-        state["parent"] = made["number"]
-        flush()                     # known from here on, so an interrupt below never buys a second parent
-    if not state["boarded"]:
-        call("board", number=state["parent"])
-        state["boarded"] = True
-        flush()
-    for issue in plan["issues"]:
-        key = issue["id"]
-        if key in state["cases"]:
-            number = state["cases"][key]["number"]
-            call("update_issue", number=number, title=issue["title"], body=issue["body"], labels=issue["labels"])
-            updated.append(key)
-        else:
-            made = call("create_issue", title=issue["title"], body=issue["body"], labels=issue["labels"])
-            number = made["number"]
-            call("add_sub_issue", parent=state["parent"], sub=made["id"])   # the numeric id, never the number
-            created.append(key)
-        state["cases"][key] = {"number": number, "hash": issue.get("hash")}
-        issues[key] = dict(state["cases"][key])
-        flush()
-    return {"parent": state["parent"], "boarded": state["boarded"], "cases": issues, "created": created,
-            "updated": updated, "removed": [k for k in state["cases"] if k not in issues],
-            "map_path": str(path) if path else None, "map": state}
-
-
-def _resumable_labels(plan):
-    """Every label the plan's issues need, the case label included, whatever the granularity."""
-    out = {CASE_LABEL, *plan["parent"]["labels"]}
-    for issue in plan["issues"]:
-        out.update(issue["labels"])
-    return sorted(out)
-
-
-def _paced(github, *, wait, attempts, backoff):
-    """Every runner call goes through here, so a rate limit delays a publish instead of failing it."""
-    def call(op, **kwargs):
-        delay = backoff
-        for attempt in range(1, attempts + 1):
-            try:
-                return github(op, **kwargs)
-            except RateLimited as limited:
-                if attempt == attempts:
-                    raise
-                wait(limited.retry_after or delay)
-                delay *= 2
-    return call
 # --------------------------------------------------------------------------- the plan
 
 
@@ -663,78 +550,120 @@ def build_plan(first, second=_NO_SCRIPT, **kwargs):
     if second is _NO_SCRIPT:
         return _plan_from_script(first, **kwargs)
     return _plan_from_scenario(first, second, **kwargs)
-# --------------------------------------------------------------------------- publishing, idempotently
+# --- publishing the plan, idempotently, resumably and paced (#1225) -------------------------------
 
+def issues_path(script_path):
+    """The map of a script's issues, beside the script: `<script>.gui-test.issues.json`.
 
-def load_map(path):
-    """The case id -> issue number map saved beside the script, or {} when there is none yet."""
-    try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def save_map(path, mapping):
-    """Write the map beside the script: a second invocation finds the same issues instead of creating new ones."""
-    Path(path).write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n")
-
-
-def _publish_from_script(plan, github, saved=None, parent=None):
-    """Create or update the parent and its sub-issues; return the map and what happened.
-
-    Idempotent by case id through `saved` (the map of a previous publish): a case the map knows is updated, never
-    duplicated. A case the map knows and the plan does not is reported in `removed` and left open: only a person
-    closes a case.
+    The script keeps its own name without its format suffix, so `play-pad-only.gui-test.json` maps to
+    `play-pad-only.gui-test.issues.json` — one committed file per script, and no state inside the script itself.
     """
-    saved = dict(saved or {})
+    path = Path(script_path)
+    name = path.name
+    for suffix in _SCRIPT_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    else:
+        name = Path(name).stem
+    return path.with_name(name + MAP_SUFFIX)
+
+
+def read_issues(path):
+    """The map beside the script, or an empty one: the parent's number, whether it is on the board, and per case."""
+    if not path:
+        return {"parent": None, "boarded": False, "cases": {}}
+    try:
+        saved = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"parent": None, "boarded": False, "cases": {}}
+    return {"parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
+            "cases": {key: {"number": value.get("number"), "hash": value.get("hash")}
+                      for key, value in (saved.get("cases") or {}).items()}}
+
+
+def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4, backoff=1.0):
+    """Publish the plan: one parent, one natively linked sub-issue per case, and only the parent on the board.
+
+    Idempotent and resumable through the map beside the script, flushed after every issue is created: a case the map
+    knows is updated, never created twice, so an interrupted publish — or another machine — resumes from it. A case
+    the map knows and the plan no longer covers is reported in `removed` and stays open. Creations are paced: a
+    secondary rate limit (`RateLimited` from the runner) is waited out and retried, never a failure.
+    """
+    if script_path is None and map_path is None and saved:
+        path = None
+    else:
+        path = Path(map_path) if map_path else (issues_path(script_path) if script_path else None)
+    state = read_issues(path) if saved is None else {
+        "parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
+        "cases": {key: dict(value) for key, value in (saved.get("cases") or {}).items()}}
+    if len(plan["issues"]) > SUB_ISSUE_CAP:
+        raise ScenarioError([f"the plan has {len(plan['issues'])} issues and GitHub allows {SUB_ISSUE_CAP} sub-issues "
+                             "per parent: publish per batch, or split the scenario; nothing was created"])
+    wait = sleep or time.sleep
+    call = _paced(github, wait=wait, attempts=attempts, backoff=backoff)
+
+    def flush():
+        if path:
+            Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
     issues, created, updated = {}, [], []
     for label in _labels(plan):
-        github("ensure_label", name=label)
-    if parent:
-        github("update_issue", number=parent, title=plan["parent"]["title"],
-               body=plan["parent"]["body"], labels=plan["parent"]["labels"])
-        parent_number, _ = parent, updated.append("parent")
+        call("ensure_label", name=label)
+    if state["parent"]:
+        call("update_issue", number=state["parent"], title=plan["parent"]["title"],
+             body=plan["parent"]["body"], labels=plan["parent"]["labels"])
+        updated.append("parent")
     else:
-        parent_number = _create(github, plan["parent"])
-        github("board", number=parent_number, status=INITIAL_STATUS)
+        made = call("create_issue", title=plan["parent"]["title"], body=plan["parent"]["body"],
+                    labels=plan["parent"]["labels"])
+        state["parent"] = made["number"]
+        flush()                     # known from here on, so an interrupt below never buys a second parent
+    if not state["boarded"]:
+        call("board", number=state["parent"])
+        state["boarded"] = True
+        flush()
     for issue in plan["issues"]:
-        key = issue["cases"][0]
-        if key in saved:
-            github("update_issue", number=saved[key], title=issue["title"], body=issue["body"],
-                   labels=issue["labels"])
-            issues[key] = saved[key]
+        key = issue["id"] if "id" in issue else issue["cases"][0]
+        if key in state["cases"]:
+            number = state["cases"][key]["number"]
+            call("update_issue", number=number, title=issue["title"], body=issue["body"], labels=issue["labels"])
             updated.append(key)
-            continue
-        made = github("create_issue", title=issue["title"], body=issue["body"], labels=issue["labels"])
-        issues[key] = made["number"]
-        created.append(key)
-        github("add_sub_issue", parent=parent_number, sub=made["id"])
-        github("board", number=made["number"], status=INITIAL_STATUS)
-    return {"parent": parent_number, "issues": issues, "created": created, "updated": updated,
-            "removed": [k for k in saved if k not in issues and k != "parent"]}
-
-
-def publish(plan, github, saved=None, parent=None, **options):
-    """Publish a plan. Two plan shapes meet here and each keeps its own contract.
-
-    A plan built from a scenario (issues keyed by `id`, #1224) goes through the resumable, paced publish (#1225): the
-    map beside the script, only the parent on the board, `options` = `script_path`, `map_path`, `sleep`, `attempts`,
-    `backoff`. A plan built from a script alone (issues carrying `cases` and a `wave`, #1223) is published against the
-    `saved` map and `parent` the caller passes, and every issue lands on the board.
-    """
-    if options or not (plan["issues"] and "cases" in plan["issues"][0]):
-        return _publish_resumable(plan, github, saved=saved, **options)
-    return _publish_from_script(plan, github, saved=saved, parent=parent)
-
-
-def _create(github, item):
-    made = github("create_issue", title=item["title"], body=item["body"], labels=item["labels"])
-    return made["number"]
+        else:
+            made = call("create_issue", title=issue["title"], body=issue["body"], labels=issue["labels"])
+            number = made["number"]
+            call("add_sub_issue", parent=state["parent"], sub=made["id"])   # the numeric id, never the number
+            created.append(key)
+        state["cases"][key] = {"number": number, "hash": issue.get("hash")}
+        issues[key] = dict(state["cases"][key])
+        flush()
+    return {"parent": state["parent"], "boarded": state["boarded"], "cases": issues,
+            "issues": {key: value["number"] for key, value in issues.items()}, "created": created,
+            "updated": updated, "removed": [k for k in state["cases"] if k not in issues],
+            "map_path": str(path) if path else None, "map": state}
 
 
 def _labels(plan):
-    waves = {i["wave"] for i in plan["issues"]}
-    return sorted({TRIAGE_LABEL, CASE_LABEL, *plan["parent"]["labels"], *(f"wave:{w}" for w in waves)})
+    """Every label the plan's issues need, the case label included, whatever the granularity."""
+    out = {CASE_LABEL, *plan["parent"]["labels"]}
+    for issue in plan["issues"]:
+        out.update(issue["labels"])
+    return sorted(out)
+
+
+def _paced(github, *, wait, attempts, backoff):
+    """Every runner call goes through here, so a rate limit delays a publish instead of failing it."""
+    def call(op, **kwargs):
+        delay = backoff
+        for attempt in range(1, attempts + 1):
+            try:
+                return github(op, **kwargs)
+            except RateLimited as limited:
+                if attempt == attempts:
+                    raise
+                wait(limited.retry_after or delay)
+                delay *= 2
+    return call
 
 
 # --------------------------------------------------------------------------- writing a run back
@@ -983,6 +912,23 @@ def write_back(results_path, map_path, github, plan=None):
     return out
 
 
+def _publish_command(args, github):
+    scenario, script = read_scenario(args.markdown), read_script(args.script)
+    if args.stamp:
+        script = record_hashes(scenario, script)
+        Path(args.script).write_text(json.dumps(script, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    runner = github if github is not None else rest_runner(args.repo, project=args.board)
+    try:
+        plan = build_plan(scenario, script, granularity=args.granularity)
+        out = publish(plan, runner, script_path=args.script)
+    except ScenarioError as err:
+        print(json.dumps({"ok": False, "published": False, "problems": err.problems}, indent=2))
+        return 1
+    print(json.dumps({"ok": True, "parent": out["parent"], "created": len(out["created"]),
+                      "updated": len(out["updated"]), "removed": out["removed"], "map": out["map_path"]}, indent=2))
+    return 0
+
+
 def main(argv=None, github=None):
     """The write-back command: `python -m squad.to_test_scenario write-back <results> --map <map>`.
 
@@ -999,12 +945,75 @@ def main(argv=None, github=None):
     wb.add_argument("--repo", help="owner/name; the REST runner is built on it when no runner is injected")
     wb.add_argument("--board", help="the board every issue joined, e.g. users/sbihaiko/projects/1")
     wb.add_argument("--bug-helper", help="the repo's scripts/report-bug.sh, for the runner and not for this command")
+    sr = sub.add_parser("start-run", help="start the run command on a script and return; nothing waits for the run")
+    sr.add_argument("script", help="the gui-test/1 script")
+    sr.add_argument("--out-dir", help="where the results file goes (default ./gui-test-results)")
+    sr.add_argument("--batch", help="run only this batch")
+    sr.add_argument("--no-file-bug", action="store_true", help="do not let the run file its one bug")
+    for flag in ("--repo", "--board", "--bug-helper"):
+        sr.add_argument(flag, help="carried into the write-back command it prints")
+    pb = sub.add_parser("publish", help="publish the scenario's issues; idempotent, resumable and paced")
+    pb.add_argument("markdown", help="the manual scenario")
+    pb.add_argument("script", help="its gui-test/1 script; the issue map is written beside it")
+    pb.add_argument("--granularity", choices=("case", "batch"), default="case")
+    pb.add_argument("--stamp", action="store_true", help="record each case's content hash on its step, in the script file")
+    for flag in ("--repo", "--board"):
+        pb.add_argument(flag)
     args = ap.parse_args(argv)
+    if args.command == "publish":
+        return _publish_command(args, github)
+    if args.command == "start-run":
+        out = start_run(args.script, out_dir=args.out_dir, batch=args.batch, file_bug=not args.no_file_bug,
+                        repo=args.repo, board=args.board, bug_helper=args.bug_helper)
+        print(json.dumps(out, indent=2, sort_keys=True))
+        return 0 if out["started"] else 1
     runner = github if github is not None else rest_runner(args.repo, project=args.board, bug_helper=args.bug_helper)
     out = write_back(args.results, args.map, runner)
     print(json.dumps(out, indent=2, sort_keys=True))
     return 0 if out.get("ok") else 1
 
+
+
+# --------------------------------------------------------------------------- starting a run, never waiting on it
+
+RUN_COMMAND = [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "gui_test_run_script.py")]
+
+
+def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", batch=None, case=None, file_bug=True,
+              evidence_repo=None, repo=None, board=None, bug_helper=None, env=None):
+    """Start the run command on a script and return at once: a run takes minutes, and nothing here waits for it.
+
+    The run command writes its results file when it ends; this returns the file's path, the pid, the log, and the
+    **write-back argv** to run afterwards (`write-back <results> --map ...`, a separate step that reads the file). When
+    the run command is not there it starts nothing and says `run command unavailable`: a run is never simulated.
+    """
+    command = list(command or RUN_COMMAND)
+    if not Path(command[-1]).is_file():
+        return {"started": False, "reason": "run command unavailable"}
+    script = Path(script_path)
+    out_dir = Path(out_dir) if out_dir else Path.cwd() / "gui-test-results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = script.name.split(".")[0]
+    results = out_dir / f"{stem}-{time.strftime('%Y%m%dT%H%M%S')}{'-' + (batch or case) if batch or case else ''}.results.json"
+    log = results.with_suffix(".log")
+    args = [*command, str(script), "--adapter", adapter, "--out", str(results)]
+    if file_bug:
+        args.append("--file-bug")
+    if evidence_repo:
+        args += ["--evidence-repo", evidence_repo]
+    if batch:
+        args += ["--batch", batch]
+    elif case:
+        args += ["--case", case]
+    with open(log, "w") as sink:
+        proc = subprocess.Popen(args, stdout=sink, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                start_new_session=True, env=env)
+    write_back = [sys.executable, "-m", "squad.to_test_scenario", "write-back", str(results),
+                  "--map", str(issues_path(script))]
+    for flag, value in (("--repo", repo), ("--board", board), ("--bug-helper", bug_helper)):
+        if value:
+            write_back += [flag, value]
+    return {"started": True, "pid": proc.pid, "results": str(results), "log": str(log), "write_back": write_back}
 
 
 # --------------------------------------------------------------------------- the whole flow
@@ -1022,9 +1031,9 @@ def run_scenario(markdown, script, github, run_command=None, granularity="per-ca
         return {"gaps": gaps, "published": None, "plan": None, "run": None,
                 "reason": "the Markdown and the script disagree; nothing was published"}
     plan = _plan_from_script(script, markdown, granularity, script_path, purpose, title, parent)
-    published = publish(plan, github, saved=saved, parent=parent)
-    if map_path:
-        save_map(map_path, {**published["issues"], "parent": published["parent"]})
+    if saved is None and parent:
+        saved = {"parent": parent}
+    published = publish(plan, github, script_path=script_path, map_path=map_path, saved=saved)
     if run_command is None:
         return {"gaps": gaps, "plan": plan, "published": published, "run": None,
                 "reason": "run command unavailable"}
@@ -1040,11 +1049,18 @@ def _sh(args, **kw):
     return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout
 
 
+def _project_ref(project):
+    """`users/<owner>/projects/<n>` (or `orgs/...`) as the `(owner, n)` that `gh project item-add` takes."""
+    parts = str(project).strip("/").split("/")
+    if len(parts) == 4 and parts[2] == "projects":
+        return parts[1], parts[3]
+    raise ValueError(f"project must look like users/<owner>/projects/<n>, not {project!r}")
+
+
 def _rate_limit(exc):
     """A `gh` failure that is a secondary rate limit: a back-off, not an error the caller must handle."""
     text = ((exc.stderr or "") + (exc.stdout or "")).lower()
     return RateLimited() if "rate limit" in text or "secondary rate" in text else None
-
 
 
 def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=INITIAL_STATUS):
@@ -1067,7 +1083,7 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
         args = ["gh", "api", "--method", method, f"repos/{repo}/{path}"] if method != "GET" else \
                ["gh", "api", f"repos/{repo}/{path}"]
         for k, v in fields:
-            args += ["-f", f"{k}={v}"]
+            args += ["-F" if isinstance(v, int) and not isinstance(v, bool) else "-f", f"{k}={v}"]
         out = call(args)
         return json.loads(out) if json_out else out
 
@@ -1099,8 +1115,10 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             if not project:
                 return {}
             url = f"https://github.com/{repo}/issues/{kw['number']}"
-            item = json.loads(call(["gh", "project", "item-add", project, "--url", url, "--format", "json"]))
-            if kw.get("status") is not None:     # the resumable publish boards only the parent, with no status
+            owner, number = _project_ref(project)
+            item = json.loads(call(["gh", "project", "item-add", number, "--owner", owner, "--url", url,
+                                    "--format", "json"]))
+            if kw.get("status") is not None:     # a caller that names a status wants it set on the new item
                 call(["gh", "project", "item-edit", "--id", item["id"], "--field", "Status",
                       "--text", kw["status"], "--project-id", project])
             return item
