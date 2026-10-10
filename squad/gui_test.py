@@ -61,6 +61,8 @@ def _step(s, in_steps, ctx, bad):
         _name("action", ACTION_NS, act["name"], ctx["requires"], ctx["caps"], sid, bad)
         if act["name"] == "nav.goal" and s.get("role") == "under-test":
             bad.append(f"{sid}: nav.goal is not allowed on a step under test")
+        if act["name"] == "nav.goal" and not (act.get("args") or {}).get("goal"):
+            bad.append(f"{sid}: nav.goal needs a goal predicate")
         args = act.get("args") or {}
         if "ticks" in args and "frames" in args:
             bad.append(f"{sid}: action has both ticks and frames")

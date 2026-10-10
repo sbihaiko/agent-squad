@@ -39,7 +39,7 @@ def decide(adapter, check, root=None):
     return "passed" if r["ok"] else f"failed (expected {r['expected']}, observed {r['observed']})"
 
 
-def run(script, adapter, record=None, prompt=None, root=None, vision=None):
+def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=None):
     """Run every step in order; return [{id, verdict, capture, held}]. Never raises on a wait timeout.
 
     A `manual` step is put to `prompt(step)`, which returns {"verdict": "passed"|"failed", "screenshot": path}; with no
@@ -48,7 +48,8 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None):
 
     With a `vision` (squad.gui_test_vision.Vision), an automated step with no `check` takes the model's verdict on its
     capture: `compatible` passes, anything else is `needs review`; a step with a `check` follows the check and is never
-    sent. Once the vision spend reaches its cap the run stops: every later step ends `skipped (spend cap ...)`.
+    sent. A `nav.goal` step is reached by `goal` (squad.gui_test_goal.Navigator); with none (CI, ADR-0271 Decision 6 A) it
+    ends `pending`, and a goal not reached ends `failed (goal not reached ...)`. Once the vision spend reaches its cap the run stops: every later step ends `skipped (spend cap ...)`.
 
     `record` takes one replay event per call: gui_step, then gui_capture (only once the wait is met), then gui_verdict.
     """
@@ -84,7 +85,13 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None):
             action = s.get("action")  # an observe-only step (the validator allows it) injects nothing
             emit("gui_step", s["id"], **({"action": action["name"]} if action else {}),
                  **({"check": s["check"]} if "check" in s else {}))
-            if action:
+            if action and action["name"] == "nav.goal" and "nav.goal" not in adapter.capabilities()["actions"]:
+                missed = "pending" if goal is None else goal.reach(adapter, s, emit, vision)
+                if missed:
+                    emit("gui_verdict", s["id"], verdict="pending" if goal is None else f"failed ({missed})")
+                    results.append({"id": s["id"], "verdict": "pending" if goal is None else f"failed ({missed})", "capture": None, "held": False})
+                    continue
+            elif action:
                 adapter.inject(action["name"], action.get("args", {}))
             cond = s["wait"].get("check")
             capture = None
