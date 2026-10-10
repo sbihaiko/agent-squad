@@ -200,3 +200,14 @@
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
 #side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
 #side .pnav button:disabled { opacity:.35; cursor:default; }
+#scriptview { position: absolute; inset: 0; overflow: auto; background: inherit; z-index: 5; }
+#scriptview[hidden] { display: none; }
+.script-diagram { font: 12px sans-serif; }
+.script-diagram .batch-name { font-weight: 600; font-size: 14px; fill: currentColor; }
+.script-diagram .step rect { fill: #eef3fb; stroke: #4a6fa5; stroke-width: 1.5; }
+.script-diagram .step.manual rect { fill: #fff6e0; stroke: #b7791f; stroke-dasharray: 6 4; }
+.script-diagram .step-id { font-weight: 600; fill: #222; }
+.script-diagram .step-text { fill: #222; }
+.script-diagram .step-tags { fill: #555; font-size: 11px; }
+.script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
+.script-diagram marker path { fill: #777; }

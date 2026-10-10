@@ -72,7 +72,7 @@ def engine_data():
 
 
 # Dependency order: a file comes after every file it uses. make.js is the entry and comes last.
-CORE_ORDER = ("canon.js", "figures.js", "record.js", "live.js", "failures.js", "children.js", "state.js", "totals.js", "replay.js", "groups.js", "stats.js", "schema.js", "edits.js", "layout.js", "review.js", "history.js", "sources.js", "control.js", "make.js")
+CORE_ORDER = ("canon.js", "figures.js", "record.js", "live.js", "failures.js", "children.js", "state.js", "totals.js", "replay.js", "groups.js", "stats.js", "schema.js", "edits.js", "layout.js", "review.js", "history.js", "sources.js", "control.js", "script.js", "make.js")
 CORE_DIR = DASH / "core"
 
 
