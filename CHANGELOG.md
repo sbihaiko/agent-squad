@@ -1,6 +1,7 @@
 # Changelog
 
 ## 0.2.2 (local fork, 2026-10-10)
+- squad-goal: runs that never started no longer pile up as "starting" panels: janitor rule J drops a run with no `record.jsonl` after 5 min (kills its dashboard), and `vendor-guard.sh` re-vendors drifted personal skills so `squad start` stops refusing with "vendor/skills is not clean" (the cause: `to-test-scenario` bytes differed from VERSIONS.json, so every dispatch since then did nothing).
 - squad-goal: janitor rule I stops a live run whose accepted issues are all closed as duplicates / not planned (report-only for other closures), and `autobug.sh` skips open bug issues titled `[duplicate…`; wasted fix runs for closed duplicate bugs no longer burn slots (`test-janitor-i.sh`).
 
 - squad-goal: a fast lane for merges. `watchd.sh` now also runs `fastloop.sh` (childcc + autopilot every 30 s) beside the 90 s `watch.sh` cycle, so a slow step never delays a merge (#1239 waited ~5 min behind a 339 s forkclose). `forkclose.sh` runs in the background under the new `single.sh <name> <cmd>` (non-blocking lock, no step overlaps its own previous run). `cycle.log` gets `CYCLE <n>s` per cycle and `AUTOPILOT-GAP <n>s` when autopilot starts are more than 120 s apart. Standalone `watch.sh` still runs childcc and autopilot itself while the fast lane is down. Tests: `test-single.sh` (8 cases). Restart watchd after updating.

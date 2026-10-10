@@ -10,6 +10,7 @@
     (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why).
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
+ J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
@@ -62,7 +63,14 @@ act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() el
 live = {}; keep = []
 for r in names:
     f = folder(r); i = read(f)
-    if i is None: keep.append(r); continue
+    if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
+        age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
+        if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
+            say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
+            for q, (_, c) in procs.items():
+                if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
+            continue
+        keep.append(r); continue
     n = f.name
     if i["verdict"]:
         if i["idle"] > 180:
