@@ -11,17 +11,17 @@ file changes.
   an **open** issue whose title carries that key and `comment_on_bug_with` comments on it with the run id, the build SHA
   and the same evidence instead of opening a second issue. `report_failures_detail` returns
   `{title, key, url, existing, lookup_failed}`; `report_failures` (#1190) is the same call and still returns the URL. A
-  look-up that cannot run (no `gh`, no network) is recorded in `lookup_failed` and the run files its bug: a failure
-  nobody recorded is worse than a bug that may repeat.
+  look-up that cannot run (no `gh`, no network), or an open bug the run cannot comment on, is recorded in
+  `lookup_failed` and the run files its bug: a failure nobody recorded is worse than a bug that may repeat.
 - `scripts/gui_test_run_script.py`: `file_one_bug` takes the adapter's repo slug and the run's identity and returns that
   detail; the results file carries `bug = {filed, url, title, existing, reason}`, so the run names the issue it belongs
   to, new or existing. `--github-runner module:callable` swaps the shell the bug's GitHub calls go through — the
   acceptance suite points it at `tests/gui_test_github_fake`, so no test reaches the network.
 - `tests/gui_test_github_fake.py` (new): a fake GitHub runner that answers the search and comment calls itself and files
   through the caller's `report-bug.sh` stand-in.
-- `tests/test_gui_test_e2e.py`: a `#1249` section of 5 cases (title shape, attach-instead-of-file, a different failure is
-  a second bug, a look-up that cannot run, and the run command's bug entry) plus `_run_cmd` pointed at the fake GitHub
-  and the two `#1222`/`#1241` assertions that pinned the old boilerplate title.
+- `tests/test_gui_test_e2e.py`: a `#1249` section of 6 cases (title shape, attach-instead-of-file, a different failure is
+  a second bug, a look-up that cannot run, a comment that cannot be posted, and the run command's bug entry) plus
+  `_run_cmd` pointed at the fake GitHub and the two `#1222`/`#1241` assertions that pinned the old boilerplate title.
 
 No case files a real bug: every filing goes through a temporary checkout's `report-bug.sh` stand-in, and the GitHub
 doors are the fake runner.
@@ -44,7 +44,7 @@ ERROR tests/test_gui_test_e2e.py
 
 ```bash
 cd ~/wt-as-1249 && MESENAI_REPO=~/wt-e2e uv run --extra dev pytest tests/test_gui_test_e2e.py -k 1249 -q
-# 5 passed, exit 0
+# 6 passed, exit 0
 cd ~/wt-as-1249 && MESENAI_REPO=~/wt-e2e uv run --extra dev pytest tests/test_gui_test_e2e.py -p no:randomly -k "1190 or 1241 or 1222"
 # 1 failed, 24 passed: the one failure is environment-gated (test_1222_the_pilot_home_batch_runs_through_the_command_
 # against_the_native_core asserts MESENAI_ROOT, a MesenAI checkout holding scripts/gui_test), and is pre-existing

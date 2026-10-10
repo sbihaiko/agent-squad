@@ -2343,3 +2343,15 @@ def test_1249_the_run_command_records_the_issue_the_run_belongs_to(tmp_path, mon
     [comment] = fake_github.COMMENTS
     assert again["run_id"] in comment["body"] and again["build_sha"] in comment["body"]
     assert "### `smoke.still-home`" in comment["body"] and "### `smoke.unknown-id`" in comment["body"]
+
+
+def test_1249_a_comment_that_cannot_be_posted_still_reports_the_run(tmp_path):
+    """An open bug the run cannot comment on is still a run to report: it files its own, and says why."""
+    board = _Board()
+    d = _two_failures_script()
+    results = run(d, TickingFake(tmp_path))
+    report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
+    board.comment_on_bug = lambda issue, body: (_ for _ in ()).throw(OSError("no network"))
+    detail = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
+    assert detail["existing"] is False and len(board.issues) == 2 and board.comments == []
+    assert "comment" in detail["lookup_failed"] and board.issues[0]["url"] in detail["lookup_failed"]

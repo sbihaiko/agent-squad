@@ -151,9 +151,13 @@ def report_failures_detail(script, results, store, file_bug, approvals_path, pri
         else:
             lookup_failed = None
         if twin:
-            comment_on_bug(twin, _comment_body(twin["title"], failed, results, run, parts))
-            return {"title": twin["title"], "key": key, "url": twin["url"], "existing": True,
-                    "lookup_failed": None}
+            try:  # an issue found but a comment that cannot be posted is a run to report, not a failure to swallow
+                comment_on_bug(twin, _comment_body(twin["title"], failed, results, run, parts))
+            except (subprocess.SubprocessError, OSError, ValueError) as ex:
+                lookup_failed = f"the comment on its open bug {twin['url']} failed: {ex}"
+            else:
+                return {"title": twin["title"], "key": key, "url": twin["url"], "existing": True,
+                        "lookup_failed": None}
     else:
         lookup_failed = None
     body = f"{len(bad)} of {len(results)} steps failed in `{script['name']}`.\n\n" + "\n\n".join(parts)
