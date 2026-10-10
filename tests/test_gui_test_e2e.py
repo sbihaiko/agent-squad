@@ -2328,3 +2328,109 @@ def test_1243_the_three_selectors_stay_mutually_exclusive(tmp_path, monkeypatch)
     with pytest.raises(SystemExit):
         mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"),
                   "--batch", "b1", "--variant", "window.mode=windowed"])
+
+
+# --- #1286: every case of the committed pad-only pilot, run on the squad's GUI test infrastructure ---
+
+from squad.gui_test_scenario import cases as scenario_cases  # noqa: E402
+from squad.gui_test_scenario import run_scenario  # noqa: E402
+from tests.gui_test_pilot_fake_1286 import ADAPTERS as PILOT_ADAPTERS  # noqa: E402
+from tests.gui_test_pilot_fake_1286 import MANUAL_ONLY_BATCHES  # noqa: E402
+
+# The Mode and Blocked-by columns of the scenario's own case table (#1286): the fourteen cases its 26 batches run,
+# each with the case that has to have run before it. Every other case of the pilot is `manual` and waits for a person.
+AUTOMATED_1286 = [
+    "launch.first-run-home", "launch.open-rom-focused",
+    "home.first-focus", "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left",
+    "home.focus-holds-right", "home.open-library", "home.back-to-home",
+    "lib.home-ring", "lib.reach-library", "lib.open-screen", "lib.back-to-home", "lib.back-ring-on-opener",
+]
+HOLDS_1286 = ["home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right"]
+
+
+def _pilot_1286():
+    return _pilot_1223()
+
+
+def _home_1286(tmp_path):
+    """The committed home batch alone, on the adapter the roster names for it: the seven automated cases, nothing else."""
+    d = _pilot_1286()
+    batch = next(b for b in d["batches"] if b["id"] == "home")
+    return run_scenario({**d, "batches": [batch]}, PILOT_ADAPTERS, out_root=tmp_path)
+
+
+def test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run(tmp_path):
+    """A fresh settings profile has no play history and no favorites, so the Home holds Open a ROM alone and a D-pad
+    press stays on it - which is what the four `home.focus-holds-*` cases and the real emulator say (#1137, and the
+    real-app case above). An adapter whose Home keeps four tiles whatever the profile lets Up escape to Recent, and
+    that one escape is enough to make the whole home batch - six of the scenario's fourteen automated cases - unrunnable.
+    """
+    out = _home_1286(tmp_path)
+    by_id = {r["id"]: r["verdict"] for r in out["rows"]}
+    assert [by_id[i] for i in HOLDS_1286] == ["passed"] * 4, by_id
+
+
+def test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster(tmp_path):
+    out = _home_1286(tmp_path)
+    by_id = {r["id"]: r["verdict"] for r in out["rows"]}
+    home = [c for c in AUTOMATED_1286 if c.startswith("home.")]
+    assert len(home) == 7
+    assert [by_id[i] for i in home] == ["passed"] * len(home), by_id
+
+
+def test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter():
+    """No batch of the committed script is left without a target, and the roster's `manual` claim holds: a batch it
+    calls manual-only has no automated case the adapter would have to answer."""
+    d = _pilot_1286()
+    rows = {c["id"]: c for c in scenario_cases(d)}
+    assert set(PILOT_ADAPTERS) == {b["id"] for b in d["batches"]}
+    for batch in d["batches"]:
+        modes = {rows[s["id"]]["mode"] for part in ("setup", "steps", "teardown") for s in batch.get(part) or []}
+        if batch["id"] in MANUAL_ONLY_BATCHES:
+            assert modes == {"manual"}, f"batch {batch['id']} is on a launch-only adapter and has an automated case"
+
+
+def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated_ones_pass(tmp_path):
+    """The whole scenario in one call: 281 cases of the committed script, in script order, none dropped and none
+    added; the fourteen automated cases pass on the roster and every other case is `pending` for a person."""
+    d = _pilot_1286()
+    out = run_scenario(d, PILOT_ADAPTERS, out_root=tmp_path)
+    assert [r["id"] for r in out["rows"]] == [s["id"] for s in scenario_cases(d)]
+    assert out["summary"]["cases"] == 281 and len(out["rows"]) == 281
+    assert out["status"] == "passed" and out["reasons"] == []
+    assert out["summary"]["failed"] == 0 and out["summary"]["not executed"] == 0
+    assert [r["id"] for r in out["rows"] if r["verdict"] == "passed"] == AUTOMATED_1286
+    assert {r["id"] for r in out["rows"] if r["verdict"] == "pending"} == \
+        {c["id"] for c in scenario_cases(d)} - set(AUTOMATED_1286)
+    assert out["summary"]["pending"] == 281 - 14
+
+
+def test_1286_a_case_names_the_case_that_blocks_it():
+    """The Blocked-by column of the scenario's case issues: a step waits for its batch's last setup step."""
+    rows = {c["id"]: c for c in scenario_cases(_pilot_1286())}
+    assert rows["home.focus-holds-up"]["blocked_by"] == "home.first-focus"
+    assert rows["lib.open-screen"]["blocked_by"] == "lib.reach-library"
+    assert rows["launch.first-run-home"]["blocked_by"] is None
+    assert rows["pause-pack-multi.pack-focus"]["blocked_by"] == "pause-pack-multi.chord-opens"
+
+
+def test_1286_a_batch_the_roster_cannot_serve_is_not_executed_and_never_dropped(tmp_path):
+    """A batch with no adapter is not skipped in silence: its cases keep their row, say `not executed` and name the
+    batch, and the run is red - a scenario whose cases nothing ran is not a green scenario."""
+    out = run_scenario(script(step("b1.auto"), step("b1.look", mode="manual")), {}, out_root=tmp_path)
+    assert [r["id"] for r in out["rows"]] == ["b1.auto", "b1.look"]
+    assert {r["verdict"] for r in out["rows"]} == {"not executed (no adapter for batch b1)"}
+    assert out["batches"] == [{"id": "b1", "verdict": "not executed",
+                               "reason": "the roster has no adapter for batch b1"}]
+    assert out["status"] == "failed"
+    assert out["reasons"] == ["no case executed", "batch b1 was not executed: the roster has no adapter for batch b1"]
+    assert out["summary"] == {"passed": 0, "failed": 0, "pending": 0, "not executed": 2, "cases": 2, "run": 0}
+
+
+def test_1286_a_failed_case_makes_the_scenario_red(tmp_path):
+    """A deviation the roster's adapter cannot show: the step fails, and the run names the case."""
+    d = script(step("b1.auto", check={"name": "ui.focused", "args": {"is": "play.ghost"}},
+                    wait={"check": "ui.focused == play.ghost", "timeout_ticks": 2}))
+    out = run_scenario(d, {"b1": TickingFake}, out_root=tmp_path)
+    assert out["status"] == "failed" and out["reasons"] == ["1 case(s) failed: b1.auto"]
+    assert out["rows"][0]["verdict"] == "failed (timeout waiting for ui.focused == play.ghost)"
