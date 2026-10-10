@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.24 (local fork, 2026-10-10)
+- **Fix to 0.2.21: the fork-worktree liveness test had to be scoped to the run that owns the tree.** 0.2.21 replaced the record-grep with "a run without a verdict is live", which is true of *every* fork worktree at once — one run in flight anywhere parked them all, and six trees belonging to closed issues (1222, 1225, 1226, 1243, 1244, 1249) stopped being collected. The test is now forkclose.sh's: a process whose cwd is inside the tree, or a run whose record moved inside the orphan window, has no `verdict` event yet and names `gui/<n>` or `wt-(as|fr)-<n>` in its record or request. A run that has ended owns nothing. `test-wtclean.sh` covers both directions — the tree survives its issue closing while the run is live, and is collected once the run has a verdict.
+
 ## 0.2.23 (local fork, 2026-10-10)
 - **A head no workflow has run on is no longer merged as if it were green.** `autopilot.sh` read CI out of the revci line, where `CI=none` falls through every failure test — so a PR whose checks had never been created reached the merge path carrying only "nothing is wrong". The merge gate now asks GitHub for the head's check runs directly (`commits/<sha>/check-runs`), and when the list is empty it holds the merge, emits `CI MISSING` on the watch log, writes the reason to the issue's comment queue, and re-dispatches the CI workflow (`SG_CI_WORKFLOW`, `checks.yml` for this profile — the workflow whose jobs the `main` ruleset requires). PR #1285 sat at `CI=none` on a head with zero check runs while every earlier head of the same branch had ten, and the five required contexts had never reported on it.
 

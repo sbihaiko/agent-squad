@@ -4,6 +4,7 @@
 # whose HEAD is on no remote branch (a fix run that landed without pushing) is pushed to its open PR's branch when that is a
 # fast-forward (WT PUSHED), else its fix is re-armed via retryfix.sh (autofix runs) or it is kept and reported once as WT UNPUSHED.
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
+now=$(date +%s)
 cd "$SG_CHECKOUT" || exit 0
 cwds=$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')   # every live process's cwd, for the zombie test
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\1#p' | while read -r w; do
@@ -50,15 +51,20 @@ done
 if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
   $G -C "$SG_FORK_DIR" worktree list --porcelain | sed -En 's#^worktree (.*/wt-(as|fr)-[0-9]+)$#\1#p' | while read -r w; do
     n=${w##*-}; b=$($G -C "$w" branch --show-current 2>/dev/null)
-    # A live run's final gate still cds into this tree, and a run in flight does not name the tree anywhere in its record yet:
-    # that only happens once the gate writes its outcome. So a run without a verdict is live unless it is a zombie -- exactly
-    # the rule the ws trees above use. The old test grepped the record for the tree's name, found nothing until the gate had
-    # already run, and deleted a live run's worktree the moment a sibling issue closed: every ac_command then failed with
-    # "cd: No such file or directory" and a correct run was marked failed (gui/1227, run 45a682, 2026-10-10).
-    live=0; for r in "$SG_CHECKOUT"/runs/run-*/record.jsonl; do
-      grep -q '"event": *"verdict"' "$r" 2>/dev/null && continue
-      [ -n "$(find "$r" -mmin +20 2>/dev/null)" ] && ! printf '%s\n' "$cwds" | grep -qF "${r%/record.jsonl}/" && continue
-      live=1; break; done
+    # Which run owns this tree? The tree's own name is the wrong key twice over: a run in flight never writes "wt-as-<n>" to its
+    # record (that only appears when the gate writes its outcome), and "some run has no verdict yet" is true of every tree at
+    # once, because one live run anywhere parks them all. What a run does carry is the branch it was launched for, so the test
+    # is forkclose.sh's: a process inside the tree, or a run whose record moved in the orphan window and whose request names
+    # gui/<n> or wt-(as|fr)-<n>. The old record-grep deleted a live run's worktree the moment a sibling issue closed, and every
+    # ac_command then failed with "cd: No such file or directory" (gui/1227, run 45a682, 2026-10-10).
+    live=0
+    printf '%s\n' "$cwds" | grep -qF "$w/" && live=1
+    if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
+      f="$r/record.jsonl"; [ -f "$f" ] || continue
+      grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue   # a run that has ended owns nothing
+      [ $(( now - $(stat -f %m "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+      grep -qE "(^|[^0-9])gui/$n([^0-9]|$)|wt-(as|fr)-$n([^0-9]|$)" "$f" "$r/request.txt" 2>/dev/null && { live=1; break; }
+    done; fi
     [ $live = 0 ] || continue
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
     [ "$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null)" = closed ] || continue
