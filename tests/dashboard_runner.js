@@ -48,6 +48,7 @@ process.stdin.on("end", async () => {
     else if (o.op === "canon") out.push(core.canonFromText(o.text));
     else if (o.op === "hash") out.push(await core.graphHash(o.text));
     else if (o.op === "scriptdiagram") out.push(core.scriptDiagram(o.script));
+    else if (o.op === "guirun") out.push(core.guiRun(o.events, o.cursor));
     else if (o.op === "scriptsvg") out.push(core.scriptSvg(o.script));
     else if (o.op === "edit") out.push(core.applyNodeEdit(o.doc, o.name, o.edited));
     else if (o.op === "rows") out.push(core.overlayRows(o.events));

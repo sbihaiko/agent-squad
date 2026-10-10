@@ -7,38 +7,16 @@ import re
 import subprocess
 from pathlib import Path
 
-from squad.gui_test import validate
+import pytest
+
+from squad.gui_test import ScriptError, validate
+from squad.gui_test_adapter import FakeAdapter as TickingFake
 from squad.gui_test_render import render
 from squad.gui_test_run import run
 from tests.dashboard_helpers import run_node
 from tests.gui_test_helpers import script, step
 
 FORK = Path(__file__).resolve().parent.parent
-
-
-class FakeAdapter:
-    """Home screen with one card; Right is a no-op, A opens the library."""
-
-    def __init__(self):
-        self.screen, self.focus, self.log = "play.home", "play.home.open-rom", []
-
-    def inject(self, name, args):
-        self.log.append((name, args))
-        if name == "pad.press" and args.get("button") == "A":
-            self.screen = "play.library"
-
-    def wait(self, condition, timeout):
-        return "met" if condition is None or self._holds(condition) else "timeout"
-
-    def _holds(self, cond):
-        key, _, want = cond.partition(" == ")
-        return {"ui.screen": self.screen, "ui.focused": self.focus}[key] == want
-
-    def check(self, name, args):
-        if args["is"].endswith("ghost"):
-            return "unknown id"
-        return name == "ui.focused" and self.focus == args["is"] or \
-            name == "ui.screen" and self.screen == args["is"]
 
 
 def three_steps():
@@ -53,10 +31,10 @@ def three_steps():
     )
 
 
-def test_three_step_script_runs_against_a_fake_adapter():
+def test_three_step_script_runs_against_a_fake_adapter(tmp_path):
     d = three_steps()
     validate(d)
-    results = run(d, FakeAdapter())
+    results = run(d, TickingFake(tmp_path))
     assert [(r["id"], r["verdict"]) for r in results] == [
         ("b1.right-holds", "passed"),
         ("b1.open-library", "passed"),
@@ -64,9 +42,9 @@ def test_three_step_script_runs_against_a_fake_adapter():
     ]
 
 
-def test_wait_timeout_is_a_failed_step_naming_the_wait():
+def test_wait_timeout_is_a_failed_step_naming_the_wait(tmp_path):
     d = script(step("b1.t", wait={"check": "ui.screen == nowhere", "timeout_ticks": 3}))
-    [r] = run(d, FakeAdapter())
+    [r] = run(d, TickingFake(tmp_path))
     assert r["verdict"] == "failed (timeout waiting for ui.screen == nowhere)"
 
 
@@ -171,3 +149,78 @@ def test_pilot_script_opens_as_a_diagram_and_every_node_shows_its_text():
             assert f'data-step="{s["id"]}"' in svg
             assert s["expect"].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:30] in svg
         assert svg.count('class="step manual"') == sum(s["mode"] == "manual" for s in steps)
+
+
+# --- #1181: the runner against a fake adapter: a step runs, captures and shows `executed` ---
+
+from tests.gui_test_contract import CONTRACT, check_contract  # noqa: E402
+
+
+def _three_step_run(tmp_path):
+    d = script(
+        step("b1.right-holds"),
+        step("b1.open-library", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+        step("b1.still-library", action={"name": "pad.press", "args": {"button": "Right", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+    )
+    adapter = TickingFake(tmp_path)
+    events = []
+    validate(d, adapter.capabilities())
+    return d, adapter, events, run(d, adapter, record=events.append)
+
+
+def test_three_step_script_shows_three_nodes_each_with_its_screenshot(tmp_path):
+    _, _, events, results = _three_step_run(tmp_path)
+    assert [r["verdict"] for r in results] == ["passed"] * 3
+    nodes = run_node([{"op": "guirun", "events": events}])[0]
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [
+        ("b1.right-holds", "executed", "passed"), ("b1.open-library", "executed", "passed"),
+        ("b1.still-library", "executed", "passed")]
+    for n in nodes:
+        assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG")
+        assert len(n["capture"]["sha256"]) == 64
+
+
+def test_step_capture_and_verdict_events_are_replay_events_in_order(tmp_path):
+    _, _, events, _ = _three_step_run(tmp_path)
+    assert [(e["event"], e["node"]) for e in events[:3]] == [
+        ("gui_step", "b1.right-holds"), ("gui_capture", "b1.right-holds"), ("gui_verdict", "b1.right-holds")]
+    assert [e["pos"] for e in events] == list(range(len(events)))
+    cut = run_node([{"op": "guirun", "events": events, "cursor": 4}])[0]
+    assert [(n["id"], n["status"]) for n in cut] == [("b1.right-holds", "executed"), ("b1.open-library", "running")]
+
+
+def test_no_capture_is_taken_before_the_wait_condition_is_met(tmp_path):
+    _, adapter, _, _ = _three_step_run(tmp_path)
+    assert adapter.captured_screens == ["play.home", "play.library", "play.library"]
+
+
+def test_a_wait_timeout_takes_no_capture_and_the_node_is_not_executed(tmp_path):
+    d = script(step("b1.t", wait={"check": "ui.screen == nowhere", "timeout_ticks": 3}))
+    adapter, events = TickingFake(tmp_path), []
+    [r] = run(d, adapter, record=events.append)
+    assert r["verdict"].startswith("failed (timeout")
+    assert adapter.captured_screens == []
+    assert [e["event"] for e in events] == ["gui_step", "gui_verdict"]
+    [n] = run_node([{"op": "guirun", "events": events}])[0]
+    assert (n["status"], n["capture"]) == ("failed", None)
+
+
+def test_validator_rejects_before_running_what_the_adapter_does_not_advertise(tmp_path):
+    d = script(step("b1.k", action={"name": "key.press", "args": {"key": "x", "ticks": 1}}),
+               step("b1.c", check={"name": "fs.exists", "args": {"is": "x"}}))
+    d["requires"] = {"actions": ["pad.press", "key.press"], "checks": ["ui.screen", "fs.exists"]}
+    adapter = TickingFake(tmp_path)
+    with pytest.raises(ScriptError) as e:
+        validate(d, adapter.capabilities())
+    assert "b1.k: adapter does not advertise action key.press" in e.value.problems
+    assert "b1.c: adapter does not advertise check fs.exists" in e.value.problems
+    assert adapter.log == []
+
+
+def test_the_fake_adapter_passes_the_shared_contract_suite(tmp_path):
+    check_contract(lambda: TickingFake(tmp_path))
+    assert {"launch", "inject", "check", "wait", "capture", "teardown", "capabilities"} <= set(CONTRACT)

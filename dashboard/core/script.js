@@ -59,5 +59,21 @@ function scriptModule() {
       + `<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs>${out}</svg>`;
   }
 
-  return { scriptDiagram, scriptSvg };
+  // A GUI test run as nodes, one per step in record order: the runner's gui_step, gui_capture and gui_verdict events up to the replay cursor
+  // (null is the end). A step shows `executed` once its wait was met, its capture was taken and its verdict is in; a verdict with no
+  // capture is `failed` (its wait timed out); a step with no verdict yet is `running`.
+  function guiRun(events, cursor) {
+    const nodes = new Map();
+    for (const e of events) {
+      if (cursor != null && e.pos > cursor) break;
+      if (!String(e.event).startsWith("gui_")) continue;
+      if (!nodes.has(e.node)) nodes.set(e.node, { id: e.node, status: "running", verdict: null, capture: null, pos: e.pos });
+      const n = nodes.get(e.node);
+      if (e.event === "gui_capture") n.capture = { path: e.path, size: e.size, sha256: e.sha256 };
+      if (e.event === "gui_verdict") { n.verdict = e.verdict; n.status = n.capture ? "executed" : "failed"; }
+    }
+    return [...nodes.values()];
+  }
+
+  return { scriptDiagram, scriptSvg, guiRun };
 }
