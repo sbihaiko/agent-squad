@@ -19,9 +19,9 @@ prof() { printf '%s' "$prs" | jq -r --arg b "$1" '[.[]|select(((.title+" "+(.bod
 open=(); fork=(); for b in $bl; do [ "$(gh api repos/$SG_REPO/issues/$b -q .state)" = open ] || continue
   case "$testing" in *" $b "*) continue;; esac   # its card is in Testing (code merged, test pass running): does not gate
   case "$cc" in *" $b "*)   # Code Complete: a PR stacks like an open blocker; fork-only work is merged into the child's fork branch
-    if [ -n "$(prof "$b")" ]; then open+=("$b"); continue; fi
-    br=${SG_FORK_BRANCH:-gui/%n}; br=${br//%n/$b}
+    br=${SG_FORK_BRANCH:-gui/%n}; br=${br//%n/$b}   # an issue can carry both a PR and fork work: hand over both
     [ -n "${SG_FORK_DIR:-}" ] && [ -n "$(/usr/bin/git -C "$SG_FORK_DIR" rev-list -1 "${SG_FORK_BASE:-main}..$br" 2>/dev/null)" ] && fork+=("$br")
+    [ -n "$(prof "$b")" ] && open+=("$b")
     continue;; esac
   open+=("$b"); done
 fx=""; [ ${#fork[@]} -gt 0 ] && fx=" FORK ${fork[*]}"

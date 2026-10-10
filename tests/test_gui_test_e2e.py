@@ -476,6 +476,44 @@ def test_settings_and_fixtures_are_byte_identical_after_the_run_even_when_the_ap
     assert (settings.read_bytes(), rom.read_bytes()) == before
     assert not ghost.exists()
 
+
+# --- #1189: vision verdict with cost on nodes and a per-run spend cap ---
+
+def test_vision_verdict_and_spend_cap_end_to_end(tmp_path):
+    from squad.gui_test_vision import Vision
+
+    def model(png, expect):  # a stand-in that reads the expected text: right text compatible, wrong text incompatible
+        return {"answer": "compatible" if "library" in expect else "incompatible", "saw": "a library list", "cost": 0.03}
+
+    def look(sid, expect):
+        s = step(sid, expect=expect, action={"name": "pad.press", "args": {"button": "A", "ticks": 1}}, wait={"timeout_ticks": 2})
+        del s["check"]
+        return s
+
+    d = script(step("b1.checked", check={"name": "ui.focused", "args": {"is": "play.home.open-rom"}}, wait={"timeout_ticks": 2}),
+               look("b1.right", "the library lists games"), look("b1.wrong", "the settings page is open"),
+               look("b1.after-cap", "the library lists games"))
+    validate(d)
+    events = []
+    results = run(d, TickingFake(tmp_path), record=events.append, vision=Vision(model, cap=0.05))
+    assert [(r["id"], r["verdict"]) for r in results] == [
+        ("b1.checked", "passed"), ("b1.right", "passed"), ("b1.wrong", "needs review"),
+        ("b1.after-cap", "skipped (spend cap $0.05 reached)")]
+    nodes = {n["id"]: n for n in run_node([{"op": "guirun", "events": events}])[0]}
+    assert [nodes[i]["cost"] for i in ("b1.right", "b1.wrong")] == [0.03, 0.03]
+    assert "cost" not in nodes["b1.checked"] and nodes["b1.after-cap"]["status"] == "skipped"
+    assert "spend cap" in nodes["b1.after-cap"]["stop"]
+
+
+def test_the_recorded_vision_measurement_covers_the_fixed_screenshot_set():
+    fix = FORK / "tests" / "fixtures" / "gui_vision"
+    cases = json.loads((fix / "cases.json").read_text())
+    rec = json.loads((fix / "measurement.json").read_text())
+    assert rec["total"] == len(cases) and rec["correct"] == rec["total"] and rec["model"]
+    assert [(c["image"], c["expect"], c["want"]) for c in rec["cases"]] == [(c["image"], c["expect"], c["answer"]) for c in cases]
+    assert all(c["got"] == c["want"] for c in rec["cases"])
+
+
 # --- #1190: a failed run opens one bug with its evidence ---
 
 from squad.gui_test_report import evidence_store, file_bug_with, report_failures  # noqa: E402
@@ -627,3 +665,36 @@ def test_wait_on_runner_predicate_met_once_it_appears(tmp_path):
     v = _one(a, wait={"check": "fs.exists late.txt == true", "timeout_ticks": 5}, root=tmp_path,
              check=_ck("fs.exists", path="late.txt", **{"is": True}))
     assert v == "passed"
+
+
+# --- #1186: CI verdict: a missing native core or a failed step is red; needs-review/pending alone is green ---
+
+from squad.gui_test_ci import ci_verdict  # noqa: E402
+
+
+def _r(*verdicts):
+    return [{"id": f"b1.s{i}", "verdict": v, "capture": None, "held": False} for i, v in enumerate(verdicts)]
+
+
+def test_ci_a_run_with_the_native_core_unavailable_is_red_never_a_skip():
+    code, summary = ci_verdict(_r("pending", "pending"), core_available=False)
+    assert code != 0
+    assert "native core" in summary
+
+
+def test_ci_a_run_with_a_failed_step_is_red_and_names_it():
+    code, summary = ci_verdict(_r("passed", "failed (timeout waiting for x)"), core_available=True)
+    assert code != 0
+    assert "b1.s1" in summary
+
+
+def test_ci_only_needs_review_and_pending_steps_is_green_and_listed_in_the_summary():
+    code, summary = ci_verdict(_r("passed", "needs review", "pending"), core_available=True)
+    assert code == 0
+    assert "needs review" in summary and "b1.s1" in summary and "b1.s2" in summary
+
+
+def test_ci_a_clean_run_is_green(tmp_path):
+    results = _three_step_run(tmp_path)[3]
+    code, _ = ci_verdict(results, core_available=True)
+    assert code == 0

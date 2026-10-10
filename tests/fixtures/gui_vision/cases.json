@@ -1,0 +1,47 @@
+[
+  {
+    "image": "home.png",
+    "expect": "The home screen shows the Open a ROM card with focus",
+    "answer": "compatible"
+  },
+  {
+    "image": "home.png",
+    "expect": "The library lists two games",
+    "answer": "incompatible"
+  },
+  {
+    "image": "library.png",
+    "expect": "The library lists two games, Castlevania and Contra",
+    "answer": "compatible"
+  },
+  {
+    "image": "library.png",
+    "expect": "The settings screen shows a Volume slider",
+    "answer": "incompatible"
+  },
+  {
+    "image": "settings.png",
+    "expect": "The settings screen shows Volume 80 and a Save button",
+    "answer": "compatible"
+  },
+  {
+    "image": "settings.png",
+    "expect": "An error dialog says the ROM could not be opened",
+    "answer": "incompatible"
+  },
+  {
+    "image": "error.png",
+    "expect": "An error dialog says the ROM could not be opened",
+    "answer": "compatible"
+  },
+  {
+    "image": "error.png",
+    "expect": "The home screen shows the Open a ROM card with focus",
+    "answer": "incompatible"
+  },
+  {
+    "image": "inject.png",
+    "expect": "The library lists two games, Castlevania and Contra",
+    "answer": "incompatible"
+  }
+]

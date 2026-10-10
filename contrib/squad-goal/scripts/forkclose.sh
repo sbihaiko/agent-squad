@@ -1,5 +1,6 @@
 #!/bin/bash
 # usage: forkclose.sh   (watch.sh, every loop; FC_DRY=1 prints the candidates)
+# Fork work merges itself (an issue with an open PR too gets only its fork half merged, no close):
 # Fork-only work closes itself: an open issue whose card is Code Complete, with no open PR naming it and a fork branch
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
@@ -11,11 +12,11 @@
 L="$A/forkclose.lock"; mkdir "$L" 2>/dev/null || exit 0   # a test pass is still running
 trap 'rmdir "$L" 2>/dev/null' EXIT
 G="/usr/bin/git -C $SG_FORK_DIR"
-cc=$(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null)
+cc=$(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null)
 [ -n "$cc" ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 for n in $cc; do
-  case "$refs" in *" $n "*) continue;; esac
+  mixed=""; case "$refs" in *" $n "*) mixed=1;; esac   # the issue also has an open MesenAI PR: merge and test its fork half, the PR path closes it
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
   [ "$($G rev-list --count "$SG_FORK_BASE..$br")" -gt 0 ] || continue
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; [ -e "$mk" ] && continue
@@ -37,7 +38,10 @@ for n in $cc; do
     && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"
   out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- sh -c "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
   tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
-  if [ $rc = 0 ]; then
+  if [ $rc = 0 ] && [ -n "$mixed" ]; then
+    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half is still an open PR; the issue closes on that path.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
+    echo "FORKCLOSE #$n fork half merged ($br ${head:0:9} -> ${m:0:9}, $id green; PR still open)"
+  elif [ $rc = 0 ]; then
     gh api -X POST repos/$SG_REPO/issues/$n/comments -F body=@- >/dev/null <<EOT
 Done (fork-only work; owner-approved rule: merged into the fork's $SG_FORK_BASE and the fork suite green there).
 - $br at ${head:0:9} merged into $SG_FORK_BASE as ${m:0:9}.
@@ -50,9 +54,19 @@ EOT
     gh api -X PATCH repos/$SG_REPO/issues/$n -f state=closed -f state_reason=completed >/dev/null && $BOARD $SG_OWNER $SG_PROJECT Done $n >/dev/null
     echo "FORKCLOSE #$n closed ($br ${head:0:9} -> ${m:0:9}, $id green)"
   else
-    $G revert -m 1 --no-edit "$m" >/dev/null 2>&1
-    $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
+    $G revert -m 1 --no-edit "$m" >/dev/null 2>&1; rv=$($G rev-parse HEAD)
+    # the branch is now an ancestor of the base, so a later merge would be a no-op: re-apply its work on the branch
+    # (merge the base in, then revert the revert) so the branch is ahead again and a fix commit re-arms the close
+    bw=$($G worktree list --porcelain | awk -v b="refs/heads/$br" '/^worktree /{w=$2} $0=="branch "b{print w}')
+    [ -n "$bw" ] && /usr/bin/git -C "$bw" merge -q --no-edit "$SG_FORK_BASE" >/dev/null 2>&1 && /usr/bin/git -C "$bw" revert --no-edit "$rv" >/dev/null 2>&1 \
+      && touch "$A/fork-$n-$(/usr/bin/git -C "$bw" rev-parse HEAD | cut -c1-9)"   # same content that just failed: wait for a real fix commit
+    nm="forkred-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"   # a fix run makes that commit
+    { echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. One child, a FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). Spawn it with spend 8. en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
+      echo "In $SG_FORK_DIR the fork suite failed after merging $br into $SG_FORK_BASE (test pass $id, exit $rc); the merge was reverted and the branch re-applied. Work in the existing worktree of $br (${bw:-git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br}). Run \`$SG_FORK_TEST_CMD\` there, fix the root cause (never weaken or skip a test; a test that needs a missing environment variable is fixed in the environment only if the variable is documented, else report it), commit on $br, NEVER push, keep the worktree. Log tail:"
+      tail -40 "$SG_STATE/tests/$id.log"; echo "GitHub issue #$n: only the failing suite is in scope."; } > "$body"
+    req=$("$here/mkreq.sh" "$nm" "$body") && (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$SG_STATE/$nm.log")
+    [ -n "$mixed" ] || $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
     printf "Fork-only close: the fork suite failed after merging %s (%s) as %s (test pass %s, exit %s); the merge was reverted on %s. Card back to In Progress.\n\`\`\`\n%s\n\`\`\`\n" "$br" "${head:0:9}" "${m:0:9}" "$id" "$rc" "$SG_FORK_BASE" "$tl" > "$SG_STATE/cq/$n-forkred$$.md"
-    echo "FORKCLOSE RED #$n ($id exit $rc), merge reverted"
+    echo "FORKCLOSE RED #$n ($id exit $rc), merge reverted, branch re-applied, fix run $nm"
   fi
 done
