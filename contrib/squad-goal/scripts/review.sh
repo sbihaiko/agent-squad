@@ -37,7 +37,7 @@ Output: first line VERDICT: APPROVE | CHANGES; then numbered findings (blocking 
 fi
 tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg"); capraw() { perl -e 'alarm shift; exec @ARGV or exit 127' "$tmo" "$@"; }   # SIGALRM -> exit 142
 # cap: capraw, but every 10 s checks that the PR head is still the reviewed one; a new push kills the model at once (SUPERSEDED, no verdict)
-cap() { capraw "$@" & local pid=$! n=0
+cap() { capraw "$@" <&0 & local pid=$! n=0   # <&0: a background job would otherwise read /dev/null instead of the prompt file
   while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); [ $((n % 5)) = 0 ] || continue
     [ "$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha 2>/dev/null || echo $head)" = "$head" ] || { touch "$p.superseded"; pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null; break; }; done
   wait $pid 2>/dev/null; }
@@ -57,8 +57,9 @@ for m in $(jq -r '.review_models[]' "$cfg"); do
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" -o "$out" - < $p > "$SG_STATE/review-$pr.err" 2>&1;;
     esac
+    rc=$?
     [ -e "$p.superseded" ] && { echo "VERDICT: BLOCKED (PR head moved during the review)" > "$out"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
-    rc=$?; printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
+    printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_STATE/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on PR #%s after %ss; next model.\n" "$m" "$pr" "$tmo" > "$SG_STATE/cq/$iss-mtimeout$$.md"; break; }

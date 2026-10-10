@@ -46,5 +46,6 @@ if v:
   tm python3 "$(dirname "$0")/childcc.py" 2>&1   # a child that passed moves its issue to Code Complete
   tm "$(dirname "$0")/autopilot.sh" 2>&1   # auto review, auto merge on APPROVE+CI green, round cap
   tm "$(dirname "$0")/heartbeat.sh"   # hung test hosts (0% CPU) and dead runs
-  tm "$(dirname "$0")/wtclean.sh" 2>&1   # finished, pushed child worktrees
+  tm "$(dirname "$0")/wtclean.sh" 2>&1
+  tm "$(dirname "$0")/janitor.sh" 2>&1   # leftover processes of finished runs, zombie runs, idle dashboards, stale dispatch markers   # finished, pushed child worktrees
   boot=0; for _ in 1 2; do sleep 30; tm python3 "$(dirname "$0")/childcc.py" 2>&1; tm "$(dirname "$0")/autopilot.sh" 2>&1; done; sleep 30; done   # autopilot every 30 s, the rest every 90 s
