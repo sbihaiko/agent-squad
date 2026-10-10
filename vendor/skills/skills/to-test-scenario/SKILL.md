@@ -99,16 +99,27 @@ That results file is the run report step 6 reads. Never simulate a run, and neve
 
 ### 6. Write results back
 
-Read the run's results file and, for every case, comment on its sub-issue with the verdict, the observed value, the variant and the evidence link (screenshots go through the privacy gate and reach an issue only via the evidence branch, never as a CI artifact). A case with no result in the report is reported as such, never passed. The module does this from the run report:
+One deterministic, model-free command of the module reads the run's results file and the map beside the script, and writes every verdict to the case's sub-issue — so CI can do it after the run, with no interactive session in the loop:
+
+```bash
+python -m squad.to_test_scenario write-back <results file> --map <name>.gui-test.issues.json \
+    --repo <owner/name> [--board users/<owner>/projects/<n>] [--bug-helper <checkout>/scripts/report-bug.sh]
+```
+
+It exits 0 when the verdicts landed and 1 when they could not. A results file that is not the frozen schema of #1222/#1223 is rejected naming every reason; a map that names no case or no parent, a run that executed no step and a core that never loaded are failures, and none of them writes anything back.
 
 - `passed` → comment and close the case's sub-issue.
-- `failed` → comment the verdict with expected and observed, leave the case open, and open **exactly one** bug for the whole run through `scripts/report-bug.sh`, listing every failed case. Never one bug per case.
+- `failed` → comment the verdict, leave the case open, and **reopen** it when it was closed, so a regression never stays hidden behind a closed issue.
 - `needs review` / `pending` / `manual` → comment, leave open, and list on the parent. They are doubt and human residue: visible, never red.
+- A verdict is commented only when it **changed** since the last one on the issue: the first run comments every case, ten later runs leave ten comments only where something moved.
+- Evidence is linked for `failed` and `needs review` only; a passed case uploads nothing.
 - A case with no result in the run is reported, not passed; an empty run writes nothing.
+
+**This command never opens a bug.** The run command owns the one bug a red run files (#1222), and the write-back only **links** it on the parent. A failure never produces two bugs.
 
 Screenshots reach an issue only through the **privacy gate** and the evidence branch — the skill never uploads a capture itself, and no resident or personal data goes into a script, an issue or a screenshot.
 
-The parent gets one final comment with counts per verdict, the run id, the script sha, the platform and the SHA of the build under test. The run never closes the parent: **a person closes it** after reading the results.
+The parent gets one final comment with counts per verdict, the run id, the script sha, the platform, the SHA of the build under test and the run's bug. The run never closes the parent: **a person closes it** after reading the results.
 
 ## Rules
 
