@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal: review chain puts `claude:claude-opus-5-5` first. Measured (49 tries): `gemini-3.8-flash-high` ran 30 s and returned no VERDICT in headless mode (a tool call was auto-denied, "no output produced"), twice per PR; `grok-4.6` timed out at 300 s in 12 of 19 tries; Opus averaged 77 s with 0 failures. Every review paid about 6 min before Opus answered; Gemini, Grok and GPT stay as fallbacks.
 - squad-goal: a run that ends `failed` with `no_dispatch` gets one consult: `consult.sh` asks the coding model (`coding_models[0]`, claude-sonnet-5-5) through the CLI whether the request is valid; GO relaunches it once with the answer appended. `launch.py` keeps the request in the run folder (`request.txt`).
 - squad-goal: `autofix.sh` and `forkclose.sh` requests also say "Spawn the child with spend 8"; an autofix run for #1209 was rejected with `spawn_rejected:spend_outside_budget` (router asked for 40).
 - squad-goal: `autobug.sh` and `autofrontier.sh` requests say "Spawn each child with spend 8", so the router no longer asks for 40 and gets `spawn_rejected:spend_outside_budget`.
