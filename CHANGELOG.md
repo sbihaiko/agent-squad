@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.28 (local fork, 2026-10-10)
+- **#1400 — dispatch refuses a panel whose children share a file (ADR-0274).** `mkreq.sh` used to append an advisory SLICE NOTE that a child could ignore (#1285 against #1391). A request that names its panel (a `PANEL: <id>` line in the body, or `SG_PANEL`) is now refused, before any file is written or run dispatched, when a pending request of the same panel names one of the same files; the error names both requests and the shared paths. An open PR or a request of another panel never refuses, it keeps the advisory note.
+  - New `test-mkreq.sh`: a same-panel overlap refuses and leaves no request, a disjoint panel launches, an overlap with an open PR outside the panel launches, a pending request of another panel is not a sibling.
+
 ## 0.2.27 (local fork, 2026-10-10)
 - **#1404 — landed fork work can refresh the live skill, and `sync-to-fork.sh` can no longer erase it.** Children land work on `local/next`, but the only supported direction was live → fork, and `sync-to-fork.sh` began with `rm -rf` on the fork's `contrib/squad-goal`, so `fork-gate.sh`/`shell-suites.sh` (#1392), the reviewer severity tags (#1393) and the debt-only merge (#1395) never reached the running loop.
   - New `refresh-from-fork.sh`, the documented counterpart: copies `local/next`'s `contrib/squad-goal` into the live skill, one new inode per file, and never touches `scripts/models.json`, per-repo profiles or `$SG_STATE`. `--check` exits 1 naming every shipped file where live and `local/next` disagree.
