@@ -31,7 +31,8 @@ def test_every_skill_a_role_pins_is_vendored_and_the_plugin_has_a_manifest():
 
 def test_the_config_lists_the_skills_the_role_map_names():
     listed = {s["name"] for s in yaml.safe_load((ROOT / "config" / "vendor-skills.yaml").read_text())["skills"]}
-    assert {"to-spec", "to-tickets", "tdd", "ego-browser", "codebase-design", "ask-matt", "diagnosing-bugs"} == listed
+    assert {"to-spec", "to-tickets", "to-test-scenario", "tdd", "ego-browser", "codebase-design", "ask-matt",
+            "diagnosing-bugs"} == listed
     assert "code-review" not in listed        # it starts subagents, which no role may do
 
 
