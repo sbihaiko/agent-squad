@@ -1862,7 +1862,7 @@ def test_1222_the_command_runs_a_fixture_script_and_writes_one_result_per_step(t
         "smoke.unchecked": "needs review",
     }
     assert r["status"] == "failed" and r["summary"]["executed"] == 4
-    assert r["bug"]["filed"] is False and "registered emulator adapter" in r["bug"]["reason"]
+    assert r["bug"]["filed"] is False and "opt-in" in r["bug"]["reason"]
     assert r["steps"][0]["capture"]["path"].startswith(str(tmp_path))
 
 
@@ -2136,3 +2136,139 @@ def test_1226_the_same_run_written_back_twice_adds_no_case_comment_and_reopens_n
     assert sorted(second["unchanged"]) == sorted(first["commented"])
     assert {n: len(b) for n, b in tracker.comments.items() if n != 1999} == before
     assert len(tracker.comments[1999]) == 2          # the summary runs every time; the cases do not
+
+
+# --- #1241: the run command files its bug only when asked, and a partial run records its selection ---
+
+
+def _bug_helper(tmp_path, output="Issue created: https://example.invalid/1241", exit_code=0):
+    """A `scripts/report-bug.sh` stand-in, because that helper is the only route a run's bug takes.
+
+    It logs every call it gets — the title in one file, the body in another — so a case can say how many bugs a run
+    filed and what they said. `exit_code` is the helper failing the way a missing token or no network does.
+    """
+    root = tmp_path / "mesenai"
+    helper = root / "scripts" / "report-bug.sh"
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    script_text = '#!/bin/sh\nprintf "%s\\n" "$1" >> ' + json.dumps(str(root / "bug-titles.log")) + "\n"
+    script_text += 'printf "%s" "$2" >> ' + json.dumps(str(root / "bug-body.log")) + "\n"
+    script_text += f'echo "no network" >&2\nexit {exit_code}\n' if exit_code else \
+        "printf '%s\\n' " + json.dumps(output) + "\n"
+    helper.write_text(script_text)
+    helper.chmod(0o755)
+    return root, root / "bug-titles.log"
+
+
+def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True):
+    """The run command driven in-process on its own contract: argv in, one results file out.
+
+    The adapter registry is how a fake adapter gets a name the command accepts; a literal `module:Class` spec is never
+    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug.
+    """
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    monkeypatch.setenv("MESENAI_ROOT", str(root if root is not None else tmp_path / "mesenai"))
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1241", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    adapter = "shape-1241"
+    if registered:
+        monkeypatch.setitem(mod.ADAPTERS, adapter, {"spec": spec, "env": (), "repo": "example/1241"})
+    else:
+        adapter = spec
+    out = tmp_path / "results.json"
+    code = mod.main([str(script_path), "--adapter", adapter, "--out", str(out),
+                     "--artifacts", str(tmp_path / "artifacts"), *extra])
+    return code, json.loads(out.read_text())
+
+
+def _two_batch_file(tmp_path):
+    path = tmp_path / "two-batches.json"
+    path.write_text(json.dumps(_two_batch_script([step("b1.one")])))
+    return path
+
+
+def test_1241_a_red_run_files_no_bug_unless_it_is_asked(tmp_path, monkeypatch):
+    """A red run used to file a bug by default: acceptance runs of #1222 left 9 duplicates on the real board."""
+    root, titles = _bug_helper(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, root=root)
+    assert code == 1 and r["status"] == "failed" and r["summary"]["failed"] == 2
+    assert r["bug"]["filed"] is False and "--file-bug" in r["bug"]["reason"]
+    assert not titles.exists(), "a run nobody asked for a bug must leave the board alone"
+
+
+def test_1241_asked_it_files_exactly_one_bug_for_every_failed_step_and_records_its_url(tmp_path, monkeypatch):
+    root, titles = _bug_helper(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1
+    assert titles.read_text().splitlines() == ["GUI test `run-script-smoke`: 2 failed steps"], "one bug, never one per step"
+    body = (root / "bug-body.log").read_text()
+    assert "### `smoke.still-home`" in body and "### `smoke.unknown-id`" in body, "every failed step, in one bug"
+    assert "### `smoke.open-library`" not in body, "a step that passed is not a failed step of this bug"
+    assert r["bug"]["filed"] is True and r["bug"]["url"] == "https://example.invalid/1241"
+
+
+def test_1241_asked_but_not_the_emulator_adapter_it_still_files_nothing(tmp_path, monkeypatch):
+    root, titles = _bug_helper(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root, registered=False)
+    assert code == 1 and r["bug"]["filed"] is False and "registered emulator adapter" in r["bug"]["reason"]
+    assert not titles.exists(), "a run against a fake adapter never touches GitHub"
+
+
+def test_1241_a_filing_that_fails_is_recorded_and_leaves_the_exit_code_alone(tmp_path, monkeypatch):
+    """No token, no network: the run still ends red on its steps, and the file says why no bug is there."""
+    root, _ = _bug_helper(tmp_path, exit_code=3)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1 and r["status"] == "failed" and r["summary"]["failed"] == 2
+    assert r["bug"]["filed"] is False and "report-bug.sh failed" in r["bug"]["reason"]
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps(script(step("b1.one"))))
+    code, r = _run_cmd(monkeypatch, tmp_path, clean, "--file-bug", root=root)
+    assert code == 0 and r["bug"]["filed"] is False and r["bug"]["reason"] == "no step failed"
+
+
+def test_1241_a_bug_helper_that_cannot_run_is_recorded_and_never_raised(tmp_path, monkeypatch):
+    root, _ = _bug_helper(tmp_path)
+    (root / "scripts" / "report-bug.sh").chmod(0o644)
+    code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1 and r["bug"]["filed"] is False and "report-bug.sh failed" in r["bug"]["reason"]
+
+
+def test_1241_the_opt_out_flag_is_gone_because_filing_is_opt_in(tmp_path, monkeypatch):
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1241_flag", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    with pytest.raises(SystemExit):
+        mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"), "--no-report-bug"])
+
+
+def test_1241_a_full_run_records_no_selection_and_a_narrowed_one_names_it(tmp_path, monkeypatch):
+    path = _two_batch_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path)
+    assert code == 0 and "selection" not in r, "a full run is not a partial run"
+    assert {s["id"] for s in r["steps"]} == {"b1.one", "b2.a"}
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--batch", "b2")
+    assert r["selection"] == {"kind": "batch", "value": "b2"}
+    assert {s["id"] for s in r["steps"]} == {"b2.a"}
+
+
+def test_1241_a_case_selection_keeps_the_setup_steps_it_needs(tmp_path, monkeypatch):
+    d = _two_batch_script([step("b1.two"), step("b1.three")])
+    d["batches"][0]["setup"] = [step("b1.setup-one")]
+    path = tmp_path / "with-setup.json"
+    path.write_text(json.dumps(d))
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--case", "b1.two")
+    assert code == 0 and r["selection"] == {"kind": "case", "value": "b1.two"}
+    assert [s["id"] for s in r["steps"]] == ["b1.setup-one", "b1.two"]
+
+
+def test_1241_an_unknown_selector_is_refused_before_anything_is_launched(tmp_path, monkeypatch):
+    path = _two_batch_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--case", "b1.ghost")
+    assert code != 0 and r["status"] == "failed"
+    assert any("b1.ghost" in reason for reason in r["reasons"]), r["reasons"]
+    assert any("b1.two" in reason or "b2.a" in reason for reason in r["reasons"]), "it names what the script does have"
+    assert "selection" not in r
+    assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"

@@ -86,12 +86,12 @@ Do not close or edit any issue the scenario came from.
 The run command is MesenAI `scripts/gui_test_run_script.py` (MesenAI #1222, its own issue): one script in, one run report out — `run_id`, the script sha, `platform`, `build_sha` and one result per step (`passed`, `failed (expected X, observed Y)`, `failed (unknown id)`, `needs review`, `pending`). Run the script on the squad's GUI test infrastructure:
 
 ```bash
-python3 scripts/gui_test_run_script.py <script.json> --adapter mesen-gui [--out <results.json>]
+python3 scripts/gui_test_run_script.py <script.json> --adapter mesen-gui [--out <results.json>] [--batch <id> | --case <id>] [--file-bug]
 ```
 
 It needs `MESENAI_ROOT` (a MesenAI checkout holding `scripts/gui_test/mesen_gui_adapter.py`), `MESEN_GUI_BINARY` (the built launcher of a build carrying the test hook) and `MESEN_CORE_LIB` (the `MesenCore` library of that same build); a missing variable, or a native core that cannot be loaded, is a **failure, never a skip**. It validates the script against the adapter's advertised capabilities *before* launching anything, rejecting a script naming an action, check or variant the adapter does not advertise and naming what is missing. It exits non-zero on a failed step, lists `needs review`/`pending` without turning the run red, and reports a run that executed no step as a failure.
 
-It writes one result per step — `passed`, `failed (expected X, observed Y)`, `failed (unknown id)`, `needs review`, `pending` — plus the run id, the script sha, the platform and the build SHA, to `--out` (default `./gui-test-results/<name>-<run id>.json`), with the batch logs and the captures beside it. A red run files **one** bug for the whole run through `scripts/report-bug.sh` (never one per step); `--no-report-bug` turns that off.
+It writes one result per step — `passed`, `failed (expected X, observed Y)`, `failed (unknown id)`, `needs review`, `pending` — plus the run id, the script sha, the platform and the build SHA, to `--out` (default `./gui-test-results/<name>-<run id>.json`), with the batch logs and the captures beside it. `--batch <id>` or `--case <id>` narrows the run to that batch, or to that case with the setup it needs, and the results file records the `selection` it covered, so a partial run is never read as the health of the whole scenario; a full run records none, and a selector the script does not have is refused before anything is launched. Filing a bug is **opt-in**: with `--file-bug` a red run files **one** bug for the whole run through `scripts/report-bug.sh` (never one per step), and without it nobody's board is touched — the file still says why nothing was filed (`bug.filed=false` with the reason), and a filing that fails is recorded, never raised.
 
 Inject it as the module's `run_command`: a callable that runs the command on the script and returns the report it wrote (`--out`, default `./gui-test-results/<name>-<run id>.json`), with `core_available` set from whether the core and the binary loaded. **If the command does not exist yet, publish, say the run is unavailable and stop** — the module returns `reason: "run command unavailable"`, no verdict is written, and you never simulate a run or hand a verdict to a case.
 
@@ -108,8 +108,12 @@ python -m squad.to_test_scenario write-back <results file> --map <name>.gui-test
 
 It exits 0 when the verdicts landed and 1 when they could not. A results file that is not the frozen schema of #1222/#1223 is rejected naming every reason; a map that names no case or no parent, a run that executed no step and a core that never loaded are failures, and none of them writes anything back.
 
+Read the run's results file and, for every case, comment on its sub-issue with the verdict, the observed value, the variant and the evidence link (screenshots go through the privacy gate and reach an issue only via the evidence branch, never as a CI artifact). A case with no result in the report is reported as such, never passed. The module does this from the run report:
+
 - `passed` → comment and close the case's sub-issue.
 - `failed` → comment the verdict, leave the case open, and **reopen** it when it was closed, so a regression never stays hidden behind a closed issue.
+
+- `failed` → comment the verdict with expected and observed, leave the case open, and link the run's **one** bug for the whole run (the run is asked for it with `--file-bug`, and it lists every failed case). Never one bug per case.
 - `needs review` / `pending` / `manual` → comment, leave open, and list on the parent. They are doubt and human residue: visible, never red.
 - A verdict is commented only when it **changed** since the last one on the issue: the first run comments every case, ten later runs leave ten comments only where something moved.
 - Evidence is linked for `failed` and `needs review` only; a passed case uploads nothing.
