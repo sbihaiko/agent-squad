@@ -1674,3 +1674,104 @@ def test_1196_a_native_dialog_left_open_fails_the_no_native_dialog_check(tmp_pat
 def test_1196_exit_full_screen_that_drops_the_sheet_fails_fs_02(tmp_path):
     results = _run_1196(tmp_path, _pilot_1196(), exit_drops_sheet=True)
     assert "fs.exit-a-sheet-stays" in [r["id"] for r in results if r["verdict"].startswith("failed")]
+
+
+# --- #1197: the pilot's two-pad, feel and complete-journey cases, converted and run end to end ---
+
+from tests.gui_test_pilot_fake_1197 import JourneyFake  # noqa: E402
+
+BATCHES_1197 = ("two-pads", "feel", "journey", "journey-fullscreen")
+PILOT_1197 = FORK / "tests" / "fixtures" / "gui_test" / "play-pad-only-1197.json"
+CASES_1197 = [f"PAD2-0{n}" for n in range(1, 5)] + [f"PAD-0{n}" for n in range(1, 5)] + ["JOURNEY-01", "JOURNEY-02"]
+MANUAL_1197 = {"two-pads.chord-on-the-other-pad", "two-pads.alternate-pads", "two-pads.players-rows",
+               "two-pads.replug-the-first-pad", "feel.hold-repeats", "feel.tap-quickly", "feel.stick-nudge",
+               "feel.diagonal", "journey.felt-long", "journey.under-five-minutes"}
+
+
+def _pilot_1197():
+    d = json.loads(PILOT_1197.read_text(encoding="utf-8"))
+    validate(d)
+    return d
+
+
+def _steps_1197(d, batches=BATCHES_1197):
+    return [s for b in d["batches"] if b["id"] in batches for k in ("setup", "steps", "teardown") for s in b[k]]
+
+
+def _run_1197(tmp_path, d, batches=BATCHES_1197, **switches):
+    results = []
+    for batch in d["batches"]:
+        if batch["id"] in batches:
+            view = {**d, "batches": [batch]}
+            results += [{**r, "batch": batch["id"]}
+                        for r in run_variants(view, JourneyFake(tmp_path, **switches), axis="window.mode")]
+    return results
+
+
+def test_1197_every_two_pad_feel_and_journey_case_is_converted_none_dropped():
+    steps = _steps_1197(_pilot_1197())
+    for case in CASES_1197:
+        assert any(f"{case}:" in s["expect"] or f"{case} (" in s["expect"] for s in steps), f"{case} has no step"
+
+
+def test_1197_the_batches_run_end_to_end_in_both_window_modes_and_physical_and_feel_stay_manual(tmp_path):
+    d = _pilot_1197()
+    results = _run_1197(tmp_path, d)
+    assert [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")] == []
+    steps = _steps_1197(d)
+    assert {s["id"] for s in steps if s["mode"] == "manual"} == MANUAL_1197
+    assert {r["id"] for r in results if r["verdict"] == "pending"} == MANUAL_1197
+    assert {r["variant"] for r in results if r["batch"] == "journey-fullscreen"} == {"fullscreen"}
+    assert {r["variant"] for r in results if r["batch"] == "journey"} == {"windowed", "fullscreen"}
+    assert {s["id"] for s in steps if s["mode"] == "automated"} <= {r["id"] for r in results if r["verdict"] == "passed"}
+
+
+REAL_APP_1197 = ("launch", "home", "home-after-game")  # these three run on the real app, in the #1183 case above
+
+
+def _fake_for_1197(tmp_path, batch):
+    if batch in ("library", "favorites", "game"):
+        return PilotFake(tmp_path)
+    if batch == "favorites-home":
+        return PilotFake(tmp_path, favorites=1)
+    if batch == "game-archive":
+        return PilotFake(tmp_path, tile="zip")
+    if batch == "game-bios":
+        return PilotFake(tmp_path, tile="fds")
+    if batch in ("pause", "settings"):
+        return PauseSettingsFake(tmp_path)
+    if batch in BATCHES_1195:
+        return ControllerFake(tmp_path)
+    if batch in BATCHES_1196:
+        return TrapFake(tmp_path)
+    return JourneyFake(tmp_path)
+
+
+def test_1197_the_full_pilot_runs_end_to_end_across_both_window_modes(tmp_path):
+    """Every batch of the pilot, each on the fake of the slice that converted it; with this batch none is left manual-only."""
+    d = _pilot_1197()
+    results, ran = [], []
+    for batch in d["batches"]:
+        if batch["id"] in REAL_APP_1197:
+            continue
+        ran.append(batch["id"])
+        view = {**d, "batches": [batch]}
+        results += [{**r, "batch": batch["id"]} for r in
+                    run_variants(view, _fake_for_1197(tmp_path, batch["id"]), axis="window.mode")]
+    assert set(BATCHES_1197) <= set(ran) and set(ran) == {b["id"] for b in d["batches"]} - set(REAL_APP_1197)
+    assert [(r["batch"], r["id"], r["variant"], r["verdict"]) for r in results if r["verdict"].startswith("failed")] == []
+    assert {r["variant"] for r in results} == {"windowed", "fullscreen"}
+    manual = {s["id"] for s in _steps_1197(d, tuple(ran)) if s["mode"] == "manual"}
+    assert {r["id"] for r in results if r["verdict"] == "pending"} == manual
+
+
+def test_1197_a_quit_that_does_not_land_on_home_fails_the_journey_and_the_run(tmp_path):
+    from squad.gui_test_run import failed as run_failed
+    results = _run_1197(tmp_path, _pilot_1197(), quit_stays=True)
+    assert {r["id"] for r in results if r["verdict"].startswith("failed")} >= {"journey.quit-lands-home"}
+    assert run_failed(results)
+
+
+def test_1197_a_full_screen_switch_that_loses_the_sheet_fails_the_full_screen_journey(tmp_path):
+    results = _run_1197(tmp_path, _pilot_1197(), switch_drops_sheet=True)
+    assert "journey-fs.switch-focus-kept" in [r["id"] for r in results if r["verdict"].startswith("failed")]
