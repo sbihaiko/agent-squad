@@ -8,6 +8,8 @@
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
  G  an open PR on the base branch whose revci line for its current head says APPROVE (5 min old), mergeable clean, with no auto/merged-<pr>: report READY-NOT-MERGED and run one autopilot pass
     (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why).
+ I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
+    otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
@@ -85,6 +87,30 @@ for x, rs in byissue.items():
     mk = st / "auto" / f"janitor-dup-{x}-{'-'.join(sorted(r[-6:] for r in rs))}"
     if len(rs) > 1 and not mk.exists():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
+        if not dry: mk.touch()
+repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+_is = {}
+def issue_info(x):
+    if x not in _is:
+        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title] | @tsv').strip().split("\t")
+        _is[x] = (o + ["", "", ""])[:3]
+    return _is[x]
+for n, i in live.items():
+    mk = st / "auto" / f"janitor-closedrun-{n[-6:]}"
+    if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
+    infos = {x: issue_info(x) for x in sorted(i["acc"])}
+    if any(v[0] != "closed" for v in infos.values()): continue
+    dup = all(v[1] == "not_planned" or v[2].startswith("[duplicate") for v in infos.values())
+    nums = ", ".join("#" + x for x in infos)
+    if dup:
+        say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
+        if not dry:
+            mk.touch(); f = folder(n if n.startswith("/") else str(co / "runs" / n))
+            for q in inside(f):
+                if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} works only closed duplicate issues")
+            if i["pid"] and i["pid"] in procs: kill(i["pid"], f"last call of run {n}")
+    else:
+        say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()
 for d in (st / "auto").glob("disp-*"):
     if now - d.stat().st_mtime < 1800: continue
