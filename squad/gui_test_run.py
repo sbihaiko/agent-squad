@@ -2,6 +2,8 @@
 import hashlib
 from pathlib import Path
 
+from squad.gui_test_checks import UNKNOWN, evaluate, holds, parse, runner_owned
+
 
 def failed(results):
     """True when any step failed; a `pending` step (nobody ran it) is not a failure."""
@@ -13,7 +15,31 @@ def _screenshot(path):
     return {"path": str(path), "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def run(script, adapter, record=None, prompt=None, vision=None):
+def wait_for(adapter, cond, timeout, root=None):
+    """`met` or `timeout`. A runner-owned predicate (fs.*, log.*) is polled one adapter tick at a time, so the bound is
+    ticks, never host time; anything else is the adapter's own wait."""
+    if cond is None or not runner_owned(parse(cond)[0]):
+        return adapter.wait(cond, timeout)
+    for _ in range(timeout + 1):
+        if holds(cond, adapter, root):
+            return "met"
+        getattr(adapter, "advance", lambda: None)()
+    return "timeout"
+
+
+def decide(adapter, check, root=None):
+    """The verdict of one objective check; a failure carries expected and observed."""
+    name, args = check["name"], check.get("args", {})
+    if not runner_owned(name) and not hasattr(adapter, "observe"):
+        got = adapter.check(name, args)
+        return "failed (unknown id)" if got == UNKNOWN else "passed" if got else "failed"
+    r = evaluate(name, args, adapter, root)
+    if r["observed"] == UNKNOWN:
+        return "failed (unknown id)"
+    return "passed" if r["ok"] else f"failed (expected {r['expected']}, observed {r['observed']})"
+
+
+def run(script, adapter, record=None, prompt=None, root=None, vision=None):
     """Run every step in order; return [{id, verdict, capture, held}]. Never raises on a wait timeout.
 
     A `manual` step is put to `prompt(step)`, which returns {"verdict": "passed"|"failed", "screenshot": path}; with no
@@ -59,7 +85,8 @@ def run(script, adapter, record=None, prompt=None, vision=None):
             adapter.inject(s["action"]["name"], s["action"].get("args", {}))
             cond = s["wait"].get("check")
             capture = None
-            if adapter.wait(cond, s["wait"].get("timeout_ticks") or s["wait"]["timeout_frames"]) != "met":
+            timeout = s["wait"].get("timeout_ticks") or s["wait"]["timeout_frames"]
+            if wait_for(adapter, cond, timeout, root) != "met":
                 verdict = f"failed (timeout waiting for {cond})"
             else:
                 capture = adapter.capture()
@@ -69,8 +96,7 @@ def run(script, adapter, record=None, prompt=None, vision=None):
                     if seen:
                         emit("gui_vision", s["id"], **seen)
                 else:
-                    got = adapter.check(s["check"]["name"], s["check"].get("args", {}))
-                    verdict = "failed (unknown id)" if got == "unknown id" else "passed" if got else "failed"
+                    verdict = decide(adapter, s["check"], root)
             emit("gui_verdict", s["id"], verdict=verdict)
             results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": bool(s.get("sensitive")),
                             **({"vision": seen} if seen else {})})
