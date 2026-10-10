@@ -39,7 +39,7 @@ class Vision:
         try:
             out = self.model(Path(png_path).read_bytes(), expect)
             info = {"answer": parse_answer(out.get("answer")), "saw": str(out.get("saw", "")), "cost": float(out.get("cost", 0))}
-        except Exception as e:  # a model outage is `unsure`, never a crash or a pass
+        except Exception as e:  # noqa: BLE001  a model outage is `unsure`, never a crash or a pass
             info = {"answer": "unsure", "saw": f"vision model failed: {type(e).__name__}: {e}", "cost": 0}
         self.spent += info["cost"]
         return info
