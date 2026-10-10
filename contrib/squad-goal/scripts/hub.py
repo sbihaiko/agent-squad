@@ -58,18 +58,19 @@ def priced(d):
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v6" in hist[p]: return hist[p]
+    if p in hist and "v7" in hist[p]: return hist[p]
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
-    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None
+    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False
     with open(p) as f:
         for i, l in enumerate(f):
             if i < 200: issues.update(re.findall(r"(?:issue|Refs) #(\d{3,5})", l))
             if i < 200 and fix is None:
                 fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d{3,5})", l)
                 if fm: fix = int(fm.group(1))
+            if i < 200 and not bug and re.search(r"\(bug\)|branch fix/", l): bug = True   # a bug-fix run (autobug or a hand request for a bug issue)
             if i < 200 and stack is None:   # an optimistically stacked run names its parent PR ("STACKED on #N, whose PR #P")
                 sm = re.search(r"STACKED on #\d{3,5}[^#]{0,40}PR #(\d{3,5})", l)
                 if sm: stack = int(sm.group(1))
@@ -92,7 +93,7 @@ def scan(p):
                 if k in ("test", "gui-test"): kind = "test"
             elif e == "land" and d.get("outcome") == "pass": land = True
             elif e == "verdict": ver, reasons, t1 = d.get("verdict"), d.get("reasons") or [], ts
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v6": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v7": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -152,7 +153,7 @@ def runs():
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
         rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stale": 2}.get(st, 1)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
     out.sort(key=lambda r: (r["rank"], r["age"]))   # open runs first, finished next, dead last; then most recently updated first
     return out
 
@@ -446,7 +447,7 @@ const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 // a run's name says what it is for: "fix PR #1202 · #1178", "panel · #1179 #1182", "#1183"; the run id moves to the detail line
 const label=r=>{const is=(r.issues||[]).filter(i=>+i!==r.fix).map(i=>"#"+i).join(" ");
-  return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?"code "+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or code issues (stacked on a parent PR); "test" is kept for test-only runs
+  return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?(r.bug?"fix ":"code ")+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or code issues (stacked on a parent PR); "test" is kept for test-only runs
 const sub=r=>{const t=r.titles||{},ks=(r.issues||[]).filter(i=>+i!==r.fix&&t[i]);return ks.length===1?t[ks[0]]:ks.length?ks.map(i=>"#"+i+" "+t[i].split(" ").slice(0,4).join(" ")).join(" · "):""};
 function plan(){ // which runs fill the N slots: pinned first, then most recently updated; slots stay stable, top slot has hysteresis
   const byId=new Map(runs.map(r=>[r.id,r])),want=[];

@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal hub: a bug-fix run (request says "(bug)" or names a `fix/` branch) is labeled `fix #N`, not `code #N`.
 - squad-goal **autobug**: `scripts/autobug.sh`, run by the watch loop every ~6 min, dispatches every open `bug` issue without an open PR, dispatch marker or skip label, all in one squad start within the free slots (one child and PR each, TDD with the RED output in the PR); profile knobs `SG_AUTO_BUGFIX`, `SG_BUG_LABEL`, `SG_BUG_SKIP_LABELS`, `SG_BUG_PROJECT`/`SG_BUG_DOING`.
 - squad-goal `stack.sh` is optimistic while testing: a blocker whose PR is already merged into the base no longer gates its dependents while its e2e runs or the issue waits to close.
 - squad-goal board flow gains **Code Complete** between In Progress and Testing: an open PR is Code Complete (`revci.sh`, `reconcile.py`); Testing starts at the merge, while the e2e on the merge SHA runs (`autopilot.sh`); the hub orders and colors the new column.
