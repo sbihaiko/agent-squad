@@ -1,7 +1,7 @@
 import pytest
 
-from tests.gui_test_helpers import script, step
 from squad.gui_test import ScriptError, validate
+from tests.gui_test_helpers import script, step
 
 
 def reasons(doc):

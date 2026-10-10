@@ -87,7 +87,20 @@ function renderProgress() {
 
 function renderLive() { renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
 
+// A gui-test script opens as a step diagram in its own view; nothing runs. Any other file goes on to the graph reader.
+function scriptFormat(text) { try { const d = JSON.parse(text); return d && typeof d.format === "string" && d.format.startsWith("gui-test/") ? d : null; } catch (e) { return null; } }
+function showScript(d, name) {
+  const svg = core.scriptSvg(d);
+  if (svg.error) { setStatus(svg.error, true); return false; }
+  $("scriptview").innerHTML = svg; $("scriptview").hidden = false; document.body.classList.add("script-open");
+  setStatus(`Opened test script ${name} as a step diagram. Nothing runs.`);
+  return true;
+}
+function hideScript() { $("scriptview").hidden = true; $("scriptview").innerHTML = ""; document.body.classList.remove("script-open"); }
 async function loadGraph(text, name) {
+  const script = scriptFormat(text);
+  if (script) return showScript(script, name);
+  hideScript();
   const r = core.parseImport(text);
   if (r.error) { setStatus(r.error, true); return false; }
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;

@@ -206,6 +206,17 @@
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
 #side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
 #side .pnav button:disabled { opacity:.35; cursor:default; }
+#scriptview { position: absolute; inset: 0; overflow: auto; background: inherit; z-index: 5; }
+#scriptview[hidden] { display: none; }
+.script-diagram { font: 12px sans-serif; }
+.script-diagram .batch-name { font-weight: 600; font-size: 14px; fill: currentColor; }
+.script-diagram .step rect { fill: #eef3fb; stroke: #4a6fa5; stroke-width: 1.5; }
+.script-diagram .step.manual rect { fill: #fff6e0; stroke: #b7791f; stroke-dasharray: 6 4; }
+.script-diagram .step-id { font-weight: 600; fill: #222; }
+.script-diagram .step-text { fill: #222; }
+.script-diagram .step-tags { fill: #555; font-size: 11px; }
+.script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
+.script-diagram marker path { fill: #777; }
 </style>
 </head>
 <body>
@@ -241,7 +252,7 @@
   <div id="review" hidden></div>
   <div id="side"></div>
 </div>
-<div id="graph"><div id="recbad" role="alert" hidden></div><div id="progress" role="status" aria-label="Issue progress"></div><div id="mapbox">
+<div id="graph"><div id="scriptview" hidden aria-label="Test script step diagram"></div><div id="recbad" role="alert" hidden></div><div id="progress" role="status" aria-label="Issue progress"></div><div id="mapbox">
   <svg id="map" xmlns="http://www.w3.org/2000/svg">
     <defs><clipPath id="card-clip"><rect width="194" height="60"/></clipPath><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs>
     <g id="vp"><g id="edges"></g><g id="cards"></g></g>
@@ -2181,6 +2192,70 @@ function controlModule({ lastOf }) {
   return { pauseView, controlBody };
 }
 
+
+// Dashboard core module: a gui-test/1 test script as a step diagram. No DOM here; the page puts the markup in a view.
+// Nothing runs: the diagram reads the script file only. The format check mirrors squad/gui_test_render.py.
+
+function scriptModule() {
+  const SCRIPT_FORMATS = ["gui-test/1"];
+  const SECTIONS = ["setup", "steps", "teardown"];
+  const STEP = { w: 280, h: 74, gap: 26, colGap: 40, head: 34, pad: 16, line: 14, lines: 2, chars: 40 };
+  const escXml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // The model: batches in order, each with its setup, steps and teardown sections; one node per step, in script order.
+  // A step's variants read as `axis=value` tags; a step with none runs under every variant, tagged "all".
+  function scriptDiagram(script) {
+    if (!script || typeof script !== "object" || !SCRIPT_FORMATS.includes(script.format)) {
+      return { error: `unknown format ${JSON.stringify(script && script.format)}; the dashboard draws ${JSON.stringify(SCRIPT_FORMATS)}` };
+    }
+    const node = (s) => ({ id: s.id, text: s.expect, tags: s.variants && Object.keys(s.variants).length ? Object.entries(s.variants).map(([k, v]) => `${k}=${v}`) : ["all"],
+      manual: s.mode === "manual", severity: s.severity });
+    return { name: script.name, batches: (script.batches || []).map((b) => ({ id: b.id,
+      sections: SECTIONS.filter((k) => (b[k] || []).length).map((k) => ({ label: k, nodes: b[k].map(node) })) })) };
+  }
+
+  function wrap(text) {
+    const words = String(text).split(/\s+/), rows = [""];
+    for (const w of words) {
+      const cur = rows[rows.length - 1];
+      if (cur && (cur + " " + w).length > STEP.chars) rows.push(w); else rows[rows.length - 1] = cur ? cur + " " + w : w;
+    }
+    if (rows.length > STEP.lines) { rows.length = STEP.lines; rows[STEP.lines - 1] = rows[STEP.lines - 1].slice(0, STEP.chars - 1) + "…"; }
+    return rows;
+  }
+
+  // One column per batch, left to right; its steps run top to bottom with an arrow between neighbors. The box keeps the clipped text; <title> keeps all of it.
+  function scriptSvg(script) {
+    const m = scriptDiagram(script);
+    if (m.error) return m;
+    let out = "", x = STEP.pad, height = 0;
+    for (const b of m.batches) {
+      let y = STEP.pad + STEP.head, prev = null;
+      out += `<g class="batch" data-batch="${escXml(b.id)}"><text class="batch-name" x="${x}" y="${STEP.pad + 16}">${escXml(b.id)}</text>`;
+      for (const sec of b.sections) {
+        for (const n of sec.nodes) {
+          if (prev !== null) out += `<path class="flow" d="M${x + STEP.w / 2} ${prev} V${y}" marker-end="url(#arrow)"/>`;
+          const cls = n.manual ? "step manual" : "step auto";
+          out += `<g class="${cls}" data-step="${escXml(n.id)}" data-section="${sec.label}"><title>${escXml(n.id)}: ${escXml(n.text)}</title>`
+            + `<rect x="${x}" y="${y}" width="${STEP.w}" height="${STEP.h}" rx="6"/>`
+            + `<text class="step-id" x="${x + 8}" y="${y + 14}">${escXml(sec.label === "steps" ? "" : sec.label + " · ")}${escXml(n.id)}${n.manual ? " · manual" : ""}</text>`
+            + wrap(n.text).map((r, i) => `<text class="step-text" x="${x + 8}" y="${y + 30 + i * STEP.line}">${escXml(r)}</text>`).join("")
+            + `<text class="step-tags" x="${x + 8}" y="${y + STEP.h - 8}">${escXml(n.tags.join(" "))}</text></g>`;
+          prev = y + STEP.h; y += STEP.h + STEP.gap;
+        }
+      }
+      out += "</g>";
+      height = Math.max(height, y);
+      x += STEP.w + STEP.colGap;
+    }
+    const w = x - STEP.colGap + STEP.pad;
+    return `<svg class="script-diagram" viewBox="0 0 ${w} ${height}" width="${w}" height="${height}">`
+      + `<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs>${out}</svg>`;
+  }
+
+  return { scriptDiagram, scriptSvg };
+}
+
 // Dashboard core: the same JSON Schema and the same rules as squad/graph.py,
 // the canonical graph hash (squad.graph.canon_hash), and the adaptation overlay (squad/report.py).
 // No DOM here. A test runs the bundle under node and compares it with the engine (tests/test_dashboard.py).
@@ -2200,12 +2275,13 @@ function make(ENGINE) {
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
   const { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
+  const { scriptDiagram, scriptSvg } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
   const { unresolvedChildren, replayAt, moveCursor } = replayModule({ num, orNull });
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { pauseView, controlBody, LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, pauseView, controlBody, LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -2299,7 +2375,20 @@ function renderProgress() {
 
 function renderLive() { renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
 
+// A gui-test script opens as a step diagram in its own view; nothing runs. Any other file goes on to the graph reader.
+function scriptFormat(text) { try { const d = JSON.parse(text); return d && typeof d.format === "string" && d.format.startsWith("gui-test/") ? d : null; } catch (e) { return null; } }
+function showScript(d, name) {
+  const svg = core.scriptSvg(d);
+  if (svg.error) { setStatus(svg.error, true); return false; }
+  $("scriptview").innerHTML = svg; $("scriptview").hidden = false; document.body.classList.add("script-open");
+  setStatus(`Opened test script ${name} as a step diagram. Nothing runs.`);
+  return true;
+}
+function hideScript() { $("scriptview").hidden = true; $("scriptview").innerHTML = ""; document.body.classList.remove("script-open"); }
 async function loadGraph(text, name) {
+  const script = scriptFormat(text);
+  if (script) return showScript(script, name);
+  hideScript();
   const r = core.parseImport(text);
   if (r.error) { setStatus(r.error, true); return false; }
   S.warnings = []; S.doc = r.doc; S.text = text; S.name = name.replace(/\.graph\.json$|\.json$/, ""); S.fileName = name; S.selected = null; S.link = null;
