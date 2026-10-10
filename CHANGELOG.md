@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.12 (local fork, 2026-10-10)
+- squad-goal: grok's review cap is 900 s, not 600. Measured on PR #1285: grok answered a mid-size diff (PR #1389) in 424 s and hit the 600 s cap on the larger one, so 600 s was still a cap the model could lose to, not a bound it worked inside. With the agy quota spent until 12/10 18:38 and codex limited until 14/10 01:01, grok is the only reviewer left inside the owner's no-Anthropic daytime window, so its headroom is the chain's headroom.
+
+
 ## 0.2.11 (local fork, 2026-10-10)
 - squad-goal: the orphan guard tells a live fix run from a dead one. It called `gui/1222` orphaned while its fix run was mid-edit, because a squad child works the fork branch from its own run ws (`git -C`), so no cwd ever sits inside the branch worktree and the cwd test could never see it. `forkclose.sh` now builds the set of branches a live run names (record touched inside the orphan window, branch read from the run's `request.txt`) once per pass, and treats those as worked on. Without it the card was re-armed on every cycle the fix ran, which is the churn the guard was written to prevent.
 - squad-goal: an atomic script rewrite keeps the file's mode. `forkclose.sh` is the one script `single.sh` executes by path, so losing `+x` to a `tmp` + `mv` rewrite stopped the fork-close step with `Permission denied` for a cycle; the rewrite helper now restores 0755.

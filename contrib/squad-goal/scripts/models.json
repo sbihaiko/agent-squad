@@ -41,7 +41,7 @@
     }
   },
   "review_timeout_seconds_by_model": {
-    "grok-4.5": 600,
-    "grok-4.6": 600
+    "grok-4.5": 900,
+    "grok-4.6": 900
   }
 }
