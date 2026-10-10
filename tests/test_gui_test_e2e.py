@@ -810,7 +810,6 @@ def test_1191_the_real_window_mode_is_not_used_in_ci(tmp_path):
 
 # --- #1193: the pilot's Library, Favorites and opening-and-playing cases, converted and run end to end ---
 
-from squad.gui_test_variants import run_variants  # noqa: E402
 from tests.gui_test_pilot_fake import PilotFake  # noqa: E402
 
 CASES_1193 = ([f"LIB-0{n}" for n in range(1, 10)] + ["FAV-01", "FAV-02"] + [f"GAME-0{n}" for n in range(1, 5)])
