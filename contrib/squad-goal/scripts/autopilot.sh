@@ -26,8 +26,8 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
         && { printf "PR #%s retargeted to %s: its parent PR #%s was merged. A conflict from the squash is fixed by replaying only this PR's commits onto %s.\n" $pr "$SG_BASE" "${par%% *}" "$SG_BASE" > "$SG_STATE/cq/$iss-retarget$pr.md"; echo "RETARGET #$pr -> $SG_BASE (parent #${par%% *} merged)"; }
     fi
   fi
-  case ",$labels," in *,hold,*|*,needs-human,*) continue;; esac
   s9=${sha:0:9}; out="$SG_STATE/revci-$pr.out"
+  case ",$labels," in *,hold,*|*,needs-human,*) grep -q "^#$pr $s9 .*APPROVE" "$out" 2>/dev/null && { [ -e "$A/hold-$pr-$s9-label" ] || { touch "$A/hold-$pr-$s9-label"; echo "HOLD #$pr @ $s9: label hold/needs-human ($labels)"; }; }; continue;; esac
   line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
@@ -54,18 +54,19 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
     continue
   fi
   [[ $line == *APPROVE* ]] || continue
-  [ "$SG_AUTO_MERGE" = yes ] || continue
-  [ "$base" = "$SG_BASE" ] || continue   # a stacked PR waits for its parent's merge and the retarget
+  hold() { [ -e "$A/hold-$pr-$s9-$1" ] || { touch "$A/hold-$pr-$s9-$1"; echo "HOLD #$pr @ $s9: $2"; }; }   # an APPROVE that does not merge says why, once per head and reason
+  [ "$SG_AUTO_MERGE" = yes ] || { hold auto "SG_AUTO_MERGE is not yes"; continue; }
+  [ "$base" = "$SG_BASE" ] || { hold stacked "base is $base, not $SG_BASE (waits for the parent's merge and the retarget)"; continue; }
   [ -e "$A/merged-$pr" ] && continue
   body=$(gh api repos/$SG_REPO/pulls/$pr -q .body 2>/dev/null)
   for d in $(echo "$body" | grep -ioE "merge (after|order)[^.]*" | grep -oE "#[0-9]+" | tr -d '#'); do
-    [ "$(gh api repos/$SG_REPO/pulls/$d -q .state 2>/dev/null)" = open ] && continue 2; done
+    [ "$(gh api repos/$SG_REPO/pulls/$d -q .state 2>/dev/null)" = open ] && { hold order "its body says merge after #$d, which is still open"; continue 2; }; done
   st=$(gh api repos/$SG_REPO/pulls/$pr -q '.head.sha+" "+.mergeable_state')
-  [ "$st" = "$sha clean" ] || continue
+  [ "$st" = "$sha clean" ] || { hold state "GitHub reports '${st#* }' (head ${st%% *}), not clean on $s9"; continue; }
   if [ "$(gh api repos/$SG_REPO/pulls/$pr -q .changed_files 2>/dev/null)" = 0 ]; then   # a fix round that undid everything: nothing to merge
     [ -e "$A/empty-$pr-${sha:0:9}" ] || { touch "$A/empty-$pr-${sha:0:9}"; printf "NEEDS OWNER: PR #%s @ %s has an empty diff against %s (a fix round undid the change); not merged.\n" $pr ${sha:0:9} "$SG_BASE" > "$SG_STATE/cq/$iss-empty$$.md"; echo "NEEDS OWNER #$pr issue #$iss: empty diff at ${sha:0:9}, not merged"; }
     continue; fi
-  [ "$(bash "$here/autofix.sh" --threads $pr)" = 0 ] || { rm -f "$tf"; continue; }   # a thread opened after the cache: re-ask next pass
+  [ "$(bash "$here/autofix.sh" --threads $pr)" = 0 ] || { rm -f "$tf"; hold threads "unresolved review threads opened after the cache"; continue; }   # a thread opened after the cache: re-ask next pass
   if m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
     touch "$A/merged-$pr"
     printf "PR #%s merged automatically (squash %s): review APPROVE and CI green on %s, mergeable clean, no open review threads. Follow-up: e2e on the merge SHA, close when AC are met.\n" $pr "${m:0:9}" $s9 > "$SG_STATE/cq/$iss-automerge$$.md"

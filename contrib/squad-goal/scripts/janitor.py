@@ -5,7 +5,9 @@
  C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt.
  D  two live runs that accepted the same issue: report once (never kills).
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
- F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence)."""
+ F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
+ G  an open PR on the base branch whose revci line for its current head says APPROVE (5 min old), mergeable clean, with no auto/merged-<pr>: report READY-NOT-MERGED and run one autopilot pass
+    (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why)."""
 import json, os, pathlib, re, signal, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 acts = []
@@ -104,6 +106,22 @@ if fd and fb:
         if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr is:open \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue
         say(f"FIXED-NOT-CLOSED #{n}: fork commit {h} \"{subj[:60]}\" names it, the issue is still open")
         if not dry: mk.touch()
+base = os.environ.get("SG_BASE", "main"); repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref)"').splitlines():
+    pr, sha, pb = (l.split() + ["", "", ""])[:3]; o = st / f"revci-{pr}.out"; mg = st / "auto" / f"merged-{pr}"
+    if not (pr.isdigit() and pb == base and o.exists() and not mg.exists()): continue
+    last = [x for x in o.read_text().splitlines() if x.startswith(f"#{pr} {sha[:9]} ")][-1:]
+    age = now - o.stat().st_mtime
+    if not (last and "APPROVE" in last[0] and "SUPERSEDED" not in last[0] and age > 300): continue
+    if sh("gh", "api", f"repos/{repo}/pulls/{pr}", "-q", ".mergeable_state").strip() != "clean": continue
+    k = st / "auto" / f"janitor-rnm-{pr}-{sha[:9]}"; k2 = pathlib.Path(str(k) + "-still")
+    if not k.exists():
+        say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: APPROVE + clean for {int(age // 60)} min, not merged; running one autopilot pass")
+        if not dry:
+            k.touch(); subprocess.run(["bash", str(pathlib.Path(__file__).parent / "autopilot.sh")], cwd=co, capture_output=True, timeout=180)
+    elif age > 900 and not k2.exists():
+        say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
+        if not dry: k2.touch()
 if acts and not dry:
     kinds = {}
     for a in acts: k = a.split()[0] if not a.startswith("kill") else ("kill " + ("dashboard" if "dashboard" in a else "leftover")); kinds[k] = kinds.get(k, 0) + 1
