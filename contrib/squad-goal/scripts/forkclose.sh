@@ -1,5 +1,6 @@
 #!/bin/bash
 # usage: forkclose.sh   (watch.sh, every loop; FC_DRY=1 prints the candidates)
+# Fork work merges itself (an issue with an open PR too gets only its fork half merged, no close):
 # Fork-only work closes itself: an open issue whose card is Code Complete, with no open PR naming it and a fork branch
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
@@ -11,11 +12,11 @@
 L="$A/forkclose.lock"; mkdir "$L" 2>/dev/null || exit 0   # a test pass is still running
 trap 'rmdir "$L" 2>/dev/null' EXIT
 G="/usr/bin/git -C $SG_FORK_DIR"
-cc=$(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null)
+cc=$(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null)
 [ -n "$cc" ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 for n in $cc; do
-  case "$refs" in *" $n "*) continue;; esac
+  mixed=""; case "$refs" in *" $n "*) mixed=1;; esac   # the issue also has an open MesenAI PR: merge and test its fork half, the PR path closes it
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
   [ "$($G rev-list --count "$SG_FORK_BASE..$br")" -gt 0 ] || continue
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; [ -e "$mk" ] && continue
@@ -37,7 +38,10 @@ for n in $cc; do
     && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"
   out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- sh -c "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
   tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
-  if [ $rc = 0 ]; then
+  if [ $rc = 0 ] && [ -n "$mixed" ]; then
+    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half is still an open PR; the issue closes on that path.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
+    echo "FORKCLOSE #$n fork half merged ($br ${head:0:9} -> ${m:0:9}, $id green; PR still open)"
+  elif [ $rc = 0 ]; then
     gh api -X POST repos/$SG_REPO/issues/$n/comments -F body=@- >/dev/null <<EOT
 Done (fork-only work; owner-approved rule: merged into the fork's $SG_FORK_BASE and the fork suite green there).
 - $br at ${head:0:9} merged into $SG_FORK_BASE as ${m:0:9}.
@@ -51,7 +55,7 @@ EOT
     echo "FORKCLOSE #$n closed ($br ${head:0:9} -> ${m:0:9}, $id green)"
   else
     $G revert -m 1 --no-edit "$m" >/dev/null 2>&1
-    $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
+    [ -n "$mixed" ] || $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
     printf "Fork-only close: the fork suite failed after merging %s (%s) as %s (test pass %s, exit %s); the merge was reverted on %s. Card back to In Progress.\n\`\`\`\n%s\n\`\`\`\n" "$br" "${head:0:9}" "${m:0:9}" "$id" "$rc" "$SG_FORK_BASE" "$tl" > "$SG_STATE/cq/$n-forkred$$.md"
     echo "FORKCLOSE RED #$n ($id exit $rc), merge reverted"
   fi
