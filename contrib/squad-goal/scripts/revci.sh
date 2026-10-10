@@ -4,8 +4,9 @@
 . "$(dirname "$0")/env.sh"; pr=$1 iss=$2
 $BOARD $SG_OWNER $SG_PROJECT "Code Complete" $iss >/dev/null
 printf "%s" "PR #$pr open; independent review running (chain in models.json)." > "$SG_STATE/cq/$iss-open$$.md"
+sha=$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha)   # the head the review is about: a push during the review ends this run as SUPERSEDED
 rm=$(bash "$(dirname "$0")/review.sh" $pr $iss | head -1 | sed -n "s/^model=\([^ ]*\).*/\1/p")
-sha=$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha); t0=$(date +%s)
+t0=$(date +%s)
 dk=0
 while :; do
   now=$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha 2>/dev/null)

@@ -17,7 +17,6 @@
   ],
   "review_models": [
     "claude:claude-opus-5-5",
-    "gemini-3.8-flash-medium",
     "grok-4.6",
     "gpt-6.1-sol"
   ],
@@ -27,6 +26,6 @@
     "claude-session",
     "gpt-5.6-terra"
   ],
-  "review_timeout_seconds": 300,
+  "review_timeout_seconds": 210,
   "review_delta_max_lines": 3000
 }

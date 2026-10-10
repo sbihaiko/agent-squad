@@ -37,6 +37,7 @@ b=$(mktemp); probs=""
 touch "$A/fix-$pr-$s9"; [ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap
 req=$(bash "$(dirname "$0")/mkreq.sh" "auto-fix-$pr-$s9" "$b") || exit 1; rm -f "$b"
 run=$(cd "$SG_CHECKOUT" && python3 "$(dirname "$0")/launch.py" "$req" 2>/dev/null | tail -1)
+[ -n "${run:-}" ] && echo "$run" > "$A/runof-$pr-$s9"   # retryfix.sh re-arms this sha if the run fails or dies
 git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place; the run already copied it
 printf "Fix run dispatched automatically on PR #%s @ %s for:%s. Run: %s. Refs #%s\n" $pr $s9 "$probs" "${run:-launch failed}" $iss > "$SG_STATE/cq/$iss-autofix$$.md"
 echo "AUTOFIX #$pr @ $s9 (issue #$iss):$probs -> ${run:-LAUNCH FAILED}"
