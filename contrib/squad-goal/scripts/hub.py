@@ -154,6 +154,13 @@ def runs():
         rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stale": 2}.get(st, 1)
         t1 = r["t1"] or time.time()
         out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
+    for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
+        try: d = json.loads(f.read_text())
+        except Exception: continue
+        age = time.time() - f.stat().st_mtime
+        if d.get("state") != "running" and age > 4 * 3600: continue
+        st = d.get("state") or "running"; t1 = d.get("t1") or time.time()
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": 0 if st == "running" else 1, "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}})
     out.sort(key=lambda r: (r["rank"], r["age"]))   # open runs first, finished next, dead last; then most recently updated first
     return out
 
@@ -447,6 +454,7 @@ const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 // a run's name says what it is for: "fix PR #1202 · #1178", "panel · #1179 #1182", "#1183"; the run id moves to the detail line
 const label=r=>{const is=(r.issues||[]).filter(i=>+i!==r.fix).map(i=>"#"+i).join(" ");
+  if(r.url)return "test "+is;
   return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?(r.bug?"fix ":"code ")+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or code issues (stacked on a parent PR); "test" is kept for test-only runs
 const sub=r=>{const t=r.titles||{},ks=(r.issues||[]).filter(i=>+i!==r.fix&&t[i]);return ks.length===1?t[ks[0]]:ks.length?ks.map(i=>"#"+i+" "+t[i].split(" ").slice(0,4).join(" ")).join(" · "):""};
 function plan(){ // which runs fill the N slots: pinned first, then most recently updated; slots stay stable, top slot has hysteresis
@@ -491,7 +499,7 @@ function drawMain(force){
     for(const id of [...frames.keys()])if(!slots.includes(id))frames.delete(id);
     main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">No open runs. Pin a finished run from the list to look at it; the next run that starts shows up here on its own.</div>";
     slots.forEach(id=>{const r=byId.get(id);let f=frames.get(id);
-      if(!f||f.dataset.port!==r.port){f=document.createElement("iframe");f.src="http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
+      if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
       const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${label(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
 }
 function refresh(){plan();drawLayout();drawList();drawMain()}
@@ -883,7 +891,14 @@ def models_set(new):
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
-        if self.path.startswith("/api/runs"): body, ct = json.dumps(runs()).encode(), "application/json"
+        if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
+            n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
+            try: d = json.loads((T / (n + ".json")).read_text()); lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
+            except Exception: d, lg = {}, "no such test"
+            import html as _h
+            ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
+            body = f'<!doctype html><meta charset=utf-8>{ref}<body style="background:#0d1117;color:#c9d1d9;font:12px ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
+        elif self.path.startswith("/api/runs"): body, ct = json.dumps(runs()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); body, ct = json.dumps(issue_detail(int(m[1])) if m else {"err": "bad n"}).encode(), "application/json"
