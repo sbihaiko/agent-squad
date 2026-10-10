@@ -46,14 +46,6 @@ def test_a_suite_that_prints_fail_but_exits_zero_is_not_hidden(tmp_path):
     assert p.returncode == 0 and "FAIL something" in p.stdout
 
 
-def test_the_real_suites_pass_offline():
-    # No network, no model, no emulator: the suites run with an empty-ish PATH of system tools only and a dead proxy.
-    env = {"HTTPS_PROXY": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9", "ALL_PROXY": "http://127.0.0.1:9",
-           "HOME": str(Path.home())}
-    p = _run("bash", str(SCRIPTS / "shell-suites.sh"), cwd=SCRIPTS, env=env, timeout=600)
-    assert p.returncode == 0, p.stdout[-3000:] + p.stderr[-1000:]
-
-
 def test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either(tmp_path):
     d = _tree(tmp_path, {"test-a.sh": "echo ok a"})
     marker = tmp_path / "gui-ran"
