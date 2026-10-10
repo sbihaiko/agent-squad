@@ -355,7 +355,7 @@ GitHub access is REST only in the loop (`board.py` for cards, REST diff in revie
 
 Board moves go through `scripts/board.sh` (`$BOARD`), which flags the hub to refresh the board within 2 s instead of its 60 s cycle; `childcc.py` runs every 30 s with the autopilot.
 
-A child that finishes with outcome pass moves its issue to Code Complete at once (`scripts/childcc.py`, every watch loop, live runs only, once per child), with a comment carrying its first reason; the panel may still be running its siblings.
+A child that finishes with outcome pass moves its issue to Code Complete at once (`scripts/childcc.py`, every watch loop, once per child), with a comment carrying its first reason; the panel may still be running its siblings. A run that already has its verdict (tiny and fork-only runs pass → verdict in under 1 s, never seen live) is backfilled too, but only when the card is Todo/In Progress/Blocked, never past Code Complete. `scripts/test-childcc.sh` is the regression test (stub gh and board).
 
 Coordinator test passes (post-merge e2e, a fork suite for fork-only work) go through `scripts/test.sh <issue> [-C <dir>] -- <command>`: it moves the card to Testing, logs to `$SG_STATE/tests/`, queues the result on the issue, and the hub lists it as `test #N` with the live log as its panel. A test run by hand outside it is invisible on the hub.
 
