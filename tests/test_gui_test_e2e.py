@@ -1856,3 +1856,25 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     again = _ScenarioGitHub()
     second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
+
+
+def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step():
+    """The whole committed pilot script against the `mesen-gui` adapter's advertised surface: the pilot as committed
+    is refused before launch (item 6), and the narrowing is a `gui-test/1` script the same validator accepts, with
+    every step of the pilot still in it - `manual` where it must be, naming what it is missing (MesenAI #1242)."""
+    from squad import to_test_scenario as tts
+    from squad.gui_test_subset import runnable
+    pilot = _pilot_1223()
+    caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"],
+            "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}
+    with pytest.raises(ScriptError):
+        validate(pilot, caps)
+    out = runnable(pilot, caps)
+    validate(out["script"], caps)
+    assert tts.step_ids(out["script"]) == tts.step_ids(pilot)
+    steps = [s for b in out["script"]["batches"] for p in ("setup", "steps", "teardown") for s in (b.get(p) or [])]
+    assert len(steps) == len(tts.step_ids(pilot))  # converted steps are counted once, and none is dropped
+    assert all(s["mode"] == "manual" or (s.get("check") or {}).get("name") in caps["checks"] for s in steps)
+    by_id = {s["id"]: s for s in steps}
+    assert all(e["missing"] and by_id[e["id"]]["mode"] == "manual" for e in out["manual"])
+    assert all(m in by_id[e["id"]]["expect"] for e in out["manual"] for m in e["missing"])  # a person reads why
