@@ -2258,7 +2258,23 @@ function scriptModule() {
       + `<defs><marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z"/></marker></defs>${out}</svg>`;
   }
 
-  return { scriptDiagram, scriptSvg };
+  // A GUI test run as nodes, one per step in record order: the runner's gui_step, gui_capture and gui_verdict events up to the replay cursor
+  // (null is the end). A step shows `executed` once its wait was met, its capture was taken and its verdict is in; a verdict with no
+  // capture is `failed` (its wait timed out); a step with no verdict yet is `running`.
+  function guiRun(events, cursor) {
+    const nodes = new Map();
+    for (const e of events) {
+      if (cursor != null && e.pos > cursor) break;
+      if (!String(e.event).startsWith("gui_")) continue;
+      if (!nodes.has(e.node)) nodes.set(e.node, { id: e.node, status: "running", verdict: null, capture: null, pos: e.pos });
+      const n = nodes.get(e.node);
+      if (e.event === "gui_capture") n.capture = { path: e.path, size: e.size, sha256: e.sha256 };
+      if (e.event === "gui_verdict") { n.verdict = e.verdict; n.status = n.capture ? "executed" : "failed"; }
+    }
+    return [...nodes.values()];
+  }
+
+  return { scriptDiagram, scriptSvg, guiRun };
 }
 
 // Dashboard core: the same JSON Schema and the same rules as squad/graph.py,
@@ -2280,13 +2296,13 @@ function make(ENGINE) {
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
   const { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
-  const { scriptDiagram, scriptSvg } = scriptModule();
+  const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
   const { unresolvedChildren, replayAt, moveCursor } = replayModule({ num, orNull });
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, pauseView, controlBody, LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
