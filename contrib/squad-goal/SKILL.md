@@ -339,6 +339,8 @@ A PR opened for an issue moves it to Code Complete; Testing starts at the merge,
 
 The comment queue is a durability mechanism, not permission to postpone creating the update. Queue the update at the moment the event happens.
 
+Optimistic while testing: a blocker whose PR is already merged into the base counts as done for dispatch (`stack.sh` READY) even while its e2e runs or the issue waits to close; dispatch its dependents at the merge, not at the close. A red e2e goes back to the blocker as a fix run; the dependents keep going.
+
 ## Event handling
 
 | Event | Action |

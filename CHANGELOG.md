@@ -2,6 +2,7 @@
 
 ## 0.2.1 (local fork, 2026-10-09)
 
+- squad-goal `stack.sh` is optimistic while testing: a blocker whose PR is already merged into the base no longer gates its dependents while its e2e runs or the issue waits to close.
 - squad-goal board flow gains **Code Complete** between In Progress and Testing: an open PR is Code Complete (`revci.sh`, `reconcile.py`); Testing starts at the merge, while the e2e on the merge SHA runs (`autopilot.sh`); the hub orders and colors the new column.
 - squad-goal autopilot: PR fields are joined with a unit separator; a tab IFS collapsed an empty labels field, read the base ref as empty and skipped every auto-merge.
 - **dashboard**: the popup cycles cards with ‹ › and ←/→; a selection no longer pans the map behind it.
