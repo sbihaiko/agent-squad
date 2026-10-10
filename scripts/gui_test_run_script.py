@@ -2,6 +2,7 @@
 """Run a whole `gui-test/1` script end to end on the squad's GUI test infrastructure (ADR-0272 items 6-8, #1222).
 
     python3 scripts/gui_test_run_script.py <script.json> [--adapter mesen-gui] [--out <results.json>]
+                                           [--batch <id> | --case <id>] [--file-bug]
 
 The runner, the script format and the adapter interface live with the squad (item 6, P1-A); the emulator adapter this
 command drives lives in MesenAI, loaded from `MESENAI_ROOT` through `squad.gui_test_worker`. This command is the door
@@ -22,11 +23,21 @@ item 8), `pending` (a `manual` step: nobody ran it). Exactly one of the last two
 `failed` steps make the run red, `needs review` and `pending` make it neither red nor green and are listed. A run
 that executed no step is a failure (a claim needs a step behind it).
 
+`--batch <id>` and `--case <id>` narrow the run (a case keeps its batch's setup) and the results file records a
+`selection` naming what was run, so a write-back can call it a partial run and never present it as the health of the
+whole scenario; a full run carries no `selection`. A selector the script does not have is refused before the adapter is
+asked anything. A **variant** selector waits for the supervised runner's variant hook (`squad.gui_test_variants` has
+the in-process one, the supervised path does not), so no `--variant` is accepted yet: it would name a window mode
+nothing switched.
+
 A red run files **one** bug for the whole run through the MesenAI failure-report path (`scripts/report-bug.sh`, see
-`squad.gui_test_report`), and only when the adapter is the registered emulator adapter — a run against a fake adapter
-never touches GitHub.
+`squad.gui_test_report`), and only when `--file-bug` asks for it: filing is **opt-in**, so a test, acceptance or CI run
+never pollutes the board (#1241). The bug is filed only for the registered emulator adapter — a run against a fake
+adapter never touches GitHub. A bug that cannot be filed is recorded as `bug.filed=false` with the reason and never
+aborts the run: the exit code reads the steps, never the filing.
 """
 import argparse
+import copy
 import ctypes
 import hashlib
 import json
@@ -176,8 +187,15 @@ def file_one_bug(script, rows, repo_root, approvals_path, store=None, runner=Non
     return report_failures(script, rows, store or local_store, file_bug, Path(approvals_path), priority="P1")
 
 
-def bug_reason(entry, rows, repo_root):
-    """Why this run files no bug, or None when it files one."""
+def bug_reason(entry, rows, repo_root, asked):
+    """Why this run files no bug, or None when it files one.
+
+    Filing is opt-in (#1241): the default asks nobody, so a test, acceptance or CI run never leaves anything on the
+    board. With `--file-bug` the run still files nothing for a fake adapter, for a green run, or when the repo's bug
+    helper is not in the checkout — each named, so `bug.reason` always says why the file has no URL.
+    """
+    if not asked:
+        return "no bug was asked for: filing is opt-in (--file-bug)"
     if not entry.get("repo"):
         return "the adapter is not the registered emulator adapter: a run against a fake adapter files nothing"
     if not any(kind(r["verdict"]) == "failed" for r in rows):
@@ -186,6 +204,34 @@ def bug_reason(entry, rows, repo_root):
     if not reporter.is_file():
         return f"{reporter} is missing"
     return None
+
+
+def narrow(script, batch=None, case=None):
+    """(the script the selectors name, the `selection` this run records); (script, None) when nothing was selected.
+
+    A batch runs that batch alone; a case runs its batch's setup and teardown with that one step, because a case whose
+    state its setup left is otherwise unrunnable. An id the script does not have raises `ScriptError` naming it, before
+    the adapter is asked for its capabilities and before anything is launched.
+    """
+    if batch is None and case is None:
+        return script, None
+    ids = [b["id"] for b in script["batches"]]
+    if batch is not None:
+        if batch not in ids:
+            raise ScriptError([f"no batch {batch!r} in {script['name']}: it has {', '.join(ids)}"])
+        view = copy.deepcopy(script)
+        view["batches"] = [b for b in view["batches"] if b["id"] == batch]
+        return view, {"kind": "batch", "value": batch}
+    steps = [(b["id"], s["id"]) for b in script["batches"] for s in b["setup"] + b["steps"]]
+    if case not in [sid for _, sid in steps]:
+        raise ScriptError([f"no case {case!r} in {script['name']}: it has {', '.join(sid for _, sid in steps)}"])
+    holder = next(bid for bid, sid in steps if sid == case)
+    view = copy.deepcopy(script)
+    for b in view["batches"]:
+        b["setup"], b["teardown"] = (b["setup"], b["teardown"]) if b["id"] == holder else ([], [])
+        b["steps"] = [s for s in b["steps"] if s["id"] == case]
+    view["batches"] = [b for b in view["batches"] if b["steps"]]
+    return view, {"kind": "case", "value": case}
 
 
 def report(record, path, text):
@@ -212,8 +258,12 @@ def main(argv=None):
     ap.add_argument("--artifacts", help="where the batch logs and captures go (default: <out>.artifacts)")
     ap.add_argument("--step-timeout", type=float, default=STEP_TIMEOUT_S,
                     help="host-time watchdog of one adapter call, in seconds")
-    ap.add_argument("--no-report-bug", action="store_true",
-                    help="do not file the one bug a red run files through scripts/report-bug.sh")
+    sel = ap.add_mutually_exclusive_group()
+    sel.add_argument("--batch", help="run only this batch: a partial run, and the results file records the selection")
+    sel.add_argument("--case", help="run only this case id, with the setup and teardown steps it needs")
+    ap.add_argument("--file-bug", action="store_true",
+                    help="file the one bug a red run files through scripts/report-bug.sh; off by default, so a test, "
+                         "acceptance or CI run never touches the board")
     args = ap.parse_args(argv)
 
     name = args.adapter
@@ -248,6 +298,13 @@ def main(argv=None):
     except ScriptError as ex:
         return _failed(record, out, "gui test run", ["the script is not a well-formed gui-test/1 file: " + p
                                                      for p in ex.problems])
+    try:  # the selectors narrow before the capabilities are read: a refused id never asks the adapter anything
+        script, selection = narrow(script, args.batch, args.case)
+    except ScriptError as ex:
+        return _failed(record, out, "gui test run",
+                       ["nothing was launched: " + p for p in ex.problems])
+    if selection is not None:  # a partial run says so; a full run carries no `selection` at all
+        record["selection"] = selection
     problems = env_problems(entry["env"])
     if problems:
         return _failed(record, out, "gui test run", problems)
@@ -269,16 +326,14 @@ def main(argv=None):
                    "summary": summary_of(rows)})
     status, reasons = outcome(rows, out_dir["batches"])
     record.update({"status": status, "reasons": reasons})
-    bug = {"filed": False, "reason": bug_reason(entry, rows, os.environ.get("MESENAI_ROOT", ""))}
-    if bug["reason"] is None and not args.no_report_bug:
-        try:
+    bug = {"filed": False, "reason": bug_reason(entry, rows, os.environ.get("MESENAI_ROOT", ""), args.file_bug)}
+    if bug["reason"] is None:
+        try:  # a bug that could not be filed is recorded, never raised: the exit code reads the steps, not the filing
             bug = {"filed": True, "url": file_one_bug(script, rows, os.environ.get("MESENAI_ROOT", ""),
                                                       artifacts / "approvals.json"),
                    "reason": f"one bug for the run's {len([r for r in rows if kind(r['verdict']) == 'failed'])} failed step(s)"}
-        except subprocess.SubprocessError as ex:  # a bug that could not be filed is reported, never raised
+        except (subprocess.SubprocessError, OSError) as ex:
             bug = {"filed": False, "reason": f"report-bug.sh failed: {ex}"}
-    elif args.no_report_bug:
-        bug = {"filed": False, "reason": "--no-report-bug"}
     record["bug"] = bug
     lines = [f"  {k}: {v}" for k, v in record["summary"].items()]
     lines += [f"  {r['id']}: {r['verdict']}" for r in rows if kind(r["verdict"]) in ("failed", *UNRESOLVED)]
