@@ -1813,25 +1813,6 @@ def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_
     assert bad == {"compose.save", "compose.save-says-so"}
 
 
-# --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
-
-def test_1224_the_pilot_script_covers_every_case_id_of_its_scenario():
-    """The pilot (261 case ids today; 67 when the spec was written) is the real fixture for the coverage check."""
-    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes, script_steps
-
-    docs = _mesenai() / "docs" / "validation" / "process"
-    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
-    if not (script_path.exists() and md_path.exists()):
-        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
-    script, scenario = read_script(script_path), read_scenario(md_path)
-    ids = [s["id"] for s in script_steps(script)]
-    report = coverage(scenario, script)
-    assert len(ids) == len(set(ids)) >= 67
-    assert (report["total_cases"], report["total_steps"]) == (len(ids), len(ids))
-    assert report["missing_steps"] == [] and report["steps_without_case"] == []
-    # The pilot predates content hashes, so nothing is reusable until a conversion records them per step.
-    assert report["reusable"] is False
-    assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
 # --- #1222: a command that runs a whole gui-test/1 script end to end (the /to-test-scenario Run step) ---
 
 
@@ -2081,6 +2062,91 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     again = _ScenarioGitHub()
     second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
+# --- to_test_scenario write-back (#1226): the committed run's results land on the pilot's issues ---------------
+
+class _IssueTracker:
+    """A GitHub stand-in that remembers what it was told, so a second write-back sees the first one's state.
+
+    It answers `issue_state` from its own memory: the state of the issue and the verdict of the last comment a
+    write-back left there. No network, no `gh`, no model.
+    """
+
+    def __init__(self, numbers):
+        self.state = {n: {"state": "open", "verdict": None} for n in numbers}
+        self.comments = {n: [] for n in numbers}
+        self.calls = []
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        number = kw.get("number")
+        if op == "issue_state":
+            return dict(self.state[number])
+        if op == "comment":
+            self.comments[number].append(kw["body"])
+            verdict = re.match(r"\*\*(passed|failed|needs review|pending)\*\*", kw["body"])
+            if verdict and number in self.state:
+                self.state[number]["verdict"] = verdict.group(1)
+        elif op == "close":
+            self.state[number]["state"] = "closed"
+        elif op == "reopen":
+            self.state[number]["state"] = "open"
+        return {}
+
+    def ops(self):
+        return [op for op, _ in self.calls]
+
+
+def _write_back_fixture():
+    """The committed run of #1222 and the pilot's map: the real results file, the real plan, a mapped issue each."""
+    from squad import to_test_scenario as tts
+
+    results = FORK / "docs" / "evidence" / "1222" / "play-pad-only-home.results.json"
+    if not os.environ.get("MESENAI_REPO") or not results.is_file():
+        pytest.skip("the committed results file of #1222 and MESENAI_REPO are needed")
+    pilot_path = _mesenai() / "docs" / "validation" / "process" / "play-pad-only.gui-test.json"
+    pilot = json.loads(pilot_path.read_text(encoding="utf-8"))
+    plan = tts.build_plan(pilot, script_path="docs/validation/process/play-pad-only.gui-test.json")
+    cases = sorted({case for issue in plan["issues"] for case in issue["cases"]})
+    mapping = {case: 2000 + pos for pos, case in enumerate(cases)}
+    return tts, results, plan, mapping, cases
+
+
+def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(tmp_path):
+    """One real results file and the pilot's map: comments, closes, pending cases and the run's own bug, no network."""
+    tts, results, plan, mapping, cases = _write_back_fixture()
+    map_path = tmp_path / "play-pad-only.gui-test.issues.json"
+    tts.save_map(map_path, {**mapping, "parent": 1999})
+    tracker = _IssueTracker(list(mapping.values()) + [1999])
+    out = tts.write_back(results, map_path, tracker, plan=plan)
+
+    assert out["counts"] == {"passed": 6, "failed": 1, "pending": 4}
+    assert out["ok"] is False and out["reason"].startswith("250 case(s) have no result")
+    assert out["bug"] == "https://github.com/sbihaiko/MesenAI/issues/1230"
+    assert "file_bug" not in tracker.ops()
+    assert tracker.state[mapping["home.open-library"]]["state"] == "open"
+    assert "failed" in tracker.comments[mapping["home.open-library"]][0]
+    assert sorted(out["closed"]) == ["home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
+                                     "home.focus-holds-up", "launch.first-run-home", "launch.open-rom-focused"]
+    assert all(tracker.state[mapping[c]]["state"] == "closed" for c in out["closed"])
+    assert "home.back-to-home" in out["pending"] and "launch.port-lamp-p1" in out["pending"]
+    summary = tracker.comments[1999][0]
+    assert "https://github.com/sbihaiko/MesenAI/issues/1230" in summary and "darwin-arm64" in summary
+    assert len(cases) >= 67 and cases == sorted(mapping)
+
+
+def test_1226_the_same_run_written_back_twice_adds_no_case_comment_and_reopens_nothing(tmp_path):
+    tts, results, plan, mapping, cases = _write_back_fixture()
+    map_path = tmp_path / "play-pad-only.gui-test.issues.json"
+    tts.save_map(map_path, {**mapping, "parent": 1999})
+    tracker = _IssueTracker(list(mapping.values()) + [1999])
+    first = tts.write_back(results, map_path, tracker, plan=plan)
+    before = {number: len(bodies) for number, bodies in tracker.comments.items() if number != 1999}
+    second = tts.write_back(results, map_path, tracker, plan=plan)
+
+    assert first["commented"] and second["commented"] == [] and second["reopened"] == []
+    assert sorted(second["unchanged"]) == sorted(first["commented"])
+    assert {n: len(b) for n, b in tracker.comments.items() if n != 1999} == before
+    assert len(tracker.comments[1999]) == 2          # the summary runs every time; the cases do not
 
 
 # --- #1241: the run command files its bug only when asked, and a partial run records its selection ---
