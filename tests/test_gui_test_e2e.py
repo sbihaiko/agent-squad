@@ -3076,19 +3076,34 @@ from squad.gui_test_scenario import run_scenario  # noqa: E402
 from tests.gui_test_pilot_fake_1286 import ADAPTERS as PILOT_ADAPTERS  # noqa: E402
 from tests.gui_test_pilot_fake_1286 import MANUAL_ONLY_BATCHES  # noqa: E402
 
-# The Mode and Blocked-by columns of the scenario's own case table (#1286): the fifteen cases its 26 batches run,
-# each with the case that has to have run before it. Every other case of the pilot is `manual` and waits for a person.
-AUTOMATED_1286 = [
-    "launch.first-run-home", "launch.open-rom-focused",
-    "home.first-focus", "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left",
-    "home.focus-holds-right", "home.open-library", "home.back-to-home", "home.back-focus-restored",
-    "lib.home-ring", "lib.reach-library", "lib.open-screen", "lib.back-to-home", "lib.back-ring-on-opener",
-]
+
+
+def _automated_1286(script):
+    """The ids of the script's automated cases (#1399): every case whose Mode is not `manual`, in script order.
+
+    Derived from the script instead of frozen: the pilot is read from MesenAI's checkout, so a hardcoded list went red
+    on the fork base whenever MesenAI added a case (#1203) with no fork commit to blame."""
+    return [c["id"] for c in scenario_cases(script) if c["mode"] != "manual"]
+
+
 HOLDS_1286 = ["home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right"]
 
 
 def _pilot_1286():
     return _pilot_1223()
+
+
+def test_1286_the_expected_automated_ids_follow_the_script_not_a_frozen_list():
+    """#1399: the fork reads the pilot from MesenAI's checkout, so a MesenAI-only change (a case added in #1203) must not
+    redden the fork base. The expectation is the script's own non-manual cases, so flipping one case's mode moves it."""
+    d = json.loads(json.dumps(_pilot_1286()))
+    before = _automated_1286(d)
+    flipped = next(c["id"] for c in scenario_cases(d) if c["mode"] == "manual")
+    next(s for b in d["batches"] for part in ("setup", "steps", "teardown") for s in b.get(part) or []
+         if s["id"] == flipped)["mode"] = "auto"
+    after = _automated_1286(d)
+    assert flipped in after and flipped not in before
+    assert [i for i in after if i != flipped] == before
 
 
 def _home_1286(tmp_path):
@@ -3112,8 +3127,8 @@ def test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run(t
 def test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster(tmp_path):
     out = _home_1286(tmp_path)
     by_id = {r["id"]: r["verdict"] for r in out["rows"]}
-    home = [c for c in AUTOMATED_1286 if c.startswith("home.")]
-    assert len(home) == 8
+    home = [c for c in _automated_1286(_pilot_1286()) if c.startswith("home.")]
+    assert set(HOLDS_1286) <= set(home)
     assert [by_id[i] for i in home] == ["passed"] * len(home), by_id
 
 
@@ -3130,18 +3145,21 @@ def test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter():
 
 
 def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated_ones_pass(tmp_path):
-    """The whole scenario in one call: 281 cases of the committed script, in script order, none dropped and none
-    added; the fifteen automated cases pass on the roster and every other case is `pending` for a person."""
+    """The whole scenario in one call: every case of the committed script, in script order, none dropped and none
+    added; the automated cases (Mode != manual) pass on the roster and every other case is `pending` for a person."""
     d = _pilot_1286()
     out = run_scenario(d, PILOT_ADAPTERS, out_root=tmp_path)
     assert [r["id"] for r in out["rows"]] == [s["id"] for s in scenario_cases(d)]
-    assert out["summary"]["cases"] == 281 and len(out["rows"]) == 281
+    total = len(scenario_cases(d))
+    automated = _automated_1286(d)
+    assert automated and total > len(automated)
+    assert out["summary"]["cases"] == total and len(out["rows"]) == total
     assert out["status"] == "passed" and out["reasons"] == []
     assert out["summary"]["failed"] == 0 and out["summary"]["not executed"] == 0
-    assert [r["id"] for r in out["rows"] if r["verdict"] == "passed"] == AUTOMATED_1286
+    assert [r["id"] for r in out["rows"] if r["verdict"] == "passed"] == automated
     assert {r["id"] for r in out["rows"] if r["verdict"] == "pending"} == \
-        {c["id"] for c in scenario_cases(d)} - set(AUTOMATED_1286)
-    assert out["summary"]["pending"] == 281 - 15
+        {c["id"] for c in scenario_cases(d)} - set(automated)
+    assert out["summary"]["pending"] == total - len(automated)
 
 
 def test_1286_a_case_names_the_case_that_blocks_it():
