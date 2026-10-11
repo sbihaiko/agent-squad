@@ -26,9 +26,17 @@ SLICE_RE='(^|[^A-Za-z0-9_./-])(UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/
 # whole wave:01 panel (#1765-#1770) could not dispatch at all. So fenced blocks, blockquote lines and lines indented by four
 # spaces (or a tab) are dropped before matching. A path at column 0 still claims its slice, and a refusal message pasted as
 # prose still does too: the guard reads what the request says it will edit, not what it quotes.
+# (#1790) The embedded-issue region is quoted evidence even where it is plain prose. autofrontier.sh and autobug.sh paste the
+# full text of every issue they dispatch under a `--- issue #<N>` marker, so a path named in a ticket's own prose was read as a
+# file the request would edit: the pass that dispatched it claimed every path its issues mentioned, the next pass embedding the
+# same issues was refused, and the two passes took turns failing while the issue stayed open (on 2026-10-11 frontier-1773 named
+# scripts/checks/verify_report_bug_prefix.sh off line 19 of #1773's body and was refused against the pass before it). The scan
+# therefore stops at the first marker line: the slice is what the request's OWN instructions name, and everything from the
+# marker down is the ticket text it hands the child. A path above the marker claims its slice exactly as before.
 slice_paths() {
   /usr/bin/awk '
     BEGIN { indent = "    "; tab = sprintf("%c", 9) }
+    /^--- issue #[0-9]+/ { exit }                             # the embedded issue text below: quoted evidence, not a slice here
     /^[[:space:]]*(```|~~~)/ { fence = !fence; next }         # a fenced block opens and closes: nothing inside it is a slice
     fence { next }
     { if ($0 ~ /^[[:space:]]*>/) next                         # a blockquote: quoted evidence
