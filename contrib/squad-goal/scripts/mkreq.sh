@@ -106,6 +106,17 @@ slice_guard() {
     holder=$(printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
     [ -n "$holder" ] || continue
     if [ $force = 1 ]; then echo "SLICE FORCE $1: $f is already in flight ($holder); dispatching anyway on SG_SLICE_FORCE=1" >&2; continue; fi
+    # (#1769) A fix run is not a second slice. autofix.sh names its request `auto-fix-<pr>-<sha9>`, and the PR it repairs is
+    # in the claim set above by definition -- its own branch changes the very files the review asked to fix. So the guard
+    # refused the only run that could repair the PR it was guarding: PR #1706 (2026-10-11) got a BLOCKING verdict on 27aaaf5b5
+    # and `refusing: request auto-fix-1706-27aaaf5b5 names scripts/checks/verify_report_bug_prefix.sh, which open PR #1706
+    # already changes` left the verdict sitting on a mergeable, CI-green PR with nothing working it (autofix.sh then exits 1).
+    # ADR-0274 separates two slices of work; a slice and its own repair are one unit of work, and the claim record already
+    # carries the number the request name carries. Only that pair is exempt: the file of another open PR, of another request
+    # and of an unmerged fork branch refuses exactly as before, and so does any request whose name is not a fix run's.
+    if [[ $1 =~ ^auto-fix-([0-9]+)-[0-9a-f]{9}$ ]] && [ "$holder" = "PR #${BASH_REMATCH[1]}" ]; then
+      echo "SLICE SELF-FIX $1: $f is $holder's own file; a fix run on the PR it repairs is not a second slice (#1769)" >&2; continue
+    fi
     case "$holder" in
       "request "*)
         rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$HOME/.cache/squad-goal/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
