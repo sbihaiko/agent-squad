@@ -55,7 +55,8 @@ def test_a_dead_running_pass_is_not_listed_as_a_live_run(hub):
     row = next(r for r in _test_rows(hub) if r["id"] == f.stem)
     assert row["state"] != "running", "a pass that has not touched its file in five hours is not running"
     assert row["live"] is False, "the left pane must not count it among the live runs"
-    assert "lost" in row["tip"].lower(), "it stays visible, marked lost"
+    assert "lost" in row["badge"].lower(), "it stays visible, marked lost in the badge"
+    assert "lost" in row["tip"].lower(), "and the note says why"
     assert hub.group_of(row) != "running", "and it leaves the running group"
 
 
