@@ -22,4 +22,14 @@ bash "$T/s/forkclose.sh" > "$T/fc.out" 2>&1; wait
 # 3. re-entrancy: a caller already holding gui-suite (an acceptance command) does not deadlock the gate
 SERIAL_WAIT_SECONDS=5 SG_STATE="$T/st" bash "$T/s/serial.sh" gui-suite bash -c "cd $T/fork && SERIAL_WAIT_SECONDS=5 SG_STATE=$T/st bash $T/s/fork-gate.sh true" >/dev/null 2>&1 \
   && ok "the gate inside a gui-suite holder does not deadlock" || ko "nested gui-suite lock deadlocked (exit $?)"
+# 4. #1414: the headless tree (SG_E2E_HEADLESS_DIR) follows the same base head, fetched and checked out under the same gui-suite lock
+$G clone -q "$T/fork" "$T/hl" 2>/dev/null; g checkout -q -b gui/2 local/next; echo two > "$T/fork/two.py"; g add .; g commit -q -m "work 2"; g checkout -q local/next   # a second issue to close: the first was consumed above
+echo '{"items":[{"n":2,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
+: > "$T/log"; printf 'export SG_E2E_HEADLESS_DIR=%s\n' "$T/hl" >> "$T/s/env.sh"
+hl0=$($G -C "$T/hl" rev-parse HEAD)
+SG_STATE="$T/st" bash "$T/s/serial.sh" gui-suite sh -c "echo gui-start >> $T/log; sleep 4; echo gui-end >> $T/log" & sleep 1
+bash "$T/s/forkclose.sh" > "$T/fc.out" 2>&1 & sleep 2
+[ "$($G -C "$T/hl" rev-parse HEAD)" = "$hl0" ] && ok "the headless tree is not touched while a GUI suite holds the lock" || ko "headless tree moved under a running GUI suite"
+wait
+[ "$($G -C "$T/hl" rev-parse HEAD)" = "$($G -C "$T/fork" rev-parse local/next)" ] && ok "the headless tree ends at the base head" || ko "headless tree did not reach the base head"
 rm -rf "$T"; exit $fail
