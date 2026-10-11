@@ -4,6 +4,8 @@
 # The request carries every open problem on the head sha: the latest review's CHANGES findings, failed CI checks,
 # a merge conflict with the base, and unresolved review threads (CodeRabbit or people: reply, then resolve).
 # One fix per head sha ($SG_STATE/auto/fix-<pr>-<sha9>); the push of the fix is the new sha that re-arms it.
+# A request mkreq.sh refuses is NOT a dispatch: the fix- and queued-<pr>-<sha9> markers and the round it charged go back
+# (exit 75), so the head is retried on the next pass instead of staying queued with nothing working it (#1770).
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; own=${SG_REPO%/*} name=${SG_REPO#*/}
 threads() { gh api graphql -f query="query{repository(owner:\"$own\",name:\"$name\"){pullRequest(number:$1){reviewThreads(first:100){nodes{isResolved isOutdated}}}}}" \
   -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false and .isOutdated==false)]|length' 2>/dev/null; }
@@ -44,7 +46,19 @@ b=$(mktemp); probs=""
 [ -z "${probs// /}" ] && { rm -f "$b"; exit 0; }
 [ -n "${AF_DRY:-}" ] && { echo "problems:$probs"; cat "$b"; rm -f "$b"; exit 0; }   # AF_DRY=1: print the request, launch nothing
 touch "$A/fix-$pr-$s9"; [ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap
-req=$(bash "$(dirname "$0")/mkreq.sh" "auto-fix-$pr-$s9" "$b") || exit 1; rm -f "$b"
+# A refusal must not consume the dispatch (#1770, the same defect #1529 fixed in autobug.sh and autofrontier.sh):
+# autopilot.sh touches auto/queued-<pr>-<sha9> BEFORE it calls this script and skips the head while that marker exists,
+# and the round is charged above, so a request mkreq.sh refused left the head queued forever -- a BLOCKING verdict, green
+# CI and nothing working it until a human pushed (#1706 @ 27aaaf5b5) -- with the round of a dispatch that never happened
+# spent against its cap. Free exactly what this dispatch wrote, return the round, and exit 75 so a caller can tell the
+# refusal from a failed run; the refusal itself already went to stderr (ADR-0274), and the next pass retries the head.
+if ! req=$(bash "$(dirname "$0")/mkreq.sh" "auto-fix-$pr-$s9" "$b"); then
+  rm -f "$b" "$A/fix-$pr-$s9" "$A/queued-$pr-$s9"
+  for r in rounds softfix; do [ -e "$A/$r-$pr" ] && sed -i '' "/^$s9\$/d" "$A/$r-$pr"; done
+  echo "AUTOFIX #$pr @ $s9 refused by mkreq.sh; freed the queued marker and returned the round, next pass retries" >&2
+  exit 75
+fi
+rm -f "$b"
 run=$(cd "$SG_CHECKOUT" && python3 "$(dirname "$0")/launch.py" "$req" 2>/dev/null | tail -1)
 [ -n "${run:-}" ] && echo "$run" > "$A/runof-$pr-$s9"   # retryfix.sh re-arms this sha if the run fails or dies
 git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place; the run already copied it
