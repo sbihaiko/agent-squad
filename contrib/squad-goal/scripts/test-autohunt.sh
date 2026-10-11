@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493).
+# Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493, #1504).
 # Offline: stub gh, autobug, autofrontier, mkreq, launch. usage: bash test-autohunt.sh [path/to/autohunt.sh]
 src=${1:-$(dirname "$0")/autohunt.sh}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -13,13 +13,30 @@ case "$*" in
   *pulls*) printf '%s\n' "${GH_PRS:-}";;
   *POST*|*issues*)
     echo "$*" >> "${GHPOST:-/dev/null}"
+    for a in "$@"; do case "$a" in body=@*) cat "${a#body=@}" >> "${GHPOST:-/dev/null}";; esac; done
     echo "{\"number\":${GH_NEW:-42}}";;
   *) ;;
 esac
 GH
 chmod +x "$T/bin/gh"
 export PATH="$T/bin:$PATH"
+restore_gh() {
+  cat > "$T/bin/gh" <<'GH'
+#!/bin/bash
+echo "$*" >> "${GHLOG:-/dev/null}"
+case "$*" in
+  *pulls*) printf '%s\n' "${GH_PRS:-}";;
+  *POST*|*issues*)
+    echo "$*" >> "${GHPOST:-/dev/null}"
+    for a in "$@"; do case "$a" in body=@*) cat "${a#body=@}" >> "${GHPOST:-/dev/null}";; esac; done
+    echo "{\"number\":${GH_NEW:-42}}";;
+  *) ;;
+esac
+GH
+  chmod +x "$T/bin/gh"
+}
 scene() {
+  restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   cp "$src" "$S/autohunt.sh"
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
@@ -79,10 +96,10 @@ export GH_PRS='1	aaaaaaaa	1100'
 r=$(run); skipped "$r" && ok "does not start while a PR waits on a review round" || ko "started with a waiting PR: '$r'"
 unset GH_PRS
 
-# 8) cooldown
-scene cdn; r=$(run); started "$r" || ko "cooldown setup did not start: '$r'"
+# 8) cooldown (a recent hunt-last, as if a hunt-filed fix already started)
+scene cdn
+echo $(date +%s) > "$SG_STATE/auto/hunt-last"
 export SG_HUNT_COOLDOWN_MINUTES=60
-rm -f "$SG_STATE/auto/hunt-live"
 r=$(run); skipped "$r" && ok "respects cooldown" || ko "started inside cooldown: '$r'"
 
 # 9) daily cap
@@ -135,5 +152,64 @@ hi = [i for i,l in enumerate(t) if "autohunt.sh" in l]
 sys.exit(0 if ai and hi and hi[0] > ai[0] else 1)
 PY
 else ko "watch.sh missing"; fi
+
+# 16) a hunt that files nothing leaves cooldown and the day count clear (Refs #1504)
+scene emptyhunt; r=$(run)
+started "$r" || ko "empty-hunt setup did not start: '$r'"
+src1=$(cat "$SG_STATE/auto/hunt-source" 2>/dev/null || echo 0)
+[ -f "$SG_STATE/auto/hunt-last" ] && ko "empty hunt: hunt-last written at hunt start" || ok "empty hunt: hunt-last not written at start"
+if [ -f "$SG_STATE/auto/hunt-day" ]; then
+  read -r _ n < "$SG_STATE/auto/hunt-day"
+  [ "${n:-0}" -eq 0 ] && ok "empty hunt: hunt-day not incremented at start" || ko "empty hunt: hunt-day=$n at start"
+else ok "empty hunt: hunt-day not incremented at start"; fi
+bash "$S/autohunt.sh" --none >/dev/null
+rm -f "$SG_STATE/auto/hunt-live"
+export SG_HUNT_COOLDOWN_MINUTES=60
+r=$(run)
+started "$r" && ok "empty hunt: next idle check hunts again" || ko "empty hunt: cooldown blocked a no-find hunt: '$r'"
+src2=$(cat "$SG_STATE/auto/hunt-source" 2>/dev/null || echo 0)
+[ "$src2" = "$(( (src1 + 1) % 4 ))" ] && ok "empty hunt: the second hunt took the next source in the rotation" || ko "empty hunt: source stalled at $src2 after $src1"
+if [ -f "$SG_STATE/auto/hunt-day" ]; then
+  read -r _ n < "$SG_STATE/auto/hunt-day"
+  [ "${n:-0}" -eq 0 ] && ok "empty hunt: hunt-day still not incremented" || ko "empty hunt: hunt-day=$n after a no-find"
+else ok "empty hunt: hunt-day still not incremented"; fi
+
+# 17) a hunt-filed bug starts cooldown and the day count when autobug dispatches it (Refs #1504)
+scene huntdisp
+d=$(cd "$(dirname "$src")" && pwd)
+cp "$d/autobug.sh" "$d/forkonly.sh" "$S/"
+[ -f "$d/cluster.py" ] && cp "$d/cluster.py" "$S/"
+mkdir -p "$T/huntdisp/co/docs/squad/workflows"
+echo '{"max_parallel": 10}' > "$T/huntdisp/co/docs/squad/workflows/dynamic.graph.json"
+cat > "$T/bin/gh" <<'GH'
+#!/bin/bash
+echo "$*" >> "${GHLOG:-/dev/null}"
+case "$*" in
+  *pulls*) ;;
+  *"issues?state=open"*) printf '42\x1fbug\n';;
+  *POST*)
+    echo "$*" >> "${GHPOST:-/dev/null}"
+    echo "{\"number\":${GH_NEW:-42}}";;
+  *issues/42*)
+    printf '{"number":42,"title":"a hunt bug","body":"repro\\nFiled by autohunt\\n","created_at":"2026-10-11T00:00:00Z","labels":[{"name":"bug"}],"state":"open"}\n';;
+  *) ;;
+esac
+GH
+chmod +x "$T/bin/gh"
+[ -f "$SG_STATE/auto/hunt-last" ] && ko "dispatch setup: hunt-last already set" || ok "dispatch setup: no hunt-last yet"
+ab=$(bash "$S/autobug.sh" 2>&1)
+case "$ab" in *"AUTOBUG dispatched"*) ok "autobug dispatched the hunt-filed bug";; *) ko "autobug did not dispatch: '$ab'";; esac
+[ -f "$SG_STATE/auto/bug-42" ] || ko "auto/bug-42 not written"
+last=$(cat "$SG_STATE/auto/hunt-last" 2>/dev/null || echo 0)
+[ "${last:-0}" -gt 0 ] && ok "hunt-last set at autobug dispatch" || ko "hunt-last not set at dispatch (last=$last)"
+if [ -f "$SG_STATE/auto/hunt-day" ]; then
+  read -r _ n < "$SG_STATE/auto/hunt-day"
+  [ "${n:-0}" -eq 1 ] && ok "hunt-day incremented once at dispatch" || ko "hunt-day=$n at dispatch"
+else ko "hunt-day missing at dispatch"; fi
+rm -f "$SG_STATE/auto/hunt-live"
+export SG_HUNT_COOLDOWN_MINUTES=60 SG_HUNT_IDLE_MINUTES=0
+echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
+r=$(AH_DRY=1 bash "$S/autohunt.sh" 2>&1)
+skipped "$r" && ok "next hunt waits 60 minutes after a hunt-fix dispatch" || ko "hunted inside cooldown after dispatch: '$r'"
 
 rm -rf "$T"; exit $fail

@@ -6,8 +6,12 @@
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
 now=$(date +%s)
 file_issue() {
-  local title=$1 body=$2 resp num
-  resp=$(gh api --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$body" -f 'labels[]=bug' 2>/dev/null)
+  local title=$1 body=$2 resp num tagged
+  tagged=$(mktemp)
+  cat "$body" > "$tagged"
+  grep -qF "Filed by autohunt" "$tagged" || echo "Filed by autohunt" >> "$tagged"
+  resp=$(gh api --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" -f 'labels[]=bug' 2>/dev/null)
+  rm -f "$tagged"
   num=$(printf '%s' "$resp" | python3 -c 'import sys,json,re
 t=sys.stdin.read().strip()
 try:
@@ -110,8 +114,7 @@ name="hunt-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
   echo "CHILD — read-only hunt (source $src_name): look for real, reproducible defects and file each as a bug."
 } > "$body"
 req=$("$here/mkreq.sh" "$name" "$body") || exit 0
-echo "$now" > "$A/hunt-last"; echo "$now" > "$A/hunt-activity"
-printf '%s %s\n' "$day" "$((n+1))" > "$A/hunt-day"
+echo "$now" > "$A/hunt-activity"
 if [ -n "${AH_DRY:-}" ]; then echo dry > "$A/hunt-live"; echo "HUNT started"; exit 0; fi
 echo "$name" > "$A/hunt-live"
 log="$SG_STATE/$name.log"
