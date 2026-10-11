@@ -43,9 +43,13 @@ def _const(src, name):
     return f"const {name}={m.group(1)};"
 
 
-def _run_js(body):
-    node = shutil.which("node")
-    assert node, "node is required to evaluate hub panel JS"
+def _stmt(marker):
+    """The single statement the page assigns after `marker`, as an expression."""
+    i = SRC.index(marker) + len(marker)
+    return SRC[i: SRC.index(";\n", i)]
+
+
+def _prelude():
     usd = re.search(r"const usd=v=>[^;]+;", SRC).group(0)
     pcol = re.search(r"const PCOL=[^;]+;", SRC).group(0)
     other = re.search(r"const OTHER=[^;]+;", SRC)
@@ -55,14 +59,36 @@ def _run_js(body):
             tk = "const " + tk
         pcol = pcol + "\n" + tk
     esc = "const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
-    js = "\n".join([
-        usd, pcol, other.group(0) if other else "",
-        esc, _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "kr"),
-        body, "console.log(JSON.stringify(out));",
+    return "\n".join([
+        usd, pcol, other.group(0) if other else "", esc,
+        _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "kr"), _fn(SRC, "openRows"),
     ])
+
+
+def _node(js):
+    node = shutil.which("node")
+    assert node, "node is required to evaluate hub panel JS"
     p = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=15)
     assert p.returncode == 0, p.stderr or p.stdout
-    return json.loads(p.stdout)
+    return p.stdout
+
+
+def _render(prelude, expr):
+    """Evaluate one assignment's expression in node, with the panel helpers in scope."""
+    return _node(_prelude() + "\n" + prelude + f"\nconsole.log({expr});")
+
+
+def _cash_line():
+    return _render("const any=true,d={plans:255,api:27.24,total:282.24};",
+                   _stmt('$("#cash").textContent=')).strip()
+
+
+def usd_texts(html):
+    return re.findall(r"<b[^>]*>(\$[\d.,]+)</b>", html)
+
+
+def _run_js(body):
+    return json.loads(_node(_prelude() + "\n" + body + "\nconsole.log(JSON.stringify(out));"))
 
 
 def test_subscription_card_has_no_info_lines():
@@ -93,29 +119,61 @@ def test_no_tot3_tile_grid():
     assert re.search(r"<div class=tot id=tot>", html)
 
 
-def test_spend_section_order_and_cash_line():
+def test_section_order_is_spend_chart_speed_open_tokens():
+    html = _stats()
+    pos = [html.find("Spend"), html.find("Spend over time"), html.find("id=chart"),
+           html.find("id=kpi"), html.find("id=open"), html.find("Tokens by model"), html.find("id=pie")]
+    assert all(p >= 0 for p in pos), pos
+    assert pos == sorted(pos), pos
+
+
+def test_spend_block_holds_the_cash_line():
     html = _stats()
     assert re.search(r"<h4>Spend\b", html)
-    tot_html = SRC[SRC.index("$(\"#tot\").innerHTML"): SRC.index("$(\"#tot\").innerHTML") + 800]
-    assert "today" in tot_html and "this month" in tot_html and "all time" in tot_html
-    cash = re.search(r"plans \$\d.*\+ API \$\d.*= \$\d", SRC)
-    assert cash, "cash line template missing"
-    assert "at API list prices (API-equivalent)" in SRC
+    cash_at = html.index("id=cash")
+    assert html.index("id=tot") < cash_at < html.index("id=per")
+    txt = _cash_line()
+    assert re.match(r"^at API list prices \(API-equivalent\) · cash this month: plans \$\d.*\+ API \$\d.*= \$\d", txt), txt
 
 
-def test_src_and_per_button_copy():
-    src = re.search(r'\$\("#src"\)\.innerHTML=([^;]+);', SRC).group(1)
-    per = re.search(r'\$\("#per"\)\.innerHTML=([^;]+);', SRC).group(1)
-    assert '"all"' in src and '"plans"' in src and '"API"' in src
-    assert "subscription" not in src.lower() or '"plans"' in src
-    assert "per hour" in per and "per day" in per and "per month" in per
-    assert re.search(r">hour<", per) is None
-    assert re.search(r">day<", per) is None
+def test_src_toggle_reads_all_plans_api():
+    html = _render(
+        'const src="both";\n',
+        _stmt('$("#src").innerHTML='),
+    )
+    assert re.findall(r">([^<>]+)</button>", html) == ["all", "plans", "API"]
 
 
-def test_all_time_equals_month_reads_this_month():
-    tot = SRC[SRC.index("$(\"#tot\").innerHTML"): SRC.index("$(\"#kpi\")") if "$(\"#kpi\")" in SRC else SRC.index("const b=sp.baseline")]
-    assert "= this month" in tot
+def test_per_toggle_reads_per_hour_day_month():
+    html = _render(
+        'const per="day";\n',
+        _stmt('$("#per").innerHTML='),
+    )
+    assert re.findall(r">([^<>]+)</button>", html) == ["per hour", "per day", "per month"]
+    # the API still keys off hour/day/month
+    assert re.findall(r"data-p=(\w+)", html) == ["hour", "day", "month"]
+    assert re.search(r'data-p=day class="on"', html)
+
+
+def test_tot_tiles_read_today_this_month_all_time():
+    html = _render("const st={totals:{today:20.67,month:612,all:1234}};\nconst same=st.totals.all===st.totals.month;\n",
+                   _stmt('$("#tot").innerHTML='))
+    assert re.findall(r"<div>([^<]+)<b", html) == ["today", "this month", "all time"]
+    assert usd_texts(html) == ["$20.67", "$612", "$1234"]
+
+
+def test_tot_all_time_equal_to_month_reads_this_month():
+    html = _render("const st={totals:{today:1.5,month:612,all:612}};\nconst same=st.totals.all===st.totals.month;\n",
+                   _stmt('$("#tot").innerHTML='))
+    tiles = re.findall(r"<div>[^<]+<b([^>]*)>([^<]+)</b></div>", html)
+    assert tiles[-1] == (" class=m", "= this month"), tiles
+    assert tiles[1] == ("", "$612")
+
+
+def test_dollars_drop_cents_at_and_above_one_hundred():
+    html = _render("const st={totals:{today:99.99,month:100,all:1234.4}};\nconst same=st.totals.all===st.totals.month;\n",
+                   _stmt('$("#tot").innerHTML='))
+    assert usd_texts(html) == ["$99.99", "$100", "$1234"]
 
 
 def test_chart_has_max_rule_ok_bar_now_and_no_year():
@@ -134,46 +192,88 @@ const out={html, texts};
         assert not re.search(r"\b\d{4}\b", t), t
 
 
-def test_speed_header_and_delta_copy():
-    kpi = POLL
-    assert "sample size" not in kpi
-    assert "since then" not in kpi
-    assert "Merge time median" in kpi
-    assert "Merge time average" in kpi
-    assert "Run time median today" in kpi
-    assert "Review rounds average" in kpi
-    assert "Hung runs killed" in kpi
-    header = re.search(r"<h4>Speed <small>.*?</small></h4>", kpi).group(0)
-    plain = re.sub(r"<[^>]+>", " ", header)
-    plain = re.sub(r"\$\{[^}]+\}", "10-09 19:00", plain, count=1)
-    plain = re.sub(r"\$\{n===1\?\"\":\"s\"\}", "s", plain)
-    plain = re.sub(r"\$\{[^}]+\}", "42", plain)
-    plain = re.sub(r"\s+", " ", plain).strip()
-    assert re.search(r"^Speed since \d\d-\d\d \d\d:\d\d UTC · \d+ PRs?$", plain)
-    assert "vs. before" not in header
-    out = _run_js("const out={html:kr('Merge time median','',18,' min',38), zero:kr('Hung runs killed','',0,'',null)};")
-    assert "was 38 min" in out["html"]
-    assert "background" not in out["html"]
-    assert re.search(r'class="[^"]*\b(good|bad)\b[^"]*"', out["html"])
-    assert re.search(r"<b[^>]*class=m", out["zero"]) or 'class="m"' in out["zero"]
+SPEED = """const b={cutoff:"2026-10-09T19:04",pr:{median:38,mean:41},run_median:64};
+const n=42,cut=b.cutoff.slice(5,16).replace("T"," ");
+const sp={baseline:b,pr:{after:{n:n,median:18,mean:22},stale:false},runs:{today_median:12},rounds:{mean:1.5},kills:{count:0}};
+"""
 
 
-def test_open_prs_header_and_empty_state():
+def _speed_html(note="42"):
+    return _render(SPEED, _stmt('$("#kpi").innerHTML='))
+
+
+def _rows(html):
+    """Each row's visible text, label column first."""
+    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m)).strip()
+            for m in re.findall(r"<div class=kr>.*?</div>", html)]
+
+
+def test_speed_header_reads_since_and_pr_count():
+    header = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.search(r"<h4>Speed <small>.*?</small></h4>", _speed_html()).group(0))).strip()
+    assert re.fullmatch(r"Speed since \d\d-\d\d \d\d:\d\d UTC · \d+ PRs?", header), header
+
+
+def test_speed_header_says_one_pr_in_the_singular():
+    html = _render(SPEED.replace("after:{n:n,", "after:{n:1,").replace("const n=42,", "const n=1,"), _stmt('$("#kpi").innerHTML='))
+    assert re.search(r"· 1 PR</small>", html), html
+
+
+def test_speed_rows_are_the_five_the_issue_names():
+    html = _speed_html()
+    assert "sample size" not in html and "since then" not in html
+    assert _rows(html) == [
+        "Merge time , median 18 min was 38 min · 53% faster",
+        "Merge time , average 22 min was 41 min · 46% faster",
+        "Run time , median today 12 min was 64 min · 81% faster",
+        "Review rounds , average 1.5",
+        "Hung runs killed 0",
+    ], _rows(html)
+
+
+def test_speed_row_delta_is_muted_text_with_only_the_percentage_coloured():
+    html = _speed_html()
+    delta = re.search(r'<span class=d>(.*?)</span></div>', html).group(1)
+    assert re.sub(r"<[^>]+>", "", delta) == "was 38 min · 53% faster"
+    assert "background" not in delta
+    pct = re.search(r'<span class="(good|bad)">([^<]+)</span>', delta)
+    assert pct and pct.group(2) == "53% faster"
+    assert not re.search(r'class="d (?:good|bad)"', html)
+
+
+def test_speed_zero_value_is_muted():
+    html = _speed_html()
+    assert re.search(r"<b class=m>0</b>", html), html
+
+
+def test_speed_keeps_the_provisional_note():
+    html = _render(SPEED.replace("after:{n:n,", "after:{n:4,").replace("const n=42,", "const n=4,"), _stmt('$("#kpi").innerHTML='))
+    assert "Provisional: only 4 PRs so far" in html and "firms up at ~10" in html
+
+
+def test_open_rows_read_number_and_minutes():
+    out = _run_js("const o=[{n:1491,min:28},{n:1502,min:31}];const out={html:openRows(o)};")
+    html = out["html"]
+    assert re.search(r"<h4>Open PRs <small>oldest first</small></h4>", html)
+    assert re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip() == "Open PRs oldest first #1491 · 28 min (warns at 30) #1502 · 31 min"
+
+
+def test_open_with_none_reads_none_open():
+    out = _run_js("const out={empty:openRows([]),missing:openRows(null)};")
+    for html in (out["empty"], out["missing"]):
+        assert re.search(r"<h4>Open PRs\b", html) and "none open" in html
+        assert "#" not in html
+    assert "Open now" not in SRC
+
+
+def test_tokens_by_model_is_always_expanded():
     html = _stats()
-    assert re.search(r'id=open', html)
-    assert "Open PRs" in POLL
-    assert "oldest first" in POLL
-    assert "none open" in POLL
-    assert "warns at 30" in POLL
-    assert "Open now" not in POLL
-
-
-def test_tokens_by_model_always_open_with_folded_other():
-    html = _stats()
-    pie_wrap = html[html.index("id=pie") - 80 : html.index("id=pie") + 40]
-    assert "<details" not in pie_wrap
+    pie_wrap = html[html.index("id=pie") - 120 : html.index("id=pie") + 40]
+    assert "<details" not in pie_wrap and "<summary" not in pie_wrap
     assert "Tokens by model" in html
-    assert re.search(r"all time", html)
+    assert re.search(r"<h4>Tokens by model <small class=m id=piet>all time</small></h4>", html)
+
+
+def test_tokens_legend_folds_under_one_percent_and_caps_six_rows():
     out = _run_js("""
 const models=[
   {model:'big',in:9000,out:0,cache:0,spend:1,calls:1},
@@ -188,38 +288,58 @@ const models=[
 ];
 const html=pie(models);
 const legend=[...html.matchAll(/<span class=ln>([^<]+)<\\/span>/g)].map(m=>m[1]);
-const out={html, legend, n:legend.length, other:(legend.find(x=>x.startsWith('other'))||'')};
+const shares=[...html.matchAll(/<span class=ln>[^<]+<\\/span><b>([^<]+)<\\/b>/g)].map(m=>m[1]);
+const slices=[...html.matchAll(/<path[^>]*fill="([^"]+)"/g)].map(m=>m[1]);
+const out={html, legend, shares, slices, n:legend.length, other:(legend.find(x=>x.startsWith('other'))||'')};
 """)
-    assert "other" in out["html"]
-    assert re.search(r"other · \d+ models", out["other"] or " ".join(out["legend"]))
+    assert out["n"] == 3, out["legend"]  # big, mid, other
+    assert out["other"] == "other · 7 models", out["legend"]
+    assert len(out["slices"]) == out["n"], out["slices"]  # one slice per legend row
+    assert out["shares"] == ["93%", "5%", "1%"], out["shares"]
     for row in out["legend"]:
         if row.startswith("other"):
             continue
-        # named rows are the ones kept; none of the <1% models (a–g) may appear
-        assert row not in list("abcdefg")
+        assert row not in list("abcdefg"), row  # no named row under 1 %
     assert out["n"] <= 6
-    assert "tokens" in out["html"]
-    assert "a:" in out["html"] or "a " in out["html"]  # tooltip lists folded models
 
 
-def test_closed_summary_shape():
-    stsr = re.search(r'\$\("#stsr"\)\.textContent=([^;]+);', SRC).group(1)
-    assert "today" in stsr and "merge" in stsr
-    assert "subscription" not in stsr
+def test_tokens_other_slice_tooltip_lists_each_folded_model():
+    out = _run_js("""
+const models=[
+  {model:'big',in:9900,out:0,cache:0,spend:1,calls:1},
+  {model:'small-a',in:60,out:0,cache:0,spend:1,calls:1},
+  {model:'small-b',in:40,out:0,cache:0,spend:1,calls:1},
+];
+const html=pie(models);
+const titles=[...html.matchAll(/<title>([^<]*)<\\/title>/g)].map(m=>m[1]);
+const out={legend:[...html.matchAll(/<span class=ln>([^<]+)<\\/span>/g)].map(m=>m[1]).find(x=>x.startsWith('other'))||'', tip:titles.find(t=>t.includes('small-a'))||''};
+""")
+    assert out["legend"] == "other · 2 models", out
+    assert "small-a: 0.60%" in out["tip"] and "small-b: 0.40%" in out["tip"], out["tip"]
 
 
-def test_section_order_spend_chart_speed_open_tokens():
-    html = _stats()
-    pos = [
-        html.find("Spend"),
-        html.find("Spend over time"),
-        html.find("id=kpi"),
-        html.find("id=open"),
-        html.find("Tokens by model"),
-        html.find("id=pie"),
-    ]
-    assert all(p >= 0 for p in pos), pos
-    assert pos == sorted(pos)
+def test_tokens_donut_centre_reads_the_total_and_tokens():
+    out = _run_js("const out={html:pie([{model:'m',in:1690000000,out:0,cache:0,spend:1,calls:1}])};")
+    assert re.search(r">1\.69B</text>", out["html"]), out["html"]
+    assert re.search(r">tokens</text>", out["html"])
+
+
+def test_tokens_header_small_text_reads_the_total():
+    html = _render("const st={models:[{in:1200000000,out:490000000,cache:0,spend:1,calls:1}]};",
+                   _stmt('$("#piet").textContent='))
+    assert re.fullmatch(r"[\d.]+[KMB] all time", html.strip()), html
+
+
+def test_closed_summary_reads_today_and_merge():
+    txt = _render("const st={totals:{today:20.67}},sp={pr:{after:{median:18}}};",
+                  _stmt('$("#stsr").textContent=')).strip()
+    assert re.fullmatch(r"today \$[\d.,]+ · merge \d+ min", txt), txt
+
+
+def test_closed_summary_survives_a_missing_median():
+    txt = _render("const st={totals:{today:0.4}},sp={pr:{after:{median:null}}};",
+                  _stmt('$("#stsr").textContent=')).strip()
+    assert re.fullmatch(r"today \$[\d.,]+ · merge \d+ min", txt), txt
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required")

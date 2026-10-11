@@ -380,7 +380,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:9px;color:var(--mute)}.tot b{display:block;font-size:15px;color:var(--fg);font-weight:600}
 .tot .cash,.cash{grid-column:1/-1;background:none;border:0;padding:0;margin:2px 0 0;font-size:10px;color:var(--mute);line-height:1.35}
 #src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button,#per button{padding:1px 5px;font-size:10px}
-.kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px;min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:9.5px}.kr b{grid-column:2;justify-self:end;font-size:14px;font-weight:600;line-height:1}.kr b small{font-size:10px;font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}
+.kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px;min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:9.5px}.kr b{grid-column:2;justify-self:end;font-size:14px;font-weight:600;line-height:1}.kr b small{font-size:10px;font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
 .kr .d{grid-column:2;justify-self:end;font-size:9px;padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:12px;font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:11px;color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:12px}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
@@ -477,7 +477,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </style>
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
-<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <div id=list></div></div>
 <div id=main></div>
@@ -561,6 +561,9 @@ function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class
     const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
     chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
   return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
+function openRows(o){return `<h4>Open PRs <small>oldest first</small></h4>`
+  +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
+   :`<div class=kr><span class=l>none open</span></div>`)}
 let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images."},EFF=["low","medium","high","max"];
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
@@ -608,7 +611,7 @@ const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","�
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);$("#plsr").textContent=any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices";
- $("#tot3").innerHTML=`<div>plans<b>${usd(d.plans)}</b><span>per month</span></div><div>API<b>${usd(d.api)}</b><span>so far this month</span></div><div>total<b>${usd(d.total)}</b><span>plans + API</span></div>`;
+ $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: API-equivalent usage vs the plan price so far.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" title="R$, U$, € or any 3-letter code"></span>`:"";
@@ -626,24 +629,24 @@ $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(
  try{await fetch("/api/plans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({[k]:body})})}catch(x){}pollSubs()});
 async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json(),sp=await (await fetch("/api/speed")).json();
-  $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">${p}</button>`).join("");
-  $("#src").innerHTML=[["both","both"],["sub","subscription"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
+  $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
+  $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  $("#stsr").textContent=(src==="both"?"":(src==="sub"?"subscription ":"API "))+"today "+usd(st.totals.today);
-  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b>${usd(st.totals.all)}</b></div>`;
+  $("#piet").textContent=tk((st.models||[]).reduce((a,m)=>a+m.in+m.out,0))+" all time";
+  $("#stsr").textContent=`today ${usd(st.totals.today)} · merge ${Math.round(sp.pr.after.median||0)} min`;
+  const same=st.totals.all===st.totals.month;
+  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
   const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
-  $("#kpi").innerHTML=`<h4>Speed <small>vs. before ${cut} UTC</small></h4>`
-   +kr("Time to merge a PR","median, open → merged",sp.pr.after.median,"min",b.pr.median)
-   +kr("Time to merge a PR","average",sp.pr.after.mean,"min",b.pr.mean)
-   +kr("Run duration","median, today",sp.runs.today_median,"min",b.run_median)
-   +kr("PRs merged since then","sample size",n,"",0,false)
-   +kr("Review rounds per PR","average",sp.rounds.mean,"",null)
-   +kr("Hung runs killed","by the heartbeat",sp.kills.count,"",null)
-   +((sp.pr.open&&sp.pr.open.length)?`<h4>Open now <small>oldest first · the loop ages a PR past 30 min</small></h4>`
-     +sp.pr.open.map(o=>`<div class=kr><div class=l>#${o.n}</div><b${o.min>=30?' style="color:var(--warn)"':''}>${o.min}<small>min</small></b></div>`).join(""):"")
+  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
+   +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
+   +kr("Merge time",", average",sp.pr.after.mean,"min",b.pr.mean)
+   +kr("Run time",", median today",sp.runs.today_median,"min",b.run_median)
+   +kr("Review rounds",", average",sp.rounds.mean,"",null)
+   +kr("Hung runs killed","",sp.kills.count,"",null)
   +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
+  $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
