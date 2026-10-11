@@ -40,7 +40,8 @@ function renderChrome() {
   $("ident").title = st ? `graph ${st.graph_name}, run ${st.run_id}` : "";
   if (st) {
     const past = S.replay && !S.replay.at_end;
-    chip.textContent = past ? `replay · ${st.state}` : (v ? `${st.state} · exit ${v.exit_code}` : st.state);
+    const words = core.STATE_TEXT[st.state] || st.state;   // the sidebar badges the same run with these words, from the one state table
+    chip.textContent = past ? `replay · ${words}` : (v ? `${words} · exit ${v.exit_code}` : words);
     chip.className = VERDICT_CLASS[st.state] || "v-bad";
     chip.title = v && v.reasons.length ? core.causeSummary(v.reasons) : "The run's verdict. Click to open the details.";
   }

@@ -104,8 +104,10 @@ def test_the_dashboard_prints_the_same_text_the_hub_badges_the_state_with(hub):
 def test_the_page_paints_every_legend_pill_the_way_the_hub_paints_its_badge(hub):
     src = PAGE_SRC()
     for r in hub.RUN_STATES:
-        rule = re.search(rf"\.b\.{re.escape(r['state'].replace(' ', '-'))}\s*\{{[^}}]*color:var\(--{r['color']}\)", src)
+        rule = re.search(rf"\.b\.{re.escape(r['state'].replace(' ', '-'))}\s*\{{([^}}]*)\}}", src)
         assert rule, r["state"]
+        body = rule.group(1)
+        assert f"color:var(--{r['color']})" in body, r["state"]
         for prop in (p for p in r["css"].split(";") if p):
-            assert prop in rule.group(0), (r["state"], prop)
+            assert prop in body, (r["state"], prop)
     assert "core.STATE_TEXT[st.state]" in src   # the run header chip takes its words from the one table
