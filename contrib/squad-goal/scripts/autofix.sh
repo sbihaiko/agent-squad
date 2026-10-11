@@ -23,7 +23,7 @@ b=$(mktemp); probs=""
   echo "Out of scope for a fix run: any finding that needs a push to, or a change in, the agent-squad fork (a gui/<n> branch to land on local/next, fork-side validator or runner code). The run has no write access to the fork; forkclose.sh lands those after the merge. Do not end the run needs-human for them: list each in your PR comment as 'fork-only, pending the close step' and fix everything else."
   line=$(grep "^#$pr $s9 " "$SG_STATE/revci-$pr.out" 2>/dev/null | tail -1)
   if [[ $line == *CHANGES* ]]; then probs+=" review"
-    echo; echo "[review] The latest automated review says VERDICT: CHANGES. Address every numbered finding (fix it, or explain in the PR comment why it is wrong, with file:line evidence):"
+    echo; echo "[review] The latest automated review says VERDICT: CHANGES. Address every finding — each bullet of the review (fix it, or say in the reply why it is wrong, with file:line evidence):"
     sed -n '/VERDICT/,$p' "$SG_STATE/review-$pr.md" | tail -n +2; fi
   bad=$(gh api "repos/$SG_REPO/commits/$sha/check-runs?per_page=100" -q '.check_runs[]|select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled")|"- \(.name): \(.details_url)"' 2>/dev/null)
   if [ -n "$bad" ]; then probs+=" ci"
@@ -42,7 +42,11 @@ b=$(mktemp); probs=""
   # a fork-only issue (forkonly.sh) is never told about prepush.sh (#1411)
   fko=0; [ -f "$(dirname "$0")/forkonly.sh" ] && { . "$(dirname "$0")/forkonly.sh"; sg_fork_only "$iss" && fko=1; }
   [ $fko = 1 ] || echo "Before every push, run: bash $(cd "$(dirname "$0")" && pwd)/prepush.sh --local   (from the worktree; it lists closing keywords, unpushed commits and files the PR body cites but the head lacks: fix each, it must print nothing)."
-  echo "Then run the checks the repo's CLAUDE.md/AGENTS.md require for the touched files, and post ONE PR comment listing each problem above and how it was addressed (with the check output tail), ending with \"Refs #$iss\". en-US. Commit and push promptly."; } > "$b"
+  echo "Then run the checks the repo's CLAUDE.md/AGENTS.md require for the touched files, and post ONE PR comment answering them, in the checklist shape of the review — nothing else:
+Line 1 names the thread it answers: the review of $s9, the CI check, or the review thread (its path:line).
+Then a '## Blocking' section and/or a '## Debt' section, whichever has problems above, Blocking first, one bullet per finding, at most two lines:
+- <file>:<line> — fixed|not fixed — <one-line reason> — <the check that proves it: the command and its result, or 'no check: <why>'>.
+No preamble, no restating of the finding, no closing summary. The comment ends with a line \"Refs #$iss\". en-US. Commit and push promptly."; } > "$b"
 [ -z "${probs// /}" ] && { rm -f "$b"; exit 0; }
 [ -n "${AF_DRY:-}" ] && { echo "problems:$probs"; cat "$b"; rm -f "$b"; exit 0; }   # AF_DRY=1: print the request, launch nothing
 touch "$A/fix-$pr-$s9"; [ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap

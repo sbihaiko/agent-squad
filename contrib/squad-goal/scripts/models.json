@@ -29,6 +29,8 @@
   ],
   "review_timeout_seconds": 360,
   "review_delta_max_lines": 3000,
+  "_review_max_lines": "Line cap of a saved review (#1777): the checklist shape of revformat.py, verdict line, headings and bullets together. review.sh puts it in the prompt and rejects an answer over it as a MODEL_FORMAT failure; retune it here, never in the prompt.",
+  "review_max_lines": 60,
   "hours": {
     "coding_models": {
       "claude-sonnet-5-5": "19-07"

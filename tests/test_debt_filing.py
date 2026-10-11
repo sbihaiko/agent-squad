@@ -4,7 +4,16 @@ import subprocess
 
 from squad.debt_filing import file_debt
 
-REVIEW = """Review of PR #77
+REVIEW = """VERDICT: CHANGES
+## Blocking
+- src/a.py:10 — null deref on empty input — an empty list raises TypeError — return [] when the input is empty
+## Debt
+- src/b.py:42 — retry loop has no backoff — it hammers the API after a 500 — retries wait with exponential backoff, covered by a test
+- src/c.py:7
+  — dead flag `legacy` — the flag has no reader — the flag and its branches are gone
+"""
+
+LEGACY = """Review of PR #77
 - BLOCKING src/a.py:10 — null deref on empty input. Acceptance: empty input returns [].
 - DEBT src/b.py:42 — retry loop has no backoff. Acceptance: retries wait with exponential backoff, covered by a test.
 - DEBT src/c.py:7 — dead flag `legacy`. Acceptance: the flag and its branches are gone.
@@ -40,6 +49,22 @@ def test_files_one_issue_per_debt_finding_and_none_for_blocking():
     filed = file_debt("o/r", 77, 70, REVIEW, "abc123", runner=gh)
     assert len(filed) == 2 and len(gh.issues) == 2
     assert not any("null deref" in i["body"] for i in gh.issues)
+
+
+def test_a_bullet_written_over_two_lines_is_one_finding():
+    """#1777: a bullet is at most two lines, and the second one belongs to the finding above it."""
+    gh = StubGh()
+    file_debt("o/r", 77, 70, REVIEW, "abc123", runner=gh)
+    bare = [i for i in gh.issues if "src/c.py:7" in i["body"]]
+    assert len(bare) == 1
+    assert "dead flag `legacy`" in bare[0]["body"] and "the flag has no reader" in bare[0]["body"]
+
+
+def test_a_review_saved_before_the_checklist_shape_still_files():
+    """A review written by the older prompt (an inline DEBT tag, no sections) is still readable."""
+    gh = StubGh()
+    filed = file_debt("o/r", 77, 70, LEGACY, "abc123", runner=gh)
+    assert len(filed) == 2 and not any("null deref" in i["body"] for i in gh.issues)
 
 
 def test_body_carries_pr_location_defect_and_acceptance_and_labels():
