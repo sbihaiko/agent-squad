@@ -124,7 +124,7 @@ def test_plan_per_case_gives_one_issue_per_case_in_script_order():
                           purpose="the pad-only Play script")
     assert [i["cases"] for i in plan["issues"]] == [["HOME-01"], ["HOME-02"], ["LIB-01"]]
     assert plan["name"] == "tiny"
-    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
+    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01", "Test-Scenario"]
     assert plan["parent"]["title"] == "Test scenario: tiny"
     assert "docs/play.gui-test.json" in plan["parent"]["body"]
     assert plan["variants"] == {"window.mode": ["windowed", "fullscreen"]}
@@ -152,8 +152,8 @@ def test_a_case_blocked_by_a_setup_step_sits_one_wave_later_and_names_it():
 
 def test_a_case_never_carries_ready_for_agent_and_the_parent_always_does():
     plan = tts.build_plan(covered_script(), markdown=MARKDOWN)
-    assert all("testcase" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
-    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
+    assert all("Test-Case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01", "Test-Scenario"]
 
 
 def test_a_sub_issue_body_carries_the_case_id_steps_expected_variant_and_mode():
@@ -197,7 +197,7 @@ def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
     gh = FakeGitHub()
     tts.publish(plan, gh)
     ensured = [kw["name"] for kw in gh.of("ensure_label")]
-    assert "testcase" in ensured and "ready-for-agent" in ensured and "wave:01" in ensured
+    assert "Test-Case" in ensured and "ready-for-agent" in ensured and "wave:01" in ensured
     assert gh.ops().index("ensure_label") < gh.ops().index("create_issue")
 
 
@@ -371,10 +371,10 @@ class _Shell:
 def test_the_rest_runner_posts_issues_and_links_a_sub_issue_by_its_numeric_id():
     sh = _Shell()
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
-    gh("create_issue", title="Test case HOME-01", body="body", labels=["testcase", "wave:01"])
+    gh("create_issue", title="Test case HOME-01", body="body", labels=["Test-Case", "wave:01"])
     gh("add_sub_issue", parent=7, sub=99)
     assert "repos/sbihaiko/MesenAI/issues" in sh.args[0]
-    assert "=Test case HOME-01" in " ".join(sh.args[0]) and "labels[]=testcase" in sh.args[0]
+    assert "=Test case HOME-01" in " ".join(sh.args[0]) and "labels[]=Test-Case" in sh.args[0]
     link = " ".join(sh.args[1])
     assert "repos/sbihaiko/MesenAI/issues/7/sub_issues" in link and "sub_issue_id=99" in link
 
@@ -663,13 +663,13 @@ class _ReadShell:
 def test_1226_the_rest_runner_reads_an_issue_s_state_and_the_verdict_of_its_last_comment():
     sh = _ReadShell(comments=["a person said hello", "**passed**\n\n- `HOME-01`: passed"])
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
-    assert gh("issue_state", number=3) == {"state": "open", "verdict": "passed", "title": None}
+    assert gh("issue_state", number=3) == {"state": "open", "verdict": "passed", "title": None, "labels": []}
     assert sh.args[0][:2] == ["gh", "api"] and "repos/sbihaiko/MesenAI/issues/3" in sh.args[0]
 
 
 def test_1226_the_rest_runner_reads_an_issue_that_never_carried_a_verdict():
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=_ReadShell(state="closed", comments=["hello"]))
-    assert gh("issue_state", number=3) == {"state": "closed", "verdict": None, "title": None}
+    assert gh("issue_state", number=3) == {"state": "closed", "verdict": None, "title": None, "labels": []}
 
 
 def test_1226_the_rest_runner_reopens_through_rest_and_never_graphql():
