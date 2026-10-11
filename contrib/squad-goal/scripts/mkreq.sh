@@ -38,12 +38,13 @@ slice_guard() {
   id=$(grep -m1 -E '^PANEL: *[^ ]+' "$2" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true; id=${id:-${SG_PANEL:-}}
   # env.sh refuses to load without a matching profile, and a launch exports the SG_* values it would have set, so take them from
   # the environment first and ask env.sh only for what is missing.
-  local repo=${SG_REPO:-} fdir=${SG_FORK_DIR:-} fbase=${SG_FORK_BASE:-local/next} ev=""
-  if [ -z "$repo" ] || [ -z "$fdir" ]; then
-    ev=$( ( . "$(cd "$(dirname "$0")" && pwd)/env.sh" >/dev/null 2>&1; printf '%s\n%s\n%s\n' "${SG_REPO:-}" "${SG_FORK_DIR:-}" "${SG_FORK_BASE:-}" ) 2>/dev/null ) || true
+  local repo=${SG_REPO:-} fdir=${SG_FORK_DIR:-} fbase=${SG_FORK_BASE:-local/next} co=${SG_CHECKOUT:-} ev=""
+  if [ -z "$repo" ] || [ -z "$fdir" ] || [ -z "$co" ]; then
+    ev=$( ( . "$(cd "$(dirname "$0")" && pwd)/env.sh" >/dev/null 2>&1; printf '%s\n%s\n%s\n%s\n' "${SG_REPO:-}" "${SG_FORK_DIR:-}" "${SG_FORK_BASE:-}" "${SG_CHECKOUT:-}" ) 2>/dev/null ) || true
     [ -n "$repo" ] || repo=$(printf '%s\n' "$ev" | sed -n 1p)
     [ -n "$fdir" ] || fdir=$(printf '%s\n' "$ev" | sed -n 2p)
     [ -n "${SG_FORK_BASE:-}" ] || fbase=$(printf '%s\n' "$ev" | sed -n 3p); fbase=${fbase:-local/next}
+    [ -n "$co" ] || co=$(printf '%s\n' "$ev" | sed -n 4p)
   fi
   # "file <TAB> holder", one line per file in flight; the first holder found for a file is the one reported.
   taken=""
@@ -53,10 +54,41 @@ slice_guard() {
         taken="$taken$f	PR #$p
 "; done; done
   fi
-  local q
+  # (#1529) A request counts as in flight only while its work is. Nothing ever deletes ~/.cache/squad-goal/req/*.txt, so
+  # reading every one of them as in flight made the set only grow: a request whose run ended days ago still refused every
+  # later slice naming one of its files (auto-fix-1203-3fbfa13ca, PR #1203 closed 2026-10-10), citing a run long over. The
+  # run folder is the evidence: launch.py copies the request into runs/<run>/request.txt, so content links the request to
+  # the run it went into, and a record.jsonl holding a verdict says that run is over -- the same test autobug.sh's live-run
+  # scan and heartbeat.sh use. A request no run carries is in flight only inside the launch window (SG_SLICE_REQ_TTL
+  # seconds, 30 min), which is all that mkreq.sh -> launch.py ever takes: an abandoned request must not hold a file forever.
+  local now ttl d deadl="" livel="" deadh=" " liveh=" " hit h q qp
+  now=$(date +%s); ttl=${SG_SLICE_REQ_TTL:-1800}
+  for d in $(cat "${SG_STATE:-$HOME/.cache/squad-goal}/active-runs.txt" 2>/dev/null || true); do
+    case "$d" in /*) ;; *) d="${co:+$co/}runs/$d";; esac
+    [ -f "$d/request.txt" ] && [ -f "$d/record.jsonl" ] || continue
+    if /usr/bin/grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null; then deadl="$deadl$d/request.txt
+"; else livel="$livel$d/request.txt
+"; fi
+  done
+  [ -n "$deadl" ] && deadh=" $(shasum -a 256 $deadl 2>/dev/null | /usr/bin/awk '{printf "%s ", $1}')"
+  [ -n "$livel" ] && liveh=" $(shasum -a 256 $livel 2>/dev/null | /usr/bin/awk '{printf "%s ", $1}')"
+  req_holds() {  # $1 = another request file: may it still hold the files it names?
+    local h
+    h=$(shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1)
+    case "$liveh" in *" $h "*) return 0;; esac          # a run without a verdict carries it: still in flight
+    case "$deadh" in *" $h "*) return 1;; esac          # its run recorded a verdict: history, however young the file is
+    [ $(( now - $(/usr/bin/stat -f %m "$1" 2>/dev/null || echo 0) )) -lt "$ttl" ]   # no run carries it: the launch window
+  }
   for q in "$HOME/.cache/squad-goal/req"/*.txt; do
-    [ -e "$q" ] || continue; [ "$q" = "$out" ] && continue; rid=$(basename "$q" .txt)
-    for f in $(slice_paths "$q"); do taken="$taken$f	request $rid
+    [ -e "$q" ] || continue; [ "$q" = "$out" ] && continue
+    # Only a request naming a path this body also names can refuse it, and there are usually none: the liveness test below
+    # is paid per candidate. A loose match is safe here -- the `taken` lookup that decides is exact.
+    qp=$(slice_paths "$q"); hit=
+    for f in $paths; do case "$qp" in *"$f"*) hit=1;; esac; done
+    [ -n "$hit" ] || continue
+    req_holds "$q" || continue
+    rid=$(basename "$q" .txt)
+    for f in $qp; do taken="$taken$f	request $rid
 "; done
   done
   # A fork-only child commits on gui/<N> off the fork base and opens no PR, so its slice is only visible in the fork checkout.
