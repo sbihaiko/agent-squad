@@ -3072,7 +3072,7 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
 
 # --- to_test_scenario close-out (#1227): the pilot publishes through the command, within GitHub's sub-issue cap ----
 
-def test_1227_the_pilot_publishes_per_batch_and_per_case_is_refused_over_the_sub_issue_cap(tmp_path):
+def test_1227_the_pilot_publishes_per_batch_and_per_case_as_a_tree_within_the_sub_issue_cap(tmp_path):
     import shutil
 
     from squad import to_test_scenario as tts
@@ -3097,10 +3097,16 @@ def test_1227_the_pilot_publishes_per_batch_and_per_case_is_refused_over_the_sub
 
     per_case = Fake()
     if cases > tts.SUB_ISSUE_CAP:
-        assert tts.main(["publish", str(md), str(script), "--stamp"], github=per_case) == 1 and per_case.creates == 0
+        # The area tree (ADR-0275) holds the cap per node, so a pilot over 100 cases publishes per case instead of being refused.
+        assert tts.main(["publish", str(md), str(script), "--stamp"], github=per_case) == 0
+        plan = tts.build_plan(tts.read_scenario(md), tts.read_script(script))
+        assert per_case.creates == len(plan["issues"]) + len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"]) + 1
+        tts.issues_path(script).unlink()
     per_batch = Fake()
     assert tts.main(["publish", str(md), str(script), "--granularity", "batch"], github=per_batch) == 0
-    assert per_batch.creates == len(tts.read_script(script)["batches"]) + 1
+    plan = tts.build_plan(tts.read_scenario(md), tts.read_script(script), granularity="batch")
+    assert per_batch.creates == len(plan["issues"]) + len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"]) + 1
+    assert len(plan["issues"]) == len(tts.read_script(script)["batches"])
     assert tts.read_issues(tts.issues_path(script))["parent"] is not None
 # --- #1286: every case of the committed pad-only pilot, run on the squad's GUI test infrastructure ---
 
