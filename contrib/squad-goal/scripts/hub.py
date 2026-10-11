@@ -58,12 +58,12 @@ def priced(d):
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v8" in hist[p]: return hist[p]
+    if p in hist and "v9" in hist[p]: return hist[p]
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
-    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False
+    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None
     with open(p) as f:
         for i, l in enumerate(f):
             if i < 200: issues.update(re.findall(r"(?:issue|Refs) #(\d{3,5})", l))
@@ -89,12 +89,17 @@ def scan(p):
                 x = mod.setdefault(d.get("model") or "unknown", {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
                 x["in"] += d.get("tokens_in") or 0; x["out"] += d.get("tokens_out") or 0; x["cache"] += d.get("cache_read") or 0
                 x["spend"] += d.get("spend") or 0; x["calls"] += 1
+                h = ((d.get("workspace") or {}).get("head") if isinstance(d.get("workspace"), dict) else None) or ((d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None)
+                if h: head = h
             elif e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
-            elif e == "land" and d.get("outcome") == "pass": land = True
-            elif e == "verdict": ver, reasons, t1 = d.get("verdict"), d.get("reasons") or [], ts
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge}
+            elif e == "land":
+                if d.get("outcome") == "pass": land = True
+                h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
+                if h: head = h
+            elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -141,6 +146,26 @@ def demoted(st, r, closed):
     """A failed / unverified / needs-human run whose every issue was closed afterwards (verified by hand, evidence on the issue) is no longer open business."""
     if st in ("failed", "unverified", "needs-human") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
     return st
+def handled_of(st, r, checkout=None):
+    """A needs-human run whose head is an ancestor of the fork's local/next (or whose PR is merged) is handled."""
+    if st != "needs-human": return st
+    if r.get("merged"): return "handled"
+    head = r.get("head")
+    if not head: return st
+    root = pathlib.Path(checkout) if checkout else pathlib.Path(PROF.get("SG_CHECKOUT") or os.getcwd())
+    p = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", str(head), "local/next"], capture_output=True)
+    return "handled" if p.returncode == 0 else st
+def badge_of(st, r=None):
+    """Hub run-list badge: a needs-human run never prints `exit N`; that lives on the tooltip."""
+    r = r or {}
+    color = next((x["color"] for x in RUN_STATES if x["state"] == st), "warn")
+    if st == "handled": text = "ended · handled (landed in fork)"
+    elif st == "needs-human": text = "ended · needs a decision"
+    else: text = st
+    rc = r.get("exit_code")
+    if rc is None and st in ("needs-human", "handled"): rc = 10
+    title = f"exit {rc}" if rc is not None and st in ("needs-human", "handled") else ""
+    return {"text": text, "color": color, "title": title, "state": st}
 LIVE_STATES = ("running", "starting", "stalled")
 def group_of(r):
     """RUNNING holds a live process (running/starting/stalled). An ended run, needs-human included, goes to an age bucket."""
@@ -162,19 +187,25 @@ def runs():
         if not pathlib.Path(d).exists(): continue
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
         r = scan(p)
-        if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True}); continue
+        if r is None:
+            b = badge_of("starting")
+            out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "badge": b["text"], "tip": b["title"], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
         st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
+        merged = {p["n"] for p in board_cache.get("prev", []) if p.get("m")}
+        st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
+        b = badge_of(st, r)
         rank = run_rank(st, live=True)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True})
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
         except Exception: continue
         age = time.time() - f.stat().st_mtime
         if d.get("state") != "running" and age > 4 * 3600: continue
-        st = d.get("state") or "running"; t1 = d.get("t1") or time.time()
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES})
+        rec = {"head": d.get("head"), "merged": d.get("merged"), "exit_code": d.get("rc")}
+        st = handled_of(d.get("state") or "running", rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": b["title"], "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES})
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
@@ -366,6 +397,7 @@ RUN_STATES = [
     {"state": "unverified", "label": "Work landed, the final gate had no command", "color": "ok", "css": "border-style:dashed"},
     {"state": "failed", "label": "Run failed", "color": "err", "css": ""},
     {"state": "needs-human", "label": "Run needs a person", "color": "warn", "css": ""},
+    {"state": "handled", "label": "Needs-human run, landed in the fork", "color": "ok", "css": ""},
     {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
     {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
     {"state": "stalled", "label": "Run stalled", "color": "warn", "css": "border-style:dashed"},
@@ -537,7 +569,7 @@ function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   const filled=GROUPS.filter(g=>by[g[0]]);
   if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(name(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>`<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr>${by[k].length} · ${usd(by[k].reduce((a,r)=>a+r.spend,0))}</span></div>${openGroup===k?by[k].map(row).join(""):""}`).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;

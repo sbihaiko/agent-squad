@@ -12,7 +12,6 @@ function setSide(open, auto) {
 function sideOpen() { return !document.body.classList.contains("noside"); }
 function openSide() { if (!sideOpen()) setSide(true, true); }
 setSide(!!UI.side, true);
-setLegend(!!UI.legend, false);   // chrome.js builds UI, so the stored choice is read here, after menu.js defined setLegend
 $("b-panel").addEventListener("click", () => setSide(!sideOpen()));
 // The panel is a popup: a click on the dimmed page behind it, or Escape, closes it.
 document.addEventListener("click", (e) => { if (e.target === document.body && sideOpen()) setSide(false); });
