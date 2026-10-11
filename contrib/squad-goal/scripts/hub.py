@@ -1307,7 +1307,8 @@ body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-emp
 body.dockb #bbody>.col.empty>.sc{display:none}   /* the strip holds no card, no scroll area and no body-sized gap reserved for one (#1809) */
 body.dockb #bbody>.col.empty>.ch{flex:1 1 auto;flex-direction:column;flex-wrap:nowrap;align-items:center;gap:6px;padding:8px 0}   /* the header fills the strip, and the name and the count take a row each: `Todo0` cannot be read any more (#1809) */
 body.dockb #bbody>.col.empty>.ch>span:first-child{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;flex:0 0 auto}   /* the collapsed-column reading, bottom to top; a long name makes a taller strip, never a wider one (#1809) */
-body.dockb #bbody>.col.empty>.ch>span:last-child{display:inline-flex;align-items:center;white-space:nowrap;flex:0 0 auto}
+body.dockb #bbody>.col.empty>.ch>span:last-child{display:flex;flex-direction:column;align-items:center;gap:4px;white-space:nowrap;flex:0 0 auto}   /* the badge and the eye are 32px side by side in a 28px strip, so they stack: the eye is a control and must not leave the strip (#1809) */
+body.dockb #bbody>.col.empty>.ch i{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 0 4px}   /* the dot carries the column's colour inline, but only `#bbody .ah i` sizes it: the strip gives it the accordion's size, so the colour still names the column (#1809) */
 body.dockb #bbody>.col.empty>.ch .n{padding:0 5px}   /* the count badge stays legible in the strip it now lives in (#1809) */
 body.dockb #bbody>.col.empty>.ch .eye{margin-left:0;flex:none}   /* the eye is a control: it keeps its place inside the strip instead of being clipped away (#1809) */
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}

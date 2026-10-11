@@ -77,6 +77,23 @@ def test_the_count_badge_is_never_flush_against_the_name(hub):
     assert "justify-content:flex-start" not in ch, "the rule that glued `Todo` and `0` into `Todo0` is gone"
 
 
+def test_the_count_and_the_eye_fit_inside_the_strip(hub):
+    """Measured in the running hub: the 18px badge and the 14px eye side by side are 32px, four more than the strip
+    holds, so the eye spilled into the column beside it. Stacked, both stay inside it."""
+    last = _css(hub, STRIP + ">.ch>span:last-child")
+    assert _prop(last, "flex-direction") == "column", "the count and the eye take a row each, inside the strip"
+    assert _prop(last, "flex") == "0 0 auto", "the pair keeps its own size instead of stretching the strip"
+
+
+def test_the_colour_dot_carries_the_category_colour_in_the_strip(hub):
+    """Measured in the running hub: only `#bbody .ah i` sizes the dot, so in the docked header it keeps its
+    background colour and paints nothing -- a 0px box. Inside the strip it gets the size the accordion gives it."""
+    dot = _css(hub, STRIP + ">.ch i")
+    assert _prop(dot, "width") == "8px" and _prop(dot, "height") == "8px", f"the dot the accordion header paints: {dot!r}"
+    assert _prop(dot, "border-radius") == "50%"
+    assert _prop(dot, "display") == "inline-block"
+
+
 def test_the_strip_holds_no_card_body_and_reserves_no_height_for_one(hub):
     assert _prop(_css(hub, STRIP + ">.sc"), "display") == "none"   # no cards, no scroll area, no reserved height
     ch = _css(hub, STRIP + ">.ch")
