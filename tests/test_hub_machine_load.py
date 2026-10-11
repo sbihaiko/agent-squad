@@ -584,7 +584,8 @@ def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
 def test_the_footer_paints_the_facts_beside_the_load_cells_and_the_amber_value(hub):
     assert "id=ldfacts" in hub.PAGE
     assert "footFit(d.facts,footCols())" in hub.PAGE                          # the drop is decided where the width is known
-    assert 'l.textContent=d.line||"CPU ? · RAM ? · GPU ?"' in hub.PAGE         # the load cells are painted exactly as before
+    assert "if(l)ldPaint(l,d);" in hub.PAGE                                   # the cells are painted here since #1816, cell by cell
+    assert "<b id=ldline>CPU ? · RAM ? · GPU ?</b>" in hub.PAGE                # and read as before until the first tick lands
     assert ".bad{color:var(--warn)" in hub.PAGE                               # the one value that turns amber does
     assert "nowrap" in _css(hub, "#ldfacts")                                  # the row drops facts, it never wraps
 
@@ -609,3 +610,108 @@ def test_the_line_drops_trailing_facts_on_a_narrow_window_and_never_truncates_on
     assert _foot_text(hub, items, len(four)) == four                           # 5 -> 4: the quota pair drops first
     assert _foot_text(hub, items, len(four) - 1) == " · ".join(texts[:3])      # 4 -> 3, still whole items
     assert _foot_text(hub, items, 0) == ""                                     # nothing fits: no number is cut into another
+
+
+# ---------------------------------------------------------------- the ceiling, per attribute (#1816)
+# The strip answered "is this machine saturated?" as a whole line, in amber, and only after the load outlived one sample.
+# These pin the other statement it makes: a single reading at the machine's ceiling RIGHT NOW is red, on that attribute's
+# own cell and nowhere else — above the amber, never instead of it, and never for a source that could not be read.
+
+def _ld_block(hub):
+    """The strip's cell code exactly as the page carries it: the constant and every `ld*` function, before substitution."""
+    const = re.search(r"^const LOAD_ERR=.*$", hub.PAGE, re.M)
+    assert const, "the page carries no LOAD_ERR constant"
+    fns = re.findall(r"^function ld[A-Z]\w*\(.*$", hub.PAGE, re.M)
+    assert len(fns) == 5, fns                      # ldNum, ldRound, ldCell, ldCells, ldPaint
+    return const.group(0) + "\n" + "\n".join(fns)
+
+
+def _ld_script(hub):
+    """The same code with the substitution the server makes when it serves the page."""
+    return _ld_block(hub).replace("__LOADERR__", str(hub.LOAD_ERR_PCT))
+
+
+# Enough of a DOM for ldPaint to build a line in, and a printer that shows the tags, so the test reads the elements the
+# browser would get — not a re-derivation of them.
+DOM = """const el=t=>({t:t,kids:[],appendChild(n){this.kids.push(n)},
+ set textContent(v){this.kids=v===""?[]:[{textContent:v}]},get textContent(){return this.kids.map(k=>k.textContent).join("")}});
+globalThis.document={createElement:t=>el(t),createTextNode:s=>({textContent:s})};
+const show=n=>n.kids?`<${n.t}${n.className?` class="${n.className}"`:""}>${n.kids.map(show).join("")}</${n.t}>`:n.textContent;
+"""
+
+
+def _ld_paint(hub, d):
+    """The strip's line as the page really paints it: three cells, their own classes, and the separators between them."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    script = f"{_ld_script(hub)}\n{DOM}const l=el('b');ldPaint(l,{json.dumps(d)});console.log(l.kids.map(show).join(''))"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return out.stdout.rstrip("\n")
+
+
+def _ld_text(hub, d):
+    """The same line without its markup: what the reader sees."""
+    return re.sub(r"<[^>]+>", "", _ld_paint(hub, d))
+
+
+def test_the_strip_still_reads_exactly_as_the_server_builds_it(hub):
+    # the client now formats the cells itself; the one thing it may not change is the text
+    for d in ({"cpu": 96, "ram": 63, "gpu": 42}, {"cpu": 62.4, "ram": 71.2, "gpu": 27.0},
+              {"cpu": None, "ram": None, "gpu": None}, {"cpu": 94.9, "ram": 95.0, "gpu": 100.0},
+              {"cpu": 2.5, "ram": 62.5, "gpu": 63.5}, {"cpu": 99.6, "ram": 104.0, "gpu": None},
+              {"cpu": 0, "ram": 100, "gpu": 7}):
+        assert _ld_text(hub, d) == hub.load_line(d["cpu"], d["ram"], d["gpu"]), d
+
+
+def test_the_cells_keep_their_order_and_their_own_separators(hub):
+    out = _ld_paint(hub, {"cpu": 7, "ram": 63, "gpu": 42})
+    assert out == '<b>CPU 7%</b> · <b>RAM 63%</b> · <b>GPU 42%</b>', out
+    assert _css(hub, "#foot").count("font-variant-numeric:tabular-nums") == 1   # the digits stay one width: nothing shifts
+
+
+def test_one_attribute_at_the_ceiling_paints_its_own_cell_and_not_the_line(hub):
+    for hot in ("cpu", "ram", "gpu"):
+        d = {"cpu": 20, "ram": 21, "gpu": 22, hot: 96}
+        out = _ld_paint(hub, d)
+        assert out.count('class="ldred"') == 1, out
+        assert f'<b class="ldred">{hot.upper()} 96%</b>' in out, out
+        assert [c.upper() for c in ("cpu", "ram", "gpu") if f'<b class="ldred">{c.upper()}' in out] == [hot.upper()]
+
+
+def test_the_ceiling_is_inclusive_so_949_is_not_red_and_950_is(hub):
+    assert _ld_paint(hub, {"cpu": 94.9, "ram": 94.9, "gpu": 94.9}).count('class="ldred"') == 0
+    assert _ld_paint(hub, {"cpu": 94.999, "ram": 0, "gpu": 0}).count('class="ldred"') == 0
+    assert _ld_paint(hub, {"cpu": 95.0, "ram": 95.0, "gpu": 95.0}).count('class="ldred"') == 3
+    assert '<b class="ldred">GPU 95%</b>' in _ld_paint(hub, {"cpu": 1, "ram": 2, "gpu": 95.0})
+
+
+def test_a_source_the_hub_cannot_read_is_a_question_mark_and_never_red(hub):
+    out = _ld_paint(hub, {"cpu": None, "ram": 96, "gpu": None})
+    assert "CPU ?" in out and "GPU ?" in out and _ld_text(hub, {"cpu": None, "ram": 96, "gpu": None}) == "CPU ? · RAM 96% · GPU ?"
+    assert out.count('class="ldred"') == 1 and '<b class="ldred">RAM 96%</b>' in out
+
+
+def test_red_wins_over_the_amber_of_a_sustained_warning(hub):
+    amber, red = _css(hub, "#foot.warn b"), _css(hub, "#foot.warn b.ldred")
+    assert "var(--warn)" in amber and "var(--err)" in red      # the whole line stays amber...
+    assert "var(--err)" in _css(hub, "#foot b.ldred")          # ...and the cell at the ceiling is red with or without it
+    out = _ld_paint(hub, {"cpu": 96, "ram": 88, "gpu": 90})    # a warned strip, one attribute at its ceiling
+    assert '<b class="ldred">CPU 96%</b> · <b>RAM 88%</b> · <b>GPU 90%</b>' == out, out
+
+
+def test_the_ceiling_is_a_named_constant_and_never_a_literal_in_the_page(hub):
+    assert isinstance(hub.LOAD_ERR_PCT, (int, float)) and hub.LOAD_WARN_PCT < hub.LOAD_ERR_PCT <= 100
+    assert "95" not in _ld_block(hub)                                       # no bare threshold in the page's own script
+    assert "__LOADERR__" in hub.PAGE                                        # the page is served the constant
+    assert '.replace("__LOADERR__", str(LOAD_ERR_PCT))' in HUB_PY.read_text()
+
+
+def test_the_served_payload_carries_the_reading_the_cell_is_judged_on(hub):
+    # the cell's colour is decided on the number the hub serves, so that number is the reading itself, not a rounded one
+    hub.LOAD_STATE.update({"cpu": [94.6], "ram": 71.2, "gpu": None, "asof": 1.0, "runs": {}})
+    p = hub.load_payload()
+    assert p["cpu"] == 94.6
+    assert p["line"] == "CPU 95% · RAM 71% · GPU ?"                          # the text rounds, the colour does not
+    assert _ld_paint(hub, p).count('class="ldred"') == 0
+    assert _ld_paint(hub, {**p, "cpu": 95.0}).count('class="ldred"') == 1

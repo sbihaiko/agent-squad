@@ -226,6 +226,9 @@ def run_rank(st, live=True):
 LOAD_SAMPLE_SECS = 5      # one sample per interval; the page polls the cached reading on this same cadence
 LOAD_WARN_PCT = 80.0      # machine CPU % at or above which the strip warns and a card may be blamed
 LOAD_WARN_SAMPLES = 2     # consecutive samples above the threshold: one hot sample is not machine load
+LOAD_ERR_PCT = 95.0       # machine % at or above which that ONE reading is red: the machine is at its ceiling right now
+                          # (#1816). Amber is the machine-wide, sustained statement above; red is per attribute and immediate
+                          # — and it wins over the amber. The page is served this constant, never a literal of its own.
 LOAD_MIN_SHARE_PCT = 3.0  # a card is marked only for a run whose process tree owns at least this much of the machine
 LOAD_HISTORY = 12         # CPU samples kept, so the warn rule can look back (a minute at the default cadence)
 GPU_CMD = ("/usr/sbin/ioreg", "-r", "-d", "1", "-c", "IOAccelerator", "-w", "0")
@@ -623,11 +626,12 @@ def foot_refresh(now=None):
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
-    `facts` the footer's own facts as the sampler last read them."""
+    `facts` the footer's own facts as the sampler last read them. The three numbers are the readings themselves, unrounded
+    (#1816): the page builds the cells from them, so the text rounds for display while the ceiling rule judges the reading."""
     hist = LOAD_STATE.get("cpu") or []
     cpu = hist[-1] if hist else None
     return {"line": load_line(cpu, LOAD_STATE.get("ram"), LOAD_STATE.get("gpu")),
-            "cpu": None if cpu is None else round(cpu),
+            "cpu": cpu,
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
             "facts": list(LOAD_STATE.get("facts") or []),
@@ -1315,7 +1319,7 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .chip[data-col="Closed PRs"] b{color:var(--pin)}
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 #foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
-#foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}
+#foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}#foot.warn b.ldred{color:var(--err)}#foot b.ldred{color:var(--err)}
 #ldfacts{margin-left:14px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
 </style>
@@ -1363,6 +1367,17 @@ const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2�
 const CAPS=__CAPS__;
 const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
 function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
+// The strip's cells (#1816). One line of text could not carry a per-attribute colour, so the page builds the three cells
+// from the numbers `/api/load` already serves and paints each on its own. These mirror the server's `pct_cell` — the same
+// order, the same ` · `, the same rounding — so the reading still reads exactly as it read; only a cell at the machine's
+// ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
+// a missing reading is not a high one. Red sits above the older, machine-wide amber of `#foot.warn`, and never replaces it.
+const LOAD_ERR=Number("__LOADERR__");
+function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")return null;const f=Number(v);return(f!==f||f<0)?null:Math.min(f,100)}
+function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
+function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}
+function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{const c=ldCell((d||{})[p[1]]);return{k:p[0],t:c.t,red:c.red}})}
+function ldPaint(l,d){l.textContent="";ldCells(d).forEach((c,i)=>{if(i)l.appendChild(document.createTextNode(" · "));const b=document.createElement("b");if(c.red)b.className="ldred";b.textContent=c.k+" "+c.t;l.appendChild(b)})}
 // The facts after the cells, served by the same tick. On a window too narrow for the whole row the trailing facts drop
 // (5 -> 4 -> 3) exactly as they are — the line never wraps and no number is cut into a different one. The budget is in
 // characters of the font the cells beside them are drawn in, measured off the cells themselves.
@@ -1371,7 +1386,7 @@ function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" �
 function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
  const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
  return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
-function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)l.textContent=d.line||"CPU ? · RAM ? · GPU ?";
+function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
  if(f)f.innerHTML=footFit(d.facts,footCols()).map(i=>i.bad?`<span class=bad>${esc(i.text)}</span>`:esc(i.text)).join(" · ")}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
@@ -2113,7 +2128,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
-        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).encode(), "text/html; charset=utf-8"
+        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
