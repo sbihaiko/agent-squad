@@ -18,10 +18,26 @@ echo old > "$FK/contrib/squad-goal/scripts/hub.py"; echo old > "$FK/dashboard/pa
 (cd "$FK" && /usr/bin/git checkout -q -b gui/1497 && echo x >> contrib/squad-goal/scripts/hub.py && /usr/bin/git -c user.email=a@b -c user.name=n commit -qam hub && /usr/bin/git checkout -q local/next)
 (cd "$FK" && /usr/bin/git checkout -q -b gui/1498 && echo x >> dashboard/page.py && /usr/bin/git -c user.email=a@b -c user.name=n commit -qam page && /usr/bin/git checkout -q local/next)
 (cd "$FK" && /usr/bin/git checkout -q -b gui/1400 && echo m > scripts/merged.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m merged && /usr/bin/git checkout -q local/next && /usr/bin/git merge -q --ff-only gui/1400)
+# (#1794) gui/1510-mine's issue #1510 is CLOSED: it can never land, so it claims no slice. gui/1780's issue is open and its
+# branch still refuses. gui/1791's issue is the one GitHub cannot be asked about (gh exits 1) -- that branch stays in flight.
+(cd "$FK" && /usr/bin/git checkout -q -b gui/1510-mine && echo x > contrib/squad-goal/scripts/hub2.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m hub2 && /usr/bin/git checkout -q local/next)
+(cd "$FK" && /usr/bin/git checkout -q -b gui/1780 && echo x > scripts/open1780.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m open1780 && /usr/bin/git checkout -q local/next)
+(cd "$FK" && /usr/bin/git checkout -q -b gui/1791 && echo x > scripts/unreachable1791.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m unreachable1791 && /usr/bin/git checkout -q local/next)
 printf 'export SG_REPO=o/r SG_FORK_DIR=%s SG_FORK_BASE=local/next\n' "$FK" > "$S/env.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
-case "$*" in *"/files"*) echo scripts/shared.py;; *pulls\?state=open*) echo 7;; esac
+# gh issue view <N> --repo o/r --json state -q .state is the only issue question asked (#1794). #1510 is CLOSED; #1791 stands
+# for a GitHub that cannot be reached -- no output and a non-zero exit -- which must leave its branch in flight, not drop it. An
+# issue the stub says nothing about answers with an empty state, which reads as in-flight too: the safe half of the same rule.
+case "$*" in
+  *"/files"*) echo scripts/shared.py;;
+  *pulls\?state=open*) echo 7;;
+  *"issue view 1497"*) echo OPEN;;
+  *"issue view 1498"*) echo OPEN;;
+  *"issue view 1510"*) echo CLOSED;;
+  *"issue view 1780"*) echo OPEN;;
+  *"issue view 1791"*) exit 1;;
+esac
 GH
 chmod +x "$T/bin/gh"
 export HOME=$T/home PATH="$T/bin:$PATH"; R=$HOME/.cache/squad-goal/req
@@ -206,5 +222,25 @@ $G -q 'request a' "$T/forkrebase-1497-def456789.err" && ok "the rebase-vs-reques
 body p12 contrib/squad-goal/scripts/hub.py forkrebase-1497-abc123456
 run forkrebase-1497-abc123456 && [ -f "$R/forkrebase-1497-abc123456.txt" ] && ok "a rebase of the branch holding the file launches" || ko "the rebase of its own branch was refused: $(cat "$T/forkrebase-1497-abc123456.err")"
 $G -q 'refusing' "$T/forkrebase-1497-abc123456.err" && ko "the rebase of its own branch was still refused" || ok "the rebase of its own branch prints no refusal"
+# 13. (#1794) a fork branch whose issue is closed claims no slice. gui/1510-mine (#1510, closed) sat one commit ahead of
+# local/next touching contrib/squad-goal/scripts/hub2.py, so the guard refused every request naming that file while five
+# startable issues waited and the loop ran zero live runs -- and a closed issue can never land a branch. Such a branch is
+# dropped, and named on stderr, because retiring it is the operator's call and nothing else said so.
+printf 'IMPORTANT: your first and only action is X\nEdit contrib/squad-goal/scripts/hub2.py\n' > "$T/q.body"
+run q && [ -f "$R/q.txt" ] && ok "a closed issue's branch does not refuse" || ko "closed-issue branch refused: $(cat "$T/q.err")"
+$G -q 'refusing' "$T/q.err" && ko "the closed-issue body was still refused: $(cat "$T/q.err")" || ok "the closed-issue body prints no refusal"
+$G -qF -- 'slice guard: gui/1510-mine skipped, its issue #1510 is closed' "$T/q.err" && ok "the skipped branch is named on stderr" || ko "the skip line is missing: $(cat "$T/q.err")"
+# 13b. the accepted half: the same shape over an OPEN issue still refuses, naming its branch and the file, and writes nothing
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/open1780.py\n' > "$T/r.body"
+run r && ko "an open issue's branch launched" || ok "an open issue's branch still refuses"
+$G -q 'gui/1780' "$T/r.err" && $G -q 'scripts/open1780.py' "$T/r.err" && ok "the refusal names the open branch and the file" || ko "open-branch refusal text: $(cat "$T/r.err")"
+[ -f "$R/r.txt" ] && ko "the open-branch refusal left a file" || ok "the open-branch refusal wrote no file"
+$G -qF -- 'gui/1780 skipped' "$T/r.err" && ko "an open issue's branch was reported as skipped" || ok "an open issue's branch prints no skip line"
+# 13c. GitHub unreachable for a branch: today's behaviour, the branch stays in flight -- an API that cannot answer must never
+# silently drop a live slice, and it prints no skip line either
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/unreachable1791.py\n' > "$T/s.body"
+run s && ko "an unanswerable branch's file launched" || ok "a branch GitHub cannot answer for stays in flight"
+$G -q 'gui/1791' "$T/s.err" && ok "the unreachable-branch refusal still names the branch" || ko "unreachable refusal text: $(cat "$T/s.err")"
+$G -qF -- 'gui/1791 skipped' "$T/s.err" && ko "the unreachable branch was reported as skipped" || ok "the unreachable branch prints no skip line"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
