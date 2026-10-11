@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # To Test Scenario
 
-Take a **test scenario** (a Markdown script a person follows, whose cases each have an id, a precondition, steps and an expected result) and make it executable: a `gui-test/1` script, a parent issue with one sub-issue per case, and a run whose verdicts land on those sub-issues.
+Take a **test scenario** (a Markdown script a person follows, whose cases each have an id, a precondition, steps and an expected result) and make it executable: a `gui-test/1` script, a tree of issues (scenario, areas, one record per case), and a run whose verdicts land as one run issue per area (ADR-0275).
 
 Sibling of `/to-tickets`: that skill slices **work** into tracer-bullet tickets; this one slices a **scenario** into cases that are **run**, not built. Reuse its publishing mechanics (issue template, `## Blocked by`, `wave:NN`, REST sub-issues), never its slicing rules.
 
@@ -58,7 +58,7 @@ print(json.dumps(build_plan(read_scenario('<scenario>.md'), read_script('<name>.
 
 A script whose steps carry no content hash is stale in every case: the plan stops on it until `publish --stamp` records the hashes.
 
-Show: parent title, batches with case counts, the `manual` cases, the `goals` cases, the variants the run covers, and the labels. Ask whether the granularity is right (**one sub-issue per case**, the default, or **per batch** when a large scenario would flood the board), whether any case should be merged or dropped, and whether the run may start right after publishing. Iterate until approved.
+Show: parent title, the areas (see the layout in step 4) with their case counts, batches with case counts, the `manual` cases, the `goals` cases, the variants the run covers, and the labels. Ask whether the granularity is right (**one record per case**, the default, or **per batch** when a large scenario would flood the board), whether an area name reads badly and needs an `area` field, whether any case should be merged or dropped, and whether the run may start right after publishing. Iterate until approved.
 
 ### 4. Publish
 
@@ -66,14 +66,44 @@ Publish **the plan the user approved**, through the module's `publish` command, 
 
 ```bash
 python3 -m squad.to_test_scenario publish <scenario>.md <name>.gui-test.json \
-  --repo <owner/name> --board users/<owner>/projects/<n> [--granularity case|batch] [--stamp]
+  --repo <owner/name> --board users/<owner>/projects/<n> [--granularity case|batch] [--stamp] [--dry-run]
 ```
 
-- REST through `gh api`, never GraphQL: a scenario creates dozens of sub-issues and would spend the GraphQL quota. Only the parent joins the board (`--board`, Status "To triage"); a sub-issue gets no card.
+**The layout.** The scenario is a tree, four levels deep, so no parent passes GitHub's 100 sub-issues:
+
+```
+Scenario issue            purpose, Areas table, dashboard; the only issue on the board
+└─ Area issue             `testarea`; objective and a Cases table
+   ├─ 📋 Cases            container; one sub-issue per case record
+   └─ 📅 Runs YYYY-MM     container; one sub-issue per run of the area that month (UTC)
+      └─ Run issue        `testrun`; totals, changes, one emoji row per case
+```
+
+- **The area rule.** A batch goes to the area named by its optional `area` field; without one, the batch id up to its first `-` (`pause-pack-multi` → `pause`). A batch may carry an `objective`, which becomes the area's objective (the first one found wins); an area without one reads "(no objective stated)". Add `area` / `objective` to the script where a prefix reads poorly.
+- **Case records.** One issue per case, labels `testcase` and `wave:NN`, titled `<verdict emoji> <case title>` starting at ⚪. A container over 100 cases splits by batch; one batch over 100 cases is refused before anything is created, and so is an area body over 60,000 characters.
+- Links are made top-down (scenario → area → container → record); a record is never linked to the scenario. Before it creates a container, the module adopts one with the same title already under that parent, so a lost map never makes two.
+
+**The verdict emoji** are one vocabulary for case rows, record titles, area titles and run titles (container titles never carry one):
+
+| Emoji | Verdict | Results-file verdict |
+|---|---|---|
+| ✅ | passed | `passed` |
+| ❌ | failed | `failed` |
+| 🟡 | needs review | `needs review` |
+| 👤 | manual: a person must walk it | `pending` |
+| ⚪ | not run | `skipped`, `not executed` |
+
+An aggregate (run, area, scenario) takes the worst verdict among its cases: ❌ > 🟡 > 👤 > ⚪ > ✅. A scenario of mostly `manual` cases reads 👤 until it is walked.
+
+**`--dry-run`** prints the counts to create, link, move and update, asks GitHub nothing and writes nothing. Run it before the first real publish and before any migration, and show the counts to the user.
+
+**Migrating a flat scenario.** A map without `"layout": "areas"` whose parent holds the case records directly is a flat scenario (the original one-sub-issue-per-case layout). `publish` migrates it in one resumable pass: create the areas and their 📋 containers; re-parent each known record into its container (a link change only: no issue is closed or deleted and no comment moves); create the records the old cap left out; write `"layout": "areas"` last, so an interrupted migration is still flat and resumes. A case whose area changed is re-parented the same way; an area the plan no longer has is listed in `removed_areas` and left open.
+
+- REST through `gh api`, never GraphQL: a scenario creates hundreds of issues and would spend the GraphQL quota. **Only the parent joins the board** (`--board`, Status "To triage"); an area, a container, a record and a run get no card.
 - `--stamp` records each case's content hash on its step in the script file. A script that predates hashes is stale in every case and the command stops without creating anything until it is stamped; stamp only a script you reviewed, and commit the change.
-- The parent carries `ready-for-agent` and `wave:01`. Each case carries `test-case` and its `wave:NN`, and **never `ready-for-agent`**: a case is run, not built, and the autofrontier must not pick it up as work.
-- Sub-issues are linked natively with the sub-issue's numeric `id`, never its number. GitHub allows **100 sub-issues per parent**: a plan with more is refused before anything is created, so publish it per batch or split the scenario.
-- The map (`<name>.gui-test.issues.json`: the parent, and per case the issue number and content hash) is written beside the script after every issue. Publishing again **updates** what the map knows and creates nothing twice; an interrupted publish resumes from it. A case the script no longer has is listed in `removed` and left open — only a person closes a case.
+- The parent keeps `ready-for-agent` and `wave:01`. No area, container, record or run issue carries `ready-for-agent`: a case is run, not built, and the autofrontier must not pick it up as work.
+- Sub-issues are linked natively with the sub-issue's numeric `id`, never its number.
+- The map (`<name>.gui-test.issues.json`: the layout, the parent, per area its number, containers and runs, and per case its issue number, hash, area and container) is written beside the script after every issue or link. Publishing again **updates** what the map knows and creates nothing twice: the text after a title's emoji is rewritten and the emoji stays, the dashboard blocks are kept, and a record's open/closed state is never touched. A case the script no longer has is listed in `removed` and left open — only a person closes a case.
 
 Do not close or edit any issue the scenario came from.
 
@@ -86,7 +116,7 @@ python3 -m squad.to_test_scenario start-run <name>.gui-test.json [--batch <id>] 
   --repo <owner/name> --board users/<owner>/projects/<n> --bug-helper <MesenAI>/scripts/report-bug.sh
 ```
 
-It launches `scripts/gui_test_run_script.py` (the `gui-test/1` runner of the squad fork, MesenAI #1222) detached, and prints at once: the **results file** it will write, the pid, the log, and the **write-back command** to run afterwards. Show the user those three and stop. The run needs `MESENAI_ROOT` (a MesenAI checkout holding `scripts/gui_test/mesen_gui_adapter.py`), `MESEN_GUI_BINARY` (the built launcher of a build carrying the test hook) and `MESEN_CORE_LIB` (the `MesenCore` library of that build); a missing variable or a core that cannot load is a **failure, never a skip**. The runner validates the script against the adapter's capabilities before launching anything and files **at most one bug** for a red run.
+It launches `scripts/gui_test_run_script.py` (the `gui-test/1` runner of the squad fork, MesenAI #1222) detached, and prints at once: the **results file** it will write, the pid, the log, and the **write-back command** to run afterwards. Show the user those three and stop. The run needs `MESENAI_ROOT` (a MesenAI checkout holding `scripts/gui_test/mesen_gui_adapter.py`), `MESEN_GUI_BINARY` (the built launcher of a build carrying the test hook) and `MESEN_CORE_LIB` (the `MesenCore` library of that build); a missing variable or a core that cannot load is a **failure, never a skip**. The runner validates the script against the adapter's capabilities before launching anything and does not file bugs: the write-back does (step 6).
 
 **If the run command is not there**, `start-run` starts nothing and says `run command unavailable`: report that the scenario is published and stop. Never simulate a run, never hand a verdict to a case.
 
@@ -99,20 +129,28 @@ python3 -m squad.to_test_scenario write-back <results file> --map <name>.gui-tes
   --repo <owner/name> --board users/<owner>/projects/<n> --bug-helper <MesenAI>/scripts/report-bug.sh
 ```
 
-It reads the file and the map and writes:
+It takes a lock beside the map (`<map>.lock`) and fails fast if another write-back holds it. On a map in the areas layout it writes:
 
-- `passed` → comment and close the case's sub-issue.
-- `failed` → comment the verdict with expected and observed, leave the case open, and link the one bug the run opened. The write-back never files a bug itself, and never one per case.
-- `needs review` / `pending` / `manual` → comment, leave open, and list on the parent. They are doubt and human residue: visible, never red.
-- A case with no result in the run (a partial `--batch` run, a case the run did not reach) is reported as missing, not passed; an empty run writes nothing. Writing the same file back twice adds no case comment and reopens nothing.
+- **One run issue per area the run touched**, closed as completed, in that area's `📅 Runs YYYY-MM` container: the totals (`✅ n · ❌ n · 🟡 n · 👤 n · ⚪ n`), the changes against the area's newest earlier run containing the case, and one emoji row per case with its record, evidence and bug links. A run is never edited afterwards; a re-run is a new run issue. A partial `--batch` run lists only its cases, and a case the run did not reach is absent, not ⚪.
+- **The dashboards**, rewritten between their markers from the run blocks: the scenario's latest run, Runs table, Flaky list and open bugs, and each area's Trend table. Nothing outside the markers is touched.
+- **Record state**: ✅ sets the title emoji and closes the record; ❌ and 🟡 set it and reopen; 👤 and ⚪ never touch a record, so a person's manual closure survives. Records get no per-run comment.
+- **Bugs: the write-back owns bug filing, one bug per failing case.** A ❌ case files a bug only when it has none open (found through the record's `Bug: #N` line, else a search of open `bug` issues for the exact title `gui-test ❌ <script> · <case id>`); a later failing run comments on that bug. Priority follows the step's `severity` (`critical` → P0, `major` → P1, otherwise P2). The first later run in which the case passes closes the bug with a comment naming the run, and a case that fails again files a new bug that links the closed one.
+- A step whose batch has no area in the map is reported in `unknown_cases` and not written. A malformed file, an empty run and a missing core write nothing.
+
+A flat map (not yet migrated) keeps the older behaviour: a comment per case on its sub-issue, and `passed` closes it. Migrate it with `publish` first.
 
 Screenshots reach an issue only through the **privacy gate** and the evidence branch — the skill never uploads a capture itself, and no resident or personal data goes into a script, an issue or a screenshot.
 
-The parent gets one final comment with counts per verdict, the run id, the script sha, the platform and the SHA of the build under test. The run never closes the parent: **a person closes it** after reading the results.
+The run never closes the scenario: **a person closes it** after reading the results.
+
+### 7. Commit the map
+
+The map is the cache the next publish and write-back start from. **After every write-back, commit `<name>.gui-test.issues.json` beside the script** (and the script, if `--stamp` changed it). Losing the map costs re-adoption calls, never duplicate issues, but a committed map keeps those calls off the next run.
 
 ## Rules
 
 - Never wait on a run: start it, name the results file and the write-back command, and return.
+- Commit the map after a write-back.
 - A run that executed no step is not a pass, and a missing core fails rather than skips.
 - Never fabricate a result, a hash or a case id.
 - Nothing is published before the user approves the plan, and nothing is published on a coverage gap.
