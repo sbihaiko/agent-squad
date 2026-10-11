@@ -14,7 +14,7 @@ Return these fields beside `status` and `reasons`:
   - `skill`: one skill, as a string, from the allowed list. It is never a list, and a skill outside the allowed list is rejected.
   - Every other field is optional and may only narrow the limits you were given.
 
-- End every child `prompt` with the done check. Tell the child to finish with `{"status": "pass", "ac_commands": ["<shell command that proves the done condition>"]}`. Use the project's test command, from `CLAUDE.md` or the README, for example `python3 -m pytest -q`. A child that does not end with `ac_commands` leaves the final gate nothing to run, and the run fails with `no_ac_commands` even when the code is right.
+- End every child `prompt` with the done check. Tell the child to finish with `{"status": "pass", "ac_commands": ["<shell command that proves the done condition>"], "expected": "<what a pass looks like, in words>"}`. Each `ac_commands` entry is one runnable shell command with no prose: no trailing parenthetical, no "(exit 0)". The gate runs it through `/bin/sh`, and a syntax error ends the run as `ac-verify:malformed`. Put the expected result in the separate `expected` field. Use the project's test command, from `CLAUDE.md` or the README, for example `python3 -m pytest -q`. A child that does not end with `ac_commands` leaves the final gate nothing to run, and the run fails with `no_ac_commands` even when the code is right.
 
 For a child that builds, tests and merges, leave `stalls` and `spend` out so it gets the full limit: a child stopped at its own cap loses the whole call (`node_stall_cap`), and a narrow cap saves little. Narrow them only for a read-only child.
 

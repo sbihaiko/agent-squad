@@ -186,7 +186,7 @@ class Dispatch:
                 r = await anyio.to_thread.run_sync(lambda c=c: workcmd.run(c, self.e.target))
                 if not r.ok:
                     got[name] = False
-                    evidence.setdefault(name, {})[f"ac_failed:{c}"] = r.evidence
+                    evidence.setdefault(name, {})[f"{'malformed' if r.malformed else 'ac_failed'}:{c}"] = r.evidence
         return got, evidence
 
     async def landing_check(self, name, head_before):
