@@ -2168,7 +2168,7 @@ def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them
     planned = [c for i in plan["issues"] for c in i["cases"]]
     assert planned == tts.step_ids(d) and len(planned) > 100
     assert all("Test-Case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
-    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
+    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01", "Test-Scenario"]
     # `goals` is the plan's own derivation - the steps that navigate by `nav.goal`/`nav.sweep` - and the committed
     # pad-only pilot has none: #1228 replaced its goal navigation with the pad press the case describes, so every case
     # it carries is planned above and the goal list is honestly empty.
