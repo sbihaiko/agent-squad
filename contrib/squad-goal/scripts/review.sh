@@ -65,6 +65,10 @@ hours_ok() { local k=$1 m=$2 w h a b; w=$(jq -r --arg k "$k" --arg m "$m" '.hour
   [ -n "$w" ] || return 0
   h=$((10#$(date +%H))); a=$((10#${w%%-*})); b=$((10#${w##*-}))
   if [ "$a" -le "$b" ]; then { [ "$h" -ge "$a" ] && [ "$h" -lt "$b" ]; } else { [ "$h" -ge "$a" ] || [ "$h" -lt "$b" ]; }; fi; }
+# A model the hub's models panel switched off (#1819) is skipped exactly like one outside its window, and the two are one
+# predicate wherever a consumer only has to decide whether the model may run.
+off_ok() { [ "$(jq -r --arg k "$1" --arg m "$2" '.off[$k][$m] // false' "$cfg" 2>/dev/null)" != true ]; }
+may_run() { hours_ok "$1" "$2" && off_ok "$1" "$2"; }
 # a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
 python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_STATE/codex-limited"
 out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev=""
@@ -102,7 +106,7 @@ eligible() { local m=$1
   case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && return 1;; esac
   case $m in gemini-*) [ -e "$SG_STATE/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/agy-limited")" ] && return 1;; esac
   if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
-  hours_ok review_models "$m" || return 1
+  may_run review_models "$m" || return 1
   return 0; }
 reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
 used=0
@@ -113,7 +117,9 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   # until the reset the error itself names, instead of spending one dead try per review round
   case $m in gemini-*) [ -e "$SG_STATE/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/agy-limited")" ] && continue;; esac
   if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
-  # outside its window the model is skipped like an unhealthy one: the chain moves on, and no MODEL_FAIL is written
+  # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
+  # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
+  off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on PR #%s: switched off in models.json.\n" "$m" "$pr" > "$SG_STATE/cq/$iss-moff$$.md"; continue; }
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$SG_STATE/cq/$iss-mhours$$.md"; continue; }
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))

@@ -88,12 +88,14 @@ def test_fit_with_the_panel_open_keeps_every_card_left_of_the_drawer(tmp_path):
 
 
 @needs_ego
-def test_fit_leaves_every_card_clear_of_the_replay_bar(tmp_path):
+def test_fit_leaves_every_card_clear_of_the_replay_bar_in_the_panel_footer(tmp_path):
+    """#1813: the bar is a row of #footer now, and the fit still has to leave every card above the row's own top."""
     steps = (LOAD + 'press(q(".card[data-group]")[0]);press(q(".card[data-group]")[0]);await wait();document.getElementById("b-fit").click();await wait();'
              'const bar=document.getElementById("replay").getBoundingClientRect(),low=Math.max(...q(".card[data-name]").map(c=>c.getBoundingClientRect().bottom));'
-             'document.title="RESULT "+JSON.stringify({clear:low<=bar.top,shown:bar.height>0});')
+             'document.title="RESULT "+JSON.stringify({clear:low<=bar.top,shown:bar.height>0,'
+             'inside:document.getElementById("footer").contains(document.getElementById("replay"))});')
     got = drive(tmp_path, steps)
-    assert got == {"clear": True, "shown": True}
+    assert got == {"clear": True, "shown": True, "inside": True}
 
 
 def _load_run(folder):

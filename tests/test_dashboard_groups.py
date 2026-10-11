@@ -210,10 +210,10 @@ def test_the_load_toast_names_neither_the_folder_nor_the_reread_for_a_live_sourc
     assert "Rereading the record every" not in src.split("function followNote")[0].split("Opened run")[-1][:200]
 
 
-def test_fit_reserves_the_replay_bar_height_whenever_a_record_is_open():
+def test_fit_reserves_the_footer_row_the_replay_bar_now_lives_in():
     src = PAGE_SRC()
-    assert "S.events ? foot + REPLAY_GAP + REPLAY_BAR_H : foot + FOOTER_PAD" in src   # the bar floats REPLAY_GAP above the footer: fit() clears both
-    assert "bar.style.bottom = (footer.offsetHeight + REPLAY_GAP)" in src            # the one gap, shared with the bar's own placement
+    assert "m.bottom - f.getBoundingClientRect().top" in src   # the row the bar rides in: one measure, the map's edge to the row
+    assert "m.bottom - f.top" in src                           # the side legend clears the same row by the one shared gap
 
 
 def test_a_square_hover_names_the_child_and_its_cost():

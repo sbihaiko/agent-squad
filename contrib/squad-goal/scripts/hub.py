@@ -1200,6 +1200,10 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:12px}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
 .mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;overflow:hidden;gap:3px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10.5px;height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:none;border-color:var(--pin)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
 .mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:24px;height:24px;padding:0;font-size:12px;line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
+/* The switch (#1819): a state, so it reads as a word, not a glyph. Off de-emphasises the row and marks the rank badge
+   -- the order itself is untouched, which is the point of the switch. */
+.mr .mb button.sw{min-width:30px;font-size:10px;letter-spacing:.02em}.mr .mb button.sw.off{color:var(--warn);border-color:#6b5223;background:#241d10}
+.mr.off .mn,.mr.off .pv,.mr.off .el{opacity:.55}.mr.off .rk{background:#3a2a2a;color:var(--warn)}.mr.off .ef,.mr.off .hr{opacity:.75}
 .madd{display:flex;gap:5px;margin-top:4px}.madd input{flex:1;min-width:0;height:28px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:0 8px;font:inherit;font-size:12px}.madd input:focus{outline:none;border-color:var(--pin)}.madd button{height:28px;padding:0 12px}
 .msave{position:sticky;bottom:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 0 0;margin:12px 0 0;background:var(--panel);border-top:1px solid var(--line);font-size:11px;z-index:1}.msave.dirty{background:#1f1b12;border-top-color:#6b5223}.msave button{height:28px;padding:0 12px}.msave button#msv:not(:disabled){background:var(--warn);color:#1a1300;border-color:var(--warn);font-weight:600}.msave button:disabled{opacity:.35;cursor:default}
 .msave .st{flex:1 1 100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute)}.msave .st.err{color:var(--err)}.msave .st .dot{display:inline-block;width:8px;height:8px;border-radius:4px;background:var(--warn);margin-right:5px;vertical-align:middle}.msave .st.okm{color:var(--ok)}.sub{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:8px 10px;background:#10141a;border:1px solid var(--line);border-radius:8px;font-size:11px}
@@ -1463,12 +1467,17 @@ function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts
 const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
 function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
 function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
+/* The row's switch (#1819): a state, not an action. Out of the chain the model keeps its place, its rank, its effort
+   and its hrs, and every consumer of the chain skips it exactly like a model outside its window. */
+function mdlOff(k,m){return !!(mdl.off&&mdl.off[k]&&mdl.off[k][m])}
+function mdlSetOff(k,m,v){mdl.off=mdl.off||{};mdl.off[k]=mdl.off[k]||{};if(v)mdl.off[k][m]=true;else delete mdl.off[k][m]}
 function mdlProv(m){const x=m.replace(/^claude:/,"");return /^claude-(sonnet|opus|haiku|fable)/.test(x)||x==="claude-session"?"Claude":/^claude-/.test(x)?"via CLI":/^gpt/.test(x)?"Codex":/^grok/.test(x)?"xAI":/^gemini/.test(x)?"Google":""}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
  $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
- b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m);return`<div class="mr${i?"":" p"}"><span class=rk title="${i?"fallback "+i:"primary"}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${i?"fallback "+i:"primary"}${pv?" · "+pv:""}">${pv||(i?"fallback "+i:"primary")}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk}${pv?" · "+pv:""}">${pv||rk}${of?" · out of the chain":""}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
  +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Written per model, beside the chains, in models.json.</div>`
+ +`<div class=mx>Each row also carries a <b>switch</b>: <code>off</code> takes the model out of the chain without removing it — it keeps its place, its rank, its effort and its hrs, and every consumer skips it exactly like a model outside its window. <b>✕</b> still deletes the entry, settings and all.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
@@ -1476,7 +1485,8 @@ $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg
  else return;mdlRender()});
 $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
- else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"")}
+ else if(t.dataset.sw){const[k,m]=t.dataset.sw.split("|");mdlSetOff(k,m,!mdlOff(k,m))}
+ else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
  else if(t.dataset.addb){const k=t.dataset.addb,v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
@@ -2070,6 +2080,22 @@ def in_hours(d, chain, mid, when=None):
     if not w: return True
     h = (when or dt.datetime.now()).hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
+def model_off(d, chain, mid):
+    """True when the panel switched the model out of its chain (#1819). The row keeps its place, its rank, its effort
+    and its hrs: the switch says "do not run this one", it never edits the chain."""
+    o = d.get("off") if isinstance(d.get("off"), dict) else {}
+    ok = o.get(chain) if isinstance(o.get(chain), dict) else {}
+    return bool(ok.get(mid)) and mid in d.get(chain, [])
+def off_of(d):
+    """Per-chain {model-id: True} from models.json's optional top-level `off`; only entries whose model is in that chain."""
+    o = d.get("off") if isinstance(d.get("off"), dict) else {}
+    return {k: {m: True for m, v in (o.get(k) or {}).items() if v and model_off(d, k, m)} for k in CHAINS}
+def may_run(d, chain, mid, when=None):
+    """True when the model may run at `when`: a model switched off is skipped exactly like one outside its window.
+
+    One predicate for both reasons, because the consumers do not care which one it was -- `in_hours` and `model_off`
+    are only apart in the panel, where the row shows which of the two it is."""
+    return not model_off(d, chain, mid) and in_hours(d, chain, mid, when)
 def hours_of(d):
     """Per-chain {model-id: "HH-HH"} from models.json's optional top-level `hours`; only entries whose model is in that chain."""
     h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
@@ -2087,6 +2113,7 @@ def models_get():
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
+            "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
             "known": known_models(d), "last_coding": last_coding_model()}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
@@ -2094,8 +2121,8 @@ def models_set(new):
     # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
     new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours"}: return {"err": "unknown chain"}
-    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None)
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off"}: return {"err": "unknown chain"}
+    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None); off = new.pop("off", None)
     for k, v in new.items():
         if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):
             return {"err": f"{k}: need 1-8 distinct model ids"}
@@ -2117,6 +2144,18 @@ def models_set(new):
             if not isinstance(hk, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and isinstance(v, str) and HOURS.match(v) for m, v in hk.items()):
                 return {"err": f"hours.{k}: model must be in the chain, window HH-HH (00-23)"}
         d["hours"] = {k: {chain_id(k, m): v for m, v in (hrs.get(k) or {}).items() if v[:2] != v[3:]} for k in CHAINS}
+    if off is not None:
+        # The switch (#1819) lives beside the chains like efforts and hours: a model out of its chain is a state of the
+        # row, so the array of strings other scripts jq stays exactly what it was. Switching every entry off is allowed:
+        # the consumers then take the "no model may run now" path instead of falling back to a model the owner took out.
+        if not isinstance(off, dict) or set(off) - set(CHAINS): return {"err": "off: unknown chain"}
+        for k, ok in off.items():
+            if not isinstance(ok, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and v for m, v in ok.items()):
+                return {"err": f"off.{k}: model must be in the chain, value true"}
+        d["off"] = {k: {chain_id(k, m): True for m, v in (off.get(k) or {}).items() if v} for k in CHAINS}
+    if "off" in d:
+        d["off"] = {k: v for k, v in off_of(d).items() if v}
+        if not d["off"]: del d["off"]
     if "hours" in d:
         d["hours"] = {k: v for k, v in hours_of(d).items() if v}
         if not d["hours"]: del d["hours"]
