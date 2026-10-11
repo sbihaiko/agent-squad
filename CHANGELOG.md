@@ -1,9 +1,5 @@
 # Changelog
 
-## 0.2.29 (local fork, 2026-10-10)
-- **#1410 — the fork gate no longer goes red on its own environment.** Two independent causes. (1) `forkclose.sh` rebuilt the e2e emulator while the GUI suite launched it mid-publish (exit 150 `app-launch-failed`): the rebuild and the gate's GUI suite now share the `gui-suite` serial lock (`fork-gate.sh` wraps the suite in `serial.sh`; `serial.sh` is re-entrant through `SG_SERIAL_HELD`, so a gate inside a `gui-suite` holder cannot deadlock). (2) `test-health.sh` read the live loop's state and failed on a real `HEALTH fork-parked`, a self-sustaining red that kept the queue parked: `shell-suites.sh` now runs every suite with all inherited `SG_*` cleared and `HOME` on its own temp dir, and `test-health.sh` scrubs its own environment when run alone.
-  - New `test-forkclose-serial.sh` (rebuild waits for a running GUI suite, gate waits for a rebuild, no nested deadlock) and `test-shell-suites-hermetic.sh`; `test-health.sh` gains a parked fork in the caller's environment.
-
 ## 0.2.28 (local fork, 2026-10-10)
 - **#1400 — dispatch refuses a panel whose children share a file (ADR-0274).** `mkreq.sh` used to append an advisory SLICE NOTE that a child could ignore (#1285 against #1391). A request that names its panel (a `PANEL: <id>` line in the body, or `SG_PANEL`) is now refused, before any file is written or run dispatched, when a pending request of the same panel names one of the same files; the error names both requests and the shared paths. An open PR or a request of another panel never refuses, it keeps the advisory note.
   - New `test-mkreq.sh`: a same-panel overlap refuses and leaves no request, a disjoint panel launches, an overlap with an open PR outside the panel launches, a pending request of another panel is not a sibling.
