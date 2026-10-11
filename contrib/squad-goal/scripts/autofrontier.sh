@@ -40,6 +40,21 @@ PY
 )
 [ "${free:-0}" -gt 0 ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
+# A MERGED PR that names the issue already delivered it (#1808), and janitor.py reports FIXED-NOT-CLOSED without closing:
+# closing needs evidence, so it is never the janitor's call. The issue therefore keeps looking untouched here, gets picked
+# again, and its child can only read the repository and report there is nothing to build -- a whole slot and its spend for
+# an empty slice. Fetch the merged page too and treat what it names as delivered. Only `merged_at` counts: a PR closed
+# without merging is not a delivery. Cached for $SG_FRONTIER_MERGED_TTL seconds -- a merge is never urgent next to a
+# blocker falling, and this pass runs every ~3 min. Failure-tolerant in both directions: a gh that fails leaves the
+# previous page in place, and an empty page skips nothing, so a broken fetch can cost a redispatch but never the frontier.
+merged="$A/merged-refs"; ttl=${SG_FRONTIER_MERGED_TTL:-120}; mt=0
+[ -f "$merged" ] && mt=$(stat -f %m "$merged" 2>/dev/null || stat -c %Y "$merged" 2>/dev/null || echo 0)
+if [ $(( $(date +%s) - mt )) -ge "$ttl" ]; then
+  if page=$(gh api "repos/$SG_REPO/pulls?state=closed&sort=updated&direction=desc&per_page=100" -q '.[]|select(.merged_at)|(.title+" "+(.body//""))' 2>/dev/null); then
+    printf '%s' "$(printf '%s\n' "$page" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')" > "$merged.tmp" && mv "$merged.tmp" "$merged"
+  fi
+fi
+refs="$refs $(cat "$merged" 2>/dev/null) "
 pick=(); notes=()
 while IFS=$'\x1f' read -r w n labels; do
   [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*|*,debt,*) continue;; esac
