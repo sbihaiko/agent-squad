@@ -144,13 +144,30 @@ class Children:
         """One child: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift."""
         e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
         dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
+        # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
+        # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
+        chain = session.model_chain(ctx.node["allow"]["models"], d["model"])
+        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first))
+        if out.kind == "deadline":
+            return slot["ev"]
+        return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None)
+
+    async def attempt(self, name, d, ws, dl, model, slot, first):
+        """One model's call for one child: the worktree is cut for the first attempt, and a later entry reuses it."""
+        e = self.e
+
+        def hit_deadline(res, el):
+            slot.update(ev=self.outcome(name, "deadline", ["deadline"], None, {"cap": res.amount, "elapsed": el}))
+
+        def cancelled(res, el):
+            return self.outcome(name, "fail", ["cancelled"], None, {"cap": res.amount, "elapsed": el})
+
         out = await session.run_call(
             lambda: e.dispatch.held.pop(name, None) or e.budget.hold(d["spend"]),   # a resume checks the funding again
-            dl, lambda res: self.request(name, d, res, ws, dl), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
-            wall=e.wall, prepare=lambda res: self.prepare(name, d, dl),
-            on_deadline=lambda res, el: slot.update(ev=self.outcome(name, "deadline", ["deadline"], None, {"cap": res.amount, "elapsed": el})),
-            on_cancel=lambda res, el: self.outcome(name, "fail", ["cancelled"], None, {"cap": res.amount, "elapsed": el}))
-        return slot["ev"] if out.kind == "deadline" else self.close(ctx, name, d, ws, out)
+            dl, lambda res: self.request(name, d, res, ws, dl, model), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
+            wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
+            on_deadline=hit_deadline, on_cancel=cancelled)
+        return out, model
 
     async def prepare(self, name, d, dl):
         if self.isolated(d):
@@ -158,13 +175,13 @@ class Children:
             if not made.ok:
                 return ["child_workspace_failed", *made.reasons]
 
-    def request(self, name, d, res, ws, dl):
-        return CallRequest(name, 1, None, f"/{d['skill']['name']} {d['prompt']}", d["model"], d["effort"], d["tools"], min(d["stalls"], self.e.limits.get("max_stalls", d["stalls"])),
+    def request(self, name, d, res, ws, dl, model=None):
+        return CallRequest(name, 1, None, f"/{d['skill']['name']} {d['prompt']}", model or d["model"], d["effort"], d["tools"], min(d["stalls"], self.e.limits.get("max_stalls", d["stalls"])),
                            res.amount, ws, dl, new_session_id(self.e.run_id), d["skill"]["name"], None,
                            self.e.limits.get("max_output_tokens"), self.e.limits.get("context_tokens"))
 
-    def close(self, ctx, name, d, ws, out):
-        """The outcome of a child whose call ended without a deadline."""
+    def close(self, ctx, name, d, ws, out, model, message=None):
+        """The outcome of a child whose call ended without a deadline. `message` is the one line an exhausted chain reports."""
         if out.kind == "no_funds":
             return self.outcome(name, "fail", ["run_spend_cap"], None, {})
         if out.kind == "expired":
@@ -173,14 +190,14 @@ class Children:
             return self.outcome(name, "fail", out.reasons, None, {})
         if out.kind == "adapter_error":
             return self.outcome(name, "fail", ["adapter_error"], None, {"cap": out.res.amount, "elapsed": out.elapsed,
-                                                                         "diagnostic": {"error": str(out.error)}})
-        return self.settle(ctx, name, d, ws, out)
+                                                                         "diagnostic": {"error": message or str(out.error)}})
+        return self.settle(ctx, name, d, ws, out, model)
 
-    def settle(self, ctx, name, d, ws, out):
+    def settle(self, ctx, name, d, ws, out, model):
         """Derive the outcome from the artifact, run the checks, snapshot the worktree, and lift the child's own spawns."""
         e, disp, r, res = self.e, ctx.node, out.result, out.res
         outcome, reasons, diag_cap = session.agent_outcome({}, r, session.cap_reason(r.stop_reason, res.amount))
-        rel, extra = None, {"model": d["model"], "effort": d["effort"], **(r.usage or {})}   # the same fields as an agent node; tokens stay absent when unknown
+        rel, extra = None, {"model": model, "effort": d["effort"], **(r.usage or {})}   # the model that answered, not the one the request named first
         if not isinstance(r.output, dict) and r.ended:      # an artifact_missing outcome says how the session ended
             extra["diagnostic"] = {"ended": r.ended}
         if isinstance(r.output, dict):

@@ -61,21 +61,15 @@ def apply_proposals(ctx, node, entry, sc, r):
 class AgentRunner:
     async def run(self, ctx, node, entry, sc):
         await shadow(ctx, node, entry, sc)    # before the deadline and the reservation, so it never eats a node's time
-        eff, deadline = ctx.eff.agent(node), ctx.call_deadline(node, sc)
-        who, slot = {"model": eff["model"], "effort": eff["effort"]}, {}
+        eff, deadline, slot = ctx.eff.agent(node), ctx.call_deadline(node, sc), {}
         fin = lambda *a, **kw: ctx.finish(node, entry, sc, *a, **kw)    # noqa: E731
-
-        def make(res):
-            return CallRequest(node["name"], entry, sc.item, prompt(ctx, node, entry, sc), eff["model"], eff["effort"], eff["tools"],
-                               eff["stalls_max"], res.amount, str(ctx.workspace_path(node.get("workspace"), sc.item)), deadline,
-                               new_session_id(ctx.run_id), node.get("skill"), node.get("instructions"),
-                               ctx.project_limits.get("max_output_tokens"), ctx.project_limits.get("context_tokens"))
-
-        out = await session.run_call(
-            lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"]), deadline, make, adapter=ctx.adapter,
-            record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall,
-            on_deadline=lambda res, el: slot.update(res=fin("deadline", ["deadline"], spend=None, cap=res.amount, elapsed=el, **who)),
-            on_cancel=lambda res, el: fin("fail", ["cancelled"], spend=None, cap=res.amount, elapsed=el, **who))
+        # A dispatch entry answers on the envelope's `allow.models`, led by the model the node names: a provider that
+        # refuses to serve one entry must not end the node while the chain still holds an entry nobody tried.
+        chain = session.model_chain(ctx.limits(node["name"])["models"] if ctx.is_dispatch_entry(node["name"]) else [], eff["model"])
+        out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin))
+        if session.exhausted(chain, tried):    # every entry refused to serve: one fail, naming each entry and its error
+            return fin("fail", ["adapter_error"], spend=None, cap=out.res.amount, elapsed=out.elapsed,
+                       diagnostic={"error": session.chain_message(tried)}, **who)
         if out.kind == "no_funds":
             return fin("fail", ["run_spend_cap"], spend=None, cap=None)
         if out.kind == "expired":
@@ -85,6 +79,27 @@ class AgentRunner:
         if out.kind == "adapter_error":
             return fin("fail", ["adapter_error"], spend=None, cap=out.res.amount, elapsed=out.elapsed, diagnostic={"error": str(out.error)}, **who)
         return self.settle(ctx, node, entry, sc, out, eff, who)
+
+    async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin):
+        """One model's call for this node entry. The next entry of the chain answers after one that refused to serve."""
+        who = {"model": model, "effort": eff["effort"]}      # the attempt's own model: it names the outcome and any stop
+
+        def hit_deadline(res, el):
+            slot.update(res=fin("deadline", ["deadline"], spend=None, cap=res.amount, elapsed=el, **who))
+
+        def cancelled(res, el):
+            return fin("fail", ["cancelled"], spend=None, cap=res.amount, elapsed=el, **who)
+
+        def make(res):
+            return CallRequest(node["name"], entry, sc.item, prompt(ctx, node, entry, sc), model, eff["effort"], eff["tools"],
+                               eff["stalls_max"], res.amount, str(ctx.workspace_path(node.get("workspace"), sc.item)), deadline,
+                               new_session_id(ctx.run_id), node.get("skill"), node.get("instructions"),
+                               ctx.project_limits.get("max_output_tokens"), ctx.project_limits.get("context_tokens"))
+
+        out = await session.run_call(
+            lambda: ctx.budget.reserve(eff["spend_max"], node["budget"]["spend"]["min"]), deadline, make, adapter=ctx.adapter,
+            record=ctx.record, budget=ctx.budget, clock=ctx.clock, wall=ctx.wall, on_deadline=hit_deadline, on_cancel=cancelled)
+        return out, who
 
     def settle(self, ctx, node, entry, sc, out, eff, who):
         r, res = out.result, out.res
