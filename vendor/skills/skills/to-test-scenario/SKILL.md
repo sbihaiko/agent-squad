@@ -80,7 +80,7 @@ Scenario issue            purpose, Areas table, dashboard; the only issue on the
 ```
 
 - **The area rule.** A batch goes to the area named by its optional `area` field; without one, the batch id up to its first `-` (`pause-pack-multi` → `pause`). A batch may carry an `objective`, which becomes the area's objective (the first one found wins); an area without one reads "(no objective stated)". Add `area` / `objective` to the script where a prefix reads poorly.
-- **Case records.** One issue per case, labels `test-case` and `wave:NN`, titled `<verdict emoji> <case title>` starting at ⚪. A container over 100 cases splits by batch; one batch over 100 cases is refused before anything is created, and so is an area body over 60,000 characters.
+- **Case records.** One issue per case, labels `testcase` and `wave:NN`, titled `<verdict emoji> <case title>` starting at ⚪. A container over 100 cases splits by batch; one batch over 100 cases is refused before anything is created, and so is an area body over 60,000 characters.
 - Links are made top-down (scenario → area → container → record); a record is never linked to the scenario. Before it creates a container, the module adopts one with the same title already under that parent, so a lost map never makes two.
 
 **The verdict emoji** are one vocabulary for case rows, record titles, area titles and run titles (container titles never carry one):
