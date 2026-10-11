@@ -3254,17 +3254,20 @@ def test_1392_the_fork_gate_keeps_the_gui_suite_command_and_adds_the_squad_shell
     scripts = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("fork-gate.sh", "shell-suites.sh"):
+    for name in ("fork-gate.sh", "shell-suites.sh", "serial.sh"):
         (d / name).write_text((scripts / name).read_text())
     suite = d / "test-x.sh"
     suite.write_text("#!/bin/bash\nexit 0\n")
+    # Its own lock directory, so the gate's gui-suite lock is not the one a suite run around this test already holds.
+    env = {**os.environ, "SG_STATE": str(tmp_path / "state")}
+    env.pop("SG_SERIAL_HELD", None)
     seen = tmp_path / "seen"
     gui = f"MESENAI_ROOT=/r MESEN_GUI_BINARY='/b b' sh -c 'echo \"$MESENAI_ROOT|$MESEN_GUI_BINARY\" > {seen}'"
-    p = subprocess.run(["bash", str(d / "fork-gate.sh"), gui], cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    p = subprocess.run(["bash", str(d / "fork-gate.sh"), gui], cwd=tmp_path, capture_output=True, text=True, timeout=15, env=env)
     assert p.returncode == 0, p.stdout + p.stderr
     assert seen.read_text().strip() == "/r|/b b"
     suite.write_text("#!/bin/bash\nexit 1\n")
-    p = subprocess.run(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    p = subprocess.run(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, capture_output=True, text=True, timeout=15, env=env)
     assert p.returncode != 0 and "FAILED: test-x.sh" in p.stdout, p.stdout
 def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
     """#1394: the command files each DEBT finding with the debt labels, and a second run files nothing."""
