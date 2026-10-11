@@ -146,7 +146,7 @@ def test_the_strip_carries_a_line_per_auto_hidden_column_below_the_chips(hub):
     assert "class=hidbar" in html
     assert "hid.size||autos.length" in html, \
         "the strip now exists for an auto-hidden column alone, with nothing the user hid"
-    assert html.index("class=chip") < html.index("hidsep") < html.index("class=hidline"), \
+    assert html.index("map(hidchip)") < html.index("hidsep") < html.index("class=hidline"), \
         "the quiet lines come after the chips the user hid, behind a divider"
     assert "autos.map(" in html
 
