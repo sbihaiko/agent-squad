@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from html.parser import HTMLParser
@@ -293,3 +294,156 @@ def _render_load_mark(hub, run):
 def test_the_page_paints_the_marker_only_for_a_run_that_owns_the_load(hub):
     assert "cpu 41%" in _render_load_mark(hub, {"cpu": 41})
     assert _render_load_mark(hub, {"id": "b"}) == ""
+
+
+# ---------------------------------------------------------------- the board's maximize toggle (#1781)
+
+BOARD_OPTS_FROM = "const bo=ls.bo||{}"
+BOARD_OPTS_TO = '$("#bz").onclick=()=>setMax(!bo.max);'
+
+
+def _head(hub):
+    """The board's header as served, from its opening tag to the body it swaps."""
+    return hub.PAGE[hub.PAGE.index("<div id=bhead>"):hub.PAGE.index("<div id=bbody>")]
+
+
+def _board_slice(hub):
+    """The page's board options: the saved record, the two controls and their handlers, nothing else."""
+    a = hub.PAGE.index(BOARD_OPTS_FROM)
+    b = hub.PAGE.index(BOARD_OPTS_TO) + len(BOARD_OPTS_TO)
+    return hub.PAGE[a:b]
+
+
+def test_the_board_header_carries_a_maximize_button_beside_the_collapse_one(hub, pg):
+    head = _head(hub)
+    assert "<button id=bz" in head and "<button id=bx" in head                # both controls live in the same header
+    assert head.index("id=lf") < head.index("id=bz") < head.index("id=bx")    # added beside the collapse control
+    assert pg.order.count("bz") == 1
+    m = re.search(r"<button id=bz title=\"([^\"]+)\" aria-pressed=false>", head)
+    assert m, head
+    assert "maximize" in m.group(1).lower()        # a title that says what it does
+
+
+def test_both_header_controls_are_titled_pressed_buttons(hub):
+    head = _head(hub)
+    both = re.findall(r"<button id=b([xz]) title=\"([^\"]+)\" aria-pressed=false>", head)
+    assert sorted(b for b, _ in both) == ["x", "z"]      # focusable, titled, and each says whether it is on
+    assert all(t.strip() for _, t in both)
+
+
+def test_the_maximized_board_claims_both_cells_of_the_right_column(hub):
+    css = _css(hub, "body.dockb.max #board")
+    assert "grid-row:1/-1" in css                  # top to bottom: the run pane's cell included
+    assert "height:auto" in css                    # no longer a fixed-height row of its own
+    assert "grid-template-rows:minmax(0,1fr) 0" in _css(hub, "body.dockb.max #win")   # the run pane's row has nothing left to give
+
+
+def test_the_run_pane_is_hidden_with_visibility_so_its_iframe_is_never_detached(hub):
+    css = _css(hub, "body.dockb.max #main")
+    assert "visibility:hidden" in css
+    assert "display:none" not in css               # its space is what the board takes; the element is untouched
+    assert not re.search(r"#main[^\n{]*\{[^}]*display:none", hub.PAGE)
+
+
+def test_the_grip_has_nothing_to_resize_while_the_board_is_maximized(hub):
+    assert "display:none" in _css(hub, "body.dockb.max #grip")
+
+
+def test_the_toggle_never_touches_the_left_bar(hub):
+    assert "grid-row:1/-1" in _css(hub, "body.dockb.max #board")               # the maximize moved the board, not the bar
+    assert "grid-template-columns:300px 1fr" in _css(hub, "body.dockb #win")
+    assert not re.search(r"body\.dockb\.max #(side|list|win)\s*,", hub.PAGE)   # only the right column's two cells move
+    assert not re.search(r"body\.dockb\.max #side\s*\{", hub.PAGE)
+
+
+def test_the_maximize_adds_no_reload_path_of_its_own(hub):
+    assert hub.PAGE.count("location.reload") == 1                              # /api/version stays the only reload
+    board = _board_slice(hub)
+    assert not re.search(r"location\.(reload|href|assign|replace)", board)     # the toggle cannot navigate at all
+
+
+_NODE_PRE = r"""
+const __el={},__seen=[],__made=[];
+const __mk=id=>({id,innerHTML:"",title:"",style:{},attrs:{},classes:new Set(),
+  classList:{add:c=>__el[id].classes.add(c),remove:c=>__el[id].classes.delete(c),
+    toggle:(c,on)=>{on?__el[id].classes.add(c):__el[id].classes.delete(c)},
+    contains:c=>__el[id].classes.has(c)},
+  setAttribute(k,v){__el[id].attrs[k]=v},getAttribute(k){return __el[id].attrs[k]}});
+const $=s=>{__seen.push(s);return __el[s]||(__el[s]=__mk(s))};
+__el["#board"]=__mk("#board");__el["#main"]=__mk("#main");__el["#bz"]=__mk("#bz");__el["#bx"]=__mk("#bx");
+const __body={classes:new Set(),classList:{toggle:(c,on)=>{on?__body.classes.add(c):__body.classes.delete(c)},contains:c=>__body.classes.has(c)}};
+globalThis.document={body:__body,createElement:t=>{__made.push(t);return __mk(t)}};
+globalThis.localStorage={hub:__STORED__};
+const ls=JSON.parse(localStorage.hub||"{}");
+const pins=new Set(),q="",per="day";
+"""
+
+_NODE_POST = r"""
+const snap=()=>({body:[...__body.classes].sort(),board:[...__el["#board"].classes].sort(),
+  press:__el["#bz"].attrs["aria-pressed"],bxpress:__el["#bx"].attrs["aria-pressed"],
+  title:__el["#bz"].title,icon:__el["#bz"].innerHTML,
+  saved:JSON.parse(localStorage.hub||"{}").bo});
+const steps={init:snap(),seen:[...new Set(__seen)],made:[...__made]};
+$("#bz").onclick();steps.maxOn=snap();
+$("#bz").onclick();steps.maxOff=snap();
+$("#bz").onclick();$("#bx").onclick();steps.collapseWhileMaximized=snap();
+$("#bz").onclick();steps.maximizeWhileCollapsed=snap();
+escBoard();steps.afterEsc=snap();
+steps.seenAfter=[...new Set(__seen)];steps.madeAfter=[...__made];
+console.log("RESULT"+JSON.stringify(steps));
+"""
+
+
+def _board_steps(hub, saved):
+    """Run the page's board options in node over a stored record, clicking both controls in turn."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    script = _NODE_PRE.replace("__STORED__", json.dumps(json.dumps({"bo": saved}))) + _board_slice(hub) + _NODE_POST
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.split("RESULT")[-1])
+
+
+def test_the_choice_is_saved_with_the_boards_other_options(hub):
+    st = _board_steps(hub, {})
+    assert st["init"]["body"] == ["dockb"] and st["init"]["press"] == "false"
+    assert st["maxOn"]["body"] == ["dockb", "max"]
+    assert st["maxOn"]["saved"]["max"] is True and st["maxOn"]["saved"]["off"] is False   # saved with the board's other options
+    assert st["maxOn"]["press"] == "true" and st["maxOn"]["icon"] != st["maxOff"]["icon"]   # the icon reflects the state
+    assert "svg" in st["maxOn"]["icon"] and "restore" in st["maxOn"]["title"].lower()
+    assert st["maxOff"]["body"] == ["dockb"] and st["maxOff"]["saved"]["max"] is False
+
+
+def test_the_toggle_never_removes_recreates_or_re_srcs_the_run_panes_iframe(hub):
+    st = _board_steps(hub, {})
+    assert "#main" not in st["seen"] and "#main" not in st["seenAfter"]   # the pane is not even looked up
+    assert st["made"] == [] and st["madeAfter"] == []                     # nothing detached, nothing re-created
+    assert "drawMain" not in _board_slice(hub) and "frames" not in _board_slice(hub)
+
+
+def test_the_two_controls_can_never_both_be_on(hub):
+    st = _board_steps(hub, {})
+    assert st["collapseWhileMaximized"]["body"] == ["dockb"]              # the collapse restored the split first
+    assert st["collapseWhileMaximized"]["board"] == ["off"] and st["collapseWhileMaximized"]["saved"]["max"] is False
+    assert st["collapseWhileMaximized"]["bxpress"] == "true" and st["collapseWhileMaximized"]["press"] == "false"
+    assert st["maxOn"]["bxpress"] == "false" and st["maxOff"]["bxpress"] == "false"   # the collapse control reads its own state
+    assert st["maximizeWhileCollapsed"]["body"] == ["dockb", "max"]       # maximizing a collapsed board restores it first
+    assert st["maximizeWhileCollapsed"]["board"] == [] and st["maximizeWhileCollapsed"]["saved"]["off"] is False
+
+
+def test_a_stored_state_that_is_both_is_never_restored(hub):
+    st = _board_steps(hub, {"off": True, "max": True})
+    assert st["init"]["body"] == ["dockb", "max"] and st["init"]["board"] == []
+
+
+def test_a_reload_restores_the_maximized_board_from_the_boards_saved_options(hub):
+    st = _board_steps(hub, {"max": True})
+    assert st["init"]["body"] == ["dockb", "max"] and st["init"]["board"] == []
+    assert st["init"]["press"] == "true"
+    assert _board_steps(hub, {"off": True})["init"]["body"] == ["dockb"]   # collapsed stays collapsed, and not maximized
+
+
+def test_escape_restores_the_split(hub):
+    st = _board_steps(hub, {"max": True})
+    assert st["afterEsc"]["body"] == ["dockb"] and st["afterEsc"]["saved"]["max"] is False
+    assert re.search(r'key==="Escape"\)\{[^}]*escBoard\(\)', hub.PAGE)     # the page's Escape branch is what restores it
