@@ -276,7 +276,7 @@ def test_a_second_publish_updates_and_reports_a_removed_case_without_closing_it(
     out = publish(smaller, again, map_path=map_path)
     assert again.of("create_issue") == [] and again.of("add_sub_issue") == [] and again.of("board") == []
     assert out["updated"] == ["parent"] + [i["id"] for i in smaller["issues"]]
-    area, container = first["map"]["areas"]["launch"]["number"], first["map"]["areas"]["launch"]["containers"][0]
+    area = first["map"]["areas"]["launch"]["number"]
     assert set(again.updated_numbers()) == {first["parent"], area, *[c["number"] for c in first["cases"].values()][:2]}
     assert out["removed"] == [plan["issues"][-1]["id"]]
     assert "close" not in again.ops()                 # a removed case is reported, never silently closed

@@ -128,7 +128,7 @@ def test_the_open_bug_is_found_by_title_when_the_record_names_none(tmp_path, tre
     run(tmp_path, gh, path, "r1", {"AAX-001": "failed"})
     (bug,) = gh.bugs()
     held = record(gh, cases, "AAX-001")
-    held["body"] = "\n".join(l for l in held["body"].splitlines() if not l.startswith("Bug: #"))
+    held["body"] = "\n".join(line for line in held["body"].splitlines() if not line.startswith("Bug: #"))
     path.unlink()                                                   # nothing but GitHub remembers the bug
     tts.publish(tts.build_plan(script(batches=[batch("aa-x", 3), batch("bb-x", 2)])), gh, map_path=path)
     run(tmp_path, gh, path, "r2", {"AAX-001": "failed"})

@@ -19,7 +19,7 @@ class StubGh:
     @staticmethod
     def _fields(args):
         out = {}
-        for flag, value in zip(args, args[1:]):
+        for flag, value in zip(args, args[1:], strict=False):
             if flag in ("-f", "-F") and "=" in value:
                 key, _, val = value.partition("=")
                 out[key] = val
@@ -69,7 +69,7 @@ def plan_of(*ids):
 
 
 def published_of(stub, ids):
-    return {"parent": 1, "issues": {i: n for i, n in zip(ids, range(11, 11 + len(ids)))}}
+    return {"parent": 1, "issues": {i: n for i, n in zip(ids, range(11, 11 + len(ids)), strict=True)}}
 
 
 def seeded(titles):

@@ -50,7 +50,7 @@ def push_lock(path, timeout=60.0, poll=0.01, stale=STALE_LOCK):
             except FileNotFoundError:
                 continue
             if time.monotonic() >= deadline:
-                raise TimeoutError(f"another run holds {path}")
+                raise TimeoutError(f"another run holds {path}") from None
             time.sleep(poll)
     try:
         yield
