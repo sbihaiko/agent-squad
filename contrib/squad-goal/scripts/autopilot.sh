@@ -99,6 +99,15 @@ while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator:
     [ -e "$rf" ] && [ $(( $(date +%s) - $(stat -f %m "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] && continue
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue   # a review of this PR is already in flight: two would race on review-<pr>.md
     aenv=""; [ -n "$aging" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=${SG_REVIEW_TIMEOUT:-120}"
+    # #1501: a BLOCKED that is only the leash timeout must not be re-queued with that same leash — the
+    # next pass would kill the only reachable model again. Drop the timeout clamp; keep depth 1 / 1 try.
+    if [ -n "$aging" ]; then
+      leash=${SG_REVIEW_TIMEOUT:-120}
+      last=$(awk -F'\t' -v p="$pr" '$2==p {row=$0} END{print row}' "$SG_STATE/review-times.tsv" 2>/dev/null)
+      sec=$(printf '%s\n' "$last" | awk -F'\t' '{print $4}')
+      lrc=$(printf '%s\n' "$last" | awk -F'\t' '{print $5}')
+      [ "$lrc" = 142 ] && [ -n "$sec" ] && [ "$sec" -ge "$leash" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1"
+    fi
     touch "$rf"; nohup env $aenv bash "$here/revci.sh" $pr $iss >> "$SG_STATE/revci-$pr.out" 2>&1 </dev/null &
     echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
     continue

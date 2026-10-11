@@ -2,6 +2,7 @@
 # Regression tests for review.sh with stubbed gh and claude (no network, no model). usage: bash test-review.sh [path/to/review.sh]
 # 1) a reviewer that answers with a VERDICT is accepted: exit 0, rc 0 in review-times.tsv (the bug: rc=$? read the status of the superseded test, so every model "failed")
 # 2) the PR head moving during the review kills the reviewer and ends BLOCKED (superseded), not a hang.
+# 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; : > "$T/s/codex-reset.py"
 cat > "$T/s/models.json" <<J
@@ -23,7 +24,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_TAGGED" ] && { printf "VERDICT: CHANGES\n1. BLOCKING a.cs:1 - diverges from ADR-0001 - wrong - fix\n2. DEBT b.cs:2 - naming - none - rename\n"; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; echo "VERDICT: APPROVE"; echo "1. fine"
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_TAGGED" ] && { printf "VERDICT: CHANGES\n1. BLOCKING a.cs:1 - diverges from ADR-0001 - wrong - fix\n2. DEBT b.cs:2 - naming - none - rename\n"; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"; echo "1. fine"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 out=$(bash "$T/s/review.sh" 7 8); rc=$?
@@ -68,4 +69,20 @@ for mode in full fix; do
 done
 /usr/bin/grep -qi 'keeps the tag' "$T/prompt" && ok "fix prompt keeps previous tags" || ko "fix prompt does not keep previous tags"
 unset CLAUDE_TAGGED CLAUDE_PROMPT
+# 7) #1501: the aging leash must not kill the only reachable model. Gemini is agy-limited, Opus is
+# outside its hours window and behind quota-guard; the survivor's own timeout (8 s) is longer than
+# the leash (2 s). A 4 s answer must be accepted, not killed at the leash.
+h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wa '%02d-%02d' $a $b
+printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-deepseek-v4-flash"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-deepseek-v4-flash":8}}' "$wa" > "$T/s/models.json"
+echo $(( $(date +%s) + 3600 )) > "$T/st/agy-limited"; touch "$T/st/quota-guard"
+rm -f "$T/st/review-7".* "$T/st/cq/"*
+t=$(date +%s)
+out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
+el=$(( $(date +%s) - t ))
+case "$out" in model=claude:claude-deepseek-v4-flash*) [ $rc = 0 ] && [ $el -ge 4 ] && ok "leash + one reachable model: survivor uses its own timeout ($el s)" || ko "leash + one reachable: rc=$rc ${el}s '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null)";; *) ko "leash + one reachable: wanted deepseek, got '$out' rc=$rc ${el}s $(head -1 "$T/st/review-7.md" 2>/dev/null)";; esac
+# 8) with several reachable models the leash still applies: two healthy claude entries, 4 s answer, 2 s leash -> first dies, chain depth 1, BLOCKED
+printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/agy-limited" "$T/st/quota-guard" "$T/st/review-7".* "$T/st/cq/"*
+out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
+[ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && /usr/bin/grep -q 'after 2s' "$T/st/cq/"*mtimeout* && ok "leash + several reachable models: still clamped" || ko "several reachable leash: rc=$rc '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 rm -rf "$T"; exit $fail
