@@ -352,7 +352,7 @@ def test_the_toggle_never_touches_the_left_bar(hub):
 def test_the_maximize_adds_no_reload_path_of_its_own(hub):
     assert hub.PAGE.count("location.reload") == 1                              # /api/version stays the only reload
     board = _board_slice(hub)
-    assert "location" not in board and "reload" not in board
+    assert not re.search(r"location\.(reload|href|assign|replace)", board)     # the toggle cannot navigate at all
 
 
 _NODE_PRE = r"""
@@ -390,7 +390,7 @@ def _board_steps(hub, saved):
     """Run the page's board options in node over a stored record, clicking both controls in turn."""
     if shutil.which("node") is None:
         pytest.skip("node is required")
-    script = _NODE_PRE.replace("__STORED__", json.dumps(json.dumps(saved))) + _board_slice(hub) + _NODE_POST
+    script = _NODE_PRE.replace("__STORED__", json.dumps(json.dumps({"bo": saved}))) + _board_slice(hub) + _NODE_POST
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.split("RESULT")[-1])
@@ -399,7 +399,8 @@ def _board_steps(hub, saved):
 def test_the_choice_is_saved_with_the_boards_other_options(hub):
     st = _board_steps(hub, {})
     assert st["init"]["body"] == ["dockb"] and st["init"]["press"] == "false"
-    assert st["maxOn"]["body"] == ["dockb", "max"] and st["maxOn"]["saved"] == {"dock": "bottom", "max": True}
+    assert st["maxOn"]["body"] == ["dockb", "max"]
+    assert st["maxOn"]["saved"]["max"] is True and st["maxOn"]["saved"]["off"] is False   # saved with the board's other options
     assert st["maxOn"]["press"] == "true" and st["maxOn"]["icon"] != st["maxOff"]["icon"]   # the icon reflects the state
     assert "svg" in st["maxOn"]["icon"] and "restore" in st["maxOn"]["title"].lower()
     assert st["maxOff"]["body"] == ["dockb"] and st["maxOff"]["saved"]["max"] is False

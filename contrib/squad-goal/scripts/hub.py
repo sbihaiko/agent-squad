@@ -1090,7 +1090,11 @@ body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{disp
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
-#grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}
+/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is a live, cross-origin dashboard: it is hidden with `visibility` and never detached, so the very same iframe element (same scroll, same run) is still there when the split comes back. The board is no longer a fixed-height row, so the grip has nothing to resize. */
+body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
+body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0}
+body.dockb.max #main{visibility:hidden}
+#grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
 body.dockb #bbody>.col{flex:1 1 0;min-width:185px;display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
@@ -1119,7 +1123,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b></div>
 <script>
@@ -1299,9 +1303,25 @@ poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
-const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off?(bo.h||320)+"px":""};
-const applyDock=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");sizeBoard();$("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;"};
-$("#board").classList.toggle("off",!!bo.off);applyDock();$("#bx").onclick=()=>{bo.off=!bo.off;$("#board").classList.toggle("off",bo.off);applyDock();saveB()};
+if(bo.max)bo.off=false;else if(bo.off)bo.max=false;   // both controls live in one saved record, so a reload can never bring back a board that is maximized and collapsed at once
+const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off&&!bo.max?(bo.h||320)+"px":""};
+// The board's maximize takes the run pane's cell as well as its own, so the kanban is read at full height. The run pane
+// is a live, cross-origin dashboard: a CSS class hides it with `visibility` and never detaches it, so the very same
+// iframe element — same scroll, same run — is still there when the split comes back. Nothing here rebuilds the panes.
+const MAXI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/></svg>',
+MINI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M9 4v5H4M15 20v-5h5M9 9L4 4M15 15l5 5"/></svg>';
+const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");document.body.classList.toggle("max",!!bo.max);
+  $("#board").classList.toggle("off",!!bo.off);sizeBoard();
+  $("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;";
+  $("#bz").innerHTML=bo.max?MINI:MAXI;$("#bz").setAttribute("aria-pressed",String(!!bo.max));
+  $("#bz").title=bo.max?"restore the split: run pane and board":"maximize the board over the run pane"};
+const applyDock=paintBoard;
+const setOff=v=>{bo.off=v;if(v)bo.max=false;paintBoard();saveB()};   // a collapsed board is never a maximized one
+const setMax=v=>{bo.max=v;if(v)bo.off=false;paintBoard();saveB()};  // maximizing a collapsed board restores it first
+const escBoard=()=>{if(bo.max)setMax(false)};
+paintBoard();
+$("#bx").onclick=()=>setOff(!bo.off);
+$("#bz").onclick=()=>setMax(!bo.max);
 const isPR=n=>n==="Open PRs"||n==="Closed PRs";
 const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const OKTAG=new Set("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td h1 h2 h3 h4 h5 h6 blockquote pre a img del s u".split(" ")),VOID=new Set(["br","hr","img"]);
@@ -1333,7 +1353,7 @@ else{const p=[];while(i<L.length&&L[i].trim()&&!onlyHold(L[i])&&!/^(#{1,4}\s|\s*
 return out.join("")}
 let html=block(t);for(let k=0;k<3;k++)html=html.replace(/\u0001(\d+)\u0001/g,(_,n)=>keep[+n]);return html.replace(/<p>(<summary>[\s\S]*?<\/summary>)<\/p>/g,"$1")}
 const pop=$("#pop"),when=t=>t.slice(0,16).replace("T"," ");
-pop.onclick=e=>{if(e.target===pop)pop.classList.remove("on")};addEventListener("keydown",e=>{if(e.key==="Escape")pop.classList.remove("on");else if(pop.classList.contains("on")&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))step(e.key==="ArrowLeft"?-1:1)});
+pop.onclick=e=>{if(e.target===pop)pop.classList.remove("on")};addEventListener("keydown",e=>{if(e.key==="Escape"){pop.classList.remove("on");escBoard()}else if(pop.classList.contains("on")&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))step(e.key==="ArrowLeft"?-1:1)});
 let nav=[];const step=k=>{const i=nav.indexOf(cur)+k;if(i>=0&&i<nav.length)showIssue(nav[i])};let cur=0;
 async function showIssue(n){cur=+n;pop.classList.add("on");$("#pbox").innerHTML="<span class=m>loading #"+n+"…</span>";
 try{const d=await (await fetch("/api/issue?n="+n)).json();if(d.err){$("#pbox").textContent=d.err;return}
