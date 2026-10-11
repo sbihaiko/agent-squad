@@ -26,4 +26,10 @@ echo 'echo c' > "$F/contrib/squad-goal/scripts/c.sh"; r=$(SG_SYNC_FORCE=1 ss) &&
 # refresh must not erase live-only edits either
 echo 'echo c2' > "$F/contrib/squad-goal/scripts/c.sh"; $G add -A; c -m c; echo 'echo live-edit' > "$L/scripts/a.sh"
 r=$(rf) && ko "refresh erased a live edit" || { [ "$(cat "$L/scripts/a.sh")" = "echo live-edit" ] && ok "refresh refuses over a live-only edit" || ko "live edit lost"; }
+# generated and backup files are not shipped content: after a refresh, --check is clean even with them on both sides
+SG_REFRESH_FORCE=1 rf >/dev/null; mkdir -p "$L/scripts/__pycache__" "$F/contrib/squad-goal/scripts/__pycache__"
+echo x > "$L/scripts/__pycache__/a.cpython-314.pyc"; echo y > "$L/scripts/models.json.bak-1"; echo z > "$L/scripts/old.bak"
+echo p > "$F/contrib/squad-goal/scripts/__pycache__/b.cpython-314.pyc"; echo q > "$F/contrib/squad-goal/scripts/stale.pyc"; echo r > "$F/contrib/squad-goal/scripts/b.sh.bak-2"; $G add -Af; c -m junk
+r=$(rf --check) && ok "check ignores __pycache__, *.pyc, *.bak*" || ko "check counts generated/backup files: $r"
+r=$(rf) && [ ! -e "$L/scripts/stale.pyc" ] && [ ! -e "$L/scripts/b.sh.bak-2" ] && [ ! -e "$L/scripts/__pycache__/b.cpython-314.pyc" ] && ok "copy skips generated/backup files" || ko "copy brought generated/backup files: $r"
 rm -rf "$T"; exit $fail
