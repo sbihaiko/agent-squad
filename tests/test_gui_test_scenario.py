@@ -184,7 +184,7 @@ def test_publish_creates_the_parent_and_one_sub_issue_per_case_and_links_them():
     created = gh.of("create_issue")
     assert [c["title"] for c in created][0] == "Test scenario: tiny"
     assert [c["title"] for c in created][1:] == [
-        "Test case HOME-01", "Test case HOME-02", "Test case LIB-01"]
+        "⚪ Test case HOME-01", "⚪ Test case HOME-02", "⚪ Test case LIB-01"]
     assert sorted(out["issues"]) == ["HOME-01", "HOME-02", "LIB-01"]
     links = gh.of("add_sub_issue")
     assert [link["sub"] for link in links] == [gh.id_of(out["issues"][c])
@@ -662,13 +662,13 @@ class _ReadShell:
 def test_1226_the_rest_runner_reads_an_issue_s_state_and_the_verdict_of_its_last_comment():
     sh = _ReadShell(comments=["a person said hello", "**passed**\n\n- `HOME-01`: passed"])
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
-    assert gh("issue_state", number=3) == {"state": "open", "verdict": "passed"}
+    assert gh("issue_state", number=3) == {"state": "open", "verdict": "passed", "title": None}
     assert sh.args[0][:2] == ["gh", "api"] and "repos/sbihaiko/MesenAI/issues/3" in sh.args[0]
 
 
 def test_1226_the_rest_runner_reads_an_issue_that_never_carried_a_verdict():
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=_ReadShell(state="closed", comments=["hello"]))
-    assert gh("issue_state", number=3) == {"state": "closed", "verdict": None}
+    assert gh("issue_state", number=3) == {"state": "closed", "verdict": None, "title": None}
 
 
 def test_1226_the_rest_runner_reopens_through_rest_and_never_graphql():
