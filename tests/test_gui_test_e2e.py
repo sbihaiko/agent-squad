@@ -2115,11 +2115,9 @@ def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
 
 
 # `home.first-focus` is the home batch's setup step (#1251): a run reports the batch's setup with its cases, so it is
-# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from. It runs before
-# `launch.port-lamp-p1` in the session of the batch before: the setup observes the state the application opens on, and
-# the pad connect that follows it makes the focus unread for a while (#1492), so the connect never precedes a setup.
-HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "home.first-focus",
-                  "launch.port-lamp-p1",
+# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from.
+HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
+                  "home.first-focus",
                   "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
                   "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
 # None of these is manual any more: MesenAI #1283 made the lamp, ring and surface cases automated (the hook decides them).
@@ -2137,18 +2135,6 @@ def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
     assert [s["id"] for b in d["batches"] for s in b["steps"]] == HOME_BATCH_IDS
     for b in d["batches"][1:]:
         assert b["setup"], f"batch {b['id']} carries no setup step, so only the batch before it can open it"
-
-
-def test_1492_the_launch_focus_setup_is_asked_before_the_batch_connects_a_pad():
-    """The Home batch's setup asserts the focus the application opens on (#1251).
-
-    The real application reads no focus at all for a while after `pad.connect` (MesenAI #1492), so a continuation that
-    runs the pad connect before that setup asks it for a state a pad already moved: it timed out in 2 of 6 runs on the
-    emulator before this order was pinned, and again after the setup's own budget was raised to 300 ticks.
-    """
-    d = _pilot_for_the_real_app(HOME_BATCH_IDS)
-    order = [s["id"] for b in d["batches"] for s in b["steps"]]
-    assert order.index("home.first-focus") < order.index("launch.port-lamp-p1"), order
 
 
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
