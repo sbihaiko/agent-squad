@@ -23,16 +23,19 @@ TOOL = "sbihaiko/agent-squad"
 
 @pytest.fixture(scope="module")
 def hub():
-    os.environ.setdefault("SG_REPO", EMU)
-    os.environ.setdefault("SG_OWNER", "sbihaiko")
-    os.environ.setdefault("SG_PROJECT", "4")
-    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
-    os.environ["SG_TOOLING_REPO"] = TOOL
-    os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    # the hub reads its profile from the environment at import, so the values this module pins are restored at the end:
+    # a module that leaves SG_TOOLING_REPO behind makes every later hub test read a second repository (#1820)
+    pinned = {"SG_REPO": EMU, "SG_OWNER": "sbihaiko", "SG_PROJECT": "4", "SG_TOOLING_REPO": TOOL,
+              "SG_CHECKOUT": tempfile.mkdtemp(), "SG_HUB_DIR": tempfile.mkdtemp()}
+    before = {k: os.environ.get(k) for k in pinned}
+    os.environ.update(pinned)
     spec = importlib.util.spec_from_file_location("hub_prs_two_repos", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    yield mod
+    for k, v in before.items():
+        if v is None: os.environ.pop(k, None)
+        else: os.environ[k] = v
 
 
 # --- the fixture/stub seam: the GraphQL payload the hub already parses, one node per PR ---------------------------

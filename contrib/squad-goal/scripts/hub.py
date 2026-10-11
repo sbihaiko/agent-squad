@@ -787,9 +787,13 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
     except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
     if items: board_cache.update(t=time.time(), items=items, lc=lc or board_cache.get("lc", {}), err=None)
+    rs = REPOS if repos is None else repos
     try:
-            prs, prev, prev_n, errs = prs_pass(fetch_open, fetch_closed, fetch_total, repos)
-            board_cache.update(t=time.time(), prs=prs, prev=prev, prev_n=prev_n, errs=errs)
+            prs, prev, prev_n, errs = prs_pass(fetch_open, fetch_closed, fetch_total, rs)
+            board_cache.update(prs=prs, prev=prev, prev_n=prev_n, errs=errs)
+            # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
+            # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
+            if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
     BOARD.write_text(json.dumps(board_cache))
     return board_cache
