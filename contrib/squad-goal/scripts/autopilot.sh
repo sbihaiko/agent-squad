@@ -97,7 +97,11 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
       [ -e "$A/dupiss-$pr-$iss" ] || { touch "$A/dupiss-$pr-$iss"; printf "PR #%s is superseded: issue #%s is closed as a duplicate / not planned, so the loop will not review, fix or merge it. Close the PR, or point its Refs at the live issue.\n" $pr $iss > "$SG_STATE/cq/$iss-dupiss$pr.md"; echo "SUPERSEDED-ISSUE #$pr: issue #$iss closed as duplicate/not planned; no review, fix or merge"; }
       continue
     fi; rm -f "$A/dupiss-$pr-$iss"; fi
-  line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
+  # The run's result is its summary line: the `#<pr> <sha9> ` namespace carries that line and nothing else (revci.sh
+  # prints CI_DISPATCH/SUPERSEDED/CI_TIMEOUT as `NOTICE ` lines), and it always carries `CI=`. Requiring both means a
+  # notice can never be read as a result -- which used to leave the head with no `CI=` and no verdict, so it was never
+  # queued for a review again (#1767).
+  line=$(grep -E "^#$pr $s9 .*CI=" "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
     [ -e "$A/launched-$pr-$s9" ] && continue
@@ -121,7 +125,9 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     nohup env $aenv bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started${aging:+ (aging: short leash)}"; continue
   fi
-  [[ $line == *SUPERSEDED* || $line == *CI_TIMEOUT* ]] && continue
+  # The run's terminal notices say this head is done with, but they are not results: they live outside the summary
+  # namespace, so they are read by their own prefix.
+  grep -qE "^NOTICE #$pr $s9 (SUPERSEDED|CI_TIMEOUT)" "$out" 2>/dev/null && continue
   # unresolved threads: asked once per head sha after review+CI (CodeRabbit has posted by then), cached
   tf="$A/threads-$pr-$s9"; [ -e "$tf" ] || bash "$here/autofix.sh" --threads $pr > "$tf"; nt=$(cat "$tf"); nt=${nt:-0}
   ms=$(awk '{print $3}' <<<"$line"); ci=$(sed -n 's/.*CI=\([^ ]*\).*/\1/p' <<<"$line")

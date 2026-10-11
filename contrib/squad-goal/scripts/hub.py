@@ -362,10 +362,16 @@ def review_attempts(pr, sha9):
     att = [r for r in review_rows(pr) if r["ts"] >= start - 5]   # 5 s of slop: the row follows the marker, never precedes it
     for r in att: r["result"] = "passed" if r["exit"] == 0 else ("timed out" if r["exit"] == 142 else "failed")
     return sorted(att, key=lambda r: r["ts"], reverse=True)
+def summary_lines(pr, sha9):
+    """The run summaries of revci-<pr>.out for head `sha9`: the `#<pr> <sha9> ` namespace carries the run's summary line
+    only, and a summary always carries `CI=`. The run's progress and terminal notices (CI_DISPATCH, SUPERSEDED,
+    CI_TIMEOUT) are printed with a `NOTICE ` prefix instead, so no reader can take one for a result (#1767)."""
+    try: ls = (STATE / f"revci-{pr}.out").read_text(errors="ignore").splitlines()
+    except OSError: return []
+    return [l for l in ls if l.startswith(f"#{pr} {sha9} ") and "CI=" in l]
 def _verdict_of(pr, sha9):
     """The verdict of the last completed run of the review loop for this head, from the revci-<pr>.out summary line."""
-    try: ls = [l for l in (STATE / f"revci-{pr}.out").read_text(errors="ignore").splitlines() if l.startswith(f"#{pr} {sha9} ")]
-    except OSError: return ""
+    ls = summary_lines(pr, sha9)
     return (ls[-1].split("VERDICT:", 1)[1].strip() if ls and "VERDICT:" in ls[-1] else "")
 def review_state(pr, sha9, now=None):
     """The card's review chip when the loop's latest attempt on this head did not pass; None keeps today's chip.
@@ -395,9 +401,7 @@ def pr_state(x):
     ci = x.get("ci") or []; sha9 = (x.get("h") or "")[:9]; n = x["n"]
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
-    line = ""
-    try: line = [l for l in (STATE / f"revci-{n}.out").read_text().splitlines() if l.startswith(f"#{n} {sha9} ")][-1]
-    except Exception: pass
+    line = (summary_lines(n, sha9) or [""])[-1]   # a notice (NOTICE #<pr> <sha9> ...) is not a result: see summary_lines
     if "CHANGES" in line: return ["changes", "changes requested"]
     rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
     if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
