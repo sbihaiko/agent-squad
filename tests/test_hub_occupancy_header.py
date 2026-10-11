@@ -2,6 +2,9 @@
 import importlib.util
 import json
 import os
+import re
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -99,3 +102,28 @@ def test_the_page_binds_the_header_tooltip_to_the_group_spend():
     assert "const CAPS=__CAPS__;" in src                                        # the caps reach the page
     assert '.replace("__CAPS__", json.dumps(loop_caps()))' in src               # ... from the graph
     assert 'title="${esc(h.title)}">${h.text}' in src                           # spend in the tooltip, occupancy as the text
+
+
+def _render_in_the_browser(hub, caps, rows):
+    """The header the page really paints: the served function, run by node. node is already a hard dependency of this suite."""
+    assert shutil.which("node"), "node is not installed: the page's own groupHeader cannot be run"
+    page = hub.PAGE
+    js = "\n".join(re.search(rf"^{header}.*$", page, re.M).group(0) for header in (r"const usd=", r"function groupHeader\("))
+    script = f"const CAPS={json.dumps(caps)};\n{js}\nconsole.log(JSON.stringify(groupHeader('running',{json.dumps(rows)})))"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_the_page_renders_the_occupancy_header_with_the_graphs_caps(hub):
+    rows = [{"spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
+    h = _render_in_the_browser(hub, {"max_parallel": 10, "max_children": 20}, rows)
+    assert h["text"] == "3/10 runs · 9/20 agents"
+    assert h["title"] == "$6.60"
+
+
+def test_the_page_renders_plain_counts_when_the_graph_is_unreadable(hub):
+    rows = [{"spend": 1.0, "agents": 3}] * 3
+    h = _render_in_the_browser(hub, None, rows)   # json null: what loop_caps() returns for an unreadable graph
+    assert h["text"] == "3 · 9"
+    assert h["title"] == "$3.00"
