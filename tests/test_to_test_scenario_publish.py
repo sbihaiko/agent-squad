@@ -124,11 +124,11 @@ def test_a_full_publish_ensures_the_labels_creates_the_parent_and_links_every_ca
     assert CASE_LABEL in labels and PARENT_LABEL in labels
     titles = gh.created_titles()
     assert titles[0] == plan["parent"]["title"] and "scenario" in titles[0].lower()
-    assert titles[1:] == [i["title"] for i in plan["issues"]]
+    assert titles[1:] == ["⚪ " + i["title"] for i in plan["issues"]]
     # The sub-issue relation names the issue's numeric id, never its number.
     made = {kw["title"]: made["id"] for kw, made in gh.made}
     linked = {(kw["parent"], kw["sub"]) for kw in gh.of("add_sub_issue")}
-    assert linked == {(out["parent"], made[i["title"]]) for i in plan["issues"]}
+    assert linked == {(out["parent"], made["⚪ " + i["title"]]) for i in plan["issues"]}
     assert len(gh.of("add_sub_issue")) == len(plan["issues"])
     # Only the parent reaches the board: no card is created for a sub-issue.
     assert gh.of("board") == [{"number": out["parent"]}]
@@ -139,7 +139,7 @@ def test_a_full_publish_maps_every_case_to_its_issue_number_and_content_hash(tmp
     gh = FakeGitHub()
     out = publish(plan, gh, map_path=tmp_path / "tiny.gui-test.issues.json")
     numbers = {kw["title"]: made["number"] for kw, made in gh.made}
-    assert out["cases"] == {i["id"]: {"number": numbers[i["title"]], "hash": i["hash"]} for i in plan["issues"]}
+    assert out["cases"] == {i["id"]: {"number": numbers["⚪ " + i["title"]], "hash": i["hash"]} for i in plan["issues"]}
     assert all(case["hash"] for case in out["cases"].values())
     assert out["created"] == [i["id"] for i in plan["issues"]] and out["updated"] == [] and out["removed"] == []
 
@@ -174,11 +174,11 @@ def test_an_interrupted_publish_resumes_from_the_map_and_creates_no_duplicate(tm
     saved = read_issues(map_path)
     assert saved["parent"] and len(saved["cases"]) == 1
     assert [c["title"] for c in interrupted.of("create_issue")] == \
-        [plan["parent"]["title"], plan["issues"][0]["title"], plan["issues"][1]["title"]]
+        [plan["parent"]["title"], "⚪ " + plan["issues"][0]["title"], "⚪ " + plan["issues"][1]["title"]]
 
     resumed = FakeGitHub(start=200)
     out = publish(plan, resumed, map_path=map_path)
-    assert [kw["title"] for kw in resumed.of("create_issue")] == [i["title"] for i in plan["issues"][1:]]
+    assert [kw["title"] for kw in resumed.of("create_issue")] == ["⚪ " + i["title"] for i in plan["issues"][1:]]
     assert out["parent"] == saved["parent"] and len(out["cases"]) == len(plan["issues"])
     assert len(resumed.of("board")) == 0                # the parent is already on the board
     # Nothing the first publish created was created again: the numbers are all different.
@@ -216,7 +216,7 @@ def test_a_secondary_rate_limit_backs_off_and_retries_instead_of_failing(tmp_pat
     assert sleeps.seconds and sleeps.seconds[0] == 7    # the API's own retry-after wins over the back-off
     titles = gh.created_titles()
     assert titles.count(plan["parent"]["title"]) == 1   # the retry created one parent, not two
-    assert titles[1:] == [i["title"] for i in plan["issues"]]
+    assert titles[1:] == ["⚪ " + i["title"] for i in plan["issues"]]
     assert len({c["number"] for c in out["cases"].values()}) == len(plan["issues"])
 
 

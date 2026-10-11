@@ -627,10 +627,13 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
         key = issue["id"] if "id" in issue else issue["cases"][0]
         if key in state["cases"]:
             number = state["cases"][key]["number"]
-            call("update_issue", number=number, title=issue["title"], body=issue["body"], labels=issue["labels"])
+            held = (call("issue_state", number=number) or {}).get("title") or ""
+            title = with_emoji(issue["title"], _held_emoji(held) or NOT_RUN)   # keeps a verdict, back-fills ⚪ once
+            call("update_issue", number=number, title=title, body=issue["body"], labels=issue["labels"])
             updated.append(key)
         else:
-            made = call("create_issue", title=issue["title"], body=issue["body"], labels=issue["labels"])
+            made = call("create_issue", title=with_emoji(issue["title"], NOT_RUN), body=issue["body"],
+                        labels=issue["labels"])
             number = made["number"]
             call("add_sub_issue", parent=state["parent"], sub=made["id"])   # the numeric id, never the number
             created.append(key)
@@ -667,6 +670,28 @@ def _paced(github, *, wait, attempts, backoff):
 
 
 # --------------------------------------------------------------------------- writing a run back
+
+
+VERDICT_EMOJI = {"passed": "✅", "failed": "❌", "needs review": "🟡", "pending": "👤"}
+NOT_RUN = "⚪"
+_PREFIXES = (NOT_RUN, *VERDICT_EMOJI.values())
+
+
+def title_base(title):
+    """The title without a verdict prefix (an emoji of the table and one space)."""
+    while title[:1] in _PREFIXES and title[1:2] == " ":
+        title = title[2:]
+    return title
+
+
+def with_emoji(title, emoji):
+    """`title` led by `emoji`, replacing any prefix it carries: latest run wins and the prefix never stacks."""
+    return f"{emoji} {title_base(title)}"
+
+
+def _held_emoji(title):
+    """The verdict emoji a title already leads with, or None for an unprefixed one."""
+    return title[0] if title[:1] in _PREFIXES and title[1:2] == " " else None
 
 
 def _verdict_of(verdicts):
@@ -835,6 +860,9 @@ def write_results(plan, run, github, published):
         counts[verdict] = counts.get(verdict, 0) + 1
         number = published["issues"][key]
         prior = github("issue_state", number=number) or {}
+        held = prior.get("title")
+        if held is not None and held != with_emoji(held, VERDICT_EMOJI[verdict]):
+            github("retitle", number=number, title=with_emoji(held, VERDICT_EMOJI[verdict]))
         if prior.get("verdict") == verdict:
             unchanged.append(key)
         else:
@@ -862,8 +890,19 @@ def write_results(plan, run, github, published):
             **({"reason": f"{len(missing)} case(s) have no result in the run"} if missing else {})}
 
 
+def _summary_line(plan, run, counts):
+    """The one-line digest every run leaves on the scenario: counts per verdict and a link to the results."""
+    ran = sum(counts.values())
+    not_run = max(len(plan["issues"]) - ran, 0)
+    link = run.get("results_url") or f"run `{run.get('run_id', '(none)')}`"
+    return (f"{counts.get('passed', 0)} passed, {counts.get('failed', 0)} failed, "
+            f"{counts.get('needs review', 0)} needs review, {counts.get('pending', 0)} manual, "
+            f"{not_run} not run - {link}")
+
+
 def _summary(plan, run, counts, review, pending, missing, bug):
-    lines = [f"## Run summary: `{plan['name']}`", "",
+    lines = [_summary_line(plan, run, counts), "",
+             f"## Run summary: `{plan['name']}`", "",
              f"- Run: `{run.get('run_id', '(none)')}` | script `{run.get('script_sha', '(none)')}` | "
              f"build `{run.get('build_sha', '(none)')}` | platform `{run.get('platform', '(none)')}`", ""]
     lines += [f"- {verdict}: {n}" for verdict, n in sorted(counts.items())]
@@ -1101,6 +1140,8 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             return api("POST", f"issues/{kw['parent']}/sub_issues", [("sub_issue_id", kw["sub"])], json_out=True)
         if op == "comment":
             return api("POST", f"issues/{kw['number']}/comments", [("body", kw["body"])], json_out=True)
+        if op == "retitle":
+            return api("PATCH", f"issues/{kw['number']}", [("title", kw["title"])], json_out=True)
         if op == "close":
             return api("PATCH", f"issues/{kw['number']}", [("state", "closed")], json_out=True)
         if op == "reopen":
@@ -1110,7 +1151,7 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             comments = api("GET", f"issues/{kw['number']}/comments", json_out=True)
             said = next((m.group(1) for c in reversed(comments or [])
                          if (m := _VERDICT_LINE.match((c.get("body") or "").strip()))), None)
-            return {"state": (issue or {}).get("state"), "verdict": said}
+            return {"state": (issue or {}).get("state"), "verdict": said, "title": (issue or {}).get("title")}
         if op == "board":
             if not project:
                 return {}
