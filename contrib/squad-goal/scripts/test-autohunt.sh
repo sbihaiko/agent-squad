@@ -11,7 +11,6 @@ cat > "$T/bin/gh" <<'GH'
 echo "$*" >> "${GHLOG:-/dev/null}"
 case "$*" in
   *pulls*) printf '%s\n' "${GH_PRS:-}";;
-  *labels=debt*) echo "${GH_DEBT:-}";;
   *POST*|*issues*)
     echo "$*" >> "${GHPOST:-/dev/null}"
     echo "{\"number\":${GH_NEW:-42}}";;

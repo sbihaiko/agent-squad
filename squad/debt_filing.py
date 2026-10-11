@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 
-LABELS = ("debt",)
+LABELS = ("debt", "ready-for-agent")
 FINDING = re.compile(r"^\W*DEBT\W+(?P<loc>\S+?:\d+)\s*[—–:-]+\s*(?P<defect>.*?)\s*(?:Acceptance:\s*(?P<ac>.*))?$",
                      re.IGNORECASE)
 MARK = "debt-key:"
@@ -39,11 +39,7 @@ def key(finding):
 
 def _body(finding, pr, issue, head):
     ac = finding["ac"] or "The defect above is fixed and a test covers it."
-    path = finding["loc"].rsplit(":", 1)[0]
-    fork = ""
-    if path.startswith(("contrib/squad-goal/", "squad/", "tests/")):
-        fork = "Fork-only work: the change lands in the agent-squad local fork; no PR against MesenAI.\n\n"
-    return (f"Origin: PR #{pr} (issue #{issue}), head {head[:12]}\n\n{fork}"
+    return (f"Origin: PR #{pr} (issue #{issue}), head {head[:12]}\n\n"
             f"**Location:** `{finding['loc']}`\n\n**Defect:** {finding['defect']}\n\n"
             f"**Acceptance criterion:** {ac}\n\n<!-- {MARK}{key(finding)} -->\n")
 
