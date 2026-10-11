@@ -908,11 +908,18 @@ MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
-# The add box is a short list, not a catalogue: a model nobody can run is noise, and a chain entry already
-# carries the ones in use. A provider whose balance is spent (grok, gemini) is left out until it answers again.
+# The add box carries the provider catalogues as they are, minus the two things that made it unreadable: the
+# workflow graph's prose (see known_models) and the same model under two spellings (the alias fold below). The
+# gemini/gpt-oss ids are the Antigravity catalogue; refresh them from `agy models` when it moves.
 EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
     "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
-    "claude-deepseek-v4-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session"]
+    "claude-deepseek-v4-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session",
+    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
+    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
+    "gemini-3.1-pro-high", "gemini-3.1-pro-low",
+    "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium",
+    "grok-4.5", "grok-4.6"]
 ALIAS = re.compile(r"^claude-(grok|gpt|gemini)-")
 def known_models(d):
     """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
