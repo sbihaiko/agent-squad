@@ -12,10 +12,6 @@ if [ "$suites" = python ]; then
 fi
 # the shell suites are offline and need no emulator, so they run beside the GUI suite (which holds the serial lock itself), not after it
 sl=$(mktemp); bash "$s" > "$sl" 2>&1 & sp=$!
-# The GUI suite is the slow half of the gate (it drives the real app), so it has its own off switch: SG_FORK_GUI_SUITE=no
-# in the environment, or the marker file $SG_STATE/auto/nogui, skips it for every landing. The shell suites always run.
-if [ "$suites" != shell ] && [ "${SG_FORK_GUI_SUITE:-yes}" = yes ] && [ ! -e "${SG_STATE:-$HOME/.cache/squad-goal}/auto/nogui" ]; then
-  echo "=== fork gate: GUI suite: $gui"; bash "$here/serial.sh" gui-suite bash -c "$gui" || { g=$?; echo "--- fork gate: GUI suite FAILED (exit $g)"; rc=1; }
-elif [ "$suites" != shell ]; then echo "=== fork gate: GUI suite SKIPPED (SG_FORK_GUI_SUITE=no or $SG_STATE/auto/nogui)"; fi
+if [ "$suites" != shell ]; then echo "=== fork gate: GUI suite: $gui"; bash "$here/serial.sh" gui-suite bash -c "$gui" || { g=$?; echo "--- fork gate: GUI suite FAILED (exit $g)"; rc=1; }; fi
 echo "=== fork gate: squad shell suites"; wait "$sp" || { shr=$?; echo "--- fork gate: shell suites FAILED"; rc=1; }
 cat "$sl"; rm -f "$sl"; exit $rc
