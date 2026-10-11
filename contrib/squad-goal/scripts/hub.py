@@ -72,7 +72,11 @@ def scan(p):
                 fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d{3,5})", l)
                 if fm: fix = int(fm.group(1))
             if i < 200 and not merge and "CONFLICT FIX" in l: merge = True   # forkclose conflict-fix run
-            if i < 200 and not bug and re.search(r"\(bug\)|branch fix/", l): bug = True   # a bug-fix run (autobug or a hand request for a bug issue)
+            # A run that fixes something is named "fix": a bug-fix run (autobug, or a hand request naming the bug issue) and a
+            # fork-only fix run alike. forkclose's fix runs name no issue and no `fix/` branch -- their request says "on the
+            # local fork branch gui/<N>" -- so without this they fell through to the "build" label with the issue number, and a
+            # red-gate fix read as new work (#1495, 2026-10-11).
+            if i < 200 and not bug and re.search(r"\(bug\)|branch fix/|on the local fork branch|FIX RUN .*fork", l): bug = True
             if i < 200 and stack is None:   # an optimistically stacked run names its parent PR ("STACKED on #N, whose PR #P")
                 sm = re.search(r"STACKED on #\d{3,5}[^#]{0,40}PR #(\d{3,5})", l)
                 if sm: stack = int(sm.group(1))
