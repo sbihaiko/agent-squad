@@ -73,7 +73,7 @@ def test_publish_command_stops_on_a_script_without_hashes_and_stamps_them_only_w
     assert tts.main(["publish", str(md), str(path)], github=gh) == 1
     assert gh.calls == [] and "content_hash" not in path.read_text()
     assert tts.main(["publish", str(md), str(path), "--stamp"], github=gh) == 0
-    assert "content_hash" in path.read_text() and len(gh.of("create_issue")) == 4   # parent plus three cases
+    assert "content_hash" in path.read_text() and len(gh.of("create_issue")) == 6   # parent, area, container, three cases
     assert tts.read_issues(tts.issues_path(path))["parent"] is not None
     again = FakeGitHub()
     assert tts.main(["publish", str(md), str(path)], github=again) == 0
