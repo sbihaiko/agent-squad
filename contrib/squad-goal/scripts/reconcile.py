@@ -39,7 +39,15 @@ def is_open(d):
 def section(body):
     m = re.search(r"^## Blocked by\s*\n(.*?)(?=^## |\Z)", body or "", re.S | re.M)
     return m.group(1) if m else ""
-def blockers(body): return [int(x) for x in re.findall(r"(?<![\w/])#(\d+)", section(body))]
+def blockers(body):
+    # A list, not prose: reading stops at the first line that is neither blank nor a bullet, so a trailing line that
+    # merely names another issue ("Blocks #N: ...") is not an edge (#1803, the parse stack.sh and forkclose.sh share).
+    out = []
+    for line in section(body).splitlines():
+        if not line.strip(): continue
+        if not re.match(r"\s*([-*] |\d+\. )", line): break
+        out.append(line)
+    return [int(x) for x in re.findall(r"(?<![\w/])#(\d+)", "\n".join(out))]
 def has_freetext_blocker(body):
     sec = section(body); return bool(re.search(r"^\s*[-*]\s+(?!none\b)\S", sec, re.M | re.I)) and not blockers(body)
 for n, it in sorted(items.items()):
