@@ -913,17 +913,22 @@ MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
 EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
     "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
     "claude-deepseek-v4-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session"]
+ALIAS = re.compile(r"^claude-(grok|gpt|gemini)-")
 def known_models(d):
     """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
 
     The workflow graph is no longer read: it names a dozen ids in its own prose (the ADR-0113 history of this
     flow), so scraping it filled the box with models that appear nowhere else.
+
+    One model, one row. A non-Anthropic provider is reachable as `grok-4.6` and as `claude-grok-4.6` and both
+    spellings were listed: the alias is folded onto the bare id, which is the form the chains name and the
+    bridge answers.
     """
     out = list(EXTRA_MODELS)
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
-    return sorted({m for m in out if MODEL_ID.match(m)})
+    return sorted({ALIAS.sub(r"\1-", m) for m in out if MODEL_ID.match(m)})
 EFFORTS = ("low", "medium", "high", "max")
 # local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
 HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
