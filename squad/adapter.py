@@ -11,6 +11,19 @@ class AdapterError(Exception):
     """The call failed before it produced a result. Its spend is unknown."""
 
 
+class MessageOverCeiling(AdapterError):
+    """The transport's reader stopped on one message bigger than its own JSON ceiling.
+
+    The ceiling and the size of the frame that hit it are facts about the transport, not about the work: the model never
+    answered badly, its message was simply past what the reader reads. They are kept apart from every other adapter
+    failure so an operator does not have to read the diagnostic text to tell the two apart (issue #1814).
+    """
+
+    def __init__(self, message, ceiling, size):
+        super().__init__(message)
+        self.ceiling, self.size = ceiling, size
+
+
 @dataclass
 class CallRequest:
     node: str
