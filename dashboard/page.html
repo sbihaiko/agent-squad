@@ -54,7 +54,7 @@
     <button id="b-redo" title="Redo (Ctrl or Cmd + Shift + Z)">Redo</button>
   </div>
   <div id="view"><button id="b-out" title="Zoom out">&minus;</button><span id="zoom">100%</span><button id="b-in" title="Zoom in">+</button><button id="b-fit" title="Fit the graph to the screen">Fit</button></div>
-  <aside id="legend" aria-label="Legend"><div id="legend-list"></div></aside>
+  <aside id="legend" aria-label="Legend"><button id="b-legend" aria-controls="legend-list" aria-expanded="false" title="Legend: the colors of the cards and the run chip (Esc closes)"><span class="lg-ic" aria-hidden="true">&#8801;</span><span class="lt">Legend</span></button><div id="legend-list"></div></aside>
   <datalist id="dl-models"></datalist><datalist id="dl-efforts"></datalist><datalist id="dl-skills"></datalist>
   <div id="replay"><button id="r-start" title="First event">|&lt;</button><button id="r-back" title="One event back (Left arrow)">&lt;</button><input id="r-range" type="range" min="1" max="1" step="1" value="1" title="Replay cursor: a position in the run record"><button id="r-fwd" title="One event forward (Right arrow)">&gt;</button><button id="r-end" title="Last event: a live run keeps following from here">&gt;|</button><span id="r-pos"></span></div>
   <div id="footer"><div id="hint">Press ? or Help for the controls</div></div>

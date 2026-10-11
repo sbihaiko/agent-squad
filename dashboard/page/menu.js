@@ -4,7 +4,7 @@ function swatches() {
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
-// The side strip's list: three headed groups (node outcomes, run states, interaction). Always expanded; a dot stands for a run chip.
+// The side strip's list: three headed groups (node outcomes, run states, interaction). Collapsed, only the swatches show; a dot stands for a run chip.
 const LEGEND_GROUPS = [["node", "Node outcomes"], ["run", "Run states"], ["interaction", "Interaction"]];
 function legendList() {
   const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
@@ -15,7 +15,18 @@ function legendList() {
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l]) => `<span class="lg">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
 }
+function setLegend(open, explicit) {
+  $("legend").classList.toggle("open", open);
+  $("b-legend").setAttribute("aria-expanded", String(open));
+  if (explicit) { UI.legend = open; saveUI(); }
+}
+function closeLegend() { if ($("legend").classList.contains("open")) setLegend(false, false); }
 $("legend-list").innerHTML = legendList();
+// A mouse hovers; a touch screen has no hover, so a tap anywhere on the strip toggles it, and a press on the map closes it.
+$("legend").addEventListener("click", (e) => {
+  if (e.target.closest("#b-legend") || window.matchMedia("(hover: none)").matches) setLegend(!$("legend").classList.contains("open"), true);
+});
+$("map").addEventListener("pointerdown", closeLegend);
 function buttonRows() {
   const els = [...document.querySelectorAll("#left .tools button[title], #left .tools label.btn, #view button[title], #replay button[title]")].filter((b) => b.offsetParent !== null);
   return els.map((b) => `<tr><td>${esc(b.firstChild && b.firstChild.nodeType === 3 ? b.firstChild.textContent.trim() : b.textContent.trim())}</td><td>${esc(b.getAttribute("title") || "")}</td></tr>`).join("");

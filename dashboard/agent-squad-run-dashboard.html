@@ -156,13 +156,17 @@
   .card.drop rect { stroke:var(--drop); stroke-width:2; fill:#2a1f33; }
   #rubber { stroke:var(--acc); stroke-width:1.6; stroke-dasharray:5 4; pointer-events:none; }
   #edges marker path { fill:#4a5568; }
-  /* The legend is a strip on the map's right edge, under the zoom controls: always expanded; the graph keeps the remaining width. */
-  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; }
-  #legend-list { display:flex; flex-direction:column; padding:4px 6px; }
+  /* The legend is a strip on the map's right edge, under the zoom controls: it widens itself to the left on hover, focus or the sticky .open. */
+  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:28px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; transition:width .15s ease .15s; }
+  #legend:hover, #legend:focus-within, #legend.open { width:220px; transition-delay:0s; }
+  #b-legend { display:flex; align-items:center; gap:6px; width:100%; box-sizing:border-box; padding:4px 5px; border:0; background:none; color:var(--fg); font-size:11px; cursor:pointer; }
+  #legend-list { display:flex; flex-direction:column; padding:0 2px 4px; }
   #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
   #legend .lg svg { flex:0 0 24px; }
-  #legend .lt, #legend .lh { overflow:hidden; }
-  #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  #legend .lt, #legend .lh { opacity:0; transition:opacity .15s ease .15s; overflow:hidden; }
+  #legend:hover .lt, #legend:focus-within .lt, #legend.open .lt, #legend:hover .lh, #legend:focus-within .lh, #legend.open .lh { opacity:1; transition-delay:0s; }
+  #legend .lh { height:0; margin:4px 0 0; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  #legend:hover .lh, #legend:focus-within .lh, #legend.open .lh { height:auto; padding-top:3px; }
   #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
@@ -203,12 +207,12 @@
   #fmenu .drop button:hover, #fmenu .drop label.btn:hover { background:#182a40; }
   #fmenu .drop .sep { color:var(--mute); font-size:11px; padding:4px 8px 0; }
   #fmenu .drop .note { padding:2px 8px; }
-  #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 244px); }
+  #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 200px); }
   #status { position:fixed; left:12px; bottom:40px; z-index:5; max-width:min(560px, 60vw); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:12px; color:var(--mute); cursor:pointer; }
   #status:empty { display:none; }
   @media (max-width: 900px) { #status { bottom:112px; } }   /* a narrow window: the toast sits above the replay bar, not over its buttons */
   #side details.ref { margin-top:14px; }
-  /* A narrow window still shows the expanded strip on the right; the help (?) holds the same list. */
+  /* A narrow window keeps the legend as the collapsed strip; the help (?) holds the full legend too. */
 
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
 #side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
@@ -275,7 +279,7 @@
     <button id="b-redo" title="Redo (Ctrl or Cmd + Shift + Z)">Redo</button>
   </div>
   <div id="view"><button id="b-out" title="Zoom out">&minus;</button><span id="zoom">100%</span><button id="b-in" title="Zoom in">+</button><button id="b-fit" title="Fit the graph to the screen">Fit</button></div>
-  <aside id="legend" aria-label="Legend"><div id="legend-list"></div></aside>
+  <aside id="legend" aria-label="Legend"><button id="b-legend" aria-controls="legend-list" aria-expanded="false" title="Legend: the colors of the cards and the run chip (Esc closes)"><span class="lg-ic" aria-hidden="true">&#8801;</span><span class="lt">Legend</span></button><div id="legend-list"></div></aside>
   <datalist id="dl-models"></datalist><datalist id="dl-efforts"></datalist><datalist id="dl-skills"></datalist>
   <div id="replay"><button id="r-start" title="First event">|&lt;</button><button id="r-back" title="One event back (Left arrow)">&lt;</button><input id="r-range" type="range" min="1" max="1" step="1" value="1" title="Replay cursor: a position in the run record"><button id="r-fwd" title="One event forward (Right arrow)">&gt;</button><button id="r-end" title="Last event: a live run keeps following from here">&gt;|</button><span id="r-pos"></span></div>
   <div id="footer"><div id="hint">Press ? or Help for the controls</div></div>
@@ -3241,7 +3245,7 @@ $("b-unlink").addEventListener("click", () => disconnectLink(S.link));
 $("b-undo").addEventListener("click", () => stepHistory(-1));
 $("b-redo").addEventListener("click", () => stepHistory(1));
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeMenu(); closeHelp(); }
+  if (e.key === "Escape") { closeMenu(); closeHelp(); closeLegend(); }
   const t = e.target && e.target.tagName;
   // In a text field the browser's own undo keeps the text; elsewhere Ctrl or Cmd + Z walks the edit history.
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !["TEXTAREA", "INPUT", "SELECT"].includes(t)) {
@@ -3267,7 +3271,7 @@ function swatches() {
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
-// The side strip's list: three headed groups (node outcomes, run states, interaction). Always expanded; a dot stands for a run chip.
+// The side strip's list: three headed groups (node outcomes, run states, interaction). Collapsed, only the swatches show; a dot stands for a run chip.
 const LEGEND_GROUPS = [["node", "Node outcomes"], ["run", "Run states"], ["interaction", "Interaction"]];
 function legendList() {
   const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
@@ -3278,7 +3282,18 @@ function legendList() {
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l]) => `<span class="lg">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
 }
+function setLegend(open, explicit) {
+  $("legend").classList.toggle("open", open);
+  $("b-legend").setAttribute("aria-expanded", String(open));
+  if (explicit) { UI.legend = open; saveUI(); }
+}
+function closeLegend() { if ($("legend").classList.contains("open")) setLegend(false, false); }
 $("legend-list").innerHTML = legendList();
+// A mouse hovers; a touch screen has no hover, so a tap anywhere on the strip toggles it, and a press on the map closes it.
+$("legend").addEventListener("click", (e) => {
+  if (e.target.closest("#b-legend") || window.matchMedia("(hover: none)").matches) setLegend(!$("legend").classList.contains("open"), true);
+});
+$("map").addEventListener("pointerdown", closeLegend);
 function buttonRows() {
   const els = [...document.querySelectorAll("#left .tools button[title], #left .tools label.btn, #view button[title], #replay button[title]")].filter((b) => b.offsetParent !== null);
   return els.map((b) => `<tr><td>${esc(b.firstChild && b.firstChild.nodeType === 3 ? b.firstChild.textContent.trim() : b.textContent.trim())}</td><td>${esc(b.getAttribute("title") || "")}</td></tr>`).join("");
@@ -3738,6 +3753,7 @@ function setSide(open, auto) {
 function sideOpen() { return !document.body.classList.contains("noside"); }
 function openSide() { if (!sideOpen()) setSide(true, true); }
 setSide(!!UI.side, true);
+setLegend(!!UI.legend, false);   // chrome.js builds UI, so the stored choice is read here, after menu.js defined setLegend
 $("b-panel").addEventListener("click", () => setSide(!sideOpen()));
 // The panel is a popup: a click on the dimmed page behind it, or Escape, closes it.
 document.addEventListener("click", (e) => { if (e.target === document.body && sideOpen()) setSide(false); });
