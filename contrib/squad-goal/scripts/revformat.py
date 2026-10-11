@@ -11,6 +11,12 @@ Nothing else: no preamble, no restating the diff, no closing summary.
 of that try (the chain moves on and says so), never a silent pass. `autopilot.sh` asks for the
 bullets per section with --summary instead of grepping a tag on the line (ADR-0273 Decision 3/5).
 
+A fix round repeats each previous finding with the answer to it, `fixed|not fixed: <reason>`
+(review.sh's FMTFIX). A bullet that answers `fixed` is the answer to a finding, not a finding
+(#1832): it is counted by neither the check nor --summary, so APPROVE with every previous Blocking
+finding fixed is the shape and the debt-only path sees blocking=0 (ADR-0273 Decision 3/5). A bullet
+saying `not fixed`, and one carrying no marker at all (a full review), keeps its severity (#1777).
+
 usage: revformat.py [--max-lines N] <review>   exit 0 = the shape holds; 1 = one reason on stdout
        revformat.py --summary <review>         prints "blocking=N debt=N" (0 when the shape is broken)
 """
@@ -24,20 +30,55 @@ THEME = re.compile(r"^#{3,}\s*(\S.*?)\s*$")
 BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 LOC = re.compile(r"^[^\s:]+:\d+")            # path:line, the first field of a bullet (or the second)
 SEP = re.compile(r"\s+[—–-]\s+")             # the " — " between the fields
+# the fix-round answer to a previous finding, the third field of a bullet (#1832): "fixed: <reason>", a bare "fixed",
+# or "fixed — <check>". "not fixed: <reason>" is not the answer, and neither is prose that merely opens with the word
+# ("fixed-size buffer"), which is why the separator after it has to be a colon, nothing or a dash.
+FIXED = re.compile(r"^fixed(?:\s*:|\s*$|\s+[—–-]\s+)", re.IGNORECASE)
 SECTIONS = ("Blocking", "Debt")
 
 
-def count(review):
-    """The bullets per section, in any order and however the shape is broken (--summary).
+def answered_fixed(text):
+    """True when a bullet is the fix round's answer to a previous finding, stated as `fixed` (#1832). `text` is the
+    bullet's text, its two lines already joined.
 
-    `autopilot.sh` asks this to tell a review that only raises DEBT from one that raises a Blocking finding.
+    The marker is the third field review.sh's FMTFIX asks for (`<file>:<line> — <defect> — fixed|not fixed: <reason> —
+    <check>`), read from the third field on, so a defect that opens with the word is not mistaken for the answer. The
+    shape check already rejects a bullet of fewer than three fields, so that field exists on every bullet it counts.
     """
-    counts, section = {name: 0 for name in SECTIONS}, None
+    return any(FIXED.match(f.strip()) for f in SEP.split(text)[2:])
+
+
+def bullets(review):
+    """(section, text) for every bullet, with the one extra line the shape allows joined onto the bullet above it."""
+    out, section, open_bullet = [], None, False
     for line in review.replace("\r\n", "\n").split("\n"):
-        m = SECTION.match(line.strip())
+        text = line.strip()
+        m = SECTION.match(text)
         if m:
-            section = m.group(1).capitalize()
-        elif not line.lstrip().startswith("#") and section and BULLET.match(line):
+            section, open_bullet = m.group(1).capitalize(), False
+            continue
+        if not text or text.startswith("#"):
+            open_bullet = False
+            continue
+        found = BULLET.match(line)
+        if found and section:
+            out.append((section, found.group(1))); open_bullet = True
+        elif section and open_bullet:
+            out[-1] = (out[-1][0], out[-1][1] + " " + text)
+    return out
+
+
+def count(review):
+    """The findings per section, in any order and however the shape is broken (--summary).
+
+    `autopilot.sh` asks this to tell a review that only raises DEBT from one that raises a Blocking finding, and
+    `hub.py` asks it for the R cell: the two read one module so a debt-only CHANGES is not blocking on one surface and
+    merged on the other. A bullet that answers a previous finding `fixed` is not a finding (#1832), the same reading
+    `survey` makes -- so a fix round whose Blocking findings are all fixed reads `blocking=0`.
+    """
+    counts = {name: 0 for name in SECTIONS}
+    for section, text in bullets(review):
+        if not answered_fixed(text):
             counts[section] += 1
     return counts
 
@@ -58,13 +99,15 @@ def survey(review, max_lines=0):
         if bullet is None:
             return None
         n, text = bullet
-        fields = SEP.split(" ".join(text))
+        joined = " ".join(text)
+        fields = SEP.split(joined)
         if len(fields) < 3:
             return (f"line {n}: {text[0][:40]!r} is not 'file:line — defect — concrete failure — fix'"
                     " (three fields at least)")
         if not any(LOC.match(f.strip()) for f in fields[:2]):
             return f"line {n}: the bullet names no file:line ({fields[0].strip()[:30]!r})"
-        counts[section] += 1
+        if not answered_fixed(joined):             # a bullet that answers a previous finding 'fixed' is not a finding
+            counts[section] += 1
         return None
     for n, line in enumerate(lines[1:], start=2):
         text = line.strip()
@@ -110,7 +153,7 @@ def survey(review, max_lines=0):
             return f"line {n}: the bullet at line {bullet[0]} runs over two lines"
     if (bad := close()):
         return bad
-    if approve and counts["Blocking"]:
+    if approve and counts["Blocking"]:   # only the Blocking bullets that are not answered 'fixed' reach counts (#1832)
         return (f"VERDICT: APPROVE with {counts['Blocking']} Blocking finding(s): the verdict contradicts"
                 " the review")
     used = sum(1 for l in lines if l.strip())
@@ -147,7 +190,8 @@ def main(argv=None):
     p.add_argument("review", help="the review to check, or - for stdin")
     p.add_argument("--max-lines", type=int, default=0,
                    help="line cap for the whole review (review_max_lines in models.json; 0 = no cap)")
-    p.add_argument("--summary", action="store_true", help="print 'blocking=N debt=N' instead of checking")
+    p.add_argument("--summary", action="store_true", help="print 'blocking=N debt=N' instead of checking"
+                   " (a bullet answered 'fixed' is not a finding, #1832)")
     p.add_argument("--normalize", action="store_true",
                    help="print the review with its verdict canonical on line 1, and check nothing")
     a = p.parse_args(argv)
