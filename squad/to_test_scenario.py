@@ -742,7 +742,9 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     never makes two containers. Re-publishing rewrites titles after their emoji prefix and bodies outside their
     dashboard block, and never touches a record's state. A case whose area changed is re-parented. A case, or an
     area, the map knows and the plan no longer covers is reported in `removed` / `removed_areas` and stays open.
-    Creations are paced: a secondary rate limit (`RateLimited` from the runner) is waited out and retried.
+    A flat map (no `"layout": "areas"`, case records under the scenario) is migrated in the same pass: areas and
+    containers first, then each known record re-parented (`replace_parent`, nothing closed or deleted), then the
+    records the cap left out created, and `"layout": "areas"` written last. Creations are paced: a secondary rate limit (`RateLimited` from the runner) is waited out and retried.
 
     `dry_run` returns the counts to create, link, move and update, asks GitHub nothing and writes nothing. A plan with
     no `areas` is published flat, every case a sub-issue of the scenario.
@@ -860,8 +862,9 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
             issues[key] = state["cases"][key]
             flush()
     else:
-        state["layout"] = "areas"
         known = state.setdefault("areas", {})
+    flat = bool(tree) and state.get("layout") != "areas" and bool(state["cases"])
+    waiting = []                    # a flat scenario's records are placed after every area and container exists
     for area in tree:
         entry = known.get(area["key"])
         if entry is None:
@@ -896,7 +899,17 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
                 flush()
             link(entry["number"], held["number"], held["id"])
             for issue in container["cases"]:
-                place(issue, area["key"], held["number"])
+                if flat:
+                    waiting.append((issue, area["key"], held["number"]))
+                else:
+                    place(issue, area["key"], held["number"])
+    # A flat scenario migrates in order: areas and containers, the known records re-parented, the records the cap left
+    # out created, and only then the layout, so an interrupted pass is still flat and resumes the same way.
+    for issue, area_key, container in sorted(waiting, key=lambda w: _case_key(w[0]) not in state["cases"]):
+        place(issue, area_key, container)
+    if tree:
+        state["layout"] = "areas"
+        flush()
     return {"parent": scenario, "boarded": state["boarded"], "cases": issues,
             "issues": {key: value["number"] for key, value in issues.items()}, "created": created,
             "updated": updated, "removed": [k for k in state["cases"] if k not in issues],
