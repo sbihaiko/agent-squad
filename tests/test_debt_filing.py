@@ -49,7 +49,8 @@ def test_body_carries_pr_location_defect_and_acceptance_and_labels():
     for needle in ("#77", "#70", "src/b.py:42", "retry loop has no backoff",
                    "retries wait with exponential backoff, covered by a test"):
         assert needle in first["body"], needle
-    assert set(first["labels"]) == {"debt", "ready-for-agent"}
+    assert first["labels"] == ["debt"]
+    assert "ready-for-agent" not in first["labels"]
     assert "debt" in gh.labels   # created because it was absent
 
 
@@ -57,6 +58,23 @@ def test_existing_debt_label_is_not_recreated():
     gh = StubGh(labels={"debt"})
     file_debt("o/r", 77, 70, REVIEW, "abc123", runner=gh)
     assert not any("--method" in c and "POST" in c and c[-1].endswith("/labels") for c in gh.calls)
+
+
+def test_existing_debt_plus_ready_for_agent_issue_is_still_a_duplicate():
+    """An older filer tagged both labels; the duplicate check still keys on `debt`."""
+    from squad.debt_filing import MARK, key, parse
+
+    gh = StubGh(labels={"debt"})
+    first = parse(REVIEW)[0]
+    gh.issues.append({
+        "title": "Debt: retry loop has no backoff (src/b.py:42)",
+        "body": f"already filed\n<!-- {MARK}{key(first)} -->\n",
+        "labels": ["debt", "ready-for-agent"],
+    })
+    filed = file_debt("o/r", 77, 70, REVIEW, "abc123", runner=gh)
+    assert all("retry" not in (u or "").lower() for u in filed)
+    assert sum(1 for i in gh.issues if MARK + key(first) in i["body"]) == 1
+    assert any("dead flag" in i["body"] for i in gh.issues)
 
 
 def test_second_run_same_head_is_a_noop_and_new_head_files_once():

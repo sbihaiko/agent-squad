@@ -37,7 +37,7 @@ PY
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 pick=(); notes=()
 while IFS=$'\x1f' read -r w n labels; do
-  [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*) continue;; esac
+  [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*|*,debt,*) continue;; esac
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
   fk=""; case "$d" in *" FORK "*) fk="; OPTIMISTIC ON CODE COMPLETE: create your fork branch from $SG_FORK_BASE and first \`git merge --no-ff\` the blocker's unmerged fork branch(es) ${d##* FORK } into it, then build on top";; esac

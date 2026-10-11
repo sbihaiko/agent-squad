@@ -50,7 +50,7 @@ review_waiting() {
   return 1
 }
 startable() {
-  AB_DRY=1 bash "$here/autobug.sh" 2>/dev/null | grep -q 'would dispatch' && return 0
+  AB_SKIP_DEBT=1 AB_DRY=1 bash "$here/autobug.sh" 2>/dev/null | grep -q 'would dispatch' && return 0
   AF_DRY=1 bash "$here/autofrontier.sh" 2>/dev/null | grep -q 'would dispatch' && return 0
   return 1
 }
@@ -96,10 +96,13 @@ case $src_i in
 esac
 echo $(( (src_i + 1) % 4 )) > "$A/hunt-source"
 
+open_debt=$(gh api "repos/$SG_REPO/issues?state=open&labels=debt&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|"#"+(.number|tostring)+" "+.title' 2>/dev/null)
 name="hunt-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 { echo "IMPORTANT: your first and only action is to call the spawn tool for the 1 child below, in one turn; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child, coding model from models.json. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
   echo "This is a read-only bug hunt. Do not edit files, do not run git writes, do not open a PR, do not push."
-  echo "Rotate among these sources; this hunt's source is $src_name."
+  echo "First source: open debt issues (work these before hunting for new defects) when there is no startable bug."
+  if [ -n "$open_debt" ]; then echo "Open debt:"; echo "$open_debt"; else echo "Open debt: none."; fi
+  echo "Then rotate among these sources; this hunt's rotated source is $src_name."
   echo "(a) run the squad shell suites and Python suites twice and report failures/flakes;"
   echo "(b) read code merged in the last 24h (git log) for defects;"
   echo "(c) open-question / needs-human notes of recent verdicts;"
@@ -107,7 +110,7 @@ name="hunt-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
   echo "May file: only a real defect with a reproduction, ideally a failing test whose output is in the issue. Search open and closed issues first; never file a duplicate; at most 3 bugs per hunt; no style opinions / architecture trade-offs (those go /adr). Each issue gets label \`bug\` and nothing else; body says Fork-only work: ... when the defect is in the agent-squad fork. File with: bash $here/autohunt.sh --file \"<title>\" <body-file>. If nothing qualifies: bash $here/autohunt.sh --none."
   echo "Never: run a GUI scenario, write-back or migration against a scenario's parent issue, delete anything (permanent deletion), spend money, touch credentials, or publish externally."
   echo
-  echo "CHILD — read-only hunt (source $src_name): look for real, reproducible defects and file each as a bug."
+  echo "CHILD — read-only hunt (first source: open debt; then $src_name): look for real, reproducible defects and file each as a bug."
 } > "$body"
 req=$("$here/mkreq.sh" "$name" "$body") || exit 0
 echo "$now" > "$A/hunt-last"; echo "$now" > "$A/hunt-activity"
