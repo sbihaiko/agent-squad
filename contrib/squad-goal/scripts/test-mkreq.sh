@@ -23,6 +23,11 @@ echo old > "$FK/contrib/squad-goal/scripts/hub.py"; echo old > "$FK/dashboard/pa
 (cd "$FK" && /usr/bin/git checkout -q -b gui/1510-mine && echo x > contrib/squad-goal/scripts/hub2.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m hub2 && /usr/bin/git checkout -q local/next)
 (cd "$FK" && /usr/bin/git checkout -q -b gui/1780 && echo x > scripts/open1780.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m open1780 && /usr/bin/git checkout -q local/next)
 (cd "$FK" && /usr/bin/git checkout -q -b gui/1791 && echo x > scripts/unreachable1791.py && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m unreachable1791 && /usr/bin/git checkout -q local/next)
+# (#1786) gui/1767 and gui/1768 both edit contrib/squad-goal/scripts/autopilot.sh and neither landed: that pair is what
+# deadlocked forkclose. for-each-ref lists gui/1767 first, so gui/1767 is the branch a refusal over that file always cites --
+# including the refusal of the rebase run for gui/1768, which repairs the other branch.
+(cd "$FK" && /usr/bin/git checkout -q -b gui/1767 && echo x > contrib/squad-goal/scripts/autopilot.sh && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m a1767 && /usr/bin/git checkout -q local/next)
+(cd "$FK" && /usr/bin/git checkout -q -b gui/1768 && printf 'x\ny\n' > contrib/squad-goal/scripts/autopilot.sh && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m a1768 && /usr/bin/git checkout -q local/next)
 printf 'export SG_REPO=o/r SG_FORK_DIR=%s SG_FORK_BASE=local/next\n' "$FK" > "$S/env.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -36,6 +41,8 @@ case "$*" in
   *"issue view 1498"*) echo OPEN;;
   *"issue view 1510"*) echo CLOSED;;
   *"issue view 1780"*) echo OPEN;;
+  *"issue view 1767"*) echo OPEN;;
+  *"issue view 1768"*) echo OPEN;;
   *"issue view 1791"*) exit 1;;
 esac
 GH
@@ -222,6 +229,16 @@ $G -q 'request a' "$T/forkrebase-1497-def456789.err" && ok "the rebase-vs-reques
 body p12 contrib/squad-goal/scripts/hub.py forkrebase-1497-abc123456
 run forkrebase-1497-abc123456 && [ -f "$R/forkrebase-1497-abc123456.txt" ] && ok "a rebase of the branch holding the file launches" || ko "the rebase of its own branch was refused: $(cat "$T/forkrebase-1497-abc123456.err")"
 $G -q 'refusing' "$T/forkrebase-1497-abc123456.err" && ko "the rebase of its own branch was still refused" || ok "the rebase of its own branch prints no refusal"
+# 12d. (#1786) TWO unmerged branches on ONE file. gui/1767 and gui/1768 both edit contrib/squad-goal/scripts/autopilot.sh, so
+# the rebase request for either one names a file the other also touches, and for-each-ref lists gui/1767 first: the branch a
+# refusal cites is then never the branch the request repairs. A rebase takes its own branch's side and merges the base into it --
+# it writes nothing the other branch is writing -- so the closes are serialized, not deadlocked, and each rebase is exempt for a
+# file its own branch claims even when another branch claims it too.
+for rb in 1768 1767; do
+  body p12 contrib/squad-goal/scripts/autopilot.sh "forkrebase-$rb-abc123456"
+  run "forkrebase-$rb-abc123456" && [ -f "$R/forkrebase-$rb-abc123456.txt" ] && ok "the rebase of gui/$rb, one of two branches on one file, launches" || ko "the rebase of gui/$rb was refused: $(cat "$T/forkrebase-$rb-abc123456.err")"
+  $G -q 'refusing' "$T/forkrebase-$rb-abc123456.err" && ko "the rebase of gui/$rb was still refused" || ok "the rebase of gui/$rb prints no refusal"
+done
 # 13. (#1794) a fork branch whose issue is closed claims no slice. gui/1510-mine (#1510, closed) sat one commit ahead of
 # local/next touching contrib/squad-goal/scripts/hub2.py, so the guard refused every request naming that file while five
 # startable issues waited and the loop ran zero live runs -- and a closed issue can never land a branch. Such a branch is

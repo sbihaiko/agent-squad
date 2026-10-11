@@ -171,9 +171,15 @@ slice_guard() {
     # request that could break the deadlock was the one refused. So the file of the branch this request repairs is exempt,
     # exactly as #1769 exempts a fix run's own PR -- and the claim record already carries the number the request name carries.
     # The closes are serialized instead: the first branch's rebase lands, and the second then collides with the base, not with a
-    # branch. Another branch, another request and an open PR over the same file refuse exactly as before, and so does any
-    # request whose name is not a rebase run's.
-    if [[ $1 =~ ^forkrebase-([0-9]+)-[0-9a-f]{9}$ ]] && [ "$holder" = "branch ${bref}/${BASH_REMATCH[1]}" ]; then
+    # branch. Another request's file, an open PR's file, and the file of a branch this request's own branch does not claim
+    # refuse exactly as before, and so does any request whose name is not a rebase run's.
+    # The exemption asks whether the request's OWN branch claims the file, not whether the branch the lookup happened to return
+    # is that branch. `holder` above is the FIRST claimer in for-each-ref order, and that order is alphabetical: of gui/1767 and
+    # gui/1768 both editing contrib/squad-goal/scripts/autopilot.sh, gui/1767 always answers first, so comparing `holder` against
+    # the request's own branch exempted gui/1767's rebase and refused gui/1768's -- the one that repairs the branch the refusal
+    # named. The pair stayed deadlocked, one-sided, and the refusal read as a mirror-check failure. Asking the claim list instead
+    # exempts a file the request's own branch claims even when another branch claims it too, which is what serializes the closes.
+    if [[ $1 =~ ^forkrebase-([0-9]+)-[0-9a-f]{9}$ ]] && printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" -v b="branch ${bref}/${BASH_REMATCH[1]}" '$1==f && $2==b {mine=1} END{exit !mine}'; then
       echo "SLICE SELF-REBASE $1: $f is ${bref}/${BASH_REMATCH[1]}'s own file; a rebase of the branch it repairs is not a second slice (#1786)" >&2; continue
     fi
     case "$holder" in
