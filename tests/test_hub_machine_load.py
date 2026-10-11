@@ -91,7 +91,8 @@ def test_two_samples_in_a_row_above_the_threshold_are_load(hub):
 def test_the_run_of_samples_has_to_be_unbroken(hub):
     assert hub.sustained([95.0, 10.0, 95.0]) is False
     assert hub.sustained([10.0, 95.0, 95.0]) is True
-    assert hub.sustained([None, 95.0, 95.0]) is False   # an unreadable sample breaks the run: never a guess
+    assert hub.sustained([95.0, None]) is False         # a sample that could not be read breaks the run: never a guess
+    assert hub.sustained([None, 95.0, 95.0]) is True    # ... and one older than the run of samples does not hold it back
 
 
 def test_a_machine_under_the_threshold_is_never_warned(hub):
@@ -128,7 +129,7 @@ def test_the_run_folder_owns_the_child_worktrees_inside_it(hub):
             2: (1, 0.0, "zsh /r/runs/run-20261011-132053-54d24b/ws/worktrees_child-route.router.7")}
     cur = {1: (0, 0.5, "python -m squad.dashboard_server /r/runs/run-20261011-132053-54d24b"),
            2: (1, 4.5, "zsh /r/runs/run-20261011-132053-54d24b/ws/worktrees_child-route.router.7")}
-    assert hub.attribute(prev, cur, owners) == {"run-1": 4.0}
+    assert hub.attribute(prev, cur, owners) == {"run-1": 5.0}   # the server that carries the run folder counts with its children
 
 
 def test_a_share_is_a_percentage_of_the_whole_machine(hub):
@@ -188,7 +189,7 @@ def test_an_empty_history_reads_as_unavailable(hub):
 def test_the_page_carries_a_footer_strip_and_polls_the_reading():
     src = HUB_PY.read_text()
     assert 'elif self.path.startswith("/api/load")' in src            # served, not sampled, per view
-    assert "<div id=foot>" in src and "id=ldline" in src              # the strip and its line
+    assert '<div id=foot' in src and "id=ldline" in src              # the strip and its line
     assert "const LOAD_MS=__LOADMS__;" in src
     assert '.replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))' in src
     assert "setInterval(loadPoll,LOAD_MS)" in src
