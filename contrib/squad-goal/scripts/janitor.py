@@ -13,7 +13,7 @@
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
  K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
     after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
- O  a run that ended with a `failed` verdict and landed nothing (no `land` pass in its record): every issue it was dispatched for goes back to the column the dispatch found it in --
+ O  a run that ended with a `failed` verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): every issue it was dispatched for goes back to the column the dispatch found it in --
     auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- and the marker is dropped, so autofrontier/autobug dispatch it again.
     Only the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board) is left, so a card another step moved past it is never downgraded; a run that landed work, an issue a live run works, and an issue an open or merged PR names keep their card and their marker. Once per run; the comment carries the run id and the verdict's reasons.
  M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
@@ -109,8 +109,10 @@ def read(f):
             try:   # the fold takes the last verdict event of a resumed record (ADR-0105)
                 d = json.loads(l); ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
             except ValueError: ver = None; rs = []
-        if '"event": "land"' in l:
-            try: landed = landed or json.loads(l).get("outcome") == "pass"
+        if '"land"' in l:   # only the landing stage's own event counts, and its name is in the JSON, never guessed
+            try:
+                d = json.loads(l)   # a node that merely asked for children (the router's `routed: continue`) is not a landing
+                landed = landed or (d.get("event") == "land" and d.get("outcome") == "pass")
             except ValueError: pass
         if '"event": "call_start"' in l:
             try: pidc = json.loads(l).get("pid") or pidc
@@ -216,7 +218,7 @@ if owner and proj and repo0:
             if n in byissue: continue   # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if card_status(proj, n) != "In Progress": continue   # only the column the dispatch set: never downgrade a card another step moved past it
-            if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch
+            if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch; -f alone would POST and the API answers that with Not Found, which reads as a PR forever
             moves = [[proj, os.environ.get("SG_TODO", "Todo")]]
             if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended failed ({why}), nothing landed; card -> {', '.join(s for _, s in moves)}, {'+'.join(marks[n])} marker dropped so it dispatches again")

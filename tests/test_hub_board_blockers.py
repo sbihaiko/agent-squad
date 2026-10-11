@@ -151,7 +151,6 @@ NAMED = {
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
-CHIP_LABEL = "#939cab"     # the name beside the number inside a chip
 
 
 def _board_js(hub):
@@ -173,6 +172,13 @@ def _mute(hub):
     return re.search(r"--mute:(#[0-9a-f]{6})", _css(hub)).group(1)
 
 
+def _token(hub, name):
+    """The hex behind one of the page's own custom properties."""
+    m = re.search(rf"\{name}:(#[0-9a-f]{{6}})", _css(hub))
+    assert m, f"{name} is not declared by the page"
+    return m.group(1)
+
+
 def _lum(hexv):
     """WCAG relative luminance of a #rrggbb colour."""
     chan = [int(hexv[i:i + 2], 16) / 255 for i in (1, 3, 5)]
@@ -192,8 +198,8 @@ def test_the_dot_the_card_border_and_the_strip_read_one_resolution_point(hub):
         "the column header's dot must ask colOf for its colour"
     assert re.search(r"--cc:\$\{colOf\(g\.name,\w+\)\}", board), \
         "the card's left border must ask colOf for its colour"
-    assert re.search(r'<b style="color:\$\{colOf\(g\.name,\w+\)\}"', board), \
-        "the hidden: strip's number must ask colOf for its colour"
+    assert re.search(r"^const hidchip=.*colOf\(g\.name,CN\)", board, re.M), \
+        "the hidden: strip's number must ask colOf for the colour of a column the map does not name"
     cols = re.search(r"--cc:\$\{colOf\(g\.name,(\w+)\)\}", board).group(1)
     assert board.count('style="--cc:${colOf(g.name,' + cols + ')}"') == 3, \
         "both layouts put the column's colour on the column itself, for the PR chrome to read, and the hidden: " \
@@ -263,14 +269,189 @@ def test_a_column_added_later_leaves_the_ones_already_there_alone(hub):
 
 
 def test_every_column_colour_reaches_aa_against_the_chip(hub):
-    colours = _col(hub, "Object.values(COLORS)") + _col(hub, "RING") + [CHIP_LABEL]
+    colours = _col(hub, "Object.values(COLORS)") + _col(hub, "RING")
     for c in colours:
         assert _ratio(c, CHIP_BG) >= 4.5, f"{c} is {_ratio(c, CHIP_BG):.2f}:1 on the chip: under AA"
 
 
-def test_the_chip_label_uses_the_readable_mute(hub):
+def test_the_number_is_the_readable_thing_on_the_chip(hub):
+    """#1792 supersedes the caption's AA rule: the name is a 10px caption in --mute, and the number
+    is the one thing the chip has to make readable. The colours the numbers wear are measured below."""
     chip = _rule(hub, ".hidbar .chip")
     assert "background:" + CHIP_BG in chip, "the measurement's background is not the chip's own"
-    assert f"color:{CHIP_LABEL}" in chip, "the name inside a chip must be readable at 10px"
-    assert _ratio(CHIP_LABEL, CHIP_BG) >= 4.5 > _ratio(_mute(hub), CHIP_BG), \
-        "the chip's label moved off --mute because --mute is under AA"
+    assert _ratio(_mute(hub), CHIP_BG) < 4.5, "the caption colour is what the chip's names wear, not its numbers"
+    for name in ("--err", "--run", "--warn", "--ok", "--pin"):
+        assert _ratio(_token(hub, name), CHIP_BG) >= 4.5, f"a number in {name} is under AA on the chip"
+
+
+# ---- the hidden: strip: a stack of full-height tiles (#1792) ----------------------------------------
+
+STRIP_W = 120        # the strip's outer width: what it is today, and what this slice must not move
+CHIP_PAD = 2         # the issue's own arithmetic: name (11px) + number (20px) + 2px + 2px = 35px
+ROW_FLOOR = 35       # below this a row is shorter than its content, and the name is clipped first
+
+
+def _px(decls, prop):
+    """One px length declared in a rule, as an int: what the browser will actually lay out."""
+    m = re.search(rf"(?:^|;){re.escape(prop)}:(\d+)px", decls)
+    assert m, f"{prop} is not declared in {decls!r}"
+    return int(m.group(1))
+
+
+def _js_value(hub, fn, args):
+    """One value the board's own script computes, run by node against the page's own code."""
+    src = "\n".join(re.search(rf"^const {n}=.*$", hub.PAGE, re.M).group(0)
+                    for n in ("COLORS", "RING", "colOf", "fmtN", "hidchip"))
+    script = f"const esc=s=>s;const CN={json.dumps(args.get('names', []))};\n{src}\nconsole.log({fn})"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return out.stdout.rstrip("\n")
+
+
+def _fmt(hub, n):
+    return _js_value(hub, f"fmtN({n})", {})
+
+
+def _chip(hub, name, n, names=None):
+    return _js_value(hub, f"hidchip({{name:{json.dumps(name)},n:{n}}})", {"names": names or []})
+
+
+def test_each_row_stacks_the_name_over_the_number_and_centres_both(hub):
+    chip = _rule(hub, ".hidbar .chip")
+    assert "flex-direction:column" in chip, "the name and the number are still side by side"
+    assert "justify-content:space-between" not in chip, "a row spread across the chip is a row, not a tile"
+    assert "align-items:center" in chip and "text-align:center" in chip, "the row is not centred"
+    assert "<span class=lbl>" in _chip(hub, "Blocked", 2).split("<b")[0], \
+        "the name must come before the number in the chip"
+
+
+def test_the_rows_divide_the_strip_equally_and_fill_the_board_s_height(hub):
+    bar, chip = _rule(hub, ".hidbar"), _rule(hub, ".hidbar .chip")
+    assert "align-self:flex-start" not in bar, "a strip hugging its content at the top leaves the rows short"
+    assert "align-self:stretch" in bar and "min-height:0" in bar, "the strip must take the board's height"
+    assert "flex:1 1 0" in chip and "min-height:0" in chip, "the rows do not share the height equally"
+    gap = _px(bar, "gap")
+    vert = 2 * int(re.search(r"padding:(\d+)px", bar).group(1))     # padding:8px 10px, top and bottom
+    board = 340                                                    # a docked board's height
+    row = lambda n: (board - vert - gap * (n - 1)) / n
+    for n in (2, 8):
+        assert row(n) * n + gap * (n - 1) + vert == board, f"{n} rows leave a gap at the bottom"
+    assert row(2) == pytest.approx(board / 2 - 8 - gap / 2), "two rows are half the strip each"
+    assert row(8) == pytest.approx((board - 16 - 7 * gap) / 8), "eight rows are an eighth each"
+    assert row(8) >= ROW_FLOOR, "eight rows are shorter than a name and a number, so a name would be cut"
+
+
+def test_the_strip_is_still_the_last_child_of_the_docked_board_row(hub):
+    assert re.search(r'const html=vis\.map\(one\)\.join\(""\)\+\(bottom&&hid\.size\?`<div class=hidbar>', hub.PAGE), \
+        "the hidden: strip is appended after every visible column, as the row's last child"
+    bar = _rule(hub, ".hidbar")
+    assert "order:" not in bar and "float" not in bar and "position:absolute" not in bar, \
+        "the strip's inside changed; where it sits in the row did not"
+
+
+def test_the_strip_width_is_pinned_in_both_directions_and_never_scrolls(hub):
+    bar, chip = _rule(hub, ".hidbar"), _rule(hub, ".hidbar .chip")
+    assert ("min-width:%dpx" % STRIP_W) in bar and ("max-width:%dpx" % STRIP_W) in bar, \
+        "the width is not pinned in both directions"
+    assert "*{box-sizing:border-box}" in _css(hub), "the pinned width is measured against a content box"
+    assert "overflow:hidden" in bar, "a long name can widen the strip"
+    assert not re.search(r"overflow(-[xy])?:(auto|scroll)", bar), "the strip must not scroll"
+    assert "min-width" not in chip and "width" not in chip, "the chip may not size the strip"
+    assert "align-items" not in bar, "the chips stretch to the strip's content box, so they cannot resize it"
+    assert "overflow:hidden" in chip, "a chip taller than its row has to clip, not push the strip open"
+    lbl = _rule(hub, ".hidbar .chip .lbl")
+    assert "max-width:100%" in lbl and "overflow:hidden" in lbl, "a long name must ellipsize inside the width"
+
+
+def test_the_name_is_the_caption_and_the_number_is_never_the_clipped_one(hub):
+    lbl, num = _rule(hub, ".hidbar .chip .lbl"), _rule(hub, ".hidbar .chip b")
+    assert "font-size:10px" in lbl and "line-height:11px" in lbl, "the name is not 10px/11px"
+    assert "color:var(--mute)" in lbl, "the name is the caption, so it wears the caption's colour"
+    assert "text-overflow:ellipsis" in lbl and "white-space:nowrap" in lbl, \
+        "a long name ellipsizes; it never wraps and never shrinks the font"
+    assert "flex:0 1 auto" in lbl and "flex:none" in num, \
+        "the name shrinks first and is clipped away; the number is never the element that gets cut"
+    assert "font-size:20px" in num and "line-height:20px" in num and "font-weight:700" in num, \
+        "the number is the one big thing in the strip"
+    assert "font-variant-numeric:tabular-nums" in num, "two counts in a stack must line up"
+
+
+def test_the_chip_names_the_column_and_the_count_it_stands_for(hub):
+    chip = _chip(hub, "Blocked", 728)
+    assert 'class=chip' in chip and 'data-eye="Blocked"' in chip, "the chip still toggles its column"
+    assert 'data-col="Blocked"' in chip, "the chip does not say which column it counts"
+    assert 'title="Blocked — 728"' in chip, "the full name is not one hover away"
+    assert "<span class=lbl>Blocked</span><b>728</b>" in chip, "the number is not stacked under its name"
+
+
+def test_counts_of_a_thousand_and_over_carry_a_thousands_separator(hub):
+    for n, want in ((0, "0"), (27, "27"), (688, "688"), (999, "999"),
+                    (1000, "1,000"), (12345, "12,345")):
+        assert _fmt(hub, n) == want, f"{n} renders as {_fmt(hub, n)}"
+    assert 'title="Closed PRs — 1,234"' in _chip(hub, "Closed PRs", 1234), \
+        "the hover text reads the count the same way the number does"
+
+
+# ---- the strip's numbers are coloured by category, not by magnitude (#1792) --------------------------
+
+# The decision, not a starting point: the strip's own mapping from column to category, with the hexes
+# #1793 owns. Magnitude would light up the two archival piles (688, 522) and bury the Blocked 2.
+HID_COL = {
+    "Blocked": "#ff6b6b",        # --err
+    "Testing": "#2dd4bf",        # --run
+    "No status": "#f5b041",      # --warn
+    "Done": "#3ecf8e",           # --ok
+    "Closed PRs": "#5aa9ff",     # what #1793 gives the retired pair, and what --pin is
+}
+
+
+def _hid_rule(hub, name):
+    """The colour a category's rule paints its number with, resolved through the page's own tokens."""
+    decls = _rule(hub, '.hidbar .chip[data-col="%s"] b' % name)
+    tokens = dict(re.findall(r"--([a-z-]+):(#[0-9a-f]{6})", re.search(r":root\{[^}]*\}", _css(hub)).group(0)))
+    m = re.fullmatch(r"color:(var\(--([a-z-]+)\)|#[0-9a-f]{6})", decls)
+    assert m, f"the rule for {name} does not decide the number's colour in one word: {decls!r}"
+    return tokens[m.group(2)] if m.group(2) else m.group(1)
+
+
+def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
+    for name, want in HID_COL.items():
+        assert _hid_rule(hub, name) == want, f"{name} is painted {_hid_rule(hub, name)}, not {want}"
+    fallback = _rule(hub, ".hidbar .chip b")
+    assert re.search(r"color:var\(--pin\)", fallback), \
+        "a column the table does not name must fall back to --pin"
+    assert _token(hub, "--pin") == HID_COL["Closed PRs"], "the archive's blue and the fallback are not one colour"
+    for name in list(HID_COL) + [""]:
+        sel = f'.hidbar .chip[data-col="{name}"] b' if name else ".hidbar .chip b"
+        assert "var(--mute)" not in _rule(hub, sel), f"{name or 'the fallback'} draws a number in the caption colour"
+
+
+def test_a_category_is_not_a_magnitude(hub):
+    """The two archival piles are the biggest numbers on the board and must not be the loudest."""
+    counts = {"Closed PRs": 688, "Done": 522, "Blocked": 2}
+    loud = [_hid_rule(hub, c) for c in counts]
+    assert len(set(loud)) == len(counts), "two categories share a colour, so the colour says nothing"
+    assert _hid_rule(hub, "Blocked") != _hid_rule(hub, "Closed PRs"), \
+        "the pile nobody is reading and the one that wants eyes wear the same colour"
+    for c, n in counts.items():
+        assert re.search(r"data-col", _chip(hub, c, n)), "the chip carries no data-col, so no rule can reach it"
+
+
+def test_a_column_the_map_does_not_name_keeps_the_colour_its_header_dot_wears(hub):
+    names = ["Stale", "Waiting on review"]
+    assert _col(hub, f'colOf("Stale",{json.dumps(names)})') == RING[0]
+    assert f'style="color:{RING[0]}"' in _chip(hub, "Stale", 5, names), \
+        "a user column's number must take the ring colour, which only colOf can give it"
+    assert "color:" not in _chip(hub, "Blocked", 2), \
+        "a category with a rule of its own must not also carry an inline colour: that is the second copy"
+
+
+def test_the_named_columns_still_read_the_one_map(hub):
+    """The strip is #1793's third reader: header dot, card border, number — one resolution point."""
+    board = _board_js(hub)
+    assert re.search(r'<b\$\{ring\?` style="color:\$\{c\}"`', board), \
+        "the strip's number must ask colOf for the colour of a column the map does not name"
+    assert "colOf(g.name,CN)" in re.search(r"^const hidchip=.*$", board, re.M).group(0), \
+        "the strip resolves its colour somewhere other than the one map"
+    assert re.search(r"const html=vis\.map\(one\)\.join\(\"\"\)\+\(bottom&&hid\.size\?`<div class=hidbar>\$\{all\.filter\(g=>hid\.has\(g\.name\)\)\.map\(hidchip\)", board), \
+        "the strip is not built from the one chip builder"

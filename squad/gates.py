@@ -26,7 +26,7 @@ GATE_REGISTRY = {
 class GateResult:
     ok: bool
     findings: list = field(default_factory=list)
-    evidence: dict = field(default_factory=dict)    # finding -> the tail of the output that explains it; the record keeps it, no prompt reads it
+    evidence: dict = field(default_factory=dict)    # finding -> the output that explains it; the record keeps it, no prompt reads it
 
 
 @dataclass
@@ -95,7 +95,11 @@ def security(params, inp):
 
 
 def ac_verify(params, inp):
-    """Run the acceptance commands that the named artifact lists, in the workspace. A command is code, not a model."""
+    """Run the acceptance commands that the named artifact lists, in the workspace. A command is code, not a model.
+
+    The evidence of a failure is whatever `workcmd.run` kept, so this gate and the landing check record the same thing
+    for the same command (ADR-0100 rule 10).
+    """
     src = params["commands_from"]
     cmds = []
     for name in [src] if isinstance(src, str) else src:     # the first artifact that lists commands wins
