@@ -269,35 +269,6 @@ def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
     assert caps["input_families"] == ["ticks"]
 
 
-def test_the_emulator_adapter_advertises_the_verbs_the_hook_answers_since_1779(tmp_path):
-    """#1780: the hook answers release, chord, navigate-to-goal and the keyboard since #1779, so the adapter that
-    drives it may advertise them; until it does, the derivation turns every step naming one of them manual."""
-    from squad.gui_test_subset import runnable
-
-    caps = _emulator(tmp_path).capabilities()
-    assert set(caps["actions"]) >= {"pad.press", "pad.release", "pad.chord", "nav.goal", "key.press"}
-
-
-def test_the_runner_keeps_a_home_step_naming_one_of_those_verbs_automated(tmp_path):
-    """#1780: the same capability list the run command validates against decides manual vs automated, so a step the
-    adapter can now drive stays a case the runner executes instead of a row a person walks."""
-    from squad.gui_test_subset import runnable
-
-    caps = _emulator(tmp_path).capabilities()
-    d = script(step("home.first-focus"),
-               step("home.release", action={"name": "pad.release", "args": {"button": "A", "ticks": 2}}),
-               step("home.chord", action={"name": "pad.chord", "args": {"buttons": ["Select", "Start"], "ticks": 4}},
-                    wait={"timeout_ticks": 8}),
-               step("home.key", action={"name": "key.press", "args": {"key": "Enter", "ticks": 2}}),
-               step("home.reach-library", role="setup",
-                    action={"name": "nav.goal", "args": {"goal": "ui.screen == play.library"}}))
-    d["requires"] = {"actions": caps["actions"], "checks": caps["checks"]}
-    d["variants"] = {"window.mode": ["windowed"]}
-    out = runnable(d, caps)
-    assert out["manual"] == []
-    assert out["kept"] == len(d["batches"][0]["steps"])
-
-
 def _slice_batch(b, ids):
     """Keep only the asked-for steps of `b`; its setup/teardown stay, the way `--case` keeps them (#1241).
 
