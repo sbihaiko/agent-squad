@@ -174,8 +174,6 @@
   #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
   #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
   /* A run-state row carries a full pill, too wide to sit beside its words: the pill takes the row and the description goes under it. */
-  #legend .lg.rlg { display:block; padding:3px 1px; white-space:normal; }
-  #legend .lg.rlg .lt { display:block; margin-top:2px; font-size:10px; line-height:1.3; }
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
   #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }

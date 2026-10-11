@@ -180,8 +180,6 @@
   #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
   #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
   /* A run-state row carries a full pill, too wide to sit beside its words: the pill takes the row and the description goes under it. */
-  #legend .lg.rlg { display:block; padding:3px 1px; white-space:normal; }
-  #legend .lg.rlg .lt { display:block; margin-top:2px; font-size:10px; line-height:1.3; }
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
   #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }
@@ -2143,13 +2141,11 @@ function sourcesModule({ STATES }) {
     { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
     { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
     { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
-    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "warn", css: "border-style:dashed" },
+    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
     { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
   ];
   // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.
   const STATE_TEXT = Object.fromEntries(RUN_STATES.map((x) => [x.state, x.text]));
-  // The run-state rows of the side legend, in the hub's table order: every state a surface can draw a pill for, so no row names a state the hub cannot show.
-  const RUN_LEGEND = RUN_STATES.map((x) => ({ state: x.state, cls: x.state.replace(/ /g, "-"), text: x.text, label: x.label, color: x.color, css: x.css }));
   // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
   const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
@@ -2221,7 +2217,7 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, RUN_STATES, RUN_LEGEND, STATE_TEXT, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
 }
 
 // Dashboard core module: Where a pause leaves the run.
@@ -2364,7 +2360,7 @@ function make(ENGINE) {
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
-  const { LEGEND, LEGEND_CHIPS, RUN_STATES, RUN_LEGEND, STATE_TEXT, HELP, httpSource, followPush } = sourcesModule({ STATES });
+  const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
@@ -2372,7 +2368,7 @@ function make(ENGINE) {
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, RUN_LEGEND, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -3308,16 +3304,14 @@ function swatches() {
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
-// A run-state row draws the pill the hub's sidebar draws for that run: the same words, the same colour and the same border, from the one table.
-const runPill = (r) => `<span class="b ${r.cls}">${esc(r.text)}</span>`;
-// The side strip's list: three headed groups (node outcomes, run states, interaction). Always expanded.
-// A run row is the pill above its short description, in the hub's table order, so every state a surface can show a pill for is named here.
-const LEGEND_GROUPS = [["node", "Node outcomes"], ["run", "Run states"], ["interaction", "Interaction"]];
+// The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
+// The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
+// (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
 function legendList() {
   const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
-    run: core.RUN_LEGEND.map((r) => [runPill(r), r.label, " rlg"]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");

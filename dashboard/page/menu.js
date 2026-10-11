@@ -4,16 +4,14 @@ function swatches() {
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
-// A run-state row draws the pill the hub's sidebar draws for that run: the same words, the same colour and the same border, from the one table.
-const runPill = (r) => `<span class="b ${r.cls}">${esc(r.text)}</span>`;
-// The side strip's list: three headed groups (node outcomes, run states, interaction). Always expanded.
-// A run row is the pill above its short description, in the hub's table order, so every state a surface can show a pill for is named here.
-const LEGEND_GROUPS = [["node", "Node outcomes"], ["run", "Run states"], ["interaction", "Interaction"]];
+// The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
+// The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
+// (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
 function legendList() {
   const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
   const rows = {
     node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
-    run: core.RUN_LEGEND.map((r) => [runPill(r), r.label, " rlg"]),
     interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
   };
   return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");

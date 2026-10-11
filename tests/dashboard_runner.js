@@ -109,7 +109,7 @@ process.stdin.on("end", async () => {
     else if (o.op === "caps") out.push(core.declaredCaps(o.doc));
     else if (o.op === "template") out.push(core.commandTemplate(o.args));
     else if (o.op === "sheet") out.push(core.reviewSheet(o.args));
-    else if (o.op === "legend") out.push({ legend: core.LEGEND, chips: core.LEGEND_CHIPS, states: core.RUN_STATES, run_states: core.RUN_LEGEND, state_text: core.STATE_TEXT, help: core.HELP });
+    else if (o.op === "legend") out.push({ legend: core.LEGEND, chips: core.LEGEND_CHIPS, states: core.RUN_STATES, state_text: core.STATE_TEXT, help: core.HELP });
     else if (o.op === "note") out.push(core.REVIEW_NOTE);
     else if (o.op === "chip") out.push(await core.hashChip(o.text));
     else if (o.op === "savetext") out.push(core.saveText(o.text));

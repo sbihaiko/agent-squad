@@ -29,11 +29,6 @@ def dash_states():
     return run_node([{"op": "legend"}])[0]["states"]
 
 
-def legend_run_rows():
-    """The run-state rows of the side legend, as the page builds them: the pill the hub's sidebar draws for that state, then the short description."""
-    return run_node([{"op": "legend"}])[0].get("run_states", [])
-
-
 def test_hub_and_dashboard_share_one_state_table_with_one_label_and_one_colour_per_state(hub):
     hub_rows = {r["state"]: (r["label"], r["color"], r["css"]) for r in hub.RUN_STATES}
     dash_rows = {r["state"]: (r["label"], r["color"], r["css"]) for r in dash_states()}
@@ -80,17 +75,15 @@ def test_no_record_verdict_falls_through_to_the_failure_style_on_the_dashboard()
     assert all(painted[chips[s]] == color[s] for s in chips)
 
 
-def test_the_legend_draws_the_sidebar_pill_for_every_state_in_the_hub_table_order(hub):
-    """One legend row per state, in the hub's order, drawing the same pill: text, colour and border style, then the short description."""
-    want = [(r["state"], hub.badge_of(r["state"])["text"], r["color"], r["css"], r["label"]) for r in hub.RUN_STATES]
-    got = [(r.get("state"), r.get("text"), r.get("color"), r.get("css"), r.get("label")) for r in legend_run_rows()]
-    assert got == want
+def test_the_legend_draws_no_run_state_row(hub):
+    """The owner removed the run-state group from the side legend (2026-10-11): the strip lists node outcomes and interaction only.
 
-
-def test_no_legend_row_names_a_state_no_surface_shows(hub):
-    rows = legend_run_rows()
-    assert len(rows) == len({r.get("state") for r in rows})   # one row per state
-    assert {r.get("state") for r in rows} - {r["state"] for r in hub.RUN_STATES} == set()
+    The vocabulary itself is untouched: the states stay one table, shared with the hub, and the surfaces that print a state draw it from there."""
+    menu = (ROOT / "dashboard" / "page" / "menu.js").read_text()
+    assert "Run states" not in menu and "runPill" not in menu and "RUN_LEGEND" not in menu
+    assert "Node outcomes" in menu and "Interaction" in menu and len(re.findall(r'\["\w+", "', menu)) == 2   # the two groups left, in order
+    assert ".rlg" not in PAGE_SRC()
+    assert {r["state"] for r in dash_states()} == {r["state"] for r in hub.RUN_STATES}
 
 
 def test_the_dashboard_prints_the_same_text_the_hub_badges_the_state_with(hub):
@@ -101,7 +94,7 @@ def test_the_dashboard_prints_the_same_text_the_hub_badges_the_state_with(hub):
         assert text[r["state"]] == hub.badge_of(r["state"])["text"], r["state"]
 
 
-def test_the_page_paints_every_legend_pill_the_way_the_hub_paints_its_badge(hub):
+def test_the_page_paints_every_state_pill_the_way_the_hub_paints_its_badge(hub):
     src = PAGE_SRC()
     for r in hub.RUN_STATES:
         rule = re.search(rf"\.b\.{re.escape(r['state'].replace(' ', '-'))}\s*\{{([^}}]*)\}}", src)

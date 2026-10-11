@@ -28,8 +28,6 @@ function sourcesModule({ STATES }) {
   ];
   // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.
   const STATE_TEXT = Object.fromEntries(RUN_STATES.map((x) => [x.state, x.text]));
-  // The run-state rows of the side legend, in the hub's table order: every state a surface can draw a pill for, so no row names a state the hub cannot show.
-  const RUN_LEGEND = RUN_STATES.map((x) => ({ state: x.state, cls: x.state.replace(/ /g, "-"), text: x.text, label: x.label, color: x.color, css: x.css }));
   // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
   const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
@@ -101,5 +99,5 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, RUN_STATES, RUN_LEGEND, STATE_TEXT, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
 }
