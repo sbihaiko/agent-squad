@@ -141,6 +141,14 @@ def demoted(st, r, closed):
     """A failed / unverified / needs-human run whose every issue was closed afterwards (verified by hand, evidence on the issue) is no longer open business."""
     if st in ("failed", "unverified", "needs-human") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
     return st
+LIVE_STATES = ("running", "starting", "stalled")
+def group_of(r):
+    """RUNNING holds a live process (running/starting/stalled). An ended run, needs-human included, goes to an age bucket."""
+    if r.get("live", True) and r.get("state") in LIVE_STATES: return "running"
+    h = (r.get("age") or 0) / 3600
+    return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
+def run_rank(st, live=True):
+    return 0 if live and st in LIVE_STATES else 1
 def runs():
     _titles()
     out = []
@@ -154,20 +162,20 @@ def runs():
         if not pathlib.Path(d).exists(): continue
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
         r = scan(p)
-        if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code"}); continue
+        if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
         st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
-        rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stalled": 2}.get(st, 1)
+        rank = run_rank(st, live=True)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True})
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
         except Exception: continue
         age = time.time() - f.stat().st_mtime
         if d.get("state") != "running" and age > 4 * 3600: continue
         st = d.get("state") or "running"; t1 = d.get("t1") or time.time()
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": 0 if st == "running" else 1, "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}})
-    out.sort(key=lambda r: (r["rank"], r["age"]))   # open runs first, finished next, dead last; then most recently updated first
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES})
+    out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
 def stats(period, src="both"):
@@ -489,7 +497,7 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   const byId=new Map(runs.map(r=>[r.id,r])),want=[];
   runs.filter(r=>pins.has(r.id)).forEach(r=>want.push(r.id));
   const open=runs.filter(r=>!pins.has(r.id)&&r.rank===0);
-  // open runs auto-fill; with none open, fall back to the most recently finished (landed) ones
+  // live runs auto-fill; with none running, fall back to the most recently finished (landed) ones
   (open.length?open:runs.filter(r=>!pins.has(r.id)&&r.rank===1)).forEach(r=>want.push(r.id));
   const top=want.slice(0,N);
   slots=slots.filter(id=>byId.has(id));
@@ -500,13 +508,13 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   top.forEach(id=>{if(!next.includes(id)){const j=next.indexOf(null);if(j>=0)next[j]=id}});
   slots=next.filter(Boolean);
 }
-const GROUPS=[["open","OPEN"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
+const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
 let openGroup=null,userPicked=false;
 // runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
 // then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
 const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
 const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
-const groupOf=r=>{if(r.rank===0)return"open";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":"d"};
+const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":"d"};
 function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   const filled=GROUPS.filter(g=>by[g[0]]);
@@ -532,7 +540,7 @@ function drawMain(force){
 }
 function refresh(){plan();drawList();drawMain()}
 function applyFilter(){runs=allRuns}
-let known=null;   // run ids already seen: a run that appears open after the first poll is selected on its own (pinned, its group opened)
+let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
   const fresh=allRuns.filter(r=>!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
