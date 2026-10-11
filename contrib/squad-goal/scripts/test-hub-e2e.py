@@ -53,13 +53,25 @@ print("== 1. boot an isolated hub (throwaway copy of the skill, port %d)" % PORT
 # A PR whose head's review attempt timed out and was re-queued (#1502): the hub serves it as its last good board data, so the
 # page renders the card through the real data path. A row older than the head's marker belongs to the head that moved.
 PR_SHA, PR9 = "1e38e5a7b41c0d2e9f", "1e38e5a7b"
+# A second open PR with a green review line and no loop reason of its own: the card used to derive `ready to merge` from that
+# line even while the loop held the merge (#1771). The hub serves both cards from its last good board data.
+GATE_SHA, GATE9, GATE_OLD = "abcdef0123456789ab", "abcdef012", "9c0ffee12"
 ST = S / "squadstate"; (ST / "auto").mkdir(parents=True)
 (S / "hubdir").mkdir()
 NOW = time.time()
 (S / "hubdir/hub-board.json").write_text(json.dumps(
     {"t": NOW, "items": [], "prev": [], "prev_n": 0, "lc": {}, "err": None,
      "prs": [{"n": 1491, "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
-              "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"}]}))
+              "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"},
+             {"n": 1492, "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",
+              "u": "2026-10-11T08:30:00Z", "h": GATE_SHA, "o": "2026-10-11T07:30:00Z"}]}))
+(ST / "revci-1492.out").write_text(f"#1492 {GATE9} clean CI=success:2 VERDICT: APPROVE\n")
+def gate(at, sha9, reason, text):
+    """auto/gate-<pr>: `<head sha9><TAB><epoch><TAB><reason><TAB><what it means>`, the pass's latest decision (#1766)."""
+    (ST / "auto/gate-1492").write_text(f"{sha9}\t{int(at)}\t{reason}\t{text}\n")
+def stamp(at):
+    """auto/.pass: the epoch of the loop's last pass."""
+    (ST / "auto/.pass").write_text(f"{int(at)}\n")
 for kind, at in (("launched", NOW - 1500), ("rereview", NOW - 240)):
     mk = ST / f"auto/{kind}-1491-{PR9}"
     mk.write_text(""); os.utime(mk, (at, at))
@@ -193,6 +205,31 @@ try:
         pg.screenshot(path=str(S / "cost.png"))
         br.close()
         ck(not errs, "no page errors", errs[:3])
+
+    print("== 6. the OPEN PRS chip is the loop's own reason, never a derived one (#1771)")
+    def chips():
+        """The chip the hub serves for every open PR: [css class, text, tooltip], straight off /api/board."""
+        st, b = req("/api/board")
+        return {x["n"]: x.get("ps") or [] for x in json.loads(b)["prs"]["items"]}
+    now = time.time()
+    stamp(now - 30)
+    gate(now - 20, GATE9, "hold-threads", "unresolved review threads opened after the cache")
+    c = chips().get(1492)
+    ck(c and c[1] == "held: threads", "a current gate that holds the merge is the chip", c)
+    ck(c and c[1] != "ready to merge", "the held head is never `ready to merge`", c)
+    ck(c and "unresolved review threads opened after the cache" in c[2] and "20 s ago" in c[2], "the tooltip carries the gate line and its age", c and c[2])
+    gate(now - 20, GATE_OLD, "hold-threads", "unresolved review threads opened after the cache")
+    ck(chips()[1492][1] == "new head, not seen yet", "a gate line for the head before this one is not a verdict", chips()[1492])
+    gate(now - 20, GATE9, "merged", "merged as abc1234: APPROVE + CI green + clean + no open threads")
+    ck(chips()[1492][1] == "ready to merge", "the gate saying the merge goes ahead is what `ready to merge` is for", chips()[1492])
+    stamp(now - 600)
+    ck(chips()[1492][1] == "loop idle", "no pass for three watch cycles reads `loop idle`", chips()[1492])
+    stamp(now - 30)
+    (ST / "auto/off").write_text("")
+    off = chips()
+    ck(all(v and v[1] == "loop off" for v in off.values()), "auto/off: every open-PR card says `loop off`", off)
+    (ST / "auto/off").unlink()
+    ck(chips()[1492][1] == "ready to merge", "lifting the kill switch gives the loop's reason back", chips()[1492])
 finally:
     MODELS.write_text(SNAP) if "SNAP" in dir() else None
     p.send_signal(signal.SIGTERM); time.sleep(1)

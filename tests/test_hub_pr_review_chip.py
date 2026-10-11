@@ -53,6 +53,17 @@ def _mark(st, kind, pr, sha9, at):
     os.utime(p, (at, at))
 
 
+def _pass(st, at):
+    """auto/.pass: the epoch of the loop's last pass. The card reports the loop's own reason from auto/gate-<pr>, and that
+    reason is current only during that pass (#1771)."""
+    (st / "auto/.pass").write_text(f"{int(at)}\n")
+
+
+def _gate(st, pr, sha9, at, reason, text):
+    """auto/gate-<pr>: `<head sha9><TAB><epoch><TAB><reason><TAB><what it means>`, the pass's latest decision about the PR."""
+    (st / "auto" / f"gate-{pr}").write_text(f"{sha9}\t{int(at)}\t{reason}\t{text}\n")
+
+
 def _pr(n=1491, head=SHA):
     return {"n": n, "t": "Hub: the OPEN PRS card says why a review is late", "u": "2026-10-11T09:00:00Z", "h": head, "d": False, "ci": [], "ms": "clean", "o": "2026-10-11T08:00:00Z"}
 
@@ -136,10 +147,12 @@ def test_a_passing_attempt_keeps_todays_chip(hub, state):
     _mark(state, "launched", 1491, SHA9, now - 900)
     _row(state, now - 600, 1491, "deepseek-v4-flash", 90, 0)
     (state / "revci-1491.out").write_text(f"#1491 {SHA9} clean CI=success:2 VERDICT: APPROVE\n")
+    _pass(state, now - 30)                                                    # the loop is passing right now
+    _gate(state, 1491, SHA9, now - 20, "merged", "merged as abc1234: APPROVE + CI green + clean + no open threads")
     assert hub.review_state(1491, SHA9, now=now) is None
     ps = hub.pr_state(_pr())
-    assert ps[1] == "ready to merge"
-    assert len(ps) == 2 and not (ps[2] if len(ps) > 2 else "")
+    assert ps[0] == "ready" and ps[1] == "ready to merge"                     # the gate's own reason, not a derived one (#1771)
+    assert "ready to merge" not in (ps[2] if len(ps) > 2 else "")
 
 
 def test_a_pr_the_loop_never_reviewed_has_no_review_state(hub, state):
