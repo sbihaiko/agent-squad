@@ -988,8 +988,9 @@ def q_codex():
     return {"windows": ws, "plan": r.get("planType"), "reached": r.get("rateLimitReachedType")}
 GROK_LOG = HOME / ".grok/logs/unified.jsonl"
 GROK_SETTINGS = HOME / ".grok/settings_cache.json"   # the config the grok CLI caches at startup
-GROK_NO_SOURCE = ("no credit line in ~/.grok/logs/unified.jsonl: the grok CLI's billing extension only runs for "
-                  "the TUI's /usage view, so the weekly credits are not on disk (the probe is not stale, it is blind)")
+GROK_SCAN_MAX = 64 * 1024 * 1024   # how far back the probe walks before calling the log blind
+GROK_NO_SOURCE = ("no credit line in ~/.grok/logs/unified.jsonl: the grok CLI writes creditUsagePercent only when its "
+                  "billing extension runs (the TUI's /usage view), and no line in the last 64 MB carries one")
 def grok_plan():
     """The plan the grok CLI itself caches; it is also what proves the settings file is being read at all."""
     try: p = json.loads(json.loads(GROK_SETTINGS.read_text())["payload"])
@@ -1000,18 +1001,22 @@ def q_grok():
     The grok CLI pushes that payload in the line's `ctx.config`, and its message wording drifts between versions
     (`billing: fetched credits config` in older ones), so match the fields and never the text. Finding none is a
     reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing yesterday's number."""
-    tail = ""
+    last = None
     try:
         with open(GROK_LOG, "rb") as fh:
-            fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 3_000_000)); tail = fh.read().decode("utf8", "ignore")
+            fh.seek(0, 2); size = fh.tell(); pos = size; floor = max(0, size - GROK_SCAN_MAX)
+            while pos > floor and last is None:
+                step = min(4_000_000, pos - floor); pos -= step; fh.seek(pos); chunk = fh.read(step)
+                if pos:   # read from the middle: the first line is half a line unless the byte before is the newline
+                    fh.seek(pos - 1)
+                    if fh.read(1) != b"\n": chunk = chunk.split(b"\n", 1)[-1]
+                for l in chunk.decode("utf8", "ignore").splitlines():
+                    try: d = json.loads(l)
+                    except Exception: continue
+                    if not isinstance(d, dict): continue
+                    c = (d.get("ctx") or {}).get("config") or {}
+                    if c.get("creditUsagePercent") is not None and isinstance(c.get("currentPeriod"), dict): last = (d, c)
     except OSError: pass
-    last = None
-    for l in tail.splitlines():
-        try: d = json.loads(l)
-        except Exception: continue
-        if not isinstance(d, dict): continue
-        c = (d.get("ctx") or {}).get("config") or {}
-        if c.get("creditUsagePercent") is not None and isinstance(c.get("currentPeriod"), dict): last = (d, c)
     if not last:
         return {"windows": [], "unavailable": True, "err": GROK_NO_SOURCE, "plan": grok_plan()}
     d, c = last; per = c.get("currentPeriod") or {}
