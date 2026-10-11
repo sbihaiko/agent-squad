@@ -17,6 +17,8 @@
     auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- and the marker is dropped, so autofrontier/autobug dispatch it again.
     Only the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board) is left, so a card another step moved past it is never downgraded; a run that landed work, an issue a live run works, and an issue an open or merged PR names keep their card and their marker. Once per run; the comment carries the run id and the verdict's reasons.
  M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
+ P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
+    Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
@@ -241,6 +243,40 @@ if fd and fb:
         if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr is:open \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue
         say(f"FIXED-NOT-CLOSED #{n}: fork commit {h} \"{subj[:60]}\" names it, the issue is still open")
         if not dry: mk.touch()
+    # P: a `fork-<n>-<sha9>` marker is the close pass's claim that it merged that commit into the base. An unwound
+    # landing -- a hand revert, a branch reset, a base rebuilt under it -- leaves the marker claiming a delivery the
+    # base does not have, and rule O does not own it (its run did not fail, it landed). No close pass can restore it
+    # either: that pass merges a branch ahead of the base, and here there is nothing left to merge. So the issue goes
+    # back to the column the dispatch reads and its markers are dropped (#1830).
+    if owner and proj and repo0:
+        def gitrc(*a): return subprocess.run(["git", "-C", fd, *a], capture_output=True, text=True).returncode
+        for mk in sorted((st / "auto").glob("fork-*")):
+            m = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", mk.name)
+            if not m: continue
+            n, sha = m.group(1), m.group(2)
+            if gitrc("merge-base", "--is-ancestor", sha, fb) == 0: continue   # the base holds the commit: the marker is honest
+            br = (os.environ.get("SG_FORK_BRANCH") or "issue/%n").replace("%n", n)
+            if gitrc("rev-parse", "-q", "--verify", "refs/heads/" + br) == 0 and sh("git", "-C", fd, "rev-list", "--count", f"{fb}..{br}").strip() not in ("", "0"): continue   # ahead: a fix commit is coming and the close retries on the head
+            files = sh("git", "-C", fd, "show", "--pretty=format:", "--name-only", sha).split()
+            if not files or gitrc("diff", "--quiet", sha, fb, "--", *files) == 0: continue   # the base holds the change itself: the head moved, nothing was unwound
+            if n in byissue: continue                                                        # a live run works it: not ours to release
+            if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
+            if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch
+            if card_status(proj, n) not in ("In Progress", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
+            km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
+            if km.exists(): continue
+            marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
+            moves = [[proj, os.environ.get("SG_TODO", "Todo")]]
+            if bproj and "bug-" + n in marks and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
+            say(f"UNWOUND #{n}: {mk.name} claims {sha[:9]}, which {fb} no longer holds and {br} has nothing left to merge; card -> {', '.join(s for _, s in moves)}, {'+'.join(marks)} dropped so it dispatches again")
+            if not dry:
+                km.touch()
+                for p, s in moves: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
+                for k in marks:
+                    f2 = st / "auto" / k
+                    if f2.exists(): f2.unlink()
+                (st / "cq" / f"{n}-unwound-{os.getpid()}.md").write_text(
+                    f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 base = os.environ.get("SG_BASE", "main"); repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref)"').splitlines():
     pr, sha, pb = (l.split() + ["", "", ""])[:3]; o = st / f"revci-{pr}.out"; mg = st / "auto" / f"merged-{pr}"
