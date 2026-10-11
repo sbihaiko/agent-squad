@@ -56,7 +56,8 @@ free_head() { rm -f "$b" "$A/runof-$pr-$s9" "$A/fix-$pr-$s9" "$A/queued-$pr-$s9"
 # autopilot.sh touches auto/queued-<pr>-<sha9> BEFORE it calls this script and skips the head while that marker exists,
 # so a request mkreq.sh refused left the head queued forever -- a BLOCKING verdict, green CI and nothing working it until
 # a human pushed (#1706 @ 27aaaf5b5). Free exactly what this dispatch wrote, return the round, and exit 75 so a caller can
-# tell the refusal from a failed run; the refusal itself already went to stderr (ADR-0274), and the next pass retries.
+# tell a dispatch that never started (this refusal, or the failed launch below, #1775) from one that did; the refusal
+# itself already went to stderr (ADR-0274), and the next pass retries the head.
 if ! req=$(bash "$(dirname "$0")/mkreq.sh" "auto-fix-$pr-$s9" "$b"); then
   free_head
   echo "AUTOFIX #$pr @ $s9 refused by mkreq.sh; freed the queued marker and returned the round, next pass retries" >&2
