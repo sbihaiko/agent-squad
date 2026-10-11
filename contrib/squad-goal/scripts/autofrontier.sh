@@ -50,14 +50,24 @@ while IFS=$'\x1f' read -r w n labels; do
   pick+=("$n"); [ ${#pick[@]} -ge "$free" ] && break
 done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$SG_FRONTIER_LABEL&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
 [ ${#pick[@]} -gt 0 ] || exit 0
-# READY issues whose bodies name a common file go in ONE child / ONE PR (cluster.py CL_MODE=files): separate PRs on one
-# slice conflict and get superseded. Stacked issues keep their own child (their base differs).
+# Issues whose bodies name a common file go in ONE child (cluster.py CL_MODE=files): two children on one slice edit the same
+# files and conflict for whoever lands second. This holds for the fork-only picks too (#1521): gui/1497, gui/1498 and gui/1502
+# all named contrib/squad-goal/scripts/hub.py, three branches on one file, and the merge stopped until a hand merged them.
+# Stacked issues keep their own child (their base differs), and a fork-only issue never shares a child with a base-branch one
+# (they land differently: a local commit on the fork against a PR).
 noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
-ready=(); kids=(); for n in "${pick[@]}"; do case "$(noteof $n)" in "base origin/$SG_BASE"*) ready+=("$n");; *) kids+=("$n");; esac; done
-if [ ${#ready[@]} -gt 1 ]; then cj="["; for n in "${ready[@]}"; do cj+="$(gh api repos/$SG_REPO/issues/$n -q '{number,title,body,created_at}' 2>/dev/null),"; done
-  cl=$(CL_MODE=files python3 "$here/cluster.py" <<<"${cj%,}]" 2>/dev/null) || cl=$(printf '%s\n' "${ready[@]}")   # unreadable issues: no clustering
-  while read -r c; do [ -n "$c" ] && kids+=("$c"); done <<<"$cl"
-else kids+=("${ready[@]}"); fi
+cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
+  local n lines=() cj cl
+  for n in "$@"; do lines+=("$n"); done
+  [ ${#lines[@]} -gt 1 ] || { [ ${#lines[@]} -eq 1 ] && printf '%s\n' "${lines[0]}"; return; }
+  cj="["; for n in "${lines[@]}"; do cj+="$(gh api repos/$SG_REPO/issues/$n -q '{number,title,body,created_at}' 2>/dev/null),"; done
+  cl=$(CL_MODE=files python3 "$here/cluster.py" <<<"${cj%,}]" 2>/dev/null) || cl=$(printf '%s\n' "${lines[@]}")   # unreadable issues: no clustering
+  printf '%s\n' "$cl" | grep .
+}
+ready=(); forkon=(); kids=()
+for n in "${pick[@]}"; do case "$(noteof $n)" in "base origin/$SG_BASE"*) ready+=("$n");; FORK-ONLY*) forkon+=("$n");; *) kids+=("$n");; esac; done
+while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${ready[@]}")
+while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${forkon[@]}")
 [ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#kids[@]} child(ren): $(printf '[%s] ' "${kids[@]}")($free free slots)"; exit 0; }
 name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass that
@@ -65,8 +75,9 @@ name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks.
 for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 nfork=0; for n in "${pick[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
-{ if [ $nfork -eq ${#pick[@]} ]; then   # every issue is fork-only: the fork preamble ONLY, nothing about origin/<base>, a PR or prepush.sh
-    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one local commit each. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+{ echo "PANEL: $name"   # the launch's own id: mkreq.sh's panel_guard refuses a second child of THIS panel naming a file another one names (ADR-0274)
+  if [ $nfork -eq ${#pick[@]} ]; then   # every issue is fork-only: the fork preamble ONLY, nothing about origin/<base>, a PR or prepush.sh
+    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one local commit each (a CHILD block with several issues is one slice: ONE local commit on ONE fork branch, with a \"Refs #N\" line per issue). en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
     echo "FORK-ONLY: all"; sg_fork_preamble
   else
     echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one PR each (a CHILD block marked FORK-ONLY: one local commit instead); a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
