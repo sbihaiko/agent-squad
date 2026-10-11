@@ -478,6 +478,14 @@ def load_sampler():
         except Exception: pass
         time.sleep(LOAD_SAMPLE_SECS)
 
+# A coordinator test pass writes `running` at its start and its terminal state at the end; killed in between, the file says
+# `running` forever. Four hours without a touch is longer than any pass this coordinator runs, so an untouched file is not a
+# running pass: the hub shows it as stalled with this note, past the RUNNING group, instead of counting a live run with no
+# process behind it. The runner's file is never
+# rewritten and the loop's own readers keep reading it as it is -- this is the hub's display bound, not a claim the test failed.
+TEST_LOST_SECS = 4 * 3600
+LOST_NOTE = "lost: no state written for over 4 h"
+
 def runs():
     _titles()
     out = []; load_rows = []
@@ -507,10 +515,14 @@ def runs():
         try: d = json.loads(f.read_text())
         except Exception: continue
         age = time.time() - f.stat().st_mtime
-        if d.get("state") != "running" and age > 4 * 3600: continue
+        raw = d.get("state") or "running"
+        lost = raw == "running" and age > TEST_LOST_SECS   # the pass died before it could write its terminal state (#1783)
+        if raw != "running" and age > 4 * 3600: continue
         rec = {"head": d.get("head"), "merged": d.get("merged"), "exit_code": d.get("rc")}
-        st = handled_of(d.get("state") or "running", rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": b["title"], "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES, "agents": 0})
+        st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
+        tip = LOST_NOTE if lost else b["title"]
+        if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
@@ -981,6 +993,7 @@ RUN_STATES = [
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
+:root{--col-w:185px;--col-empty-w:132px}   /* the docked strip's column geometry: the one place its widths are set (#1791) */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
@@ -1105,7 +1118,7 @@ body:not(.dockb.max) #pip{visibility:hidden}
 #pip.off #pipb{height:0;visibility:hidden}
 #pipm{display:none;flex:1;padding:10px;font-size:11px;line-height:1.45;color:var(--mute)}
 #pip.noframe #pipb{visibility:hidden;height:0}#pip.noframe #pipm{display:block}
-body.dockb #bbody>.col{flex:1 1 0;min-width:185px;display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
+body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
 .prs{--cc:var(--run);background:linear-gradient(#2dd4bf14,#2dd4bf08)}
@@ -1113,8 +1126,11 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 #bbody .prs>.ah,#bbody .prs>.ch{background:#12332f;color:#7ff0df;border-bottom:1px solid #2dd4bf66;letter-spacing:.04em;text-transform:uppercase}
 #bbody .prs .it{border:1px solid #2dd4bf55;border-left:4px solid var(--run);background:#14262a;border-radius:10px}
 #bbody .prs .it .id{background:#2dd4bf22;border-color:var(--run);color:#7ff0df}
-body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--run)}
+body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--run);flex:1.15 1 0}
 body.dockb #bbody>.col.prcol{background:linear-gradient(#2dd4bf14,#2dd4bf08);box-shadow:inset 0 2px 0 var(--run);flex:1.15 1 0}
+body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-empty-w);max-width:var(--col-empty-w);border-right:1px solid var(--line)}   /* a visible column with no cards keeps only its header, so the strip still reads as a row of columns (#1791); the columns that do have cards take the freed width */
+body.dockb #bbody>.col.empty>.ch{padding:8px 6px;flex-wrap:wrap;row-gap:2px;justify-content:flex-start}   /* the name falls onto a row of its own rather than clipping the count */
+body.dockb #bbody>.col.empty>.ch>span{white-space:nowrap}body.dockb #bbody>.col.empty>.ch .eye{margin-left:auto}
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
 body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .sec:first-child>.ch{border-top:0}
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
@@ -1171,7 +1187,11 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),el=$("#ldline"),f=$("#foot");
  if(el)el.textContent=d.line||"CPU ? · RAM ? · GPU ?";if(f)f.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
-let openGroup=null,userPicked=false;
+// The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
+// beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
+// run appearing, ending or moving to another age bucket can never move what the user opened.
+let openGroups=Array.isArray(ls.groups)?new Set(ls.groups.filter(k=>GROUPS.some(g=>g[0]===k))):null;
+const saveGroups=()=>{ls.groups=[...openGroups];save()};
 // runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
 // then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
 const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
@@ -1179,11 +1199,12 @@ const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&sh
 const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":"d"};
 function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
-  const filled=GROUPS.filter(g=>by[g[0]]);
-  if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
+  if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
+  const filled=GROUPS.filter(g=>by[g[0]]||openGroups.has(g[0]));   // an open group that emptied keeps its header and shows no rows
   const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b>${loadMark(r)}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
-  $("#list").innerHTML=filled.map(([k,t])=>{const h=groupHeader(k,by[k]);return `<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroup===k?by[k].map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
-  document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
+  $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
+  document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
+    if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id)}
     save();refresh(true)});
@@ -1206,7 +1227,7 @@ let known=null;   // run ids already seen: a run that appears running after the 
 function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
   const fresh=allRuns.filter(r=>!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
-  if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);userPicked=false;save()}
+  if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
 function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
   return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
@@ -1248,9 +1269,11 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
-/* accordion: one group open at a time */
-const ACC=["plans","stats","mdl"];if(!ACC.includes(ls.acc))ls.acc="";
-ACC.forEach(i=>{const e=$("#"+i);e.open=i===ls.acc;e.addEventListener("toggle",()=>{if(e.open){ACC.forEach(j=>{if(j!==i)$("#"+j).open=false});ls.acc=i;save();if(i==="mdl")mdlLoad()}else if(ls.acc===i&&!ACC.some(j=>$("#"+j).open)){ls.acc="";save()}})});mdlLoad();
+/* accordions: each of the three answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl"];
+let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
+const saveAcc=()=>{ls.acc=[...openAcc];save()};
+ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open)mdlLoad()})});mdlLoad();
 const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
 const OTHER=0.01;
 function pie(ms){const rows=ms.map(m=>({...m,v:m.in+m.out})).filter(m=>m.v>0);if(!rows.length)return"<span class=m>no token data</span>";
@@ -1464,8 +1487,9 @@ setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textConte
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
 const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const colCls=(pr,n)=>"col"+(pr?" prs":"")+(n?"":" empty");   // a visible column with no cards left after the filter collapses to the narrow width (#1791)
 const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${col[g.name]||"var(--mute)"}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
-if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
+if(bottom)return `<div class="${colCls(isPR(g.name),it.length)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>hidden: ${all.filter(g=>hid.has(g.name)).map(g=>`<span class=chip data-eye="${esc(g.name)}"><span>${esc(g.name)}</span><b>${g.n}</b></span>`).join("")}</div>`:"");
 if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted

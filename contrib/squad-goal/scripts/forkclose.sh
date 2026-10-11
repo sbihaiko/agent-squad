@@ -5,7 +5,7 @@
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
 # card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
-# conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); the fork checkout must be clean and on the base branch.
+# conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); a fork checkout a child left on its own branch is put back on the base by the pass itself while the tree is clean and no live run names that branch (WAIT, naming the reason, when it is not).
 # An issue whose `## Blocked by` names an issue with an unlanded fork branch waits for it (FORKCLOSE WAIT, once per set): its tests import the blocker's files.
 # Cheaper queue (#1409): a green merge is recorded as a tested base (basetest-<new sha>), so the next landing pays no second base test; the suites a
 # branch's diff cannot affect are skipped (gate-suites.sh -> FG_SUITES, anything unknown runs the full gate); and when several branches are code
@@ -40,6 +40,32 @@ orphan() { local b=$1 w t
   printf '%s\n' "$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" | grep -qF "$w/" && return 1
   t=$($G log -1 --format=%ct "$b" 2>/dev/null) || return 1
   [ $(( now - t )) -ge $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ]; }
+# What holds a branch: a live run that names it, or a process whose cwd sits inside its worktree. Prints the reason; empty = free.
+# Our own shell is inside it only when the loop itself was started from that checkout, and this lsof form prints no pid, so it
+# cannot tell the two apart; that case is read as free, which is what the loop wants (it does not hold a branch from itself).
+held() { local w
+  case "$livebrs" in *" $1 "*) echo "a live run names it"; return;; esac
+  w=$($G worktree list --porcelain | awk -v x="refs/heads/$1" '/^worktree /{p=$2} $0=="branch "x{print p}')
+  [ -n "$w" ] || return
+  case "$PWD/" in "$w"/*) return;; esac
+  printf '%s\n' "$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')" | grep -qF "$w/" && echo "a process has its cwd inside its worktree"; }
+# A fork-only child that works in the shared checkout instead of its own ~/wt-as-<N> worktree leaves it on its branch, and then
+# one WAIT line per pass blocks every merge, forever, with nothing naming the cause (#1798). A clean tree nobody holds is the
+# loop's own to move back to the base; uncommitted work is never reset and a branch a live run names is never taken from under
+# it -- both are named instead, so the operator reads which of the two it is rather than the same silent WAIT.
+needbase() { local cb why
+  if [ -n "$($G status --porcelain --untracked-files=no)" ]; then
+    echo "FORKCLOSE WAIT $1: $SG_FORK_DIR has uncommitted changes; a merge pass needs a clean tree, and forkclose never resets or checks out over someone's work. Commit them, or move the checkout to $SG_FORK_BASE; the pass resumes on its own."
+    return 1; fi
+  cb=$($G branch --show-current 2>/dev/null)
+  [ "$cb" = "$SG_FORK_BASE" ] && return 0
+  why=$(held "$cb")
+  if [ -n "$why" ]; then echo "FORKCLOSE WAIT $1: $SG_FORK_DIR is on $cb and $why; not moving a checkout in use. A fork-only child belongs in its own ~/wt-as-<N> worktree (forkonly.sh), never in the shared checkout."
+    return 1; fi
+  if $G checkout -q "$SG_FORK_BASE" 2>/dev/null; then
+    echo "FORKCLOSE CHECKOUT $1: $SG_FORK_DIR was left on $cb (clean tree, nobody in it); returned it to $SG_FORK_BASE"
+    return 0; fi
+  echo "FORKCLOSE WAIT $1: $SG_FORK_DIR is on $cb and could not be returned to $SG_FORK_BASE"; return 1; }
 lost() { $G diff --name-only --diff-filter=A "$SG_FORK_BASE" "$1" 2>/dev/null; }   # files the branch has that the base lacks: a revert of a merge of the branch (or a sibling's merge that carried it) took them, whatever commit added them
 mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; else [ -n "$lf" ] || return 1; fi   # ahead of the base AND files lost to a revert: the merge only brings the commits after the revert, so a modify/delete conflict on a lost file is expected and the branch's version of every lost file wins
   if [ -n "$lf" ]; then $G checkout -q "$br" -- $lf || return 1; [ -z "$($G diff --name-only --diff-filter=U)" ] || return 1; fi
@@ -87,7 +113,7 @@ bdiff() { $G diff --name-only "$($G merge-base "$1" "$2" 2>/dev/null)" "$2" 2>/d
 batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
   cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"   # the loop's own eligibility rules; its notices (WAIT, ORPHAN) print here
   [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
-  [ "$($G branch --show-current)" = "$SG_FORK_BASE" ] && [ -z "$($G status --porcelain --untracked-files=no)" ] || return 0   # the loop below says WAIT
+  needbase "batch" || return 0   # a checkout left on a branch is returned to the base here, so the batch is not skipped for a pass (the loop below says WAIT when it cannot be)
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); basegate "batch" || exit 0
   key=$(for nn in $bl; do $G rev-parse "$(brof $nn)"; done | cksum | cut -d' ' -f1); [ -e "$A/nobatch-$key" ] && return 0   # this exact set already went red as a batch
   $G checkout -q -b fc-batch "$SG_FORK_BASE" || return 0
@@ -143,7 +169,7 @@ for n in $cc; do
     [ -n "${FC_DRY:-}" ] || [ -e "$A/redwarn-$n" ] || { touch "$A/redwarn-$n"; printf "Fork-only close: %s is landing but this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; please post the RED and GREEN output here. The landing is not blocked.\n" "$br" > "$SG_STATE/cq/$n-redwarn$$.md"; }
   fi
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
-  if [ "$($G branch --show-current)" != "$SG_FORK_BASE" ] || [ -n "$($G status --porcelain --untracked-files=no)" ]; then echo "FORKCLOSE WAIT #$n: $SG_FORK_DIR is not a clean $SG_FORK_BASE checkout"; exit 0; fi
+  needbase "#$n" || exit 0
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
   basegate "#$n" || continue
   fs=full; [ -z "$late$reland" ] && fs=$(bdiff "$SG_FORK_BASE" "$br" | bash "$here/gate-suites.sh")   # suites by path; late/reland: doubt, full
