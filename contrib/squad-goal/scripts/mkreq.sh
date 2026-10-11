@@ -116,10 +116,33 @@ slice_guard() {
 "; done
   done
   # A fork-only child commits on gui/<N> off the fork base and opens no PR, so its slice is only visible in the fork checkout.
-  local bglob=${SG_FORK_BRANCH:-gui/%n} br bref; bref=${bglob%%/%n*}; bglob="refs/heads/${bglob%%/%n*}"
+  # (#1794) A branch whose issue is closed claims no slice: it can never land. gui/1510-mine (#1510, closed 2026-10-11) sat one
+  # commit ahead of local/next touching contrib/squad-goal/scripts/hub.py, so the guard refused every request naming that file
+  # -- five startable issues, zero live runs, and the refusal on stderr once per pass was all anyone was told. The digits of the
+  # branch name are its issue (gui/1510-mine -> 1510), and `gh issue view` is asked once per number, cached for the pass. A
+  # branch GitHub cannot answer for (no `gh`, no repo, an API error, an empty answer) stays in flight exactly as before: an
+  # unreachable API must never silently drop a live slice, and it says nothing. A branch that is skipped is NAMED, because what
+  # can no longer land is what the operator has to retire and nothing else on the loop says so.
+  local bglob=${SG_FORK_BRANCH:-gui/%n} br bref bnum bstate ghcache=" "; bref=${bglob%%/%n*}; bglob="refs/heads/${bglob%%/%n*}"
   if [ -n "$fdir" ] && [ -d "$fdir" ]; then
     for br in $(/usr/bin/git -C "$fdir" for-each-ref --format='%(refname:short)' "$bglob/*" 2>/dev/null || true); do
       [ -n "$(/usr/bin/git -C "$fdir" rev-list -1 "$fbase..$br" 2>/dev/null)" ] || continue
+      # The digits of the branch name are the issue it belongs to; a branch that names none (a hand-made one) is left in flight.
+      if [[ $br =~ ([0-9]+) ]]; then
+        bnum=${BASH_REMATCH[1]}
+        # The cache is read and written here, in the loop's own scope: a function returning the state would run in the
+        # command substitution's subshell and lose every write, asking GitHub once per branch instead of once per issue.
+        case "$ghcache" in
+          *" $bnum:"*) bstate=${ghcache#* "$bnum:"}; bstate=${bstate%% *};;
+          *) bstate=""
+             if [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then bstate=$(gh issue view "$bnum" --repo "$repo" --json state -q .state 2>/dev/null) || bstate=""; fi
+             ghcache="$ghcache$bnum:$bstate ";;
+        esac
+        if [ "$bstate" = CLOSED ]; then
+          echo "slice guard: $br skipped, its issue #$bnum is closed" >&2
+          continue
+        fi
+      fi
       for f in $(/usr/bin/git -C "$fdir" diff --name-only "$fbase...$br" 2>/dev/null || true); do
         taken="$taken$f	branch $br
 "; done
