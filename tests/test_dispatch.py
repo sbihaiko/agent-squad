@@ -12,7 +12,7 @@ from squad.engine import Engine
 from squad.graph import from_doc
 from squad.record import read
 from tests.gitrepo import make_repo, sh, sibling_repo
-from tests.helpers import node, router
+from tests.helpers import DESIGN, node, router
 
 
 def req(skill="tdd", **kw):
@@ -339,6 +339,16 @@ async def test_the_workspace_preflight_applies_to_a_frontier_child(tmp_path):
     r = ev(tmp_path / "b", "resume")[0]
     assert v.verdict == "conflict" and eng2.adapter.calls == [] and r["frontier"] == ["route.router.2"]
     assert r["preflight"]["reason"] == "workspace_changed:worktrees/child"
+
+
+def test_the_shipped_router_record_is_stamped_to_the_graph_it_ships_beside():
+    # #1817/#1830: the record's run_start graph_hash is the contract check_record.py enforces against
+    # docs/design/router.graph.json, so a graph edit and the restamp of the record are one change. Named here so a
+    # drifted pair fails by its own name instead of only inside the frontier test below.
+    from squad.graph import canon_hash
+    doc = router()
+    events = [json.loads(line) for line in (DESIGN / "router.record.jsonl").read_text().splitlines() if line.strip()]
+    assert events[0]["event"] == "run_start" and events[0]["graph_hash"] == canon_hash(doc)
 
 
 @pytest.mark.anyio
