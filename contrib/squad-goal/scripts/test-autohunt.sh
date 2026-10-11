@@ -139,6 +139,11 @@ case "$n" in *"HUNT filed #42"*) ok "file helper logs HUNT filed #N";; *) ko "fi
 $G -qF "labels[]=bug" "$T/file/ghpost" && ok "file helper adds the bug label" || ko "no bug label: $(cat "$T/file/ghpost")"
 extra=$($G -oE 'labels\[\]=[^ ]+' "$T/file/ghpost" 2>/dev/null | $G -cvF 'labels[]=bug' || true)
 [ "${extra:-0}" -eq 0 ] && ok "file helper adds only the bug label" || ko "file helper added extra labels: $(cat "$T/file/ghpost")"
+$G -qF "title=[SQUAD] a defect" "$T/file/ghpost" && ok "file helper prefixes the title with [SQUAD]" || ko "no [SQUAD] prefix: $(cat "$T/file/ghpost")"
+: > "$T/file/ghpost"
+bash "$S/autohunt.sh" --file "[SQUAD] already tagged" "$T/file/body.md" >/dev/null 2>&1
+$G -qF "title=[SQUAD] already tagged" "$T/file/ghpost" && ! $G -qF "[SQUAD] [SQUAD]" "$T/file/ghpost" \
+  && ok "file helper never doubles an existing prefix" || ko "doubled prefix: $(cat "$T/file/ghpost")"
 n=$(bash "$S/autohunt.sh" --none 2>&1)
 case "$n" in *"HUNT none"*) ok "empty hunt logs HUNT none";; *) ko "none: '$n'";; esac
 

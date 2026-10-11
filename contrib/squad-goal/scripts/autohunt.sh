@@ -7,6 +7,7 @@
 now=$(date +%s)
 file_issue() {
   local title=$1 body=$2 resp num tagged
+  case $title in \[*) ;; *) title="[SQUAD] $title";; esac   # every issue the loop files about its own tooling carries the prefix
   tagged=$(mktemp)
   cat "$body" > "$tagged"
   grep -qF "Filed by autohunt" "$tagged" || echo "Filed by autohunt" >> "$tagged"
