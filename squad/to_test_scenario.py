@@ -749,9 +749,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     area, the map knows and the plan no longer covers is reported in `removed` / `removed_areas` and stays open.
     A flat map (no `"layout": "areas"`, case records under the scenario) is migrated in the same pass: areas and
     containers first, then each known record re-parented (`replace_parent`, nothing closed or deleted), then the
-    records the cap left out created, and `"layout": "areas"` written last. The scenario's links to its areas are
-    made in that last step too, because the flat scenario already holds the cap's 100 sub-issues: linking an area
-    before the records leave the parent is refused, and a pass that dies there resumes into the same refusal. Creations are paced: a secondary rate limit (`RateLimited` from the runner) is waited out and retried.
+    records the cap left out created, and `"layout": "areas"` written last. Creations are paced: a secondary rate limit (`RateLimited` from the runner) is waited out and retried.
 
     `dry_run` returns the counts to create, link, move and update, asks GitHub nothing and writes nothing. A plan with
     no `areas` is published flat, every case a sub-issue of the scenario.
@@ -876,7 +874,6 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
         known = state.setdefault("areas", {})
     flat = bool(tree) and state.get("layout") != "areas" and bool(state["cases"])
     waiting = []                    # a flat scenario's records are placed after every area and container exists
-    untied = []                     # and its areas, linked to a scenario the flat records still fill
     for area in tree:
         entry = known.get(area["key"])
         if entry is None:
@@ -895,10 +892,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
             areas_done["updated"].append(area["key"])
         ident = entry.get("id") or _id_in(children(scenario), entry["number"])
         entry["id"] = ident
-        if flat:
-            untied.append((entry["number"], ident))     # a full parent has no room until the records move out
-        else:
-            link(scenario, entry["number"], ident)
+        link(scenario, entry["number"], ident)
         flush()
         for container in area["containers"]:
             held = next((c for c in entry["containers"] if c["title"] == container["title"]), None)
@@ -923,8 +917,6 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     # out created, and only then the layout, so an interrupted pass is still flat and resumes the same way.
     for issue, area_key, container in sorted(waiting, key=lambda w: _case_key(w[0]) not in state["cases"]):
         place(issue, area_key, container)
-    for number, ident in untied:    # the parent has room again: the flat records left it for their containers
-        link(scenario, number, ident)
     if tree:
         state["layout"] = "areas"
         flush()
