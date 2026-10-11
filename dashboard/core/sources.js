@@ -19,6 +19,7 @@ function sourcesModule({ STATES }) {
     { state: "unverified", cls: null, label: "Work landed, the final gate had no command", color: "ok", hub_only: true },
     { state: "failed", cls: "v-bad", label: "Run failed", color: "err" },
     { state: "needs-human", cls: "v-human", label: "Run needs a person", color: "warn" },
+    { state: "handled", cls: null, label: "Needs-human run, landed in the fork", color: "ok", hub_only: true },
     { state: "running", cls: "v-live", label: "Run in progress", color: "run" },
     { state: "starting", cls: null, label: "Run starting", color: "run", hub_only: true },
     { state: "stalled", cls: "v-wait", label: "Run stalled", color: "warn" },
