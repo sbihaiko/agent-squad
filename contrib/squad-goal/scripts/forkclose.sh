@@ -99,6 +99,10 @@ for n in $cc; do
       && bash "$here/serial.sh" gui-suite bash -c 'cd "$1" && eval "$2"' _ "$SG_E2E_BUILD_DIR" "${SG_E2E_BUILD_CMD:-make core && make ui}" > "$SG_STATE/e2e-build.log" 2>&1 \
       || echo "FORKCLOSE WARN #$n: rebuilding $SG_E2E_BUILD_DIR failed (see e2e-build.log)"
   fi
+  if [ -n "${SG_E2E_HEADLESS_DIR:-}" ] && [ -d "$SG_E2E_HEADLESS_DIR" ]; then   # the separate tree the headless case builds in (#1414): same base head as the e2e build, moved under the same gui-suite lock so no headless build runs mid-checkout
+    bash "$here/serial.sh" gui-suite bash -c 'cd "$1" && /usr/bin/git fetch -q origin && /usr/bin/git checkout -q --detach "origin/$2"' _ "$SG_E2E_HEADLESS_DIR" "$SG_BASE" > "$SG_STATE/e2e-headless.log" 2>&1 \
+      || echo "FORKCLOSE WARN #$n: moving $SG_E2E_HEADLESS_DIR to the base head failed (see e2e-headless.log)"
+  fi
   out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
   tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
   if [ $rc = 0 ] && [ -n "$mixed" ]; then

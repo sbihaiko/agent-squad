@@ -22,3 +22,4 @@
 # Fork-only work (forkclose.py): an issue delivered as a branch in a local fork, no PR, closes on merge + fork suite green
 # : "${SG_FORK_DIR:=$HOME/src/fork}"; : "${SG_FORK_BASE:=main}"; : "${SG_FORK_BRANCH:=issue/%n}"; : "${SG_FORK_TEST_CMD:=make test}"
 # : "${SG_E2E_BUILD_DIR:=$HOME/src/app-build}"; : "${SG_E2E_BUILD_CMD:=make}"   # app build the fork suite drives, rebuilt at the base head before each fork test
+# : "${SG_E2E_HEADLESS_DIR:=$HOME/src/app-headless}"   # a SEPARATE tree for the suite's headless (dotnet test) cases, kept at the same base head under the same gui-suite lock; never the SG_E2E_BUILD_DIR tree, whose binary the real-app cases launch (#1414)
