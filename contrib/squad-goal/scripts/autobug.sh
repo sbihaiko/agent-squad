@@ -93,8 +93,17 @@ allfork=0; [ "$nfork" -eq ${#clusters[@]} ] && allfork=1
 req=$("$here/mkreq.sh" "$name" "$body") || exit 0
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
+hunt_fix=0; now=$(date +%s)
 for c in "${clusters[@]}"; do set -- $c; p=$1
-  for n in "$@"; do
+  for n in "$@"; do echo "$name" > "$A/bug-$n"
+    if [ "$hunt_fix" = 0 ] && gh api "repos/$SG_REPO/issues/$n" 2>/dev/null | grep -qF "Filed by autohunt"; then
+      hunt_fix=1
+      echo "$now" > "$A/hunt-last"; echo "$now" > "$A/hunt-activity"
+      day=$(date +%F); d=; k=0
+      [ -f "$A/hunt-day" ] && read -r d k < "$A/hunt-day"
+      [ "$d" = "$day" ] || k=0
+      printf '%s %s\n' "$day" "$((k+1))" > "$A/hunt-day"
+    fi
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$SG_STATE/cq/$n-autobug$$.md"; done; done
 $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}" >/dev/null 2>&1
