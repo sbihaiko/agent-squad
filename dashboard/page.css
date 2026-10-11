@@ -249,3 +249,22 @@
   body:not(.noside) #view { right:12px; }
   body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
 }
+
+/* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the
+   hub's pip opens over its maximized board. The card is the panel's own data (core.cardBody), so the two cannot drift. */
+body.card-mode { display: block; margin: 0; }
+body.card-mode #topbar, body.card-mode #left, body.card-mode #graph, body.card-mode #footer,
+body.card-mode #totals, body.card-mode #progress, body.card-mode #replay, body.card-mode #status, body.card-mode #help { display: none; }
+body.card-mode #card { display: block; }
+#card { display: none; height: 100vh; overflow: auto; overscroll-behavior: contain; padding: 8px 10px; background: #0f1115; color: #d8dde6; font: 12px ui-monospace, Menlo, monospace; }
+#card h3 { margin: 8px 0 4px; font-size: 12px; color: #d8dde6; }
+#card .cgroup { border: 1px solid #2a303b; border-radius: 6px; margin: 0 0 6px; padding: 4px 8px 6px; background: #161a21; }
+#card .cgroup.s-running, #card .cgroup.s-started { border-color: #2dd4bf; }
+#card .cgroup.s-failed, #card .cgroup.s-rejected { border-color: #ff6b6b; }
+#card .crow { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#card .crow b { font-weight: 600; }
+#card .crow.s-passed { color: #3ecf8e; }
+#card .crow.s-failed, #card .crow.s-rejected { color: #ff6b6b; }
+#card .crow.s-running, #card .crow.s-started { color: #2dd4bf; }
+#card .crow.s-queued { color: #8a93a3; }
+#card .cnote { color: #8a93a3; line-height: 1.4; }

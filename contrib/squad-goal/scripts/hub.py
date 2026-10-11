@@ -1040,7 +1040,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}
-#board{width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
+#board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
 #board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
 #bbody .ah{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}
@@ -1105,9 +1105,19 @@ body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;o
 body.dockb #bhead{position:static}
 /* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is a live, cross-origin dashboard: it is hidden with `visibility` and never detached, so the very same iframe element (same scroll, same run) is still there when the split comes back. The board is no longer a fixed-height row, so the grip has nothing to resize. */
 body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
-body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0}
+body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0;overflow:hidden}
 body.dockb.max #main{visibility:hidden}
 #grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
+/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and never detached, so the frame — one connection to the run's dashboard — is still there when the board is maximized again. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
+#pip{position:absolute;z-index:10;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 22px #0009;overflow:hidden;overscroll-behavior:contain}
+body:not(.dockb.max) #pip{visibility:hidden}
+#piph{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;background:#1b212b;border-bottom:1px solid var(--line);cursor:move;touch-action:none;flex:none;font-size:11px}
+#piph:hover,#piph.drag{background:#232b37}#piph b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+#piph button{font:inherit;font-size:11px;line-height:1;padding:2px 6px;cursor:pointer}
+#pipb{flex:1;min-height:0;display:flex}#pipf{border:0;border-radius:0 0 5px 5px}
+#pip.off #pipb{height:0;visibility:hidden}
+#pipm{display:none;flex:1;padding:10px;font-size:11px;line-height:1.45;color:var(--mute)}
+#pip.noframe #pipb{visibility:hidden;height:0}#pip.noframe #pipm{display:block}
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
@@ -1139,7 +1149,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b></div>
 <script>
@@ -1206,12 +1216,12 @@ function drawMain(force){
   const byId=new Map(runs.map(r=>[r.id,r]));
   if(key!==built){built=key;
     for(const id of [...frames.keys()])if(!slots.includes(id))frames.delete(id);
-    main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.</div>";
+    main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">"+PIP_NORUNS+"</div>";
     slots.forEach(id=>{const r=byId.get(id);let f=frames.get(id);
       if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
       const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
 }
-function refresh(){plan();drawList();drawMain()}
+function refresh(){plan();drawList();drawMain();pipDraw()}
 function applyFilter(){runs=allRuns}
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
@@ -1391,6 +1401,67 @@ document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
 const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
 g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
+// ---- the pip over the maximized board (#1782)
+// Maximized, the run pane is out of sight, and with it the one thing worth glancing at while the board is read. This
+// window floats on the board and shows ONE card of the run's own dashboard — the card is the dashboard's single-card
+// mode, `?card=<name>`, documented in docs/design/README.md. The two pages are served on different ports, so there is no
+// DOM to reach into: the URL is the whole interface, and the hub never renders a second copy of the card, which would
+// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and never detaches it — so
+// nobody closes it twice. The frame is sourced once per run switch: maximizing, collapsing, dragging and resizing never
+// touch it, so the second view is one connection per run switch and one replay of that run's record, paid when the left
+// bar moves to another run and never per paint. A dashboard too old to answer the mode says so inside the window
+// instead of leaving an empty frame.
+const PIP_NORUNS="No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.";
+const PIP={card:"groups",w:360,h:300,minW:240,minH:160,cw:240,ch:34,inset:12,step:16,run:64,wait:2500};
+const PIP_CARDS={groups:"Groups"};
+const PIP_OLD="This run's dashboard has no single-card mode, so the window has nothing to show. It is a dashboard built before `?card=` (docs/design/README.md); the run pane below is unaffected.";
+const pip=()=>bo.pip||(bo.pip={});
+const pipCard=p=>(p&&p.card)||PIP.card;
+const pipClamp=(v,lo,hi)=>hi<lo?lo:Math.max(lo,Math.min(hi,v));
+const pipURL=(r,card)=>r?((r.url||"http://127.0.0.1:"+r.port+"/")+"?card="+encodeURIComponent(card)):"";
+const pipBox=()=>{const b=$("#board").getBoundingClientRect(),h=$("#bhead").getBoundingClientRect();return{w:b.width,h:b.height,head:h.height}};
+// The size it takes on this board: the minimum first, so a place remembered on a wider board shrinks onto a narrow one and still fits.
+const pipSize=(box,off)=>off?{w:PIP.cw,h:PIP.ch}:{w:box.w<PIP.w?PIP.minW:PIP.w,h:box.h-box.head<PIP.h?PIP.minH:PIP.h};
+// A place is kept against the board's top-left and clamped: never left of the board, never above its header (measured, not assumed), never past its far edge.
+const pipPlace=(box,s,x,y)=>({x:pipClamp(Math.round(x),0,box.w-s.w),y:pipClamp(Math.round(y),box.head,box.h-s.h)});
+let pipSrc="",pipSeen="",pipDead="",pipTimer=0;
+const pipRun=()=>{const id=slots[0];return id?runs.find(r=>r.id===id)||null:null};   // the run the left bar selected is the run the window shows
+const pipHead=r=>{const c=PIP_CARDS[pipCard(pip())]||pipCard(pip());return r?name(r)+" · "+r.state+" · "+c:c};
+const pipSet=o=>{Object.assign(pip(),o);saveB();pipDraw()};
+function pipDraw(){
+  const el=$("#pip"),p=pip(),off=!!p.off,box=pipBox(),s=pipSize(box,off);
+  const at=pipPlace(box,s,p.x===undefined?box.w-s.w-PIP.inset:p.x,p.y===undefined?box.h-s.h-PIP.inset:p.y);
+  el.style.left=at.x+"px";el.style.top=at.y+"px";el.style.width=s.w+"px";el.style.height=s.h+"px";
+  el.classList.toggle("off",off);$("#pipx").innerHTML=off?"&#43;":"&#8211;";
+  if(at.x!==p.x||at.y!==p.y){p.x=at.x;p.y=at.y;saveB()}   // a place remembered on a wider board is pulled back onto this one
+  const r=pipRun(),card=pipCard(p),url=pipURL(r,card),f=$("#pipf");
+  if(url)if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
+    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}   // an older dashboard never answers: say so, never an empty frame
+  const miss=!!url&&pipSrc===pipDead&&pipSeen!==pipSrc;
+  el.classList.toggle("noframe",!r||miss);
+  $("#pipm").textContent=!r?PIP_NORUNS:miss?PIP_OLD:"";
+  $("#pipt").textContent=pipHead(r);
+}
+pipDraw();
+$("#pipx").onclick=()=>pipSet({off:!pip().off});
+$("#pipo").onclick=()=>setMax(false);   // closing the window is leaving the maximize mode: the board is never maximized without it
+$("#piph").onpointerdown=e=>{e.preventDefault();const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
+const el=$("#pip"),ox=e.clientX-(parseFloat(el.style.left)||0),oy=e.clientY-(parseFloat(el.style.top)||0);
+const mv=ev=>{if(!ev.buttons){up();return}const box=pipBox(),s=pipSize(box,!!pip().off),at=pipPlace(box,s,ev.clientX-ox,ev.clientY-oy);el.style.left=at.x+"px";el.style.top=at.y+"px"},
+up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);
+const p=pip();p.x=parseFloat(el.style.left)||0;p.y=parseFloat(el.style.top)||0;saveB()};
+g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
+$("#piph").addEventListener("keydown",e=>{
+  if(e.key==="Escape"){e.preventDefault();e.stopPropagation();if(pip().off)$("#bz").focus();else pipSet({off:true});return}   // never restores the split from inside
+  const d={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];if(!d)return;
+  e.preventDefault();e.stopPropagation();
+  const p=pip(),step=e.shiftKey?PIP.run:PIP.step,box=pipBox(),s=pipSize(box,!!p.off),at=pipPlace(box,s,(p.x||0)+d[0]*step,(p.y||0)+d[1]*step);
+  pipSet({x:at.x,y:at.y})});
+addEventListener("message",e=>{const d=e.data;if(!d||d.squadCard===undefined)return;pipSeen=pipSrc;pipDead="";pipDraw()});   // the dashboard answered the mode
+$("#pip").addEventListener("wheel",e=>e.preventDefault(),{passive:false});   // a wheel over the chrome does not reach the board behind it
+$("#piph").addEventListener("wheel",e=>e.preventDefault(),{passive:false});
+addEventListener("resize",()=>pipDraw());
+// ---- the pip ends here
 document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const h=new Set(bo.hidden||[]),g=t.dataset.eye;h.has(g)?h.delete(g):h.add(g);bo.hidden=[...h];saveB();pollBoard()},true);
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}

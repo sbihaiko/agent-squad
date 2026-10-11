@@ -132,5 +132,40 @@ function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, chil
     return segs;
   }
 
-  return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus };
+  // ---- the panel's single-card mode (ticket #1782) ----
+  // One card of the panel, named by the page's `card` parameter, for the second view the hub's pip opens over its
+  // maximized board. The panel has one card it can name cleanly, so the parameter takes that one alone: `groups`, the
+  // run's children grouped by dispatch and state, unfinished first — the one thing worth glancing at while the board
+  // is read. The card is derived from the same record and the same state table the panel's own rows read, never authored.
+  const CARD_NAMES = ["groups"], CARD_TITLES = { groups: "Groups" };
+  // A child in flight or still waiting comes before a finished one, then the outcomes. A rejected request groups as
+  // `rejected`: the record refused it, so it never ran and its outcome alone would read as one more failed child.
+  const CARD_ORDER = ["running", "started", "queued", "failed", "rejected", "deadline", "needs-human", "passed"];
+  const cardRank = (s) => (CARD_ORDER.indexOf(s) < 0 ? CARD_ORDER.length : CARD_ORDER.indexOf(s));
+  const cardStateOf = (c) => (c.rejected ? "rejected" : childMark(c).state);
+  const cardWord = (s) => (MARKS[s] ? MARKS[s].label : s);
+
+  // The children grouped by dispatch and state, unfinished first. Ordered by state, then by dispatch, so the card is
+  // stable while a run works: a child that finishes moves its own group, and the others keep their place.
+  function cardGroups(children) {
+    const by = new Map();
+    for (const c of children || []) {
+      const key = `${c.dispatch}\u0000${cardStateOf(c)}`;
+      if (!by.has(key)) by.set(key, { dispatch: c.dispatch, state: cardStateOf(c), kids: [] });
+      by.get(key).kids.push(c);
+    }
+    return [...by.values()]
+      .map((g) => ({ ...g, label: cardWord(g.state), count: g.kids.length, name: `${g.dispatch} · ${g.kids.length} ${cardWord(g.state)}` }))
+      .sort((a, b) => cardRank(a.state) - cardRank(b.state) || String(a.dispatch).localeCompare(String(b.dispatch)));
+  }
+
+  // What the page paints for a `card` request: the card, or the message that names the cards the panel does have. A
+  // card the panel does not have is a message, never an empty frame.
+  function cardBody(name, children) {
+    if (!CARD_NAMES.includes(name)) return { ok: false, message: `This dashboard has no card named "${name}". It has: ${CARD_NAMES.join(", ")}.` };
+    const groups = cardGroups(children);
+    return { ok: true, name, title: CARD_TITLES[name] || name, groups, empty: groups.length ? "" : "This run has no children yet." };
+  }
+
+  return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody };
 }
