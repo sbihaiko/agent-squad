@@ -2115,9 +2115,11 @@ def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
 
 
 # `home.first-focus` is the home batch's setup step (#1251): a run reports the batch's setup with its cases, so it is
-# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from.
-HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
-                  "home.first-focus",
+# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from. MesenAI ccfd2dfc5
+# (#1492) moved the batch's pad connect - `launch.port-lamp-p1` - from the launch batch's steps to the head of the home
+# batch's, so the setup is asked for before any pad is connected; `_pilot_for_the_real_app` merges that setup into the
+# session of the batch before, which puts `home.first-focus` third and leaves the connect right after it.
+HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "home.first-focus", "launch.port-lamp-p1",
                   "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
                   "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
 # None of these is manual any more: MesenAI #1283 made the lamp, ring and surface cases automated (the hook decides them).
