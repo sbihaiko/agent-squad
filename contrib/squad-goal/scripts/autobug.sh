@@ -7,6 +7,10 @@
 # coordinator deletes auto/bug-<n> to retry. SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
+# One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
+# same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
+# for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
+[ -n "${SG_SINGLE_AUTOBUG:-}" ] || exec env SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
 read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, re, sys, pathlib
@@ -54,6 +58,11 @@ clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[
 pick=(); for c in "${clusters[@]}"; do pick+=($c); done
 [ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
+# Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass
+# that started in that window used to pick them all over again. A launch that fails keeps the claim -- the marker is
+# the loop's dispatch lock and only the coordinator retries it (see the header); janitor.py's stale-marker sweep reads
+# only `disp-*` markers, so a bug- marker is neither released by it nor able to break it.
+for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
 # A cluster is fork-only when any of its issues is (sg_fork_only: label, or the body line); fork clusters get the fork preamble ONLY
 fk=(); nfork=0; for c in "${clusters[@]}"; do f=0; for n in $c; do sg_fork_only "$n" && f=1; done; fk+=($f); nfork=$((nfork+f)); done
 allfork=0; [ "$nfork" -eq ${#clusters[@]} ] && allfork=1
@@ -77,7 +86,7 @@ req=$("$here/mkreq.sh" "$name" "$body") || exit 0
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
 for c in "${clusters[@]}"; do set -- $c; p=$1
-  for n in "$@"; do echo "$name" > "$A/bug-$n"
+  for n in "$@"; do
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$SG_STATE/cq/$n-autobug$$.md"; done; done
 $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}" >/dev/null 2>&1

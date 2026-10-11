@@ -8,6 +8,10 @@
 # to dispatch again. Empty SG_FRONTIER_LABEL turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
+# One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
+# same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
+# for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
+[ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
 read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, re, sys, pathlib
 def find(o):
@@ -56,6 +60,10 @@ if [ ${#ready[@]} -gt 1 ]; then cj="["; for n in "${ready[@]}"; do cj+="$(gh api
 else kids+=("${ready[@]}"); fi
 [ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#kids[@]} child(ren): $(printf '[%s] ' "${kids[@]}")($free free slots)"; exit 0; }
 name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
+# Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass that
+# started in that window used to pick them all over again. A launch that fails keeps the claim -- janitor.py still reads
+# `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks.
+for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 nfork=0; for n in "${pick[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
 { if [ $nfork -eq ${#pick[@]} ]; then   # every issue is fork-only: the fork preamble ONLY, nothing about origin/<base>, a PR or prepush.sh
     echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one local commit each. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
@@ -71,7 +79,7 @@ nfork=0; for n in "${pick[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((n
 req=$("$here/mkreq.sh" "$name" "$body") || exit 0
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
-for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"
+for n in "${pick[@]}"; do
   printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$SG_STATE/cq/$n-frontier$$.md"; done
 $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}" >/dev/null 2>&1
 echo "FRONTIER dispatched ${pick[*]/#/#} in one run ($name)"
