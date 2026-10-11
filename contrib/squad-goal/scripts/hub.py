@@ -1006,7 +1006,13 @@ def q_grok():
         with open(GROK_LOG, "rb") as fh:
             fh.seek(0, 2); size = fh.tell(); pos = size; floor = max(0, size - GROK_SCAN_MAX)
             while pos > floor and last is None:
-                step = min(4_000_000, pos - floor); pos -= step; fh.seek(pos); chunk = fh.read(step)
+                hi = pos; step = min(4_000_000, pos - floor); pos -= step
+                if hi < size:   # the read would end inside a line: carry it to its newline, so this chunk holds that
+                    fh.seek(hi)  # whole line and not its head alone, the tail of it being what the older chunk drops
+                    while hi < size and hi < pos + 8_000_000:
+                        b = fh.read(65_536); hi += len(b)
+                        if b"\n" in b or not b: break
+                fh.seek(pos); chunk = fh.read(hi - pos)
                 if pos:   # read from the middle: the first line is half a line unless the byte before is the newline
                     fh.seek(pos - 1)
                     if fh.read(1) != b"\n": chunk = chunk.split(b"\n", 1)[-1]
