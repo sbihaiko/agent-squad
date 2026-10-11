@@ -8,10 +8,15 @@
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
-  #left { grid-row:2; overflow:auto; border-right:1px solid var(--line); background:var(--panel); padding:4px 12px 12px; min-height:0; }
+  /* The side panel is a drawer docked to the right edge, under the top bar: it takes its own column of the screen, so the diagram stays whole.
+     --side-w is its live width (the sheet's height under 900px), and --side-min/--side-max the travel the grip clamps to. The page measures both. */
+  body { --side-w:420px; --side-min:320px; --side-max:calc(100vw - 520px); }
+  #left { position:fixed; top:37px; right:0; bottom:0; left:auto; width:var(--side-w,420px); max-height:none; transform:none; border-radius:0; border:0; border-left:1px solid var(--line); box-shadow:-8px 0 32px #0008; z-index:7; padding:8px 16px 16px; overflow:auto; background:var(--panel); }
+  /* The grip is an 8px strip on either side of the drawer's edge: #side-grip inside, #left::before outside over the map. Both start a drag. */
+  #side-grip { position:fixed; top:37px; bottom:0; right:calc(var(--side-w,420px) - 8px); width:8px; cursor:col-resize; }
+  #side-grip:focus-visible { outline:1px solid var(--acc); outline-offset:-1px; }
+  #left::before { content:""; position:fixed; top:37px; bottom:0; right:var(--side-w,420px); width:8px; z-index:7; cursor:col-resize; }
   #graph { grid-column:1; grid-row:2; }
-  #left { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; bottom:auto; z-index:9; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 48px #000b; padding:8px 20px 20px; }
-  body:not(.noside)::after { content:""; position:fixed; inset:37px 0 0 0; background:#0008; z-index:8; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
   button, label.btn { cursor:pointer; }
@@ -73,8 +78,10 @@
   svg#map { position:absolute; inset:0; width:100%; height:100%; background:#0c0e12; cursor:grab; touch-action:none; user-select:none; }
   svg#map.panning { cursor:grabbing; }
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
+  body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
   #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
   #replay { position:absolute; left:50%; bottom:34px; transform:translateX(-50%); display:none; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; box-shadow:0 6px 20px #0008; }
+  body:not(.noside) #replay { left:calc((100vw - var(--side-w,0px)) / 2); }   /* the bar centers in what the drawer leaves, so it never sits under it */
   #replay input[type=range] { width:320px; accent-color:var(--acc); }
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
@@ -159,6 +166,7 @@
   /* The legend is a strip on the map's right edge, under the zoom controls: it widens itself to the left on hover, focus or the sticky .open. */
   #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:28px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; transition:width .15s ease .15s; }
   #legend:hover, #legend:focus-within, #legend.open { width:220px; transition-delay:0s; }
+  body:not(.noside) #legend { visibility:hidden; }   /* the open drawer owns the right edge; the key [ or the ? overlay bring the strip back */
   #b-legend { display:flex; align-items:center; gap:6px; width:100%; box-sizing:border-box; padding:4px 5px; border:0; background:none; color:var(--fg); font-size:11px; cursor:pointer; }
   #legend-list { display:flex; flex-direction:column; padding:0 2px 4px; }
   #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
@@ -229,6 +237,20 @@
 .script-diagram .step-tags { fill: #555; font-size: 11px; }
 .script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
 .script-diagram marker path { fill: #777; }
+
+/* A window under 1024px starts with a narrower drawer; --side-max stays 520px short of the viewport, so 504px of travel at 1024. */
+@media (max-width: 1024px) { body { --side-w:360px; } }
+/* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
+   The map reserves the sheet's height, and the replay bar rises clear of it rather than hiding under it. */
+@media (max-width: 900px) {
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
+  #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  body:not(.noside) #mapbox { padding-bottom:52vh; }
+  body:not(.noside) #view { right:12px; }
+  body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
+}
 </style>
 </head>
 <body>
@@ -259,6 +281,7 @@
   <button id="b-help" title="Show the controls and the color legend (key ?)" aria-expanded="false" aria-label="Help">?</button>
 </header>
 <div id="left">
+  <div id="side-grip" tabindex="0" role="separator" aria-orientation="vertical" aria-valuemin="320" title="Drag to widen or narrow the side panel (arrow keys, Home, End, double-click to reset)"></div>
   <div id="stop" hidden></div>
   <div id="offer" hidden></div>
   <div id="review" hidden></div>
@@ -2133,6 +2156,7 @@ function sourcesModule({ STATES }) {
     { how: "Enter in the name field", what: "Apply the rename.", covers: ["key:Enter"] },
     { how: "Ctrl or Cmd + Z", what: "Undo. Add Shift to redo.", covers: ["key:z"] },
     { how: "Ctrl or Cmd + Y", what: "Redo.", covers: ["key:y"] },
+    { how: "Drag the side panel's edge, or the arrow keys on its grip", what: "Set how wide the panel is — how tall it is when a narrow window makes it a bottom sheet. Home and End go to the narrowest and the widest; a double-click brings the default back.", covers: ["key:Home", "key:End"] },
     { how: "[", what: "Show or hide the side panel.", covers: ["key:["] },
     { how: "?", what: "Show or hide this help.", covers: ["key:?"] },
     { how: "Esc", what: "Close the menu and this help.", covers: ["key:Escape"] },
@@ -2480,14 +2504,15 @@ function bottomReserve() {
   const foot = $("footer") ? $("footer").offsetHeight : 0;
   return S.events ? foot + REPLAY_GAP + REPLAY_BAR_H : foot + FOOTER_PAD;
 }
-// The side panel overlays the left of the map, so an open panel takes its width off the area the graph is fitted into.
+// The side panel is a drawer at the right edge, so an open panel takes its width off the area the graph is fitted into and the
+// fitted view stays at the map's left edge, unshifted.
 // `floorKey` (the key of a group just expanded) keeps the fit from shrinking below READABLE_K: the view then starts at the group's dispatch,
 // and the fit stays off (S.fitted false) so a live update does not shrink it again. The Fit button fits all.
 function fit(floorKey) {
-  const s = mapSize(), side = 0; // the panel is a popup now, it no longer takes room from the map
+  const s = mapSize(), side = sideOpen() ? $("left").offsetWidth : 0;
   const all = { ...S.layout, ...S.childPos, ...S.groupPos, ...S.groupPts }, size = { w: Math.max(MIN_FIT, s.w - side), h: Math.max(MIN_FIT, s.h - bottomReserve()) };
   const anchor = floorKey ? floorAnchor(floorKey) : null, v = core.viewFitFloor(all, BOX, size, PAD, anchor ? READABLE_K : 0, anchor);
-  S.view = { ...v, tx: v.tx + side };
+  S.view = { ...v };
   S.floored = !!(anchor && v.k === READABLE_K); S.fitted = !S.floored; applyView();
 }
 // The top-left of what an expanded group shows: its dispatch's entry and the first row of its cards.
@@ -2497,14 +2522,14 @@ function floorAnchor(key) {
 }
 function zoomBy(factor, cx, cy) { const s = mapSize(); S.view = core.viewZoomAt(S.view, cx === undefined ? s.w / 2 : cx, cy === undefined ? s.h / 2 : cy, factor); S.fitted = false; applyView(); }
 
-// The side panel overlays the left of the map. A selection that would sit under it, or off the map, pans the view (never the zoom)
-// until it shows right of the panel; one already in view moves nothing, and a closed panel moves nothing.
+// The side panel covers the right of the map. A selection that would sit under it, or off the map, pans the view (never the zoom)
+// until it shows left of the drawer; one already in view moves nothing, and a closed panel moves nothing.
 function revealSelected() {
   if (!sideOpen() || !S.selected) return;
   const name = S.selected, grp = S.groups.find((g) => g.key === name || g.kids.some((c) => c.name === name));
   const r = S.groupPos[name] || (grp && S.groupPos[grp.key]) || S.childPos[name] || S.layout[name];
   if (!r) return;
-  const v = core.viewReveal(S.view, { x: r.x, y: r.y, w: r.w || BOX.w, h: r.h || BOX.h }, mapSize(), { left: $("left").offsetWidth + REVEAL_INSET, right: REVEAL_INSET, top: REVEAL_INSET, bottom: Math.max(bottomReserve(), REVEAL_INSET) });
+  const v = core.viewReveal(S.view, { x: r.x, y: r.y, w: r.w || BOX.w, h: r.h || BOX.h }, mapSize(), { left: REVEAL_INSET, right: $("left").offsetWidth + REVEAL_INSET, top: REVEAL_INSET, bottom: Math.max(bottomReserve(), REVEAL_INSET) });
   if (v !== S.view) { S.view = v; applyView(); }
 }
 
@@ -2584,14 +2609,14 @@ function clearSelection() { S.selected = null; S.link = null; setSide(false, tru
 function pick(name) {
   S.link = null;
   if (S.selected === name) { clearSelection(); return; }
-  S.selected = name; render(); // the panel is a popup over the map: a selection never pans the view
+  S.selected = name; render(); // the drawer takes the right edge: render() reveals the selection left of it
 }
-// The cards in reading order (top to bottom, then left to right), for the popup's previous / next.
+// The cards in reading order (top to bottom, then left to right), for the panel's previous / next.
 function cardOrder() {
   return [...$("cards").children].filter((c) => c.dataset.name).map((c) => ({ n: c.dataset.name, r: c.getBoundingClientRect() }))
     .sort((a, b) => Math.round(a.r.top) - Math.round(b.r.top) || a.r.left - b.r.left).map((c) => c.n);
 }
-// Previous / next card without closing the popup: the ‹ › buttons, or ← → while the popup is open.
+// Previous / next card without closing the panel: the ‹ › buttons, or ← → while the panel is open.
 function stepCard(k) {
   const o = cardOrder(), i = o.indexOf(S.selected) + k;
   if (i < 0 || i >= o.length) return;
@@ -3749,16 +3774,59 @@ function setSide(open, auto) {
   document.body.classList.toggle("noside", !open);
   $("b-panel").setAttribute("aria-expanded", String(open));
   if (!auto) { UI.side = open; saveUI(); }
+  if (S.doc) fit();   // the drawer takes its width off the map, so an open or closed panel is a fit the graph can feel
 }
 function sideOpen() { return !document.body.classList.contains("noside"); }
 function openSide() { if (!sideOpen()) setSide(true, true); }
 setSide(!!UI.side, true);
 setLegend(!!UI.legend, false);   // chrome.js builds UI, so the stored choice is read here, after menu.js defined setLegend
 $("b-panel").addEventListener("click", () => setSide(!sideOpen()));
-// The panel is a popup: a click on the dimmed page behind it, or Escape, closes it.
-document.addEventListener("click", (e) => { if (e.target === document.body && sideOpen()) setSide(false); });
+// Escape closes the panel; the map behind it stays the map, so a click there is a click, not a dismissal.
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sideOpen() && !e.defaultPrevented) setSide(false); });
 $("vchip").addEventListener("click", () => setSide(!sideOpen()));
+
+// The drawer's grip. A drag on the 8px strip at its edge, or the arrows on the handle, sets --side-w between the stylesheet's
+// --side-min and --side-max; a double-click puts the 420px default back. The width is page state, like the panel's open flag.
+const SIDE_HIT = 8, SIDE_STEP = 24, SIDE_RESET = 420;
+const sideProbe = document.createElement("div");
+sideProbe.style.cssText = "position:fixed;top:-9999px;left:-9999px;height:0;pointer-events:none";
+document.body.appendChild(sideProbe);
+// The CSS owns the limits: --side-min and --side-max are measured through a probe, so the page and the stylesheet cannot drift.
+function sidePx(tok) { sideProbe.style.width = `var(${tok})`; return Math.round(sideProbe.getBoundingClientRect().width); }
+// A narrow window turns the drawer into a bottom sheet: the same variable is its height and the grip is sideways.
+function sideRow() { return window.matchMedia("(max-width: 900px)").matches; }
+function sideWidth() { const r = $("left").getBoundingClientRect(); return Math.round(sideRow() ? r.height : r.width); }
+function sideAria(now) {
+  const grip = $("side-grip");
+  grip.setAttribute("aria-orientation", sideRow() ? "horizontal" : "vertical");
+  grip.setAttribute("aria-valuemin", String(sidePx("--side-min"))); grip.setAttribute("aria-valuemax", String(sidePx("--side-max"))); grip.setAttribute("aria-valuenow", String(now));
+}
+function setSideWidth(px, store) {
+  const v = Math.min(Math.max(Math.round(px), sidePx("--side-min")), sidePx("--side-max"));
+  document.body.style.setProperty("--side-w", v + "px");
+  sideAria(v);
+  if (store) { UI.sideW = v; saveUI(); }
+  if (S.doc) fit();   // every change to the drawer is a change to the room the graph has
+  return v;
+}
+// The grip is the whole 8px strip either side of the drawer's edge, so the press is judged by where it landed.
+function onGrip(e) { const r = $("left").getBoundingClientRect(); return Math.abs(sideRow() ? e.clientY - r.top : e.clientX - r.left) <= SIDE_HIT; }
+let sideDrag = null;
+function startSideDrag(e) { sideDrag = { x: e.clientX, y: e.clientY, w: sideWidth() }; document.body.style.cursor = sideRow() ? "row-resize" : "col-resize"; }
+document.addEventListener("pointerdown", (e) => { if (sideOpen() && onGrip(e)) startSideDrag(e); });
+document.addEventListener("pointermove", (e) => { if (sideDrag) setSideWidth(sideRow() ? sideDrag.w + (sideDrag.y - e.clientY) : sideDrag.w + (sideDrag.x - e.clientX), false); });
+document.addEventListener("pointerup", () => { if (!sideDrag) return; sideDrag = null; document.body.style.cursor = ""; UI.sideW = sideWidth(); saveUI(); });
+$("side-grip").addEventListener("pointerdown", (e) => { e.stopPropagation(); if (sideOpen()) startSideDrag(e); });
+$("side-grip").addEventListener("keydown", (e) => {
+  const grow = sideRow() ? "ArrowDown" : "ArrowRight", shrink = sideRow() ? "ArrowUp" : "ArrowLeft";
+  if (e.key === grow || e.key === shrink) setSideWidth(sideWidth() + (e.key === grow ? SIDE_STEP : -SIDE_STEP), true);
+  else if (e.key === "Home" || e.key === "End") setSideWidth(sidePx(e.key === "Home" ? "--side-min" : "--side-max"), true);
+  else return;
+  e.preventDefault();
+});
+$("side-grip").addEventListener("dblclick", () => setSideWidth(SIDE_RESET, true));
+window.addEventListener("resize", () => sideAria(sideWidth()));   // the sheet's limits are in vh: the handle follows a resize
+if (UI.sideW !== undefined) setSideWidth(UI.sideW, false); else sideAria(sideWidth());   // a reload lands where the drag left the drawer
 
 // Run mode reads a run; Edit mode shows every control that changes the graph. A loaded run opens in Run mode, a bare page in Edit mode, until the person picks.
 var modePicked = false;

@@ -42,6 +42,7 @@ function sourcesModule({ STATES }) {
     { how: "Enter in the name field", what: "Apply the rename.", covers: ["key:Enter"] },
     { how: "Ctrl or Cmd + Z", what: "Undo. Add Shift to redo.", covers: ["key:z"] },
     { how: "Ctrl or Cmd + Y", what: "Redo.", covers: ["key:y"] },
+    { how: "Drag the side panel's edge, or the arrow keys on its grip", what: "Set how wide the panel is — how tall it is when a narrow window makes it a bottom sheet. Home and End go to the narrowest and the widest; a double-click brings the default back.", covers: ["key:Home", "key:End"] },
     { how: "[", what: "Show or hide the side panel.", covers: ["key:["] },
     { how: "?", what: "Show or hide this help.", covers: ["key:?"] },
     { how: "Esc", what: "Close the menu and this help.", covers: ["key:Escape"] },
