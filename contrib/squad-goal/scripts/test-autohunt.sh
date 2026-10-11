@@ -178,7 +178,7 @@ else ok "empty hunt: hunt-day still not incremented"; fi
 # 17) a hunt-filed bug starts cooldown and the day count when autobug dispatches it (Refs #1504)
 scene huntdisp
 d=$(cd "$(dirname "$src")" && pwd)
-cp "$d/autobug.sh" "$d/forkonly.sh" "$S/"
+cp "$d/autobug.sh" "$d/single.sh" "$d/forkonly.sh" "$S/"
 [ -f "$d/cluster.py" ] && cp "$d/cluster.py" "$S/"
 mkdir -p "$T/huntdisp/co/docs/squad/workflows"
 echo '{"max_parallel": 10}' > "$T/huntdisp/co/docs/squad/workflows/dynamic.graph.json"
