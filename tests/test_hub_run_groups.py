@@ -47,11 +47,11 @@ def test_ended_run_lands_in_the_age_bucket(hub):
     assert hub.group_of({"state": "completed", "age": 100, "live": False}) == "1h"
 
 
-def test_run_list_group_header_reads_running_not_open(hub):
+def test_run_list_group_header_reads_workers_not_open(hub):
     m = re.search(r"const GROUPS=(\[[^\]]+\])", hub.PAGE)
     assert m, "GROUPS missing"
     groups = m.group(1)
-    assert '["running","RUNNING"]' in groups
+    assert '["running","WORKERS"]' in groups
     assert "OPEN" not in groups and '["open"' not in groups
 
 

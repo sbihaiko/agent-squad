@@ -1328,7 +1328,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>BUILDER <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
 <script>
@@ -1359,7 +1359,7 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   top.forEach(id=>{if(!next.includes(id)){const j=next.indexOf(null);if(j>=0)next[j]=id}});
   slots=next.filter(Boolean);
 }
-const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
+const GROUPS=[["running","WORKERS"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
 const CAPS=__CAPS__;
 const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
 function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
