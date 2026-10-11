@@ -2876,7 +2876,7 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     going stale in silence."""
     from squad import to_test_scenario as tts
     from squad.gui_test_subset import runnable
-    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes, script_steps
+    from squad.to_test_scenario import coverage, read_scenario, read_script, script_steps
     pilot = _pilot_1223()
     caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.visible", "ui.dialogs"],
             "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}
@@ -2901,9 +2901,34 @@ def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_l
     assert len(ids) == len(set(ids)) >= 67
     assert (report["total_cases"], report["total_steps"]) == (len(ids), len(ids))
     assert report["missing_steps"] == [] and report["steps_without_case"] == []
-    # The pilot predates content hashes, so nothing is reusable until a conversion records them per step.
+    # The pilot is converted: every step records the content hash of its case as the Markdown has it now, so the
+    # script is reusable - no case is uncovered, no step is orphaned and nothing is stale.
+    assert report["reusable"] is True and report["stale"] == []
+
+
+def test_1242_a_script_with_its_content_hashes_stripped_is_refused_as_stale_not_for_gaps(tmp_path):
+    """The narrowing's other half, pinned without leaning on the committed pilot being un-converted: the same script
+    with every step's `content_hash` removed still covers every case and orphans no step - so `reusable` is what the
+    hashes decide, never the ids - and every case is stale, since nothing says which version of the case the step was
+    converted from. Recording the hashes again is the whole of what makes it reusable (MesenAI #1242)."""
+    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    script, scenario = read_script(script_path), read_scenario(md_path)
+    stripped = copy.deepcopy(script)
+    for batch in stripped["batches"]:
+        for part in ("setup", "steps", "teardown"):
+            for s in batch.get(part, []):
+                s.pop("content_hash", None)
+    path = tmp_path / "play-pad-only.gui-test.json"
+    path.write_text(json.dumps(stripped), encoding="utf-8")
+    report = coverage(scenario, read_script(path))  # still a `gui-test/1` script the validator accepts
+    assert report["missing_steps"] == [] and report["steps_without_case"] == []
+    assert report["stale"] == [c["id"] for c in scenario["cases"]]
     assert report["reusable"] is False
-    assert coverage(scenario, record_hashes(scenario, script))["reusable"] is True
+    assert coverage(scenario, record_hashes(scenario, read_script(path)))["reusable"] is True
 
 
 # --- #1243: the run command runs one variant of a script, and records it as a partial run ---
