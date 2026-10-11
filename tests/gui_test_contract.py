@@ -21,12 +21,21 @@ def contract_launch(adapter):
     assert adapter.launch({}) is not None
 
 
+# The args each advertised action needs to be a well-formed request (#1780): a chord names the two buttons it holds,
+# the keyboard names a key, the release names the button it lets go, and a goal read names the predicate it reads
+# toward. Everything else is the plain press.
+PAYLOADS = {"pad.chord": {"buttons": ["Select", "Start"], "ticks": 1},
+            "pad.release": {"button": "Right"},
+            "key.press": {"key": "Enter", "ticks": 1},
+            "nav.goal": {"goal": "ui.screen == play.home"}}
+
+
 @case
 def contract_inject(adapter):
     adapter.launch({})
     for name in adapter.capabilities()["actions"]:
-        if name.startswith("pad."):
-            adapter.inject(name, {"button": "Right", "ticks": 1})
+        if name.startswith("pad.") or name in PAYLOADS:
+            adapter.inject(name, PAYLOADS.get(name, {"button": "Right", "ticks": 1}))
 
 
 @case

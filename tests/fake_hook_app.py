@@ -81,7 +81,10 @@ def handle(req, token):
                     "moves": [{"name": "pad.press", "args": {"pad": 0, "button": b, "ticks": 1}} for b in NAVIGATION]}
         if action == "key.press" and req["args"].get("key") == "Enter" and state["screen"] == "play.library":
             state["screen"], state["focus"], state["opens_at"] = "play.home", "play.home.open-rom", None
-        if action == "pad.press" and req["args"].get("button") == "A" and state["screen"] == "play.home":
+        # Confirm is the confirm press the application's own navigation names (PadNavAction.Confirm), the same
+        # press as A on the pad: the six moves `nav.goal` hands are navigation names, and one of them has to open
+        # the library for a goal-driven run to reach it.
+        if action == "pad.press" and req["args"].get("button") in ("A", "Confirm") and state["screen"] == "play.home":
             state["opens_at"] = state["tick"] + 3
         return {"ok": True}
     if op == "capture":

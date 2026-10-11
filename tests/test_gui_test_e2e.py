@@ -261,14 +261,6 @@ def test_the_emulator_adapter_passes_the_shared_contract_suite(tmp_path):
     assert len(made) == len(CONTRACT)
 
 
-def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
-    caps = _emulator(tmp_path).capabilities()
-    assert caps["actions"] == ["pad.press"]
-    assert set(caps["checks"]) == {"ui.screen", "ui.focused", "ui.visible", "ui.dialogs",
-                                   "ui.ring", "ui.footer", "ui.surface", "ui.items"}
-    assert caps["input_families"] == ["ticks"]
-
-
 # --- #1780: the adapter and the runner drive the verbs the hook answers since #1779 --------------------------
 
 # The verbs ADR-0272's hook answers since #1779 (hook version 2), in the order the adapter advertises them: the
@@ -284,9 +276,13 @@ def _verbs_asked(path):
 def test_the_emulator_adapter_advertises_the_verbs_the_hook_answers_since_1779(tmp_path):
     """#1780: the hook answers `pad.release`, `pad.chord` and `key.press`, and reads a goal's state and moves under
     `nav.goal`, since #1779. An adapter that drives it advertises them, and a verb it does not advertise is the
-    capability the derivation names when it turns the step that writes it into a case a person walks."""
+    capability the derivation names when it turns the step that writes it into a case a person walks. What it reads
+    is what the hook answers and no more: the checks are the application's own UI state."""
     caps = _emulator(tmp_path).capabilities()
     assert caps["actions"] == VERBS_1779
+    assert set(caps["checks"]) == {"ui.screen", "ui.focused", "ui.visible", "ui.dialogs",
+                                   "ui.ring", "ui.footer", "ui.surface", "ui.items"}
+    assert caps["input_families"] == ["ticks"]
 
 
 def test_the_adapter_drives_the_new_verbs_over_the_hook(tmp_path):
@@ -303,8 +299,9 @@ def test_the_adapter_drives_the_new_verbs_over_the_hook(tmp_path):
         step("b1.chord", action={"name": "pad.chord", "args": {"buttons": ["Select", "Start"], "ticks": 4}},
              wait={"check": "ui.surface == none", "timeout_ticks": 8},
              check={"name": "ui.surface", "args": {"is": "none"}}),
-        step("b1.release", check=None, action={"name": "pad.release", "args": {"button": "A", "ticks": 1}},
-             wait={"timeout_ticks": 2}),
+        step("b1.release", action={"name": "pad.release", "args": {"button": "A", "ticks": 1}},
+             wait={"check": "ui.surface == none", "timeout_ticks": 8},
+             check={"name": "ui.surface", "args": {"is": "none"}}),
     )
     d["requires"] = {"actions": VERBS_1779, "checks": ["ui.screen", "ui.surface"]}
     d["variants"] = {"window.mode": ["windowed"]}
@@ -317,14 +314,17 @@ def test_the_adapter_drives_the_new_verbs_over_the_hook(tmp_path):
 
 
 def _goal_script():
-    """One `nav.goal` step: the pilot's `after-game.reach-home` shape (#1780), a setup step that asserts the screen."""
+    """A `nav.goal` setup step and the case it establishes: the pilot's `after-game.reach-home` shape (#1780)."""
     d = script(step("b1.reach-library", role="setup",
                     precondition="by hand: the screen is play.home",
                     action={"name": "nav.goal", "args": {"goal": "ui.screen == play.library"}},
                     wait={"check": "ui.screen == play.library", "timeout_ticks": 60},
+                    check={"name": "ui.screen", "args": {"is": "play.library"}}),
+               step("b1.library-open", precondition="ui.screen == play.library",
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 8},
                     check={"name": "ui.screen", "args": {"is": "play.library"}}))
     d["batches"][0]["setup"] = [d["batches"][0]["steps"].pop(0)]
-    d["requires"] = {"actions": ["nav.goal"], "checks": ["ui.screen"]}
+    d["requires"] = {"actions": ["pad.press", "nav.goal"], "checks": ["ui.screen"]}
     d["variants"] = {"window.mode": ["windowed"]}
     return d
 
@@ -338,24 +338,27 @@ def test_a_goal_step_asks_the_hook_and_waits_for_a_chooser(tmp_path):
     d = _goal_script()
     adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(verbs)})
     validate(d, adapter.capabilities())
-    [r] = run_launched(d, adapter)
-    assert r == {"id": "b1.reach-library", "verdict": "pending", "capture": None}
-    assert _verbs_asked(verbs) == ["nav.goal"]
+    results = run_launched(d, adapter)
+    assert (results[0]["id"], results[0]["verdict"]) == ("b1.reach-library", "pending")
+    # The goal step asks the read and nothing else; the press after it is the case that follows, which the pending
+    # setup never established.
+    assert _verbs_asked(verbs) == ["nav.goal", "pad.press"]
 
 
 def test_a_goal_is_reached_through_the_hooks_own_moves_and_the_navigators_choice(tmp_path):
     """#1780: the hook hands the moves it accepts in the duration family its own clock allows, and the runner's
-    Navigator chooses among them (ADR-0271 items 2-3). Confirm on the Home is the library, so a chooser that takes
-    the hook's own move reaches the goal the pilot's setup names."""
+    Navigator chooses among them (ADR-0271 items 2-3). Confirm on the Home opens the library, so a chooser that
+    takes the hook's own navigation move reaches the goal the pilot's setup names."""
     from squad.gui_test_goal import Navigator
 
     d = _goal_script()
     adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(tmp_path / "verbs.jsonl")})
     validate(d, adapter.capabilities())
     events = []
-    navigator = Navigator(lambda state, options: {"choice": "pad.press A"}, max_decisions=4)
-    [r] = run_launched(d, adapter, record=events.append, goal=navigator)
-    assert r["verdict"] == "passed"
+    navigator = Navigator(lambda state, options: {"choice": "pad.press Confirm"}, max_decisions=4)
+    results = run_launched(d, adapter, record=events.append, goal=navigator)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.reach-library", "passed"),
+                                                          ("b1.library-open", "passed")]
     [decision] = [e for e in events if e["event"] == "gui_decision"]
     assert decision["options"] == ["pad.press Up", "pad.press Down", "pad.press Left", "pad.press Right",
                                    "pad.press Confirm", "pad.press Back"]
