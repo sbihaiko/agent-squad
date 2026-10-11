@@ -908,20 +908,21 @@ MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
-EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
-    "gpt-5.6-terra", "gpt-6.1-sol", "gpt-5.6-sol", "grok-4.6", "claude-session",
-    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low",
-    "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
+# The add box is a short list, not a catalogue: a model nobody can run is noise, and a chain entry already
+# carries the ones in use. A provider whose balance is spent (grok, gemini) is left out until it answers again.
+EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+    "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
+    "claude-deepseek-v4-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session"]
 def known_models(d):
-    """Suggestions for the add box: everything the squad, Claude Code settings and the workflow allow-list already name, plus EXTRA_MODELS."""
+    """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
+
+    The workflow graph is no longer read: it names a dozen ids in its own prose (the ADR-0113 history of this
+    flow), so scraping it filled the box with models that appear nowhere else.
+    """
     out = list(EXTRA_MODELS)
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
-    for wf in (pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json",):
-        try: out += re.findall(r'"((?:claude|gpt|grok|gemini)[A-Za-z0-9._:\-]*)"', wf.read_text())
-        except Exception: pass
     return sorted({m for m in out if MODEL_ID.match(m)})
 EFFORTS = ("low", "medium", "high", "max")
 # local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
