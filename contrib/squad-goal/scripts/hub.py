@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
+import datetime as dt, glob, importlib.util, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
@@ -564,16 +564,6 @@ def refresh_board():
                 '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
-            po = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/pulls?state=open&per_page=100", "--jq",
-                '.[]|{n:.number,t:.title,d:.draft,u:.updated_at,h:.head.sha,o:.created_at}'], capture_output=True, text=True, timeout=60).stdout
-            prs = [json.loads(l) for l in po.splitlines() if l.strip()]
-            for x in prs:   # per open PR: check-run conclusions and mergeable state (2 REST calls each; open PRs are few)
-                try:
-                    ck = subprocess.run(["gh", "api", f"repos/{REPO}/commits/{x['h']}/check-runs?per_page=100", "--jq", "[.check_runs[]|(.conclusion//.status)]"],
-                                        capture_output=True, text=True, timeout=30).stdout
-                    x["ci"] = json.loads(ck or "[]")
-                    x["ms"] = subprocess.run(["gh", "api", f"repos/{REPO}/pulls/{x['n']}", "--jq", ".mergeable_state"], capture_output=True, text=True, timeout=30).stdout.strip()
-                except Exception: pass
             pc = subprocess.run(["gh", "api", f"repos/{REPO}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq",
                 '.[]|{n:.number,t:.title,c:(.merged_at//.closed_at),m:(.merged_at!=null)}'], capture_output=True, text=True, timeout=60).stdout
             prev = [json.loads(l) for l in pc.splitlines() if l.strip()]
@@ -588,6 +578,10 @@ def refresh_board():
             go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + gq], capture_output=True, text=True, timeout=60).stdout
             try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
             except Exception: pass
+            pq = OPEN_PR_QUERY % (own, name)   # one query for every open PR (list, head, base, merge state, labels, threads, rollup)
+            po = subprocess.run(["gh", "api", "graphql", "-f", "query=" + pq], capture_output=True, text=True, timeout=60).stdout
+            prs = prs_from_graphql(json.loads(po)) if po.strip() else None
+            if prs is None: raise ValueError("the open-PR query returned nothing; the last good rows stay in place")  # never a fresh empty pass (#1772)
             lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())} or board_cache.get("lc", {})   # label colors as GitHub shows them
             if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
@@ -700,18 +694,186 @@ def gate_state(n, sha9, now=None):
     elif reason.startswith("hold-"): cls, chip = "changes", "held: " + reason[5:]
     else: cls, chip = "running", reason   # the loop's own word for what it is doing on this head (reviewing, fix-round, ...)
     return [cls, chip, f"{reason}: {text}\n{g[0]} · written {_ago(now - g[1])} ago"]
+STRIP_MAX_AGE = 180.0   # the strip's own honesty window: past this the facts are no longer the poll's (#1772)
+
+# One GraphQL query per poll for every open PR: the list, the head and base, the merge state, the labels, the review
+# threads and the status rollup, in place of a REST list plus two REST calls per PR every poll (#1772). Nothing in it is
+# optional to the reader: a field the query did not return stays None and renders `?`, never a passing word.
+OPEN_PR_QUERY = """query{repository(owner:"%s",name:"%s"){pullRequests(first:100,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
+number title isDraft updatedAt createdAt headRefOid baseRefName mergeStateStatus
+labels(first:30){nodes{name}}
+reviewThreads(first:100){totalCount nodes{isResolved}}
+commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
+
+LIVE_BAD = ("failure", "timed_out", "action_required", "startup_failure", "cancelled", "error")
+LIVE_WAIT = ("queued", "in_progress", "pending", "waiting", "requested", "expected", "completed")
+
+def _live_states(rollup):
+    """The states of the live rollup's contexts: a CheckRun reports its conclusion once it has one and its status before
+    that, a StatusContext reports its state. None when the rollup itself is absent (unknown, not empty)."""
+    if rollup is None: return None
+    out = []
+    for c in ((rollup.get("contexts") or {}).get("nodes") or []):
+        v = c.get("conclusion") or c.get("status") or c.get("state")
+        if v: out.append(str(v).lower())
+    return out
+
+def _live_rollup(states):
+    """The live rollup in the same coarse words the loop's own `CI=` snapshot is read in: pass, fail, pending, none."""
+    if states is None: return None
+    if any(s in LIVE_BAD for s in states): return "fail"
+    if any(s in LIVE_WAIT for s in states): return "pending"
+    return "pass" if states else "none"
+
+def prs_from_graphql(payload):
+    """One row per open PR out of the batched OPEN_PR_QUERY response, or None when the call returned nothing usable
+    (failed, rate-limited, no repository): None means the caller keeps the last good rows, never that no PR is open
+    (#1772). A fact the query did not return stays None, so the strip renders `?` for it."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    nodes = (((data or {}).get("repository") or {}).get("pullRequests") or {}).get("nodes")
+    if nodes is None: return None
+    rows = []
+    for nd in nodes:
+        commit = ((nd.get("commits") or {}).get("nodes") or [{}])[-1].get("commit") or {}
+        states = _live_states(commit.get("statusCheckRollup"))
+        th = nd.get("reviewThreads")
+        threads = None if th is None or (th.get("totalCount") or 0) > len(th.get("nodes") or []) \
+            else sum(1 for t in (th.get("nodes") or []) if not t.get("isResolved"))
+        labels = [l["name"] for l in ((nd.get("labels") or {}).get("nodes") or [])] if nd.get("labels") is not None else None
+        ms = "" if (nd.get("mergeStateStatus") or "").upper() == "UNKNOWN" else (nd.get("mergeStateStatus") or "").lower()
+        base = nd.get("baseRefName") or None
+        rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
+                     "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
+                     "th": threads, "ci": states, "rollup": _live_rollup(states),
+                     "facts": not (states is None or threads is None or labels is None or not ms or not base)})
+    return rows
+
+def _ci_state(tok):
+    """The coarse state of a `CI=` snapshot (`success:9`, `failure:1,success:8`, `none`, `skipped`): pass, fail, pending, none."""
+    parts = [p.split(":")[0] for p in (tok or "").split(",") if p]
+    if not parts: return "?"
+    if any(p in LIVE_BAD for p in parts): return "fail"
+    if any(p in LIVE_WAIT for p in parts): return "pending"
+    return "pass" if "success" in parts else "none"
+
+def ci_snapshot(n, sha9):
+    """The loop's own `CI=` word for this head, out of the run's summary line; None when it printed none for this head."""
+    ls = summary_lines(n, sha9)
+    return ls[-1].split("CI=", 1)[1].split()[0] if ls and "CI=" in ls[-1] else None
+
+def _verdict_token(v):
+    """`OK`, `CHG`, `BLK` for the loop's verdict text, `?` for a word this strip does not know."""
+    if v.startswith("APPROVE"): return "OK"
+    if v.startswith("CHANGES"): return "CHG"
+    if v.startswith("BLOCKED"): return "BLK"
+    return "?"
+
+_REVFORMAT = {}
+def _revformat():
+    """revformat.py, the module that reads a finding's severity off the section it sits in (#1777). The strip asks the
+    same module the merge path asks, so a debt-only CHANGES cannot be called blocking on one surface and merged on the other."""
+    if "m" not in _REVFORMAT:
+        try: _REVFORMAT["m"] = importlib.import_module("revformat")
+        except Exception:
+            spec = importlib.util.spec_from_file_location("revformat", pathlib.Path(__file__).resolve().parent / "revformat.py")
+            m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); _REVFORMAT["m"] = m
+    return _REVFORMAT["m"]
+
+def review_debt_only(n):
+    """True when the review the loop wrote for this PR raises DEBT only (`blocking=0 debt>0`). The autopilot merges one
+    once the debt is filed, so no card may render it as blocking (#1772). A module that cannot answer is not an answer:
+    no debt claim without it."""
+    try: review = (STATE / f"review-{n}.md").read_text(errors="ignore")
+    except OSError: return False
+    if not review.strip(): return False
+    try: c = _revformat().count(review)
+    except Exception: return False
+    return c.get("Blocking", 0) == 0 and c.get("Debt", 0) > 0
+
+def _summary_any_head(n):
+    """Every summary line the loop printed for this PR, whatever head it names."""
+    try: ls = (STATE / f"revci-{n}.out").read_text(errors="ignore").splitlines()
+    except OSError: return []
+    return [l for l in ls if l.startswith(f"#{n} ") and "CI=" in l]
+
+def review_cell(n, sha9):
+    """The R cell: the review verdict *on this head* (#1772). `-` = the loop has not judged this head, and the tooltip
+    says which head its last word was about; `...` = it queued a review for this head; `debt` = a debt-only CHANGES."""
+    v = _verdict_of(n, sha9)
+    if v:
+        tok = _verdict_token(v)
+        if tok == "CHG" and review_debt_only(n): tok = "debt"
+        tip = f"the loop's review of this head ({sha9}): VERDICT: {v}"
+        if tok == "debt": tip += " -- a debt-only CHANGES: the autopilot merges it once the debt is filed, so it does not block"
+        return tok, tip
+    old = _summary_any_head(n)
+    if old:
+        osha, oline = old[-1].split()[1], old[-1]
+        ov = oline.split("VERDICT:", 1)[1].strip() if "VERDICT:" in oline else ""
+        if osha != sha9 and ov.startswith("APPROVE"):
+            return "-", f"the loop's APPROVE is on {osha}, an older head (this head is {sha9}): an APPROVE is a word about the head it names"
+        if osha != sha9: return "-", f"the loop's last review named {osha}, not this head ({sha9})"
+    if (STATE / "auto" / f"launched-{n}-{sha9}").exists():
+        return "...", f"the loop queued a review for {sha9} (auto/launched-{n}-{sha9}) and has printed no verdict yet"
+    return "-", f"the loop has not reviewed this head ({sha9})"
+
+def gate_strip(x, t=None, now=None):
+    """The five-cell strip under the card's chip: R C T B H, each cell its own word and tooltip (#1772).
+
+    R the review verdict on this head, C the loop's own CI snapshot for it (marked `live!=` when GitHub's live rollup
+    disagrees), T the live unresolved review threads, B base and merge state, H labels and holds. A fact the batched
+    query did not return renders `?` -- unknown never reads as passing -- and the whole strip is `old` past 180 s of
+    `t` (the poll's stamp), so a failed poll greys out instead of standing in as a fresh one."""
+    now = time.time() if now is None else now
+    n, sha9 = x["n"], (x.get("h") or "")[:9]
+    age = int(now - (t or 0))
+    rv, rtip = review_cell(n, sha9)
+    snap = ci_snapshot(n, sha9)
+    if snap is None:
+        cv = ("?", "the loop has printed no CI snapshot for this head" +
+              (f"; GitHub's live rollup says {x['rollup']}" if x.get("rollup") else "; GitHub's live rollup is not in this poll either"))
+    elif x.get("rollup") and _ci_state(snap) != x["rollup"]:
+        cv = (f"{snap} live!={x['rollup']}", f"the loop's CI snapshot for {sha9} is {snap}; GitHub's live rollup says {x['rollup']} for the same head, so they disagree")
+    else:
+        cv = (snap, f"the loop's own CI snapshot for {sha9} (the head it was taken on), from the run's summary line")
+    th = x.get("th")
+    tv = ("?", "the batched query did not return this PR's review threads") if th is None else \
+         (str(th), f"{th} unresolved review threads on GitHub (resolved ones are not counted)")
+    base, ms = x.get("base") or "?", x.get("ms")
+    bv = ("?", "GitHub has not computed the merge state for this head" if x.get("facts") is not False else "the batched query did not return this PR") \
+        if not ms else (f"{base}·{ms}", f"base {base}, merge state {ms}")
+    labels, holds = x.get("l"), []
+    g = gate_line(n)
+    if g and g[2].startswith("hold-"): holds.append("hold:" + g[2][5:])
+    if x.get("d"): holds.append("draft")
+    if labels is None:
+        hv = ("?", "the batched query did not return this PR's labels")
+    else:
+        shown = ", ".join(labels[:3]) + (f" +{len(labels) - 3}" if len(labels) > 3 else "")
+        hv = ("-", "no labels, no hold")
+        if labels or holds: hv = (" ".join(filter(None, [shown, "·".join(holds)])), f"labels: {', '.join(labels) or 'none'}; holds: {'·'.join(holds) or 'none'}")
+    return {"cells": [{"k": "R", "v": rv, "tip": rtip}, {"k": "C", "v": cv[0], "tip": cv[1]}, {"k": "T", "v": tv[0], "tip": tv[1]},
+                      {"k": "B", "v": bv[0], "tip": bv[1]}, {"k": "H", "v": hv[0], "tip": hv[1]}],
+            "age": age, "old": age > STRIP_MAX_AGE}
+
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
     Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review.
-    Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771)."""
-    sha9 = (x.get("h") or "")[:9]; n = x["n"]
+    Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771).
+    A row the batched query did not fill in says so instead of falling through to a passing word (#1772), and a debt-only
+    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed."""
+    n = x["n"]; sha9 = (x.get("h") or "")[:9]
     if (STATE / "auto" / "off").exists(): return gate_state(n, sha9)   # the loop is off: no card reports a verdict of its own
     if x.get("d"): return ["draft", "draft"]
     ci = x.get("ci") or []
+    if x.get("facts") is False: return ["idle", "facts unknown",
+        "the batched open-PR query did not return this PR, so its CI, merge state and threads are unknown -- not passing"]
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
     line = (summary_lines(n, sha9) or [""])[-1]   # a notice (NOTICE #<pr> <sha9> ...) is not a result: see summary_lines
-    if "CHANGES" in line: return ["changes", "changes requested"]
+    if "CHANGES" in line:
+        if review_debt_only(n): return gate_state(n, sha9)   # a debt-only CHANGES is not blocking: the autopilot merges it (#1772)
+        return ["changes", "changes requested"]
     rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
     if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
     if "BLOCKED" in line: return ["broke", "review blocked"]
@@ -732,9 +894,9 @@ def board():
         return (min(w) if w else 10**9, x["n"])
     groups = [{"name": n, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == "Done" else sorted(by.get(n, []), key=wave)} for n in names]
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
-    for x in prs: x["ps"] = pr_state(x)
+    for x in prs: x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t"))   # the chip, then the R C T B H strip under it (#1772)
     prev = sorted(board_cache.get("prev", []), key=lambda p: p["c"] or "", reverse=True)
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"]} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "o": p.get("o")} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"]} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "o": p.get("o")} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
 def issue_detail(n):
@@ -877,6 +1039,12 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .pst.ready{color:#3fb950;border-color:#2e6b3a;background:#12261a}#bbody .pst.running{color:#5aa9ff;border-color:#24496e;background:#0f1d2c}
 #bbody .pst.changes{color:#e3b341;border-color:#6b5223;background:#261e0f}#bbody .pst.broke,#bbody .pst.conflict{color:#f85149;border-color:#6e2a27;background:#2a1212}
 #bbody .pst.idle,#bbody .pst.draft{color:var(--mute);border-color:var(--line);background:#12161c}
+#bbody .gstrip{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;font-size:10px;color:var(--mute)}
+#bbody .gstrip.old{opacity:.45;filter:grayscale(1)}
+#bbody .gc{border:1px solid var(--line);border-radius:7px;padding:0 5px;white-space:nowrap;background:#12161c}
+#bbody .gc b{color:var(--fg);font-weight:600;margin-left:3px}
+#bbody .gc.ok b{color:#3fb950}#bbody .gc.warn b{color:#e3b341}#bbody .gc.bad b{color:#f85149}
+#bbody .gc.debt b{color:#5aa9ff}#bbody .gc.unk{border-color:#6b5223}#bbody .gc.unk b{color:#e3b341}
 #bbody .it:hover{background:var(--bgh,#232b37);border-color:#3a4352}
 #bbody .it .id{display:inline-block;background:#12161c;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-bottom:4px;font-size:11px;color:var(--pin);text-decoration:none;font-weight:700}
 #lf{display:inline-block;position:relative;font-size:11px;font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
@@ -1202,7 +1370,9 @@ lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"
 const age=o=>{let m=Math.max(0,Math.floor((Date.now()-Date.parse(o))/60000));const d=Math.floor(m/1440),h=Math.floor(m%1440/60);m%=60;return "⏱ "+(d?d+"d "+h+"h":h?h+"h "+String(m).padStart(2,"0")+"m":m+"m")};
 const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=4?"warm":""};
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
-const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
+const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
+const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${col[g.name]||"var(--mute)"}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
