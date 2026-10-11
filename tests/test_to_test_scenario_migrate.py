@@ -26,17 +26,38 @@ class CappedGitHub(TreeGitHub):
         return super().__call__(op, **kw)
 
 
-def flat_scenario(gh, plan, path, known=KNOWN):
+class DiesAfterTheMove(TreeGitHub):
+    """A publish a killed process ends: the link landed on GitHub, the map write behind it never ran.
+
+    `add_sub_issue` is where the stand-in would have flushed afterwards, so raising once it has recorded the move is
+    exactly the state #1565 describes: a record moved, and the map still calling it flat."""
+
+    def __init__(self, *args, die_after_moves=None, **kw):
+        super().__init__(*args, **kw)
+        self.die_after_moves, self.moves = die_after_moves, 0
+
+    def __call__(self, op, **kw):
+        out = super().__call__(op, **kw)
+        if op == "add_sub_issue" and kw.get("replace_parent"):
+            self.moves += 1
+            if self.moves == self.die_after_moves:
+                raise RuntimeError("the process died after the link landed")
+        return out
+
+
+def flat_scenario(gh, plan, path, known=KNOWN, ids=True):
     """A flat publish as it was: the scenario, then `known` case records linked straight to it, and the flat map.
 
     The records are the first 90 and the last 10 of the plan, so a creation in an early area comes before a move in
-    the last one unless the migration orders them."""
+    the last one unless the migration orders them. `ids=False` is the map the older publish wrote: `number` and `hash`
+    per case and never an `id` (#1565)."""
     scenario = gh("create_issue", title="Scenario", body="b", labels=[])
     state = {"parent": scenario["number"], "boarded": True, "cases": {}}
     for issue in plan["issues"][:known - 10] + plan["issues"][-10:]:
         made = gh("create_issue", title=f"⚪ {issue['title']}", body="old", labels=[])
         gh("add_sub_issue", parent=scenario["number"], sub=made["id"])
-        state["cases"][issue["cases"][0]] = {"number": made["number"], "id": made["id"], "hash": issue.get("hash")}
+        entry = {"number": made["number"], "hash": issue.get("hash")}
+        state["cases"][issue["cases"][0]] = dict(entry, id=made["id"]) if ids else entry
     path.write_text(json.dumps(state), encoding="utf-8")
     return scenario["number"]
 
@@ -141,3 +162,42 @@ def test_an_interrupted_full_parent_migration_resumes_and_links_the_areas_last(t
     assert [kw["parent"] for kw in links[-16:]] == [scenario] * 16
     assert saved["layout"] == "areas" and len(saved["cases"]) == 281
     assert len(gh.kids[scenario]) == 16 and sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
+
+
+def test_a_resumed_migration_places_every_record_when_the_map_holds_no_id_and_the_last_move_unrecorded(tmp_path):
+    """#1565: ADR-0275 section D says an interrupted pass is still flat and resumes the same way.
+
+    Every map the old flat publish wrote carries `number` and `hash` per case and no `id`, so a pass interrupted
+    between its link and the map write leaves a record that is both moved and unrecorded, with no id to move it back
+    with: the scenario scan behind `place()` looked for a record that had already left the scenario."""
+    plan, gh, path = pad_plan(), DiesAfterTheMove(die_after_moves=1), tmp_path / "m.json"
+    scenario = flat_scenario(gh, plan, path, ids=False)
+    flat = [case["number"] for case in json.loads(path.read_text(encoding="utf-8"))["cases"].values()]
+    with pytest.raises(RuntimeError):
+        tts.publish(plan, gh, map_path=path)
+    held = json.loads(path.read_text(encoding="utf-8"))
+    away = {kid for parent, kids in gh.kids.items() if parent != scenario for kid in kids if kid in flat}
+    assert "layout" not in held and len(away) == 1 and len(gh.kids[scenario]) == KNOWN - 1
+    assert not any(case.get("id") or case.get("container") for case in held["cases"].values())
+    gh.die_after_moves = None
+    tts.publish(plan, gh, map_path=path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["layout"] == "areas" and len(saved["cases"]) == 281
+    assert all(case["container"] for case in saved["cases"].values())
+    assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
+    assert len(gh.kids[scenario]) == 16 and not set(flat) & set(gh.kids[scenario])
+    assert all(i["state"] == "open" for i in gh.issues.values())
+
+
+def test_a_resume_asks_the_issue_itself_when_no_parent_in_hand_still_holds_the_record(tmp_path):
+    """#1565: the last source of the id is the issue — `GET issues/<number>` answers whatever its parent is now."""
+    plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
+    scenario = flat_scenario(gh, plan, path, ids=False)
+    loose = gh.kids[scenario][0]
+    stray = gh("create_issue", title="a parent the plan does not know", body="", labels=[])
+    gh("add_sub_issue", parent=stray["number"], sub=gh.issues[loose]["id"], replace_parent=True)
+    assert loose not in gh.kids[scenario] and loose in gh.kids[stray["number"]]
+    tts.publish(plan, gh, map_path=path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["layout"] == "areas" and len(saved["cases"]) == 281
+    assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281 and not gh.kids[stray["number"]]

@@ -657,19 +657,21 @@ class _ReadShell:
         path = next((a for a in args if a.startswith("repos/")), "")
         if path.endswith("/comments"):
             return json.dumps([{"body": b} for b in self.comments])
-        return json.dumps({"number": 3, "state": self.state})
+        return json.dumps({"number": 3, "id": 903, "state": self.state})
 
 
 def test_1226_the_rest_runner_reads_an_issue_s_state_and_the_verdict_of_its_last_comment():
     sh = _ReadShell(comments=["a person said hello", "**passed**\n\n- `HOME-01`: passed"])
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
-    assert gh("issue_state", number=3) == {"state": "open", "verdict": "passed", "title": None, "labels": []}
+    assert gh("issue_state", number=3) == {"state": "open", "verdict": "passed", "title": None, "labels": [],
+                                           "id": 903}
     assert sh.args[0][:2] == ["gh", "api"] and "repos/sbihaiko/MesenAI/issues/3" in sh.args[0]
 
 
 def test_1226_the_rest_runner_reads_an_issue_that_never_carried_a_verdict():
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=_ReadShell(state="closed", comments=["hello"]))
-    assert gh("issue_state", number=3) == {"state": "closed", "verdict": None, "title": None, "labels": []}
+    assert gh("issue_state", number=3) == {"state": "closed", "verdict": None, "title": None, "labels": [],
+                                           "id": 903}
 
 
 def test_1226_the_rest_runner_reopens_through_rest_and_never_graphql():

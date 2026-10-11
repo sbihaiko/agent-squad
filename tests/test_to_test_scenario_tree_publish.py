@@ -52,7 +52,7 @@ class TreeGitHub:
             return self.issues[kw["number"]]["body"]
         if op == "issue_state":
             held = self.issues[kw["number"]]
-            return {"state": held["state"], "verdict": None, "title": held["title"]}
+            return {"state": held["state"], "verdict": None, "title": held["title"], "id": held["id"]}
         if op == "update_issue":
             self.issues[kw["number"]].update(title=kw["title"], body=kw["body"])
             return {}

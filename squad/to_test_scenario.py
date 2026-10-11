@@ -14,7 +14,8 @@ Two outside dependencies are injected, and they are the only ones this module ha
   `update_issue`, `add_sub_issue`, `remove_sub_issue`, `list_sub_issues`, `set_title`, `issue_body`,
   `search_open_bug`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
   builds the real one on `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues). This module reads
-  `issue_state` to know whether a verdict changed and whether a case is closed, and it **never** calls `file_bug`: the
+  `issue_state` to know whether a verdict changed and whether a case is closed, and to read a record's numeric `id`
+  when the map holds none (#1565), and it **never** calls `file_bug`: the
   run command owns the one bug a red run files, and the write-back only links it.
 - **the run command** — `run_command(script)` returns one run report (`run_id`, `script_sha`, `platform`,
   `build_sha`, `core_available`, `results`). It is the `gui-test/1` runner of its own issue (MesenAI #1222); until it
@@ -789,6 +790,21 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     def adopt(parent, matches):
         return next((kid for kid in children(parent) if matches(kid.get("title") or "")), None)
 
+    def ident_of(number, container):
+        """A record's numeric id when neither the plan nor the map holds one (#1565: every map the flat publish wrote).
+
+        The record is about to join `container`, so an interrupted pass may already have linked it there and died
+        before the write that says so: the container is asked first, then the scenario the record left, and last the
+        issue itself — `GET issues/<number>` answers with the id whatever its parent is now.
+        """
+        found = _id_in(children(container), number) or _id_in(children(scenario), number)
+        if found is None:
+            found = (call("issue_state", number=number) or {}).get("id")
+        if found is None:
+            raise ScenarioError([f"issue #{number} has no numeric id: neither the map nor GitHub carries one, so it "
+                                "cannot be linked; re-run the publish once GitHub answers for the issue"])
+        return found
+
     def link(parent, number, ident, replace=False):
         held = children(parent)
         if any(kid["number"] == number for kid in held):
@@ -851,7 +867,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
             updated.append(key)
             held = state["cases"].setdefault(key, {})
             if held.get("container") != container:
-                ident = entry.get("id") or held.get("id") or _id_in(children(scenario), entry["number"])
+                ident = entry.get("id") or held.get("id") or ident_of(entry["number"], container)
                 link(container, entry["number"], ident, replace=True)    # a moved case, or one never linked
         state["cases"][key].update(entry, hash=issue.get("hash"), area=area_key, container=container)
         issues[key] = state["cases"][key]
@@ -893,7 +909,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
             known[area["key"]] = entry = dict(entry, containers=entry.get("containers") or [],
                                               runs=entry.get("runs") or {})
             areas_done["updated"].append(area["key"])
-        ident = entry.get("id") or _id_in(children(scenario), entry["number"])
+        ident = entry.get("id") or ident_of(entry["number"], scenario)   # an area is linked straight to the scenario
         entry["id"] = ident
         if flat:
             untied.append((entry["number"], ident))     # a full parent has no room until the records move out
@@ -949,8 +965,11 @@ def _retype(call, number, label, fresh=()):
 
 
 def _id_in(kids, number):
-    """The numeric id of an issue among the sub-issues listed, for an entry an older map wrote with no id."""
-    return next(kid["id"] for kid in kids if kid["number"] == number)
+    """The numeric id of an issue among the sub-issues listed, for an entry an older map wrote with no id.
+
+    `None` when the list does not hold the record: a resume asks the next parent instead of dying on a `StopIteration`
+    (#1565)."""
+    return next((kid["id"] for kid in kids if kid["number"] == number), None)
 
 
 def _container_body(area_key):
@@ -1802,7 +1821,8 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             said = next((m.group(1) for c in reversed(comments or [])
                          if (m := _VERDICT_LINE.match((c.get("body") or "").strip()))), None)
             return {"state": (issue or {}).get("state"), "verdict": said, "title": (issue or {}).get("title"),
-                    "labels": [x.get("name") for x in (issue or {}).get("labels") or []]}
+                    "labels": [x.get("name") for x in (issue or {}).get("labels") or []],
+                    "id": (issue or {}).get("id")}     # the record's numeric id, whatever its parent is (#1565)
         if op == "board":
             if not project:
                 return {}
