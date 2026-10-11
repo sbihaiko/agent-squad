@@ -76,7 +76,7 @@ name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks.
 for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 nfork=0; for n in "${pick[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
-{ echo "PANEL: $name"   # the launch's own id: mkreq.sh's panel_guard refuses a second child of THIS panel naming a file another one names (ADR-0274)
+{ echo "PANEL: $name"   # the launch's own id: mkreq.sh's slice_guard names it when it refuses a second child of THIS panel sharing a file (ADR-0274)
   if [ $nfork -eq ${#pick[@]} ]; then   # every issue is fork-only: the fork preamble ONLY, nothing about origin/<base>, a PR or prepush.sh
     echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one local commit each (a CHILD block with several issues is one slice: ONE local commit on ONE fork branch, with a \"Refs #N\" line per issue). en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
     echo "FORK-ONLY: all"; sg_fork_preamble
