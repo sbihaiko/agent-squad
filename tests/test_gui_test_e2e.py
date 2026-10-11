@@ -345,6 +345,24 @@ def test_a_goal_step_asks_the_hook_and_waits_for_a_chooser(tmp_path):
     assert _verbs_asked(verbs) == ["nav.goal", "pad.press"]
 
 
+def test_a_goal_step_the_adapter_drives_itself_is_executed_not_pending(tmp_path):
+    """#1780: the read above is one kind of adapter, and a stale fake is the other: an adapter that lists `nav.goal`
+    among the actions it runs drives the goal itself, so the step's own wait and check are what decide it, exactly as
+    they decide every other action that adapter runs. The #1193-#1197 pilot fixtures were derived against fakes of
+    that kind - every `*.reach-*` setup step of theirs is `automated`, and their assertions hold the run's `pending`
+    set to the fixture's `manual` one - so routing an advertised `nav.goal` to the chosen-by-Nobody path turns those
+    setups into rows nobody established and the batches red."""
+    from tests.gui_test_pilot_fake import PilotFake
+
+    d = _goal_script()
+    adapter = PilotFake(tmp_path)
+    validate(d, adapter.capabilities())
+    results = run_launched(d, adapter)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.reach-library", "passed"),
+                                                          ("b1.library-open", "passed")]
+    assert ("nav.goal", {"goal": "ui.screen == play.library"}) in adapter.log
+
+
 def test_a_goal_is_reached_through_the_hooks_own_moves_and_the_navigators_choice(tmp_path):
     """#1780: the hook hands the moves it accepts in the duration family its own clock allows, and the runner's
     Navigator chooses among them (ADR-0271 items 2-3). Confirm on the Home opens the library, so a chooser that
