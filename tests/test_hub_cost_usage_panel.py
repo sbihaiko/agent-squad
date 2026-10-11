@@ -51,6 +51,7 @@ def _stmt(marker):
 
 def _prelude():
     usd = re.search(r"const usd=v=>[^;]+;", SRC).group(0)
+    usdc = re.search(r"const usdc=v=>[^;]+;", SRC)
     pcol = re.search(r"const PCOL=[^;]+;", SRC).group(0)
     other = re.search(r"const OTHER=[^;]+;", SRC)
     if "tk=" not in pcol:
@@ -60,7 +61,7 @@ def _prelude():
         pcol = pcol + "\n" + tk
     esc = "const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
     return "\n".join([
-        usd, pcol, other.group(0) if other else "", esc,
+        usd, usdc.group(0) if usdc else "", pcol, other.group(0) if other else "", esc,
         _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "kr"), _fn(SRC, "openRows"),
     ])
 
