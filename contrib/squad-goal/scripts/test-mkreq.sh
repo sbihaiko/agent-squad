@@ -114,5 +114,24 @@ cp "$R/just-req.txt" "$T/co/runs/run-9003/request.txt"; echo '{"event": "verdict
 echo "$T/co/runs/run-9003" >> "$T/home/.cache/squad-goal/active-runs.txt"
 body p9 scripts/justdone.py p
 run p && [ -f "$R/p.txt" ] && ok "a verdict makes the request history at once" || ko "fresh request of a finished run refuses: $(cat "$T/p.err")"
+# 10. (#1769) a FIX RUN is not a second slice. autofix.sh names its request `auto-fix-<pr>-<sha9>` and the body lists the files
+# that PR's own review asked to change -- which the open PR already changes, so the guard refused the launch of the only run
+# that could repair it. PR #1706 (2026-10-11): after a BLOCKING review on 27aaaf5b5, `refusing: request auto-fix-1706-27aaaf5b5
+# names scripts/checks/verify_report_bug_prefix.sh, which open PR #1706 already changes`; autofix.sh then exited 1 and the
+# verdict sat on a mergeable, CI-green PR with nothing working it. ADR-0274 refuses an overlap between two SLICES; a slice and
+# its own repair are one unit of work, and the claim record already carries the number the request name carries.
+body p10 scripts/shared.py auto-fix-7-27aaaf5b5
+run auto-fix-7-27aaaf5b5 && [ -f "$R/auto-fix-7-27aaaf5b5.txt" ] && ok "a fix run for the PR holding the file launches" || ko "fix run for its own PR refused: $(cat "$T/auto-fix-7-27aaaf5b5.err")"
+/usr/bin/grep -q 'refusing' "$T/auto-fix-7-27aaaf5b5.err" && ko "the fix run for its own PR was still refused" || ok "the fix run on its own PR prints no refusal"
+# 10b. the cross-slice rule is intact: the same request shape naming a file a DIFFERENT open PR changes is refused as before
+body p10 scripts/shared.py auto-fix-8-27aaaf5b5
+run auto-fix-8-27aaaf5b5 && ko "an auto-fix request naming another PR's file launched" || ok "an auto-fix request for another PR still refuses"
+/usr/bin/grep -q 'open PR #7' "$T/auto-fix-8-27aaaf5b5.err" && /usr/bin/grep -q 'scripts/shared.py' "$T/auto-fix-8-27aaaf5b5.err" && ok "the cross-PR refusal still names the PR and the path" || ko "cross-PR refusal text: $(cat "$T/auto-fix-8-27aaaf5b5.err")"
+[ -f "$R/auto-fix-8-27aaaf5b5.txt" ] && ko "the cross-PR refusal left a file" || ok "the cross-PR refusal wrote no file"
+# 10c. a plain request (not a fix run) naming the same file of the same open PR is still refused: the exemption is the fix-run
+# class, not "the PR mentions this path somewhere"
+body p10 scripts/shared.py plain-overlap
+run plain-overlap && ko "a plain request on an open PR's file launched" || ok "a plain request on an open PR's file still refuses"
+/usr/bin/grep -q 'open PR #7' "$T/plain-overlap.err" && ok "the plain refusal names the PR" || ko "plain refusal text: $(cat "$T/plain-overlap.err")"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
