@@ -29,9 +29,14 @@ def dash_states():
     return run_node([{"op": "legend"}])[0]["states"]
 
 
+def legend_run_rows():
+    """The run-state rows of the side legend, as the page builds them: the pill the hub's sidebar draws for that state, then the short description."""
+    return run_node([{"op": "legend"}])[0].get("run_states", [])
+
+
 def test_hub_and_dashboard_share_one_state_table_with_one_label_and_one_colour_per_state(hub):
-    hub_rows = {r["state"]: (r["label"], r["color"]) for r in hub.RUN_STATES}
-    dash_rows = {r["state"]: (r["label"], r["color"]) for r in dash_states()}
+    hub_rows = {r["state"]: (r["label"], r["color"], r["css"]) for r in hub.RUN_STATES}
+    dash_rows = {r["state"]: (r["label"], r["color"], r["css"]) for r in dash_states()}
     assert hub_rows == dash_rows
     assert len({r["state"] for r in hub.RUN_STATES}) == len(hub.RUN_STATES)
     assert {r["color"] for r in hub.RUN_STATES} <= set(PALETTE)
@@ -75,7 +80,32 @@ def test_no_record_verdict_falls_through_to_the_failure_style_on_the_dashboard()
     assert all(painted[chips[s]] == color[s] for s in chips)
 
 
-def test_the_dashboard_legend_lists_one_chip_per_non_hub_only_state():
-    rows = run_node([{"op": "legend"}])[0]["chips"]
-    expect = [r["label"] for r in dash_states() if not r.get("hub_only")]
-    assert [r["label"] for r in rows] == expect
+def test_the_legend_draws_the_sidebar_pill_for_every_state_in_the_hub_table_order(hub):
+    """One legend row per state, in the hub's order, drawing the same pill: text, colour and border style, then the short description."""
+    want = [(r["state"], hub.badge_of(r["state"])["text"], r["color"], r["css"], r["label"]) for r in hub.RUN_STATES]
+    got = [(r.get("state"), r.get("text"), r.get("color"), r.get("css"), r.get("label")) for r in legend_run_rows()]
+    assert got == want
+
+
+def test_no_legend_row_names_a_state_no_surface_shows(hub):
+    rows = legend_run_rows()
+    assert len(rows) == len({r.get("state") for r in rows})   # one row per state
+    assert {r.get("state") for r in rows} - {r["state"] for r in hub.RUN_STATES} == set()
+
+
+def test_the_dashboard_prints_the_same_text_the_hub_badges_the_state_with(hub):
+    """The run header pill and the sidebar pill read one text: the dashboard's map comes from the one table."""
+    text = run_node([{"op": "legend"}])[0].get("state_text", {})
+    assert set(text) == {r["state"] for r in hub.RUN_STATES}
+    for r in hub.RUN_STATES:
+        assert text[r["state"]] == hub.badge_of(r["state"])["text"], r["state"]
+
+
+def test_the_page_paints_every_legend_pill_the_way_the_hub_paints_its_badge(hub):
+    src = PAGE_SRC()
+    for r in hub.RUN_STATES:
+        rule = re.search(rf"\.b\.{re.escape(r['state'].replace(' ', '-'))}\s*\{{[^}}]*color:var\(--{r['color']}\)", src)
+        assert rule, r["state"]
+        for prop in (p for p in r["css"].split(";") if p):
+            assert prop in rule.group(0), (r["state"], prop)
+    assert "core.STATE_TEXT[st.state]" in src   # the run header chip takes its words from the one table
