@@ -77,7 +77,7 @@ def test_a_write_back_makes_one_closed_run_issue_per_area_with_totals_and_change
     assert len(aa) == 2 and len(gh.runs(areas["bb"]["number"])) == 2
     number, issue = aa[1]
     assert issue["title"] == "❌ Run 2026-10-11 11:00 UTC · aa · ddddddd"
-    assert issue["state"] == "closed" and issue["labels"] == ["testrun"]
+    assert issue["state"] == "closed" and issue["labels"] == ["Test-Run"]
     assert [gh.issues[n]["title"] for n in gh.kids[areas["aa"]["number"]]] == ["📋 Cases", "📅 Runs 2026-10"]
     assert "✅ 1 · ❌ 2 · 🟡 0 · 👤 0 · ⚪ 0 (of 3)" in issue["body"]
     assert "New failures: `AAX-001`" in issue["body"]

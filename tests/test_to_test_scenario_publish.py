@@ -333,16 +333,16 @@ def test_rest_runner_creates_and_links_issues_over_rest_and_adds_only_what_it_is
         return "{}"
 
     gh = rest_runner("sbihaiko/MesenAI", shell=shell, project="users/sbihaiko/projects/3")
-    gh("ensure_label", name="testcase")
-    made = gh("create_issue", title="Test case a.b", body="body", labels=["testcase", "wave:01"])
+    gh("ensure_label", name="Test-Case")
+    made = gh("create_issue", title="Test case a.b", body="body", labels=["Test-Case", "wave:01"])
     assert made == {"number": 8, "id": 800}
     gh("add_sub_issue", parent=7, sub=made["id"])
     gh("board", number=7)
 
-    assert seen[0] == ["gh", "label", "create", "testcase", "--force", "--repo", "sbihaiko/MesenAI"]
+    assert seen[0] == ["gh", "label", "create", "Test-Case", "--force", "--repo", "sbihaiko/MesenAI"]
     post = seen[1]
     assert post[:5] == ["gh", "api", "--method", "POST", "repos/sbihaiko/MesenAI/issues"]
-    assert "labels[]=testcase" in post and "labels[]=wave:01" in post
+    assert "labels[]=Test-Case" in post and "labels[]=wave:01" in post
     sub = next(a for a in seen if a[4].endswith("/sub_issues"))
     assert sub[4] == "repos/sbihaiko/MesenAI/issues/7/sub_issues" and "sub_issue_id=800" in sub
     assert sub[sub.index("sub_issue_id=800") - 1] == "-F"   # an integer field: `-f` would send a string, a 422
@@ -357,7 +357,7 @@ def test_rest_runner_turns_a_secondary_rate_limit_answer_into_a_back_off():
 
     gh = rest_runner("sbihaiko/MesenAI", shell=shell)
     with pytest.raises(RateLimited):
-        gh("create_issue", title="t", body="b", labels=["testcase"])
+        gh("create_issue", title="t", body="b", labels=["Test-Case"])
 
 
 def test_a_plan_over_the_sub_issue_cap_is_refused_before_anything_is_created(tmp_path):
