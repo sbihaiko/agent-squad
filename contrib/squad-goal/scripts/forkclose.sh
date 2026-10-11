@@ -95,7 +95,8 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
     if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; $G reset -q --hard HEAD; fi; done
   if [ "$(wc -w <<<"$merged")" -lt 2 ]; then $G checkout -q "$SG_FORK_BASE"; $G branch -q -D fc-batch; return 0; fi
   suites=$(printf '%s\n' $files | bash "$here/gate-suites.sh"); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
-  out=$(FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
+  id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
+  out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
   $G checkout -q "$SG_FORK_BASE"
   if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
     echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
@@ -162,7 +163,8 @@ for n in $cc; do
   if [ -n "$late" ] && [ -e "$A/basetest-$bs" ]; then   # the base that holds the branch is already tested green (a batch that just landed it, or the base test above): no second run
     rc=0; id=base-$bs; lg=$(cat "$A/basetest-$bs"); tl=$(tail -3 "${lg:-/dev/null}" 2>/dev/null)
   else e2eprep "#$n"
-    out=$(FG_SUITES=$fs "$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out"); tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
+    id=test-$n-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts: a gate killed by a signal never prints it (#1470)
+    out=$(TEST_ID=$id FG_SUITES=$fs "$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
     # the gate ran on the tree that is now the base head: record it as tested, so the next landing pays no second base test
     [ $rc = 0 ] && [ -z "$late" ] && [ "$($G rev-parse HEAD)" = "$m" ] && echo "$SG_STATE/tests/$id.log" > "$A/basetest-${m:0:9}"
   fi
@@ -187,12 +189,20 @@ EOT
   else
     [ -n "$late" ] && { printf "Fork-only close: %s was already in %s as %s and its issue #%s was still open, but the fork suite failed on the base itself (test pass %s, exit %s). Nothing of the branch was merged here and the branch has nothing to fix, so there is no revert and no fix run; the next pass retries.\n\`\`\`\n%s\n\`\`\`\n" "$br" "$SG_FORK_BASE" "$late" "$n" "$id" "$rc" "$tl" > "$SG_STATE/cq/$n-latered$$.md"
       echo "FORKCLOSE LATE-RED #$n ($id exit $rc): $br was already in $SG_FORK_BASE and the suite is red on the base itself; no revert, no fix run"; continue; }
+    ek=""; { [ $rc = 143 ] || [ $rc = 137 ] || grep -q '"state": "running"' "$SG_STATE/tests/$id.json" 2>/dev/null; } && ek=1   # killed by a signal (or never finalized): the environment failed, not the code (#1470)
     $G revert -m 1 --no-edit "$m" >/dev/null 2>&1; rv=$($G rev-parse HEAD)
     # the branch is now an ancestor of the base, so a later merge would be a no-op: re-apply its work on the branch
     # (merge the base in, then revert the revert) so the branch is ahead again and a fix commit re-arms the close
     bw=$($G worktree list --porcelain | awk -v b="refs/heads/$br" '/^worktree /{w=$2} $0=="branch "b{print w}')
     [ -n "$bw" ] && /usr/bin/git -C "$bw" merge -q --no-edit "$SG_FORK_BASE" >/dev/null 2>&1 && /usr/bin/git -C "$bw" revert --no-edit "$rv" >/dev/null 2>&1 \
-      && touch "$A/fork-$n-$(/usr/bin/git -C "$bw" rev-parse HEAD | cut -c1-9)"   # same content that just failed: wait for a real fix commit
+      && { [ -n "$ek" ] || touch "$A/fork-$n-$(/usr/bin/git -C "$bw" rev-parse HEAD | cut -c1-9)"; }   # same content that just failed: wait for a real fix commit (a killed gate is retried instead)
+    if [ -n "$ek" ]; then   # no fix run: there is nothing to fix. One retry on the next cycle; a second kill on the same head goes to the owner
+      rm -f "$mk"; nh=$($G rev-parse "$br"); kf="$A/envkill-$n"; kc=0; [ "$(cut -d' ' -f2 "$kf" 2>/dev/null)" = "$nh" ] && kc=$(cut -d' ' -f1 "$kf"); kc=$(( kc + 1 )); echo "$kc $nh" > "$kf"
+      if [ "$kc" -ge 2 ]; then touch "$A/fork-$n-${nh:0:9}"   # parked until the head moves or the marker expires
+        printf "Fork-only close: the fork gate for %s was killed by a signal %s times in a row on the same head (test pass %s, exit %s, log %s/tests/%s.log). That is the environment, not the code, so no fix run was dispatched. Owner: check what kills the gate (a reaper, memory pressure, a stray pkill); the close resumes when the branch head moves.\n" "$br" "$kc" "$id" "$rc" "$SG_STATE" "$id" > "$SG_STATE/cq/$n-envkill$$.md"
+        echo "FORKCLOSE NEEDS OWNER #$n ($id, exit $rc, log $SG_STATE/tests/$id.log): the gate was killed $kc times in a row on ${nh:0:9}; no fix run"
+      else echo "FORKCLOSE ENV-KILL #$n ($id, exit $rc, log $SG_STATE/tests/$id.log), merge reverted, branch re-applied; the gate is retried once on the next cycle, no fix run"; fi
+      continue; fi
     nm="forkred-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"   # a fix run makes that commit
     { echo "FORK-ONLY: all"   # mkreq.sh: fork DONE CHECK and checklist, no PR text (#1411)
       echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). Spawn it with spend 8. en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
@@ -201,6 +211,6 @@ EOT
     req=$("$here/mkreq.sh" "$nm" "$body") && (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$SG_STATE/$nm.log")
     [ -n "$mixed" ] || $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
     printf "Fork-only close: the fork suite failed after merging %s (%s) as %s (test pass %s, exit %s); the merge was reverted on %s. Card back to In Progress.\n\`\`\`\n%s\n\`\`\`\n" "$br" "${head:0:9}" "${m:0:9}" "$id" "$rc" "$SG_FORK_BASE" "$tl" > "$SG_STATE/cq/$n-forkred$$.md"
-    echo "FORKCLOSE RED #$n ($id exit $rc), merge reverted, branch re-applied, fix run $nm"
+    echo "FORKCLOSE RED #$n ($id exit $rc, log $SG_STATE/tests/$id.log), merge reverted, branch re-applied, fix run $nm"
   fi
 done
