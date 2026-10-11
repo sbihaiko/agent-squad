@@ -11,14 +11,15 @@ function bottomReserve() {
   const foot = $("footer") ? $("footer").offsetHeight : 0;
   return S.events ? foot + REPLAY_GAP + REPLAY_BAR_H : foot + FOOTER_PAD;
 }
-// The side panel overlays the left of the map, so an open panel takes its width off the area the graph is fitted into.
+// The side panel is a drawer at the right edge, so an open panel takes its width off the area the graph is fitted into and the
+// fitted view stays at the map's left edge, unshifted.
 // `floorKey` (the key of a group just expanded) keeps the fit from shrinking below READABLE_K: the view then starts at the group's dispatch,
 // and the fit stays off (S.fitted false) so a live update does not shrink it again. The Fit button fits all.
 function fit(floorKey) {
-  const s = mapSize(), side = 0; // the panel is a popup now, it no longer takes room from the map
+  const s = mapSize(), side = sideOpen() ? $("left").offsetWidth : 0;
   const all = { ...S.layout, ...S.childPos, ...S.groupPos, ...S.groupPts }, size = { w: Math.max(MIN_FIT, s.w - side), h: Math.max(MIN_FIT, s.h - bottomReserve()) };
   const anchor = floorKey ? floorAnchor(floorKey) : null, v = core.viewFitFloor(all, BOX, size, PAD, anchor ? READABLE_K : 0, anchor);
-  S.view = { ...v, tx: v.tx + side };
+  S.view = { ...v };
   S.floored = !!(anchor && v.k === READABLE_K); S.fitted = !S.floored; applyView();
 }
 // The top-left of what an expanded group shows: its dispatch's entry and the first row of its cards.
@@ -28,14 +29,14 @@ function floorAnchor(key) {
 }
 function zoomBy(factor, cx, cy) { const s = mapSize(); S.view = core.viewZoomAt(S.view, cx === undefined ? s.w / 2 : cx, cy === undefined ? s.h / 2 : cy, factor); S.fitted = false; applyView(); }
 
-// The side panel overlays the left of the map. A selection that would sit under it, or off the map, pans the view (never the zoom)
-// until it shows right of the panel; one already in view moves nothing, and a closed panel moves nothing.
+// The side panel covers the right of the map. A selection that would sit under it, or off the map, pans the view (never the zoom)
+// until it shows left of the drawer; one already in view moves nothing, and a closed panel moves nothing.
 function revealSelected() {
   if (!sideOpen() || !S.selected) return;
   const name = S.selected, grp = S.groups.find((g) => g.key === name || g.kids.some((c) => c.name === name));
   const r = S.groupPos[name] || (grp && S.groupPos[grp.key]) || S.childPos[name] || S.layout[name];
   if (!r) return;
-  const v = core.viewReveal(S.view, { x: r.x, y: r.y, w: r.w || BOX.w, h: r.h || BOX.h }, mapSize(), { left: $("left").offsetWidth + REVEAL_INSET, right: REVEAL_INSET, top: REVEAL_INSET, bottom: Math.max(bottomReserve(), REVEAL_INSET) });
+  const v = core.viewReveal(S.view, { x: r.x, y: r.y, w: r.w || BOX.w, h: r.h || BOX.h }, mapSize(), { left: REVEAL_INSET, right: $("left").offsetWidth + REVEAL_INSET, top: REVEAL_INSET, bottom: Math.max(bottomReserve(), REVEAL_INSET) });
   if (v !== S.view) { S.view = v; applyView(); }
 }
 
@@ -115,14 +116,14 @@ function clearSelection() { S.selected = null; S.link = null; setSide(false, tru
 function pick(name) {
   S.link = null;
   if (S.selected === name) { clearSelection(); return; }
-  S.selected = name; render(); // the panel is a popup over the map: a selection never pans the view
+  S.selected = name; render(); // the drawer takes the right edge: render() reveals the selection left of it
 }
-// The cards in reading order (top to bottom, then left to right), for the popup's previous / next.
+// The cards in reading order (top to bottom, then left to right), for the panel's previous / next.
 function cardOrder() {
   return [...$("cards").children].filter((c) => c.dataset.name).map((c) => ({ n: c.dataset.name, r: c.getBoundingClientRect() }))
     .sort((a, b) => Math.round(a.r.top) - Math.round(b.r.top) || a.r.left - b.r.left).map((c) => c.n);
 }
-// Previous / next card without closing the popup: the ‹ › buttons, or ← → while the popup is open.
+// Previous / next card without closing the panel: the ‹ › buttons, or ← → while the panel is open.
 function stepCard(k) {
   const o = cardOrder(), i = o.indexOf(S.selected) + k;
   if (i < 0 || i >= o.length) return;

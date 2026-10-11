@@ -2,10 +2,15 @@
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
-  #left { grid-row:2; overflow:auto; border-right:1px solid var(--line); background:var(--panel); padding:4px 12px 12px; min-height:0; }
+  /* The side panel is a drawer docked to the right edge, under the top bar: it takes its own column of the screen, so the diagram stays whole.
+     --side-w is its live width (the sheet's height under 900px), and --side-min/--side-max the travel the grip clamps to. The page measures both. */
+  body { --side-w:420px; --side-min:320px; --side-max:calc(100vw - 520px); }
+  #left { position:fixed; top:37px; right:0; bottom:0; left:auto; width:var(--side-w,420px); max-height:none; transform:none; border-radius:0; border:0; border-left:1px solid var(--line); box-shadow:-8px 0 32px #0008; z-index:7; padding:8px 16px 16px; overflow:auto; background:var(--panel); }
+  /* The grip is an 8px strip on either side of the drawer's edge: #side-grip inside, #left::before outside over the map. Both start a drag. */
+  #side-grip { position:fixed; top:37px; bottom:0; right:calc(var(--side-w,420px) - 8px); width:8px; cursor:col-resize; }
+  #side-grip:focus-visible { outline:1px solid var(--acc); outline-offset:-1px; }
+  #left::before { content:""; position:fixed; top:37px; bottom:0; right:var(--side-w,420px); width:8px; z-index:7; cursor:col-resize; }
   #graph { grid-column:1; grid-row:2; }
-  #left { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; bottom:auto; z-index:9; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 48px #000b; padding:8px 20px 20px; }
-  body:not(.noside)::after { content:""; position:fixed; inset:37px 0 0 0; background:#0008; z-index:8; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
   button, label.btn { cursor:pointer; }
@@ -67,8 +72,10 @@
   svg#map { position:absolute; inset:0; width:100%; height:100%; background:#0c0e12; cursor:grab; touch-action:none; user-select:none; }
   svg#map.panning { cursor:grabbing; }
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
+  body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
   #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
   #replay { position:absolute; left:50%; bottom:34px; transform:translateX(-50%); display:none; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; box-shadow:0 6px 20px #0008; }
+  body:not(.noside) #replay { left:calc((100vw - var(--side-w,0px)) / 2); }   /* the bar centers in what the drawer leaves, so it never sits under it */
   #replay input[type=range] { width:320px; accent-color:var(--acc); }
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
@@ -160,6 +167,7 @@
   /* The legend is a strip on the map's right edge, under the zoom controls: always expanded; the graph keeps the remaining width. */
   #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; }
   #legend-list { display:flex; flex-direction:column; padding:4px 6px; }
+  body:not(.noside) #legend { visibility:hidden; }   /* the open drawer owns the right edge; the keyboard [ or the ? overlay brings the strip back */
   #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
   #legend .lg svg { flex:0 0 24px; }
   #legend .lt, #legend .lh { overflow:hidden; }
@@ -229,3 +237,17 @@
 .script-diagram .step-tags { fill: #555; font-size: 11px; }
 .script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
 .script-diagram marker path { fill: #777; }
+
+/* A window under 1024px starts with a narrower drawer; --side-max stays 520px short of the viewport, so 504px of travel at 1024. */
+@media (max-width: 1024px) { body { --side-w:360px; } }
+/* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
+   The map reserves the sheet's height, and the replay bar rises clear of it rather than hiding under it. */
+@media (max-width: 900px) {
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
+  #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  body:not(.noside) #mapbox { padding-bottom:52vh; }
+  body:not(.noside) #view { right:12px; }
+  body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
+}

@@ -40,17 +40,23 @@ def test_every_card_the_record_touched_carries_a_state_glyph(tmp_path):
 
 
 @needs_ego
-def test_selecting_a_node_under_the_panel_pans_it_clear_without_changing_the_zoom(tmp_path):
-    steps = (LOAD + 'const cards=q(".card[data-name]:not([data-group]):not(.child)").sort((a,b)=>a.getBoundingClientRect().left-b.getBoundingClientRect().left);'
-             'const first=cards[0].dataset.name;const zoom=document.getElementById("zoom").textContent;'
-             'const tx0=document.getElementById("vp").getAttribute("transform");'
+def test_selecting_a_node_under_the_drawer_pans_it_clear_without_changing_the_zoom(tmp_path):
+    """The drawer covers the right edge: a zoomed graph puts a card under it, and pressing that card pans it clear."""
+    steps = (LOAD + 'document.getElementById("b-panel").click();await wait();for(let i=0;i<8;i++)document.getElementById("b-in").click();await wait();'
+             'const map=document.getElementById("map"),pd=(t,x,y,el)=>(el||window).dispatchEvent(new PointerEvent(t,{bubbles:true,button:0,clientX:x,clientY:y}));'
+             'pd("pointerdown",300,400,map);pd("pointermove",550,400);pd("pointerup",550,400);await wait();'
+             'const cards=q(".card[data-name]:not([data-group]):not(.child)").sort((a,b)=>b.getBoundingClientRect().right-a.getBoundingClientRect().right);'
+             'const drawer=()=>document.getElementById("left").getBoundingClientRect();const last=cards[0].dataset.name;'
+             'const under=cards[0].getBoundingClientRect().right>drawer().left;'
+             'const zoom=document.getElementById("zoom").textContent,tx0=document.getElementById("vp").getAttribute("transform");'
              'press(cards[0]);await wait();'
-             'const card=q(".card[data-name]").find(c=>c.dataset.name===first);'
-             'const panel=document.getElementById("left").offsetWidth, left=card.getBoundingClientRect().left;'
-             'document.title="RESULT "+JSON.stringify({panel,left,zoomSame:zoom===document.getElementById("zoom").textContent,moved:tx0!==document.getElementById("vp").getAttribute("transform"),open:!document.body.classList.contains("noside")});')
+             'const card=q(".card[data-name]").find(c=>c.dataset.name===last);'
+             'document.title="RESULT "+JSON.stringify({under,clear:card.getBoundingClientRect().right<=drawer().left+1,panel:drawer().width,'
+             'zoomSame:zoom===document.getElementById("zoom").textContent,moved:tx0!==document.getElementById("vp").getAttribute("transform"),open:!document.body.classList.contains("noside")});')
     got = drive(tmp_path, steps)
-    assert got["open"] and got["zoomSame"]
-    assert got["left"] >= got["panel"]   # the leftmost node ends up right of the 360 px panel
+    assert got["open"] and got["under"]   # the press lands on a card the drawer was covering, so the reveal has work to do
+    assert got["zoomSame"] and got["moved"]
+    assert got["clear"]   # the rightmost node ends up left of the drawer, not under it
 
 
 @needs_ego
@@ -69,14 +75,16 @@ def test_every_card_is_a_keyboard_stop_enter_selects_and_space_opens_and_folds_a
 
 
 @needs_ego
-def test_fit_with_the_panel_open_fits_the_whole_map_as_when_it_is_closed(tmp_path):
-    """The panel is a popup over the map, so it takes no room from the fit."""
-    steps = (LOAD + 'const edge=()=>Math.min(...q(".card[data-name]").map(c=>c.getBoundingClientRect().left));'
-             'document.getElementById("b-fit").click();await wait();const shut=edge();'
+def test_fit_with_the_panel_open_keeps_every_card_left_of_the_drawer(tmp_path):
+    """The drawer takes its width off the map, so a fit with it open is a different fit."""
+    steps = (LOAD + 'const cards=()=>q(".card[data-name]").map(c=>c.getBoundingClientRect());'
+             'document.getElementById("b-fit").click();await wait();const shut=Math.min(...cards().map(r=>r.left));'
              'document.getElementById("b-panel").click();await wait();document.getElementById("b-fit").click();await wait();'
-             'document.title="RESULT "+JSON.stringify({open:document.getElementById("left").getBoundingClientRect().right>300,same:edge()===shut});')
+             'const drawer=document.getElementById("left").getBoundingClientRect();'
+             'document.title="RESULT "+JSON.stringify({open:drawer.width>300,shut,now:Math.min(...cards().map(r=>r.left)),clear:Math.max(...cards().map(r=>r.right))<=drawer.left+1});')
     got = drive(tmp_path, steps)
-    assert got == {"open": True, "same": True}
+    assert got["open"] is True and got["clear"] is True   # nothing sits under the drawer
+    assert got["now"] != got["shut"]   # the fit gave the drawer its width
 
 
 @needs_ego
