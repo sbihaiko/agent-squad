@@ -158,6 +158,36 @@ run quo && [ -f "$R/quo.txt" ] && ok "a path only quoted as evidence does not cl
 $G -q 'refusing' "$T/quo.err" && ko "the quoted-context body was still refused: $(cat "$T/quo.err")" || ok "the quoted-context body prints no refusal"
 $G -qF -- 'scripts/quoted-free.py' "$R/quo.txt" && ok "the prose path of the same body is still the slice" || ko "the accepted body lost its prose path"
 # 11b. the prose scan is intact: the same three paths named at column 0 refuse exactly as before (test 5 and 5b are that case)
+# 11c. (#1790) prose inside an EMBEDDED ISSUE is not a slice either. Every automatic request embeds the full text of the issues
+# it dispatches under a `--- issue #N` marker line, so a path named in the plain prose of a quoted body counted as a file the
+# request would edit: the pass that dispatched it claimed every path its issues' prose named, the next pass embedding the same
+# issues was refused, and the two passes took turns failing while the issue stayed open. The slice a request claims is what its
+# OWN instructions name, so the scan stops at the first marker line: the quoted region is what the body tells the child about
+# its ticket, not what it asks it to edit.
+cat > "$T/issue-prose.body" <<'B'
+IMPORTANT: your first and only action is X
+PANEL: p11
+Edit scripts/issue-prose-free.py
+
+--- issue #9002
+An earlier pass was refused because open PR #7 already changes scripts/shared.py, and a sibling had
+claimed contrib/squad-goal/scripts/hub.py while gui/1497 touched dashboard/page.py.
+B
+run issue-prose && [ -f "$R/issue-prose.txt" ] && ok "a path in an embedded issue's prose does not claim a slice" || ko "embedded-issue prose refused the request: $(cat "$T/issue-prose.err")"
+$G -q 'refusing' "$T/issue-prose.err" && ko "the embedded-issue prose body was still refused: $(cat "$T/issue-prose.err")" || ok "the embedded-issue prose body prints no refusal"
+$G -qF -- 'scripts/issue-prose-free.py' "$R/issue-prose.txt" && ok "the instruction path of the same body is still the slice" || ko "the accepted body lost its instruction path"
+# 11d. the instruction part still claims its slice: the same path named ABOVE the first marker refuses exactly as before
+cat > "$T/issue-own.body" <<'B'
+IMPORTANT: your first and only action is X
+PANEL: p11
+Edit scripts/shared.py
+
+--- issue #9002
+Fix the bug the issue describes.
+B
+run issue-own && ko "an instruction path already in flight launched" || ok "a path the instructions name still refuses"
+$G -q 'open PR #7' "$T/issue-own.err" && $G -q 'scripts/shared.py' "$T/issue-own.err" && ok "the refusal names the PR and the instruction path" || ko "instruction-path refusal text: $(cat "$T/issue-own.err")"
+[ -f "$R/issue-own.txt" ] && ko "the instruction-path refusal left a file" || ok "the instruction-path refusal wrote no file"
 # 12. (#1786) a rebase of an already-written branch is not a second writer. forkclose.sh names its request
 # `forkrebase-<issue>-<sha9>` and its body names the conflicting files, which the branch it repairs holds by definition -- with
 # gui/1767 and gui/1768 both editing contrib/squad-goal/scripts/autopilot.sh, the guard refused each rebase run citing the other
