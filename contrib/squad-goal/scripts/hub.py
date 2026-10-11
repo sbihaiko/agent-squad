@@ -478,6 +478,13 @@ def load_sampler():
         except Exception: pass
         time.sleep(LOAD_SAMPLE_SECS)
 
+# A coordinator test pass writes `running` at its start and its terminal state at the end; killed in between, the file says
+# `running` forever. Well past the suite's own timeout, an untouched file is not a running pass: the hub shows it as stalled
+# with this note, past the RUNNING group, instead of counting a live run with no process behind it. The runner's file is never
+# rewritten and the loop's own readers keep reading it as it is -- this is the hub's display bound, not a claim the test failed.
+TEST_LOST_SECS = 4 * 3600
+LOST_NOTE = "lost: no state written for over 4 h"
+
 def runs():
     _titles()
     out = []; load_rows = []
@@ -507,10 +514,13 @@ def runs():
         try: d = json.loads(f.read_text())
         except Exception: continue
         age = time.time() - f.stat().st_mtime
-        if d.get("state") != "running" and age > 4 * 3600: continue
+        raw = d.get("state") or "running"
+        lost = raw == "running" and age > TEST_LOST_SECS   # the pass died before it could write its terminal state (#1783)
+        if raw != "running" and age > 4 * 3600: continue
         rec = {"head": d.get("head"), "merged": d.get("merged"), "exit_code": d.get("rc")}
-        st = handled_of(d.get("state") or "running", rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": b["title"], "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES, "agents": 0})
+        st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
+        tip = LOST_NOTE if lost else b["title"]
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first

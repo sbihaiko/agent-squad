@@ -51,12 +51,20 @@ def _test_rows(hub):
 
 
 def test_a_dead_running_pass_is_not_listed_as_a_live_run(hub):
-    f = _pass_file(hub, "test-1565-dead", "running", 68 * 60)
+    f = _pass_file(hub, "test-1565-dead", "running", 5 * 3600)
     row = next(r for r in _test_rows(hub) if r["id"] == f.stem)
-    assert row["state"] != "running", "a pass that has not touched its file in 68 min is not running"
+    assert row["state"] != "running", "a pass that has not touched its file in five hours is not running"
     assert row["live"] is False, "the left pane must not count it among the live runs"
     assert "lost" in row["tip"].lower(), "it stays visible, marked lost"
     assert hub.group_of(row) != "running", "and it leaves the running group"
+
+
+def test_a_pass_the_repro_saw_is_still_running_inside_the_bound(hub):
+    """The 68 min pass of the report is inside a bound set past the suite's own timeout: only the file's age decides."""
+    f = _pass_file(hub, "test-1565-68min", "running", 68 * 60)
+    row = next(r for r in _test_rows(hub) if r["id"] == f.stem)
+    assert row["state"] == "running" and row["live"] is True
+    assert hub.group_of(row) == "running"
 
 
 def test_a_fresh_running_pass_is_still_a_live_run(hub):
