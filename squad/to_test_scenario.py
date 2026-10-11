@@ -45,11 +45,13 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 import time
 import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 from squad.gui_test import validate
@@ -1204,6 +1206,230 @@ def _summary(plan, run, counts, review, pending, missing, bug):
     return "\n".join(lines)
 
 
+RUN_LABEL = "testrun"
+RUN_BLOCK = re.compile(r"<!-- gui-test:run (\{.*\}) -->")
+RUNS_EMOJI = "📅"
+RUNS_CONTAINER = re.compile(rf"{RUNS_EMOJI} Runs (\d{{4}}-\d{{2}})(?: \((\d+)\))?$")
+TREND_WINDOW = 10                        # a trend and a flaky check read this many runs containing the case
+RUN_CAP = 100                            # a month's runs container holds this many run issues before the next one
+_WORST_FIRST = ("failed", "needs review", "pending", "skipped", "passed")    # ADR-0275 §3: ❌ > 🟡 > 👤 > ⚪ > ✅
+_RUN_EMOJI = dict(VERDICT_EMOJI, skipped=NOT_RUN)
+
+
+def _family(verdict):
+    return next((f for f in VERDICT_FAMILIES if verdict.startswith(f)), "skipped")
+
+
+def _overall(families):
+    return next(f for f in _WORST_FIRST if f in families) if families else "skipped"
+
+
+def _utc(text):
+    """A results file's `started` as an aware UTC datetime; a time with no offset is read as UTC."""
+    when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def _totals(families):
+    counts = {f: sum(1 for x in families if x == f) for f in _WORST_FIRST}
+    return " · ".join(f"{_RUN_EMOJI[f]} {counts[f]}" for f in ("passed", "failed", "needs review", "pending", "skipped")) \
+        + f" (of {len(families)})"
+
+
+def _ranked(history):
+    """The run blocks of an area, oldest first: by `started`, ties by run id, never by issue number (ADR-0275 §4)."""
+    return sorted(history, key=lambda run: (run["block"]["started"], run["block"]["run_id"]))
+
+
+def _runs_listing(call, area_number):
+    """The area's 📅 containers as they are on GitHub now, newest month first, each with the run issues it holds."""
+    found = []
+    for kid in call("list_sub_issues", number=area_number) or []:
+        hit = RUNS_CONTAINER.match(kid.get("title") or "")
+        if hit:
+            found.append({"title": kid["title"], "number": kid["number"], "id": kid["id"], "month": hit.group(1),
+                          "n": int(hit.group(2) or 1), "kids": list(call("list_sub_issues", number=kid["number"]) or [])})
+    return sorted(found, key=lambda c: (c["month"], c["n"]), reverse=True)
+
+
+def _runs_container(call, entry, listing, month):
+    """The container this month's next run goes into: adopted when it exists and has room, else created and linked."""
+    held = sorted((c for c in listing if c["month"] == month), key=lambda c: c["n"])
+    if held and len(held[-1]["kids"]) < RUN_CAP:
+        return held[-1]
+    n = held[-1]["n"] + 1 if held else 1
+    title = f"{RUNS_EMOJI} Runs {month}" + (f" ({n})" if n > 1 else "")
+    made = call("create_issue", title=title, body="", labels=[])
+    call("add_sub_issue", parent=entry["number"], sub=made["id"])
+    container = {"title": title, "number": made["number"], "id": made["id"], "month": month, "n": n, "kids": []}
+    listing.append(container)
+    listing.sort(key=lambda c: (c["month"], c["n"]), reverse=True)
+    return container
+
+
+def _read_history(call, listing, cases):
+    """The run blocks of an area, read from its containers newest month first until each case has a full window."""
+    seen, runs = {case: 0 for case in cases}, []
+    for container in listing:
+        if cases and all(n >= TREND_WINDOW for n in seen.values()):
+            break
+        for kid in container["kids"]:
+            hit = RUN_BLOCK.search(call("issue_body", number=kid["number"]) or "")
+            if hit:
+                run = {"number": kid["number"], "block": json.loads(hit.group(1))}
+                runs.append(run)
+                for case in run["block"]["cases"]:
+                    if case in seen:
+                        seen[case] += 1
+    return runs
+
+
+def _changes(block, earlier):
+    """New failures, fixed and still failing, each case against its newest earlier run of the area that has it."""
+    new, fixed, still = [], [], []
+    for case, verdict in block["cases"].items():
+        prior = next((r["block"]["cases"][case] for r in reversed(earlier) if case in r["block"]["cases"]), None)
+        if verdict == "failed":
+            (still if prior == "failed" else new).append(case)
+        elif verdict == "passed" and prior == "failed":
+            fixed.append(case)
+    return new, fixed, still
+
+
+def _names(cases):
+    return ", ".join(f"`{c}`" for c in cases) or "none"
+
+
+def _run_body(report, area, block, changes, numbers, evidence):
+    new, fixed, still = changes
+    lines = [f"- Started: {block['started']} | run `{block['run_id']}` | area `{area}`",
+             f"- Script `{report['script']['sha256']}` | build `{report['build_sha']}` | platform `{report['platform']}`",
+             "", "## Totals", "", _totals(list(block["cases"].values())), "", "## Changes", "",
+             f"- New failures: {_names(new)}", f"- Fixed: {_names(fixed)}", f"- Still failing: {_names(still)}",
+             "", "## Cases", "", "| | Case | Record | Evidence | Bug |", "|---|---|---|---|---|"]
+    for case, verdict in block["cases"].items():
+        shown = evidence.get(case) if verdict in ("failed", "needs review") else None
+        shown = "withheld by the privacy gate" if shown == WITHHELD else (f"![{case}]({shown})" if shown else "-")
+        record = f"#{numbers[case]}" if case in numbers else "-"
+        lines.append(f"| {_RUN_EMOJI[verdict]} | `{case}` | {record} | {shown} | - |")
+    return "\n".join(lines + ["", f"<!-- gui-test:run {json.dumps(block, sort_keys=True)} -->"])
+
+
+def _trend(history, cases):
+    """Per case: its last verdicts oldest to newest (runs that did not contain it are not in it) and its pass rate."""
+    rows = ["### Trend (last 10 runs)", "", "| Case | Trend | Pass rate |", "|---|---|---|"]
+    ranked = _ranked(history)
+    for case in cases:
+        seen = [r["block"]["cases"][case] for r in ranked if case in r["block"]["cases"]][-TREND_WINDOW:]
+        if not seen:
+            continue
+        ran = [v for v in seen if v in ("passed", "failed", "needs review")]
+        rate = f"{round(100 * ran.count('passed') / len(ran))}%" if ran else "-"
+        rows.append(f"| `{case}` | {' '.join(_RUN_EMOJI[v] for v in seen)} | {rate} |")
+    return "\n".join(rows)
+
+
+def _flaky(histories, cases_of):
+    """Cases that alternated ✅/❌ within their last 10 runs: at least two flips between a pass and a failure."""
+    flaky = []
+    for area, history in histories.items():
+        ranked = _ranked(history)
+        for case in cases_of(area):
+            seen = [r["block"]["cases"][case] for r in ranked if case in r["block"]["cases"]][-TREND_WINDOW:]
+            ran = [v for v in seen if v in ("passed", "failed")]
+            if sum(1 for a, b in zip(ran, ran[1:]) if a != b) >= 2:
+                flaky.append(f"- `{case}` ({area}): {' '.join(_RUN_EMOJI[v] for v in seen)}")
+    return flaky
+
+
+def _scenario_dashboard(histories, cases_of):
+    by_run = {}
+    for area, history in histories.items():
+        for run in history:
+            by_run.setdefault(run["block"]["run_id"], []).append((area, run))
+    ordered = sorted(by_run.items(), key=lambda kv: (min(r["block"]["started"] for _, r in kv[1]), kv[0]), reverse=True)
+    lines = ["### Latest run", ""]
+    if ordered:
+        lines += [f"Run `{ordered[0][0]}`", "", "| Area | Result | Totals |", "|---|---|---|"]
+        for area, run in sorted(ordered[0][1], key=lambda x: x[0]):
+            fam = list(run["block"]["cases"].values())
+            lines.append(f"| {area} | {_RUN_EMOJI[_overall(fam)]} | {_totals(fam)} |")
+    else:
+        lines.append("No run yet.")
+    lines += ["", "### Runs", "", "| Run | Started | Result | Totals | Area runs |", "|---|---|---|---|---|"]
+    for run_id, parts in ordered[:TREND_WINDOW]:
+        fam = [v for _, r in parts for v in r["block"]["cases"].values()]
+        links = " · ".join(f"{a} #{r['number']}" for a, r in sorted(parts, key=lambda x: x[0]))
+        started = min(r["block"]["started"] for _, r in parts)
+        lines.append(f"| {run_id} | {started} | {_RUN_EMOJI[_overall(fam)]} | {_totals(fam)} | {links} |")
+    return "\n".join(lines + ["", "### Flaky cases", ""] + (_flaky(histories, cases_of) or ["None."]))
+
+
+def _set_dashboard(call, number, content):
+    """Rewrite the block between the markers of an issue's body, or append one when it has none; the rest stays."""
+    held = call("issue_body", number=number) or ""
+    block = f"{DASHBOARD_START}\n{content}\n{DASHBOARD_END}"
+    start = held.find(DASHBOARD_START)
+    end = held.find(DASHBOARD_END, start) if start >= 0 else -1
+    body = held[:start] + block + held[end + len(DASHBOARD_END):] if end >= 0 else held.rstrip("\n") + "\n\n" + block + "\n"
+    call("set_body", number=number, body=body)
+
+
+def _write_areas(report, doc, map_path, github):
+    """Slice E of ADR-0275: one closed run issue per touched area, then every dashboard from the run blocks."""
+    call = _paced(github, wait=time.sleep, attempts=4, backoff=1.0)
+    areas, cases = doc["areas"], doc.get("cases") or {}
+    numbers = {case: entry["number"] for case, entry in cases.items() if isinstance(entry, dict) and "number" in entry}
+    of_area = {}
+    for case, entry in cases.items():
+        of_area.setdefault(entry.get("area") if isinstance(entry, dict) else None, []).append(case)
+    cases_of = lambda area: sorted(of_area.get(area, []))   # noqa: E731
+    mine, unknown = {}, []
+    for step in report["steps"]:
+        area = (cases.get(step["id"]) or {}).get("area")
+        if area in areas:
+            mine.setdefault(area, []).append(step)
+        else:
+            unknown.append(step["id"])
+    when = _utc(report["started"])
+    stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    call("ensure_label", name=RUN_LABEL)
+    histories, listings, written = {}, {}, []
+    for area in sorted(areas):
+        entry = areas[area]
+        listings[area] = _runs_listing(call, entry["number"])
+        histories[area] = _read_history(call, listings[area], cases_of(area))
+    failed = []
+    for area, steps in sorted(mine.items()):
+        entry, month = areas[area], when.strftime("%Y-%m")
+        container = _runs_container(call, entry, listings[area], month)
+        held = entry.setdefault("runs", {}).setdefault(month, [])
+        if not any(c["number"] == container["number"] for c in held):
+            held.append({"title": container["title"], "number": container["number"], "id": container["id"]})
+            Path(map_path).write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        block = {"run_id": report["run_id"], "started": stamp, "area": area, "build_sha": report["build_sha"],
+                 "cases": {s["id"]: _family(s["verdict"]) for s in steps}}
+        key = (block["started"], block["run_id"])
+        earlier = [r for r in _ranked(histories[area]) if (r["block"]["started"], r["block"]["run_id"]) < key]
+        changes = _changes(block, earlier)
+        title = f"{_RUN_EMOJI[_overall(list(block['cases'].values()))]} Run {when:%Y-%m-%d %H:%M} UTC · {area} · " \
+                f"{report['build_sha'][:7]}"
+        evidence = {s["id"]: s.get("evidence") for s in steps}
+        made = call("create_issue", title=title, body=_run_body(report, area, block, changes, numbers, evidence),
+                    labels=[RUN_LABEL])
+        call("add_sub_issue", parent=container["number"], sub=made["id"])
+        call("close", number=made["number"])
+        container["kids"].append({"number": made["number"], "id": made["id"]})
+        histories[area].append({"number": made["number"], "block": block})
+        failed += [c for c, v in block["cases"].items() if v == "failed"]
+        written.append({"area": area, "number": made["number"], "title": title, "container": container["number"]})
+    for area in mine:
+        _set_dashboard(call, areas[area]["number"], _trend(histories[area], cases_of(area)))
+    _set_dashboard(call, doc["parent"], _scenario_dashboard(histories, cases_of))
+    return {"ok": not failed, "written": True, "runs": written, "failed": failed,
+            **({"unknown_cases": unknown} if unknown else {})}
+
+
 # --------------------------------------------------------------------------- the write-back command (#1226)
 
 def write_back(results_path, map_path, github, plan=None):
@@ -1213,8 +1439,10 @@ def write_back(results_path, map_path, github, plan=None):
     (a per-batch publish), and without it every case id of the map is one issue. This never opens a bug: the run
     command owns the one bug a red run files, and this links it on the parent.
 
-    A malformed results file, a map that names no case or no parent, a run that executed no step and a core that never
-    loaded are all failures, and none of them writes anything back.
+    A map in the areas layout (ADR-0275 slice E) is written as one closed run issue per area plus the rewritten
+    dashboards, under a lock beside the map; a flat map keeps the per-case comments. A malformed results file, a map
+    that names no case or no parent, a run that executed no step and a core that never loaded are all failures, and
+    none of them writes anything back.
     """
     try:
         report = read_results(results_path)
@@ -1222,20 +1450,32 @@ def write_back(results_path, map_path, github, plan=None):
         return {"ok": False, "reason": "malformed results file: " + "; ".join(ex.problems),
                 "problems": ex.problems}
     report.setdefault("script_sha", report["script"]["sha256"])
-    published = read_map(map_path)
-    if not published["issues"]:
-        return {"ok": False, "reason": f"the map {map_path} names no case: publish the scenario first (#1225)"}
-    if published["parent"] is None:
-        return {"ok": False, "reason": f"the map {map_path} names no parent issue: publish the scenario first"}
-    if plan is None:
-        plan = {"name": report["script"]["name"],
-                "issues": [{"cases": [case]} for case in sorted(published["issues"])]}
-    out = write_results(plan, report, github, published)
-    grouped = {case for issue in plan["issues"] for case in issue["cases"]}
-    unknown = [r["id"] for r in report["steps"] if r["id"] not in grouped]
-    if unknown:
-        out["unknown_cases"] = unknown
-    return out
+    lock = Path(str(map_path) + ".lock")
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        return {"ok": False, "reason": f"another write-back holds the lock {lock}: nothing was written"}
+    try:
+        published = read_map(map_path)     # read again under the lock: another writer may have changed the map
+        if not published["issues"]:
+            return {"ok": False, "reason": f"the map {map_path} names no case: publish the scenario first (#1225)"}
+        if published["parent"] is None:
+            return {"ok": False, "reason": f"the map {map_path} names no parent issue: publish the scenario first"}
+        if published.get("layout") == "areas" and published.get("areas") and not plan:
+            if report.get("core_available") is False or not report["steps"]:
+                return write_results({"name": "", "issues": []}, report, github, published)
+            return _write_areas(report, read_issues(map_path), map_path, github)
+        if plan is None:
+            plan = {"name": report["script"]["name"],
+                    "issues": [{"cases": [case]} for case in sorted(published["issues"])]}
+        out = write_results(plan, report, github, published)
+        grouped = {case for issue in plan["issues"] for case in issue["cases"]}
+        unknown = [r["id"] for r in report["steps"] if r["id"] not in grouped]
+        if unknown:
+            out["unknown_cases"] = unknown
+        return out
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def _publish_command(args, github):
@@ -1442,6 +1682,8 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
                 if len(batch) < 100:
                     return found
                 page += 1
+        if op == "set_body":
+            return api("PATCH", f"issues/{kw['number']}", [("body", kw["body"])], json_out=True)
         if op == "set_title":
             return api("PATCH", f"issues/{kw['number']}", [("title", kw["title"])], json_out=True)
         if op == "issue_body":
