@@ -333,7 +333,7 @@ def speed():
             "runs": {"today_median": round(st.median(today), 1) if today else None, "all_median": round(st.median(done), 1) if done else None},
             "rounds": {"prs": len(rounds), "mean": round(st.mean(rounds), 2) if rounds else None}, "kills": {"count": len(kills), "last": max(kills) if kills else None}}
 
-# One run-state vocabulary for the hub's run badges and its legend. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
+# One run-state vocabulary for the hub's run badges. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
 # same states alike; tests/test_run_state_vocabulary.py holds the two tables equal. `color` is a palette variable of :root; `css` is extra style.
 RUN_STATES = [
     {"state": "completed", "label": "Run completed", "color": "ok", "css": ""},
@@ -363,7 +363,6 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .b{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;border:1px solid}
 .landed,.pass,.ok{color:var(--ok)}
 /*RUN_STATE_CSS*/
-#lg{display:flex;flex-wrap:wrap;gap:3px 6px;padding:6px 10px;border-top:1px solid var(--line)}
 .m{color:var(--mute);font-size:11px;margin-top:2px}
 #q{width:100%;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
 .sp{border-bottom:1px solid var(--line);font-size:11px}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:12px;font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:none}
@@ -471,7 +470,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>cost &amp; speed<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<div id=list></div><div id=lg title="what a run badge means">/*RUN_STATE_LEGEND*/</div></div>
+<div id=list></div></div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
@@ -711,8 +710,7 @@ document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
-PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES)) \
-    .replace("/*RUN_STATE_LEGEND*/", "".join('<span class="b %s">%s</span>' % (r["state"].replace(" ", "-"), r["label"]) for r in RUN_STATES))
+PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
