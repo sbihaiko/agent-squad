@@ -50,8 +50,25 @@ def wait_up():
 
 print(f"artifacts: {S}")
 print("== 1. boot an isolated hub (throwaway copy of the skill, port %d)" % PORT)
+# A PR whose head's review attempt timed out and was re-queued (#1502): the hub serves it as its last good board data, so the
+# page renders the card through the real data path. A row older than the head's marker belongs to the head that moved.
+PR_SHA, PR9 = "1e38e5a7b41c0d2e9f", "1e38e5a7b"
+ST = S / "squadstate"; (ST / "auto").mkdir(parents=True)
+(S / "hubdir").mkdir()
+NOW = time.time()
+(S / "hubdir/hub-board.json").write_text(json.dumps(
+    {"t": NOW, "items": [], "prev": [], "prev_n": 0, "lc": {}, "err": None,
+     "prs": [{"n": 1491, "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
+              "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"}]}))
+for kind, at in (("launched", NOW - 1500), ("rereview", NOW - 240)):
+    mk = ST / f"auto/{kind}-1491-{PR9}"
+    mk.write_text(""); os.utime(mk, (at, at))
+with (ST / "review-times.tsv").open("a") as f:
+    f.write("%s\t1491\tdeepseek-v4-flash\t120\t142\n" % time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(NOW - 30)))
 p = subprocess.Popen([sys.executable, str(S / "skill/scripts/hub.py"), str(PORT)], cwd=REPO,
-                     stdout=open(S / "hub.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
+                     stdout=open(S / "hub.log", "w"), stderr=subprocess.STDOUT, start_new_session=True,
+                     env=dict(os.environ, SG_HUB_DIR=str(S / "hubdir"), SG_STATE=str(ST),
+                              SG_REPO="squad-hub-e2e/none", SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO))
 try:
     ck(wait_up(), "hub answers /api/version")
     st, b = req("/api/version")
@@ -111,6 +128,18 @@ try:
         pg.goto(BASE, wait_until="domcontentloaded")
         pg.wait_for_timeout(1200)
         ck(pg.title().strip() != "", "page loads", pg.title())
+        # the OPEN PRS card of a head whose review timed out: the chip, its tooltip, the retry line, and the column's width (#1502)
+        try: pg.wait_for_selector('#bbody .col[data-g="Open PRs"] .it .pst', timeout=20000)
+        except Exception: pass
+        pv = pg.eval_on_selector_all('#bbody .col[data-g="Open PRs"] .it', """els=>els.map(e=>{const s=e.querySelector('.pst'),r=e.querySelector('.prr');
+            return {n:e.dataset.n, chip:s&&s.textContent, line:r&&r.textContent, tip:(s&&s.title)||'', over:e.scrollWidth-e.clientWidth,
+                    cover:s?s.scrollWidth-s.clientWidth:0, rover:r?r.scrollWidth-r.clientWidth:0}})""")
+        card = next((x for x in pv if x["n"] == "1491"), None)
+        ck(card is not None, "the OPEN PRS column renders the timed-out PR's card", pv)
+        ck(card and card["chip"] == "review timed out · deepseek-v4-flash · 120 s", "the chip names the model and the seconds it burned", card)
+        ck(card and card["line"] == "retry in 16 min", "the muted line says when the loop retries", card)
+        ck(card and "deepseek-v4-flash 120 s · timed out" in card["tip"], "the chip's tooltip lists the attempt for this head", card and card["tip"])
+        ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
         pg.wait_for_selector('#mbody input[data-hr="coding_models|claude-sonnet-5-5"]', timeout=15000)
         rows = pg.eval_on_selector_all("#mbody .mr", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
