@@ -85,6 +85,14 @@ else:
     sys.exit(f"no run folder appeared in 180 s; see {log}")
 run = new[-1]
 (runs / run / "request.txt").write_text(req_file.read_text())   # consult.sh reads the request from the run folder
+run_log = runs / run / "launch.log"
+def _copy_launch_log():   # the janitor quotes this file to explain why the run never started; state/<req>.log is the same stream
+    try: run_log.write_text(pathlib.Path(log).read_text())
+    except OSError: run_log.write_text("")
+_copy_launch_log()
+if proc.poll() is None:   # launch.py exits at once, so a follower process (a thread would die with it) keeps the copy live until the squad exits, which is exactly when a refused start writes its reason
+    subprocess.Popen(["bash", "-c", 'while kill -0 "$1" 2>/dev/null; do cp -f "$2" "$3"; sleep 1; done; cp -f "$2" "$3"', "launchlog", str(proc.pid), str(log), str(run_log)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 # make sure the hub is up so the run's dashboard shows up there on its own (it discovers dashboard servers by itself)
 _s = socket.socket(); _s.settimeout(0.5)
 try: _s.connect(("127.0.0.1", 7700))
