@@ -157,9 +157,13 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started${aging:+ (aging: short leash)}"; continue
   fi
   # The run's terminal notices say this head is done with, but they are not results: they live outside the summary
-  # namespace, so they are read by their own prefix -- and each still records the pass's gate like every other exit.
-  grep -qE "^NOTICE #$pr $s9 SUPERSEDED" "$out" 2>/dev/null && { gate superseded "the review marked this head SUPERSEDED"; continue; }
-  grep -qE "^NOTICE #$pr $s9 CI_TIMEOUT" "$out" 2>/dev/null && { gate ci-timeout "the review of this head hit CI_TIMEOUT"; continue; }
+  # namespace, so they are read by their own prefix -- and a summary line that already carries the word (a run from
+  # before the namespace split) reads the same way, so neither shape re-reviews the head. Both record the pass's gate,
+  # like every other exit (#1766).
+  if grep -qE "^NOTICE #$pr $s9 SUPERSEDED" "$out" 2>/dev/null || [[ $line == *SUPERSEDED* ]]; then
+    gate superseded "the review marked this head SUPERSEDED"; continue; fi
+  if grep -qE "^NOTICE #$pr $s9 CI_TIMEOUT" "$out" 2>/dev/null || [[ $line == *CI_TIMEOUT* ]]; then
+    gate ci-timeout "the review of this head hit CI_TIMEOUT"; continue; fi
   # unresolved threads: asked once per head sha after review+CI (CodeRabbit has posted by then), cached
   tf="$A/threads-$pr-$s9"; [ -e "$tf" ] || bash "$here/autofix.sh" --threads $pr > "$tf"; nt=$(cat "$tf"); nt=${nt:-0}
   ms=$(awk '{print $3}' <<<"$line"); ci=$(sed -n 's/.*CI=\([^ ]*\).*/\1/p' <<<"$line")
