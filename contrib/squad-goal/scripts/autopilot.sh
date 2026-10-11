@@ -109,7 +109,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     lm="$A/launched-$pr-$s9"
     if [ -e "$lm" ]; then
       lpid=$(cut -d' ' -f1 "$lm" 2>/dev/null)
-      [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null && continue
+      case "$lpid" in ''|*[!0-9]*) ;; *) kill -0 "$lpid" 2>/dev/null && continue;; esac
       rm -f "$lm"
       echo "STALE-REVIEW #$pr @ $s9: the review launched for this head is gone and left no summary line (a restart, the janitor or the shell killed it); the marker is dropped and the head is reviewed again"
     fi
