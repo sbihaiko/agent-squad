@@ -95,6 +95,8 @@ process.stdin.on("end", async () => {
     else if (o.op === "mark") out.push(core.stateMark(o.state));
     else if (o.op === "reveal") out.push(core.viewReveal(o.view, o.rect, o.size, o.insets));
     else if (o.op === "childmark") out.push(core.childMark(o.c));
+    else if (o.op === "card") out.push(core.cardBody(o.name, o.children));
+    else if (o.op === "cardnames") out.push(core.CARD_NAMES);
     else if (o.op === "roster") out.push(core.childRoster(o.children, o.dispatch));
     else if (o.op === "grouplayout") out.push(core.groupLayout(o.groups, o.layout, o.taken, o.box, o.gap, o.doc));
     else if (o.op === "bus") out.push(core.childBus(o.anchor, o.pos, o.box));

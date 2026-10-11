@@ -85,7 +85,9 @@ function renderProgress() {
   if (!was && cells.length && S.fitted && S.doc) fit();
 }
 
-function renderLive() { renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
+// A single-card page paints that one card and nothing else: it still reads the run (the same push stream or reread
+// timer), so the card is live, but the map, the totals and the panel are never built for a second view.
+function renderLive() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
 
 // A gui-test script opens as a step diagram in its own view; nothing runs. Any other file goes on to the graph reader.
 function scriptFormat(text) { try { const d = JSON.parse(text); return d && typeof d.format === "string" && d.format.startsWith("gui-test/") ? d : null; } catch (e) { return null; } }
@@ -121,5 +123,5 @@ function nodesOf() { return S.doc && Array.isArray(S.doc.nodes) ? S.doc.nodes.fi
 function errsFor(name) { return S.errors.filter((e) => e.node === name); }
 function overlayFor(name) { return S.overlay && S.overlay.shown ? S.overlay.rows.filter((r) => r.target === name) : []; }
 
-function render() { renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
+function render() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
 

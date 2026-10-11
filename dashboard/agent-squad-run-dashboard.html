@@ -255,6 +255,25 @@
   body:not(.noside) #view { right:12px; }
   body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
 }
+
+/* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the
+   hub's pip opens over its maximized board. The card is the panel's own data (core.cardBody), so the two cannot drift. */
+body.card-mode { display: block; margin: 0; }
+body.card-mode #topbar, body.card-mode #left, body.card-mode #graph, body.card-mode #footer,
+body.card-mode #totals, body.card-mode #progress, body.card-mode #replay, body.card-mode #status, body.card-mode #help { display: none; }
+body.card-mode #card { display: block; }
+#card { display: none; height: 100vh; overflow: auto; overscroll-behavior: contain; padding: 8px 10px; background: #0f1115; color: #d8dde6; font: 12px ui-monospace, Menlo, monospace; }
+#card h3 { margin: 8px 0 4px; font-size: 12px; color: #d8dde6; }
+#card .cgroup { border: 1px solid #2a303b; border-radius: 6px; margin: 0 0 6px; padding: 4px 8px 6px; background: #161a21; }
+#card .cgroup.s-running, #card .cgroup.s-started { border-color: #2dd4bf; }
+#card .cgroup.s-failed, #card .cgroup.s-rejected { border-color: #ff6b6b; }
+#card .crow { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#card .crow b { font-weight: 600; }
+#card .crow.s-passed { color: #3ecf8e; }
+#card .crow.s-failed, #card .crow.s-rejected { color: #ff6b6b; }
+#card .crow.s-running, #card .crow.s-started { color: #2dd4bf; }
+#card .crow.s-queued { color: #8a93a3; }
+#card .cnote { color: #8a93a3; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -313,6 +332,7 @@
   <div id="help" hidden><div class="box"><h2>Controls</h2><table id="help-rows"></table><h2>Buttons</h2><table id="help-btns"></table><h2>Colors</h2><div id="help-legend"></div><div class="row"><button id="b-help-close" title="Close the help (Esc)">Close</button></div></div></div>
   <div id="menu"></div>
 </div>
+<div id="card" aria-label="One card of the run panel"></div>
 <div id="totals" role="status" aria-label="Run totals"></div>
 </div>
 <div id="status" role="status" title="Click to dismiss"></div>
@@ -1195,7 +1215,42 @@ function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, chil
     return segs;
   }
 
-  return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus };
+  // ---- the panel's single-card mode (ticket #1782) ----
+  // One card of the panel, named by the page's `card` parameter, for the second view the hub's pip opens over its
+  // maximized board. The panel has one card it can name cleanly, so the parameter takes that one alone: `groups`, the
+  // run's children grouped by dispatch and state, unfinished first — the one thing worth glancing at while the board
+  // is read. The card is derived from the same record and the same state table the panel's own rows read, never authored.
+  const CARD_NAMES = ["groups"], CARD_TITLES = { groups: "Groups" };
+  // A child in flight or still waiting comes before a finished one, then the outcomes. A rejected request groups as
+  // `rejected`: the record refused it, so it never ran and its outcome alone would read as one more failed child.
+  const CARD_ORDER = ["running", "started", "queued", "failed", "rejected", "deadline", "needs-human", "passed"];
+  const cardRank = (s) => (CARD_ORDER.indexOf(s) < 0 ? CARD_ORDER.length : CARD_ORDER.indexOf(s));
+  const cardStateOf = (c) => (c.rejected ? "rejected" : childMark(c).state);
+  const cardWord = (s) => (MARKS[s] ? MARKS[s].label : s);
+
+  // The children grouped by dispatch and state, unfinished first. Ordered by state, then by dispatch, so the card is
+  // stable while a run works: a child that finishes moves its own group, and the others keep their place.
+  function cardGroups(children) {
+    const by = new Map();
+    for (const c of children || []) {
+      const key = `${c.dispatch}\u0000${cardStateOf(c)}`;
+      if (!by.has(key)) by.set(key, { dispatch: c.dispatch, state: cardStateOf(c), kids: [] });
+      by.get(key).kids.push(c);
+    }
+    return [...by.values()]
+      .map((g) => ({ ...g, label: cardWord(g.state), count: g.kids.length, name: `${g.dispatch} · ${g.kids.length} ${cardWord(g.state)}` }))
+      .sort((a, b) => cardRank(a.state) - cardRank(b.state) || String(a.dispatch).localeCompare(String(b.dispatch)));
+  }
+
+  // What the page paints for a `card` request: the card, or the message that names the cards the panel does have. A
+  // card the panel does not have is a message, never an empty frame.
+  function cardBody(name, children) {
+    if (!CARD_NAMES.includes(name)) return { ok: false, message: `This dashboard has no card named "${name}". It has: ${CARD_NAMES.join(", ")}.` };
+    const groups = cardGroups(children);
+    return { ok: true, name, title: CARD_TITLES[name] || name, groups, empty: groups.length ? "" : "This run has no children yet." };
+  }
+
+  return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody };
 }
 
 // Dashboard core module: Per-node statistics, the harness a node used, and the run statistics.. Moved from rest.js with no change.
@@ -2365,10 +2420,10 @@ function make(ENGINE) {
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
   const { unresolvedChildren, replayAt, moveCursor } = replayModule({ num, orNull });
-  const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
+  const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -2460,7 +2515,9 @@ function renderProgress() {
   if (!was && cells.length && S.fitted && S.doc) fit();
 }
 
-function renderLive() { renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
+// A single-card page paints that one card and nothing else: it still reads the run (the same push stream or reread
+// timer), so the card is live, but the map, the totals and the panel are never built for a second view.
+function renderLive() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
 
 // A gui-test script opens as a step diagram in its own view; nothing runs. Any other file goes on to the graph reader.
 function scriptFormat(text) { try { const d = JSON.parse(text); return d && typeof d.format === "string" && d.format.startsWith("gui-test/") ? d : null; } catch (e) { return null; } }
@@ -2496,7 +2553,7 @@ function nodesOf() { return S.doc && Array.isArray(S.doc.nodes) ? S.doc.nodes.fi
 function errsFor(name) { return S.errors.filter((e) => e.node === name); }
 function overlayFor(name) { return S.overlay && S.overlay.shown ? S.overlay.rows.filter((r) => r.target === name) : []; }
 
-function render() { renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
+function render() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
 
 
 // --- the graph area: an SVG with one group that pan and zoom move ---
@@ -3611,6 +3668,36 @@ if (FROM_SERVER) connectServed();
 else if (window.showDirectoryPicker) { $("b-folder").onclick = connectFolder; restoreFolder(); } else { $("b-folder").style.display = "none"; $("l-folder").style.display = ""; if (WANT) askForWanted(); }
 $("f-folder").addEventListener("change", async (e) => { const fs = [...e.target.files]; if (fs.length) await loadRunSource(fileListSource(fs)); e.target.value = ""; });
 
+
+// --- single-card mode (ticket #1782): the page paints ONE card of the panel, named by its URL ---
+// The hub's pip, floating over the maximized board, points a frame at this page with `?card=<name>`, so the second
+// view shows the panel's own card instead of a copy that drifts. The page still reads the run (the same push stream
+// or reread timer it always uses), so the card follows a live run rather than a snapshot; the mode only cuts what is
+// painted. A name the panel does not have is answered with a message inside the card, never an empty frame. The page
+// tells whoever framed it that it answered the mode, which is how the window tells an older dashboard (one that does
+// not know the parameter at all) from one that does.
+const CARD = (new URLSearchParams(location.search).get("card") || "").trim();
+// The window is a second page paint of the same run: it must not be told twice about anything, so the card is
+// rebuilt only when its own text changed, like the panel's own list.
+let cardHTML = null;
+
+function renderCard() {
+  const box = $("card"), card = core.cardBody(CARD, S.children);
+  const groups = card.groups.map((g) => {
+    const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
+    return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
+  }).join("");
+  const html = card.ok ? groups || `<p class="cnote">${esc(card.empty)}</p>` : `<p class="cnote">${esc(card.message)}</p>`;
+  if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  if (window.parent !== window) window.parent.postMessage({ squadCard: CARD }, "*");   // the window's own handshake: it knows this page answered the mode
+}
+
+if (CARD) {
+  document.body.classList.add("card-mode");
+  $("card").setAttribute("aria-label", `One card of the run panel: ${CARD}`);
+  renderCard();
+  window.addEventListener("message", (e) => { if (e.data && e.data.card === CARD) renderCard(); });   // the window may ask for a repaint
+}
 
 // --- save, draft copy, hash chip, and the changed-file stop ---
 const PICKER = !!window.showOpenFilePicker;
