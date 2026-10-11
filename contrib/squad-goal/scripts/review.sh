@@ -29,7 +29,7 @@ $SHAPE
 No preamble, no restating the diff or the issue body, no closing summary: a review of a small diff fits on one screen."
 FMTFIX="Output — the same short checklist, and nothing else, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE
-APPROVE only when every Blocking previous finding is fixed and the delta adds none. Each previous finding keeps the severity it was raised with, and its bullet repeats its file:line and its defect: - <file>:<line> — <defect> — fixed|not fixed: <one-line reason> — <the check that proves it>.
+APPROVE only when every Blocking previous finding is fixed and the delta adds none. Each previous finding keeps the severity it was raised with, and its bullet repeats its file:line and its defect: - <file>:<line> — <defect> — fixed|not fixed: <one-line reason> — <the check that proves it>. The marker is what the loop reads (#1832): a bullet answered 'fixed: <reason>' is the fix, not a finding, so it contradicts no APPROVE; a bullet saying 'not fixed: <reason>' keeps the severity it was raised with and is what a CHANGES rests on.
 No preamble, no restating the delta, no closing summary."
 if [ -n "$delta" ]; then
 { echo "You are a code reviewer. Read-only: do not edit, create or delete files. Answer in English.
