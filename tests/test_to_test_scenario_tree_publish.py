@@ -10,7 +10,7 @@ import pytest
 from squad import to_test_scenario as tts
 from tests.test_gui_test_scenario import script
 from tests.test_to_test_scenario_areas import batch
-from tests.test_to_test_scenario_publish import SCENARIO, scenario_file, tiny_plan
+from tests.test_to_test_scenario_publish import scenario_file, tiny_plan
 
 DASHBOARD = "<!-- gui-test:dashboard:start -->\n| latest | ✅ |\n<!-- gui-test:dashboard:end -->"
 

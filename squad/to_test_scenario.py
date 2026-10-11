@@ -51,7 +51,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from squad.gui_test import validate
@@ -877,7 +877,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
     for area in tree:
         entry = known.get(area["key"])
         if entry is None:
-            kid = adopt(scenario, lambda held: title_base(held) == area["title"])
+            kid = adopt(scenario, lambda held, title=area["title"]: title_base(held) == title)
             entry = {"number": kid["number"], "id": kid["id"]} if kid else None
         if entry is None:
             made = create(with_emoji(area["title"], NOT_RUN), area["body"], area["labels"])
@@ -898,7 +898,7 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
             held = next((c for c in entry["containers"] if c["title"] == container["title"]), None)
             if held is None:
                 title = f"{CASES_EMOJI} {container['title']}"
-                kid = adopt(entry["number"], lambda text: text == title)
+                kid = adopt(entry["number"], lambda text, held=title: text == held)
                 if kid is None:
                     made = create(title, _container_body(area["key"]), [GROUP_LABEL])
                     containers_created.append(f"{area['key']}: {title}")
@@ -1247,7 +1247,7 @@ def _overall(families):
 def _utc(text):
     """A results file's `started` as an aware UTC datetime; a time with no offset is read as UTC."""
     when = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    return (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+    return (when if when.tzinfo else when.replace(tzinfo=UTC)).astimezone(UTC)
 
 
 def _totals(families):
@@ -1358,7 +1358,7 @@ def _flaky(histories, cases_of):
         for case in cases_of(area):
             seen = [r["block"]["cases"][case] for r in ranked if case in r["block"]["cases"]][-TREND_WINDOW:]
             ran = [v for v in seen if v in ("passed", "failed")]
-            if sum(1 for a, b in zip(ran, ran[1:]) if a != b) >= 2:
+            if sum(1 for a, b in zip(ran, ran[1:], strict=False) if a != b) >= 2:
                 flaky.append(f"- `{case}` ({area}): {' '.join(_RUN_EMOJI[v] for v in seen)}")
     return flaky
 
