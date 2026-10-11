@@ -58,7 +58,7 @@ from squad.gui_test import validate
 from squad.gui_test_report import EVIDENCE_FAMILIES, WITHHELD
 
 CASE_ID = re.compile(r"[A-Z][A-Z0-9]*-\d+$")
-CASE_LABEL = "testcase"
+CASE_LABEL = "Test-Case"
 TRIAGE_LABEL = "ready-for-agent"
 INITIAL_STATUS = "To triage"
 SETUP_ROLES = {"setup", "recovery"}
@@ -73,11 +73,14 @@ FORMAT = "gui-test/1"
 HASH_FIELD = "content_hash"
 
 PARENT_LABEL = "ready-for-agent"
-CASE_LABEL = "testcase"
+CASE_LABEL = "Test-Case"
+SCENARIO_LABEL = "Test-Scenario"
+GROUP_LABEL = "Test-Group"
+OLD_TYPE_LABELS = {"testcase", "testarea", "testrun", "gui-test-run"}   # what the Test-<Kind> labels replace (#1481)
 
 SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
-AREA_LABEL = "testarea"
+AREA_LABEL = "Test-Area"
 CASES_EMOJI = "📋"
 DASHBOARD_START = "<!-- gui-test:dashboard:start -->"
 DASHBOARD_END = "<!-- gui-test:dashboard:end -->"
@@ -414,7 +417,7 @@ def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
     areas = _area_tree(script, issues)
     return {"scenario": scenario["name"], "granularity": granularity,
             "parent": {"title": f"Test scenario: {scenario['name']}",
-                       "labels": [PARENT_LABEL, f"wave:{wave}"],
+                       "labels": [PARENT_LABEL, f"wave:{wave}", SCENARIO_LABEL],
                        "body": _scenario_parent_body(scenario, script, steps, edges, areas)},
             "areas": areas, "issues": issues}
 # --------------------------------------------------------------------------- the area tree (ADR-0275)
@@ -571,7 +574,7 @@ def _plan_from_script(script, markdown=None, granularity="per-case", script_path
     return {
         "name": name,
         "granularity": granularity,
-        "parent": {"title": parent_title, "body": parent_body, "labels": [TRIAGE_LABEL, "wave:01"]},
+        "parent": {"title": parent_title, "body": parent_body, "labels": [TRIAGE_LABEL, "wave:01", SCENARIO_LABEL]},
         "areas": areas,
         "issues": issues,
         "variants": script.get("variants") or {},
@@ -794,8 +797,12 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
 
     def refresh(number, title, body, labels, default):
         """Update a known issue: its title keeps the emoji prefix it has, else takes `default`."""
-        held = (call("issue_state", number=number) or {}).get("title") or ""
+        state = call("issue_state", number=number) or {}
+        held = state.get("title") or ""
         prefix = _held_emoji(held) or default
+        kept = [x for x in state.get("labels") or [] if x not in OLD_TYPE_LABELS and x not in labels
+                and not x.startswith("wave:")]
+        labels = list(labels) + kept          # the type label replaces the old one; a label somebody added stays
         call("update_issue", number=number, title=with_emoji(title, prefix) if prefix else title, body=body,
              labels=labels)
 
@@ -893,12 +900,13 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
                 title = f"{CASES_EMOJI} {container['title']}"
                 kid = adopt(entry["number"], lambda text: text == title)
                 if kid is None:
-                    made = create(title, _container_body(area["key"]), [])
+                    made = create(title, _container_body(area["key"]), [GROUP_LABEL])
                     containers_created.append(f"{area['key']}: {title}")
                     kid = {"number": made["number"], "id": made["id"]}
                 held = {"title": container["title"], "number": kid["number"], "id": kid["id"]}
                 entry["containers"].append(held)
                 flush()
+            _retype(call, held["number"], GROUP_LABEL, fresh)
             link(entry["number"], held["number"], held["id"])
             for issue in container["cases"]:
                 if flat:
@@ -920,6 +928,18 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
             "map_path": str(path) if path else None, "map": state}
 
 
+def _retype(call, number, label, fresh=()):
+    """Give an issue its type label: the old ones dropped, every other label kept, nothing written when it is right."""
+    if number in fresh:
+        return
+    held = (call("issue_state", number=number) or {}).get("labels")
+    if held is None:
+        return
+    wanted = [x for x in held if x not in OLD_TYPE_LABELS and x != label] + [label]
+    if sorted(wanted) != sorted(held):
+        call("set_labels", number=number, labels=wanted)
+
+
 def _id_in(kids, number):
     """The numeric id of an issue among the sub-issues listed, for an entry an older map wrote with no id."""
     return next(kid["id"] for kid in kids if kid["number"] == number)
@@ -931,7 +951,7 @@ def _container_body(area_key):
 
 def _labels(plan):
     """Every label the plan's issues need, the case label included, whatever the granularity."""
-    out = {CASE_LABEL, *plan["parent"]["labels"]}
+    out = {CASE_LABEL, GROUP_LABEL, *plan["parent"]["labels"]}
     for area in plan.get("areas") or []:
         out.update(area["labels"])
     for issue in plan["issues"]:
@@ -1206,7 +1226,7 @@ def _summary(plan, run, counts, review, pending, missing, bug):
     return "\n".join(lines)
 
 
-RUN_LABEL = "testrun"
+RUN_LABEL = "Test-Run"
 RUN_BLOCK = re.compile(r"<!-- gui-test:run (\{.*\}) -->")
 RUNS_EMOJI = "📅"
 RUNS_CONTAINER = re.compile(rf"{RUNS_EMOJI} Runs (\d{{4}}-\d{{2}})(?: \((\d+)\))?$")
@@ -1256,10 +1276,11 @@ def _runs_container(call, entry, listing, month):
     """The container this month's next run goes into: adopted when it exists and has room, else created and linked."""
     held = sorted((c for c in listing if c["month"] == month), key=lambda c: c["n"])
     if held and len(held[-1]["kids"]) < RUN_CAP:
+        _retype(call, held[-1]["number"], GROUP_LABEL)
         return held[-1]
     n = held[-1]["n"] + 1 if held else 1
     title = f"{RUNS_EMOJI} Runs {month}" + (f" ({n})" if n > 1 else "")
-    made = call("create_issue", title=title, body="", labels=[])
+    made = call("create_issue", title=title, body="", labels=[GROUP_LABEL])
     call("add_sub_issue", parent=entry["number"], sub=made["id"])
     container = {"title": title, "number": made["number"], "id": made["id"], "month": month, "n": n, "kids": []}
     listing.append(container)
@@ -1454,6 +1475,7 @@ def _write_areas(report, doc, map_path, github):
     when = _utc(report["started"])
     stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
     call("ensure_label", name=RUN_LABEL)
+    call("ensure_label", name=GROUP_LABEL)
     histories, listings, written = {}, {}, []
     for area in sorted(areas):
         entry = areas[area]
@@ -1742,6 +1764,8 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
                 if len(batch) < 100:
                     return found
                 page += 1
+        if op == "set_labels":
+            return api("PATCH", f"issues/{kw['number']}", [("labels[]", x) for x in kw["labels"]], json_out=True)
         if op == "set_body":
             return api("PATCH", f"issues/{kw['number']}", [("body", kw["body"])], json_out=True)
         if op == "set_title":
@@ -1766,7 +1790,8 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             comments = api("GET", f"issues/{kw['number']}/comments", json_out=True)
             said = next((m.group(1) for c in reversed(comments or [])
                          if (m := _VERDICT_LINE.match((c.get("body") or "").strip()))), None)
-            return {"state": (issue or {}).get("state"), "verdict": said, "title": (issue or {}).get("title")}
+            return {"state": (issue or {}).get("state"), "verdict": said, "title": (issue or {}).get("title"),
+                    "labels": [x.get("name") for x in (issue or {}).get("labels") or []]}
         if op == "board":
             if not project:
                 return {}

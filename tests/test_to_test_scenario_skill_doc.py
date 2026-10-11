@@ -39,7 +39,7 @@ def test_the_skill_shows_the_dry_run_flag_of_publish():
 
 
 def test_the_skill_describes_the_areas_layout_and_the_area_rule():
-    for phrase in ("Area issue", "📋 Cases", "📅 Runs", "`testarea`", "`testrun`", "`area`", "`objective`",
+    for phrase in ("Area issue", "📋 Cases", "📅 Runs", "`Test-Area`", "`Test-Run`", "`area`", "`objective`",
                    "batch id up to its first `-`", "(no objective stated)"):
         assert phrase in SKILL, phrase
 
