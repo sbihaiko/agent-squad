@@ -269,6 +269,119 @@ def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
     assert caps["input_families"] == ["ticks"]
 
 
+# --- #1780: the adapter and the runner drive the verbs the hook answers since #1779 --------------------------
+
+# The verbs ADR-0272's hook answers since #1779 (hook version 2), in the order the adapter advertises them: the
+# pad press it always had, the release and the chord beside it, the keyboard, and the goal read.
+VERBS_1779 = ["pad.press", "pad.release", "pad.chord", "key.press", "nav.goal"]
+
+
+def _verbs_asked(path):
+    """The actions the stub application was asked for, in order: one JSON object per line, appended by the fixture."""
+    return [json.loads(line)["action"] for line in path.read_text().splitlines()]
+
+
+def test_the_emulator_adapter_advertises_the_verbs_the_hook_answers_since_1779(tmp_path):
+    """#1780: the hook answers `pad.release`, `pad.chord` and `key.press`, and reads a goal's state and moves under
+    `nav.goal`, since #1779. An adapter that drives it advertises them, and a verb it does not advertise is the
+    capability the derivation names when it turns the step that writes it into a case a person walks."""
+    caps = _emulator(tmp_path).capabilities()
+    assert caps["actions"] == VERBS_1779
+
+
+def test_the_adapter_drives_the_new_verbs_over_the_hook(tmp_path):
+    """#1780: each verb reaches the hook as its own action, and the keyboard's own press is the one that moves the
+    application - the chord and the release are answered without one. A refusal here is the adapter not asking."""
+    verbs = tmp_path / "verbs.jsonl"
+    d = script(
+        step("b1.open", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 60},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+        step("b1.enter", action={"name": "key.press", "args": {"key": "Enter", "ticks": 2}},
+             wait={"check": "ui.screen == play.home", "timeout_ticks": 60},
+             check={"name": "ui.screen", "args": {"is": "play.home"}}),
+        step("b1.chord", action={"name": "pad.chord", "args": {"buttons": ["Select", "Start"], "ticks": 4}},
+             wait={"check": "ui.surface == none", "timeout_ticks": 8},
+             check={"name": "ui.surface", "args": {"is": "none"}}),
+        step("b1.release", check=None, action={"name": "pad.release", "args": {"button": "A", "ticks": 1}},
+             wait={"timeout_ticks": 2}),
+    )
+    d["requires"] = {"actions": VERBS_1779, "checks": ["ui.screen", "ui.surface"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(verbs)})
+    validate(d, adapter.capabilities())
+    results = run_launched(d, adapter)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.open", "passed"), ("b1.enter", "passed"),
+                                                          ("b1.chord", "passed"), ("b1.release", "passed")]
+    assert _verbs_asked(verbs) == ["pad.press", "key.press", "pad.chord", "pad.release"]
+
+
+def _goal_script():
+    """One `nav.goal` step: the pilot's `after-game.reach-home` shape (#1780), a setup step that asserts the screen."""
+    d = script(step("b1.reach-library", role="setup",
+                    precondition="by hand: the screen is play.home",
+                    action={"name": "nav.goal", "args": {"goal": "ui.screen == play.library"}},
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 60},
+                    check={"name": "ui.screen", "args": {"is": "play.library"}}))
+    d["batches"][0]["setup"] = [d["batches"][0]["steps"].pop(0)]
+    d["requires"] = {"actions": ["nav.goal"], "checks": ["ui.screen"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    return d
+
+
+def test_a_goal_step_asks_the_hook_and_waits_for_a_chooser(tmp_path):
+    """#1780: `nav.goal` is the hook's read of the state a move is chosen from and the moves it accepts (ADR-0271
+    items 1-2), never a press. An adapter that advertises it is asked; with no chooser (CI, ADR-0271 Decision 6 A)
+    the step is `pending`, and asking is what keeps it from being a red one: injected as a step of its own the read
+    moves nothing, so the wait behind it would time out."""
+    verbs = tmp_path / "verbs.jsonl"
+    d = _goal_script()
+    adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(verbs)})
+    validate(d, adapter.capabilities())
+    [r] = run_launched(d, adapter)
+    assert r == {"id": "b1.reach-library", "verdict": "pending", "capture": None}
+    assert _verbs_asked(verbs) == ["nav.goal"]
+
+
+def test_a_goal_is_reached_through_the_hooks_own_moves_and_the_navigators_choice(tmp_path):
+    """#1780: the hook hands the moves it accepts in the duration family its own clock allows, and the runner's
+    Navigator chooses among them (ADR-0271 items 2-3). Confirm on the Home is the library, so a chooser that takes
+    the hook's own move reaches the goal the pilot's setup names."""
+    from squad.gui_test_goal import Navigator
+
+    d = _goal_script()
+    adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(tmp_path / "verbs.jsonl")})
+    validate(d, adapter.capabilities())
+    events = []
+    navigator = Navigator(lambda state, options: {"choice": "pad.press A"}, max_decisions=4)
+    [r] = run_launched(d, adapter, record=events.append, goal=navigator)
+    assert r["verdict"] == "passed"
+    [decision] = [e for e in events if e["event"] == "gui_decision"]
+    assert decision["options"] == ["pad.press Up", "pad.press Down", "pad.press Left", "pad.press Right",
+                                   "pad.press Confirm", "pad.press Back"]
+
+
+def test_the_runner_keeps_a_home_step_naming_one_of_those_verbs_automated(tmp_path):
+    """#1780: the same capability list the run command validates against decides manual vs automated, so a step the
+    adapter can now drive stays a case the runner executes instead of a row a person walks."""
+    from squad.gui_test_subset import runnable
+
+    caps = _emulator(tmp_path).capabilities()
+    d = script(step("home.first-focus"),
+               step("home.release", action={"name": "pad.release", "args": {"button": "A", "ticks": 2}},
+                    wait={"timeout_ticks": 8}),
+               step("home.chord", action={"name": "pad.chord", "args": {"buttons": ["Select", "Start"], "ticks": 4}},
+                    wait={"timeout_ticks": 8}),
+               step("home.key", action={"name": "key.press", "args": {"key": "Enter", "ticks": 2}},
+                    wait={"timeout_ticks": 8}),
+               step("home.second-focus"))
+    d["requires"] = {"actions": caps["actions"], "checks": ["ui.screen", "ui.focused"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    out = runnable(d, caps)
+    assert out["manual"] == []
+    assert out["kept"] == len(d["batches"][0]["steps"])
+
+
 def _slice_batch(b, ids):
     """Keep only the asked-for steps of `b`; its setup/teardown stay, the way `--case` keeps them (#1241).
 

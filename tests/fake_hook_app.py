@@ -1,7 +1,12 @@
 """A stand-in for the emulator that speaks the GUI test hook protocol (ADR-0272) over its Unix socket.
 
-It starts on the Home with Open a ROM focused; a press of A opens the library after three ticks.
-Ticks are real time (50 ms), like the application's pad bridge. FAKE_HOOK_MODE=crash makes it exit on the first inject.
+It starts on the Home with Open a ROM focused; a press of A opens the library after three ticks, and the
+keyboard's Enter brings it back (the two paths a #1780 run drives). Ticks are real time (50 ms), like the
+application's pad bridge. FAKE_HOOK_MODE=crash makes it exit on the first inject.
+
+Hook version 2 (#1779): the chord and the release are answered without moving anything, and `nav.goal` is a read
+of the state and the six pad navigation moves - it injects nothing. FAKE_HOOK_VERBS names a file every action the
+application was asked for is appended to, one JSON object per line, so a test reads back what the adapter sent.
 """
 import hashlib
 import json
@@ -15,6 +20,9 @@ import zlib
 
 state = {"tick": 0, "screen": "play.home", "focus": "play.home.open-rom", "opens_at": None}
 CONTROLS = ["play.home", "play.home.open-rom", "play.library.back"]
+# PadNavAction, the six navigation presses the application itself hands a goal-driven run (TestHookProtocol.NavGoal).
+NAVIGATION = ["Up", "Down", "Left", "Right", "Confirm", "Back"]
+ACTIONS = ["pad.press", "pad.release", "pad.chord", "key.press", "nav.goal"]
 
 
 def png(w, h, seed):
@@ -39,7 +47,10 @@ def handle(req, token):
         return {"ok": False, "error": "unauthorized"}
     op = req.get("op")
     if op == "hello":
-        return {"ok": True, "hook": 1, "ops": ["hello", "state", "inject", "capture", "quit"], "namespaces": ["pad", "ui"]}
+        # #1779: version 2 names the actions this hook answers, so a run that drives a verb it cannot answer is
+        # refused before the step that wrote it.
+        return {"ok": True, "hook": 2, "ops": ["hello", "state", "inject", "capture", "quit"],
+                "namespaces": ["pad", "key", "nav", "ui"], "actions": list(ACTIONS)}
     if op == "state":
         return {"ok": True, "screen": state["screen"], "dialogs": [], "focus": state["focus"], "tick": state["tick"], "frames": 0,
                 # #1282: what a player judges by eye, from the application's own UI state.
@@ -55,9 +66,22 @@ def handle(req, token):
     if op == "inject":
         if os.environ.get("FAKE_HOOK_MODE") == "crash":
             os._exit(139)
-        if req.get("action") != "pad.press":
-            return {"ok": False, "error": "unknown action " + str(req.get("action"))}
-        if req["args"].get("button") == "A" and state["screen"] == "play.home":
+        action = req.get("action")
+        asked = os.environ.get("FAKE_HOOK_VERBS")
+        if asked:
+            with open(asked, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"action": action, "args": req.get("args") or {}}) + "\n")
+        if action not in ACTIONS:
+            return {"ok": False, "error": "unknown action " + str(action)}
+        if action == "nav.goal":
+            # #1779: a read, never a step - the goal it names is not touched, and the six moves it hands are the
+            # pad's own navigation presses in the duration family this state's clock uses.
+            return {"ok": True, "goal": req["args"].get("goal", ""), "state": dict(state, controls=[]),
+                    "family": "ticks",
+                    "moves": [{"name": "pad.press", "args": {"pad": 0, "button": b, "ticks": 1}} for b in NAVIGATION]}
+        if action == "key.press" and req["args"].get("key") == "Enter" and state["screen"] == "play.library":
+            state["screen"], state["focus"], state["opens_at"] = "play.home", "play.home.open-rom", None
+        if action == "pad.press" and req["args"].get("button") == "A" and state["screen"] == "play.home":
             state["opens_at"] = state["tick"] + 3
         return {"ok": True}
     if op == "capture":
