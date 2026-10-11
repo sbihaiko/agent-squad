@@ -164,7 +164,7 @@ $("b-unlink").addEventListener("click", () => disconnectLink(S.link));
 $("b-undo").addEventListener("click", () => stepHistory(-1));
 $("b-redo").addEventListener("click", () => stepHistory(1));
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeMenu(); closeHelp(); closeLegend(); }
+  if (e.key === "Escape") { closeMenu(); closeHelp(); }
   const t = e.target && e.target.tagName;
   // In a text field the browser's own undo keeps the text; elsewhere Ctrl or Cmd + Z walks the edit history.
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !["TEXTAREA", "INPUT", "SELECT"].includes(t)) {
