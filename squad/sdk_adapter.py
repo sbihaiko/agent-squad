@@ -17,12 +17,14 @@ import time
 import anyio
 
 from squad import workcmd
-from squad.adapter import AdapterError, CallResult
+from squad.adapter import AdapterError, CallResult, MessageOverCeiling
 from squad.stall import StallWatch
 
 STOP_REASONS = {"error_max_budget_usd": "spend_cap"}
 OUTPUT_CAP_TEXT = "output token maximum"
 FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+CEILING_TEXT = re.compile(r"exceeded maximum buffer size of (\d+) bytes")
+FRAME_TEXT = re.compile(r"Buffer size (\d+) exceeds limit (\d+)")
 PROGRESS_SECONDS = 10.0     # the default interval between two progress events of one call; a setting in agent-defaults.yaml
 INPUT_KEYS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 CACHE_KEYS = (("cache_read", "cache_read_input_tokens"), ("cache_write", "cache_creation_input_tokens"))
@@ -73,6 +75,28 @@ def _loads(s):
     except ValueError:
         return None
     return obj if isinstance(obj, dict) else None
+
+
+def ceiling_hit(err):
+    """`(ceiling, size)` when this error is the SDK reader's JSON ceiling, else None.
+
+    The reader (`claude_agent_sdk/_internal/transport/subprocess_cli.py`, the `guard()` inside `_read_messages_impl`)
+    raises `CLIJSONDecodeError("JSON message exceeded maximum buffer size of <ceiling> bytes", ValueError("Buffer size
+    <size> exceeds limit <ceiling>"))` — the ceiling in the sentence it keeps as `line`, the size of the frame that hit
+    it in the original error. Both are read off the error rather than assumed, and `size` stays None when a version
+    reports the ceiling without the frame behind it. The SDK is never imported for this: the text is the fact.
+    """
+    texts = [str(err), str(getattr(err, "line", "") or "")]
+    for e in (getattr(err, "original_error", None), err.__cause__, err.__context__):
+        if e is not None:
+            texts.append(str(e))
+    ceiling = size = None
+    for t in texts:
+        if m := FRAME_TEXT.search(t):      # the reader's own complaint names the frame that hit the limit
+            ceiling, size = int(m.group(2)), int(m.group(1))
+        elif ceiling is None and (m := CEILING_TEXT.search(t)):
+            ceiling = int(m.group(1))
+    return (ceiling, size) if ceiling is not None else None
 
 
 def _stalled(watch, message):
@@ -219,6 +243,15 @@ class SdkAdapter:
                 else:
                     result = m
         except Exception as e:   # broad on purpose: the SDK raises several types; each becomes AdapterError with its type kept; only a capped result is kept
+            # Probed 2026-10-11 (run-20261011-171934-888e92, issue #1814): one message past the reader's JSON ceiling
+            # ends the read stream inside the transport — `guard()` raises out of its own frame loop — so the frame
+            # cannot be dropped and the session cannot go on. The ceiling and the size of that frame are the only facts
+            # there are, and they are what this error carries.
+            if over := ceiling_hit(e):
+                ceiling, size = over
+                raise MessageOverCeiling(
+                    f"the transport's reader stopped at its {ceiling}-byte JSON ceiling: the session's message was "
+                    f"{size if size is not None else 'an unmeasured number of'} bytes", ceiling, size) from e
             # Probed 2026-09-30: a response past CLAUDE_CODE_MAX_OUTPUT_TOKENS ends the call with an error that follows a measured ResultMessage.
             output_cap = result is not None and OUTPUT_CAP_TEXT in str(e)
             # Probed 2026-10-01: a call stopped at its spend cap raises in the same way (subtype

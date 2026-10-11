@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import anyio
 
-from squad.adapter import AdapterError
+from squad.adapter import AdapterError, MessageOverCeiling
 
 # A reason the model writes about itself is a claim, not an engine fact: the contract tells a child to answer `out_of_budget` when it
 # gives up, and it did so at $0.36 of a $1.50 cap. The engine's own cap reasons (CAP_REASON) stay apart from it.
@@ -36,6 +36,28 @@ def provider_error(err):
 def model_chain(models, first):
     """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`."""
     return [first] + [m for m in (models or []) if m and m != first]
+
+
+def adapter_reason(err):
+    """The reason a call that produced no result ends on. A message past the transport's ceiling is a fact about the
+    transport, not about the work, so the reason names the ceiling and the size of the frame that hit it: an operator
+    reads what happened without opening the diagnostic, and the next dispatch is a decision, not a guess (issue #1814)."""
+    if isinstance(err, MessageOverCeiling):
+        return [f"message_over_ceiling:size={err.size if err.size is not None else 'unknown'},ceiling={err.ceiling}"]
+    return ["adapter_error"]
+
+
+def adapter_diagnostic(err, message=None):
+    """What the record says about a call that produced no result, and — for the transport ceiling — what the transport
+    allowed. The SDK's reader raises out of its own line framer, so the frame cannot be dropped and the session cannot
+    go on: neither recovery is possible in place, and the record says so instead of leaving the run's death unexplained.
+    The only recovery is a fresh call, which the engine never makes silently (ADR-0102 rule 1: one entry is one fresh
+    session), so the record asks for one.
+    """
+    d = {"error": message or str(err)}
+    if isinstance(err, MessageOverCeiling):
+        d["transport"] = {"ceiling": err.ceiling, "size": err.size, "dropped": False, "continued": False, "recovery": "fresh_call"}
+    return d
 
 
 async def run_chain(chain, call):

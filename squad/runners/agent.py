@@ -77,7 +77,8 @@ class AgentRunner:
         if out.kind == "deadline":
             return slot["res"]
         if out.kind == "adapter_error":
-            return fin("fail", ["adapter_error"], spend=None, cap=out.res.amount, elapsed=out.elapsed, diagnostic={"error": str(out.error)}, **who)
+            return fin("fail", session.adapter_reason(out.error), spend=None, cap=out.res.amount, elapsed=out.elapsed,
+                       diagnostic=session.adapter_diagnostic(out.error), **who)
         return self.settle(ctx, node, entry, sc, out, eff, who)
 
     async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin):
