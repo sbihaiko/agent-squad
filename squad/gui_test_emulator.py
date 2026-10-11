@@ -1,8 +1,5 @@
-"""The emulator's gui-test/1 adapter (ADR-0272): it places the script's fixtures, starts the application with the
-test hook, injects the input actions over the hook's local socket and captures the window.
-
-Since #1779 the hook answers the release, the chord, the keyboard and the `nav.goal` read beside the single press,
-so the adapter drives them too (#1780): a pad-only batch is no longer manual for the adapter not asking.
+"""The emulator's gui-test/1 adapter (ADR-0272), pad only: it places the script's fixtures, starts the
+application with the test hook, injects `pad.*` over the hook's local socket and captures the window.
 
 It never skips: a fixture it cannot place, or an application that does not come up, is a failure with the reason.
 """
@@ -18,7 +15,6 @@ import tempfile
 import time
 from pathlib import Path
 
-from squad.gui_test_checks import parse
 from squad.gui_test_run import run
 
 TICK_SECONDS = 0.05
@@ -29,14 +25,6 @@ SETTLE_SECONDS = 5
 PROFILES = {"fresh": {"Preferences": {"UiMode": "Player", "Workspace": "Play", "SingleInstance": False}}}
 KNOWN_PROFILES = tuple(PROFILES)
 NES_HEADER = 16
-# #1780: the actions the adapter drives, and the hook answers them all since #1779 (hook version 2).
-# `pad.press` was the whole of it while the hook drove a single press; `pad.release` and `pad.chord` are the
-# two-button gestures a press cannot express, `key.press` is the application's own keyboard at the layer it
-# reads, and `nav.goal` is not an input at all - it is the hook's read of the state a move is chosen from and
-# the moves it will accept (ADR-0271 items 1-2), which the runner's Navigator chooses among (item 6 A).
-ACTIONS = ["pad.press", "pad.release", "pad.chord", "key.press", "nav.goal"]
-# The advertised actions that inject nothing: asking one is a read, so it is never a press that came too early.
-READS = ("nav.goal",)
 
 
 # #1282: the checks that read what a player sees (the hook's own state, ADR-0271) and the vocabularies
@@ -96,10 +84,9 @@ class EmulatorAdapter:
         self.extra_env, self.startup_timeout = dict(env or {}), startup_timeout
         self.session_dir = self.proc = self.sock = self.reader = None
         self.command, self.env, self.token, self._id, self._captures = [], {}, "", 0, 0
-        self._nav_goal, self._nav = None, None
 
     def capabilities(self):
-        return {"actions": list(ACTIONS), "checks": list(CHECKS),
+        return {"actions": ["pad.press"], "checks": list(CHECKS),
                 "input_families": ["ticks"], "variants": {"window.mode": ["windowed"]}}
 
     # ---- fixtures, placed before the process starts ----
@@ -232,57 +219,23 @@ class EmulatorAdapter:
 
     def inject(self, name, args):
         """A press right after launch can answer `unknown button Up on pad 1` until the app has built its key names
-        (the same press a moment later is taken), so that one refusal is retried for up to 10 s.
-
-        `nav.goal` is a read (the hook injects nothing for it), so it is asked once and its answer is kept: `moves`
-        serves the moves it handed, which are the application's own and do not depend on the goal."""
-        self._nav = None
-        if name in READS:
-            self._nav_goal = (args or {}).get("goal") or self._nav_goal
+        (the same press a moment later is taken), so that one refusal is retried for up to 10 s."""
         deadline = time.monotonic() + 10
         while True:
             try:
-                reply = self._ask({"op": "inject", "action": name, "args": args})
-                if name in READS:
-                    self._nav = reply
-                return reply
+                return self._ask({"op": "inject", "action": name, "args": args})
             except AdapterError as e:
-                if name in READS or "unknown button" not in str(e) or time.monotonic() > deadline:
+                if "unknown button" not in str(e) or time.monotonic() > deadline:
                     raise
                 time.sleep(0.25)
 
     def _state(self):
         return self._ask({"op": "state"})
 
-    def ui_state(self):
-        """The state a goal's move is chosen from: the hook's own snapshot, which is what ADR-0271 item 1 asks for -
-        the UI state, never a screenshot."""
-        return self._state()
-
-    def moves(self, family):
-        """The moves the hook handed for the goal it was asked (ADR-0271 item 2), in the family the step names.
-
-        Only the moves the application itself answered are here: the hook hands the pad's own navigation presses in
-        the duration family its clock allows, so a `key` family has none until it hands keyboard moves too. A goal
-        nobody asked yet has no moves, which is why the runner asks before the Navigator chooses."""
-        want = "key.press" if family == "key" else "pad.press"
-        return [m for m in (self._nav or {}).get("moves", []) if m.get("name") == want]
-
-    def advance(self):
-        """One application tick. A Navigator settles by spending ticks, and here they are the application's own clock
-        (the hook's `tick`), the same unit every wait counts in."""
-        start = self._state()["tick"]
-        deadline = time.monotonic() + TICK_SECONDS * 8 + 1
-        while self._state()["tick"] == start and time.monotonic() < deadline:
-            time.sleep(0.01)
-
     def _holds(self, state, cond):
-        """`ui.screen` and `ui.focused` are read off the snapshot the poll already took; every other name the checks
-        answer is read through `check`, so a wait and a step's own check read the same thing (#1780)."""
         key, _, want = cond.partition(" == ")
-        if key in ("ui.screen", "ui.focused"):
-            return {"ui.screen": state.get("screen"), "ui.focused": state.get("focus")}[key] == want
-        return self.check(*parse(cond)) is True
+        got = {"ui.screen": state.get("screen"), "ui.focused": state.get("focus")}.get(key)
+        return got == want
 
     def wait(self, condition, timeout):
         """`timeout` counts the application's ticks. Without a condition the wait spends them all: a step that
@@ -436,12 +389,10 @@ def _batch_fixtures(script, batch):
     return wanted
 
 
-def run_launched(script, adapter, record=None, only=None, goal=None):
+def run_launched(script, adapter, record=None, only=None):
     """Run each batch in a fresh process launched with the fixtures it names (ADR-0272); `only` keeps those step ids.
 
-    `goal` is the Navigator a `nav.goal` step is reached by (#1780); with none the step is `pending`, which is what
-    ADR-0271 Decision 6 A asks of a run with no chooser. A fixture that cannot be placed, or a crash, fails the
-    batch's steps with the reason; it never raises.
+    A fixture that cannot be placed, or a crash, fails the batch's steps with the reason; it never raises.
     """
     results, offset = [], 0
 
@@ -456,7 +407,7 @@ def run_launched(script, adapter, record=None, only=None, goal=None):
         events = []
         try:
             adapter.launch(_batch_fixtures(script, batch))
-            got = run(sub, adapter, record=events.append, goal=goal)
+            got = run(sub, adapter, record=events.append)
         except FixtureError as e:
             got = [{"id": s["id"], "verdict": f"failed (fixture: {e})", "capture": None} for s in batch["setup"] + batch["steps"] + batch["teardown"] if s["mode"] == "automated"]
         except ProcessCrash:

@@ -49,8 +49,7 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=
     With a `vision` (squad.gui_test_vision.Vision), an automated step with no `check` takes the model's verdict on its
     capture: `compatible` passes, anything else is `needs review`; a step with a `check` follows the check and is never
     sent. A `nav.goal` step is reached by `goal` (squad.gui_test_goal.Navigator); with none (CI, ADR-0271 Decision 6 A) it
-    ends `pending`, and a goal not reached ends `failed (goal not reached ...)`. An adapter that advertises `nav.goal` is
-    asked for the hook's own read first (#1780), which is what the Navigator chooses among. Once the vision spend reaches its cap the run stops: every later step ends `skipped (spend cap ...)`.
+    ends `pending`, and a goal not reached ends `failed (goal not reached ...)`. Once the vision spend reaches its cap the run stops: every later step ends `skipped (spend cap ...)`.
 
     `record` takes one replay event per call: gui_step, then gui_capture (only once the wait is met), then gui_verdict.
     """
@@ -86,13 +85,7 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=
             action = s.get("action")  # an observe-only step (the validator allows it) injects nothing
             emit("gui_step", s["id"], **({"action": action["name"]} if action else {}),
                  **({"check": s["check"]} if "check" in s else {}))
-            if action and action["name"] == "nav.goal":
-                # #1780: since #1779 the hook answers `nav.goal` itself - the state the move is chosen from and the
-                # moves it will accept (ADR-0271 items 1-2) - so an adapter that advertises it is asked, and the
-                # Choice stays the runner's (item 6 A). Asking is a read: it injects nothing, and taking it for a
-                # press would leave the step's own wait timing out on a screen nothing moved.
-                if "nav.goal" in adapter.capabilities()["actions"]:
-                    adapter.inject("nav.goal", action.get("args", {}))
+            if action and action["name"] == "nav.goal" and "nav.goal" not in adapter.capabilities()["actions"]:
                 missed = "pending" if goal is None else goal.reach(adapter, s, emit, vision)
                 if missed:
                     emit("gui_verdict", s["id"], verdict="pending" if goal is None else f"failed ({missed})")
