@@ -333,7 +333,7 @@ def speed():
             "runs": {"today_median": round(st.median(today), 1) if today else None, "all_median": round(st.median(done), 1) if done else None},
             "rounds": {"prs": len(rounds), "mean": round(st.mean(rounds), 2) if rounds else None}, "kills": {"count": len(kills), "last": max(kills) if kills else None}}
 
-# One run-state vocabulary for the hub's run badges and its legend. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
+# One run-state vocabulary for the hub's run badges. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
 # same states alike; tests/test_run_state_vocabulary.py holds the two tables equal. `color` is a palette variable of :root; `css` is extra style.
 RUN_STATES = [
     {"state": "completed", "label": "Run completed", "color": "ok", "css": ""},
