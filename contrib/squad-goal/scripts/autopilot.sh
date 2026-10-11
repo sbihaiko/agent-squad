@@ -112,7 +112,11 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
       gate issue-duplicate "issue #$iss is closed as a duplicate / not planned, so the PR is superseded and is not reviewed, fixed or merged"
       continue
     fi; rm -f "$A/dupiss-$pr-$iss"; fi
-  line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
+  # The run's result is its summary line: the `#<pr> <sha9> ` namespace carries that line and nothing else (revci.sh
+  # prints CI_DISPATCH/SUPERSEDED/CI_TIMEOUT as `NOTICE ` lines), and it always carries `CI=`. Requiring both means a
+  # notice can never be read as a result -- which used to leave the head with no `CI=` and no verdict, so it was never
+  # queued for a review again (#1767).
+  line=$(grep -E "^#$pr $s9 .*CI=" "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && { gate reviewing "a review of this head is already in flight (revci.sh $pr)"; continue; }
     [ -e "$A/launched-$pr-$s9" ] && { gate reviewing "a review of this head was launched on an earlier pass and has not written its line yet"; continue; }
@@ -139,8 +143,14 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     gate reviewing "no review of this head yet: revci.sh $pr was started (review + CI wait)"
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started${aging:+ (aging: short leash)}"; continue
   fi
-  [[ $line == *SUPERSEDED* ]] && { gate superseded "the review marked this head SUPERSEDED"; continue; }
-  [[ $line == *CI_TIMEOUT* ]] && { gate ci-timeout "the review of this head hit CI_TIMEOUT"; continue; }
+  # The run's terminal notices say this head is done with, but they are not results: they live outside the summary
+  # namespace, so they are read by their own prefix -- and a summary line that already carries the word (a run from
+  # before the namespace split) reads the same way, so neither shape re-reviews the head. Both record the pass's gate,
+  # like every other exit (#1766).
+  if grep -qE "^NOTICE #$pr $s9 SUPERSEDED" "$out" 2>/dev/null || [[ $line == *SUPERSEDED* ]]; then
+    gate superseded "the review marked this head SUPERSEDED"; continue; fi
+  if grep -qE "^NOTICE #$pr $s9 CI_TIMEOUT" "$out" 2>/dev/null || [[ $line == *CI_TIMEOUT* ]]; then
+    gate ci-timeout "the review of this head hit CI_TIMEOUT"; continue; fi
   # unresolved threads: asked once per head sha after review+CI (CodeRabbit has posted by then), cached
   tf="$A/threads-$pr-$s9"; [ -e "$tf" ] || bash "$here/autofix.sh" --threads $pr > "$tf"; nt=$(cat "$tf"); nt=${nt:-0}
   ms=$(awk '{print $3}' <<<"$line"); ci=$(sed -n 's/.*CI=\([^ ]*\).*/\1/p' <<<"$line")
