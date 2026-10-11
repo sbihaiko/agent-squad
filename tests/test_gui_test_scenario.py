@@ -183,13 +183,13 @@ def test_publish_creates_the_parent_and_one_sub_issue_per_case_and_links_them():
     out = tts.publish(plan, gh)
     created = gh.of("create_issue")
     assert [c["title"] for c in created][0] == "Test scenario: tiny"
-    assert [c["title"] for c in created][1:] == [
+    assert [c["title"] for c in created if "Test case" in c["title"]] == [
         "⚪ Test case HOME-01", "⚪ Test case HOME-02", "⚪ Test case LIB-01"]
     assert sorted(out["issues"]) == ["HOME-01", "HOME-02", "LIB-01"]
-    links = gh.of("add_sub_issue")
-    assert [link["sub"] for link in links] == [gh.id_of(out["issues"][c])
-                                                  for c in ("HOME-01", "HOME-02", "LIB-01")]
-    assert {link["parent"] for link in links} == {out["parent"]}
+    links = {link["sub"]: link["parent"] for link in gh.of("add_sub_issue")}
+    containers = {c["number"] for a in out["map"]["areas"].values() for c in a["containers"]}
+    assert {links[gh.id_of(out["issues"][c])] for c in ("HOME-01", "HOME-02", "LIB-01")} == containers
+    assert out["parent"] not in {links[gh.id_of(out["issues"][c])] for c in out["issues"]}   # never the scenario
 
 
 def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
@@ -329,7 +329,7 @@ def test_the_scenario_stops_after_publishing_when_the_run_command_does_not_exist
     out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None)
     assert out["run"] is None and out["reason"] == "run command unavailable"
     assert out["published"]["parent"] == 101          # the parent is the first issue created
-    assert gh.ops().count("create_issue") == 4
+    assert gh.ops().count("create_issue") == 1 + 3 * 3          # the scenario, then an area, a container, a case each
     assert "comment" not in gh.ops()
 
 
@@ -587,7 +587,8 @@ def test_1226_the_map_beside_the_script_is_read_in_the_shape_the_publish_writes(
     nested = tmp_path / "nested.json"
     nested.write_text(json.dumps({"parent": 7, "cases": {"HOME-01": {"number": 11, "content_hash": "a" * 64}}}),
                       encoding="utf-8")
-    assert tts.read_map(nested) == {"parent": 7, "issues": {"HOME-01": 11}}
+    assert tts.read_map(nested) == {"parent": 7, "issues": {"HOME-01": 11},
+                                    "cases": {"HOME-01": {"number": 11, "content_hash": "a" * 64}}}
     assert tts.read_map(tmp_path / "absent.json") == {"parent": None, "issues": {}}
 
 
