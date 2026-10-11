@@ -43,7 +43,7 @@ def state(hub, tmp_path, monkeypatch):
 def _row(st, ts, pr, model, secs, rc):
     """One review-times.tsv row: timestamp, PR, model, seconds, exit code (review.sh appends one per model attempt)."""
     with (st / "review-times.tsv").open("a") as f:
-        f.write("%s\t%s\t%s\t%s\t%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ts)), pr, model, secs, rc))
+        f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(ts))}\t{pr}\t{model}\t{secs}\t{rc}\n")
 
 
 def _mark(st, kind, pr, sha9, at):
@@ -104,7 +104,7 @@ def test_a_failed_attempt_names_the_model_and_keeps_the_reason_in_the_tooltip(hu
     _mark(state, "launched", 1491, SHA9, now - 900)
     _row(state, now - 600, 1491, "grok-4.5", 300, 141)
     (state / "revci-1491.out").write_text(
-        "#1491 %s clean CI=success:2 VERDICT: BLOCKED (every review model failed)\n" % SHA9)
+        f"#1491 {SHA9} clean CI=success:2 VERDICT: BLOCKED (every review model failed)\n")
     st = hub.review_state(1491, SHA9, now=now)
     assert st["chip"] == "review failed · grok-4.5"
     assert "BLOCKED (every review model failed)" in st["tip"]
@@ -135,7 +135,7 @@ def test_a_passing_attempt_keeps_todays_chip(hub, state):
     now = time.time()
     _mark(state, "launched", 1491, SHA9, now - 900)
     _row(state, now - 600, 1491, "deepseek-v4-flash", 90, 0)
-    (state / "revci-1491.out").write_text("#1491 %s clean CI=success:2 VERDICT: APPROVE\n" % SHA9)
+    (state / "revci-1491.out").write_text(f"#1491 {SHA9} clean CI=success:2 VERDICT: APPROVE\n")
     assert hub.review_state(1491, SHA9, now=now) is None
     ps = hub.pr_state(_pr())
     assert ps[1] == "ready to merge"

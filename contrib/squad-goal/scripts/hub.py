@@ -499,13 +499,13 @@ RUN_STATES = [
     {"state": "handled", "label": "Needs-human run, landed in the fork", "color": "ok", "css": ""},
     {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
     {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
-    {"state": "stalled", "label": "Run stalled", "color": "warn", "css": "border-style:dashed"},
+    {"state": "stalled", "label": "Run stalled", "color": "wait", "css": "border-style:dashed"},
     {"state": "no verdict yet", "label": "No verdict yet", "color": "none", "css": ""},
 ]
 
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
-:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--pin:#5aa9ff}
+:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;height:100vh}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #top{position:sticky;top:0;background:linear-gradient(#162033,#121a28);padding:10px 10px 10px 12px;border-bottom:2px solid var(--pin);border-left:3px solid var(--pin);z-index:2;box-shadow:0 2px 8px #0008}#top>b{font-size:13px;letter-spacing:.12em;color:var(--pin)}

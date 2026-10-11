@@ -4,10 +4,11 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/forkonly.sh" "$d/single.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/forkonly.sh" "$T/s/"
 : > "$T/st/active-runs.txt"
 echo '{"max_parallel": 1}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
-printf 'SG_REPO=x/y; SG_STATE=%s; SG_BASE=main; SG_CHECKOUT=%s; SG_FRONTIER_LABEL=ready-for-agent; SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
+# exported, as the real env.sh does: the stub mkreq.sh below is a child shell and must still see SG_STATE
+printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
 # 1228 is a bug; 1400 is debt (and still carries ready-for-agent, the old filer). 1401 is a frontier-only slice.
 cat > "$T/issues.json" <<'JSON'
 [

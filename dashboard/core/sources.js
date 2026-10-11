@@ -23,13 +23,11 @@ function sourcesModule({ STATES }) {
     { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
     { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
     { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
-    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "warn", css: "border-style:dashed" },
+    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
     { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
   ];
   // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.
   const STATE_TEXT = Object.fromEntries(RUN_STATES.map((x) => [x.state, x.text]));
-  // The run-state rows of the side legend, in the hub's table order: every state a surface can draw a pill for, so no row names a state the hub cannot show.
-  const RUN_LEGEND = RUN_STATES.map((x) => ({ state: x.state, cls: x.state.replace(/ /g, "-"), text: x.text, label: x.label, color: x.color, css: x.css }));
   // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
   const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
@@ -101,5 +99,5 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, RUN_STATES, RUN_LEGEND, STATE_TEXT, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
 }
