@@ -1119,6 +1119,10 @@ EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "cla
     "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium",
     "grok-4.5", "grok-4.6"]
 ALIAS = re.compile(r"^claude-(grok|gpt|gemini)-")
+# The gateway's own tier suffix, which no chain consumer serves: review.sh hands a bare id to `codex exec`, never
+# to the gateway. Folded onto the bare id (`gpt-5.6-terra-fast`) it reads as a codex model, so an entry picked
+# from the box failed every call and fell through the chain (#1564).
+GATEWAY_ONLY = re.compile(r"-fast$")
 RUNNER = "claude:"          # review.sh's prefix for "run this one through the claude CLI"
 def bare_id(mid):
     """The model's own name, without the review-path prefix. This is what the panel shows and what the box offers."""
@@ -1170,6 +1174,18 @@ def gateway_models(ttl=120):
     _gw.update(t=time.time(), ids=ids)
     return ids
 
+def runnable_models(ids):
+    """The ids a chain consumer can actually run, which the sources behind the box are not all of.
+
+    No chain consumer goes through the gateway: review.sh sends a bare id to `codex exec`, a `claude:`-prefixed one
+    to `claude -p --model`, `grok-*` to the grok CLI and `gemini-*` to agy. The gateway's `-fast` tier answers only
+    on the gateway route -- the alias that serves it lives in the interactive shell wrapper, which review.sh does
+    not go through -- and under its folded id it reached `codex exec` as a model codex does not have: the 400
+    "The 'gpt-5.6-terra-fast' model is not supported when using Codex with a ChatGPT account" (#1564). Both sources
+    spell it: the gateway's own catalogue and the Claude Code settings, which register the same wrapper aliases.
+    """
+    return [m for m in ids if not GATEWAY_ONLY.search(m)]
+
 def known_models(d):
     """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
 
@@ -1179,12 +1195,15 @@ def known_models(d):
     One model, one row. A non-Anthropic provider is reachable as `grok-4.6` and as `claude-grok-4.6` and both
     spellings were listed: the alias is folded onto the bare id, which is the form the chains name and the
     bridge answers.
+
+    An id offered here is one a chain consumer runs: the assembled list goes through runnable_models, so the
+    gateway's `-fast` tier never reaches the box, where it costs a whole run to discover.
     """
     out = list(EXTRA_MODELS) + gateway_models()
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
-    return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in out if MODEL_ID.match(m)})
+    return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in runnable_models(out) if MODEL_ID.match(m)})
 EFFORTS = ("low", "medium", "high", "max")
 # local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
 HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
