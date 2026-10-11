@@ -64,6 +64,7 @@ def scan(p):
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False
+    accepted, done_kids = set(), set()
     with open(p) as f:
         for i, l in enumerate(f):
             if i < 200: issues.update(re.findall(r"(?:issue|Refs) #(\d{3,5})", l))
@@ -80,6 +81,8 @@ def scan(p):
             except Exception: continue
             ts = d.get("ts"); e = d.get("event")
             if ts and t0 is None: t0 = ts
+            if e == "spawn_accepted" and d.get("child"): accepted.add(d["child"])
+            if e == "outcome" and d.get("node"): done_kids.add(d["node"])
             if e == "outcome" and d.get("spend") is not None:
                 d["spend"] = priced(d)
                 spend += d["spend"]
@@ -94,7 +97,7 @@ def scan(p):
                 if k in ("test", "gui-test"): kind = "test"
             elif e == "land" and d.get("outcome") == "pass": land = True
             elif e == "verdict": ver, reasons, t1 = d.get("verdict"), d.get("reasons") or [], ts
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "agents": len(accepted - done_kids)}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -147,6 +150,40 @@ def group_of(r):
     if r.get("live", True) and r.get("state") in LIVE_STATES: return "running"
     h = (r.get("age") or 0) / 3600
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
+
+def loop_caps():
+    """Occupancy denominators from the live workflow graph. max_parallel is run.max_parallel; max_children is run.max_children or a dispatch node's. None when the graph cannot be read."""
+    p = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json"
+    try:
+        d = json.loads(p.read_text())
+        run = d.get("run") if isinstance(d.get("run"), dict) else {}
+        mp, mc = run.get("max_parallel"), run.get("max_children")
+        if not isinstance(mc, int):
+            for n in d.get("nodes") or []:
+                if isinstance(n, dict) and isinstance(n.get("max_children"), int):
+                    mc = n["max_children"]; break
+        if isinstance(mp, int) and mp > 0 and isinstance(mc, int) and mc > 0:
+            return {"max_parallel": mp, "max_children": mc}
+    except Exception:
+        pass
+    return None
+
+def usd_txt(v):
+    if v is None: return "—"
+    if v >= 100: return "$" + str(int(round(v)))
+    return f"${v:.2f}"
+
+def group_header(kind, rows, caps):
+    """RUNNING shows occupancy (live runs and live children over the caps); other groups keep count · cost. Spend is the tooltip."""
+    n = len(rows)
+    spend = sum((r.get("spend") or 0) for r in rows)
+    agents = sum((r.get("agents") or 0) for r in rows)
+    title = usd_txt(spend)
+    if kind == "running":
+        if caps and isinstance(caps.get("max_parallel"), int) and isinstance(caps.get("max_children"), int):
+            return {"text": f"{n}/{caps['max_parallel']} runs · {agents}/{caps['max_children']} agents", "title": title}
+        return {"text": f"{n} · {agents}", "title": title}
+    return {"text": f"{n} · {title}", "title": title}
 def run_rank(st, live=True):
     return 0 if live and st in LIVE_STATES else 1
 def runs():
@@ -162,19 +199,19 @@ def runs():
         if not pathlib.Path(d).exists(): continue
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
         r = scan(p)
-        if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True}); continue
+        if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
         st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
         rank = run_rank(st, live=True)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True, "agents": r.get("agents") or 0})
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
         except Exception: continue
         age = time.time() - f.stat().st_mtime
         if d.get("state") != "running" and age > 4 * 3600: continue
         st = d.get("state") or "running"; t1 = d.get("t1") or time.time()
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES})
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES, "agents": 0})
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
@@ -509,6 +546,8 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   slots=next.filter(Boolean);
 }
 const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
+const CAPS=__CAPS__;
+function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
 let openGroup=null,userPicked=false;
 // runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
 // then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
@@ -520,7 +559,7 @@ function drawList(){
   const filled=GROUPS.filter(g=>by[g[0]]);
   if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
   const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(name(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
-  $("#list").innerHTML=filled.map(([k,t])=>`<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr>${by[k].length} · ${usd(by[k].reduce((a,r)=>a+r.spend,0))}</span></div>${openGroup===k?by[k].map(row).join(""):""}`).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
+  $("#list").innerHTML=filled.map(([k,t])=>{const h=groupHeader(k,by[k]);return `<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroup===k?by[k].map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id)}
@@ -983,7 +1022,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
-        else: body, ct = PAGE.replace("__REPO__", REPO).encode(), "text/html; charset=utf-8"
+        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
