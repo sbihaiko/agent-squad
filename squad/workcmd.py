@@ -12,11 +12,43 @@ stays fast (a wide command is a choice, never the default).
 Guards: `tests/test_workcmd.py`.
 """
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 
 TIMEOUT_S = 300           # the default cap for one acceptance command, in seconds (>= 300: see the module docstring)
-EVIDENCE_TAIL = 1500      # characters kept from the end of a failed command's output
+EVIDENCE_TAIL = 1500      # the most characters of a failed command's output kept as evidence
+
+# A line that explains a failure, even when it sits above the kept tail. `pytest -q` prints the failure block first and
+# the slowest-durations block last, so a bare tail records the standings and drops the assertion (ADR-0100 rule 10).
+EVIDENCE_SIGNAL = re.compile(r"^(_{5,}|E   |FAILED|ERROR)")
+MORE_ELIDED = "[... more failing lines elided]"
+
+
+def evidence_of(output):
+    """The evidence kept from the output of a failed command: its failing lines, then the end of the output.
+
+    ADR-0100 rule 10. An output that fits the budget is kept whole. A longer one keeps the lines that explain a
+    failure (`EVIDENCE_SIGNAL`) found in the part being dropped, then the last characters of the output, all inside
+    `EVIDENCE_TAIL`; the size of the dropped part is named, so a reader never mistakes the record for the whole log.
+    An output with no failing line keeps its plain tail.
+    """
+    text = output.decode("utf-8", "replace").strip() if isinstance(output, bytes) else output.strip()
+    if len(text) <= EVIDENCE_TAIL:
+        return text
+    head, tail = text[: -EVIDENCE_TAIL], text[-EVIDENCE_TAIL:]
+    signals = [line for line in head.splitlines() if EVIDENCE_SIGNAL.match(line)]
+    if not signals:
+        return tail
+    note = f"[{len(head)} characters elided; the failing lines are kept]"
+    room = EVIDENCE_TAIL - len(note)
+    block = "\n".join(signals)
+    if len(block) > room // 2:                     # the first failing lines are the ones that explain the failure
+        cut = max(0, room // 2 - len(MORE_ELIDED) - 1)
+        block = block[:cut].rsplit("\n", 1)[0] + "\n" + MORE_ELIDED
+    kept = [note, block]
+    end = EVIDENCE_TAIL - sum(len(p) for p in kept) - len(kept)
+    return "\n".join(kept + [text[-end:]])
 
 
 def ac_timeout(environ=None):
@@ -63,11 +95,11 @@ def run(cmd, cwd, timeout=None):
     timeout = ac_timeout() if timeout is None else timeout
     syntax = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, cwd=cwd)
     if syntax.returncode != 0:
-        return CmdResult(False, syntax.stderr.decode("utf-8", "replace").strip()[-EVIDENCE_TAIL:], malformed=True)
+        return CmdResult(False, evidence_of(syntax.stderr), malformed=True)
     try:
         r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=clean_env(os.environ))
     except subprocess.TimeoutExpired:
         return CmdResult(False, f"timeout after {timeout:g} s")
     if r.returncode == 0:
         return CmdResult(True)
-    return CmdResult(False, (r.stdout + r.stderr).decode("utf-8", "replace").strip()[-EVIDENCE_TAIL:])
+    return CmdResult(False, evidence_of(r.stdout + r.stderr))
