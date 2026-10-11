@@ -61,4 +61,11 @@ slice_guard() {
   fi
 }
 panel_guard "$1" "$2" || exit 1
+# Fork-only (#1411, the rule of forkonly.sh): the builders write a `FORK-ONLY: all` line when every child is fork-only; a hand-written body
+# with no CHILD blocks is fork-only when it carries the "Fork-only work" line. A fork-only request gets the fork DONE CHECK and checklist:
+# nothing in it names a PR, a push or prepush.sh.
+fork=0; if grep -qE '^FORK-ONLY: all' "$2"; then fork=1; elif ! grep -qE '^CHILD' "$2" && grep -q 'Fork-only work' "$2"; then fork=1; fi
+if [ $fork = 1 ]; then
+  mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence, each as \"cd <fork worktree> && <command>\" (the gate runs in the fork worktree you committed in). Use the targeted commands (the touched test files, the doc checks when docs changed), not a full suite, and only commands that passed for you."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist-fork.txt"; } > "$out"; slice_guard "$1" "$2"; echo "$out"; exit 0
+fi
 mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a PR branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; slice_guard "$1" "$2"; echo "$out"
