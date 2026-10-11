@@ -52,5 +52,10 @@ def evaluate(name, args, adapter, root=None):
 
 
 def holds(cond, adapter, root=None):
+    """True when the predicate holds. An adapter that answers `check` itself - the emulator's, which returns `true`,
+    `false` or `unknown id` - is asked that way, the same seam a step's own check goes through (#1780); `unknown id`
+    is not a hold, exactly as `decide` reads it."""
     name, args = parse(cond)
+    if not runner_owned(name) and not hasattr(adapter, "observe"):
+        return adapter.check(name, args) is True
     return evaluate(name, args, adapter, root)["ok"]
