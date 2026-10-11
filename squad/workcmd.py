@@ -32,15 +32,10 @@ def clean_env(environ):
 class CmdResult:
     ok: bool
     evidence: str = ""     # empty on success; the output tail on a failure; "timeout after N s" on a timeout
-    malformed: bool = False     # the shell cannot parse the command (prose in it); the command never ran
 
 
 def run(cmd, cwd, timeout=TIMEOUT_S):
-    """Run a shell command in `cwd`. Exit code 0 is ok; any other exit or a timeout is a failure with evidence.
-    A command the shell cannot parse is `malformed`, not a failed check: nothing ran, so nothing was proved false."""
-    syntax = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, cwd=cwd)
-    if syntax.returncode != 0:
-        return CmdResult(False, syntax.stderr.decode("utf-8", "replace").strip()[-EVIDENCE_TAIL:], malformed=True)
+    """Run a shell command in `cwd`. Exit code 0 is ok; any other exit or a timeout is a failure with evidence."""
     try:
         r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=clean_env(os.environ))
     except subprocess.TimeoutExpired:

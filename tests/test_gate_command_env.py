@@ -24,15 +24,3 @@ def test_an_ac_command_does_not_see_the_orchestrators_virtualenv(tmp_path, monke
 def test_an_ac_command_that_fails_still_reads_as_a_failure(tmp_path):
     r = run(tmp_path, "exit 3")
     assert not r.ok and r.findings == ["ac_failed:exit 3"]
-
-
-def test_an_ac_command_with_a_trailing_parenthetical_is_malformed_not_failed(tmp_path):
-    r = run(tmp_path, "true (exit 0, no FAIL lines)")
-    assert not r.ok
-    assert r.findings == ["malformed:true (exit 0, no FAIL lines)"]
-    assert not any(k.startswith("ac_failed") for k in r.evidence)
-
-
-def test_a_clean_ac_command_still_passes_on_its_exit_code(tmp_path):
-    assert run(tmp_path, "true").ok
-    assert run(tmp_path, "exit 3").findings == ["ac_failed:exit 3"]

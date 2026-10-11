@@ -104,14 +104,13 @@ def ac_verify(params, inp):
             break
     if not cmds:
         return GateResult(False, ["no_ac_commands"])
-    findings, evidence = [], {}
+    bad, evidence = [], {}
     for c in cmds:
         r = workcmd.run(c, inp.cwd)
         if not r.ok:
-            kind = "malformed" if r.malformed else "ac_failed"     # prose in a command is a bad check, not a failed one
-            findings.append(f"{kind}:{c}")
-            evidence[f"{kind}:{c}"] = r.evidence
-    return GateResult(not findings, findings, evidence)
+            bad.append(c)
+            evidence[f"ac_failed:{c}"] = r.evidence
+    return GateResult(not bad, [f"ac_failed:{c}" for c in bad], evidence)
 
 
 def visual_guard(_params, inp):
