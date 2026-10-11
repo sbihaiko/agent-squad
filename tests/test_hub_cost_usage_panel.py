@@ -51,6 +51,7 @@ def _stmt(marker):
 
 def _prelude():
     usd = re.search(r"const usd=v=>[^;]+;", SRC).group(0)
+    usdc = re.search(r"const usdc=v=>[^;]+;", SRC)
     pcol = re.search(r"const PCOL=[^;]+;", SRC).group(0)
     other = re.search(r"const OTHER=[^;]+;", SRC)
     if "tk=" not in pcol:
@@ -60,7 +61,7 @@ def _prelude():
         pcol = pcol + "\n" + tk
     esc = "const esc=t=>String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));"
     return "\n".join([
-        usd, pcol, other.group(0) if other else "", esc,
+        usd, usdc.group(0) if usdc else "", pcol, other.group(0) if other else "", esc,
         _fn(SRC, "bars"), _fn(SRC, "pie"), _fn(SRC, "kr"), _fn(SRC, "openRows"),
     ])
 
@@ -333,16 +334,19 @@ def test_tokens_header_small_text_reads_the_total():
     assert re.fullmatch(r"[\d.]+[KMB] all time", html.strip()), html
 
 
-def test_closed_summary_reads_today_and_merge():
-    txt = _render("const st={totals:{today:20.67}},sp={pr:{after:{median:18}}};",
+def test_closed_summary_reads_the_month_cash():
+    txt = _render("const d={plans:254.99,api:27.24,total:282.23};",
                   _stmt('$("#stsr").textContent=')).strip()
-    assert re.fullmatch(r"today \$[\d.,]+ · merge \d+ min", txt), txt
+    assert re.fullmatch(r"month \$[\d.,]+", txt), txt
+    assert txt == "month $282.23", txt
+    assert "today" not in txt
 
 
-def test_closed_summary_survives_a_missing_median():
-    txt = _render("const st={totals:{today:0.4}},sp={pr:{after:{median:null}}};",
+def test_closed_summary_reads_the_api_part_without_a_plan_price():
+    txt = _render("const d={plans:0,api:27.24,total:27.24};",
                   _stmt('$("#stsr").textContent=')).strip()
-    assert re.fullmatch(r"today \$[\d.,]+ · merge \d+ min", txt), txt
+    assert txt == "month $27.24", txt
+    assert "today" not in txt
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required")
