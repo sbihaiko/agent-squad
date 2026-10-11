@@ -654,11 +654,54 @@ def review_state(pr, sha9, now=None):
             left = mk + rereview_minutes() * 60 - now
             retry = "retrying now" if left <= 0 else f"retry in {int(-(-left // 60))} min"
     return {"cls": "changes", "chip": chip, "tip": f"attempts on {sha9}, newest first:\n" + "\n".join(lines), "retry": retry}
+GATE_SLOP = 5.0     # the gate line follows the pass stamp by less than a second; 5 s covers a coarse clock
+WATCH_CYCLE = 90.0  # one watch.sh cycle: three 30 s sleeps
+GATE_IDLE_AFTER = 3 * WATCH_CYCLE   # three cycles with no pass: the loop is not deciding anything, so no card may say it did
+def _pass_epoch():
+    """auto/.pass: the epoch of the loop's last pass, stamped at the top of every pass (autopilot.sh)."""
+    try: return float((STATE / "auto" / ".pass").read_text().strip())
+    except (OSError, ValueError): return None
+def _ago(secs): return f"{int(secs)} s" if secs < 90 else f"{int(round(secs / 60))} min"
+def gate_line(n):
+    """auto/gate-<n>: `<head sha9><TAB><epoch><TAB><reason><TAB><what it means>`, the pass's latest decision about this PR,
+    overwritten at every exit so the file carries the latest reason and only it (#1766). None when the file is absent or
+    unreadable — a half-written line cannot be seen, the pass writes it through a temp file + mv."""
+    try: f = (STATE / "auto" / f"gate-{n}").read_text(errors="ignore").rstrip("\n").split("\t")
+    except OSError: return None
+    if len(f) != 4 or not f[1].isdigit(): return None
+    return f[0], float(f[1]), f[2], f[3]
+def gate_state(n, sha9, now=None):
+    """The card's chip from the loop's own reason (#1771), as [css class, chip, tooltip]. The hub used to derive readiness
+    from the review line, so a card could claim `ready to merge` for a head the loop was holding — the loop's verdict is
+    already on disk, so the card reports it instead of guessing, and the two cannot disagree by construction. The reason in
+    auto/gate-<n> is the loop's word only for the head it names, written during the pass auto/.pass stamps; `ready to merge`
+    is reserved for a gate line that says the merge is going ahead. On any other head the chip says which honest state
+    applies: `loop off` (auto/off), `loop idle` (no pass for three watch cycles), `new head, not seen yet`."""
+    now = time.time() if now is None else now
+    if (STATE / "auto" / "off").exists():
+        return ["idle", "loop off", "auto/off is present: the loop is off, so no card can say what it decided"]
+    p = _pass_epoch()
+    if p is None or now - p > GATE_IDLE_AFTER:
+        last = "has never run" if p is None else f"last ran {_ago(now - p)} ago"
+        return ["idle", "loop idle", f"the loop {last} (auto/.pass, idle past {_ago(GATE_IDLE_AFTER)} = three watch cycles)"]
+    g = gate_line(n)
+    if not g or g[0] != sha9: return ["idle", "new head, not seen yet",
+        f"the loop's last reason {'names no head' if not g else f'is for {g[0]}, not {sha9}'}: it has not judged this head"]
+    if g[1] < p - GATE_SLOP: return ["idle", "new head, not seen yet",
+        f"the loop's last reason is from the pass before this one ({g[0]}, written {_ago(now - g[1])} ago): the running pass has not judged this head"]
+    reason, text = g[2], g[3]
+    if reason in ("merged", "merging"): cls, chip = "ready", "ready to merge"   # the gate says the merge is going ahead
+    elif reason.startswith("hold-"): cls, chip = "changes", "held: " + reason[5:]
+    else: cls, chip = "running", reason   # the loop's own word for what it is doing on this head (reviewing, fix-round, ...)
+    return [cls, chip, f"{reason}: {text}\n{g[0]} · written {_ago(now - g[1])} ago"]
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
-    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review."""
+    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review.
+    Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771)."""
+    sha9 = (x.get("h") or "")[:9]; n = x["n"]
+    if (STATE / "auto" / "off").exists(): return gate_state(n, sha9)   # the loop is off: no card reports a verdict of its own
     if x.get("d"): return ["draft", "draft"]
-    ci = x.get("ci") or []; sha9 = (x.get("h") or "")[:9]; n = x["n"]
+    ci = x.get("ci") or []
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
     line = ""
@@ -670,7 +713,7 @@ def pr_state(x):
     if "BLOCKED" in line: return ["broke", "review blocked"]
     if any(c in ("queued", "in_progress", "pending", "waiting", "requested") for c in ci): return ["running", "CI running"]
     if not line and (STATE / "auto" / f"launched-{n}-{sha9}").exists(): return ["running", "reviewing"]
-    if "APPROVE" in line: return ["ready", "merging" if (STATE / "auto" / f"merged-{n}").exists() else "ready to merge"]
+    if "APPROVE" in line: return gate_state(n, sha9)   # a green review line is not the loop's verdict: the gate file is
     return ["idle", "awaiting review"]
 def board():
     by = {}
