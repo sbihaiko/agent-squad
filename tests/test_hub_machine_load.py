@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -204,6 +205,80 @@ def test_the_page_carries_a_footer_strip_and_polls_the_reading():
     assert 'const LOAD_MS=Number("__LOADMS__")||5000;' in src
     assert '.replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))' in src
     assert "setInterval(loadPoll,LOAD_MS)" in src
+
+
+# ---------------------------------------------------------------- where the reading sits
+
+VOID = {"meta", "link", "br", "hr", "img", "input", "source", "area"}
+
+
+class Page(HTMLParser):
+    """Enough of the page's element tree to ask where a box sits: its ancestors and the document order."""
+
+    def __init__(self, html):
+        super().__init__(convert_charrefs=True)
+        self.parents, self.order, self._open = {}, [], []
+        self.feed(html)
+
+    def _note(self, attrs):
+        eid = dict(attrs).get("id")
+        if eid:
+            self.parents[eid] = tuple(a for a, _ in self._open if a)
+            self.order.append(eid)
+
+    def handle_starttag(self, tag, attrs):
+        self._note(attrs)
+        if tag not in VOID:
+            self._open.append((dict(attrs).get("id"), tag))
+
+    def handle_startendtag(self, tag, attrs):
+        self._note(attrs)
+
+    def handle_endtag(self, tag):
+        for i in range(len(self._open) - 1, -1, -1):
+            if self._open[i][1] == tag:
+                del self._open[i:]
+                return
+
+
+@pytest.fixture(scope="module")
+def pg(hub):
+    return Page(hub.PAGE)
+
+
+def _css(hub, selector):
+    """One CSS rule's body, matched on a whole selector at a rule boundary."""
+    m = re.search(r"(?:^|[\n}])\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", hub.PAGE)
+    assert m, f"no CSS rule for {selector}"
+    return m.group(1)
+
+
+def test_the_reading_left_the_pane_and_became_the_windows_own_bar(pg):
+    # the left pane keeps its footer for the loop's own state; the machine reading is about the whole window
+    assert "side" not in pg.parents["foot"]
+    assert pg.parents["foot"] == pg.parents["win"]      # a sibling of the panes' container, so the bar spans the window
+    assert "win" in pg.parents["side"] and "win" in pg.parents["board"]
+    assert pg.order.index("foot") > pg.order.index("board")   # painted below both panes, not between them
+
+
+def test_the_bar_is_a_row_of_the_windows_column_so_nothing_pushes_it_off(hub, pg):
+    body = _css(hub, "body")
+    assert "flex-direction:column" in body              # window = panes, then the bar
+    win = _css(hub, "#win")
+    assert "flex:1" in win and "min-height:0" in win    # the panes take the room left over: they scroll, the bar does not
+    foot = _css(hub, "#foot")
+    assert "flex:none" in foot and "position:sticky" not in foot   # a fixed height of its own, not sticky inside a scroller
+
+
+def test_the_docked_board_stays_inside_the_panes_so_the_bar_keeps_the_full_width(hub, pg):
+    dock = _css(hub, "body.dockb #win")
+    assert "grid-template-columns:300px 1fr" in dock and "grid-template-rows:minmax(0,1fr) auto" in dock
+
+
+def test_one_element_carries_the_reading_however_often_it_is_repainted(hub, pg):
+    assert pg.order.count("ldline") == 1                              # one reading on the page, never two that can disagree
+    assert hub.PAGE.count("setInterval(loadPoll") == 1                # one timer for the whole window
+    assert hub.PAGE.count('fetch("/api/load")') == 1                  # one request per tick, whatever renders the value
 
 
 def _render_load_mark(hub, run):
