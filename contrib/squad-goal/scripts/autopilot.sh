@@ -130,6 +130,14 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
       lpid=$(cut -d' ' -f1 "$lm" 2>/dev/null)
       case "$lpid" in ''|*[!0-9]*) ;; *) kill -0 "$lpid" 2>/dev/null \
         && { gate reviewing "a review of this head was launched on an earlier pass (revci.sh pid $lpid) and has not written its line yet"; continue; };; esac
+      # The marker is stale only when the review it named left nothing about this head: the summary line is already
+      # missing (that is why this branch runs), so a notice line is what a run that did report leaves behind. A notice
+      # is not a result -- it does not re-review the head either (#1767) -- so the marker stands and the head waits for a
+      # push, exactly as it did before the marker carried a pid. Only a run that left no trace at all is #1706.
+      if grep -qE "^(NOTICE )?#$pr $s9 " "$out" 2>/dev/null; then
+        gate reviewing "the review launched for this head reported on it (a notice, not a summary) and its process is gone: the head waits for a push"
+        continue
+      fi
       rm -f "$lm"
       echo "STALE-REVIEW #$pr @ $s9: the review launched for this head is gone and left no summary line (a restart, the janitor or the shell killed it); the marker is dropped and the head is reviewed again"
     fi
