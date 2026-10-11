@@ -67,6 +67,16 @@ needbase() { local cb why
     return 0; fi
   echo "FORKCLOSE WAIT $1: $SG_FORK_DIR is on $cb and could not be returned to $SG_FORK_BASE"; return 1; }
 lost() { $G diff --name-only --diff-filter=A "$SG_FORK_BASE" "$1" 2>/dev/null; }   # files the branch has that the base lacks: a revert of a merge of the branch (or a sibling's merge that carried it) took them, whatever commit added them
+# The fork checkout is shallow, so a commit can sit here while its parent never arrived. Merging a branch that carries such a
+# commit drags it into $SG_FORK_BASE and the push of the base dies in index-pack ("remote: fatal: did not receive expected
+# object <parent>"), which is #1823: the tip is produced, it is unpushable, and nothing says so. Prints "<commit> <parent>"
+# for the first such commit reachable in the range $1, empty when there is none; no fetch on this machine can supply the
+# parent, so the branch has to be rebuilt on the base instead of landed.
+shallowrange() { local c p
+  for c in $($G rev-list "$1" 2>/dev/null); do
+    for p in $($G cat-file -p "$c" 2>/dev/null | sed -n 's/^parent //p'); do
+      $G cat-file -e "$p" 2>/dev/null || { echo "$c $p"; return 0; }; done; done
+  return 1; }
 mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; else [ -n "$lf" ] || return 1; fi   # ahead of the base AND files lost to a revert: the merge only brings the commits after the revert, so a modify/delete conflict on a lost file is expected and the branch's version of every lost file wins
   if [ -n "$lf" ]; then $G checkout -q "$br" -- $lf || return 1; [ -z "$($G diff --name-only --diff-filter=U)" ] || return 1; fi
   $G commit -q --no-edit -m "Merge $br (Refs #$n)" >/dev/null 2>&1 || [ -z "$($G rev-parse -q --verify MERGE_HEAD)" ]; }
@@ -143,6 +153,19 @@ dispatch() { local nm=$1 n=$2 kind=$3 mo="$SG_STATE/req/$nm.mkres" req rc
   (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$SG_STATE/$nm.log"); }
 ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null | tr '\n' ' ') "
 pat=${SG_FORK_BRANCH//%n/}; cc=$($G for-each-ref --format='%(refname:short)' "refs/heads/$pat*" | sed "s#^$pat##" | grep -E '^[0-9]+$')   # every fork branch, so a closed issue's fork half still lands
+# The base LEFT ALREADY broken by an earlier merge of such a branch is the other half of #1823: local/next is ahead of
+# origin/<base> with a tip nobody can push, every later pass reads the work as landed, and the run sees nothing. This pass
+# never rewrites history on its own (the recovery is a graft, an operator's call), it only stops being silent about it.
+if ob=$($G rev-parse -q --verify "refs/remotes/origin/$SG_FORK_BASE" 2>/dev/null) && [ "$($G rev-list --count "origin/$SG_FORK_BASE..$SG_FORK_BASE" 2>/dev/null)" != 0 ]; then
+  if sb=$(shallowrange "origin/$SG_FORK_BASE..$SG_FORK_BASE"); then
+    sc=${sb%% *}; sp=${sb#* }; pbm="$A/pushblocked-$($G rev-parse --short=9 "$SG_FORK_BASE")"
+    if [ ! -e "$pbm" ]; then touch "$pbm"
+      mkdir -p "$SG_STATE/cq"
+      printf "Fork base is unpushable: %s is %s commit(s) ahead of origin/%s and its history carries %s, whose parent %s is not in this clone (shallow boundary; index-pack reports \`did not receive expected object %s\`). \`git push origin %s\` cannot succeed until that commit is grafted away, so the commits already merged stay local. Every branch that landed on this base since is in that state too.\n" "$SG_FORK_BASE" "$($G rev-list --count "origin/$SG_FORK_BASE..$SG_FORK_BASE")" "$SG_FORK_BASE" "$sc" "$sp" "$sp" "$SG_FORK_BASE" > "$SG_STATE/cq/pushblocked-${sc:0:9}$$.md"
+      echo "FORKCLOSE PUSH-BLOCKED: $SG_FORK_BASE is ahead of origin/$SG_FORK_BASE and carries $sc whose parent $sp is missing from this clone: \`git push origin $SG_FORK_BASE\` cannot succeed (index-pack: did not receive expected object $sp) until it is grafted away. Report queued; no branch is merged into it in the meantime."
+    fi
+  fi
+fi
 [ -n "$cc" ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 [ -n "${FC_DRY:-}${FC_NOBATCH:-}${FC_COLLECT:-}" ] || [ "$(wc -w <<<"$cc")" -lt 2 ] || batchpass
@@ -150,6 +173,17 @@ for n in $cc; do
   case "$refs" in *" $n "*) continue;; esac   # an open MesenAI PR: its fork half waits for that merge (the fork suite runs against main's build)
   st=$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null) || continue
   br=${SG_FORK_BRANCH//%n/$n}; $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
+  # A branch that carries a shallow boundary is refused before anything else touches the base or the card: merging it is what
+  # produces a $SG_FORK_BASE that cannot be pushed (#1823), and no later pass can undo that without rewriting history.
+  if sb=$(shallowrange "$SG_FORK_BASE..$br"); then
+    sc=${sb%% *}; sp=${sb#* }; sm="$A/shallow-$n-${sc:0:9}"
+    echo "FORKCLOSE SHALLOW #$n: $br carries $sc, whose parent $sp is not in this clone (shallow boundary, a lineage that was never published). Merging it would drag $sc into $SG_FORK_BASE and the push of $SG_FORK_BASE would be rejected (remote: fatal: did not receive expected object $sp). Not merging: rebuild $br on $SG_FORK_BASE (\`git -C $SG_FORK_DIR rebase --onto $SG_FORK_BASE $sc $br\`, or cherry-pick its own commits onto a fresh branch) and the next pass lands it."
+    if [ ! -e "$sm" ]; then touch "$sm"
+      mkdir -p "$SG_STATE/cq"
+      printf "Fork-only close (#%s): %s did not land. The commit %s in its history has parent %s, which this clone never received (shallow boundary), so merging it would leave %s ahead of origin/%s with a tip the remote refuses (\`index-pack: did not receive expected object %s\`) and no later pass could undo that without rewriting history. Rebuild %s on %s and it lands on its own.\n" "$n" "$br" "$sc" "$sp" "$SG_FORK_BASE" "$SG_FORK_BASE" "$sp" "$br" "$SG_FORK_BASE" > "$SG_STATE/cq/$n-shallow$$.md"
+    fi
+    continue
+  fi
   mixed=""; if [ "$st" = closed ]; then mixed=1                       # closed: its PR half landed, merge the fork half without touching the issue
   else case "$ready" in *" $n "*) ;; *)
     orphan "$br" || continue   # the card is state THIS script owns (In Progress on a red, Done on a green): derived, never the gate
