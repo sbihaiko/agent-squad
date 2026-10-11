@@ -50,7 +50,8 @@ hours_ok() { local k=$1 m=$2 w h a b; w=$(jq -r --arg k "$k" --arg m "$m" '.hour
   [ -n "$w" ] || return 0
   h=$((10#$(date +%H))); a=$((10#${w%%-*})); b=$((10#${w##*-}))
   if [ "$a" -le "$b" ]; then { [ "$h" -ge "$a" ] && [ "$h" -lt "$b" ]; } else { [ "$h" -ge "$a" ] || [ "$h" -lt "$b" ]; }; fi; }
-r=$(python3 "$(dirname "$0")/codex-reset.py"); [ -n "$r" ] && echo "$r" > "$SG_STATE/codex-limited"   # a full Codex window (hub quota) skips codex before any try
+# a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
+python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_STATE/codex-limited"
 out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev=""
 # autopilot's age SLA (a PR open past SG_AGE_MINUTES) pins the review to one model and one try: an old PR may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
