@@ -1,4 +1,4 @@
-  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --wait:#e8d44d; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
@@ -122,14 +122,14 @@
   .group-card.sel > rect { stroke:var(--acc); stroke-width:2.5; }
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:11px; font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
-  .chip-sw.v-wait { border-color:var(--warn); color:var(--warn); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
+  .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
   .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
   /* The run-state pill the legend draws: one rule per state of the hub's table (contrib/squad-goal/scripts/hub.py RUN_STATES), colour and border alike, so a
      legend row cannot drift from the sidebar pill. A test holds these rules to the hub's table. */
   .b { display:inline-block; padding:0 6px; border-radius:9px; font-size:11px; border:1px solid; }
   .b.completed { color:var(--ok); } .b.verified { color:var(--ok); font-style:italic; } .b.unverified { color:var(--ok); border-style:dashed; }
   .b.failed { color:var(--err); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
-  .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.stalled { color:var(--warn); border-style:dashed; }
+  .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
   .b.no-verdict-yet { color:var(--none); }
   .card:focus { outline:none; } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
@@ -196,7 +196,7 @@
   #vchip[hidden] { display:none; }
   #vchip.v-ok { border-color:var(--ok); color:var(--ok); }
   #vchip.v-bad { border-color:var(--err); color:var(--err); }
-  #vchip.v-wait { border-color:var(--warn); color:var(--warn); }
+  #vchip.v-wait { border-color:var(--wait); color:var(--wait); }
   #vchip.v-none { border-color:var(--none); color:var(--none); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
   #vchip.v-human { border-color:var(--warn); color:var(--warn); }

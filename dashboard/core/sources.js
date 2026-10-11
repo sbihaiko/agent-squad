@@ -23,7 +23,7 @@ function sourcesModule({ STATES }) {
     { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
     { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
     { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
-    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "warn", css: "border-style:dashed" },
+    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
     { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
   ];
   // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.

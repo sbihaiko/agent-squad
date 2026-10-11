@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 # The verdict values a record can carry, plus the two the surfaces add: the hub's `starting`/`verified`/`unverified`, the dashboard's no-verdict.
 RECORD_VERDICTS = ["completed", "failed", "needs-human"]
-PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6"}
+PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf", "none": "#b79cf6", "wait": "#e8d44d"}
 
 
 @pytest.fixture(scope="module")
