@@ -1362,6 +1362,66 @@ def _set_dashboard(call, number, content):
     call("set_body", number=number, body=body)
 
 
+_BUG_LINE = re.compile(r"^Bug: #(\d+)[ \t]*$", re.M)
+_SEVERITY_LINE = re.compile(r"\*\*Severity:\*\*\s*(\w+)")
+_PRIORITY = {"critical": "P0", "major": "P1"}
+
+
+def _record_bug(call, record, number, title):
+    """The open bug of a case: the record's `Bug: #N` line first, then an exact-title search; and the closed one it named."""
+    named = _BUG_LINE.search(record)
+    held = int(named.group(1)) if named else None
+    if held is not None and (call("issue_state", number=held) or {}).get("state") == "open":
+        return held, None
+    found = call("search_open_bug", title=title)
+    return (found["number"], None) if found else (None, held)
+
+
+def _with_bug_line(body, bug):
+    line = f"Bug: #{bug}"
+    return _BUG_LINE.sub(line, body, count=1) if _BUG_LINE.search(body) else f"{body.rstrip()}\n\n{line}\n"
+
+
+def _write_record(call, report, case, step, number, run_issue):
+    """Slice F of ADR-0275: one case's record follows its verdict, and a failing case owns exactly one bug.
+
+    `passed` closes the record; `failed` and `needs review` reopen it and set the title emoji, read against the prior
+    one on the title. `pending` and `skipped` never touch it, so a record a person closed stays closed.
+    """
+    family = _family(step["verdict"])
+    if family not in ("passed", "failed", "needs review"):
+        return
+    prior = call("issue_state", number=number) or {}
+    title, emoji = prior.get("title"), VERDICT_EMOJI[family]
+    if title is not None and title != with_emoji(title, emoji):
+        call("retitle", number=number, title=with_emoji(title, emoji))
+    if family == "passed" and prior.get("state") != "closed":
+        call("close", number=number)
+    elif family != "passed" and prior.get("state") == "closed":
+        call("reopen", number=number)
+    bug_title = f"gui-test ❌ {report['script']['name']} · {case}"
+    record = call("issue_body", number=number) or ""
+    bug, closed = _record_bug(call, record, number, bug_title)
+    where = f"run `{report['run_id']}`" + (f" (#{run_issue})" if run_issue else "")
+    if family == "passed":
+        if bug is not None:
+            call("comment", number=bug, body=f"Passed in {where}: closing.")
+            call("close", number=bug)
+        return
+    if family != "failed":
+        return
+    if bug is not None:
+        call("comment", number=bug, body=f"Failed again in {where}.\n\n{_case_line(case, step)}")
+        return
+    severity = (_SEVERITY_LINE.search(record) or [None, step.get("severity")])[1]
+    body = f"Case `{case}` (record #{number}) failed in {where}.\n\n{_case_line(case, step)}"
+    if closed is not None:
+        body += f"\n\nAn earlier bug for this case, #{closed}, was closed after a pass."
+    made = call("file_bug", title=bug_title, body=body, priority=_PRIORITY.get(severity, "P2"))
+    if made.get("number"):
+        call("set_body", number=number, body=_with_bug_line(record, made["number"]))
+
+
 def _write_areas(report, doc, map_path, github):
     """Slice E of ADR-0275: one closed run issue per touched area, then every dashboard from the run blocks."""
     call = _paced(github, wait=time.sleep, attempts=4, backoff=1.0)
@@ -1409,6 +1469,9 @@ def _write_areas(report, doc, map_path, github):
         container["kids"].append({"number": made["number"], "id": made["id"]})
         histories[area].append({"number": made["number"], "block": block})
         failed += [c for c, v in block["cases"].items() if v == "failed"]
+        for step in steps:
+            if step["id"] in numbers:
+                _write_record(call, report, step["id"], step, numbers[step["id"]], made["number"])
         written.append({"area": area, "number": made["number"], "title": title, "container": container["number"]})
     for area in mine:
         _set_dashboard(call, areas[area]["number"], _trend(histories[area], cases_of(area)))
@@ -1507,7 +1570,6 @@ def main(argv=None, github=None):
     sr.add_argument("script", help="the gui-test/1 script")
     sr.add_argument("--out-dir", help="where the results file goes (default ./gui-test-results)")
     sr.add_argument("--batch", help="run only this batch")
-    sr.add_argument("--no-file-bug", action="store_true", help="do not let the run file its one bug")
     for flag in ("--repo", "--board", "--bug-helper"):
         sr.add_argument(flag, help="carried into the write-back command it prints")
     pb = sub.add_parser("publish", help="publish the scenario's issues; idempotent, resumable and paced")
@@ -1522,7 +1584,7 @@ def main(argv=None, github=None):
     if args.command == "publish":
         return _publish_command(args, github)
     if args.command == "start-run":
-        out = start_run(args.script, out_dir=args.out_dir, batch=args.batch, file_bug=not args.no_file_bug,
+        out = start_run(args.script, out_dir=args.out_dir, batch=args.batch,
                         repo=args.repo, board=args.board, bug_helper=args.bug_helper)
         print(json.dumps(out, indent=2, sort_keys=True))
         return 0 if out["started"] else 1
@@ -1538,7 +1600,7 @@ def main(argv=None, github=None):
 RUN_COMMAND = [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "gui_test_run_script.py")]
 
 
-def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", batch=None, case=None, file_bug=True,
+def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", batch=None, case=None,
               evidence_repo=None, repo=None, board=None, bug_helper=None, env=None):
     """Start the run command on a script and return at once: a run takes minutes, and nothing here waits for it.
 
@@ -1556,8 +1618,6 @@ def start_run(script_path, *, command=None, out_dir=None, adapter="mesen-gui", b
     results = out_dir / f"{stem}-{time.strftime('%Y%m%dT%H%M%S')}{'-' + (batch or case) if batch or case else ''}.results.json"
     log = results.with_suffix(".log")
     args = [*command, str(script), "--adapter", adapter, "--out", str(results)]
-    if file_bug:
-        args.append("--file-bug")
     if evidence_repo:
         args += ["--evidence-repo", evidence_repo]
     if batch:
