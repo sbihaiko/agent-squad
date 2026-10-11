@@ -577,7 +577,7 @@ function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
 function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
 function mdlProv(m){const x=m.replace(/^claude:/,"");return /^claude-(sonnet|opus|haiku|fable)/.test(x)||x==="claude-session"?"Claude":/^claude-/.test(x)?"via CLI":/^gpt/.test(x)?"Codex":/^grok/.test(x)?"xAI":/^gemini/.test(x)?"Google":""}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
- $("#mdsr").textContent=(mdl.coding_models||[])[0]||"";
+ $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
  b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m);return`<div class="mr${i?"":" p"}"><span class=rk title="${i?"fallback "+i:"primary"}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${i?"fallback "+i:"primary"}${pv?" · "+pv:""}">${pv||(i?"fallback "+i:"primary")}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
  +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Written per model, beside the chains, in models.json.</div>`
@@ -921,6 +921,40 @@ EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "cla
     "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium",
     "grok-4.5", "grok-4.6"]
 ALIAS = re.compile(r"^claude-(grok|gpt|gemini)-")
+RUNNER = "claude:"          # review.sh's prefix for "run this one through the claude CLI"
+def bare_id(mid):
+    """The model's own name, without the review-path prefix. This is what the panel shows and what the box offers."""
+    return mid[len(RUNNER):] if mid.startswith(RUNNER) else mid
+def chain_id(chain, mid):
+    """The spelling one chain needs in models.json. review.sh routes by prefix (claude:* -> the claude CLI,
+    gemini-*/grok-* -> agy/grok, anything else -> codex), so an Anthropic id in review_models has to carry
+    `claude:`; every other chain names the bare id the squad hands to the gateway. The panel works in bare ids
+    and never sees the prefix: which spelling a role needs is this file's business, not the reader's."""
+    b = bare_id(mid)
+    return RUNNER + b if chain == "review_models" and b.startswith("claude-") else b
+def last_coding_model(limit=15):
+    """The model the newest run that got far enough to name one actually coded with.
+
+    The chains say what the NEXT child will be given; that is not the same claim, and it read as one while the
+    router was pinned to a model whose provider had stopped serving (2026-10-11). A child's outcome event carries
+    its model (`route.router.N`), so the last one is read from the records, newest run first.
+    """
+    runs = pathlib.Path(PROF["SG_CHECKOUT"] or os.getcwd()) / "runs"
+    try: ds = sorted((d for d in runs.glob("run-*")), key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+    except OSError: return ""
+    for d in ds:
+        rec = d / "record.jsonl"
+        if not rec.exists(): continue
+        best = None
+        for line in rec.read_text(errors="replace").splitlines():
+            if '"outcome"' not in line or '"route.' not in line: continue
+            try: e = json.loads(line)
+            except Exception: continue
+            if e.get("event") == "outcome" and (e.get("node") or "").startswith("route.") and e.get("model"):
+                if best is None or (e.get("ts") or 0) > (best.get("ts") or 0): best = e
+        if best: return best["model"]
+    return ""
+
 def known_models(d):
     """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
 
@@ -935,7 +969,7 @@ def known_models(d):
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
-    return sorted({ALIAS.sub(r"\1-", m) for m in out if MODEL_ID.match(m)})
+    return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in out if MODEL_ID.match(m)})
 EFFORTS = ("low", "medium", "high", "max")
 # local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
 HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
@@ -960,30 +994,41 @@ def efforts_of(d):
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
 def models_get():
-    d = json.loads(MODELS.read_text()); return {**{k: d.get(k, []) for k in CHAINS}, "efforts": efforts_of(d), "hours": hours_of(d), "known": known_models(d)}
+    """The three chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
+
+    The file keeps the spelling each role needs (chain_id); the panel never sees it, so a reader cannot pick the
+    wrong one of two spellings of the same model."""
+    d = json.loads(MODELS.read_text())
+    return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
+            "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
+            "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
+            "known": known_models(d), "last_coding": last_coding_model()}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
     new = {k: v for k, v in new.items() if k != "known"} if isinstance(new, dict) else new
     if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours"}: return {"err": "unknown chain"}
     d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None)
     for k, v in new.items():
-        if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v) or len(set(v)) != len(v):
+        if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):
             return {"err": f"{k}: need 1-8 distinct model ids"}
+        v = [chain_id(k, m) for m in v]      # the panel works in bare ids; the file gets the spelling the role needs
+        if len(set(v)) != len(v): return {"err": f"{k}: need 1-8 distinct model ids"}
         d[k] = v
     if eff is not None:
         # efforts live beside the chains, never inside them (other scripts jq the arrays of strings); "default" = key absent
         if not isinstance(eff, dict) or set(eff) - set(CHAINS): return {"err": "efforts: unknown chain"}
         for k, ek in eff.items():
-            if not isinstance(ek, dict) or not all(isinstance(m, str) and m in d.get(k, []) and v in EFFORTS for m, v in ek.items()):
+            if not isinstance(ek, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and v in EFFORTS for m, v in ek.items()):
                 return {"err": f"efforts.{k}: model must be in the chain, effort one of {'|'.join(EFFORTS)}"}
-        d["efforts"] = {k: {m: v for m, v in (eff.get(k) or {}).items() if v != "medium"} for k in CHAINS}  # medium is the default: absent
+        # keyed by the spelling the chain stores, like the chain itself (medium is the default: absent)
+        d["efforts"] = {k: {chain_id(k, m): v for m, v in (eff.get(k) or {}).items() if v != "medium"} for k in CHAINS}
     if hrs is not None:
         # hours live beside the chains, like efforts; a window equal at both ends is meaningless, so it is dropped
         if not isinstance(hrs, dict) or set(hrs) - set(CHAINS): return {"err": "hours: unknown chain"}
         for k, hk in hrs.items():
-            if not isinstance(hk, dict) or not all(isinstance(m, str) and m in d.get(k, []) and isinstance(v, str) and HOURS.match(v) for m, v in hk.items()):
+            if not isinstance(hk, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and isinstance(v, str) and HOURS.match(v) for m, v in hk.items()):
                 return {"err": f"hours.{k}: model must be in the chain, window HH-HH (00-23)"}
-        d["hours"] = {k: {m: v for m, v in (hrs.get(k) or {}).items() if v[:2] != v[3:]} for k in CHAINS}
+        d["hours"] = {k: {chain_id(k, m): v for m, v in (hrs.get(k) or {}).items() if v[:2] != v[3:]} for k in CHAINS}
     if "hours" in d:
         d["hours"] = {k: v for k, v in hours_of(d).items() if v}
         if not d["hours"]: del d["hours"]

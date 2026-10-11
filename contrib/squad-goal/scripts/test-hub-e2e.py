@@ -117,7 +117,7 @@ try:
         ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
         by = {r["m"]: r for r in rows}
         ck(by.get("claude-sonnet-5-5", {}).get("hr") == "19-07", "coding claude-sonnet-5-5 shows 19-07", by.get("claude-sonnet-5-5"))
-        ck(by.get("claude:claude-opus-5-5", {}).get("hr") == "19-07", "review claude-opus-5-5 shows 19-07", by.get("claude:claude-opus-5-5"))
+        ck(by.get("claude-opus-5-5", {}).get("hr") == "19-07", "review claude-opus-5-5 shows 19-07", by.get("claude-opus-5-5"))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
         ck(by.get("grok-4.5", {}).get("hr") == "", "grok-4.5 has no window (all day)", by.get("grok-4.5"))
         ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
         ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
