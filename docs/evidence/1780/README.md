@@ -15,12 +15,16 @@ committed pilot at `~/wt-e2e/docs/validation/process/play-pad-only.gui-test.json
 | `pad.release` | not advertised | advertised; injected with its `button` |
 | `pad.chord` | not advertised | advertised; injected with its `buttons` |
 | `key.press` | not advertised | advertised; injected with its `key` |
-| `nav.goal` | not advertised | advertised, and **asked as the read it is**: the hook answers `{goal, state, family, moves}`, the adapter keeps the reply, `moves(family)` hands the six `PadNavAction` presses to the Navigator, and `advance()` waits one application tick. Nothing is injected to ask it. |
+| `nav.goal` | not advertised | advertised, and **asked as the read it is**: the hook answers `{goal, state, family, moves}`, the adapter keeps the reply, `moves(family)` hands the six `PadNavAction` presses to the Navigator, and `advance()` waits one application tick. Nothing is injected to ask it. It is also declared under `reads` beside the actions it was added to, which is how the runner tells this adapter from one that performs the goal itself. |
 
 The runner (`squad/gui_test_run.py`) asks the adapter for that read **before** the Navigator chooses, and a goal step
 with no Navigator available ends `pending` — never a fabricated pass, which is ADR-0271 Decision 6 A (local only, no
-key in CI) saying itself in the result. The derivation (`squad/gui_test_subset.runnable`) keeps a step naming any of
-those five verbs `automated` for an adapter that advertises them.
+key in CI) saying itself in the result. Which of the two kinds of adapter a step is on is `goal_route`: an adapter that
+answers the read has the goal handed to the Navigator, while one that lists `nav.goal` among the actions it runs and
+answers no read drives the goal itself, and the step's own wait and check decide it — the kind the fakes behind the
+#1193–#1197 fixtures are, whose `*.reach-*` setups must resolve for those batches' `pending` set to stay the fixture's
+`manual` one. The derivation (`squad/gui_test_subset.runnable`) keeps a step naming any of those five verbs `automated`
+for an adapter that advertises them.
 
 ## 2. Where the pilot's manual cases stand, measured
 
