@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression test for janitor rule N (#1513): a run that ended with a failed verdict and landed nothing releases its issues --
+# Regression test for janitor rule O (#1513): a run that ended with a failed verdict and landed nothing releases its issues --
 # the card goes back to Todo (loop board) / To triage (bug board) and its dispatch marker is dropped, so the next cycle
 # re-dispatches it. A run that landed work keeps its card and its marker, and so does a live run, or a card another step
 # already moved past In Progress. Stubbed gh/board. usage: bash test-janitor-failed-dispatch.sh [janitor.py]
@@ -39,11 +39,11 @@ printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #
 echo run-live > "$T/st/auto/disp-704"
 touch -t 202001010000 "$T/co/runs/run-fail/record.jsonl" "$T/co/runs/run-land/record.jsonl" "$T/co/runs/run-bug/record.jsonl"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_BUG_DOING=Doing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
-/usr/bin/grep -q '^o 4 Todo 701$' "$T/board.calls" 2>/dev/null && ok "N: failed run -> card back to Todo" || ko "N #701 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
-[ ! -e "$T/st/auto/disp-701" ] && ok "N: failed run -> disp marker dropped" || ko "N disp-701 kept: $o"
-/usr/bin/grep -q 'DISPATCH-FAILED #701' "$T/st/cycle.log" 2>/dev/null && ok "N: reported run + reason" || ko "N cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
-/usr/bin/grep -l 'adapter_error' "$T/st/cq/"*701* >/dev/null 2>&1 && /usr/bin/grep -q 'run-fail' "$T/st/cq/"*701* && ok "N: comment names the run and the reason" || ko "N comment: $(ls "$T/st/cq" 2>/dev/null)"
-[ -e "$T/st/auto/disp-702" ] && ! /usr/bin/grep -q ' 702$' "$T/board.calls" 2>/dev/null && ok "N: a run that landed work keeps its card and marker" || ko "N #702 touched: $(cat "$T/board.calls" 2>/dev/null)"
-! /usr/bin/grep -q ' 704$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-704" ] && ok "N: an issue a live run works is left alone" || ko "N #704 touched: $(cat "$T/board.calls" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Todo 703$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 703$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-703" ] && ok "N: autobug run -> loop board Todo + bug board To triage" || ko "N #703 not released: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 701$' "$T/board.calls" 2>/dev/null && ok "O: failed run -> card back to Todo" || ko "O #701 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
+[ ! -e "$T/st/auto/disp-701" ] && ok "O: failed run -> disp marker dropped" || ko "O disp-701 kept: $o"
+/usr/bin/grep -q 'DISPATCH-FAILED #701' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -l 'adapter_error' "$T/st/cq/"*701* >/dev/null 2>&1 && /usr/bin/grep -q 'run-fail' "$T/st/cq/"*701* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
+[ -e "$T/st/auto/disp-702" ] && ! /usr/bin/grep -q ' 702$' "$T/board.calls" 2>/dev/null && ok "O: a run that landed work keeps its card and marker" || ko "O #702 touched: $(cat "$T/board.calls" 2>/dev/null)"
+! /usr/bin/grep -q ' 704$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-704" ] && ok "O: an issue a live run works is left alone" || ko "O #704 touched: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 703$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 703$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-703" ] && ok "O: autobug run -> loop board Todo + bug board To triage" || ko "O #703 not released: $(cat "$T/board.calls" 2>/dev/null)"
 rm -rf "$T"; exit $fail
