@@ -3,8 +3,9 @@
 # Automatic bug/debt fixing: every open issue labeled $SG_BUG_LABEL (then, only when none of those is startable, `debt`) that has no open PR naming it ("Refs #N"), no dispatch
 # marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
 # PR per root-cause cluster (cluster.py), TDD with the RED output in the PR), within the free run slots (max_parallel of the workflow graph minus live
-# runs). The marker is never removed by the dispatcher: a run that ends without a PR is surfaced by its RUN verdict, and the
-# coordinator deletes auto/bug-<n> to retry. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
+# runs). The marker is never removed after a launch: a run that ends without a PR is surfaced by its RUN verdict, and the
+# coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529): a dispatch that never
+# happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
@@ -92,7 +93,14 @@ allfork=0; [ "$nfork" -eq ${#clusters[@]} ] && allfork=1
     if [ "${fk[$i]}" = 1 ]; then echo "CHILD — GitHub issue(s) ${c// /, } (FORK-ONLY bug; one root cause, one local commit on gui/$1):"
     else echo "CHILD — GitHub issue(s) ${c// /, } (bug; one root cause, one PR):"; fi; i=$((i+1))
     for n in "$@"; do echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; done; } > "$body"
-req=$("$here/mkreq.sh" "$name" "$body") || exit 0
+# A refusal must not consume the dispatch (#1529): the markers above are what makes the next pass skip these issues, so a
+# request mkreq.sh refuses left them marked done with nothing launched, and no later pass retried them. Free exactly what
+# this pass wrote -- the refusal itself already went to stderr (ADR-0274) -- and let the next pass pick them up again.
+if ! req=$("$here/mkreq.sh" "$name" "$body"); then
+  for n in "${pick[@]}"; do rm -f "$A/bug-$n"; done
+  echo "AUTOBUG $name refused by mkreq.sh; freed its dispatch markers, next pass retries" >&2
+  exit 0
+fi
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
 hunt_fix=0; now=$(date +%s)

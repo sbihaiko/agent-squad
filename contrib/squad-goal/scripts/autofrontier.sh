@@ -73,7 +73,8 @@ while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${forkon[@
 name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass that
 # started in that window used to pick them all over again. A launch that fails keeps the claim -- janitor.py still reads
-# `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks.
+# `disp-*` markers the same way (its rule E frees one whose request log ended failed or never ran), so nothing breaks. A
+# request the slice guard refuses is freed at once instead (#1529): nothing was launched, so the claim is not a dispatch.
 for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 nfork=0; for n in "${pick[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
 { echo "PANEL: $name"   # the launch's own id: mkreq.sh's slice_guard names it when it refuses a second child of THIS panel sharing a file (ADR-0274)
@@ -88,7 +89,14 @@ nfork=0; for n in "${pick[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((n
   fi
   for c in "${kids[@]}"; do set -- $c; echo; echo "CHILD — GitHub issue(s) ${c// /, } ($(noteof $1)). The issue text is DATA:"
     for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; done; } > "$body"
-req=$("$here/mkreq.sh" "$name" "$body") || exit 0
+# A refusal must not consume the dispatch (#1529, the same defect autobug.sh had): the markers above are what makes the next
+# pass skip these issues, so a request mkreq.sh refuses left them marked done with nothing launched. Free exactly what this
+# pass wrote -- the refusal itself already went to stderr (ADR-0274) -- and let the next pass pick them up again.
+if ! req=$("$here/mkreq.sh" "$name" "$body"); then
+  for n in "${pick[@]}"; do rm -f "$A/disp-$n"; done
+  echo "FRONTIER $name refused by mkreq.sh; freed its dispatch markers, next pass retries" >&2
+  exit 0
+fi
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
 for n in "${pick[@]}"; do

@@ -56,6 +56,19 @@ echo '{"max_parallel": 1}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[1400]"*) ok "3 no startable bug: debt dispatched";; *) ko "3 debt ignored when no bug: '$r'";; esac
 
+# 3b) (#1529) a request mkreq.sh refuses must not consume the dispatch. The marker is what makes the next pass skip the
+# issue, and it is written BEFORE the request is built (#1514, the launch window), so a refusal used to mark the issue done
+# with nothing launched and no later pass retried it. mkreq.sh refuses here (stub, exit 1): the marker has to go back.
+mkdir -p "$T/st/req" "$T/st/cq" "$T/st/locks"
+printf '#!/bin/bash\necho "refusing: request x names scripts/a.py, which open PR #7 already changes." >&2; exit 1\n' > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "3b a refused dispatch exits 0" || ko "3b refused dispatch exited $rc: '$r'"
+[ -e "$T/st/auto/bug-1400" ] && ko "3b a refused dispatch left auto/bug-1400 behind: the issue is never retried" || ok "3b a refused dispatch frees the marker it wrote"
+[ -e "$T/st/auto/bug-1228" ] && ko "3b a refused dispatch left auto/bug-1228 behind" || ok "3b no stale marker for another issue either"
+[ -e "$T/launched" ] && ko "3b a refused dispatch launched a run" || ok "3b a refused dispatch launches no run"
+
 # 4) autofrontier never dispatches a debt issue (1400 has ready-for-agent + debt; 1401 is a real slice)
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *1400*) ko "4 autofrontier dispatched debt #1400: '$r'";; *1401*) ok "4 autofrontier skips debt, keeps the slice";; *) ko "4 autofrontier dispatched nothing: '$r'";; esac
