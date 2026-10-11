@@ -74,7 +74,7 @@ def test_a_head_that_moved_after_the_attempt_goes_back_to_awaiting_review(hub, s
     now = time.time()
     _mark(state, "launched", 1491, SHA9[:9], now - 900)          # the attempt belonged to the head the PR no longer has
     _row(state, now - 840, 1491, "deepseek-v4-flash", 120, 142)
-    assert hub.review_attempts(1491, OLD[:9], now=now) == []
+    assert hub.review_attempts(1491, OLD[:9]) == []
     assert hub.review_state(1491, OLD[:9], now=now) is None
     assert hub.pr_state(_pr(head=OLD))[1] == "awaiting review"
 
@@ -123,7 +123,7 @@ def test_the_tooltip_lists_the_attempts_for_this_head_newest_first(hub, state):
     _mark(state, "launched", 1491, SHA9, now - 1500)
     _row(state, now - 1400, 1491, "codex-gpt-5", 300, 1)
     _row(state, now - 200, 1491, "deepseek-v4-flash", 120, 142)
-    att = hub.review_attempts(1491, SHA9, now=now)
+    att = hub.review_attempts(1491, SHA9)
     assert [a["model"] for a in att] == ["deepseek-v4-flash", "codex-gpt-5"]
     assert [a["result"] for a in att] == ["timed out", "failed"]
     tip = hub.review_state(1491, SHA9, now=now)["tip"]
@@ -145,7 +145,7 @@ def test_a_passing_attempt_keeps_todays_chip(hub, state):
 def test_a_pr_the_loop_never_reviewed_has_no_review_state(hub, state):
     now = time.time()
     _row(state, now - 600, 1491, "deepseek-v4-flash", 120, 142)   # a row with no marker for any head of this PR
-    assert hub.review_attempts(1491, SHA9, now=now) == []
+    assert hub.review_attempts(1491, SHA9) == []
     ps = hub.pr_state(_pr())
     assert ps == ["idle", "awaiting review"]
     assert hub.pr_state(_pr(n=1492))[1] == "awaiting review"

@@ -291,9 +291,65 @@ def refresh_board():
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
             except OSError: pass
 ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
+def _marker_mtime(kind, pr, sha9):
+    """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
+    try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
+    except OSError: return None
+def rereview_minutes():
+    """The loop's own re-queue window (SG_REREVIEW_MINUTES, 20 min by default): how long a head waits for the next attempt."""
+    try: return float(os.environ.get("SG_REREVIEW_MINUTES") or 20)
+    except ValueError: return 20.0
+def review_rows(pr):
+    """review-times.tsv rows for PR `pr`: one per model attempt (timestamp, PR, model, seconds, exit code), written by review.sh."""
+    rows = []
+    try: lines = (STATE / "review-times.tsv").read_text(errors="ignore").splitlines()
+    except OSError: return rows
+    for l in lines:
+        f = l.rstrip("\n").split("\t")
+        if len(f) < 5 or f[1] != str(pr) or not f[3].isdigit() or not f[4].lstrip("-").isdigit(): continue
+        try: ts = time.mktime(time.strptime(f[0].strip(), "%Y-%m-%dT%H:%M:%S"))
+        except ValueError: continue
+        rows.append({"ts": ts, "model": f[2], "secs": int(f[3]), "exit": int(f[4])})
+    return rows
+def review_attempts(pr, sha9):
+    """The loop's review attempts on PR `pr`'s current head `sha9`, newest first. `launched-<pr>-<sha9>` (or a re-queue in
+    `rereview-<pr>-<sha9>`) is the loop's record that it started work on this head: a row written before that belongs to the
+    head that moved, so a new head leaves no attempts and the card goes back to `awaiting review`."""
+    start = _marker_mtime("launched", pr, sha9)
+    if start is None: start = _marker_mtime("rereview", pr, sha9)
+    if start is None: return []
+    att = [r for r in review_rows(pr) if r["ts"] >= start - 5]   # 5 s of slop: the row follows the marker, never precedes it
+    for r in att: r["result"] = "passed" if r["exit"] == 0 else ("timed out" if r["exit"] == 142 else "failed")
+    return sorted(att, key=lambda r: r["ts"], reverse=True)
+def _verdict_of(pr, sha9):
+    """The verdict of the last completed run of the review loop for this head, from the revci-<pr>.out summary line."""
+    try: ls = [l for l in (STATE / f"revci-{pr}.out").read_text(errors="ignore").splitlines() if l.startswith(f"#{pr} {sha9} ")]
+    except OSError: return ""
+    return (ls[-1].split("VERDICT:", 1)[1].strip() if ls and "VERDICT:" in ls[-1] else "")
+def review_state(pr, sha9, now=None):
+    """The card's review chip when the loop's latest attempt on this head did not pass; None keeps today's chip.
+    A timeout (exit 142) names the model and the seconds it burned; any other failure names the model and keeps the reason
+    (the run's own verdict, else the exit code) in the tooltip. The retry line comes from the loop's re-queue marker.
+    Returns [css class, chip text, tooltip, retry line]."""
+    att = review_attempts(pr, sha9)
+    now = time.time() if now is None else now
+    if not att or att[0]["exit"] == 0: return None
+    last = att[0]
+    reason = _verdict_of(pr, sha9) or f"exit {last['exit']}"
+    chip = f"review timed out · {last['model']} · {last['secs']} s" if last["exit"] == 142 else f"review failed · {last['model']}"
+    lines = [f"{a['model']} {a['secs']} s · {a['result']}" for a in att]   # newest first, so the card's tooltip reads top-down
+    lines[0] += f" ({reason})"
+    retry = ""
+    mk = _marker_mtime("rereview", pr, sha9)
+    if mk is not None:
+        if last["ts"] < mk: retry = "retrying now"   # the re-queue already started the attempt this head is owed
+        else:
+            left = mk + rereview_minutes() * 60 - now
+            retry = "retrying now" if left <= 0 else f"retry in {int(-(-left // 60))} min"
+    return {"cls": "changes", "chip": chip, "tip": f"attempts on {sha9}, newest first:\n" + "\n".join(lines), "retry": retry}
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
-    Worst first: draft, conflict, ci-failed, changes, ci-running, reviewing, ready, merged-soon, awaiting-review."""
+    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review."""
     if x.get("d"): return ["draft", "draft"]
     ci = x.get("ci") or []; sha9 = (x.get("h") or "")[:9]; n = x["n"]
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
@@ -302,6 +358,8 @@ def pr_state(x):
     try: line = [l for l in (STATE / f"revci-{n}.out").read_text().splitlines() if l.startswith(f"#{n} {sha9} ")][-1]
     except Exception: pass
     if "CHANGES" in line: return ["changes", "changes requested"]
+    rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
+    if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
     if "BLOCKED" in line: return ["broke", "review blocked"]
     if any(c in ("queued", "in_progress", "pending", "waiting", "requested") for c in ci): return ["running", "CI running"]
     if not line and (STATE / "auto" / f"launched-{n}-{sha9}").exists(): return ["running", "reviewing"]
@@ -458,7 +516,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
 #bbody .it{margin:6px 8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--cc,var(--mute));border-radius:6px;background:var(--bg,#1c222c);line-height:1.35;font-size:12.5px;white-space:normal;overflow-wrap:anywhere;box-shadow:0 1px 2px #0006}
 #bbody .it .ft{display:flex;justify-content:flex-end;margin-top:6px}#bbody .age{display:inline-block;padding:0 6px;border-radius:9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:#e3b341;border-color:#6b5223}#bbody .age.old{color:#f85149;border-color:#6e2a27}
-#bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:600;vertical-align:1px;border:1px solid}
+#bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:600;vertical-align:1px;border:1px solid;max-width:100%;overflow-wrap:anywhere}
 #bbody .pst.ready{color:#3fb950;border-color:#2e6b3a;background:#12261a}#bbody .pst.running{color:#5aa9ff;border-color:#24496e;background:#0f1d2c}
 #bbody .pst.changes{color:#e3b341;border-color:#6b5223;background:#261e0f}#bbody .pst.broke,#bbody .pst.conflict{color:#f85149;border-color:#6e2a27;background:#2a1212}
 #bbody .pst.idle,#bbody .pst.draft{color:var(--mute);border-color:var(--line);background:#12161c}
@@ -467,6 +525,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #lf{display:inline-block;position:relative;font-size:11px;font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
 #lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{border-color:var(--pin)}#bbody .it .tt{display:block}
+#bbody .it .prr{display:block;margin-top:2px;font-size:10.5px;color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--pin);text-decoration:none}
 #bbody .it.m{border-style:dashed;text-align:center;background:none;box-shadow:none}
 #bbody .pad{height:6px}#bbody .sc{max-height:58vh;overflow:auto}#bbody .it .dt{float:right;color:var(--mute);font-size:11px}
@@ -755,7 +814,7 @@ lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"
 const age=o=>{let m=Math.max(0,Math.floor((Date.now()-Date.parse(o))/60000));const d=Math.floor(m/1440),h=Math.floor(m%1440/60);m%=60;return "⏱ "+(d?d+"d "+h+"h":h?h+"h "+String(m).padStart(2,"0")+"m":m+"m")};
 const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=4?"warm":""};
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
-const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}">${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${col[g.name]||"var(--mute)"}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
