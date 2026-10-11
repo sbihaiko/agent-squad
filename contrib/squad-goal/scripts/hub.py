@@ -981,6 +981,7 @@ RUN_STATES = [
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
+:root{--col-w:185px;--col-empty-w:132px}   /* the docked strip's column geometry: the one place its widths are set (#1791) */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
@@ -1091,7 +1092,7 @@ body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;o
 
 body.dockb #bhead{position:static}
 #grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}
-body.dockb #bbody>.col{flex:1 1 0;min-width:185px;display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
+body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
 .prs{--cc:var(--run);background:linear-gradient(#2dd4bf14,#2dd4bf08)}
@@ -1099,8 +1100,11 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 #bbody .prs>.ah,#bbody .prs>.ch{background:#12332f;color:#7ff0df;border-bottom:1px solid #2dd4bf66;letter-spacing:.04em;text-transform:uppercase}
 #bbody .prs .it{border:1px solid #2dd4bf55;border-left:4px solid var(--run);background:#14262a;border-radius:10px}
 #bbody .prs .it .id{background:#2dd4bf22;border-color:var(--run);color:#7ff0df}
-body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--run)}
+body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--run);flex:1.15 1 0}
 body.dockb #bbody>.col.prcol{background:linear-gradient(#2dd4bf14,#2dd4bf08);box-shadow:inset 0 2px 0 var(--run);flex:1.15 1 0}
+body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-empty-w);max-width:var(--col-empty-w);border-right:1px solid var(--line)}   /* a visible column with no cards keeps only its header, so the strip still reads as a row of columns (#1791); the columns that do have cards take the freed width */
+body.dockb #bbody>.col.empty>.ch{padding:8px 6px;flex-wrap:wrap;row-gap:2px;justify-content:flex-start}   /* the name falls onto a row of its own rather than clipping the count */
+body.dockb #bbody>.col.empty>.ch>span{white-space:nowrap}body.dockb #bbody>.col.empty>.ch .eye{margin-left:auto}
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
 body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .sec:first-child>.ch{border-top:0}
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
@@ -1373,8 +1377,9 @@ setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textConte
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
 const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const colCls=(pr,n)=>"col"+(pr?" prs":"")+(n?"":" empty");   // a visible column with no cards left after the filter collapses to the narrow width (#1791)
 const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${col[g.name]||"var(--mute)"}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
-if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
+if(bottom)return `<div class="${colCls(isPR(g.name),it.length)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>hidden: ${all.filter(g=>hid.has(g.name)).map(g=>`<span class=chip data-eye="${esc(g.name)}"><span>${esc(g.name)}</span><b>${g.n}</b></span>`).join("")}</div>`:"");
 if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted

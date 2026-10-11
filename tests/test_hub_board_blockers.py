@@ -128,7 +128,7 @@ def test_the_collapsed_width_is_a_named_constant(hub):
     assert cfg, "the strip's column widths need one config block naming them (--col-w, --col-empty-w)"
     assert css.count("--col-empty-w:") == 1, "the narrow width is declared more than once"
     assert "flex:0 0 var(--col-empty-w)" in _rule(hub, "body.dockb #bbody>.col.empty")
-    assert not re.search(r"\d+px", _rule(hub, "body.dockb #bbody>.col.empty")), \
+    assert not re.search(r"(?:flex|min-width|max-width|width):[^;]*\d+px", _rule(hub, "body.dockb #bbody>.col.empty")), \
         "the collapse rule carries a magic number instead of the named constant"
 
 
@@ -136,6 +136,9 @@ def test_the_populated_columns_keep_their_proportions_when_one_collapses(hub):
     assert "flex:1 1 0" in _rule(hub, "body.dockb #bbody>.col")
     assert "flex:1.15 1 0" in _rule(hub, "body.dockb #bbody>.col.prs")     # the PR column's extra weight
     assert "flex:0 0 var(--col-empty-w)" in _rule(hub, "body.dockb #bbody>.col.empty")
+    css = _css(hub)
+    assert css.index("body.dockb #bbody>.col.empty{") > css.index("body.dockb #bbody>.col.prcol{"), \
+        "an empty PR column has to collapse too: the collapse rule must come after the PR column's weight"
 
 
 def test_the_narrow_column_keeps_its_header_readable_and_its_border(hub):
@@ -170,6 +173,6 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
     page = hub.PAGE
     handler = re.search(r'\$\("#lfl"\)\.onchange=[^\n]*', page).group(0)
     assert "pollBoard()" in handler and "location.reload" not in handler
-    poll = page[page.index("async function pollBoard()"): page.index("const col=")]
-    assert "#bbody" in poll and "location.reload" not in poll
+    poll = page[page.index("async function pollBoard()"): page.index("finally{lim.busy=0}}")]
+    assert 'if($("#bbody").dataset.h!==html)' in poll and "location.reload" not in poll
     assert re.search(r"setInterval\(pollBoard,", page), "a card moving or a run ending must repaint the strip on its own"
