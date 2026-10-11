@@ -4,7 +4,8 @@
 # marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
 # PR per root-cause cluster (cluster.py), TDD with the RED output in the PR), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed by the dispatcher: a run that ends without a PR is surfaced by its RUN verdict, and the
-# coordinator deletes auto/bug-<n> to retry. A run that never starts (no record.jsonl) is freed by the janitor (at most twice). SG_AUTO_BUGFIX=no turns it off.
+# coordinator deletes auto/bug-<n> to retry. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
+# most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
@@ -68,8 +69,9 @@ pick=(); for c in "${clusters[@]}"; do pick+=($c); done
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass
 # that started in that window used to pick them all over again. A launch that fails keeps the claim -- the marker is
-# the loop's dispatch lock and only the coordinator retries it (see the header); janitor.py's stale-marker sweep reads
-# only `disp-*` markers, so a bug- marker is neither released by it nor able to break it.
+# the loop's dispatch lock and only the coordinator retries it (see the header); janitor.py's stale-marker sweep (rule E)
+# reads only `disp-*` markers, so a bug- marker is never released by that sweep, but its rule O does read a bug- marker
+# and drops it with the cards when the run ended failed and landed nothing.
 for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
 # A cluster is fork-only when any of its issues is (sg_fork_only: label, or the body line); fork clusters get the fork preamble ONLY
 fk=(); nfork=0; for c in "${clusters[@]}"; do f=0; for n in $c; do sg_fork_only "$n" && f=1; done; fk+=($f); nfork=$((nfork+f)); done
