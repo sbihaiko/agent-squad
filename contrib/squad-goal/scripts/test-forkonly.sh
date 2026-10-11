@@ -64,13 +64,18 @@ for m in m1 m2; do f=$HOME/.cache/squad-goal/req/$m.txt
 $G -q 'gh api --method POST' "$HOME/.cache/squad-goal/req/m3.txt" && ok "mkreq plain keeps the PR checklist" || ko "mkreq plain lost the PR checklist"
 # 7: forkonly.sh rule: the label, or a marker LINE (plain / bulleted / bolded / quoted), never the phrase inside a sentence
 for p in "1:yes" "2:yes" "3:no" "4:yes" "5:yes" "6:yes" "7:no" "8:yes" "9:no"; do (. "$S/forkonly.sh"; sg_fork_only "${p%%:*}") && v=yes || v=no; [ "$v" = "${p#*:}" ] && ok "rule #${p%%:*} = $v" || ko "rule #${p%%:*} = $v"; done
-# 8: forkrescue.py re-points a stray fix/<N>-x commit to gui/<N>, moves the card, leaves a note
-scene rs; F=$T/rs/fork; /usr/bin/git init -q -b local/next "$F"; (cd "$F" && /usr/bin/git -c user.email=a@b -c user.name=n commit -q --allow-empty -m base \
-  && /usr/bin/git checkout -q -b fix/1-x && /usr/bin/git -c user.email=a@b -c user.name=n commit -q --allow-empty -m work && /usr/bin/git checkout -q local/next \
-  && /usr/bin/git checkout -q -b fix/3-y && /usr/bin/git -c user.email=a@b -c user.name=n commit -q --allow-empty -m other && /usr/bin/git checkout -q local/next)
-mkdir -p "$T/rs/co/runs/r1" "$T/rs/co/runs/r3"; echo r1 >> "$T/rs/st/active-runs.txt"; echo r3 >> "$T/rs/st/active-runs.txt"
+# 8: forkrescue.py re-points a stray fix/<N>-x commit to gui/<N>, moves the card, leaves a note.
+# The branch decides, not only the brand (#1831): #1 is fork-only by label and carries a fork path, #3 carries a MesenAI path.
+# Both cards are parked at the landing stage in the hub's board cache, which is what the rescue reads (no gh call).
+scene rs; F=$T/rs/fork; /usr/bin/git init -q -b local/next "$F"; gi() { (cd "$F" && /usr/bin/git -c user.email=a@b -c user.name=n "$@"); }
+gi commit -q --allow-empty -m base; mkdir -p "$F/contrib/squad-goal/scripts" "$F/UI"
+gi checkout -q -b fix/1-x; echo tooling > "$F/contrib/squad-goal/scripts/t.sh"; gi add -A; gi commit -q -m work; gi checkout -q local/next
+gi checkout -q -b fix/3-y; echo game > "$F/UI/Foo.cs"; gi add -A; gi commit -q -m other; gi checkout -q local/next
+mkdir -p "$T/rs/co/runs/r1" "$T/rs/co/runs/r3" "$T/rs/co/runs/.hub"
+printf '{"items":[{"n":1,"st":"Code Complete","s":"open"},{"n":3,"st":"Code Complete","s":"open"}]}' > "$T/rs/co/runs/.hub/hub-board.json"
+echo r1 >> "$T/rs/st/active-runs.txt"; echo r3 >> "$T/rs/st/active-runs.txt"
 for p in "r1:1" "r3:3"; do r=${p%%:*}; i=${p#*:}; { echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #'$i'"}'; echo '{"event": "outcome", "node": "c", "outcome": "needs-human", "reasons": ["where does the PR go?"]}'; echo '{"event": "verdict"}'; } > "$T/rs/co/runs/$r/record.jsonl"; done
-export SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_FORK_DIR=$F SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORKONLY="$T/rs/scripts/forkonly.sh" SG_BOARD="$T/board.sh"
+export SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/rs/co SG_FORK_DIR=$F SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORKONLY="$T/rs/scripts/forkonly.sh" SG_BOARD="$T/board.sh"
 (cd "$T/rs/co" && python3 "$T/rs/scripts/forkrescue.py" >"$T/rs/out" 2>&1)
 [ "$(/usr/bin/git -C "$F" rev-parse gui/1 2>/dev/null)" = "$(/usr/bin/git -C "$F" rev-parse fix/1-x)" ] && ok "rescue: gui/1 points at the fix/1-x commit" || ko "rescue: gui/1 missing or elsewhere ($(cat "$T/rs/out"))"
 $G -q 'Code Complete 1$' "$T/rs/st/moves" 2>/dev/null && ok "rescue: card -> Code Complete" || ko "rescue: card not moved"
