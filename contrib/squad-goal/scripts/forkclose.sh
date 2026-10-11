@@ -6,6 +6,7 @@
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
 # card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
 # conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); a fork checkout a child left on its own branch is put back on the base by the pass itself while the tree is clean and no live run names that branch (WAIT, naming the reason, when it is not).
+# A branch whose own worktree still holds uncommitted changes is not the run's final state: the pass refuses (FORKCLOSE UNLANDED, naming the branch) instead of merging a mid-work tip and closing the issue with the code absent from the base (#1821).
 # An issue whose `## Blocked by` names an issue with an unlanded fork branch waits for it (FORKCLOSE WAIT, once per set): its tests import the blocker's files.
 # Cheaper queue (#1409): a green merge is recorded as a tested base (basetest-<new sha>), so the next landing pays no second base test; the suites a
 # branch's diff cannot affect are skipped (gate-suites.sh -> FG_SUITES, anything unknown runs the full gate); and when several branches are code
@@ -77,6 +78,15 @@ shallowrange() { local c p
     for p in $($G cat-file -p "$c" 2>/dev/null | sed -n 's/^parent //p'); do
       $G cat-file -e "$p" 2>/dev/null || { echo "$c $p"; return 0; }; done; done
   return 1; }
+# The run's final state is what the child left in the worktree it worked in, and a pass can only land what a commit carries. Prints
+# the path of the worktree holding $1 with uncommitted (tracked) changes; empty = the tip is all there is, so the merge is the whole
+# run. Untracked files are not work in progress here: a gate tree is full of them and one would park a finished branch forever.
+# The shared checkout counts too -- a child that worked there instead of its own ~/wt-as-<n> has the same unfinished tip (#1798).
+dirtywt() { local w
+  w=$($G worktree list --porcelain | awk -v x="refs/heads/$1" '/^worktree /{p=$2} $0=="branch "x{print p}')
+  [ -n "$w" ] || return 1
+  [ -n "$(/usr/bin/git -C "$w" status --porcelain --untracked-files=no 2>/dev/null)" ] || return 1
+  echo "$w"; }
 mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; else [ -n "$lf" ] || return 1; fi   # ahead of the base AND files lost to a revert: the merge only brings the commits after the revert, so a modify/delete conflict on a lost file is expected and the branch's version of every lost file wins
   if [ -n "$lf" ]; then $G checkout -q "$br" -- $lf || return 1; [ -z "$($G diff --name-only --diff-filter=U)" ] || return 1; fi
   $G commit -q --no-edit -m "Merge $br (Refs #$n)" >/dev/null 2>&1 || [ -z "$($G rev-parse -q --verify MERGE_HEAD)" ]; }
@@ -208,6 +218,15 @@ for n in $cc; do
     [ "$age" -lt $(( ${SG_FORK_MARKER_MINUTES:-45} * 60 )) ] && continue
     rm -f "$mk"; echo "FORKCLOSE RETRY #$n: the marker for ${head:0:9} waited $(( age / 60 )) min with no new commit on $br and no fix run alive; retrying"
   fi
+  # The pass merges the branch HEAD, so the branch HEAD has to BE the run's final state. A child that leaves its work uncommitted
+  # in its own ~/wt-as-<n> worktree has a tip that is a mid-work commit: the merge lands that, git reports success and the issue
+  # closes with the code still in the index and absent from $SG_FORK_BASE (#1821, #1809's source half was never on the base). Its
+  # tree is never committed, checked out or reset from here -- the pass refuses and names the branch as unlanded, and the child
+  # committing on the branch releases it on the next pass, exactly like the checkout wait above (FORKCLOSE UNLANDED, once per issue).
+  if uw=$(dirtywt "$br"); then
+    um="$A/forkunlanded-$n"; [ -e "$um" ] || { touch "$um"; echo "FORKCLOSE UNLANDED #$n: $br is checked out at $uw with uncommitted changes, so the branch tip ${head:0:9} is not the run's final state and merging it would close #$n with its code missing from $SG_FORK_BASE. Commit them on $br (or discard them); the pass resumes on its own."; }
+    continue; fi
+  rm -f "$A/forkunlanded-$n"
   [ -n "${FC_COLLECT:-}" ] && { [ -z "$late$reland$mixed" ] && echo "$n" >> "$FC_COLLECT"; continue; }   # a plain open fork-only candidate
   # A fork-only fix has no PR body to carry its TDD RED output, so the child posts it on the issue ("TDD RED" first line, req-checklist-fork.txt). Missing: say so, once per issue; a warning only, the landing goes on (#1413).
   if ! gh api "repos/$SG_REPO/issues/$n/comments" --paginate -q '.[].body' 2>/dev/null | grep -q 'TDD RED'; then
