@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib
+import datetime as dt, glob, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
@@ -1032,6 +1032,23 @@ def last_coding_model(limit=15):
         if best: return best["model"]
     return ""
 
+GATEWAY = (os.environ.get("ANTHROPIC_BASE_URL") or "http://localhost:8016").rstrip("/")
+_gw = {"t": 0.0, "ids": []}
+def gateway_models(ttl=120):
+    """The ids the gateway itself serves, read from its own `/v1/models` -- the same list Claude Code's `/model` picker
+    shows as "From gateway". Live, because the catalogue changes on the gateway's side and a hardcoded copy went stale
+    (the GPT family was missing from the add box, 2026-10-11); cached briefly, because the panel asks on every load.
+    Empty when the gateway is down, which leaves the other sources to fill the box."""
+    if time.time() - _gw["t"] < ttl: return _gw["ids"]
+    ids = []
+    try:
+        with urllib.request.urlopen(GATEWAY + "/v1/models", timeout=3) as r:
+            d = json.loads(r.read().decode("utf8", "replace"))
+        ids = [m["id"] for m in (d.get("data") or d.get("models") or []) if isinstance(m, dict) and m.get("id")]
+    except Exception: pass
+    _gw.update(t=time.time(), ids=ids)
+    return ids
+
 def known_models(d):
     """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
 
@@ -1042,7 +1059,7 @@ def known_models(d):
     spellings were listed: the alias is folded onto the bare id, which is the form the chains name and the
     bridge answers.
     """
-    out = list(EXTRA_MODELS)
+    out = list(EXTRA_MODELS) + gateway_models()
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
