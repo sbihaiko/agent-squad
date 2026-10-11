@@ -9,7 +9,7 @@ G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
 g checkout -q -b gui/1 local/next; echo 1 > "$T/fork/f1"; g add .; g commit -q -m "work 1"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"issues/1/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 bs=$(g rev-parse --short=9 local/next); A="$T/st/auto"
 printf 'FAIL test-pilot-script.sh: case home-06\n--- fork gate: GUI suite FAILED (exit 1)\n' > "$T/st/basetest-$bs.log"
 run() { bash "$T/s/forkclose.sh" 2>&1; }; cards() { ls "$T/st/cq" | wc -l | tr -d ' '; }
