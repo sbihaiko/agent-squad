@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-pytest_plugins = ["tests.slowcap"]
+pytest_plugins = ["tests.slowcap", "tests.real_app_guard_plugin"]
 
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 

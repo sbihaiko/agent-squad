@@ -13,6 +13,7 @@ from squad.gui_test import ScriptError, validate
 from squad.gui_test_adapter import FakeAdapter as TickingFake
 from squad.gui_test_render import render
 from squad.gui_test_run import run
+from tests import real_app_guard as guard
 from tests.dashboard_helpers import run_node
 from tests.gui_test_helpers import script, step
 
@@ -2104,7 +2105,7 @@ def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
 
 
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
-def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work):
+def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work, clean_app_start):
     """AC 4: the committed pilot's Home batch, through the command, on the built application."""
     root = _mesenai_root()
     _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
@@ -2120,6 +2121,7 @@ def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_c
     p = _run_script_cmd(script_path, out, "--step-timeout", "180", spec="mesen-gui",
                         env={"MESENAI_ROOT": str(root)})
     r = json.loads(out.read_text())
+    guard.assert_launched(r, clean_app_start)
     assert {s["id"] for s in r["steps"]} == set(HOME_BATCH_IDS)
     assert {s["id"] for s in r["steps"] if s["verdict"] == "pending"} == HOME_BATCH_MANUAL
     failed = {s["id"] for s in r["steps"] if s["verdict"].startswith("failed")}
