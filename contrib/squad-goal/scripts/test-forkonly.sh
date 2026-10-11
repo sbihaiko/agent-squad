@@ -6,10 +6,19 @@ d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1";
 G=/usr/bin/grep; mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
-# issue 1: fork-only by label; 2: fork-only by body line only; 3: plain MesenAI issue
+# issue 1: fork-only by label; 2: fork-only by the plain body marker; 3: plain MesenAI issue;
+# 4-6: the marker bulleted, bolded, quoted; 7/9: the phrase only inside a sentence; 8: the marker on a later line
 a="$*"; n=$(printf '%s' "$a" | grep -oE 'issues/[0-9]+' | head -1 | tr -dc 0-9)
 lab() { case $1 in 1) echo '{"name":"bug"},{"name":"fork-only"}';; *) echo '{"name":"bug"}';; esac; }
-body() { case $1 in 2) printf 'Fork-only work: no PR.\\nfix it';; *) printf 'plain body';; esac; }
+body() { case $1 in
+  2) printf 'Fork-only work: no PR.\\nfix it';;
+  4) printf 'Fix it.\\n- Fork-only work: no PR.';;
+  5) printf 'Fix it.\\n**Fork-only work**: no PR.';;
+  6) printf 'Fix it.\\n> Fork-only work: no PR.';;
+  7) printf 'Decided this is Fork-only work for the fork, so no PR for now.';;
+  8) printf 'Fix it.\\nFork-only work: no PR.';;
+  9) printf 'Fix it.\\n- the issue is Fork-only work per the decision below';;
+  *) printf 'plain body';; esac; }
 case "$a" in
   *"pulls?state=open"*) ;;
   *"issues?state=open"*) echo "$GH_LIST";;
@@ -53,8 +62,8 @@ for m in m1 m2; do f=$HOME/.cache/squad-goal/req/$m.txt
   $G -qE 'origin/main|open the PR|prepush.sh|gh api --method POST repos/<owner>/<repo>/pulls' "$f" && ko "mkreq $m: PR text in a fork-only request" || ok "mkreq $m: no PR text"
   $G -q 'cd <fork worktree>' "$f" && ok "mkreq $m: fork DONE CHECK" || ko "mkreq $m: no fork DONE CHECK"; done
 $G -q 'gh api --method POST' "$HOME/.cache/squad-goal/req/m3.txt" && ok "mkreq plain keeps the PR checklist" || ko "mkreq plain lost the PR checklist"
-# 7: forkonly.sh rule
-for p in "1:yes" "2:yes" "3:no"; do (. "$S/forkonly.sh"; sg_fork_only "${p%%:*}") && v=yes || v=no; [ "$v" = "${p#*:}" ] && ok "rule #${p%%:*} = $v" || ko "rule #${p%%:*} = $v"; done
+# 7: forkonly.sh rule: the label, or a marker LINE (plain / bulleted / bolded / quoted), never the phrase inside a sentence
+for p in "1:yes" "2:yes" "3:no" "4:yes" "5:yes" "6:yes" "7:no" "8:yes" "9:no"; do (. "$S/forkonly.sh"; sg_fork_only "${p%%:*}") && v=yes || v=no; [ "$v" = "${p#*:}" ] && ok "rule #${p%%:*} = $v" || ko "rule #${p%%:*} = $v"; done
 # 8: forkrescue.py re-points a stray fix/<N>-x commit to gui/<N>, moves the card, leaves a note
 scene rs; F=$T/rs/fork; /usr/bin/git init -q -b local/next "$F"; (cd "$F" && /usr/bin/git -c user.email=a@b -c user.name=n commit -q --allow-empty -m base \
   && /usr/bin/git checkout -q -b fix/1-x && /usr/bin/git -c user.email=a@b -c user.name=n commit -q --allow-empty -m work && /usr/bin/git checkout -q local/next \
