@@ -732,13 +732,14 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
-def refresh_board():
-    """Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + open PRs, every 60 s; last good data survives errors and restarts."""
-    sf = ""
-    while True:
-        try:
-            sf = sf or status_field()
-            out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={sf}", "--jq",
+_board_sf = ""   # the Status field's REST id: read once per process, not once per pass
+def board_pass():
+    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + open PRs. The 60 s loop and the
+    header's refresh button both run exactly this, so a press reads the board the same way the timer does (#1810)."""
+    global _board_sf
+    try:
+            _board_sf = _board_sf or status_field()
+            out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={_board_sf}", "--jq",
                 '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
@@ -763,8 +764,14 @@ def refresh_board():
             lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())} or board_cache.get("lc", {})   # label colors as GitHub shows them
             if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
-        except Exception as e: board_cache["err"] = str(e)[:80]
-        for _ in range(30):   # every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag)
+    except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
+    return board_cache
+def refresh_board():
+    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag). The header's
+    refresh button asks for the same pass by hand; it never replaces this timer (#1810)."""
+    while True:
+        board_pass()
+        for _ in range(30):
             time.sleep(2)
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
@@ -1159,7 +1166,7 @@ RUN_STATES = [
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
-:root{--col-w:185px;--col-empty-w:132px}   /* the docked strip's column geometry: the one place its widths are set (#1791) */
+:root{--col-w:185px;--col-empty-w:28px}   /* the docked strip's column geometry: the one place its widths are set (#1791); an empty column keeps one line of text and nothing else (#1809) */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
@@ -1208,7 +1215,9 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}
 #board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
-#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
+#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}#board.off #br{display:none}
+#br{margin-left:8px;margin-right:auto;padding:0 6px;font-weight:400;line-height:1.4}   /* beside the title, so it reads as part of it and never as the labels / maximize / collapse group (#1810) */
+#br[aria-busy=true]{opacity:.55;cursor:progress}#br.busy>span{display:inline-block;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 #bbody .ah{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
@@ -1265,7 +1274,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 body.dockb #win{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
 body.dockb #side{grid-row:1/3}body.dockb #main{grid-column:2;grid-row:1}
 body.dockb #board{grid-column:2;grid-row:2;width:auto;height:320px;border-left:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
-body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}
+body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}body.dockb #board.off #br{display:inline-block}
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
@@ -1295,8 +1304,12 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb #bbody>.col.prcol{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent));box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-empty-w);max-width:var(--col-empty-w);border-right:1px solid var(--line)}   /* a visible column with no cards keeps only its header, so the strip still reads as a row of columns (#1791); the columns that do have cards take the freed width */
-body.dockb #bbody>.col.empty>.ch{padding:8px 6px;flex-wrap:wrap;row-gap:2px;justify-content:flex-start}   /* the name falls onto a row of its own rather than clipping the count */
-body.dockb #bbody>.col.empty>.ch>span{white-space:nowrap}body.dockb #bbody>.col.empty>.ch .eye{margin-left:auto}
+body.dockb #bbody>.col.empty>.sc{display:none}   /* the strip holds no card, no scroll area and no body-sized gap reserved for one (#1809) */
+body.dockb #bbody>.col.empty>.ch{flex:1 1 auto;flex-direction:column;flex-wrap:nowrap;align-items:center;gap:6px;padding:8px 0}   /* the header fills the strip, and the name and the count take a row each: `Todo0` cannot be read any more (#1809) */
+body.dockb #bbody>.col.empty>.ch>span:first-child{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;flex:0 0 auto}   /* the collapsed-column reading, bottom to top; a long name makes a taller strip, never a wider one (#1809) */
+body.dockb #bbody>.col.empty>.ch>span:last-child{display:inline-flex;align-items:center;white-space:nowrap;flex:0 0 auto}
+body.dockb #bbody>.col.empty>.ch .n{padding:0 5px}   /* the count badge stays legible in the strip it now lives in (#1809) */
+body.dockb #bbody>.col.empty>.ch .eye{margin-left:0;flex:none}   /* the eye is a control: it keeps its place inside the strip instead of being clipped away (#1809) */
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
 body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .sec:first-child>.ch{border-top:0}
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
@@ -1316,7 +1329,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><button id=br title="re-read the board now: the Project statuses, the blockers and the open PRs" aria-label="refresh the board now" aria-busy=false><span>&#8635;</span></button><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
 <script>
@@ -1685,6 +1698,7 @@ if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTM
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
 $("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
 document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});
+$("#br").onclick=async()=>{const b=$("#br");if(b.disabled)return;b.disabled=true;b.setAttribute("aria-busy","true");b.classList.add("busy");try{await fetch("/api/board/refresh")}catch(e){}try{await pollBoard()}finally{b.disabled=false;b.setAttribute("aria-busy","false");b.classList.remove("busy")}};   // one real pass, asked for by hand; the button says it is busy while it runs and clears when it ends, failure included (#1810)
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
@@ -2090,6 +2104,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); body, ct = json.dumps(issue_detail(int(m[1])) if m else {"err": "bad n"}).encode(), "application/json"
+        elif self.path.startswith("/api/board/refresh"):
+            board_pass(); body, ct = json.dumps(board()).encode(), "application/json"   # the header's refresh button: one real pass, not another read of the cache (#1810)
         elif self.path.startswith("/api/board"): body, ct = json.dumps(board()).encode(), "application/json"
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": LOADED}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"

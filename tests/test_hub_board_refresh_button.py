@@ -94,10 +94,11 @@ def test_the_button_sits_beside_the_title_in_the_header(hub):
 
 
 def test_the_button_carries_a_title_and_an_accessible_name(hub):
-    btn = re.search(r"<button id=br\b[^>]*>", hub.PAGE).group(0)
-    assert re.search(r'title="[^"]+"', btn), f"no title: {btn!r}"
-    assert re.search(r'aria-label="[^"]+"', btn), f"the icon is not the only label: {btn!r}"
-    assert re.search(r">\s*\S+\s*<", btn), f"the icon the button paints: {btn!r}"
+    m = re.search(r"<button id=br\b[^>]*>(.*?)</button>", hub.PAGE, re.S)
+    assert m, "no #br element in the served page"
+    assert re.search(r'title="[^"]+"', m.group(0)), f"no title: {m.group(0)!r}"
+    assert re.search(r'aria-label="[^"]+"', m.group(0)), f"the icon is not the only label: {m.group(0)!r}"
+    assert m.group(1).strip(), "the button paints an icon, not an empty box"
 
 
 def test_the_button_says_it_is_busy_while_the_pass_runs_and_clears_when_it_ends(hub):
@@ -131,11 +132,12 @@ def test_the_sixty_second_pass_is_unchanged_and_is_not_replaced_by_the_button(hu
 
     def fake_sleep(s):
         sleeps.append(s)
-        if len(passes) >= 2 and len(sleeps) >= 62:
-            raise StopIteration            # two passes and two full waits are enough to see the schedule
+        if len(sleeps) == 32:
+            raise StopIteration            # one full wait plus two more: enough to see the second pass and its schedule
 
     monkeypatch.setattr(hub, "board_pass", lambda: passes.append(1))
     monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "STATE", Path(tempfile.mkdtemp()))   # no board-dirty flag of a live loop on this machine
     with pytest.raises(StopIteration):
         hub.refresh_board()
     assert len(passes) == 2, "the loop keeps passing on its own, not only when the button is pressed"
