@@ -4,8 +4,9 @@
 # The request carries every open problem on the head sha: the latest review's CHANGES findings, failed CI checks,
 # a merge conflict with the base, and unresolved review threads (CodeRabbit or people: reply, then resolve).
 # One fix per head sha ($SG_STATE/auto/fix-<pr>-<sha9>); the push of the fix is the new sha that re-arms it.
-# A request mkreq.sh refuses is NOT a dispatch: the fix- and queued-<pr>-<sha9> markers and the round it charged go back
-# (exit 75), so the head is retried on the next pass instead of staying queued with nothing working it (#1770).
+# A request mkreq.sh refuses, or a launch that printed no run id, is NOT a dispatch: the fix- and queued-<pr>-<sha9>
+# markers go back, no round is charged (exit 75), and the head is retried on the next pass instead of staying queued with
+# nothing working it and a round spent against its cap (#1770, #1775).
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; own=${SG_REPO%/*} name=${SG_REPO#*/}
 threads() { gh api graphql -f query="query{repository(owner:\"$own\",name:\"$name\"){pullRequest(number:$1){reviewThreads(first:100){nodes{isResolved isOutdated}}}}}" \
   -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false and .isOutdated==false)]|length' 2>/dev/null; }
@@ -45,22 +46,35 @@ b=$(mktemp); probs=""
   echo "Then run the checks the repo's CLAUDE.md/AGENTS.md require for the touched files, and post ONE PR comment listing each problem above and how it was addressed (with the check output tail), ending with \"Refs #$iss\". en-US. Commit and push promptly."; } > "$b"
 [ -z "${probs// /}" ] && { rm -f "$b"; exit 0; }
 [ -n "${AF_DRY:-}" ] && { echo "problems:$probs"; cat "$b"; rm -f "$b"; exit 0; }   # AF_DRY=1: print the request, launch nothing
-touch "$A/fix-$pr-$s9"; [ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap
+touch "$A/fix-$pr-$s9"   # reserve the head: one dispatch per sha, whether or not the launch gets as far as a run (below)
+# A round is spent by a fix run, not by an attempt to start one (#1775): auto/rounds-<pr> is written below, once launch.py
+# has printed a run id. Charging it here put a PR at the round cap with no fix run ever behind it -- autopilot.sh reads the
+# file as `n=$(grep -c . "$A/rounds-$pr")` and hands the PR to autopanel.sh / needs-owner at AP_MAX_ROUNDS.
+free_head() { rm -f "$b" "$A/runof-$pr-$s9" "$A/fix-$pr-$s9" "$A/queued-$pr-$s9"
+  for r in rounds softfix; do [ -e "$A/$r-$pr" ] && sed -i '' "/^$s9\$/d" "$A/$r-$pr"; done; }
 # A refusal must not consume the dispatch (#1770, the same defect #1529 fixed in autobug.sh and autofrontier.sh):
 # autopilot.sh touches auto/queued-<pr>-<sha9> BEFORE it calls this script and skips the head while that marker exists,
-# and the round is charged above, so a request mkreq.sh refused left the head queued forever -- a BLOCKING verdict, green
-# CI and nothing working it until a human pushed (#1706 @ 27aaaf5b5) -- with the round of a dispatch that never happened
-# spent against its cap. Free exactly what this dispatch wrote, return the round, and exit 75 so a caller can tell the
-# refusal from a failed run; the refusal itself already went to stderr (ADR-0274), and the next pass retries the head.
+# so a request mkreq.sh refused left the head queued forever -- a BLOCKING verdict, green CI and nothing working it until
+# a human pushed (#1706 @ 27aaaf5b5). Free exactly what this dispatch wrote, return the round, and exit 75 so a caller can
+# tell the refusal from a failed run; the refusal itself already went to stderr (ADR-0274), and the next pass retries.
 if ! req=$(bash "$(dirname "$0")/mkreq.sh" "auto-fix-$pr-$s9" "$b"); then
-  rm -f "$b" "$A/fix-$pr-$s9" "$A/queued-$pr-$s9"
-  for r in rounds softfix; do [ -e "$A/$r-$pr" ] && sed -i '' "/^$s9\$/d" "$A/$r-$pr"; done
+  free_head
   echo "AUTOFIX #$pr @ $s9 refused by mkreq.sh; freed the queued marker and returned the round, next pass retries" >&2
   exit 75
 fi
 rm -f "$b"
 run=$(cd "$SG_CHECKOUT" && python3 "$(dirname "$0")/launch.py" "$req" 2>/dev/null | tail -1)
-[ -n "${run:-}" ] && echo "$run" > "$A/runof-$pr-$s9"   # retryfix.sh re-arms this sha if the run fails or dies
+# The second way a dispatch fails to start (#1775): launch.py refuses (quota guard, model out of its hours window, a dead
+# graph) and prints no run id. Nothing is working the head, so it keeps nothing of the dispatch and no round is spent;
+# exit 75 says "no run started, retry the head", and the next pass does.
+if [ -z "${run:-}" ]; then
+  free_head
+  echo "AUTOFIX #$pr @ $s9: launch.py printed no run id, so no fix run started; freed the claim and charged no round, next pass retries" >&2
+  exit 75
+fi
+echo "$run" > "$A/runof-$pr-$s9"   # retryfix.sh re-arms this sha if the run fails or dies
+[ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap
 git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place; the run already copied it
-printf "Fix run dispatched automatically on PR #%s @ %s for:%s. Run: %s. Refs #%s\n" $pr $s9 "$probs" "${run:-launch failed}" $iss > "$SG_STATE/cq/$iss-autofix$$.md"
-echo "AUTOFIX #$pr @ $s9 (issue #$iss):$probs -> ${run:-LAUNCH FAILED}"
+# only a dispatch that started is announced: a failed one goes to stderr above, so no issue comment claims a fix run that never ran
+printf "Fix run dispatched automatically on PR #%s @ %s for:%s. Run: %s. Refs #%s\n" $pr $s9 "$probs" "$run" $iss > "$SG_STATE/cq/$iss-autofix$$.md"
+echo "AUTOFIX #$pr @ $s9 (issue #$iss):$probs -> $run"
