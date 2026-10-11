@@ -7,14 +7,30 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 
 def _profile():
-    """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment, else from env.sh (the profile matched from the cwd's origin)."""
-    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT"]
-    if all(os.environ.get(k) for k in keys): return {k: os.environ[k] for k in keys}
+    """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment, else from env.sh (the profile matched from the cwd's
+    origin). SG_TOOLING_REPO is the optional second repository the board reads, empty when the profile names none."""
+    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_TOOLING_REPO"]
+    if all(os.environ.get(k) for k in keys[:4]): return {k: os.environ.get(k, "") for k in keys}
     here = pathlib.Path(__file__).resolve().parent
-    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
+    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT" "$SG_TOOLING_REPO"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
     return {k: os.environ.get(k) or (out[i] if i < len(out) else "") for i, k in enumerate(keys)}
 PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], PROF["SG_PROJECT"]
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE or run from a checkout a profile matches)")
+def repos_from(primary, *others):
+    """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
+    repository the profile names after it (SG_TOOLING_REPO, the squad's own tooling repository) (#1820)."""
+    out = []
+    for r in (primary,) + tuple(others):
+        r = (r or "").strip()
+        if r and r not in out: out.append(r)
+    return out
+REPOS = repos_from(REPO, PROF.get("SG_TOOLING_REPO"))
+def repo_tag(repo, repos=None):
+    """The short tag a card wears for its repository: the name after the owner when that name stands for exactly one
+    repository the board reads, else the full owner/name -- the tag that does not fit (#1820)."""
+    repos = REPOS if repos is None else repos
+    name = repo.rsplit("/", 1)[-1]
+    return name if sum(1 for r in repos if r.rsplit("/", 1)[-1] == name) == 1 else repo
 def status_field():
     """REST id of the board's Status field (the items endpoint needs it to return Status values)."""
     o = subprocess.run(["gh", "api", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id'], capture_output=True, text=True, timeout=60).stdout.split()
@@ -726,6 +742,11 @@ def stats(period, src="both"):
 BOARD = HUBDIR / "hub-board.json"
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
+# A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
+# the profile repository's, which is the only one that pass read.
+for _k in ("prs", "prev"):
+    for _x in board_cache.get(_k) or []: _x.setdefault("r", REPO)
+board_cache.setdefault("errs", [])
 def apply_open_blockers(items, nodes):
     """Attach open native blockers (`Issue.blockedBy`) onto each item as `b`. A closed blocker drops off by itself."""
     by = {n.get("number"): n for n in nodes or []}
@@ -737,21 +758,22 @@ def apply_open_blockers(items, nodes):
         else: i.pop("b", None)
     return items
 _board_sf = ""   # the Status field's REST id: read once per process, not once per pass
-def board_pass():
-    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + open PRs. The 60 s loop and the
-    header's refresh button both run exactly this, so a press reads the board the same way the timer does (#1810)."""
+def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
+    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open and closed PRs of
+    every repository the hub is told to read (#1820). The 60 s loop and the header's refresh button both run exactly
+    this, so a press reads the board the same way the timer does (#1810).
+
+    The two reads are independent: the issues are the profile repository's board, the PR columns span every configured
+    repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
+    repository's own error on the column), so a failed pass never writes a fresh empty board (#1772, #1820)."""
     global _board_sf
+    items = lc = None
     try:
             _board_sf = _board_sf or status_field()
             out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={_board_sf}", "--jq",
                 '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
-            pc = subprocess.run(["gh", "api", f"repos/{REPO}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq",
-                '.[]|{n:.number,t:.title,c:(.merged_at//.closed_at),m:(.merged_at!=null)}'], capture_output=True, text=True, timeout=60).stdout
-            prev = [json.loads(l) for l in pc.splitlines() if l.strip()]
-            pt = subprocess.run(["gh", "api", f"search/issues?q=repo:{REPO}+is:pr+is:closed&per_page=1", "--jq", ".total_count"], capture_output=True, text=True, timeout=60).stdout.strip()
-            prev_n = int(pt) if pt.isdigit() else len(prev)   # the real total; the list itself is only the latest page
             oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
                 '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name]}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
@@ -761,14 +783,19 @@ def board_pass():
             go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + gq], capture_output=True, text=True, timeout=60).stdout
             try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
             except Exception: pass
-            pq = OPEN_PR_QUERY % (own, name)   # one query for every open PR (list, head, base, merge state, labels, threads, rollup)
-            po = subprocess.run(["gh", "api", "graphql", "-f", "query=" + pq], capture_output=True, text=True, timeout=60).stdout
-            prs = prs_from_graphql(json.loads(po)) if po.strip() else None
-            if prs is None: raise ValueError("the open-PR query returned nothing; the last good rows stay in place")  # never a fresh empty pass (#1772)
             lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
-            lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())} or board_cache.get("lc", {})   # label colors as GitHub shows them
-            if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
+            lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
     except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
+    if items: board_cache.update(t=time.time(), items=items, lc=lc or board_cache.get("lc", {}), err=None)
+    rs = REPOS if repos is None else repos
+    try:
+            prs, prev, prev_n, errs = prs_pass(fetch_open, fetch_closed, fetch_total, rs)
+            board_cache.update(prs=prs, prev=prev, prev_n=prev_n, errs=errs)
+            # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
+            # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
+            if len(errs) < len(rs): board_cache["t"] = time.time()
+    except Exception as e: board_cache["err"] = str(e)[:80]
+    BOARD.write_text(json.dumps(board_cache))
     return board_cache
 def refresh_board():
     """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag). The header's
@@ -914,10 +941,12 @@ def _live_rollup(states):
     if any(s in LIVE_WAIT for s in states): return "pending"
     return "pass" if states else "none"
 
-def prs_from_graphql(payload):
+def prs_from_graphql(payload, repo=None):
     """One row per open PR out of the batched OPEN_PR_QUERY response, or None when the call returned nothing usable
     (failed, rate-limited, no repository): None means the caller keeps the last good rows, never that no PR is open
-    (#1772). A fact the query did not return stays None, so the strip renders `?` for it."""
+    (#1772). A fact the query did not return stays None, so the strip renders `?` for it. `repo` is the repository the
+    payload was read from: it rides on every row as `r`, so a card links, opens and resolves its issue in its own
+    repository (#1820)."""
     data = payload.get("data") if isinstance(payload, dict) else None
     nodes = (((data or {}).get("repository") or {}).get("pullRequests") or {}).get("nodes")
     if nodes is None: return None
@@ -933,9 +962,59 @@ def prs_from_graphql(payload):
         base = nd.get("baseRefName") or None
         rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
                      "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
-                     "th": threads, "ci": states, "rollup": _live_rollup(states),
+                     "th": threads, "ci": states, "rollup": _live_rollup(states), "r": repo,
                      "facts": not (states is None or threads is None or labels is None or not ms or not base)})
     return rows
+
+def open_prs_of(repo):
+    """The open PRs of ONE repository, out of the batched OPEN_PR_QUERY: its rows each carry the repository as `r`,
+    or None when the read returned nothing usable (the caller keeps the last good rows, #1772)."""
+    own, name = repo.split("/", 1)
+    po = subprocess.run(["gh", "api", "graphql", "-f", "query=" + OPEN_PR_QUERY % (own, name)], capture_output=True, text=True, timeout=60).stdout
+    return prs_from_graphql(json.loads(po), repo) if po.strip() else None
+
+def closed_prs_of(repo):
+    """The latest page of ONE repository's closed PRs, each row tagged with its repository."""
+    pc = subprocess.run(["gh", "api", f"repos/{repo}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq",
+        '.[]|{n:.number,t:.title,c:(.merged_at//.closed_at),m:(.merged_at!=null)}'], capture_output=True, text=True, timeout=60).stdout
+    return [dict(json.loads(l), r=repo) for l in pc.splitlines() if l.strip()]
+
+def closed_total_of(repo):
+    """The real number of closed PRs of ONE repository: the list itself is only the latest page (None when unreadable)."""
+    pt = subprocess.run(["gh", "api", f"search/issues?q=repo:{repo}+is:pr+is:closed&per_page=1", "--jq", ".total_count"], capture_output=True, text=True, timeout=60).stdout.strip()
+    return int(pt) if pt.isdigit() else None
+
+def prs_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
+    """One read of the OPEN PRs and Closed PRs columns for EVERY repository the hub is told to read (#1820), in place
+    of the single-repository read the column carried before it. Each repository is read on its own, through the three
+    fetchers it is given (the seam the tests stub), and contributes its own rows -- each row named by `r`.
+
+    A repository the hub cannot read adds its error to the returned `errs` and keeps the last good rows of ITS OWN from
+    the cache: an unreachable repository is an error on the column, never a silently empty one, and never a reason to
+    drop the rows of the repository that answered. Returns (rows, prev, prev_n, errs)."""
+    fetch_open = fetch_open or open_prs_of
+    fetch_closed = fetch_closed or closed_prs_of
+    fetch_total = fetch_total or closed_total_of
+    repos = REPOS if repos is None else repos
+    last_prs, last_prev = board_cache.get("prs") or [], board_cache.get("prev") or []
+    last_n = dict(board_cache.get("prev_n_of") or {})
+    if not last_n and board_cache.get("prev_n"): last_n[REPO] = board_cache["prev_n"]   # a cache written before #1820 has one total, and it is the profile repo's
+    prs, prev, prev_n, errs, n_of = [], [], 0, [], {}
+    for r in repos:
+        try:
+            rows = fetch_open(r)
+            if rows is None: raise ValueError("the open-PR query returned nothing; the last good rows stay in place")
+            closed = fetch_closed(r) or []
+            total = fetch_total(r)
+            total = last_n.get(r, 0) if total is None else total
+        except Exception as e:
+            errs.append(f"{r}: {str(e)[:70]}")
+            prs += [x for x in last_prs if x.get("r") == r]     # this repository's own last good rows, and no other's
+            prev += [x for x in last_prev if x.get("r") == r]
+            n_of[r] = last_n.get(r, 0); prev_n += n_of[r]
+            continue
+        prs += rows; prev += closed; n_of[r] = max(total, len(closed)); prev_n += n_of[r]
+    return prs, prev, prev_n, errs
 
 def _ci_state(tok):
     """The coarse state of a `CI=` snapshot (`success:9`, `failure:1,success:8`, `none`, `skipped`): pass, fail, pending, none."""
@@ -1085,32 +1164,42 @@ def board():
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
     for x in prs: x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t"))   # the chip, then the R C T B H strip under it (#1772)
     prev = sorted(board_cache.get("prev", []), key=lambda p: p["c"] or "", reverse=True)
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"]} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "o": p.get("o")} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    # Every card names its repository (#1820): `r` is the full owner/name (what a link and the popup read), `rt` the tag
+    # the card wears (MesenAI / agent-squad, or owner/repo when the short name names more than one repository).
+    perr = "; ".join(board_cache.get("errs") or [])   # the repositories this pass could not read, named on the column
+    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
-def issue_detail(n):
-    """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw."""
-    hit = _issue_cache.get(n)
+def gh_json(path, timeout=30):
+    """One `gh api` read as JSON, or None when it returned nothing (the one seam the issue panel reads through)."""
+    return json.loads(subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout).stdout or "null")
+def issue_detail(n, repo=None):
+    """Issue (or PR) body + the last 5 comments, fetched on click and cached 60 s. n is an int, never interpolated raw.
+    `repo` is the repository the card belongs to (#1820): a number is only a number, and PR #1821 of the tooling
+    repository is not PR #1821 of the emulator -- a repository the hub was not told to read is never read, so the panel
+    resolves a card in its own repository or in the profile's one."""
+    repo = repo if repo in REPOS else REPO
+    hit = _issue_cache.get((repo, n))
     if hit and time.time() - hit[0] < 60: return hit[1]
-    g = lambda path: json.loads(subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=30).stdout or "null")
-    it = g(f"repos/{REPO}/issues/{n}")
+    g = gh_json
+    it = g(f"repos/{repo}/issues/{n}")
     if not it or "number" not in it: return {"err": "not found"}
-    cm = g(f"repos/{REPO}/issues/{n}/comments?per_page=100") or []
-    d = {"n": n, "title": it["title"], "state": it["state"], "pr": "pull_request" in it, "url": it["html_url"], "by": it["user"]["login"],
+    cm = g(f"repos/{repo}/issues/{n}/comments?per_page=100") or []
+    d = {"n": n, "r": repo, "title": it["title"], "state": it["state"], "pr": "pull_request" in it, "url": it["html_url"], "by": it["user"]["login"],
          "created": it["created_at"], "updated": it["updated_at"], "labels": [l["name"] for l in it["labels"]], "body": (it.get("body") or "")[:3000],
          "total": len(cm), "comments": [{"by": c["user"]["login"], "at": c["created_at"], "body": (c.get("body") or "")[:1200]} for c in cm[-5:]]}
     if d["pr"]:   # a PR also gets its branch, size, merge state, CI summary and the latest review verdicts
-        p = g(f"repos/{REPO}/pulls/{n}") or {}
-        ck = (g(f"repos/{REPO}/commits/{p['head']['sha']}/check-runs?per_page=100") or {}).get("check_runs", []) if p.get("head") else []
+        p = g(f"repos/{repo}/pulls/{n}") or {}
+        ck = (g(f"repos/{repo}/commits/{p['head']['sha']}/check-runs?per_page=100") or {}).get("check_runs", []) if p.get("head") else []
         cnt = {}
         for c in ck: k = c.get("conclusion") or c["status"]; cnt[k] = cnt.get(k, 0) + 1
         rv = {}
-        for r in g(f"repos/{REPO}/pulls/{n}/reviews?per_page=100") or []:
+        for r in g(f"repos/{repo}/pulls/{n}/reviews?per_page=100") or []:
             if r["state"] != "COMMENTED": rv[r["user"]["login"]] = r["state"]
         d["pull"] = {"head": p.get("head", {}).get("ref"), "base": p.get("base", {}).get("ref"), "add": p.get("additions"), "del": p.get("deletions"), "files": p.get("changed_files"),
                      "draft": p.get("draft"), "merged": bool(p.get("merged_at")), "mstate": p.get("mergeable_state"), "checks": cnt, "reviews": rv}
         if d["pull"]["merged"]: d["state"] = "merged"
-    _issue_cache[n] = (time.time(), d); return d
+    _issue_cache[(repo, n)] = (time.time(), d); return d
 
 PRS = HUBDIR / "hub-prs.json"
 try: prs_cache = json.loads(PRS.read_text())     # last good PR data survives a restart
@@ -1309,6 +1398,8 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 #bbody .prs>.ah,#bbody .prs>.ch{background:color-mix(in srgb,var(--cc) 12%,#0f1115);color:var(--cc);border-bottom:1px solid color-mix(in srgb,var(--cc) 40%,transparent);letter-spacing:.04em;text-transform:uppercase}
 #bbody .prs .it{border:1px solid color-mix(in srgb,var(--cc) 33%,transparent);border-left:4px solid var(--cc);background:color-mix(in srgb,var(--cc) 8%,#10141a);border-radius:10px}
 #bbody .prs .it .id{background:color-mix(in srgb,var(--cc) 13%,transparent);border-color:var(--cc);color:var(--cc)}
+#bbody .prs .it .rpo{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the tag naming the card's repository (#1820) */
+#bbody .perr{margin:0 0 6px;padding:4px 6px;font-size:10px;line-height:1.35;border-radius:8px;overflow-wrap:anywhere;color:#ffb4b4;background:color-mix(in srgb,#ff6b6b 12%,#10141a);border:1px solid color-mix(in srgb,#ff6b6b 40%,transparent)}   /* the unreadable repository, on the column (#1820) */
 body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb #bbody>.col.prcol{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent));box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
@@ -1590,7 +1681,8 @@ function md(src){const keep=[],hold=h=>"\u0001"+(keep.push(h)-1)+"\u0001";
 let t=(src||"").replace(/\r/g,"").replace(/<!--[\s\S]*?-->/g,"").replace(/```[^\n]*\n([\s\S]*?)```/g,(_,c)=>hold("<pre><code>"+esc(c)+"</code></pre>"));
 t=t.replace(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^<>]*?)?)\s*\/?>/g,(all,c,n,a)=>{const r=safeTag(!!c,n,a);return r===null?all:hold(r)});
 t=esc(t);
-const inl=x=>x.replace(/`([^`\n]+)`/g,"<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g,"<b>$1</b>").replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g,"$1<i>$2</i>").replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g,'<a target=_blank rel=noopener href="$2">$1</a>').replace(/(^|[\s(])#(\d{1,6})\b/g,'$1<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/$2">#$2</a>');
+let irepo="__REPO__";   // the repository the open card belongs to: a `Refs #N` in its markdown links in THAT repository (#1820)
+const inl=x=>x.replace(/`([^`\n]+)`/g,"<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g,"<b>$1</b>").replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g,"$1<i>$2</i>").replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g,'<a target=_blank rel=noopener href="$2">$1</a>').replace(/(^|[\s(])#(\d{1,6})\b/g,`$1<a target=_blank rel=noopener href="https://github.com/${irepo}/issues/$2">#$2</a>`);
 const onlyHold=l=>/^\s*(\u0001\d+\u0001\s*)+$/.test(l);
 function block(txt){const out=[],L=txt.split("\n");let i=0;
 while(i<L.length){const l=L[i];let m;
@@ -1609,15 +1701,17 @@ return out.join("")}
 let html=block(t);for(let k=0;k<3;k++)html=html.replace(/\u0001(\d+)\u0001/g,(_,n)=>keep[+n]);return html.replace(/<p>(<summary>[\s\S]*?<\/summary>)<\/p>/g,"$1")}
 const pop=$("#pop"),when=t=>t.slice(0,16).replace("T"," ");
 pop.onclick=e=>{if(e.target===pop)pop.classList.remove("on")};addEventListener("keydown",e=>{if(e.key==="Escape"){pop.classList.remove("on");escBoard()}else if(pop.classList.contains("on")&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))step(e.key==="ArrowLeft"?-1:1)});
-let nav=[];const step=k=>{const i=nav.indexOf(cur)+k;if(i>=0&&i<nav.length)showIssue(nav[i])};let cur=0;
-async function showIssue(n){cur=+n;pop.classList.add("on");$("#pbox").innerHTML="<span class=m>loading #"+n+"…</span>";
-try{const d=await (await fetch("/api/issue?n="+n)).json();if(d.err){$("#pbox").textContent=d.err;return}
-$("#pbox").innerHTML=`<div class=bar><span class=m>${d.pr?"PR":"Issue"} #${d.n} · ${d.state}</span><span><button id=pprev title="previous card (←)" ${nav.indexOf(cur)>0?"":"disabled"}>‹</button> <span class=m>${nav.length>1?nav.indexOf(cur)+1+"/"+nav.length:""}</span> <button id=pnext title="next card (→)" ${nav.indexOf(cur)>=0&&nav.indexOf(cur)<nav.length-1?"":"disabled"}>›</button> <a class=gh target=_blank href="${esc(d.url)}">Open on GitHub ↗</a> <button id=px>✕</button></span></div><h2>${esc(d.title)}</h2>
+let nav=[],cur=0,irepo="__REPO__";   // nav carries [number, repository] pairs: a number alone does not name a card now that two repositories fill the column (#1820)
+const ni=()=>nav.findIndex(x=>x[0]===cur&&x[1]===irepo);
+const step=k=>{const i=ni()+k;if(i>=0&&i<nav.length)showIssue(nav[i][0],nav[i][1])};
+async function showIssue(n,r){cur=+n;irepo=r||"__REPO__";pop.classList.add("on");$("#pbox").innerHTML="<span class=m>loading #"+n+"…</span>";
+try{const d=await (await fetch("/api/issue?n="+n+(r?"&r="+encodeURIComponent(r):""))).json();if(d.err){$("#pbox").textContent=d.err;return}
+$("#pbox").innerHTML=`<div class=bar><span class=m>${d.pr?"PR":"Issue"} #${d.n} · ${d.state}${d.r&&d.r!=="__REPO__"?` · ${esc(d.r)}`:""}</span><span><button id=pprev title="previous card (←)" ${ni()>0?"":"disabled"}>‹</button> <span class=m>${nav.length>1?ni()+1+"/"+nav.length:""}</span> <button id=pnext title="next card (→)" ${ni()>=0&&ni()<nav.length-1?"":"disabled"}>›</button> <a class=gh target=_blank href="${esc(d.url)}">Open on GitHub ↗</a> <button id=px>✕</button></span></div><h2>${esc(d.title)}</h2>
 ${d.pull?`<div class=prbar><span class=pill>${esc(d.pull.head||"?")} &rarr; ${esc(d.pull.base||"?")}</span><span class=pill>+${d.pull.add??0} &minus;${d.pull.del??0} · ${d.pull.files??0} files</span>${d.pull.draft?"<span class=pill>draft</span>":""}<span class="pill ${d.pull.mstate==="clean"?"ok":d.pull.mstate==="dirty"?"bad":""}">merge: ${esc(d.pull.mstate||"?")}</span>${Object.entries(d.pull.checks).map(([k,v])=>`<span class="pill ${k==="success"?"ok":/failure|cancelled|timed_out|action_required/.test(k)?"bad":""}">CI ${esc(k)} ${v}</span>`).join("")}${Object.entries(d.pull.reviews).map(([u,st])=>`<span class="pill ${st==="APPROVED"?"ok":st==="CHANGES_REQUESTED"?"bad":""}">${esc(u)}: ${esc(st.toLowerCase().replace("_"," "))}</span>`).join("")}</div>`:""}<div class=meta>by ${esc(d.by)} · opened ${when(d.created)} · updated ${when(d.updated)}</div>${d.labels.map(l=>`<span class=lb>${esc(l)}</span>`).join("")}
 <div class=md>${d.body?md(d.body):"<span class=m>(no description)</span>"}</div><h3 class=sec>Last ${d.comments.length} of ${d.total} comments</h3>`+(d.comments.map(c=>`<div class=cm><div class=meta>${esc(c.by)} · ${when(c.at)}</div><div class=md>${md(c.body)}</div></div>`).join("")||"<span class=m>no comments</span>");
 $("#px").onclick=()=>pop.classList.remove("on");$("#pprev").onclick=()=>step(-1);$("#pnext").onclick=()=>step(1);$("#pbox").scrollTop=0}catch(e){$("#pbox").textContent="failed to load"}}
-document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||c.classList.contains("m"))return;window.open("https://github.com/__REPO__/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
-nav=[...c.closest(".sc").querySelectorAll(".it[data-n]")].map(x=>+x.dataset.n);showIssue(c.dataset.n)});
+document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||c.classList.contains("m"))return;window.open("https://github.com/"+(c.dataset.r||"__REPO__")+"/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
+nav=[...c.closest(".sc").querySelectorAll(".it[data-n]")].map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"]);showIssue(c.dataset.n,c.dataset.r)});
 const hm=location.hash.match(/issue=(\d+)/);if(hm)showIssue(+hm[1]);   // deep link: /#issue=1171
 document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g==="Open PRs")bo.prOpen=bo.prOpen===false;else if(g==="Closed PRs")bo.prevOpen=!bo.prevOpen;else bo.open=g;saveB();pollBoard()});
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
@@ -1722,19 +1816,20 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
+const perr=g=>g.err?`<div class=perr title="a repository the hub was told to read and could not: the rows this column still shows for it are its last good ones">&#9888; ${esc(g.err)}</div>`:"";   // a repository the hub cannot read is an error on the column, never an empty column (#1820)
 const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)));
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
 const badge=g=>`<span class=n>${f||sel.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
 const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
-if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
-return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
+if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
+return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
 // One tile of the hidden: strip: the name as a caption over the count, the count's colour deciding what the count
 // means. data-col names the column, so the colour is a CSS rule per category rather than an inline value; the one
@@ -2180,7 +2275,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/runs"): body, ct = json.dumps(runs()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
-            m = re.search(r"[?&]n=(\d{1,6})\b", self.path); body, ct = json.dumps(issue_detail(int(m[1])) if m else {"err": "bad n"}).encode(), "application/json"
+            m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
+            body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
         elif self.path.startswith("/api/board/refresh"):
             board_pass(); body, ct = json.dumps(board()).encode(), "application/json"   # the header's refresh button: one real pass, not another read of the cache (#1810)
         elif self.path.startswith("/api/board"): body, ct = json.dumps(board()).encode(), "application/json"
