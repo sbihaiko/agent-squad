@@ -7,13 +7,20 @@
 # card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
 # conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); the fork checkout must be clean and on the base branch.
 # An issue whose `## Blocked by` names an issue with an unlanded fork branch waits for it (FORKCLOSE WAIT, once per set): its tests import the blocker's files.
+# Cheaper queue (#1409): a green merge is recorded as a tested base (basetest-<new sha>), so the next landing pays no second base test; the suites a
+# branch's diff cannot affect are skipped (gate-suites.sh -> FG_SUITES, anything unknown runs the full gate); and when several branches are code
+# complete they merge, in order, onto one candidate branch (fc-batch, the base is untouched) that the gate runs once: green fast-forwards the base
+# and each issue then closes through the late-close path below with that run as its evidence; red drops the candidate and the loop lands them one
+# at a time, so a culprit is still named. A branch that conflicts with an earlier one stays out of the batch and gets its conflict-fix run as usual.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ] || exit 0; [ -e "$A/off" ] && exit 0
 L="$A/forkclose.lock"   # a test pass is still running; a lock whose pid is gone (loop restarted mid-pass) is stale
-if ! mkdir "$L" 2>/dev/null; then kill -0 "$(cat "$L/pid" 2>/dev/null)" 2>/dev/null && exit 0; rm -rf "$L"; mkdir "$L" || exit 0; fi
-echo $$ > "$L/pid"
-trap 'rm -rf "$L"' EXIT
+if [ -z "${FC_COLLECT:-}" ]; then   # the batch pre-pass runs this script again under the lock its parent holds, only to list the candidates
+  if ! mkdir "$L" 2>/dev/null; then kill -0 "$(cat "$L/pid" 2>/dev/null)" 2>/dev/null && exit 0; rm -rf "$L"; mkdir "$L" || exit 0; fi
+  echo $$ > "$L/pid"
+  trap 'rm -rf "$L"' EXIT
+fi
 G="/usr/bin/git -C $SG_FORK_DIR"
 now=$(date +%s)
 # The branches a live run is working on: a squad child runs from its own run ws, so a `git -C` on the fork worktree leaves
@@ -39,10 +46,63 @@ mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; el
   $G commit -q --no-edit -m "Merge $br (Refs #$n)" >/dev/null 2>&1 || [ -z "$($G rev-parse -q --verify MERGE_HEAD)" ]; }
 relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
   t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") && $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
+brof() { echo "${SG_FORK_BRANCH//%n/$1}"; }
+# a red base reds every branch at once: test it once per base head, before merging anything. 0 = the base is green (or already known green), 1 = wait
+basegate() { local l=$1 bt
+  if [ -e "$A/basered-$bs" ]; then
+    # A park nobody hears about is a silent stall (#1407): say so once per base sha, naming the failing test and who waits.
+    if [ ! -e "$A/basered-$bs.escalated" ]; then touch "$A/basered-$bs.escalated"
+      ft=$(grep -E 'FAIL|not ok' "$SG_STATE/basetest-$bs.log" 2>/dev/null | grep -v 'fork gate' | head -3)
+      wb=""; for w in $cc; do [ "$($G rev-list --count "$SG_FORK_BASE..${SG_FORK_BRANCH//%n/$w}" 2>/dev/null)" -gt 0 ] && wb="$wb ${SG_FORK_BRANCH//%n/$w}"; done
+      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. After %s min the base suite is retried once on its own; a green retry lifts the park, a second red keeps it.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" > "$SG_STATE/cq/${l//[^0-9a-z]/}-basered$$.md"
+    fi
+    # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
+    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
+      if ( cd "$SG_FORK_DIR" && FG_SUITES=full bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN $l: $SG_FORK_BASE $bs passed the solo retry after the park; lifting it"; return 0
+      else echo "FORKCLOSE BASE-RED $l: the solo retry of $SG_FORK_BASE $bs failed too (see $SG_STATE/basetest-$bs.log); the park stays"; return 1; fi
+    else echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be the branch's fault; waiting for a green base"; return 1; fi
+  fi
+  [ -e "$A/basetest-$bs" ] && return 0
+  if ( cd "$SG_FORK_DIR" && FG_SUITES=full bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"; return 0; fi
+  # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
+  # parallel), and a single red would park every branch on a flake. Two consecutive reds is the base, one is a retry.
+  bt=$(( $(cat "$A/basered-$bs.tries" 2>/dev/null || echo 0) + 1 )); echo "$bt" > "$A/basered-$bs.tries"
+  if [ "$bt" -ge "${SG_FORK_BASERED_TRIES:-2}" ]; then touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the fork suite on its own $bt runs in a row (see $SG_STATE/basetest-$bs.log); not merging, no revert, no fix run. Every branch is parked until the base is green."
+  else echo "FORKCLOSE BASE-FLAKE $l: $SG_FORK_BASE $bs failed the fork suite on its own (run $bt of ${SG_FORK_BASERED_TRIES:-2}); one red is not proof, retrying next cycle."; fi
+  return 1; }
+e2eprep() {   # $1 = label; the e2e checkouts the real-app cases drive, at the base's head
+  [ -n "${SG_E2E_DIR:-}" ] && [ -d "$SG_E2E_DIR" ] && [ -z "$(/usr/bin/git -C "$SG_E2E_DIR" status --porcelain --untracked-files=no)" ] \
+    && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"
+  if [ -n "${SG_E2E_BUILD_DIR:-}" ] && [ -d "$SG_E2E_BUILD_DIR" ]; then   # the built emulator the real-app cases drive: rebuild at the base's head (incremental) under the gui-suite lock: the GUI suite never launches a build that is mid-publish (#1410)
+    /usr/bin/git -C "$SG_E2E_BUILD_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_BUILD_DIR" checkout -q --detach "origin/$SG_BASE" \
+      && bash "$here/serial.sh" gui-suite bash -c 'cd "$1" && eval "$2"' _ "$SG_E2E_BUILD_DIR" "${SG_E2E_BUILD_CMD:-make core && make ui}" > "$SG_STATE/e2e-build.log" 2>&1 \
+      || echo "FORKCLOSE WARN $1: rebuilding $SG_E2E_BUILD_DIR failed (see e2e-build.log)"
+  fi
+}
+bdiff() { $G diff --name-only "$($G merge-base "$1" "$2" 2>/dev/null)" "$2" 2>/dev/null; }   # what branch $2 changed since it left $1 (empty on any doubt: the full gate)
+batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
+  cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"   # the loop's own eligibility rules; its notices (WAIT, ORPHAN) print here
+  [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
+  [ "$($G branch --show-current)" = "$SG_FORK_BASE" ] && [ -z "$($G status --porcelain --untracked-files=no)" ] || return 0   # the loop below says WAIT
+  bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); basegate "batch" || exit 0
+  key=$(for nn in $bl; do $G rev-parse "$(brof $nn)"; done | cksum | cut -d' ' -f1); [ -e "$A/nobatch-$key" ] && return 0   # this exact set already went red as a batch
+  $G checkout -q -b fc-batch "$SG_FORK_BASE" || return 0
+  for nn in $bl; do b2=$(brof $nn); files="$files $(bdiff HEAD "$b2")"   # in order; a branch that conflicts with an earlier one stays out and gets its conflict fix from the loop below
+    if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; $G reset -q --hard HEAD; fi; done
+  if [ "$(wc -w <<<"$merged")" -lt 2 ]; then $G checkout -q "$SG_FORK_BASE"; $G branch -q -D fc-batch; return 0; fi
+  suites=$(printf '%s\n' $files | bash "$here/gate-suites.sh"); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
+  out=$(FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
+  $G checkout -q "$SG_FORK_BASE"
+  if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
+    echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
+    echo "FORKCLOSE BATCH landed ${merged# } ($suites suites, $id green); each issue closes below"
+  else $G branch -q -D fc-batch; touch "$A/nobatch-$key"
+    echo "FORKCLOSE BATCH RED (${merged# }; $id exit $rc): nothing landed, falling back to one branch at a time so the culprit is named"; fi; }
 ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null | tr '\n' ' ') "
 pat=${SG_FORK_BRANCH//%n/}; cc=$($G for-each-ref --format='%(refname:short)' "refs/heads/$pat*" | sed "s#^$pat##" | grep -E '^[0-9]+$')   # every fork branch, so a closed issue's fork half still lands
 [ -n "$cc" ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
+[ -n "${FC_DRY:-}${FC_NOBATCH:-}${FC_COLLECT:-}" ] || [ "$(wc -w <<<"$cc")" -lt 2 ] || batchpass
 for n in $cc; do
   case "$refs" in *" $n "*) continue;; esac   # an open MesenAI PR: its fork half waits for that merge (the fork suite runs against main's build)
   st=$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null) || continue
@@ -71,31 +131,12 @@ for n in $cc; do
     [ "$age" -lt $(( ${SG_FORK_MARKER_MINUTES:-45} * 60 )) ] && continue
     rm -f "$mk"; echo "FORKCLOSE RETRY #$n: the marker for ${head:0:9} waited $(( age / 60 )) min with no new commit on $br and no fix run alive; retrying"
   fi
+  [ -n "${FC_COLLECT:-}" ] && { [ -z "$late$reland$mixed" ] && echo "$n" >> "$FC_COLLECT"; continue; }   # a plain open fork-only candidate
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   if [ "$($G branch --show-current)" != "$SG_FORK_BASE" ] || [ -n "$($G status --porcelain --untracked-files=no)" ]; then echo "FORKCLOSE WAIT #$n: $SG_FORK_DIR is not a clean $SG_FORK_BASE checkout"; exit 0; fi
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
-  if [ -e "$A/basered-$bs" ]; then
-    # A park nobody hears about is a silent stall (#1407): say so once per base sha, naming the failing test and who waits.
-    if [ ! -e "$A/basered-$bs.escalated" ]; then touch "$A/basered-$bs.escalated"
-      ft=$(grep -E 'FAIL|not ok' "$SG_STATE/basetest-$bs.log" 2>/dev/null | grep -v 'fork gate' | head -3)
-      wb=""; for w in $cc; do [ "$($G rev-list --count "$SG_FORK_BASE..${SG_FORK_BRANCH//%n/$w}" 2>/dev/null)" -gt 0 ] && wb="$wb ${SG_FORK_BRANCH//%n/$w}"; done
-      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. After %s min the base suite is retried once on its own; a green retry lifts the park, a second red keeps it.\n" "$SG_FORK_BASE" "$bs" "${wb:- $br}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" > "$SG_STATE/cq/$n-basered$$.md"
-    fi
-    # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
-    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
-      if ( cd "$SG_FORK_DIR" && bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; touch "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN #$n: $SG_FORK_BASE $bs passed the solo retry after the park; lifting it"
-      else echo "FORKCLOSE BASE-RED #$n: the solo retry of $SG_FORK_BASE $bs failed too (see $SG_STATE/basetest-$bs.log); the park stays"; continue; fi
-    else echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be $br's fault; waiting for a green base"; continue; fi
-  fi
-  if [ ! -e "$A/basetest-$bs" ]; then   # a red base reds every branch at once: test it once per base head, before merging anything
-    if ( cd "$SG_FORK_DIR" && bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"
-    else   # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
-           # parallel), and a single red would park every branch on a flake. Two consecutive reds is the base, one is a retry.
-      bt=$(( $(cat "$A/basered-$bs.tries" 2>/dev/null || echo 0) + 1 )); echo "$bt" > "$A/basered-$bs.tries"
-      if [ "$bt" -ge "${SG_FORK_BASERED_TRIES:-2}" ]; then touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own $bt runs in a row (see $SG_STATE/basetest-$bs.log); not merging $br, no revert, no fix run. Every branch is parked until the base is green."
-      else echo "FORKCLOSE BASE-FLAKE #$n: $SG_FORK_BASE $bs failed the fork suite on its own (run $bt of ${SG_FORK_BASERED_TRIES:-2}); one red is not proof, retrying next cycle."; fi
-      continue; fi
-  fi
+  basegate "#$n" || continue
+  fs=full; [ -z "$late$reland" ] && fs=$(bdiff "$SG_FORK_BASE" "$br" | bash "$here/gate-suites.sh")   # suites by path; late/reland: doubt, full
   [ -z "$late" ] && touch "$mk"
   if [ -z "$late" ] && ! { if [ -n "$reland" ]; then relandbr; else mergebr; fi; }; then
     $G merge --abort 2>/dev/null
@@ -108,20 +149,18 @@ for n in $cc; do
     printf "Fork-only close: merging %s (%s) into %s conflicts (%s). A conflict-fix squad run (%s) merges the base into the branch keeping both sides; the loop retries the close when the branch head moves.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "$files" "$nm" > "$SG_STATE/cq/$n-forkconflict$$.md"
     echo "FORKCLOSE CONFLICT #$n $br into $SG_FORK_BASE ($files) -> fix run $nm"; continue; fi
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
-  [ -n "${SG_E2E_DIR:-}" ] && [ -d "$SG_E2E_DIR" ] && [ -z "$(/usr/bin/git -C "$SG_E2E_DIR" status --porcelain --untracked-files=no)" ] \
-    && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"
-  if [ -n "${SG_E2E_BUILD_DIR:-}" ] && [ -d "$SG_E2E_BUILD_DIR" ]; then   # the built emulator the real-app cases drive: rebuild at the base's head (incremental) under the gui-suite lock: the GUI suite never launches a build that is mid-publish (#1410)
-    /usr/bin/git -C "$SG_E2E_BUILD_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_BUILD_DIR" checkout -q --detach "origin/$SG_BASE" \
-      && bash "$here/serial.sh" gui-suite bash -c 'cd "$1" && eval "$2"' _ "$SG_E2E_BUILD_DIR" "${SG_E2E_BUILD_CMD:-make core && make ui}" > "$SG_STATE/e2e-build.log" 2>&1 \
-      || echo "FORKCLOSE WARN #$n: rebuilding $SG_E2E_BUILD_DIR failed (see e2e-build.log)"
+  if [ -n "$late" ] && [ -e "$A/basetest-$bs" ]; then   # the base that holds the branch is already tested green (a batch that just landed it, or the base test above): no second run
+    rc=0; id=base-$bs; lg=$(cat "$A/basetest-$bs"); tl=$(tail -3 "${lg:-/dev/null}" 2>/dev/null)
+  else e2eprep "#$n"
+    out=$(FG_SUITES=$fs "$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out"); tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
+    # the gate ran on the tree that is now the base head: record it as tested, so the next landing pays no second base test
+    [ $rc = 0 ] && [ -z "$late" ] && [ "$($G rev-parse HEAD)" = "$m" ] && echo "$SG_STATE/tests/$id.log" > "$A/basetest-${m:0:9}"
   fi
-  out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
-  tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
   if [ $rc = 0 ] && [ -n "$mixed" ]; then
     printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
     echo "FORKCLOSE #$n fork half merged ($br ${head:0:9} -> ${m:0:9}, $id green; PR still open)"
   elif [ $rc = 0 ]; then
-    [ -n "$late" ] && landline="- $br was already in $SG_FORK_BASE as $late: the pass that merged it ended before its close step, and every later pass read the branch as landed and skipped it. The fork suite is re-run here as the evidence that rule asks for." \
+    [ -n "$late" ] && landline="- $br was already in $SG_FORK_BASE as $late: the pass that merged it ended before its close step, and every later pass read the branch as landed and skipped it. The fork suite result below (a batch or base test that covers it) is the evidence that rule asks for." \
                    || landline="- $br at ${head:0:9} merged into $SG_FORK_BASE as ${m:0:9}."
     gh api -X POST repos/$SG_REPO/issues/$n/comments -F body=@- >/dev/null <<EOT
 Done (fork-only work; owner-approved rule: merged into the fork's $SG_FORK_BASE and the fork suite green there).
