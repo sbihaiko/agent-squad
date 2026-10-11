@@ -46,7 +46,6 @@ if v:
   tm python3 "$(dirname "$0")/forkrescue.py" 2>&1   # a fork-only run that ended needs-human/fail with its commit off gui/<N>: re-point it, Code Complete (#1411)
   [ $((tick % 2)) -eq 1 ] && tm "$(dirname "$0")/autofrontier.sh" 2>&1   # dispatch the frontier as soon as a blocker falls, every ~3 min
   [ $((tick % 4)) -eq 1 ] && tm "$(dirname "$0")/autobug.sh" 2>&1   # open bug issues dispatched automatically, every ~6 min
-  tm "$(dirname "$0")/autohunt.sh" 2>&1   # idle loop: one read-only bug hunt that files reproducible defects
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and autopilot every 30 s outside this cycle
   [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1; tm "$(dirname "$0")/autopilot.sh" 2>&1; }   # standalone watch.sh keeps them here
   tm "$(dirname "$0")/heartbeat.sh"   # hung test hosts (0% CPU) and dead runs
