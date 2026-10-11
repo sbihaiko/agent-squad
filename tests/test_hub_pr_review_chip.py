@@ -106,7 +106,7 @@ def test_a_failed_attempt_names_the_model_and_keeps_the_reason_in_the_tooltip(hu
     (state / "revci-1491.out").write_text(
         f"#1491 {SHA9} clean CI=success:2 VERDICT: BLOCKED (every review model failed)\n")
     st = hub.review_state(1491, SHA9, now=now)
-    assert st["chip"] == "review failed · grok-4.5"
+    assert st["chip"] == "review failed"   # the model stays in the tooltip, not on the chip (owner, 2026-10-11)
     assert "BLOCKED (every review model failed)" in st["tip"]
     assert "exit 141" not in st["tip"]
 

@@ -377,7 +377,7 @@ def review_state(pr, sha9, now=None):
     if not att or att[0]["exit"] == 0: return None
     last = att[0]
     reason = _verdict_of(pr, sha9) or f"exit {last['exit']}"
-    chip = f"review timed out · {last['model']} · {last['secs']} s" if last["exit"] == 142 else f"review failed · {last['model']}"
+    chip = f"review timed out · {last['model']} · {last['secs']} s" if last["exit"] == 142 else "review failed"
     lines = [f"{a['model']} {a['secs']} s · {a['result']}" for a in att]   # newest first, so the card's tooltip reads top-down
     lines[0] += f" ({reason})"
     retry = ""
