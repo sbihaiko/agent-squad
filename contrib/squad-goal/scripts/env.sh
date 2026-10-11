@@ -13,11 +13,6 @@ if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
 : "${SG_STATE:=$HOME/.cache/squad-goal}"
-# The fork's GUI suite ($SG_FORK_TEST_CMD) drives the real application and is the slow half of every fork landing, so it has
-# one off switch for every path that can start it: the gate, a fix run's acceptance command and a re-land all read this
-# variable. The marker $SG_STATE/auto/nogui, or SG_FORK_GUI_SUITE=no in the environment, swaps it for the squad's own shell
-# suites; removing the marker puts the GUI suite back on the next script that starts.
-if [ -e "$SG_STATE/auto/nogui" ] || [ "${SG_FORK_GUI_SUITE:-yes}" = no ]; then SG_FORK_TEST_CMD="${SG_FORK_TEST_NOGUI_CMD:-bash $here/shell-suites.sh}"; fi
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
 export SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag

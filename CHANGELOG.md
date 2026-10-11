@@ -1,7 +1,6 @@
 # Changelog
 
 ## 0.2.31 (local fork, 2026-10-11)
-- **The fork's GUI suite has one off switch, wherever it is started from.** The gate skips it when `SG_FORK_GUI_SUITE=no` or `$SG_STATE/auto/nogui` exists, and `env.sh` now swaps `$SG_FORK_TEST_CMD` itself for the squad's own shell suites under the same switch, so a fix run's acceptance command and a re-land skip it too — not just the gate.
 - **The fork gate's GUI suite has its own off switch.** The gate's slow half is the GUI suite (`$SG_FORK_TEST_CMD`, the MesenAI end-to-end suite driving the real application) and every landing paid it in full, so a run of tooling-only branches queued behind minutes of it each. `fork-gate.sh` now skips it when `SG_FORK_GUI_SUITE=no` is in the environment or when the marker `$SG_STATE/auto/nogui` exists, and prints the skip on the line it used to spend launching it; the squad's own shell suites always run, so a branch that edits `contrib/squad-goal/scripts` is still gated by a suite that looks at them (#1392). The switch is read when the gate starts, so dropping the marker takes effect on the next landing with no restart.
 
 ## 0.2.30 (local fork, 2026-10-11)
