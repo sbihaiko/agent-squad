@@ -13,6 +13,7 @@ from squad.gui_test import ScriptError, validate
 from squad.gui_test_adapter import FakeAdapter as TickingFake
 from squad.gui_test_render import render
 from squad.gui_test_run import run
+from tests import real_app_guard as guard
 from tests.dashboard_helpers import run_node
 from tests.gui_test_helpers import script, step
 
@@ -500,10 +501,30 @@ def test_three_pilot_steps_run_on_the_real_emulator_with_no_pad_attached(tmp_pat
     assert len({n["capture"]["sha256"] for n in nodes}) >= 1
 
 
+def test_a_headless_tree_that_is_the_binarys_checkout_is_refused_and_a_separate_one_runs(tmp_path):
+    """#1414: the headless case builds the UI into its tree; that must never be the tree MESEN_GUI_BINARY comes from."""
+    from squad.gui_test_headless import SharedTree, headless_repo
+    build, headless = tmp_path / "e2e-build", tmp_path / "e2e-headless"
+    binary = build / "bin" / "osx-arm64" / "Release" / "Mesen"
+    binary.parent.mkdir(parents=True); binary.write_text("x"); headless.mkdir()
+    with pytest.raises(SharedTree, match="MESEN_GUI_BINARY"):
+        headless_repo({"MESENAI_HEADLESS_REPO": str(build), "MESEN_GUI_BINARY": str(binary)})
+    link = tmp_path / "alias"; link.symlink_to(build)
+    with pytest.raises(SharedTree):
+        headless_repo({"MESENAI_HEADLESS_REPO": str(link), "MESENAI_APP": str(binary)})
+    assert headless_repo({"MESENAI_HEADLESS_REPO": str(headless), "MESEN_GUI_BINARY": str(binary)}) == headless
+    assert headless_repo({"MESENAI_HEADLESS_REPO": str(build)}) == build  # no binary configured: nothing to collide with
+
+
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
 def test_hook_e2e_case_of_1182_drives_the_home_over_the_socket():
     """#1182's GuiTestHook_e2e_a_runner_drives_the_Home_over_the_socket, run for real: one case passed, none skipped."""
-    repo = _env_path("MESENAI_HEADLESS_REPO", "a MesenAI checkout with `make core` built (its own bin/, never the read-only MESENAI_REPO)")
+    from squad.gui_test_headless import SharedTree, headless_repo
+    _env_path("MESENAI_HEADLESS_REPO", "a MesenAI checkout with `make core` built (its own bin/, never the read-only MESENAI_REPO)")
+    try:
+        repo = headless_repo(os.environ)
+    except SharedTree as e:
+        pytest.skip(str(e))
     lib = _env_path("MESEN_CORE_LIB", "the MesenCore.dylib built from that checkout")
     assert lib.is_file(), f"MESEN_CORE_LIB {lib} is not a file"
     p = subprocess.run(
@@ -2084,7 +2105,7 @@ def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
 
 
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
-def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work):
+def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work, clean_app_start):
     """AC 4: the committed pilot's Home batch, through the command, on the built application."""
     root = _mesenai_root()
     _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
@@ -2100,6 +2121,7 @@ def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_c
     p = _run_script_cmd(script_path, out, "--step-timeout", "180", spec="mesen-gui",
                         env={"MESENAI_ROOT": str(root)})
     r = json.loads(out.read_text())
+    guard.assert_launched(r, clean_app_start)
     assert {s["id"] for s in r["steps"]} == set(HOME_BATCH_IDS)
     assert {s["id"] for s in r["steps"] if s["verdict"] == "pending"} == HOME_BATCH_MANUAL
     failed = {s["id"] for s in r["steps"] if s["verdict"].startswith("failed")}
