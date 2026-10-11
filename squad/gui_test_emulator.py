@@ -35,7 +35,9 @@ NES_HEADER = 16
 # reads, and `nav.goal` is not an input at all - it is the hook's read of the state a move is chosen from and
 # the moves it will accept (ADR-0271 items 1-2), which the runner's Navigator chooses among (item 6 A).
 ACTIONS = ["pad.press", "pad.release", "pad.chord", "key.press", "nav.goal"]
-# The advertised actions that inject nothing: asking one is a read, so it is never a press that came too early.
+# The advertised actions that inject nothing: asking one is a read, so it is never a press that came too early. They
+# are advertised under `reads` beside them, which is how the runner tells an adapter that answers the hook's read from
+# one that performs the goal itself (`squad.gui_test_run.goal_route`, #1780).
 READS = ("nav.goal",)
 
 
@@ -99,7 +101,7 @@ class EmulatorAdapter:
         self._nav_goal, self._nav = None, None
 
     def capabilities(self):
-        return {"actions": list(ACTIONS), "checks": list(CHECKS),
+        return {"actions": list(ACTIONS), "reads": list(READS), "checks": list(CHECKS),
                 "input_families": ["ticks"], "variants": {"window.mode": ["windowed"]}}
 
     # ---- fixtures, placed before the process starts ----

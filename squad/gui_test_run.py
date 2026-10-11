@@ -39,6 +39,22 @@ def decide(adapter, check, root=None):
     return "passed" if r["ok"] else f"failed (expected {r['expected']}, observed {r['observed']})"
 
 
+def goal_route(adapter):
+    """Who a `nav.goal` step belongs to on this adapter: `"read"`, `"adapter"` or `"none"` (#1780).
+
+    The hook's `nav.goal` injects nothing: it answers with the state a move is chosen from and the moves it will accept,
+    and the Choice stays the runner's (ADR-0271 items 1-2 and 6 A, hook version 2 since #1779). An adapter that answers
+    that read declares it under `reads`, so the runner asks it and hands the goal to the Navigator. An adapter that
+    lists `nav.goal` among the actions it runs and answers no read drives the goal itself, and the step's own wait and
+    check are what decide it, the way every other action of that adapter is decided. An adapter that advertises it in
+    neither list has no goal to give: nothing is asked and the step ends `pending`, as a run with no chooser does.
+    """
+    caps = adapter.capabilities()
+    if "nav.goal" in caps.get("reads", ()):
+        return "read"
+    return "adapter" if "nav.goal" in caps.get("actions", ()) else "none"
+
+
 def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=None):
     """Run every step in order; return [{id, verdict, capture, held}]. Never raises on a wait timeout.
 
@@ -49,8 +65,9 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=
     With a `vision` (squad.gui_test_vision.Vision), an automated step with no `check` takes the model's verdict on its
     capture: `compatible` passes, anything else is `needs review`; a step with a `check` follows the check and is never
     sent. A `nav.goal` step is reached by `goal` (squad.gui_test_goal.Navigator); with none (CI, ADR-0271 Decision 6 A) it
-    ends `pending`, and a goal not reached ends `failed (goal not reached ...)`. An adapter that advertises `nav.goal` is
-    asked for the hook's own read first (#1780), which is what the Navigator chooses among. Once the vision spend reaches its cap the run stops: every later step ends `skipped (spend cap ...)`.
+    ends `pending`, and a goal not reached ends `failed (goal not reached ...)`. An adapter that answers the hook's
+    `nav.goal` read is asked for it first (#1780), which is what the Navigator chooses among; one that drives the goal
+    itself runs the step the way it runs every other action (`goal_route`). Once the vision spend reaches its cap the run stops: every later step ends `skipped (spend cap ...)`.
 
     `record` takes one replay event per call: gui_step, then gui_capture (only once the wait is met), then gui_verdict.
     """
@@ -84,14 +101,16 @@ def run(script, adapter, record=None, prompt=None, root=None, vision=None, goal=
                 results.append({"id": s["id"], "verdict": verdict, "capture": capture, "held": False})
                 continue
             action = s.get("action")  # an observe-only step (the validator allows it) injects nothing
+            route = goal_route(adapter) if action and action["name"] == "nav.goal" else ""
             emit("gui_step", s["id"], **({"action": action["name"]} if action else {}),
                  **({"check": s["check"]} if "check" in s else {}))
-            if action and action["name"] == "nav.goal":
+            if route in ("read", "none"):
                 # #1780: since #1779 the hook answers `nav.goal` itself - the state the move is chosen from and the
-                # moves it will accept (ADR-0271 items 1-2) - so an adapter that advertises it is asked, and the
+                # moves it will accept (ADR-0271 items 1-2) - so an adapter that answers that read is asked, and the
                 # Choice stays the runner's (item 6 A). Asking is a read: it injects nothing, and taking it for a
-                # press would leave the step's own wait timing out on a screen nothing moved.
-                if "nav.goal" in adapter.capabilities()["actions"]:
+                # press would leave the step's own wait timing out on a screen nothing moved. An adapter that drives
+                # the goal itself is no goal of the runner's: it runs the step below, like every other action.
+                if route == "read":
                     adapter.inject("nav.goal", action.get("args", {}))
                 missed = "pending" if goal is None else goal.reach(adapter, s, emit, vision)
                 if missed:
