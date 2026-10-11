@@ -58,13 +58,13 @@ def priced(d):
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v9" in hist[p]: return hist[p]
+    if p in hist and "v10" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them)
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None
-    accepted, done_kids = set(), set()
+    accepted, done_kids, wts = set(), set(), set()
     with open(p) as f:
         for i, l in enumerate(f):
             if i < 200: issues.update(re.findall(r"(?:issue|Refs) #(\d{3,5})", l))
@@ -98,6 +98,8 @@ def scan(p):
                 x["spend"] += d.get("spend") or 0; x["calls"] += 1
                 h = ((d.get("workspace") or {}).get("head") if isinstance(d.get("workspace"), dict) else None) or ((d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None)
                 if h: head = h
+                w = d.get("workspace") if isinstance(d.get("workspace"), dict) else None   # the worktrees this run works in: how a load is traced back to it (see attribute)
+                if w and w.get("path") and w.get("name") not in (None, "."): wts.add(w["path"])
             elif e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
@@ -106,7 +108,7 @@ def scan(p):
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
                 if h: head = h
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids)}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts)}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -215,9 +217,270 @@ def group_header(kind, rows, caps):
     return {"text": f"{n} · {title}", "title": title}
 def run_rank(st, live=True):
     return 0 if live and st in LIVE_STATES else 1
+
+# ---------------------------------------------------------------- machine load (#1776)
+# The strip answers "is this machine saturated?"; a card answers "because of whom?". Both read ONE cached sample, taken by
+# a thread inside this process: serving the page, and polling it, spawn nothing and read no counter, so the hub can never
+# become part of the load it reports. CPU and RAM are read from this process (Mach's own counters, else psutil); the GPU
+# counter is the one exception — an unprivileged `ioreg` read per sample, the only source macOS offers without root.
+LOAD_SAMPLE_SECS = 5      # one sample per interval; the page polls the cached reading on this same cadence
+LOAD_WARN_PCT = 80.0      # machine CPU % at or above which the strip warns and a card may be blamed
+LOAD_WARN_SAMPLES = 2     # consecutive samples above the threshold: one hot sample is not machine load
+LOAD_MIN_SHARE_PCT = 3.0  # a card is marked only for a run whose process tree owns at least this much of the machine
+LOAD_HISTORY = 12         # CPU samples kept, so the warn rule can look back (a minute at the default cadence)
+GPU_CMD = ("/usr/sbin/ioreg", "-r", "-d", "1", "-c", "IOAccelerator", "-w", "0")
+GPU_RE = re.compile(r'"Device Utilization %"\s*=\s*(\d+(?:\.\d+)?)')
+
+def _pct(v):
+    """A source's answer as a percentage, or None when it did not really answer: a string, a negative, NaN. A source that
+    cannot be read has to show `?` — a 0 would read as an idle machine and hide the load the strip exists to show."""
+    try: f = float(v)
+    except (TypeError, ValueError): return None
+    if f != f or f < 0: return None   # NaN compares false to itself
+    return min(f, 100.0)
+
+def pct_cell(v):
+    """One cell of the strip: the rounded percentage, or `?` where the hub cannot see."""
+    f = _pct(v)
+    return "?" if f is None else f"{f:.0f}%"
+
+def load_line(cpu, ram, gpu):
+    """The strip's single line, in the order it is read."""
+    return f"CPU {pct_cell(cpu)} · RAM {pct_cell(ram)} · GPU {pct_cell(gpu)}"
+
+def sustained(samples, warn=LOAD_WARN_PCT, need=LOAD_WARN_SAMPLES):
+    """True when the newest `need` samples all sit at or above `warn`: the load has to outlive a single reading, so a
+    one-off spike blames nobody. A sample that could not be read breaks the run instead of passing for a low one."""
+    n = max(int(need), 1); tail = list(samples or [])[-n:]
+    return len(tail) == n and all(s is not None and s >= warn for s in tail)
+
+def parse_gpu(text):
+    """GPU utilisation out of IOAccelerator's PerformanceStatistics. A machine with no accelerator, or a driver that does
+    not report utilisation, answers None: the cell shows `?` rather than a zero nobody measured."""
+    m = GPU_RE.search(text or "")
+    return float(m.group(1)) if m else None
+
+def owners_of(rows):
+    """run id -> the paths its processes run in: the run's own folder (its child worktrees live under it) plus every
+    worktree its record named. Paths, because a run is told apart by where it runs, not by what its processes are called."""
+    out = {}
+    for r in rows or []:
+        paths = [r.get("dir") or ""] + list(r.get("wts") or [])
+        out[r["id"]] = [p for p in dict.fromkeys(paths) if p]
+    return out
+
+def attribute(prev, cur, owners):
+    """CPU seconds per run between two process snapshots (pid -> (ppid, cpu seconds, argv)).
+    A process is credited to the owner whose worktree path its own argv names, and one that names none inherits its
+    nearest ancestor's owner, so a whole tree (zsh -> claude -> dotnet test) counts, not just the process that carries
+    the path. Attribution is by path and never by process name: every child of every run is the same `claude`, `dotnet`
+    or `python`, so a name would credit whichever run started first. Seconds outside every run (the editor, the browser,
+    a stray build) belong to nobody, and stay only in the strip's machine-wide figure."""
+    hit = {}
+    def owner_of(pid, depth=0):
+        if pid in hit: return hit[pid]
+        row = cur.get(pid)
+        if row is None or depth > 64: return None
+        cmd = row[2] or ""
+        best = None
+        for key, paths in owners.items():
+            for p in paths:
+                if p in cmd and (best is None or len(p) > len(best[1])): best = (key, p)
+        found = best[0] if best else owner_of(row[0], depth + 1)
+        hit[pid] = found
+        return found
+    out = {}
+    for pid, (ppid, secs, cmd) in cur.items():
+        p = prev.get(pid)
+        d = secs - p[1] if p else 0.0
+        if d <= 0: continue
+        k = owner_of(pid)
+        if k: out[k] = out.get(k, 0.0) + d
+    return out
+
+def share_pct(secs, window, ncpu):
+    """One run's CPU seconds as a percentage of the whole machine, the unit the strip's CPU figure uses: a run holding one
+    of eight cores holds 12.5% of the machine."""
+    if not window or not ncpu: return 0.0
+    return round(100.0 * secs / (window * ncpu), 1)
+
+def attach_load(rows, shares, warn):
+    """The card's marker: with the machine warned, every run whose process tree owns a real share of that CPU carries
+    `cpu`, the percentage it owns. A run that owns nothing of it carries none, and the marker is dropped the moment the
+    machine is calm again."""
+    for r in rows:
+        r.pop("cpu", None)
+        if warn and shares.get(r.get("id"), 0.0) >= LOAD_MIN_SHARE_PCT:
+            r["cpu"] = round(shares[r["id"]])
+    return rows
+
+_MACH = None
+def _mach():
+    """libSystem's host_statistics, resolved once: the kernel's own CPU and memory counters, read inside this process."""
+    global _MACH
+    if _MACH is None:
+        try:
+            import ctypes, ctypes.util
+            lib = ctypes.CDLL(ctypes.util.find_library("System") or "/usr/lib/libSystem.B.dylib")
+            lib.mach_host_self.restype = ctypes.c_uint
+            lib.host_statistics.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+            lib.host_page_size.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_uint)]
+            _MACH = (ctypes, lib)
+        except Exception: _MACH = False
+    return _MACH or None
+
+_CPU_TICKS = None
+def cpu_pct():
+    """Machine CPU as a percentage of all cores, from the delta of the kernel's tick counters. The first read has no
+    previous one to compare, so it answers None (`?` in the strip) instead of inventing a number."""
+    global _CPU_TICKS
+    cur = None
+    m = _mach()
+    if m:
+        ctypes, lib = m
+        class Load(ctypes.Structure): _fields_ = [("user", ctypes.c_uint32), ("system", ctypes.c_uint32), ("idle", ctypes.c_uint32), ("nice", ctypes.c_uint32)]
+        i = Load(); n = ctypes.c_uint(4)
+        if lib.host_statistics(lib.mach_host_self(), 3, ctypes.byref(i), ctypes.byref(n)) == 0:
+            cur = (i.user + i.system + i.nice, i.user + i.system + i.nice + i.idle)
+    if cur is None:
+        try:
+            import psutil
+            t = psutil.cpu_times()
+            cur = (t.user + t.system + getattr(t, "nice", 0.0), t.user + t.system + getattr(t, "nice", 0.0) + t.idle)
+        except Exception: cur = None
+    prev, _CPU_TICKS = _CPU_TICKS, cur
+    if not cur or not prev: return None
+    busy, tot = cur[0] - prev[0], cur[1] - prev[1]
+    return 100.0 * busy / tot if tot > 0 else None
+
+def ram_pct():
+    """Used memory as a percentage of the machine's total, from the kernel's page counters (active + wired + compressed),
+    else psutil. None where neither answers."""
+    m = _mach()
+    if m:
+        ctypes, lib = m
+        try:
+            class VM(ctypes.Structure):
+                _fields_ = ([(n, ctypes.c_uint32) for n in ("free", "active", "inactive", "wire")] +
+                            [(n, ctypes.c_uint64) for n in ("zero_fill", "reactivations", "pageins", "pageouts", "faults", "cow_faults", "lookups", "hits", "purges", "purgeable", "speculative", "decompressions", "compressions", "swapins", "swapouts")] +
+                            [(n, ctypes.c_uint32) for n in ("compressor", "throttled", "external", "internal")] + [("total_uncompressed", ctypes.c_uint64)])
+            vm = VM(); n = ctypes.c_uint(ctypes.sizeof(VM) // 4)
+            size = ctypes.c_uint(0)
+            h = lib.mach_host_self()
+            if lib.host_statistics64(h, 4, ctypes.byref(vm), ctypes.byref(n)) == 0 and lib.host_page_size(h, ctypes.byref(size)) == 0 and size.value:
+                total = _sysctl_u64("hw.memsize")
+                used = (vm.active + vm.wire + vm.compressor) * size.value
+                if total: return min(100.0, 100.0 * used / total)
+        except Exception: pass
+    try:
+        import psutil
+        return psutil.virtual_memory().percent
+    except Exception: return None
+
+def _sysctl_u64(name):
+    """One integer out of sysctl, in-process (ctypes), for hw.memsize."""
+    m = _mach()
+    if not m: return 0
+    ctypes, lib = m
+    try:
+        lib.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        out = ctypes.c_uint64(0); size = ctypes.c_size_t(8)
+        if lib.sysctlbyname(name.encode(), ctypes.byref(out), ctypes.byref(size), None, 0) != 0: return 0
+        return int(out.value) if size.value == 8 else 0
+    except Exception: return 0
+
+def gpu_pct():
+    """The accelerator's own utilisation counter, one unprivileged `ioreg` read. An ioreg that is missing, slow or has no
+    accelerator to report answers None: the cell shows `?`."""
+    try: out = subprocess.run(list(GPU_CMD), capture_output=True, text=True, timeout=10).stdout
+    except Exception: return None
+    return parse_gpu(out)
+
+SOURCES = {"cpu": cpu_pct, "ram": ram_pct, "gpu": gpu_pct}
+def sample_load(src=None):
+    """One reading of the three cells. A source that raises, hangs or answers with something that is not a percentage is
+    unavailable for that cell, and the page shows `?`: a bad source never prints a traceback and never fakes a number."""
+    out = {}
+    for k in ("cpu", "ram", "gpu"):
+        fn = (src if src is not None else SOURCES).get(k)
+        try: out[k] = _pct(fn()) if fn else None
+        except Exception: out[k] = None
+    return out
+
+LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {}}
+LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
+_PROC_PREV, _PROC_AT = None, 0.0
+
+def proc_snapshot():
+    """pid -> (ppid, CPU seconds, argv) for the processes this user can see: psutil when it is importable (a read inside
+    this process), else one `ps`. Only the sampler calls this, and only while the machine is warned."""
+    try:
+        import psutil
+        out = {}
+        for p in psutil.process_iter(["pid", "ppid", "cpu_times", "cmdline"]):
+            i = p.info
+            try: out[i["pid"]] = (i["ppid"], float(sum(i["cpu_times"][:3])), " ".join(i["cmdline"] or []))
+            except Exception: continue
+        if out: return out
+    except Exception: pass
+    out = {}
+    for l in sh("/bin/ps", "-axo", "pid=,ppid=,time=,command=").splitlines():
+        f = l.split(None, 3)
+        if len(f) < 4 or not f[0].isdigit(): continue
+        out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
+    return out
+
+def _ps_time(t):
+    """`ps -o time=` prints CPU time as [[dd-]hh:]mm:ss[.ss]; seconds, 0.0 when it cannot be read."""
+    d, dash, rest = t.partition("-")
+    if not dash: rest = d
+    secs = 0.0
+    try:
+        for p in rest.split(":"): secs = secs * 60 + float(p)
+        return secs + (int(d) * 86400 if dash else 0)
+    except ValueError: return 0.0
+
+def attribute_pass():
+    """CPU per run over the last interval, as a share of the machine. The sampler calls it only while the machine is
+    warned: a calm machine never builds a process table."""
+    global _PROC_PREV, _PROC_AT
+    cur = proc_snapshot()
+    prev, _PROC_PREV = _PROC_PREV, cur
+    now = time.time(); window = now - (_PROC_AT or now); _PROC_AT = now
+    if not prev or window <= 0: return {}
+    ncpu = os.cpu_count() or 1
+    return {k: share_pct(v, window, ncpu) for k, v in attribute(prev, cur, owners_of(LOAD_RUNS)).items()}
+
+def load_tick(sample=None):
+    """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, and — only while the
+    machine is warned — work out which run owns that CPU."""
+    s = sample if sample is not None else sample_load()
+    LOAD_STATE["cpu"] = (LOAD_STATE["cpu"] + [s["cpu"]])[-LOAD_HISTORY:]
+    LOAD_STATE["ram"], LOAD_STATE["gpu"], LOAD_STATE["asof"] = s["ram"], s["gpu"], time.time()
+    LOAD_STATE["runs"] = attribute_pass() if sustained(LOAD_STATE["cpu"]) else {}
+    return LOAD_STATE
+
+def load_payload():
+    """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
+    sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use."""
+    hist = LOAD_STATE.get("cpu") or []
+    cpu = hist[-1] if hist else None
+    return {"line": load_line(cpu, LOAD_STATE.get("ram"), LOAD_STATE.get("gpu")),
+            "cpu": None if cpu is None else round(cpu),
+            "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
+            "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
+            "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
+
+def load_sampler():
+    """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
+    while True:
+        try: load_tick()
+        except Exception: pass
+        time.sleep(LOAD_SAMPLE_SECS)
+
 def runs():
     _titles()
-    out = []
+    out = []; load_rows = []
     for l in sh("/bin/ps", "-axo", "pid=,command=").splitlines():
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
@@ -239,6 +502,7 @@ def runs():
         rank = run_rank(st, live=True)
         t1 = r["t1"] or time.time()
         out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True, "agents": r.get("agents") or 0})
+        load_rows.append({"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []})   # what the load attribution needs, and nothing else
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
         except Exception: continue
@@ -247,6 +511,8 @@ def runs():
         rec = {"head": d.get("head"), "merged": d.get("merged"), "exit_code": d.get("rc")}
         st = handled_of(d.get("state") or "running", rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
         out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": b["title"], "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=st in LIVE_STATES), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": st in LIVE_STATES, "agents": 0})
+    LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
+    attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
@@ -628,12 +894,16 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
 .hidbar{flex:none;align-self:flex-start;padding:8px 10px;color:var(--mute);font-size:11px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line);min-width:120px}.chip b{font-weight:600;color:var(--pin)}.chip{display:flex;justify-content:space-between;gap:10px;align-items:center;cursor:pointer;background:#2a303b;border-radius:9px;padding:1px 8px;color:var(--fg)}
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
+#foot{position:sticky;bottom:0;z-index:1;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
+#foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}
+.load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
 </style>
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
-<div id=list></div></div>
+<div id=list></div>
+<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b></div></div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
@@ -667,6 +937,10 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
 }
 const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
 const CAPS=__CAPS__;
+const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
+function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
+async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),el=$("#ldline"),f=$("#foot");
+ if(el)el.textContent=d.line||"CPU ? · RAM ? · GPU ?";if(f)f.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
 let openGroup=null,userPicked=false;
 // runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
@@ -678,7 +952,7 @@ function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   const filled=GROUPS.filter(g=>by[g[0]]);
   if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b>${loadMark(r)}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>{const h=groupHeader(k,by[k]);return `<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroup===k?by[k].map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
@@ -807,6 +1081,7 @@ async function pollStats(){try{pollSubs();
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
+loadPoll();setInterval(loadPoll,LOAD_MS);   // the strip ticks on the sampler's cadence, whatever else the page is doing
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
 const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off?(bo.h||320)+"px":""};
@@ -1300,7 +1575,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
-        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).encode(), "text/html; charset=utf-8"
+        elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
+        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
@@ -1322,5 +1598,5 @@ def watch_self():
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
