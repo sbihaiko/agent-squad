@@ -1947,6 +1947,36 @@ def test_1222_a_failed_check_names_expected_and_observed_from_the_adapters_answe
     assert _verdicts(out)["b1.one"] == "failed (expected play.library, observed play.home)"
 
 
+def _hold_step(lost_ticks, tmp_path):
+    """A hold like home.focus-holds-up (press 4 ticks, wait 4 ticks, focus must still be Open a ROM) on a slow host."""
+    d = _shape(action={"name": "pad.press", "args": {"button": "Up", "ticks": 4}}, wait={"timeout_ticks": 4},
+               check={"name": "ui.focused", "args": {"is": "play.home.open-rom"}})
+    return run_supervised(d, "tests.gui_test_run_script_fake:SlowHostAdapter", {"lost_ticks": lost_ticks},
+                          out_dir=tmp_path / "out")
+
+
+def test_1418_a_hold_step_whose_focus_is_unread_at_the_check_settles_on_ticks_and_says_it_retried(tmp_path):
+    """Load makes the hook read no focus right after the hold; the step re-reads for more emulated ticks (never host
+    time), passes when the focus is back, and reports the retry beside the pass."""
+    out = _hold_step(lost_ticks=10, tmp_path=tmp_path)
+    assert _verdicts(out)["b1.one"] == "passed"
+    result = next(r for r in out["results"] if r["id"] == "b1.one")
+    assert result["timing"]["retried"] and result["timing"]["settled"], result
+
+
+def test_1418_a_hold_step_whose_focus_never_returns_gets_a_timing_verdict_not_a_plain_miss(tmp_path):
+    out = _hold_step(lost_ticks=10_000, tmp_path=tmp_path)
+    assert _verdicts(out)["b1.one"].startswith("failed (timing: focus unread after")
+
+
+def test_1418_a_hold_that_really_moved_the_focus_still_fails_on_the_observed_id_without_a_retry(tmp_path):
+    d = _shape(action={"name": "pad.press", "args": {"button": "Up", "ticks": 4}}, wait={"timeout_ticks": 4},
+               check={"name": "ui.focused", "args": {"is": "play.library"}})
+    out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
+    assert _verdicts(out)["b1.one"] == "failed (expected play.library, observed play.home.open-rom)"
+    assert "timing" not in out["results"][0]
+
+
 def test_1222_an_unknown_id_fails_that_step_and_leaves_the_next_batch_running(tmp_path):
     """mesen-gui raises UnknownId; the step fails (unknown id), the batch is not the unit that fails."""
     d = _shape(check={"name": "ui.focused", "args": {"is": "play.ghost"}})
@@ -2126,7 +2156,8 @@ def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_c
     assert {s["id"] for s in r["steps"]} == set(HOME_BATCH_IDS)
     assert {s["id"] for s in r["steps"] if s["verdict"] == "pending"} == HOME_BATCH_MANUAL
     failed = {s["id"] for s in r["steps"] if s["verdict"].startswith("failed")}
-    assert failed <= HOME_BATCH_MAY_FAIL and not [b for b in r["batches"] if "crash" in b["verdict"] or "hang" in b["verdict"]]
+    verdicts = {s["id"]: s["verdict"] for s in r["steps"] if s["id"] in failed}
+    assert failed <= HOME_BATCH_MAY_FAIL and not [b for b in r["batches"] if "crash" in b["verdict"] or "hang" in b["verdict"]], verdicts
     assert p.returncode == (1 if failed else 0), p.stdout + p.stderr
     passed = {s["id"] for s in r["steps"] if s["verdict"] == "passed"}
     assert passed >= set(HOME_BATCH_IDS) - HOME_BATCH_MANUAL - HOME_BATCH_MAY_FAIL - {"home.back-to-home"}
