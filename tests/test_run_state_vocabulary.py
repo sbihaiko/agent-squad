@@ -45,11 +45,11 @@ def test_every_state_the_hub_can_show_is_in_the_table(hub):
         assert hub.state_of({"verdict": v, "reasons": [], "land": False}, 0) in states
 
 
-def test_the_hub_serves_no_legend_and_its_badge_classes_all_have_a_colour_rule(hub):
+def test_the_hub_badge_classes_all_have_a_colour_rule_and_a_legend_entry(hub):
     css = hub.PAGE.split("<style>")[1].split("</style>")[0]
     for r in hub.RUN_STATES:
         assert re.search(rf"\.b\.{re.escape(r['state'].replace(' ', '-'))}\s*\{{[^}}]*color:var\(--{r['color']}\)", css), r["state"]
-    assert "id=lg" not in hub.PAGE and "#lg" not in hub.PAGE and "RUN_STATE_LEGEND" not in hub.PAGE   # the hub carries no legend (#1417)
+        assert f">{r['label']}<" in hub.PAGE.split("<div id=side>")[1], r["state"]   # the hub's own legend names it
     assert "var(--none)" in css and "--none:" + PALETTE["none"] in css
 
 
