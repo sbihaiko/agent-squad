@@ -6,10 +6,10 @@ function sourcesModule({ STATES }) {
   // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
-    ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
-    { cls: "err", label: "Rule error on the node", group: "node" },
-    { cls: "sel", label: "Selected", group: "interaction" },
-    { cls: "drop", label: "Target of the link you drag", group: "interaction" },
+    ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend })),   // the card states: from the one STATES table
+    { cls: "err", label: "Rule error on the node" },
+    { cls: "sel", label: "Selected" },
+    { cls: "drop", label: "Target of the link you drag" },
   ];
   // One run-state vocabulary: the top-bar verdict chip, its legend and the hub's run badges (contrib/squad-goal/scripts/hub.py RUN_STATES) name and
   // paint a state alike; a Python test holds the two tables equal. `color` is a palette variable; a `hub_only` state is one the hub derives, so the chip never shows it.

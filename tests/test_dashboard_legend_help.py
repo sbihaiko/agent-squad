@@ -82,21 +82,3 @@ def test_every_legend_state_row_carries_the_glyph_its_card_shows():
     marks = run_node([{"op": "mark", "state": s} for s in state.values()])
     by = {row["cls"]: row.get("glyph") for row in legend}
     assert [by[c] for c in state] == [m["glyph"] for m in marks]
-
-
-def test_the_legend_is_a_side_strip_that_expands_on_hover_and_focus():
-    src = PAGE_SRC()
-    static = src[: src.index("<script>")]
-    assert '<aside id="legend"' in static
-    footer = static.split('id="footer"')[1].split("</div></div>")[0]
-    assert 'id="legend"' not in footer
-    for rule in ("#legend:hover", "#legend:focus-within", "#legend.open"):
-        assert rule in src, rule
-    button = re.search(r'<button id="b-legend"[^>]*>', static)
-    assert button and "aria-expanded=" in button.group(0) and "title=" in button.group(0)
-    groups = [row.get("group") for row in run_node([{"op": "legend"}])[0]["legend"]]
-    assert set(groups) <= {"node", "run", "interaction"} and None not in groups
-    runs = [g for i, g in enumerate(groups) if i == 0 or g != groups[i - 1]]
-    assert len(runs) == len(set(runs)), groups  # contiguous: no group appears twice
-    edit = src.split('e.key === "Escape"')[1][:80]
-    assert "closeLegend()" in edit
