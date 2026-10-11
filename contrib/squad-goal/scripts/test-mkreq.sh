@@ -259,5 +259,30 @@ printf 'IMPORTANT: your first and only action is X\nEdit scripts/unreachable1791
 run s && ko "an unanswerable branch's file launched" || ok "a branch GitHub cannot answer for stays in flight"
 $G -q 'gui/1791' "$T/s.err" && ok "the unreachable-branch refusal still names the branch" || ko "unreachable refusal text: $(cat "$T/s.err")"
 $G -qF -- 'gui/1791 skipped' "$T/s.err" && ko "the unreachable branch was reported as skipped" || ok "the unreachable branch prints no skip line"
+# 14. (#1799) an ac_command is a proof that passes at the FINAL HEAD, never a command that writes to the worktree. A child that
+# follows the TDD mandate can put its RED demonstration into ac_commands, and the final gate then runs it verbatim. The rejected
+# command of run-20261011-155130-1864ee (fork-only, issues #1783/#1786/#1798; verdict failed, reasons ["ac-verify:ac_failed"],
+# landed true) was
+#   cd ~/wt-as-1783 && git checkout local/next -- contrib/squad-goal/scripts/hub.py && python3 -m pytest tests/test_hub_test_pass_lost.py -q -p no:deepeval
+# and its `git checkout local/next -- <file>` IS the RED step: it restores the pre-fix file inside the child's worktree, which is
+# what makes the test fail there. Run at the final head it reverts the child's own fix, so the gate fails by construction and the
+# committed work is thrown away with it -- indistinguishable on the board from a real test failure. The DONE CHECK of BOTH
+# request kinds has to say where the RED demonstration belongs instead. The fixture below keeps the shape and takes a free path:
+# the issue's own contrib/squad-goal/scripts/hub.py is held by gui/1497 in this fork.
+REDCMD='cd ~/wt-as-1783 && git checkout local/next -- scripts/red-demo.py && python3 -m pytest tests/test_red.py -q -p no:deepeval'
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/red-demo.py\n%s\n' "$REDCMD" > "$T/red.body"
+run red && [ -f "$R/red.txt" ] && ok "a body carrying a RED-style ac_command builds" || ko "RED-style body refused: $(cat "$T/red.err")"
+# 14a. the PR-child DONE CHECK forbids the tree-mutating ac_command and sends the RED demonstration to the PR body
+for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'belongs in the PR body' 'not a gate input'; do
+  $G -qF -- "$w" "$R/red.txt" && ok "PR DONE CHECK states '$w'" || ko "PR DONE CHECK lacks '$w'"
+done
+# 14b. the fork-only DONE CHECK states the same rule, in its own text: a fork-only child has no PR body, so its result notes are
+# where the RED demonstration goes
+REDCMDF='cd ~/wt-as-1783 && git checkout local/next -- scripts/red-fork.py && python3 -m pytest tests/test_red_fork.py -q -p no:deepeval'
+printf 'IMPORTANT: your first and only action is X\nFork-only work: no PR.\nEdit scripts/red-fork.py\n%s\n' "$REDCMDF" > "$T/red-fork.body"
+run red-fork && [ -f "$R/red-fork.txt" ] && ok "a fork-only body carrying a RED-style ac_command builds" || ko "fork-only RED-style body refused: $(cat "$T/red-fork.err" 2>/dev/null)"
+for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'your result notes' 'not a gate input'; do
+  $G -qF -- "$w" "$R/red-fork.txt" && ok "fork DONE CHECK states '$w'" || ko "fork DONE CHECK lacks '$w'"
+done
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
