@@ -9,6 +9,7 @@ st=${SG_STATE:-$HOME/.cache/squad-goal}; n=$1; shift; # GUI kill switch (scripts
 # exits 0, never non-zero: a suite deliberately not run is not a failure, and a red gate would revert every branch in flight.
 case "$n" in gui-suite)
   k=""; [ "${SG_GUI_TESTS:-}" = no ] && k="SG_GUI_TESTS=no"; [ -e "$st/auto/gui-tests-off" ] && k="${k:-$st/auto/gui-tests-off}"
+  [ -e "$HOME/.squad-gui-tests-off" ] && k="${k:-$HOME/.squad-gui-tests-off}"   # the durable copy: a suite that inherits SG_STATE can clean it
   [ -n "$k" ] && { echo "serial: gui-suite NOT run ($k); re-enable with scripts/gui-tests.sh on" >&2; exit 0; };; esac
 case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mkdir -p "$st/locks"; w=${SERIAL_WAIT_SECONDS:-1800}; t0=$(date +%s)
 until mkdir "$L" 2>/dev/null; do
