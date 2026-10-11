@@ -933,7 +933,7 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
 }
 const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
 const CAPS=__CAPS__;
-const LOAD_MS=__LOADMS__;   // the sampler's own cadence: the page reads the cached reading, and never refreshes slower than the cap
+const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
 function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),el=$("#ldline"),f=$("#foot");
  if(el)el.textContent=d.line||"CPU ? · RAM ? · GPU ?";if(f)f.classList.toggle("warn",!!d.warn)}catch(e){}}

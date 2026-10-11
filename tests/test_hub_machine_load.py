@@ -78,6 +78,17 @@ def test_the_gpu_reading_comes_from_the_accelerators_own_counters(hub):
     assert hub.parse_gpu('"Device Utilization %"=abc') is None
 
 
+def test_a_cpu_or_ram_sample_spawns_nothing(hub, monkeypatch):
+    """The reading must not add to the load it reports: this machine's own sources, with every spawn made fatal."""
+    def boom(*a, **k):
+        raise AssertionError("a CPU or RAM sample must not spawn a process")
+    monkeypatch.setattr(hub, "sh", boom)
+    monkeypatch.setattr(hub.subprocess, "run", boom)
+    got = hub.sample_load({"cpu": hub.cpu_pct, "ram": hub.ram_pct})
+    for v in got.values():
+        assert v is None or 0 <= v <= 100                 # a reading, or an honest `?`
+
+
 # ---------------------------------------------------------------- the warn rule
 
 def test_one_hot_sample_is_not_load(hub):
@@ -190,7 +201,7 @@ def test_the_page_carries_a_footer_strip_and_polls_the_reading():
     src = HUB_PY.read_text()
     assert 'elif self.path.startswith("/api/load")' in src            # served, not sampled, per view
     assert '<div id=foot' in src and "id=ldline" in src              # the strip and its line
-    assert "const LOAD_MS=__LOADMS__;" in src
+    assert 'const LOAD_MS=Number("__LOADMS__")||5000;' in src
     assert '.replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000)))' in src
     assert "setInterval(loadPoll,LOAD_MS)" in src
 
