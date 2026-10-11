@@ -648,7 +648,7 @@ const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m
 const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
 const qbar=(label,pct,resets,sm,tip)=>`<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span>${resets?`<span class=rst title="${esc(rs(resets))}">${rel(resets)}</span>`:""}</div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%"></div></div></div>`;
-const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
+const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${ago(a.asof)}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
 const SUBL={claude:"Claude Team",grok:"SuperGrok",gpt:"ChatGPT Plus",gemini:"Google AI Plus"};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
@@ -661,7 +661,7 @@ async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
   const est=pl&&v.usd?v.eq/v.usd*100:null,aq=v.quota,aw=aq&&aq.windows[0],q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null),win=aw?aw.label:(pl&&pl.qwin||""),pct=q!=null?q:est,today=d.frac*100,cls=q!=null?"warnq":(ok?(v.saved>=0?"good":"bad"):"");
   const MT="Fill: API-equivalent used by squad runs ÷ monthly plan price (partial: other uses of the plan are not seen). 100% = plan paid off. Tick: how much of the month has passed.";
-  const bar=aw?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
+  const bar=aw||(aq&&aq.unavailable)?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
   const man=aw||!pl?"":`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${q??""}" placeholder="%" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" maxlength=40 style="flex:1;min-width:0"></div>`;
   return `<div class=sub><div class=hd><span class=nm>${SUBL[k]}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")}catch(e){console.error(e)}}
 $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(!k)return;const row=e.target.closest(".sub");let body;
@@ -876,18 +876,38 @@ def q_codex():
         x = r.get(key)
         if x: m = x.get("windowDurationMins") or 0; ws.append({"label": "weekly" if m >= 7 * 1440 else ("5 h" if m == 300 else fallback), "pct": x.get("usedPercent"), "resets": x.get("resetsAt")})
     return {"windows": ws, "plan": r.get("planType"), "reached": r.get("rateLimitReachedType")}
+GROK_LOG = HOME / ".grok/logs/unified.jsonl"
+GROK_SETTINGS = HOME / ".grok/settings_cache.json"   # the config the grok CLI caches at startup
+GROK_NO_SOURCE = ("no credit line in ~/.grok/logs/unified.jsonl: the grok CLI's billing extension only runs for "
+                  "the TUI's /usage view, so the weekly credits are not on disk (the probe is not stale, it is blind)")
+def grok_plan():
+    """The plan the grok CLI itself caches; it is also what proves the settings file is being read at all."""
+    try: p = json.loads(json.loads(GROK_SETTINGS.read_text())["payload"])
+    except Exception: return None
+    return ((p.get("settings") or {}).get("subscription_tier_display")) or None
 def q_grok():
-    """The grok CLI logs `billing: fetched credits config` (creditUsagePercent, current weekly period) each time it runs; read the newest line."""
-    f = HOME / ".grok/logs/unified.jsonl"
-    with open(f, "rb") as fh:
-        fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 3_000_000)); tail = fh.read().decode("utf8", "ignore")
+    """Read the newest log line carrying a BillingConfig: `creditUsagePercent` + `currentPeriod{start,end}`.
+    The grok CLI pushes that payload in the line's `ctx.config`, and its message wording drifts between versions
+    (`billing: fetched credits config` in older ones), so match the fields and never the text. Finding none is a
+    reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing yesterday's number."""
+    tail = ""
+    try:
+        with open(GROK_LOG, "rb") as fh:
+            fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 3_000_000)); tail = fh.read().decode("utf8", "ignore")
+    except OSError: pass
     last = None
     for l in tail.splitlines():
-        if "billing: fetched credits config" in l: last = l
-    if not last: return None
-    d = json.loads(last); c = d["ctx"]["config"]; per = c.get("currentPeriod") or {}
-    end = dt.datetime.fromisoformat(per["end"]).timestamp() if per.get("end") else None
-    return {"windows": [{"label": "weekly", "pct": c.get("creditUsagePercent"), "resets": end}], "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()}
+        try: d = json.loads(l)
+        except Exception: continue
+        if not isinstance(d, dict): continue
+        c = (d.get("ctx") or {}).get("config") or {}
+        if c.get("creditUsagePercent") is not None and isinstance(c.get("currentPeriod"), dict): last = (d, c)
+    if not last:
+        return {"windows": [], "unavailable": True, "err": GROK_NO_SOURCE, "plan": grok_plan()}
+    d, c = last; per = c.get("currentPeriod") or {}
+    end = dt.datetime.fromisoformat(per["end"].replace("Z", "+00:00")).timestamp() if per.get("end") else None
+    return {"windows": [{"label": "weekly", "pct": c.get("creditUsagePercent"), "resets": end}], "plan": grok_plan(),
+            "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()}
 def q_agy():
     """`agy -p /quota` prints one line per model group (no model call): name, `Weekly Limit Remaining`, N%, reset ISO. The Gemini group is the Google plan's."""
     r = subprocess.run(["agy", "-p", "/quota"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -914,17 +934,30 @@ def week_value(k, usd, days, mstart):
     for e in weeks[k].values():
         if e["end"] - 7 * 86400 >= mstart or e["end"] > time.time(): tot += e["pct"] / 100 * usd * 7 / days
     return round(tot, 2)
+QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy}
+def refresh_quota_once():
+    """One pass: ask each CLI for its quota. A probe that answers with no windows replaces the row outright, so a
+    reading that stopped tracking reality cannot pass as current; a probe that raises keeps the last good value."""
+    for k, fn in QUOTA_PROBES.items():
+        try:
+            r = fn()
+            if r:
+                r.setdefault("asof", time.time()); quota[k] = r
+                if r.get("windows"): note_week(k, r)
+        except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
+    try: QUOTA.write_text(json.dumps(quota))
+    except OSError: pass
 def refresh_quota():
-    """Every 20 min: ask each CLI for its quota; a failed read keeps the last good value (and its age is shown)."""
+    """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row)."""
     while True:
-        for k, fn in (("claude", q_claude), ("gpt", q_codex), ("grok", q_grok), ("gemini", q_agy)):
-            try:
-                r = fn()
-                if r: r.setdefault("asof", time.time()); quota[k] = r; note_week(k, r)
-            except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
-        try: QUOTA.write_text(json.dumps(quota))
-        except OSError: pass
-        time.sleep(1200)
+        refresh_quota_once(); time.sleep(1200)
+def quota_row(k):
+    """What the cost panel shows for provider k: the CLI's own reading, or the reason there is no reading."""
+    r = quota.get(k)
+    if not r: return None
+    if r.get("windows"): return r
+    if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
+    return None
 
 def subs_month():
     """Per subscription, this month: API-equivalent used so far, the plan price prorated to today, and the saving."""
@@ -944,7 +977,7 @@ def subs_month():
         pr = round(usd * frac, 2) if usd is not None else None
         out[k] = {"plan": plan, "usd": round(usd, 2) if usd is not None else None, "rate": rt, "noRate": bool(plan and not rt), "eq": eq, "qval": week_value(k, usd, days, mstart), "prorated": pr, "saved": round(eq - pr, 2) if pr is not None else None, "x": round(eq / pr, 1) if pr else None}
     plans = sum(v["usd"] for v in out.values() if v["usd"] is not None)
-    for k in out: out[k]["quota"] = quota.get(k) if quota.get(k, {}).get("windows") else None
+    for k in out: out[k]["quota"] = quota_row(k)
     return {"subs": out, "frac": round(frac, 3), "plans": round(plans, 2), "api": round(api, 2), "total": round(plans + api, 2)}
 
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
