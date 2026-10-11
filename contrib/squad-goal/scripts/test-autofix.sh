@@ -29,4 +29,29 @@ r=$(AF_DRY=1 bash "$T/s/autofix.sh" 9 8 2>&1); case "$r" in *"fork-only"*) case 
 for v in "closed not_planned Some bug" "closed completed [duplicate of #1] Some bug"; do
   r=$(GH_ISSUE="$v" AF_DRY=1 bash "$T/s/autofix.sh" 9 8 2>&1); case "$r" in "AUTOFIX SKIPPED #9"*) ok "dup issue ($v): skipped";; *) ko "dup issue ($v): '$r'";; esac; done
 GH_ISSUE="closed completed Some bug" bash "$T/s/autofix.sh" --dupissue 8 && ko "completed issue counted as a duplicate" || ok "completed issue: not a duplicate"
+# 5) (#1770) a dispatch mkreq.sh refuses must not keep the claim autopilot.sh took for the head. autopilot.sh touches
+# auto/queued-<pr>-<sha9> BEFORE calling this script and skips the head while that marker exists, and this script charges
+# the round before it builds the request: a refusal left the head queued forever with its round spent and nothing working
+# it (#1706 @ 27aaaf5b5 kept a BLOCKING verdict, green CI and no fix run until a human pushed). The refusal frees what it
+# wrote and says so with its own exit code, so a round that was never spent is not charged (#1529 for autobug/autofrontier).
+export GH_ISSUE="open - Some bug"; M="$T/st/auto"; mkdir -p "$M" "$T/co"
+printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s\n' "$T/st" "$T" > "$T/s/env.sh"
+printf '#!/bin/bash\necho "refusing: request $1 names tests/a.py, which open PR #7 already changes." >&2; exit 1\n' > "$T/s/mkreq.sh"
+printf 'open("%s/launched","w")\nprint("run-4242")\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/mkreq.sh"
+echo "#9 aaaaaaaaa clean CI=success:1 VERDICT: CHANGES" > "$T/st/revci-9.out"; printf 'VERDICT: CHANGES\n1. fix it\n' > "$T/st/review-9.md"
+touch "$M/queued-9-aaaaaaaaa"
+r=$(bash "$T/s/autofix.sh" 9 8 2>&1); rc=$?
+[ -e "$M/queued-9-aaaaaaaaa" ] && ko "5a a refused dispatch left auto/queued-9-aaaaaaaaa: the next pass skips the head" || ok "5a a refused dispatch frees the queued marker"
+[ -e "$M/fix-9-aaaaaaaaa" ] && ko "5a a refused dispatch left auto/fix-9-aaaaaaaaa behind" || ok "5a a refused dispatch frees the fix marker too"
+[ -s "$M/rounds-9" ] && ko "5a a refused dispatch charged a round ($(cat "$M/rounds-9"))" || ok "5a a refused dispatch returns the round"
+[ -e "$T/launched" ] && ko "5a a refused dispatch launched a run" || ok "5a a refused dispatch launches no run"
+[ "$rc" = 75 ] && ok "5a a refused dispatch exits 75 (distinct from a failed run)" || ko "5a refused dispatch exited $rc, not 75: '$r'"
+# 6) the successful dispatch keeps the claim and the round (the marker is what stops a second fix run on the same head)
+printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"\n' > "$T/s/mkreq.sh"; chmod +x "$T/s/mkreq.sh"
+rm -f "$M/fix-9-aaaaaaaaa" "$M/rounds-9"; touch "$M/queued-9-aaaaaaaaa"
+r=$(bash "$T/s/autofix.sh" 9 8 2>&1); rc=$?
+[ -e "$M/queued-9-aaaaaaaaa" ] && ok "6 a dispatched fix keeps the queued marker" || ko "6 a dispatched fix dropped its own claim: '$r'"
+[ "$(cat "$M/rounds-9" 2>/dev/null)" = aaaaaaaaa ] && ok "6 a dispatched fix charges its round" || ko "6 a dispatched fix charged no round ($(cat "$M/rounds-9" 2>/dev/null))"
+[ "$rc" = 0 ] && ok "6 a dispatched fix exits 0" || ko "6 a dispatched fix exited $rc: '$r'"
+case "$r" in *"run-4242"*) ok "6 the run id is reported";; *) ko "6 no run id in '$r'";; esac
 rm -rf "$T"; exit $fail
