@@ -11,7 +11,8 @@ model judgment and lives in the skill, not here.
 Two outside dependencies are injected, and they are the only ones this module has:
 
 - **the GitHub runner** — a callable `runner(op, **kwargs)`; the ops are `ensure_label`, `create_issue`,
-  `update_issue`, `add_sub_issue`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
+  `update_issue`, `add_sub_issue`, `remove_sub_issue`, `list_sub_issues`, `set_title`, `issue_body`,
+  `search_open_bug`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
   builds the real one on `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues). This module reads
   `issue_state` to know whether a verdict changed and whether a case is closed, and it **never** calls `file_bug`: the
   run command owns the one bug a red run files, and the write-back only links it.
@@ -48,6 +49,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 from squad.gui_test import validate
@@ -1137,7 +1139,27 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             fields = [("title", kw["title"]), ("body", kw["body"])] + [("labels[]", x) for x in kw["labels"]]
             return api("PATCH", f"issues/{kw['number']}", fields, json_out=True)
         if op == "add_sub_issue":
-            return api("POST", f"issues/{kw['parent']}/sub_issues", [("sub_issue_id", kw["sub"])], json_out=True)
+            fields = [("sub_issue_id", kw["sub"])] + ([("replace_parent", "true")] if kw.get("replace_parent") else [])
+            return api("POST", f"issues/{kw['parent']}/sub_issues", fields, json_out=True)
+        if op == "remove_sub_issue":
+            return api("DELETE", f"issues/{kw['parent']}/sub_issue", [("sub_issue_id", kw["sub"])], json_out=True)
+        if op == "list_sub_issues":
+            found, page = [], 1
+            while True:
+                batch = api("GET", f"issues/{kw['number']}/sub_issues?per_page=100&page={page}", json_out=True) or []
+                found += batch
+                if len(batch) < 100:
+                    return found
+                page += 1
+        if op == "set_title":
+            return api("PATCH", f"issues/{kw['number']}", [("title", kw["title"])], json_out=True)
+        if op == "issue_body":
+            return ((api("GET", f"issues/{kw['number']}", json_out=True) or {}).get("body")) or ""
+        if op == "search_open_bug":
+            query = urllib.parse.quote(f'repo:{repo} is:issue is:open label:bug in:title "{kw["title"]}"')
+            found = json.loads(call(["gh", "api", f"search/issues?q={query}"])).get("items", [])
+            hit = next((i for i in found if i.get("title") == kw["title"]), None)
+            return None if hit is None else {"number": hit["number"], "url": hit.get("html_url"), "title": hit["title"]}
         if op == "comment":
             return api("POST", f"issues/{kw['number']}/comments", [("body", kw["body"])], json_out=True)
         if op == "retitle":
@@ -1167,7 +1189,9 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")
             out = call([bug_helper, kw["title"], kw["body"], kw["priority"]])
-            return {"url": next((w for w in out.split() if w.startswith("http")), None)}
+            url = next((w for w in out.split() if w.startswith("http")), None)
+            tail = url.rstrip("/").rsplit("/", 1)[-1] if url else ""
+            return {"url": url, "number": int(tail) if tail.isdigit() else None}
         raise ValueError(f"unknown op {op!r}")
     return gh
 
