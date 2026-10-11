@@ -1,0 +1,130 @@
+"""#1514: two overlapping dispatch passes must not both pick the same issues and dispatch them twice.
+
+Host-free: the real dispatchers run against stubs for gh, cluster.py, mkreq.sh and launch.py, with their own
+SG_STATE, so nothing here touches the network, a model or the live loop.
+"""
+import os
+import subprocess
+import time
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
+
+GH = """#!/bin/bash
+# A stub gh: one open issue (#42), no open PR. autobug reads `<number><US>labels>`; autofrontier sorts on
+# `<wave><US><number><US><labels>`, so the two queries answer in their own shape.
+case "$*" in *"pulls?state=open"*) exit 0;; esac
+case "$*" in *"labels=ready-for-agent"*) printf 'wave:01\\03742\\037%s\\n' "$LABELS"; exit 0;; esac
+case "$*" in *"issues?state=open"*) printf '42\\037%s\\n' "$LABELS"; exit 0;; esac
+case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","created_at":"2026-10-11T00:00:00Z"}\\n'; exit 0;; esac
+exit 0
+"""
+
+FORKONLY = """sg_fork_only() { return 1; }
+sg_fork_preamble() { :; }
+"""
+
+STACK = """#!/bin/bash
+echo "READY"
+"""
+
+LAUNCH = """import sys
+sys.exit(0)
+"""
+
+
+def _scripts(tmp_path, cluster_sleep):
+    """A scripts folder holding the real dispatchers and single.sh, plus every stub they call."""
+    d = tmp_path / "scripts"
+    d.mkdir(parents=True)
+    for name in ("single.sh", "autobug.sh", "autofrontier.sh"):
+        (d / name).write_text((SCRIPTS / name).read_text())
+    (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
+    (d / "forkonly.sh").write_text(FORKONLY)
+    (d / "cluster.py").write_text(f"import time\ntime.sleep({cluster_sleep})\nprint('42')\n")
+    (d / "stack.sh").write_text(STACK)
+    (d / "launch.py").write_text(LAUNCH)
+    # The stub mkreq.sh records whether the issue was claimed at the moment the request was built (#1514).
+    (d / "mkreq.sh").write_text(
+        '#!/bin/bash\nname=$1\n'
+        'printf "marker=%s\\n" "$([ -e "$SG_STATE/auto/bug-42" ] || [ -e "$SG_STATE/auto/disp-42" ] '
+        '&& echo present || echo absent)" > "$SG_STATE/mkreq-seen.txt"\n'
+        'printf "%s\\n" "$SG_STATE/req/$name.txt"\n')
+    for f in d.iterdir():
+        f.chmod(0o755)
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(GH)
+    gh.chmod(0o755)
+    return d, gh
+
+
+def _state(tmp_path, script):
+    """The SG_* a dispatcher needs: state, the checkout it reads, the board and the repo."""
+    st = tmp_path / "state"
+    (st / "auto").mkdir(parents=True)
+    (st / "req").mkdir()
+    (st / "cq").mkdir()
+    (st / "active-runs.txt").write_text("")
+    (tmp_path / "checkout").mkdir()
+    labels = "wave:01" if script == "autofrontier.sh" else "bug,wave:01"
+    return {
+        "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": str(tmp_path / "home"),
+        "SG_STATE": str(st),
+        "SG_CHECKOUT": str(tmp_path / "checkout"),
+        "SG_REPO": "o/n", "SG_OWNER": "o", "SG_PROJECT": "1", "SG_BUG_PROJECT": "",
+        "SG_BASE": "main", "SG_BUG_LABEL": "bug", "SG_FRONTIER_LABEL": "ready-for-agent",
+        "SG_FRONTIER_PREAMBLE": "", "BOARD": "true", "LABELS": labels,
+    }
+
+
+def _pass(d, env, tmp_path, label):
+    return subprocess.Popen(["bash", str(d / label)], env=env, cwd=tmp_path,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
+def _bodies(tmp_path):
+    return sorted(p.name for p in (tmp_path / "state" / "req").glob("*.body"))
+
+
+def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
+    """The second pass starts inside the first one's pick: it must see the claim and dispatch nothing."""
+    d, _ = _scripts(tmp_path, cluster_sleep=3)
+    env = {**os.environ, **_state(tmp_path, "autobug.sh")}
+    (tmp_path / "home").mkdir()
+    first = _pass(d, env, tmp_path, "autobug.sh")
+    time.sleep(1.2)                                      # the first pass is inside its pick (cluster.py sleeps 3 s)
+    second = _pass(d, env, tmp_path, "autobug.sh")
+    out = [p.communicate(timeout=90)[0] for p in (first, second)]
+
+    assert "AUTOBUG dispatched" in out[0], out[0]
+    assert second.returncode == 0, out[1]
+    assert "AUTOBUG dispatched" not in out[1], f"the overlapping pass dispatched a second time:\n{out[1]}"
+    assert len(_bodies(tmp_path)) == 1, f"two requests were built: {_bodies(tmp_path)}"
+
+
+def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
+    """A crash between the pick and the launch must still leave the issue claimed (#1514)."""
+    d, _ = _scripts(tmp_path, cluster_sleep=0)
+    env = {**os.environ, **_state(tmp_path, "autobug.sh")}
+    (tmp_path / "home").mkdir()
+    out = _pass(d, env, tmp_path, "autobug.sh").communicate(timeout=90)[0]
+    assert "AUTOBUG dispatched" in out, out
+
+    seen = (tmp_path / "state" / "mkreq-seen.txt").read_text().strip()
+    assert seen == "marker=present", f"mkreq.sh built the request with the issue unclaimed: {seen}"
+    marker = tmp_path / "state" / "auto" / "bug-42"
+    assert marker.exists() and marker.read_text().strip().startswith("autobug-"), marker.read_text()
+
+
+def test_autofrontier_claims_the_issue_before_it_builds_the_request(tmp_path):
+    """The same claim-before-build rule holds for the frontier dispatcher (#1514)."""
+    d, _ = _scripts(tmp_path, cluster_sleep=0)
+    env = {**os.environ, **_state(tmp_path, "autofrontier.sh")}
+    (tmp_path / "home").mkdir()
+    out = _pass(d, env, tmp_path, "autofrontier.sh").communicate(timeout=90)[0]
+    assert "FRONTIER dispatched" in out, out
+
+    seen = (tmp_path / "state" / "mkreq-seen.txt").read_text().strip()
+    assert seen == "marker=present", f"mkreq.sh built the request with the issue unclaimed: {seen}"

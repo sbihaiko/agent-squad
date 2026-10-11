@@ -20,7 +20,14 @@ def _tree(tmp_path, suites):
 
 
 def _run(*cmd, cwd, env=None, timeout=60):
-    e = {**os.environ, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", **(env or {})}
+    # Hermetic (#1515): the live loop's own SG_*/FG_* must not reach the gate. serial.sh takes the machine-wide
+    # gui-suite lock inside $SG_STATE, so an inherited SG_STATE makes this test wait for the running GUI suite --
+    # minutes on a busy machine -- and the test times out or blows the suite's 20 s cap on the loop's load, not on
+    # the gate's wiring. A private SG_STATE gives the gate its own lock; FG_SUITES is cleared so the gate is `full`.
+    e = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "FG_"))}
+    e["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+    e["SG_STATE"] = str(Path(cwd) / "state")
+    e.update(env or {})
     return subprocess.run(list(cmd), cwd=cwd, capture_output=True, text=True, env=e, timeout=timeout)
 
 

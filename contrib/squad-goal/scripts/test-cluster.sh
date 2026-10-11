@@ -14,8 +14,9 @@ echo "$r" | /usr/bin/grep -qx 1300 && ok "same area outside the window stays apa
 echo "$r" | /usr/bin/grep -qx "1301 1302" && ok "shared file path clusters" || ko "files: '$r'"
 echo "$r" | /usr/bin/grep -qx 1303 && ok "unrelated issue alone" || ko "alone: '$r'"
 r=$(CL_MODE=files python3 "$d/cluster.py" <<<"$I"); echo "$r" | /usr/bin/grep -qx 1228 && ok "CL_MODE=files ignores the area rule" || ko "files mode: '$r'"
-# autobug: clusters become children
-mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$T/s/"; : > "$T/st/active-runs.txt"
+# autobug: clusters become children. single.sh and forkonly.sh travel with the dispatchers: both run the pass under
+# single.sh (#1514) and source forkonly.sh, so a sandbox without them cannot start a pass at all.
+mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/forkonly.sh" "$T/s/"; : > "$T/st/active-runs.txt"
 echo '{"max_parallel": 10}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
 printf 'SG_REPO=x/y; SG_STATE=%s; SG_BASE=main; SG_CHECKOUT=%s; SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
