@@ -168,6 +168,9 @@ def test_tot_all_time_equal_to_month_reads_this_month():
     tiles = re.findall(r"<div>[^<]+<b([^>]*)>([^<]+)</b></div>", html)
     assert tiles[-1] == (" class=m", "= this month"), tiles
     assert tiles[1] == ("", "$612")
+    rule = re.search(r"\.tot b\.m\{([^}]*)\}", SRC)
+    assert rule and "color:var(--mute)" in rule.group(1), rule
+    assert "font-size:15px" not in rule.group(1)  # "= this month" is text, not a value: it must fit the tile
 
 
 def test_dollars_drop_cents_at_and_above_one_hundred():
