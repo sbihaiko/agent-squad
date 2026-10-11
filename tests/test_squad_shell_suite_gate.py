@@ -11,7 +11,7 @@ def _tree(tmp_path, suites):
     """A scripts folder holding the real gate scripts and the given fake suites (name -> shell body)."""
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("shell-suites.sh", "fork-gate.sh"):
+    for name in ("shell-suites.sh", "fork-gate.sh", "serial.sh"):
         if (SCRIPTS / name).exists():
             shutil.copy(SCRIPTS / name, d / name)
     for name, body in suites.items():

@@ -3149,7 +3149,6 @@ from tests.gui_test_pilot_fake_1286 import ADAPTERS as PILOT_ADAPTERS  # noqa: E
 from tests.gui_test_pilot_fake_1286 import MANUAL_ONLY_BATCHES  # noqa: E402
 
 
-
 def _automated_1286(script):
     """The ids of the script's automated cases (#1399): every case whose Mode is not `manual`, in script order.
 
