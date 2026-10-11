@@ -1434,7 +1434,8 @@ def _pilot_for_the_real_app(ids):
         else:
             kept.append(b)
     d["batches"] = kept
-    d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
+    # `requires` stays the pilot's own: its automated steps now press, connect and disconnect pads and read the ring,
+    # lamps and surface through the hook (MesenAI #1283), so narrowing it to pad.press made the run refuse to start.
     d["variants"] = {"window.mode": ["windowed"]}
     # The three steps need no rom and no pack: keep only the settings fixture, the one kind every adapter build supports
     # (the pilot also declares pack/rom-* kinds for its later batches, which the adapter rejects at launch).
@@ -2119,7 +2120,8 @@ HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.po
                   "home.first-focus",
                   "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
                   "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
-HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-by-pad-gap"}
+# None of these is manual any more: MesenAI #1283 made the lamp, ring and surface cases automated (the hook decides them).
+HOME_BATCH_MANUAL = set()
 # `home.open-library` waits on `ui.screen == play.library`, and no control in the application carries that id yet: the
 # pilot says its ids are provisional until the in-app AutomationIds land (#1182). It is the one step this can fail on
 # today, and it is asserted as a subset so the case keeps its meaning when that slice lands and the step passes.

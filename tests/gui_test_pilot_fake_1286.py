@@ -1,6 +1,6 @@
 """The adapter roster of the committed pad-only pilot (MesenAI #1286): which target each batch runs on.
 
-The pilot's batches do not all live on one adapter. `launch`, `home` and `library` are its automated batches and need a
+The pilot's batches do not all live on one adapter. `launch`, `home`, `library` and `lamps` are its automated batches and need a
 target whose Home and Library answer the checks the script asks for; every other batch is `manual` - a person runs the
 cases by hand and records a verdict - so its adapter only has to launch, and its cases end `pending` for that person.
 
@@ -22,7 +22,35 @@ class ScenarioFake(PilotFake):
 
     def __init__(self, out_dir, history=0, favorites=0, **rest):
         super().__init__(out_dir, favorites=favorites, **rest)
-        self.history = history
+        self.history, self.pads, self.settings_open = history, set(), False
+
+    def capabilities(self):
+        caps = super().capabilities()
+        return {**caps, "actions": caps["actions"] + ["pad.connect", "pad.disconnect"],
+                "checks": caps["checks"] + ["ui.ring", "ui.footer", "ui.surface", "ui.lamps"]}
+
+    def inject(self, name, args):
+        if name in ("pad.connect", "pad.disconnect"):
+            self.log.append((name, args))
+            (self.pads.add if name == "pad.connect" else self.pads.discard)(args["index"])
+        else:
+            super().inject(name, args)
+
+    def _y(self):
+        if self.screen == "play.home":
+            self.settings_open = True
+        super()._y()
+
+    def observe(self, name, args):
+        """The hook's player-visible reads: the ring follows focus on the Home (a pad coming or going never moves it),
+        a lamp is lit only for a connected pad, and the surface is the Settings sheet once Y opened it."""
+        if name == "ui.ring":
+            return self.focus if self.screen == "play.home" else ""
+        if name == "ui.surface":
+            return "play.settings" if self.settings_open else self.screen
+        if name == "ui.lamps":
+            return "lit" if args["port"] - 1 in self.pads else "dim"
+        return super().observe(name, args)
 
     def _home_order(self):
         tiles = ["play.home.continue"] if self.history else []
@@ -33,12 +61,12 @@ class ScenarioFake(PilotFake):
         return tiles + ["play.home.open-rom"]
 
 
-AUTOMATED_BATCHES = ("launch", "home", "library")
+AUTOMATED_BATCHES = ("launch", "home", "library", "lamps")
 
 MANUAL_ONLY_BATCHES = frozenset({
     "home-after-game", "favorites", "favorites-home", "game", "game-archive", "game-bios", "dialogs", "pause",
     "settings", "pause-pack-multi", "settings-menu-sounds", "controller", "controller-done", "controller-b",
-    "controller-no-game", "lamps", "lamps-game", "loss", "fullscreen", "feel", "trap", "journey", "two-pads",
+    "controller-no-game", "lamps-game", "loss", "fullscreen", "feel", "trap", "journey", "two-pads",
 })
 
 ADAPTERS = {**{batch: ScenarioFake for batch in AUTOMATED_BATCHES},
