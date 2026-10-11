@@ -19,7 +19,7 @@
 #  SG_REVIEW_CHAIN_DEPTH=1 model, SG_REVIEW_RETRY_BUDGET=1 try, SG_REVIEW_TIMEOUT=120 s. An old PR may not spend the whole
 #  chain again while a fresh one waits. AGING fires once, STALLED every 15 min after, so a stuck PR is visible in watch.log.
 # Kill switch: touch $SG_STATE/auto/off (everything) or $SG_STATE/auto/nofix (review+merge only). Hold a PR: label `hold` or `needs-human`; an owner comment `/release` (whole body) lifts it.
-# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS, REFSADDED.
+# Events: AUTOREVIEW, STALE-REVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS, REFSADDED.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; [ -e "$A/off" ] && exit 0
 L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo 0); tot=$(wc -l < "$L" | tr -d ' ')
 [ "$tot" -gt "$seen" ] && tail -n +$((seen+1)) "$L" | grep -E "^(AUTOFIX|AUTOPANEL|NEEDS OWNER)"; echo "$tot" > "$A/.logseen"
@@ -100,8 +100,19 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   line=$(grep "^#$pr $s9 " "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && continue
-    [ -e "$A/launched-$pr-$s9" ] && continue
-    touch "$A/launched-$pr-$s9"
+    # The marker means "a review of this head is in flight", and it holds only while that review is: it carries the pid
+    # of the revci.sh it started, so a review that is still running keeps the head from being reviewed twice. A revci
+    # killed before it appended its summary (a restart, the janitor, the shell) used to leave the marker behind with no
+    # running review and no summary line, and nothing re-queued the head -- only a new push moves the sha -- so the PR
+    # sat mergeable and CI-green with no verdict and its card read `reviewing` forever (#1706). Reaching here means the
+    # summary line for this head is still missing, so a marker whose review is gone is stale: drop it and review again.
+    lm="$A/launched-$pr-$s9"
+    if [ -e "$lm" ]; then
+      lpid=$(cut -d' ' -f1 "$lm" 2>/dev/null)
+      [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null && continue
+      rm -f "$lm"
+      echo "STALE-REVIEW #$pr @ $s9: the review launched for this head is gone and left no summary line (a restart, the janitor or the shell killed it); the marker is dropped and the head is reviewed again"
+    fi
     # A head that already conflicts with its base cannot merge as it is, so it will move before it can: reviewing it now
     # spends a model on a diff that is about to change, and the conflict round that follows pushes a new head that is
     # reviewed a second time. Fix the conflict first, and let the review see the rebased head. (This is how PR #1285 was
@@ -119,6 +130,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
       echo "PREPUSH #$pr @ $s9: $(printf '%s' "$pp" | wc -l | tr -d ' ') process problem(s), fix round without a model review"; continue; fi
     aenv=""; [ -n "$aging" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=${SG_REVIEW_TIMEOUT:-120}"
     nohup env $aenv bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
+    echo $! > "$A/launched-$pr-$s9"   # the pid the marker is judged by on the next pass (see the stale check above)
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started${aging:+ (aging: short leash)}"; continue
   fi
   [[ $line == *SUPERSEDED* || $line == *CI_TIMEOUT* ]] && continue
