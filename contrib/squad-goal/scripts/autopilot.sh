@@ -1,7 +1,10 @@
 #!/bin/bash
 # One pass per watch cycle. Open PRs that name an issue ("Refs #N") are reviewed, fixed and merged:
-# a PR with no Refs #N is not ignored silently — one skip comment on the PR and a NOREFS log line,
-# once per head, so the next pass that still cannot map it stays quiet.
+# a PR with no Refs #N is repaired when the issue can be derived — the branch (`gui/<N>`, fork work) or the run
+# that produced the branch (its record names the branch and the issue) — by appending `Refs #N` to the body with
+# one REST PATCH and logging REFSADDED, so the next pass routes it like any other PR. When it cannot be derived,
+# the PR is not ignored silently: one skip comment on the PR and a NOREFS log line, once per head, so the next
+# pass that still cannot map it stays quiet.
 #  1. new head sha, no review yet -> prepush.sh gate (process-only problems become a CHANGES verdict with no model review),
 #     else start revci.sh detached (review + CI wait)
 #  2. review+CI done on the head sha: CHANGES, failed CI, merge conflict or unresolved review threads
@@ -16,20 +19,42 @@
 #  SG_REVIEW_CHAIN_DEPTH=1 model, SG_REVIEW_RETRY_BUDGET=1 try, SG_REVIEW_TIMEOUT=120 s. An old PR may not spend the whole
 #  chain again while a fresh one waits. AGING fires once, STALLED every 15 min after, so a stuck PR is visible in watch.log.
 # Kill switch: touch $SG_STATE/auto/off (everything) or $SG_STATE/auto/nofix (review+merge only). Hold a PR: label `hold` or `needs-human`; an owner comment `/release` (whole body) lifts it.
-# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS.
+# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS, REFSADDED.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; [ -e "$A/off" ] && exit 0
 L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo 0); tot=$(wc -l < "$L" | tr -d ' ')
 [ "$tot" -gt "$seen" ] && tail -n +$((seen+1)) "$L" | grep -E "^(AUTOFIX|AUTOPANEL|NEEDS OWNER)"; echo "$tot" > "$A/.logseen"
 MAX=${AP_MAX_ROUNDS:-2}; MIN=${AP_MIN_ISSUE:-1090}; here="$(dirname "$0")"
 bg() { nohup bash "$here/$1" "${@:2}" >> "$L" 2>&1 </dev/null & }
+# The issue a PR delivers when its title and body do not say: the branch (`gui/<N>` is fork-only work) or the run
+# that produced the branch — a record of $SG_CHECKOUT/runs that names the branch carries the issue it was dispatched
+# for, the same `issue #N` / `Refs #N` shape hub.py reads. Prints N and returns 0, or returns 1 (nothing to repair).
+derive_issue() {
+  local ref=$1 n d
+  case "$ref" in gui/[0-9]*) n=${ref#gui/}; n=${n%%[!0-9]*}; [ -n "$n" ] && { echo "$n"; return 0; };; esac
+  [ -n "$ref" ] && [ -n "$SG_CHECKOUT" ] || return 1
+  for d in "$SG_CHECKOUT"/runs/*/record.jsonl; do
+    [ -f "$d" ] || continue
+    grep -qF -- "$ref" "$d" 2>/dev/null || continue
+    n=$(head -200 "$d" | grep -oE '(issue|Refs) #[0-9]{3,5}' | head -1 | grep -oE '[0-9]+')
+    [ -n "$n" ] && { echo "$n"; return 0; }
+  done
+  return 1
+}
 now=$(date +%s); list=$(mktemp)
 gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
- | jq -r '.[]|select(.draft==false)|[.number,.head.sha,(((.title+" "+(.body//""))|capture("Refs #(?<n>[0-9]+)")|.n) // ""),([.labels[].name]|join(",")),.base.ref,.created_at]|join("\u001f")' > "$list"
+ | jq -r '.[]|select(.draft==false)|[.number,.head.sha,(((.title+" "+(.body//""))|capture("Refs #(?<n>[0-9]+)")|.n) // ""),.head.ref,([.labels[].name]|join(",")),.base.ref,.created_at]|join("\u001f")' > "$list"
 # oldest first. auto/seen-<pr> holds the PR's own birthday (the epoch of its created_at), so the age is the PR's and not
 # the moment this loop happened to notice it. A PR with no marker yet keys as "now": it is new, not old, so it goes last.
 while IFS= read -r l; do printf '%s\t%s\n' "$(cat "$A/seen-${l%%$'\x1f'*}" 2>/dev/null || echo "$now")" "$l"; done < "$list" | sort -n | cut -f2- > "$list.s"
-while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator: a tab IFS collapses empty fields (no labels) and shifts the rest
-  if [ -z "$iss" ]; then   # no Refs #N: the loop cannot map the PR to an issue; say so once per head
+while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separator: a tab IFS collapses empty fields (no labels) and shifts the rest
+  if [ -z "$iss" ]; then   # no Refs #N: repair the PR when the issue is derivable, else say so once per head
+    n=$(derive_issue "$ref"); [ -n "$n" ] && [ "$n" -ge "$MIN" ] 2>/dev/null || n=""
+    if [ -n "$n" ]; then
+      cur=$(gh api "repos/$SG_REPO/pulls/$pr" -q .body 2>/dev/null)
+      gh api -X PATCH "repos/$SG_REPO/pulls/$pr" -f body="$(printf '%s\n\nRefs #%s' "$cur" "$n")" >/dev/null 2>&1 \
+        && { echo "REFSADDED #$pr #$n (the PR said no issue; derived from the branch $ref)"; continue; }
+      echo "REFSADDED FAILED #$pr: could not write Refs #$n into the body"
+    fi
     s9=${sha:0:9}; [ -e "$A/norefs-$pr-$s9" ] && continue
     touch "$A/norefs-$pr-$s9"
     printf "PR #%s is skipped by the autopilot: its title and body have no \`Refs #N\`, so the loop cannot map it to an issue and will not review, fix or merge it. Add \`Refs #<issue>\` (the live issue this PR delivers) and the next pass will pick it up.\n" $pr > "$SG_STATE/cq/$pr-norefs$s9.md"
