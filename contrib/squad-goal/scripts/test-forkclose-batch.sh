@@ -6,7 +6,7 @@ G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 runs() { [ -f "$T/gui.log" ] && wc -l < "$T/gui.log" | tr -d ' ' || echo 0; }
 setup() {   # setup <issue>...: a fork whose base has hub.py (10 lines) and one branch per issue; 1 edits line 1, 2 edits line 10, 3 edits line 1 too (conflicts with 1), 4 adds the file "bad" (the gate goes red on it), others add their own file
   T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$here/forkclose.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
+  cp "$here/forkclose.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
   printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"
   printf '#!/bin/bash\necho %s/req.txt\n' "$T" > "$T/s/mkreq.sh"; printf 'open(__import__("sys").argv[1]+".launched","w")\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log; [ ! -e bad ]"\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"

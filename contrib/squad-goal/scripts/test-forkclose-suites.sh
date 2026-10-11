@@ -12,20 +12,20 @@ cls() { printf '%s\n' "$@" | bash "$here/gate-suites.sh"; }
 [ "$(cls)" = full ] && ok "no file list (doubt) is the full gate" || ko "empty"
 [ "$(cls contrib/squad-goal-evil/x)" = full ] && ok "a lookalike directory is the full gate" || ko "lookalike"
 # the gate honors FG_SUITES
-mkdir -p "$T/g/contrib/squad-goal/scripts"; cp "$here/fork-gate.sh" "$T/g/contrib/squad-goal/scripts/"
+mkdir -p "$T/g/contrib/squad-goal/scripts"; cp "$here/fork-gate.sh" "$here/serial.sh" "$T/g/contrib/squad-goal/scripts/"
 printf 'touch %s/shell.started\nexit 0\n' "$T" > "$T/g/contrib/squad-goal/scripts/shell-suites.sh"
-gate() { rm -f "$T"/*.ran "$T/shell.started"; (cd "$T/g" && FG_SUITES=$1 SG_FORK_PY_CMD="touch $T/py.ran" bash contrib/squad-goal/scripts/fork-gate.sh "${2:-touch $T/gui.ran}" >/dev/null 2>&1); }
+gate() { rm -f "$T"/*.ran "$T/shell.started"; (cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=$1 SG_FORK_PY_CMD="touch $T/py.ran" bash contrib/squad-goal/scripts/fork-gate.sh "${2:-touch $T/gui.ran}" >/dev/null 2>&1); }
 gate shell; [ ! -e "$T/gui.ran" ] && [ -e "$T/shell.started" ] && [ ! -e "$T/py.ran" ] && ok "FG_SUITES=shell runs the shell suites only" || ko "shell mode"
 gate python; [ -e "$T/py.ran" ] && [ ! -e "$T/gui.ran" ] && [ ! -e "$T/shell.started" ] && ok "FG_SUITES=python runs the python tests only" || ko "python mode"
 gate full; [ -e "$T/gui.ran" ] && [ -e "$T/shell.started" ] && [ ! -e "$T/py.ran" ] && ok "FG_SUITES=full runs the GUI suite and the shell suites" || ko "full mode"
 gate "" ; [ -e "$T/gui.ran" ] && [ -e "$T/shell.started" ] && ok "no FG_SUITES is the full gate" || ko "default mode"
 # the shell suites run beside the GUI suite: the GUI command only passes once the shell suites have started
 wait4="for i in \$(seq 60); do [ -e $T/shell.started ] && exit 0; sleep 0.1; done; exit 1"
-gate full "$wait4"; (cd "$T/g" && FG_SUITES=full bash contrib/squad-goal/scripts/fork-gate.sh "$wait4" >/dev/null 2>&1) && ok "shell suites run beside the GUI suite, not after it" || ko "shell suites waited for the GUI suite"
+gate full "$wait4"; (cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=full bash contrib/squad-goal/scripts/fork-gate.sh "$wait4" >/dev/null 2>&1) && ok "shell suites run beside the GUI suite, not after it" || ko "shell suites waited for the GUI suite"
 rm -f "$T/shell.started"; printf 'exit 1\n' > "$T/g/contrib/squad-goal/scripts/shell-suites.sh"
-(cd "$T/g" && FG_SUITES=full bash contrib/squad-goal/scripts/fork-gate.sh "exit 3" >/dev/null 2>&1) && ko "a red gate exited 0" || ok "a red suite still fails the gate"
+(cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=full bash contrib/squad-goal/scripts/fork-gate.sh "exit 3" >/dev/null 2>&1) && ko "a red gate exited 0" || ok "a red suite still fails the gate"
 # forkclose.sh picks the suites from the branch's diff
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$here/forkclose.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$T/s/"
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$here/forkclose.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"
 printf 'echo shell >> %s/shell.log; exit 0\n' "$T" > "$T/s/shell-suites.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log"\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
