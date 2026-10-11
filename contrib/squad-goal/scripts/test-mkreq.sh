@@ -1,7 +1,9 @@
 #!/bin/bash
 # Regression test for mkreq.sh's dispatch-time slice gate (ADR-0274, Refs #1400). usage: bash test-mkreq.sh
 # Offline: gh is a stub that reports one open PR touching scripts/shared.py; HOME is a throwaway directory.
-d=$(dirname "$0"); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The report is buffered so the first line says TDD RED while a fix is missing, TDD GREEN once it is in.
+d=$(dirname "$0"); T=$(mktemp -d); log=$T/report; : > "$log"; fail=0
+ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }
 S=$T/scripts; mkdir -p "$S" "$T/bin" "$T/home"
 cp "$d/mkreq.sh" "$d/models.json" "$d/req-checklist.txt" "$d/req-checklist-fork.txt" "$S/"
 echo 'export SG_REPO=o/r' > "$S/env.sh"
@@ -42,4 +44,9 @@ if $G -qF -- "commit early and often" "$R/fork.txt" && $G -qF -- "as soon as a s
 fi
 n=$(/usr/bin/git -C "$F" log --oneline local/next..gui/42 | wc -l | tr -d ' ')
 [ "$n" -ge 1 ] && ok "cap-death: git log local/next..gui/42 is non-empty" || ko "cap-death: gui/42 empty after spend-cap death"
-rm -rf "$T"; exit $fail
+# 7. the request of a PR-bound child carries the literal `Refs #<N>` line it has to paste into the PR body (Refs #1507):
+# a PR with no such line is skipped by the autopilot, so the child has to be handed the line, not only the rule.
+body p7 scripts/z.py g; run g && [ -f "$R/g.txt" ] && ok "PR request builds" || ko "PR request: $(cat "$T/g.err" 2>/dev/null)"
+$G -qF -- 'Refs #<N>' "$R/g.txt" && ok "PR request carries the literal Refs #<N> line" || ko "PR request lacks the literal Refs #<N> line"
+[ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
+cat "$log"; rm -rf "$T"; exit $fail
