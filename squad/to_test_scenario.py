@@ -73,6 +73,10 @@ CASE_LABEL = "testcase"
 
 SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
+AREA_LABEL = "testarea"
+AREA_BODY_LIMIT = 60_000                 # GitHub refuses an issue body over 65,536 characters; the rest is headroom
+EXPECT_LIMIT = 160                       # the Cases table shows this much of a case's expected result
+NO_OBJECTIVE = "(no objective stated)"
 
 _SCRIPT_SUFFIXES = (".gui-test.json", ".gui-test")
 _SEPARATOR = re.compile(r":?-{2,}:?")
@@ -350,7 +354,7 @@ def _batch_issue(batch, steps, edges):
             "hash": hashlib.sha256(hashes.encode("utf-8")).hexdigest() if hashes else None}
 
 
-def _scenario_parent_body(scenario, script, steps, edges):
+def _scenario_parent_body(scenario, script, steps, edges, areas):
     fixtures = script.get("fixtures") or {}
     variants = script.get("variants") or {}
     rows = "\n".join(f"| `{s['id']}` | `{s['batch']}` | `{s['mode']}` | "
@@ -367,6 +371,7 @@ def _scenario_parent_body(scenario, script, steps, edges):
         "## Variants", "",
         "\n".join(f"- `{axis}`: " + ", ".join(f"`{value}`" for value in values)
                   for axis, values in variants.items()) or "None.", "",
+        _areas_table(areas),
         "## Cases", "",
         "| Case | Batch | Mode | Blocked by |",
         "|---|---|---|---|",
@@ -396,14 +401,97 @@ def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
     edges = _setup_edges(steps)
     by_case = {c["id"]: c for c in scenario["cases"]}
     if granularity == "case":
-        issues = [_case_issue(by_case[s["id"]], s, edges) for s in steps]
+        issues = [dict(_case_issue(by_case[s["id"]], s, edges), batch=s["batch"]) for s in steps]
     else:
-        issues = [_batch_issue(batch["id"], steps, edges) for batch in script["batches"]]
+        issues = [dict(_batch_issue(batch["id"], steps, edges), batch=batch["id"]) for batch in script["batches"]]
+    areas = _area_tree(script, issues)
     return {"scenario": scenario["name"], "granularity": granularity,
             "parent": {"title": f"Test scenario: {scenario['name']}",
                        "labels": [PARENT_LABEL, f"wave:{wave}"],
-                       "body": _scenario_parent_body(scenario, script, steps, edges)},
-            "issues": issues}
+                       "body": _scenario_parent_body(scenario, script, steps, edges, areas)},
+            "areas": areas, "issues": issues}
+# --------------------------------------------------------------------------- the area tree (ADR-0275)
+
+
+def _area_key(batch):
+    """The batch's `area` field, else its id up to the first `-` (ADR-0275 section 2)."""
+    return batch.get("area") or batch["id"].split("-", 1)[0]
+
+
+def _cell(text, limit=None):
+    text = " ".join(str(text or "").split()).replace("|", "\\|")
+    return text if limit is None or len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _action_check(step):
+    return f"{_call(step.get('action'))} -> {_call(step.get('check'))}"
+
+
+def _area_body(objective, batches):
+    rows = [f"| `{s['id']}` | {_cell(s.get('expect'), EXPECT_LIMIT)} | {_cell(_action_check(s))} | "
+            f"{s.get('severity', '-')} | {'manual' if s.get('mode') == 'manual' else 'automated'} | - |"
+            for batch in batches for _batch, _kind, s in steps({"batches": [batch]})]
+    return "\n".join([objective, "", "## Cases", "",
+                      "| Case | Expected | Action -> check | Severity | Mode | Record |",
+                      "|---|---|---|---|---|---|", *rows, ""])
+
+
+def _containers(batches, by_batch):
+    """The area's case issues in containers of at most SUB_ISSUE_CAP, each batch whole.
+
+    Titles are plain ASCII like every plan title; publishing adds the container's emoji, as it adds a case's verdict.
+    """
+    groups, current = [], []
+    for batch in batches:
+        own = by_batch.get(batch["id"], [])
+        if current and len(current) + len(own) > SUB_ISSUE_CAP:
+            groups.append(current)
+            current = []
+        current = current + own
+    groups.append(current)
+    return [{"title": "Cases" if len(groups) == 1 else f"Cases ({n}/{len(groups)})", "cases": cases}
+            for n, cases in enumerate(groups, 1)]
+
+
+def _area_tree(script, issues):
+    """The areas of the plan: each one's containers hold the very objects of `issues`, the flat run-ordered view.
+
+    Raises ScenarioError — before anything is written — when a batch alone outgrows a container, a node holds more
+    than SUB_ISSUE_CAP sub-issues, or an area body is over AREA_BODY_LIMIT characters.
+    """
+    by_batch = {}
+    for issue in issues:
+        by_batch.setdefault(issue["batch"], []).append(issue)
+    grouped, problems = {}, []
+    for batch in script["batches"]:
+        area = grouped.setdefault(_area_key(batch), {"objective": None, "batches": []})
+        area["objective"] = area["objective"] or batch.get("objective")
+        area["batches"].append(batch)
+        count = len(by_batch.get(batch["id"], []))
+        if count > SUB_ISSUE_CAP:
+            problems.append(f"batch {batch['id']!r} has {count} case issues and a node holds at most {SUB_ISSUE_CAP} "
+                            "sub-issues: split the batch")
+    if len(grouped) > SUB_ISSUE_CAP:
+        problems.append(f"the scenario has {len(grouped)} areas and a node holds at most {SUB_ISSUE_CAP} sub-issues")
+    areas = []
+    for key, area in grouped.items():
+        objective = area["objective"] or NO_OBJECTIVE
+        body = _area_body(objective, area["batches"])
+        if len(body) > AREA_BODY_LIMIT:
+            problems.append(f"area {key!r}: the body is {len(body)} characters and the limit is {AREA_BODY_LIMIT}")
+        areas.append({"key": key, "title": f"Area: {key}", "labels": [AREA_LABEL], "objective": objective,
+                      "body": body, "containers": [] if problems else _containers(area["batches"], by_batch),
+                      "cases": sum(len(list(steps({"batches": [b]}))) for b in area["batches"])})
+    if problems:
+        raise ScenarioError(problems)
+    return areas
+
+
+def _areas_table(areas):
+    rows = [f"| `{a['key']}` | {_cell(a['objective'], EXPECT_LIMIT)} | {a['cases']} | - |" for a in areas]
+    return "\n".join(["## Areas", "", "| Area | Objective | Cases | Latest result |", "|---|---|---|---|", *rows, ""])
+
+
 # --------------------------------------------------------------------------- the plan
 
 
@@ -466,16 +554,18 @@ def _plan_from_script(script, markdown=None, granularity="per-case", script_path
     name = script.get("name") or "scenario"
     parent_title = title or f"Test scenario: {name}"
     parent_blocked = script.get("blocked_by") or []
-    parent_body = _parent_body(name, script, script_path, purpose, parent_blocked)
     issues = (_plan_per_case if granularity == "per-case" else _plan_per_batch)(script, parent)
     for i in issues:
         i["wave"] = f"{i['wave']:02d}"
         i["labels"] = [CASE_LABEL, f"wave:{i['wave']}"]
+    areas = _area_tree(script, issues)
+    parent_body = _parent_body(name, script, script_path, purpose, parent_blocked, areas)
     all_steps = [s for _, _, s in steps(script)]
     return {
         "name": name,
         "granularity": granularity,
         "parent": {"title": parent_title, "body": parent_body, "labels": [TRIAGE_LABEL, "wave:01"]},
+        "areas": areas,
         "issues": issues,
         "variants": script.get("variants") or {},
         "fixtures": script.get("fixtures") or {},
@@ -485,7 +575,7 @@ def _plan_from_script(script, markdown=None, granularity="per-case", script_path
     }
 
 
-def _parent_body(name, script, script_path, purpose, blocked):
+def _parent_body(name, script, script_path, purpose, blocked, areas):
     lines = [f"Scenario `{name}`: every case below is run against the target adapter and its verdict is written back "
              "to the case's sub-issue.", ""]
     if purpose:
@@ -495,7 +585,7 @@ def _parent_body(name, script, script_path, purpose, blocked):
     lines += ["## Fixtures", "", "```json", json.dumps(script.get("fixtures") or {}, indent=2), "```", ""]
     lines += ["## Variants", ""]
     lines += [f"- `{axis}`: {', '.join(values)}" for axis, values in (script.get("variants") or {}).items()]
-    lines += ["", "## Cases", "", "| Batch | Case | Expected | Mode |", "|---|---|---|---|"]
+    lines += ["", _areas_table(areas), "## Cases", "", "| Batch | Case | Expected | Mode |", "|---|---|---|---|"]
     for batch in script["batches"]:
         for _, kind, s in steps({"batches": [batch]}):
             lines.append(f"| `{batch['id']}` | `{s['id']}` | {s.get('expect', '')} | "
