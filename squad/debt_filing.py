@@ -1,7 +1,10 @@
 """File each DEBT finding of a saved review as a board task (ADR-0273 Decision 4).
 
-A review line reads `- DEBT <file>:<line> — <defect>. Acceptance: <criterion>` (the BLOCKING|DEBT tag of the reviewer).
-BLOCKING findings block the merge and are never filed. GitHub goes through REST only (`gh api`), never GraphQL.
+The review is the checklist of `contrib/squad-goal/scripts/revformat.py` (#1777): the section a finding sits in is
+its severity, and a bullet reads `- <file>:<line> — <defect> — <concrete failure> — <fix>`, at most two lines.
+BLOCKING findings block the merge and are never filed; the acceptance criterion of a filed task is that fix.
+A review saved before the checklist (an inline DEBT tag, no sections) is still read the old way.
+GitHub goes through REST only (`gh api`), never GraphQL.
 """
 import argparse
 import hashlib
@@ -12,7 +15,11 @@ import sys
 
 LABELS = ("debt",)
 FINDING = re.compile(r"^\W*DEBT\W+(?P<loc>\S+?:\d+)\s*[—–:-]+\s*(?P<defect>.*?)\s*(?:Acceptance:\s*(?P<ac>.*))?$",
-                     re.IGNORECASE)
+                     re.IGNORECASE)   # the shape of a review saved before #1777: an inline DEBT tag on the line
+SECTION = re.compile(r"^##\s*(Blocking|Debt)\s*$", re.IGNORECASE)
+BULLET = re.compile(r"^\s*[-*]\s+(?P<text>\S.*)$")
+SEP = re.compile(r"\s+[—–-]\s+")
+LOC = re.compile(r"^[^\s:]+:\d+$")
 MARK = "debt-key:"
 
 
@@ -20,13 +27,44 @@ def _sh(args, input=None):
     return subprocess.run(args, input=input, capture_output=True, text=True, check=True).stdout
 
 
+def _bullets(review):
+    """(section, text) for every bullet of the checklist, the one extra line joined onto the finding above it."""
+    out, section = [], None
+    for line in review.splitlines():
+        text = line.strip()
+        m = SECTION.match(text)
+        if m:
+            section = m.group(1).capitalize()
+            continue
+        if not text or text.startswith("#"):
+            continue
+        found = BULLET.match(line)
+        if found and section:
+            out.append([section, found["text"]])
+        elif section and out:
+            out[-1][1] += " " + text
+    return out
+
+
 def parse(review):
     """The DEBT findings of `review` as dicts of loc, defect and acceptance."""
+    if not any(SECTION.match(line.strip()) for line in review.splitlines()):
+        out = []   # a review saved before the checklist shape: an inline DEBT tag on the line
+        for line in review.splitlines():
+            m = FINDING.match(line.strip())
+            if m:
+                out.append({"loc": m["loc"], "defect": m["defect"].rstrip(" ."), "ac": (m["ac"] or "").strip()})
+        return out
     out = []
-    for line in review.splitlines():
-        m = FINDING.match(line.strip())
-        if m:
-            out.append({"loc": m["loc"], "defect": m["defect"].rstrip(" ."), "ac": (m["ac"] or "").strip()})
+    for section, text in _bullets(review):
+        if section != "Debt":
+            continue
+        fields = [f.strip() for f in SEP.split(text)]
+        at = next((i for i, f in enumerate(fields[:2]) if LOC.match(f)), 0)
+        if len(fields) < at + 2:
+            continue
+        out.append({"loc": fields[at].rstrip(" .,"), "defect": fields[at + 1].rstrip(" ."),
+                    "ac": " ".join(fields[at + 2:]).strip()})
     return out
 
 

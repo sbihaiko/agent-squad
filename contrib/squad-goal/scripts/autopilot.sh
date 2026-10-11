@@ -167,12 +167,15 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
     continue
   fi
-  # ADR-0273 Decision 3/5: a CHANGES whose review has no BLOCKING line (and at least one DEBT line) does not cost a round -- the
+  # ADR-0273 Decision 3/5: a CHANGES whose review raises no Blocking finding (and at least one Debt bullet) does not cost a round -- the
   # debt is filed and the merge path below runs with every guard. Never for a (prepush) CHANGES, failed CI, a conflict or open
   # threads, and never once the open `debt` ledger is past SG_DEBT_MAX.
-  soft=0; rv="$SG_STATE/review-$pr.md"; tag='^[^[:alnum:]]*([0-9]+[.)][[:space:]]*)?'
+  # the severity of a finding is the section it sits in (#1777), so the soft path counts the bullets of each section
+  # (revformat.py --summary): a '## Debt' heading with no bullet under it is not a finding and files nothing.
+  soft=0; rv="$SG_STATE/review-$pr.md"; sb=1; sd=0
+  [ -f "$rv" ] && { sev=$(python3 "$here/revformat.py" --summary "$rv" 2>/dev/null); sb=${sev#blocking=}; sb=${sb%% *}; sd=${sev##*debt=}; }
   if [ "${SG_DEBT_SOFT:-yes}" = yes ] && [[ $line == *CHANGES* && $line != *"(prepush)"* && $ci != *failure* && $ci != *timed_out* && $ci != *cancelled* ]] \
-     && [ "$ms" != dirty ] && [ "$nt" -eq 0 ] && [ -f "$rv" ] && ! grep -Eiq "${tag}BLOCKING" "$rv" && grep -Eiq "${tag}DEBT" "$rv"; then
+     && [ "$ms" != dirty ] && [ "$nt" -eq 0 ] && [ -f "$rv" ] && [ "${sb:-1}" = 0 ] && [ "${sd:-0}" -gt 0 ] 2>/dev/null; then
     od=$(gh api --paginate "repos/$SG_REPO/issues?labels=debt&state=open&per_page=100" -q '.[].number' 2>/dev/null | grep -c .)
     [ "${od:-0}" -le "${SG_DEBT_MAX:-15}" ] && soft=1
   fi

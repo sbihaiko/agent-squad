@@ -54,4 +54,14 @@ r=$(bash "$T/s/autofix.sh" 9 8 2>&1); rc=$?
 [ "$(cat "$M/rounds-9" 2>/dev/null)" = aaaaaaaaa ] && ok "6 a dispatched fix charges its round" || ko "6 a dispatched fix charged no round ($(cat "$M/rounds-9" 2>/dev/null))"
 [ "$rc" = 0 ] && ok "6 a dispatched fix exits 0" || ko "6 a dispatched fix exited $rc: '$r'"
 case "$r" in *"run-4242"*) ok "6 the run id is reported";; *) ko "6 no run id in '$r'";; esac
+# 7) #1777: the reply the fix run posts is ONE comment in the review's checklist shape -- one bullet per finding,
+# fixed|not fixed with the one-line reason and the check that proves it, naming the thread it answers, ending with Refs #N
+echo "#9 aaaaaaaaa clean CI=success:1 VERDICT: CHANGES" > "$T/st/revci-9.out"
+printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$T/st/review-9.md"
+r=$(AF_DRY=1 bash "$T/s/autofix.sh" 9 8 2>&1)
+miss=""; for needle in 'ONE PR comment' '## Blocking' '## Debt' 'fixed|not fixed' 'the check that proves it' 'the thread it answers' 'Refs #8'; do
+  case "$r" in *"$needle"*) ;; *) miss="$miss '$needle'";; esac; done
+[ -z "$miss" ] && ok "the reply is one comment in the checklist shape, ending with Refs #N" || ko "the reply instruction lacks$miss"
+case "$r" in *"every finding"*) ok "the review finding is addressed as a bullet, not a numbered line";; *) ko "the review finding is not addressed as a bullet";; esac
+
 rm -rf "$T"; exit $fail
