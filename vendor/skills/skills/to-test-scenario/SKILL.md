@@ -72,15 +72,19 @@ python3 -m squad.to_test_scenario publish <scenario>.md <name>.gui-test.json \
 **The layout.** The scenario is a tree, four levels deep, so no parent passes GitHub's 100 sub-issues:
 
 ```
-Scenario issue            purpose, Areas table, dashboard; the only issue on the board
+Scenario issue            `Test-Scenario`; purpose, Areas table, dashboard; the only issue on the board
 └─ Area issue             `Test-Area`; objective and a Cases table
-   ├─ 📋 Cases            container; one sub-issue per case record
-   └─ 📅 Runs YYYY-MM     container; one sub-issue per run of the area that month (UTC)
+   ├─ 📋 Cases            container (`Test-Group`); one sub-issue per case record
+   └─ 📅 Runs YYYY-MM     container (`Test-Group`); one sub-issue per run of the area that month (UTC)
       └─ Run issue        `Test-Run`; totals, changes, one emoji row per case
 ```
 
+Every issue carries exactly one **`Test-<Kind>`** label, one per node kind: `Test-Scenario` (the scenario),
+`Test-Area` (an area), `Test-Group` (a container), `Test-Case` (a case record) and `Test-Run` (a run issue).
+The older lowercase labels (`testcase`, `testarea`, `testrun`) are replaced on sight, so an issue never keeps both.
+
 - **The area rule.** A batch goes to the area named by its optional `area` field; without one, the batch id up to its first `-` (`pause-pack-multi` → `pause`). A batch may carry an `objective`, which becomes the area's objective (the first one found wins); an area without one reads "(no objective stated)". Add `area` / `objective` to the script where a prefix reads poorly.
-- **Case records.** One issue per case, labels `testcase` and `wave:NN`, titled `<verdict emoji> <case title>` starting at ⚪. A container over 100 cases splits by batch; one batch over 100 cases is refused before anything is created, and so is an area body over 60,000 characters.
+- **Case records.** One issue per case, labels `Test-Case` and `wave:NN`, titled `<verdict emoji> <case title>` starting at ⚪. A container over 100 cases splits by batch; one batch over 100 cases is refused before anything is created, and so is an area body over 60,000 characters.
 - Links are made top-down (scenario → area → container → record); a record is never linked to the scenario. Before it creates a container, the module adopts one with the same title already under that parent, so a lost map never makes two.
 
 **The verdict emoji** are one vocabulary for case rows, record titles, area titles and run titles (container titles never carry one):
