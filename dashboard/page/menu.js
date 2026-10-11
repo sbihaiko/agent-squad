@@ -29,16 +29,16 @@ function openHelp() {
 }
 function closeHelp() { $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false"); }
 function toggleHelp() { if ($("help").hidden) openHelp(); else closeHelp(); }
-// #footer (the hint) sets the floor; keep the floating #replay bar clear of it, and the side legend above both, at any width.
+// #footer (the hint and the replay bar's row) sets the floor; keep the side legend above the row, at any width. The row's
+// own top is measured rather than its height, so the bottom sheet that lifts the row lifts the legend's floor too.
 (function trackFooterHeight() {
-  const footer = $("footer"), bar = $("replay");
+  const footer = $("footer");
   const sync = () => {
-    bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px";
-    const barH = bar.offsetHeight ? bar.offsetHeight + REPLAY_GAP : 0;
-    $("legend").style.setProperty("--legend-bottom", (footer.offsetHeight + REPLAY_GAP + barH + REPLAY_GAP) + "px");
+    const m = $("map").getBoundingClientRect(), f = footer.getBoundingClientRect();
+    $("legend").style.setProperty("--legend-bottom", (m.bottom - f.top + REPLAY_GAP) + "px");
   };
   new ResizeObserver(sync).observe(footer);
-  new ResizeObserver(sync).observe(bar);
+  window.addEventListener("resize", sync);
   sync();
 })();
 $("b-help").addEventListener("click", toggleHelp);

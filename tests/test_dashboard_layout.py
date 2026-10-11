@@ -12,6 +12,20 @@ from tests.test_dashboard_failures import BOX, _run
 FIX = ROOT / "tests" / "fixtures" / "run-router-waves"
 CHROME = ROOT / "dashboard" / "page" / "chrome.js"
 GRAPH = ROOT / "dashboard" / "page" / "graph.js"
+SHELL = ROOT / "dashboard" / "page" / "shell.js"
+
+
+def _footer_html():
+    """The markup inside #footer, tag-matched: what the panel's bottom row actually holds. The bar lives in this row
+    (#1813), so a test can read its place in the markup rather than trusting a rule to place it over the map."""
+    page = PAGE_SRC().split("<script>")[0]
+    i = page.index('<div id="footer">')
+    depth = 0
+    for m in re.finditer(r"<div\b|</div>", page[i:]):
+        depth += 1 if m.group(0).startswith("<div") else -1
+        if depth == 0:
+            return page[i:i + m.end()]
+    raise AssertionError("#footer is never closed")
 
 
 def _layout(doc):
@@ -209,7 +223,56 @@ def test_a_click_on_the_map_no_longer_closes_the_panel():
 
 def test_the_panel_keeps_its_place_in_the_layers_of_the_page():
     assert {s: _computed(s)["z-index"] for s in ("#help", "#menu", "#left", "#status", "#legend")} == {"#help": "20", "#menu": "10", "#left": "7", "#status": "5", "#legend": "4"}
-    assert "z-index" not in _computed("#replay")   # the bar is kept clear by where it sits, not by a layer
+    assert "z-index" not in _computed("#replay")   # the bar sits in the footer's row, so it needs no layer at all
+
+
+def test_the_replay_bar_is_a_row_inside_the_panel_footer():
+    """#1813: the transport moved off the middle of the map and into #footer, the panel's bottom row, after #hint."""
+    footer = _footer_html()
+    assert '<div id="replay">' in footer, "the bar is a child of #footer, not a sibling floating over the map"
+    assert footer.index('<div id="hint">') < footer.index('<div id="replay">')   # the hint keeps the left of the row
+
+
+def test_the_replay_bar_no_longer_floats_over_the_map():
+    css = _computed("#replay")
+    assert {"position", "left", "bottom", "transform"} & set(css) == set()   # no placement of its own: the row places it
+    assert "box-shadow" not in css                                          # and no raised pill look
+    assert css["pointer-events"] == "auto"                                  # clickable inside a pass-through row
+    assert _computed("#footer")["pointer-events"] == "none"                 # the row itself never eats a drag on the map
+
+
+def test_the_replay_bar_is_thinner_and_quieter_than_the_pill_it_replaces():
+    css = _computed("#replay")
+    assert css["border-top"] == "1px solid var(--line)" and "border-radius" not in css
+    assert css["padding"] == "2px 0 0"          # one line of small text: ~24px with the buttons
+    btn = _computed("#replay button")
+    assert btn.get("background") == "none" and btn.get("border") in ("0", "none")   # flat until the pointer is on it
+    assert "box-shadow" not in btn
+    assert "#replay button:hover:not(:disabled)" in [sel for _, sel, _ in _rules(_page_css())]
+
+
+def test_the_replay_reading_reserves_no_dead_width():
+    assert "min-width" not in _computed("#r-pos")   # the 190px the floating pill kept for the text is gone
+    assert _computed("#r-pos")["font"] == "11px var(--mono)"
+
+
+def test_the_slider_is_shortened_to_what_the_row_can_spare():
+    width = _computed("#replay input[type=range]")["width"]
+    assert width.endswith("px") and int(width[:-2]) < 320, width   # it was 320px; the footer gives it less
+
+
+def test_the_map_reserves_the_footer_row_and_nothing_for_a_floating_box():
+    body = GRAPH.read_text().split("function bottomReserve()")[1].split("\nfunction ")[0]
+    assert "REPLAY_BAR_H" not in body and "REPLAY_GAP" not in body   # the 34px + 44px reservation went with the pill
+    assert "REPLAY_BAR_H" not in SHELL.read_text()
+    assert "getBoundingClientRect().top" in body   # the row's own top is the floor, wherever the layout puts the row
+
+
+def test_no_rule_places_the_bar_over_the_map_any_more():
+    """The two clearance rules (page.css:78 and :250) only existed to keep the floating box off the drawer and the sheet."""
+    stray = [sel for _, sel, d in _rules(_page_css())
+             if sel.split()[-1] == "#replay" and sel != "#replay" and ({"left", "bottom", "transform", "position"} & set(d))]
+    assert stray == []
 
 
 def test_the_fit_takes_the_open_drawers_width_off_the_map():
@@ -255,8 +318,7 @@ def test_the_legend_steps_out_of_the_drawers_way_and_comes_back_when_the_panel_c
     assert 'e.key === "[" && !e.metaKey && !e.ctrlKey' in CHROME.read_text() and "setSide(!sideOpen())" in CHROME.read_text()
 
 
-def test_the_replay_bar_and_the_zoom_buttons_keep_to_the_free_side_of_the_drawer():
-    assert _computed("body:not(.noside) #replay")["left"] == "calc((100vw - var(--side-w,0px)) / 2)"
+def test_the_zoom_buttons_keep_to_the_free_side_of_the_drawer():
     assert _computed("body:not(.noside) #view")["right"] == "calc(var(--side-w) + 12px)"
 
 
@@ -275,5 +337,7 @@ def test_a_window_under_900px_docks_the_panel_as_a_bottom_sheet_with_a_sideways_
     assert _computed("#left::before", media="max-width: 900px")["cursor"] == "row-resize"
 
 
-def test_the_replay_bar_stays_above_the_bottom_sheet_rather_than_under_it():
-    assert _computed("body:not(.noside) #replay", media="max-width: 900px")["bottom"] == "calc(var(--side-w,52vh) + 12px)"
+def test_the_footer_row_clears_the_bottom_sheet_and_carries_the_bar_with_it():
+    """#1813: the bar rides in #footer, so the row's own clearance is what keeps it off the sheet — not a rule on the bar."""
+    assert _computed("body:not(.noside) #footer", media="max-width: 900px")["bottom"] == "calc(var(--side-w,52vh) + 10px)"
+    assert _computed("body:not(.noside) #replay", media="max-width: 900px") == {}   # the bar has no clearance rule of its own

@@ -74,13 +74,17 @@
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
   body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
   #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
-  #replay { position:absolute; left:50%; bottom:34px; transform:translateX(-50%); display:none; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; box-shadow:0 6px 20px #0008; }
-  body:not(.noside) #replay { left:calc((100vw - var(--side-w,0px)) / 2); }   /* the bar centers in what the drawer leaves, so it never sits under it */
-  #replay input[type=range] { width:320px; accent-color:var(--acc); }
+  /* #replay is #footer's own transport row (#1813): the panel's bottom edge carries it, flat and hairline-thin, so the
+     map keeps the room a floating pill used to reserve. It sits after #hint and never shrinks the hint off the row. */
+  #replay { display:none; align-items:center; gap:4px; flex:0 1 auto; min-width:0; margin-left:auto; padding:2px 0 0; border-top:1px solid var(--line); pointer-events:auto; }
+  #replay input[type=range] { flex:0 1 150px; width:150px; min-width:24px; accent-color:var(--acc); }
+  #replay button { flex:none; height:20px; padding:0 3px; background:none; border:0; border-radius:3px; color:var(--mute); font:12px var(--mono); cursor:pointer; }
+  #replay button:hover:not(:disabled) { background:#2e3846; color:var(--fg); }
+  #replay button:disabled { opacity:.35; cursor:default; }
   #replay button, #r-pos { white-space:nowrap; }
-  #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
+  #r-pos { flex:none; color:var(--mute); font:11px var(--mono); text-align:right; }
   #r-pos.past { color:var(--warn); }
-  /* #footer holds #hint and #legend as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap. */
+  /* #footer holds #hint and #replay as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap. */
   #footer { position:absolute; left:12px; right:12px; bottom:10px; display:flex; justify-content:space-between; align-items:flex-end; gap:12px; pointer-events:none; }
   #hint { color:var(--mute); font-size:11px; white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
@@ -239,7 +243,7 @@
 /* A window under 1024px starts with a narrower drawer; --side-max stays 520px short of the viewport, so 504px of travel at 1024. */
 @media (max-width: 1024px) { body { --side-w:360px; } }
 /* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
-   The map reserves the sheet's height, and the replay bar rises clear of it rather than hiding under it. */
+   The map reserves the sheet's height, and the footer row — the hint and the replay bar together — rises clear of it. */
 @media (max-width: 900px) {
   body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
   #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
@@ -247,7 +251,7 @@
   #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   body:not(.noside) #mapbox { padding-bottom:52vh; }
   body:not(.noside) #view { right:12px; }
-  body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
+  body:not(.noside) #footer { bottom:calc(var(--side-w,52vh) + 10px); }   /* the whole row clears the sheet: the bar rides in it */
 }
 
 /* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the

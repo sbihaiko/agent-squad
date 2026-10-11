@@ -5,8 +5,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 const SVGNS = "http://www.w3.org/2000/svg";
 const BOX = { w: 200, h: 60 }, PAD = 32;
 // Sizes the page shares between files. A card's top-right glyph sits GLYPH.right from the right edge and GLYPH.top from the top; the card text
-// is cut to the CLIP lengths (the tooltip keeps the full text). The replay bar floats REPLAY_GAP above the footer and is REPLAY_BAR_H tall,
-// so fit() and the reveal keep the graph clear of both. A selection is revealed REVEAL_INSET from the map edge.
+// is cut to the CLIP lengths (the tooltip keeps the full text). The replay bar is a row of the footer (#1813), so fit() and the reveal
+// clear the one row it rides in; REPLAY_GAP is the clearance the side legend keeps above that row. A selection is revealed REVEAL_INSET
+// from the map edge.
 const GLYPH = { right: 9, top: 19 }, CLIP = { name: 22, cause: 25, harness: 30 };
 // An expanded group of many children is shown no smaller than READABLE_K: the part next to its dispatch stays readable and the rest is a pan away.
 const READABLE_K = 0.7;
@@ -14,7 +15,7 @@ const READABLE_K = 0.7;
 const TEXT = { x: 10, name: 19, kind: 34, line1: 46, line2: 57, cause: 56 }, CARD_GAP = 30;
 // Pointer feel: a press that moves under DRAG_SLOP px is a click; one wheel pixel zooms by WHEEL_RATE (exponent); a zoom button steps by ZOOM_STEP; the fit never uses a map smaller than MIN_FIT px.
 const DRAG_SLOP = 3, WHEEL_RATE = 0.0015, ZOOM_STEP = 1.25, MIN_FIT = 120;
-const REPLAY_GAP = 24, REPLAY_BAR_H = 44, REVEAL_INSET = 16, FOOTER_PAD = 12;
+const REPLAY_GAP = 24, REVEAL_INSET = 16, FOOTER_PAD = 12;
 
 const S = { recordBad: null, warnings: [], doc: null, text: "", name: "graph", layout: {}, selected: null, link: null, events: null, cursor: null, replay: null, overlay: null, stats: null, children: [], childPos: {}, expanded: [], groupOf: {}, lastTap: null, groups: [], groupPos: {}, groupPts: {}, groupSq: {}, folder: null, issueTotal: null, issueHeld: 0, errors: [], notice: "", handle: null, stamp: null, layoutHandle: null, layoutStamp: null, baseText: "", baseLayout: "{}", baseHash: null, chip: null, offerPending: null, view: { k: 1, tx: 20, ty: 20 }, hist: core.histNew(100) };
 
@@ -43,8 +44,12 @@ async function recompute(opts) {
 
 // A reread must not wipe a field the owner is typing in, so the side panel redraws only when no field in it has focus.
 function renderReplay() {
-  const bar = $("replay"), r = S.replay;
+  const bar = $("replay"), r = S.replay, was = S.replayShown;
   bar.style.display = r ? "flex" : "none";
+  S.replayShown = !!r;
+  // The bar is a row of #footer: it makes the row taller, and the row is the map's reserve. So a fitted graph is fitted
+  // again when the row grows, exactly as the totals bar does when it appears.
+  if (was !== !!r && S.fitted && S.doc) fit();
   if (!r) return;
   const range = $("r-range");
   range.min = r.first; range.max = r.last; range.value = r.cursor;
