@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -447,3 +448,164 @@ def test_escape_restores_the_split(hub):
     st = _board_steps(hub, {"max": True})
     assert st["afterEsc"]["body"] == ["dockb"] and st["afterEsc"]["saved"]["max"] is False
     assert re.search(r'key==="Escape"\)\{[^}]*escBoard\(\)', hub.PAGE)     # the page's Escape branch is what restores it
+
+
+# ---------------------------------------------------------------- the line's facts (#1797)
+# The strip answered "is this machine saturated?". These pin the facts that answer the other half — whether the squad is
+# working or merely looks busy — and nothing else: the order they are read in, the `?` for a source that went unreadable,
+# `ok` for an empty health pass, the pair #1795 writes for the drift, the caps the graph carries, the quota markers the
+# review chain skips models over, the amber past the quarter hour, and the drop on a window too narrow for the row.
+
+NOW = 1_000_000.0
+CAPS = {"max_parallel": 10, "max_children": 20}
+
+
+def _src(**over):
+    """One reading of every source, all readable, so a test can break exactly one of them."""
+    base = {"health": {"causes": [], "armed": {}, "ts": NOW},
+            "progress": NOW - 240, "occ": {"live": 4, "agents": 7},
+            "drift": {"runs": 2, "inprogress": 2}, "quota": {"codex": None, "agy": None}}
+    return {**base, **over}
+
+
+def _facts(hub, src=None, caps=CAPS):
+    return [i["text"] for i in hub.foot_items(src or _src(), caps, NOW)]
+
+
+def test_the_five_facts_follow_the_load_cells_in_this_order(hub):
+    reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names, read as a clock time
+    items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
+    assert [i["key"] for i in items] == ["health", "progress", "occ", "drift", "quota"]
+    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · drift 0 · "
+                                    "codex ok · agy reset 14:20")
+    assert [i["bad"] for i in items] == [False] * 5
+
+
+def test_health_names_the_most_recent_still_armed_cause_with_its_age(hub):
+    armed = {"watch-stalled": NOW - 540, "fork-parked": NOW - 3600}
+    assert _facts(hub, _src(health={"causes": ["watch-stalled", "fork-parked"], "armed": armed, "ts": NOW}))[0] \
+        == "health: watch-stalled 9m"                                        # named, with its age — never a bare count
+    assert _facts(hub, _src(health={"causes": ["watch-stalled"], "armed": {}, "ts": NOW - 540}))[0] \
+        == "health: watch-stalled 9m"                                        # nothing in alerts.log: the pass that saw it ages it
+
+
+def test_health_is_ok_when_the_pass_found_no_cause_and_never_a_count(hub):
+    assert _facts(hub, _src(health={"causes": [], "armed": {}, "ts": NOW}))[0] == "health ok"
+    text = _facts(hub, _src(health={"causes": ["a", "b", "c"], "armed": {"a": NOW - 600}, "ts": NOW}))[0]
+    assert text == "health: a 10m" and "3" not in text
+
+
+def test_progress_is_the_newest_transition_the_loop_owns_and_turns_bad_past_the_quarter_hour(hub):
+    assert hub.FOOT_PROGRESS_WARN_SECS == 15 * 60
+    assert _facts(hub, _src(progress=NOW - 900))[1] == "last progress 15m"
+    assert [i["key"] for i in hub.foot_items(_src(progress=NOW - 901), CAPS, NOW) if i["bad"]] == ["progress"]
+    assert hub.foot_items(_src(progress=NOW - 900), CAPS, NOW)[1]["bad"] is False
+    assert _facts(hub, _src(progress=NOW - 2400))[1] == "last progress 40m"
+
+
+def test_occupancy_reads_the_caps_the_graph_carries_and_never_a_hard_coded_pair(hub):
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"max_parallel": 3, "max_children": 40})[2] \
+        == "4/3 runs 7/40 agents"                                            # the caps come from the graph, not from 10/20
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[2] == "?"
+    assert _facts(hub, _src(occ=None))[2] == "?"
+
+
+def test_drift_is_the_pair_health_writes_and_never_a_count_of_its_own(hub):
+    assert _facts(hub, _src(drift={"runs": 2, "inprogress": 5}))[3] == "drift 3"
+    assert _facts(hub, _src(drift={"runs": 2, "inprogress": 2}))[3] == "drift 0"
+    assert _facts(hub, _src(drift=None))[3] == "drift ?"                     # #1795's pair is not there yet
+    assert _facts(hub, _src(drift={"runs": 2, "inprogress": -1}))[3] == "drift ?"   # an unreadable board is not a drift
+    # the live-run count the footer already holds is NOT this number: only the pair decides it
+    assert _facts(hub, _src(occ={"live": 9, "agents": 1}, drift={"runs": 2, "inprogress": 2}))[3] == "drift 0"
+
+
+def test_only_the_limited_quota_markers_are_named_each_with_its_reset(hub):
+    reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))
+    assert _facts(hub, _src(quota={"codex": reset, "agy": reset}))[4] == "codex reset 14:20 · agy reset 14:20"
+    assert _facts(hub, _src(quota={"codex": None, "agy": None}))[4] == "codex ok · agy ok"
+    assert _facts(hub, _src(quota={"codex": "?", "agy": None}))[4] == "codex ? · agy ok"   # one unreadable marker only
+
+
+def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
+    assert hub.limited_until(str(int(NOW + 60)), NOW) == NOW + 60
+    assert hub.limited_until(str(int(NOW - 60)), NOW) is None                # the window passed: the model is back
+    assert hub.limited_until("", NOW) is None                                # no marker: nothing was spent
+    assert hub.limited_until("soon", NOW) == "?"                             # a file naming no time the hub can read
+
+
+def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
+    line = hub.foot_line(hub.foot_items(_src(progress=None), CAPS, NOW))
+    assert line == "health ok · last progress ? · 4/10 runs 7/20 agents · drift 0 · codex ok · agy ok"
+    assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None, "drift": None,
+                                        "quota": {"codex": "?", "agy": None}}, None, NOW)) \
+        == "health ? · last progress ? · ? · drift ? · codex ? · agy ok"
+
+
+def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
+    now = time.time()
+    st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
+    (st / "health.json").write_text(json.dumps({"ts": now, "ok": False, "runs": 2, "inprogress": 5, "causes": ["watch-stalled"]}))
+    armed = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 540))
+    (st / "alerts.log").write_text(f"{armed} HEALTH watch-stalled: no cycle for 6 min\n")
+    (st / "cycle.log").write_text("16:19:46 autobug.sh 31s\n")
+    (st / "agy-limited").write_text(str(int(now + 3600)))
+    monkeypatch.setattr(hub, "STATE", st)
+    src = hub.foot_sources(now)
+    assert src["health"]["causes"] == ["watch-stalled"]
+    assert abs(src["health"]["armed"]["watch-stalled"] - (now - 540)) < 2
+    assert src["drift"] == {"runs": 2, "inprogress": 5}                       # the pair #1795 writes, read as it stands
+    assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
+    facts = hub.foot_line(hub.foot_items(src, {"max_parallel": 10, "max_children": 20}, now))
+    assert "health: watch-stalled 9m" in facts and "drift 3" in facts and "agy reset " in facts
+    monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
+    assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
+        == "health ? · last progress ? · ? · drift ? · codex ok · agy ok"
+
+
+def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("serving a view must not read a source of its own")
+    monkeypatch.setattr(hub, "foot_sources", boom)
+    hub.LOAD_STATE.update({"cpu": [12.0], "ram": 71.2, "gpu": None, "asof": 1.0, "runs": {},
+                           "facts": hub.foot_items(_src(), CAPS, NOW)})
+    p = hub.load_payload()
+    assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
+    assert p["facts"][0]["text"] == "health ok" and len(p["facts"]) == 5
+
+
+def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
+    src = HUB_PY.read_text()
+    sect = src[src.index("the footer's facts (#1797)"):src.index("def load_payload(")]   # the rule sits with the code it governs
+    assert "across the room" in sect and "within a minute" in sect and "one short token" in sect
+    for gone in ("spend_cap", "throughput", "column header"):                 # rejected for the line, so it is not re-proposed
+        assert gone in sect
+
+
+def test_the_footer_paints_the_facts_beside_the_load_cells_and_the_amber_value(hub):
+    assert "id=ldfacts" in hub.PAGE
+    assert "footFit(d.facts,footCols())" in hub.PAGE                          # the drop is decided where the width is known
+    assert 'l.textContent=d.line||"CPU ? · RAM ? · GPU ?"' in hub.PAGE         # the load cells are painted exactly as before
+    assert ".bad{color:var(--warn)" in hub.PAGE                               # the one value that turns amber does
+    assert "nowrap" in _css(hub, "#ldfacts")                                  # the row drops facts, it never wraps
+
+
+def _foot_text(hub, items, cols):
+    """The line the page really builds, run by node over a list of facts and a character budget."""
+    js = re.search(r"^function footFit\(.*\n^function footText\(.*$", hub.PAGE, re.M).group(0)
+    out = subprocess.run(["node", "-"], input=f"{js}\nconsole.log(footText({json.dumps(items)}, {cols}))",
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return out.stdout.rstrip("\n")
+
+
+def test_the_line_drops_trailing_facts_on_a_narrow_window_and_never_truncates_one(hub):
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
+    texts = [i["text"] for i in items]
+    full = " · ".join(texts)
+    assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all five, in order
+    four = " · ".join(texts[:4])
+    assert _foot_text(hub, items, len(four)) == four                           # 5 -> 4: the quota pair drops first
+    assert _foot_text(hub, items, len(four) - 1) == " · ".join(texts[:3])      # 4 -> 3, still whole items
+    assert _foot_text(hub, items, 0) == ""                                     # nothing fits: no number is cut into another

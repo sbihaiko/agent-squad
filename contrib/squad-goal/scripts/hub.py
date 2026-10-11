@@ -460,21 +460,185 @@ def load_tick(sample=None):
     LOAD_STATE["runs"] = attribute_pass() if sustained(LOAD_STATE["cpu"]) else {}
     return LOAD_STATE
 
+# ---------------------------------------------------------------- the footer's facts (#1797)
+# The line answers two questions: "is this machine saturated?" (the three load cells, first and never reordered) and "is
+# the squad working, or merely busy?" (the facts appended after them, in this order). A fact earns a place on this line
+# only if (a) it reads as one short token — a number, `ok` or `?`; (b) its bad value alone, seen from across the room,
+# tells the operator the squad is stuck or lying while the rest of the page looks busy; and (c) the operator could act on
+# it within a minute. Anything needing a second number to interpret, or already drawn within one screen of the footer,
+# goes to a panel or a column header instead. Rejected here for exactly that reason, with where each lives instead:
+#   per-run spend vs `spend_cap`              -> the run's own line in the left pane, where it already is
+#   per-model spend, reviewer latency,        -> the cost & usage panel
+#   who-is-reviewing-what
+#   throughput (runs/hour, median, tks/s)     -> nowhere: `last progress` answers "is it moving?" without a rate that
+#                                                changes too fast to read
+#   per-column board counts                   -> the column headers directly above the footer
+#   the age of the oldest card in a column    -> the column header (`Testing (3) · 2h`), one number per column
+#   fork-ahead / branches waiting / last      -> a fourth left-pane accordion; `fork-parked` already reaches the footer
+#   base-test duration                           through `health`
+# Every value comes from a source this hub already refreshes — no new polling and no new query. A value the hub cannot
+# verify is `?`, never a stale or invented number, and a fact that goes unreadable takes its own `?` with it while the
+# rest of the line stands. The line is one row: on a window too narrow for it, the trailing facts drop (5 -> 4 -> 3) —
+# nothing wraps, and no number is ever cut into a different one.
+FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
+FOOT_SEP = " · "
+
+def foot_age(secs):
+    """An age as the line reads it — one token, the shape the page's own `age()` paints: `45s`, `4m`, `2h`."""
+    s = max(float(secs), 0.0)
+    return f"{int(s)}s" if s < 90 else (f"{int(round(s / 60))}m" if s < 5400 else f"{int(round(s / 3600))}h")
+
+def limited_until(txt, now=None):
+    """The epoch a quota marker names while it skips a model; None when there is no marker or its window has passed (the
+    model is back); `?` when the marker is there but names no time the hub can read — a length is not a reset."""
+    s = (txt or "").strip()
+    if not s: return None
+    try: t = float(s)
+    except ValueError: return "?"
+    return t if t > (time.time() if now is None else now) else None
+
+def _health_fact(h, now):
+    """`health ok`, or `health: <cause> <age>` for the most recent cause still armed. Named, never a count: `3 alerts`
+    would hide the one cause that says the loop is dead, which is the only thing this fact is on the page to say."""
+    if not isinstance(h, dict): return "health ?"
+    causes = [c for c in (h.get("causes") or []) if c]
+    if not causes: return "health ok"
+    armed = h.get("armed") or {}
+    ts = {c: armed[c] for c in causes if isinstance(armed.get(c), (int, float))}
+    if ts: c, t = max(ts.items(), key=lambda kv: kv[1])          # the newest alert still standing: the newest cause
+    elif isinstance(h.get("ts"), (int, float)): c, t = causes[0], h["ts"]   # no alert line left for it: the pass that saw it ages it
+    else: return f"health: {causes[0]} ?"    # the cause is armed but its age cannot be read: named, then `?`
+    return f"health: {c} {foot_age(now - t)}"
+
+def _progress_fact(ts, now):
+    """The age of the newest transition the loop owns — a verdict, a land, a dispatch or a board move."""
+    return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
+
+def _occ_fact(occ, caps):
+    """`4/10 runs 7/20 agents` against the caps the live graph carries, never a hard-coded pair. With no graph there is
+    no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
+    if not isinstance(occ, dict) or not isinstance(caps, dict): return "?"
+    mp, mc = caps.get("max_parallel"), caps.get("max_children")
+    if not isinstance(mp, int) or not isinstance(mc, int): return "?"
+    return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
+
+def _drift_fact(d):
+    """The pair #1795 writes (`runs` and `inprogress` in health.json) and never a second count computed here: a board the
+    health pass could not read reports -1, which is not a drift — it is a `?`."""
+    if not isinstance(d, dict): return "drift ?"
+    runs, ip = d.get("runs"), d.get("inprogress")
+    if not isinstance(runs, int) or not isinstance(ip, int) or runs < 0 or ip < 0: return "drift ?"
+    return f"drift {abs(runs - ip)}"
+
+def _quota_fact(q, now):
+    """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
+    reset time it names. A limited model is what the operator acts on; one that is back reads `ok`."""
+    out = []
+    for name in ("codex", "agy"):
+        v = (q or {}).get(name)
+        if v == "?": out.append(f"{name} ?")
+        elif isinstance(v, (int, float)): out.append(name + " reset " + time.strftime("%H:%M", time.localtime(v)))
+        else: out.append(name + " ok")
+    return FOOT_SEP.join(out)
+
+def foot_items(src, caps=None, now=None):
+    """The five facts, in the order the line reads them, each carrying whether its value is the bad one: `bad` is what
+    the page paints amber, and only `last progress` has one (a stall between the loop's own two thresholds)."""
+    now = time.time() if now is None else now
+    src = src or {}
+    prog = src.get("progress")
+    return [{"key": "health", "text": _health_fact(src.get("health"), now), "bad": False},
+            {"key": "progress", "text": _progress_fact(prog, now),
+             "bad": isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS},
+            {"key": "occ", "text": _occ_fact(src.get("occ"), caps), "bad": False},
+            {"key": "drift", "text": _drift_fact(src.get("drift")), "bad": False},
+            {"key": "quota", "text": _quota_fact(src.get("quota"), now), "bad": False}]
+
+def foot_line(items):
+    """The facts as the line reads them, one `·` between each: the page appends this after the three load cells."""
+    return FOOT_SEP.join(i["text"] for i in (items or []))
+
+# The sources, each one the loop already refreshes: `health.json` plus the `alerts.log` line that armed each cause, the
+# loop's own markers and `cycle.log` (a verdict, a land, a dispatch, a board move), the caps graph, the pair `health.sh`
+# writes, and the markers the review chain skips models over. Reading them is a few small files in the sampler thread
+# that already runs: no source here costs a query, a `ps` or a GitHub call.
+FOOT_ROWS = {"live": None, "agents": None, "asof": 0.0}   # what the `runs()` pass the page already polls saw
+
+def _read(p):
+    try: return pathlib.Path(p).read_text(errors="ignore")
+    except OSError: return ""
+
+def _json(p):
+    try: return json.loads(pathlib.Path(p).read_text())
+    except Exception: return None
+
+def _newest_mtime(*paths):
+    ts = []
+    for p in paths:
+        try: ts.append(pathlib.Path(p).stat().st_mtime)
+        except OSError: pass
+    return max(ts) if ts else None
+
+def _armed_from_alerts(text, causes):
+    """cause -> when its alert last reached alerts.log, i.e. when the health pass armed it. The pass writes one line when
+    a cause appears and re-arms it after it clears, so the newest line for a cause still armed is its age."""
+    out = {}
+    for l in (text or "").splitlines():
+        if " HEALTH " not in l: continue
+        head, _, rest = l.partition(" HEALTH ")
+        cause = rest.split(":", 1)[0].strip()
+        if cause not in causes: continue
+        try: t = time.mktime(time.strptime(head.strip(), "%Y-%m-%d %H:%M:%S"))
+        except ValueError: continue
+        out[cause] = max(t, out.get(cause, 0.0))
+    return out
+
+def foot_sources(now=None):
+    """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
+    so one unreadable file costs one `?` and never the rest of the line."""
+    now = time.time() if now is None else now
+    out = {"health": None, "progress": None, "occ": None, "drift": None,
+           "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
+                     "agy": limited_until(_read(STATE / "agy-limited"), now)}}
+    h = _json(STATE / "health.json")
+    if isinstance(h, dict):
+        causes = [c for c in (h.get("causes") or []) if c]
+        out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts")}
+        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
+    if FOOT_ROWS.get("live") is not None:
+        out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
+    stamps = [_newest_mtime(STATE / "cycle.log", STATE / "auto", STATE / "board-dirty")]
+    for r in list(LOAD_RUNS):   # the live runs' own records: what the loop's children wrote as they moved
+        stamps.append(_newest_mtime(pathlib.Path(r.get("dir") or "") / "record.jsonl"))
+    stamps = [s for s in stamps if s]
+    out["progress"] = max(stamps) if stamps else None
+    return out
+
+def foot_refresh(now=None):
+    """One pass of the footer's sources, kept where the page serves it from: the sampler thread calls this, so the line
+    can never be written from a figure the loop has stopped refreshing. A failed pass keeps the last good facts."""
+    LOAD_STATE["facts"] = foot_items(foot_sources(now), loop_caps(), now)
+    return LOAD_STATE["facts"]
+
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
-    sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use."""
+    sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
+    `facts` the footer's own facts as the sampler last read them."""
     hist = LOAD_STATE.get("cpu") or []
     cpu = hist[-1] if hist else None
     return {"line": load_line(cpu, LOAD_STATE.get("ram"), LOAD_STATE.get("gpu")),
             "cpu": None if cpu is None else round(cpu),
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
+            "facts": list(LOAD_STATE.get("facts") or []),
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def load_sampler():
     """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
     while True:
         try: load_tick()
+        except Exception: pass
+        try: foot_refresh()
         except Exception: pass
         time.sleep(LOAD_SAMPLE_SECS)
 
@@ -524,6 +688,8 @@ def runs():
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
         out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
+    _live = [r for r in out if group_of(r) == "running"]   # the footer's occupancy (#1797): the same rows the left pane groups
+    FOOT_ROWS.update(live=len(_live), agents=sum(r.get("agents") or 0 for r in _live), asof=time.time())
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
@@ -1138,6 +1304,7 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 #foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}
+#ldfacts{margin-left:14px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
 </style>
 <div id=win>
@@ -1151,7 +1318,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=pop><div id=pbox></div></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
-<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b></div>
+<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
 <script>
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
@@ -1184,8 +1351,18 @@ const GROUPS=[["running","RUNNING"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2�
 const CAPS=__CAPS__;
 const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
 function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
-async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),el=$("#ldline"),f=$("#foot");
- if(el)el.textContent=d.line||"CPU ? · RAM ? · GPU ?";if(f)f.classList.toggle("warn",!!d.warn)}catch(e){}}
+// The facts after the cells, served by the same tick. On a window too narrow for the whole row the trailing facts drop
+// (5 -> 4 -> 3) exactly as they are — the line never wraps and no number is cut into a different one. The budget is in
+// characters of the font the cells beside them are drawn in, measured off the cells themselves.
+function footFit(items,cols){const k=(items||[]).slice();while(k.length&&k.map(i=>i.text).join(" · ").length>cols)k.pop();return k}
+function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" · ")}
+function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
+ const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
+ return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
+function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)l.textContent=d.line||"CPU ? · RAM ? · GPU ?";
+ if(f)f.innerHTML=footFit(d.facts,footCols()).map(i=>i.bad?`<span class=bad>${esc(i.text)}</span>`:esc(i.text)).join(" · ")}
+async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
+ footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
