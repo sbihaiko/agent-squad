@@ -1,5 +1,7 @@
 #!/bin/bash
-# One pass per watch cycle. Open PRs that name an issue ("Refs #N"):
+# One pass per watch cycle. Open PRs that name an issue ("Refs #N") are reviewed, fixed and merged:
+# a PR with no Refs #N is not ignored silently — one skip comment on the PR and a NOREFS log line,
+# once per head, so the next pass that still cannot map it stays quiet.
 #  1. new head sha, no review yet -> prepush.sh gate (process-only problems become a CHANGES verdict with no model review),
 #     else start revci.sh detached (review + CI wait)
 #  2. review+CI done on the head sha: CHANGES, failed CI, merge conflict or unresolved review threads
@@ -14,7 +16,7 @@
 #  SG_REVIEW_CHAIN_DEPTH=1 model, SG_REVIEW_RETRY_BUDGET=1 try, SG_REVIEW_TIMEOUT=120 s. An old PR may not spend the whole
 #  chain again while a fresh one waits. AGING fires once, STALLED every 15 min after, so a stuck PR is visible in watch.log.
 # Kill switch: touch $SG_STATE/auto/off (everything) or $SG_STATE/auto/nofix (review+merge only). Hold a PR: label `hold` or `needs-human`; an owner comment `/release` (whole body) lifts it.
-# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING.
+# Events: AUTOREVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; [ -e "$A/off" ] && exit 0
 L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo 0); tot=$(wc -l < "$L" | tr -d ' ')
 [ "$tot" -gt "$seen" ] && tail -n +$((seen+1)) "$L" | grep -E "^(AUTOFIX|AUTOPANEL|NEEDS OWNER)"; echo "$tot" > "$A/.logseen"
@@ -27,7 +29,14 @@ gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
 # the moment this loop happened to notice it. A PR with no marker yet keys as "now": it is new, not old, so it goes last.
 while IFS= read -r l; do printf '%s\t%s\n' "$(cat "$A/seen-${l%%$'\x1f'*}" 2>/dev/null || echo "$now")" "$l"; done < "$list" | sort -n | cut -f2- > "$list.s"
 while IFS=$'\x1f' read -r pr sha iss labels base created; do   # unit separator: a tab IFS collapses empty fields (no labels) and shifts the rest
-  [ -n "$iss" ] && [ "$iss" -ge "$MIN" ] 2>/dev/null || continue
+  if [ -z "$iss" ]; then   # no Refs #N: the loop cannot map the PR to an issue; say so once per head
+    s9=${sha:0:9}; [ -e "$A/norefs-$pr-$s9" ] && continue
+    touch "$A/norefs-$pr-$s9"
+    printf "PR #%s is skipped by the autopilot: its title and body have no \`Refs #N\`, so the loop cannot map it to an issue and will not review, fix or merge it. Add \`Refs #<issue>\` (the live issue this PR delivers) and the next pass will pick it up.\n" $pr > "$SG_STATE/cq/$pr-norefs$s9.md"
+    echo "NOREFS #$pr @ $s9: no Refs #N; skipped (the loop cannot map it to an issue)"
+    continue
+  fi
+  [ "$iss" -ge "$MIN" ] 2>/dev/null || continue
   if [ -n "$base" ] && [ "$base" != "$SG_BASE" ]; then   # stacked: retarget once the parent PR (head = our base) is merged
     par=$(gh api "repos/$SG_REPO/pulls?state=closed&head=${SG_REPO%%/*}:$base&per_page=5" -q '[.[]|select(.merged_at!=null)][0]|select(.)|"\(.number) \(.head.sha)"' 2>/dev/null)
     if [ -n "$par" ] && [ "$par" != null ] && [ "$(cat "$A/stack-$pr" 2>/dev/null)" != "${par#* }" ]; then   # once per parent (the list API can lag)
