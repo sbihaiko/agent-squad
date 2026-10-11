@@ -324,6 +324,13 @@ def test_the_board_header_carries_a_maximize_button_beside_the_collapse_one(hub,
     assert "maximize" in m.group(1).lower()        # a title that says what it does
 
 
+def test_both_header_controls_are_titled_pressed_buttons(hub):
+    head = _head(hub)
+    both = re.findall(r"<button id=b([xz]) title=\"([^\"]+)\" aria-pressed=false>", head)
+    assert sorted(b for b, _ in both) == ["x", "z"]      # focusable, titled, and each says whether it is on
+    assert all(t.strip() for _, t in both)
+
+
 def test_the_maximized_board_claims_both_cells_of_the_right_column(hub):
     css = _css(hub, "body.dockb.max #board")
     assert "grid-row:1/-1" in css                  # top to bottom: the run pane's cell included
@@ -373,7 +380,8 @@ const pins=new Set(),q="",per="day";
 
 _NODE_POST = r"""
 const snap=()=>({body:[...__body.classes].sort(),board:[...__el["#board"].classes].sort(),
-  press:__el["#bz"].attrs["aria-pressed"],title:__el["#bz"].title,icon:__el["#bz"].innerHTML,
+  press:__el["#bz"].attrs["aria-pressed"],bxpress:__el["#bx"].attrs["aria-pressed"],
+  title:__el["#bz"].title,icon:__el["#bz"].innerHTML,
   saved:JSON.parse(localStorage.hub||"{}").bo});
 const steps={init:snap(),seen:[...new Set(__seen)],made:[...__made]};
 $("#bz").onclick();steps.maxOn=snap();
@@ -417,6 +425,8 @@ def test_the_two_controls_can_never_both_be_on(hub):
     st = _board_steps(hub, {})
     assert st["collapseWhileMaximized"]["body"] == ["dockb"]              # the collapse restored the split first
     assert st["collapseWhileMaximized"]["board"] == ["off"] and st["collapseWhileMaximized"]["saved"]["max"] is False
+    assert st["collapseWhileMaximized"]["bxpress"] == "true" and st["collapseWhileMaximized"]["press"] == "false"
+    assert st["maxOn"]["bxpress"] == "false" and st["maxOff"]["bxpress"] == "false"   # the collapse control reads its own state
     assert st["maximizeWhileCollapsed"]["body"] == ["dockb", "max"]       # maximizing a collapsed board restores it first
     assert st["maximizeWhileCollapsed"]["board"] == [] and st["maximizeWhileCollapsed"]["saved"]["off"] is False
 
