@@ -79,6 +79,16 @@ PY
 fi
 # SG_REVIEW_CHAIN_DEPTH bounds how many models an aging PR may burn (autopilot sets 1). It counts only models that
 # are actually tried, so a chain whose head is out of quota still falls through instead of ending BLOCKED untried.
+# #1501: the aging leash (SG_REVIEW_TIMEOUT) exists so an old PR does not burn the whole chain. It must not
+# make the only reachable model fail by construction: count who would actually be tried, and skip the clamp
+# when that count is 1. Several reachable models still get the leash.
+eligible() { local m=$1
+  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && return 1;; esac
+  case $m in gemini-*) [ -e "$SG_STATE/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/agy-limited")" ] && return 1;; esac
+  if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
+  hours_ok review_models "$m" || return 1
+  return 0; }
+reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
 used=0
 for m in $chain; do
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
@@ -92,8 +102,8 @@ for m in $chain; do
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s for PR #%s (previous model failed %s times).\n" "$prev" "$m" "$pr" "$tries" > "$SG_STATE/cq/$iss-mswitch$$.md"
-  tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for an aging PR
-  [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
+  tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for an aging PR, except when one model is all that is reachable
+  [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)
     case $m in
