@@ -95,6 +95,8 @@ process.stdin.on("end", async () => {
     else if (o.op === "mark") out.push(core.stateMark(o.state));
     else if (o.op === "reveal") out.push(core.viewReveal(o.view, o.rect, o.size, o.insets));
     else if (o.op === "childmark") out.push(core.childMark(o.c));
+    else if (o.op === "card") out.push(core.cardBody(o.name, o.children));
+    else if (o.op === "cardnames") out.push(core.CARD_NAMES);
     else if (o.op === "roster") out.push(core.childRoster(o.children, o.dispatch));
     else if (o.op === "grouplayout") out.push(core.groupLayout(o.groups, o.layout, o.taken, o.box, o.gap, o.doc));
     else if (o.op === "bus") out.push(core.childBus(o.anchor, o.pos, o.box));
@@ -109,7 +111,7 @@ process.stdin.on("end", async () => {
     else if (o.op === "caps") out.push(core.declaredCaps(o.doc));
     else if (o.op === "template") out.push(core.commandTemplate(o.args));
     else if (o.op === "sheet") out.push(core.reviewSheet(o.args));
-    else if (o.op === "legend") out.push({ legend: core.LEGEND, chips: core.LEGEND_CHIPS, help: core.HELP });
+    else if (o.op === "legend") out.push({ legend: core.LEGEND, chips: core.LEGEND_CHIPS, states: core.RUN_STATES, state_text: core.STATE_TEXT, help: core.HELP });
     else if (o.op === "note") out.push(core.REVIEW_NOTE);
     else if (o.op === "chip") out.push(await core.hashChip(o.text));
     else if (o.op === "savetext") out.push(core.saveText(o.text));

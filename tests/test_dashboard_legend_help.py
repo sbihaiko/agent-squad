@@ -82,3 +82,27 @@ def test_every_legend_state_row_carries_the_glyph_its_card_shows():
     marks = run_node([{"op": "mark", "state": s} for s in state.values()])
     by = {row["cls"]: row.get("glyph") for row in legend}
     assert [by[c] for c in state] == [m["glyph"] for m in marks]
+
+
+def test_the_legend_is_a_side_strip_always_expanded_with_no_collapse_control():
+    """First paint shows the full list on the right; hover, focus and a toggle never open or close it."""
+    src = PAGE_SRC()
+    static = src[: src.index("<script>")]
+    assert '<aside id="legend"' in static
+    footer = static.split('id="footer"')[1].split("</div></div>")[0]
+    assert 'id="legend"' not in footer
+    assert 'id="b-legend"' not in static  # no toggle: the strip has no collapse control
+    for token in ("#legend:hover", "#legend:focus-within", "#legend.open", "closeLegend", "setLegend", "UI.legend"):
+        assert token not in src, token
+    rule = re.search(r"#legend \{[^}]+\}", src)
+    assert rule and "right:12px" in rule.group(0) and "width:220px" in rule.group(0) and "width:28px" not in rule.group(0)
+    labels = re.search(r"#legend \.lt, #legend \.lh \{[^}]+\}", src)
+    assert labels and "opacity:0" not in labels.group(0)
+    heads = re.search(r"#legend \.lh \{[^}]+\}", src)
+    assert heads and "height:0" not in heads.group(0)
+    # The graph is the one grid column; the strip overlays the map's right edge and never takes a column of its own.
+    assert "grid-template-columns:1fr;" in src.split("body {", 1)[1].split("}", 1)[0]
+    groups = [row.get("group") for row in run_node([{"op": "legend"}])[0]["legend"]]
+    assert set(groups) <= {"node", "run", "interaction"} and None not in groups
+    runs = [g for i, g in enumerate(groups) if i == 0 or g != groups[i - 1]]
+    assert len(runs) == len(set(runs)), groups  # contiguous: no group appears twice

@@ -1,0 +1,31 @@
+#!/bin/bash
+# usage: refresh-from-fork.sh [--check]   The counterpart of sync-to-fork.sh: copies the fork's local/next contrib/squad-goal into this live skill.
+# --check changes nothing and exits 1 naming every shipped file where live and local/next disagree.
+# Not shipped (ignored on both sides): __pycache__/, *.pyc, *.bak*.
+# Never touched: scripts/models.json, per-repo profiles (only profiles/example.sh ships) and $SG_STATE (sync-deny, fork-base).
+# Refused (SG_REFRESH_FORCE=1 overrides) when live carries edits neither synced to the fork nor on local/next, which the copy would erase.
+set -euo pipefail
+live="$(cd "$(dirname "$0")/.." && pwd)"; F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-local/next}; st=${SG_STATE:-$HOME/.cache/squad-goal}
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+git -C "$F" archive "$br" contrib/squad-goal | tar -x -C "$tmp"; fk="$tmp/contrib/squad-goal"
+sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+shipped() { ( cd "$1" && find . -type f ! -name .DS_Store ! -name '*.pyc' ! -name '*.bak*' ! -path '*/__pycache__/*' | sed 's|^\./||' | { grep -vE '^scripts/models\.json$|^scripts/profiles/' || true; } ; echo scripts/profiles/example.sh ) | sort -u; }
+base() { [ -f "$st/fork-base" ] && awk -v p="$1" '$2==p{print $1}' "$st/fork-base" || true; }
+diverged=$( { shipped "$live"; shipped "$fk"; } | sort -u | while read -r f; do
+  if [ -f "$live/$f" ] && [ -f "$fk/$f" ]; then cmp -s "$live/$f" "$fk/$f" || echo "$f"; elif [ -f "$live/$f" ] || [ -f "$fk/$f" ]; then echo "$f"; fi; done )
+if [ "${1:-}" = "--check" ]; then
+  [ -z "$diverged" ] && { echo "live skill matches $br"; exit 0; }
+  echo "live skill and $br disagree on:"; echo "$diverged"; exit 1
+fi
+[ -z "$diverged" ] && { echo "already current with $br"; exit 0; }
+ahead=$(echo "$diverged" | while read -r f; do
+  [ -f "$live/$f" ] || continue; b=$(base "$f"); [ -n "$b" ] && [ "$b" = "$(sha "$live/$f")" ] || echo "$f"; done)
+if [ -n "$ahead" ] && [ "${SG_REFRESH_FORCE:-}" != 1 ]; then
+  echo "refused: live carries edits that are not in $br (run sync-to-fork.sh first, or SG_REFRESH_FORCE=1 to discard them):"; echo "$ahead"; exit 1
+fi
+echo "$diverged" | while read -r f; do
+  [ -f "$fk/$f" ] || continue
+  mkdir -p "$(dirname "$live/$f")"; cp -p "$fk/$f" "$live/$f.new.$$"; mv "$live/$f.new.$$" "$live/$f"   # new inode: a running copy of the script keeps reading the old one
+done
+mkdir -p "$st"; ( cd "$live" && shipped . | while read -r f; do [ -f "$f" ] && echo "$(sha "$f") $f"; done ) > "$st/fork-base"
+echo "refreshed $(echo "$diverged" | wc -l | tr -d ' ') files from $br"

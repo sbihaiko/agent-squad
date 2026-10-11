@@ -39,6 +39,8 @@ def test_no_finished_worktree_is_left_behind():
     for path, head in rows:
         if path.resolve() == here or path.resolve() == rows[0][0].resolve():
             continue
+        if ".claude/worktrees" not in path.as_posix():
+            continue  # live sibling checkouts (for example ~/wt-as-*) are other sessions, not leftover work
         ahead = git("rev-list", "--count", f"{main_head}..{head}") if path.exists() else "?"
         if ahead == "0":
             stale.append(str(path))

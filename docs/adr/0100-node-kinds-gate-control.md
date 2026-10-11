@@ -22,7 +22,7 @@ The pipeline is code in dev_squad. A tier skip removes the critic on a trivial c
 7. **There are no sibling jumps.** To reach a later sibling, put a `when` on it over a declared fact, including `outcome:<node>`. A `when` is read on every entry and is never bypassed. No node has two entry semantics.
 8. **Budget is stalls and spend. Deadline is a separate term** with its own outcome (ADR-0051). The loop maximum is a third term and may only shrink at run time. A stall is a failed attempt at one step (a tool and its command or target) whose failure reads the same as the last one for that step. A changed failure or a success restarts the count, so a call that keeps changing what fails never stalls. Total turns are never capped: spend and the deadline bound a call ([ADR-0134](0134-stall-cap-counts-failures-without-evolution.md)).
 9. **A run has a verdict with five values: completed, needs-human, conflict, failed, stopped** (ADR-0029, ADR-0105). **A node has an outcome: pass, fail, deadline, needs-human.** A deadline is a node outcome. It adds no exit code.
-10. **A failed `ac-verify` command keeps the last 1500 characters of its output as evidence** in the gate outcome in the run record. No agent prompt reads it.
+10. **The evidence of a failed `ac-verify` command is the output that explains it, inside 1500 characters**, in the gate outcome in the run record. An output that fits the budget is kept whole. A longer one keeps the failing lines found in the part about to be dropped — the `FAILED`/`ERROR` summary lines, the `___ test ___` headers and the `E   ` assertion lines — then the end of the output, and names the size of the dropped part. A bare tail kept the last block a runner prints, which for `pytest -q` is the slowest-durations standings: the assertion that explains the failure was dropped. No agent prompt reads the evidence.
 11. **The engine is one scheduler with one runner per node kind.** A new kind adds one runner.
 
 Reopen rule 7 only if a target must run on a jump but not by order under the same facts, and no derived fact can express it.
@@ -31,4 +31,4 @@ Rejected: a fail edge from a gate into a node (a gate would not be a stop condit
 
 ## Guard
 
-`tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`, `tests/test_actions.py`, `tests/test_spec_shape.py`, `tests/test_gate_evidence.py`. A change to this rule changes its tests in the same commit (ADR-0018).
+`tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`, `tests/test_actions.py`, `tests/test_spec_shape.py`, `tests/test_gate_evidence.py`, `tests/test_workcmd_evidence_assertion.py`. A change to this rule changes its tests in the same commit (ADR-0018).

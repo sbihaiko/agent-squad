@@ -4,6 +4,8 @@
 value too (`{"passed": ..., "observed": ...}`), which is what lets a failed step name "expected X, observed Y". This
 fake speaks the emulator's shape, so the command and the supervised runner are exercised against it without a build.
 """
+from pathlib import Path
+
 from squad.gui_test_adapter import CONTROLS, SCREENS, FakeAdapter
 
 
@@ -23,3 +25,51 @@ class ShapeAdapter(FakeAdapter):
         if args["is"] not in SCREENS | CONTROLS:
             raise UnknownId(args["is"])
         return {"passed": observed == args["is"], "observed": observed}
+
+
+class VariantAdapter(ShapeAdapter):
+    """ShapeAdapter plus the optional `set_variant` hook, which the supervised run switches a variant through (#1243).
+
+    The switch is what a case can read back: the fake appends the axis and value it was given next to the run's
+    artifacts, so a case says which window mode the command actually asked for, per batch process.
+    """
+
+    def set_variant(self, axis, value):
+        with (Path(self.out_dir) / "variant.log").open("a", encoding="utf-8") as log:
+            log.write(f"{axis}={value}\n")
+
+
+class OneModeAdapter(ShapeAdapter):
+    """An adapter whose window axis runs one way only: a selection of that value has nothing to switch (#1243)."""
+
+    def capabilities(self):
+        return super().capabilities() | {"variants": {"window.mode": ["windowed"]}}
+
+
+class SlowHostAdapter(ShapeAdapter):
+    """A host too loaded to keep up (#1418): after a pad press the hook reads no focus at all (`observed None`) until
+    `lost_ticks` emulated ticks have passed, which is what a hold step saw at load ~185 with the focus then settling."""
+
+    def __init__(self, out_dir, lost_ticks):
+        super().__init__(out_dir)
+        self.lost_ticks, self._lost_until = lost_ticks, None
+
+    def inject(self, name, args):
+        super().inject(name, args)
+        if name == "pad.press":
+            self._lost_until = self.tick + self.lost_ticks
+
+    def _focused(self):
+        return None if self._lost_until is not None and self.tick < self._lost_until else self.focus
+
+    def wait(self, condition, timeout):
+        for _ in range(timeout + 1):
+            if condition is not None and condition.partition(" == ")[2] == self._focused():
+                return "met"
+            self._advance()
+        return "met" if condition is None else "timeout"
+
+    def check(self, name, args):
+        if name != "ui.focused":
+            return super().check(name, args)
+        return {"passed": self._focused() == args["is"], "observed": self._focused()}

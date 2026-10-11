@@ -4,14 +4,19 @@
 <meta charset="utf-8">
 <title>agent-squad-run-dashboard</title>
 <style>
-  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --wait:#e8d44d; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
-  #left { grid-row:2; overflow:auto; border-right:1px solid var(--line); background:var(--panel); padding:4px 12px 12px; min-height:0; }
+  /* The side panel is a drawer docked to the right edge, under the top bar: it takes its own column of the screen, so the diagram stays whole.
+     --side-w is its live width (the sheet's height under 900px), and --side-min/--side-max the travel the grip clamps to. The page measures both. */
+  body { --side-w:420px; --side-min:320px; --side-max:calc(100vw - 520px); }
+  #left { position:fixed; top:37px; right:0; bottom:0; left:auto; width:var(--side-w,420px); max-height:none; transform:none; border-radius:0; border:0; border-left:1px solid var(--line); box-shadow:-8px 0 32px #0008; z-index:7; padding:8px 16px 16px; overflow:auto; background:var(--panel); }
+  /* The grip is an 8px strip on either side of the drawer's edge: #side-grip inside, #left::before outside over the map. Both start a drag. */
+  #side-grip { position:fixed; top:37px; bottom:0; right:calc(var(--side-w,420px) - 8px); width:8px; cursor:col-resize; }
+  #side-grip:focus-visible { outline:1px solid var(--acc); outline-offset:-1px; }
+  #left::before { content:""; position:fixed; top:37px; bottom:0; right:var(--side-w,420px); width:8px; z-index:7; cursor:col-resize; }
   #graph { grid-column:1; grid-row:2; }
-  #left { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; bottom:auto; z-index:9; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 48px #000b; padding:8px 20px 20px; }
-  body:not(.noside)::after { content:""; position:fixed; inset:37px 0 0 0; background:#0008; z-index:8; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
   button, label.btn { cursor:pointer; }
@@ -73,8 +78,10 @@
   svg#map { position:absolute; inset:0; width:100%; height:100%; background:#0c0e12; cursor:grab; touch-action:none; user-select:none; }
   svg#map.panning { cursor:grabbing; }
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
+  body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
   #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
   #replay { position:absolute; left:50%; bottom:34px; transform:translateX(-50%); display:none; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; box-shadow:0 6px 20px #0008; }
+  body:not(.noside) #replay { left:calc((100vw - var(--side-w,0px)) / 2); }   /* the bar centers in what the drawer leaves, so it never sits under it */
   #replay input[type=range] { width:320px; accent-color:var(--acc); }
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
@@ -121,8 +128,15 @@
   .group-card.sel > rect { stroke:var(--acc); stroke-width:2.5; }
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:11px; font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
-  .chip-sw.v-wait { border-color:var(--warn); color:var(--warn); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
-  .chip-sw.v-live { border-color:var(--run); color:var(--run); }
+  .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
+  .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
+  /* The run-state pill the legend draws: one rule per state of the hub's table (contrib/squad-goal/scripts/hub.py RUN_STATES), colour and border alike, so a
+     legend row cannot drift from the sidebar pill. A test holds these rules to the hub's table. */
+  .b { display:inline-block; padding:0 6px; border-radius:9px; font-size:11px; border:1px solid; }
+  .b.completed { color:var(--ok); } .b.verified { color:var(--ok); font-style:italic; } .b.unverified { color:var(--ok); border-style:dashed; }
+  .b.failed { color:var(--err); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
+  .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
+  .b.no-verdict-yet { color:var(--none); }
   .card:focus { outline:none; } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:#1a1f27; stroke:#556; stroke-width:1.2; }
@@ -156,7 +170,16 @@
   .card.drop rect { stroke:var(--drop); stroke-width:2; fill:#2a1f33; }
   #rubber { stroke:var(--acc); stroke-width:1.6; stroke-dasharray:5 4; pointer-events:none; }
   #edges marker path { fill:#4a5568; }
-  #legend { display:flex; flex-wrap:wrap; gap:4px 12px; max-width:62%; justify-content:flex-end; color:var(--mute); font-size:11px; pointer-events:none; flex:1 1 auto; min-width:0; }
+  /* The legend is a strip on the map's right edge, under the zoom controls: always expanded; the graph keeps the remaining width. */
+  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; }
+  #legend-list { display:flex; flex-direction:column; padding:4px 6px; }
+  body:not(.noside) #legend { visibility:hidden; }   /* the open drawer owns the right edge; the keyboard [ or the ? overlay brings the strip back */
+  #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
+  #legend .lg svg { flex:0 0 24px; }
+  #legend .lt, #legend .lh { overflow:hidden; }
+  #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
+  /* A run-state row carries a full pill, too wide to sit beside its words: the pill takes the row and the description goes under it. */
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
   #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }
@@ -177,9 +200,10 @@
   #vchip[hidden] { display:none; }
   #vchip.v-ok { border-color:var(--ok); color:var(--ok); }
   #vchip.v-bad { border-color:var(--err); color:var(--err); }
-  #vchip.v-wait { border-color:var(--warn); color:var(--warn); }
+  #vchip.v-wait { border-color:var(--wait); color:var(--wait); }
   #vchip.v-none { border-color:var(--none); color:var(--none); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
+  #vchip.v-human { border-color:var(--warn); color:var(--warn); }
   #modesw { display:flex; }
   #modesw button { border-radius:0; }
   #modesw button:first-child { border-radius:4px 0 0 4px; }
@@ -195,13 +219,12 @@
   #fmenu .drop button:hover, #fmenu .drop label.btn:hover { background:#182a40; }
   #fmenu .drop .sep { color:var(--mute); font-size:11px; padding:4px 8px 0; }
   #fmenu .drop .note { padding:2px 8px; }
-  #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 200px); }
+  #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 244px); }
   #status { position:fixed; left:12px; bottom:40px; z-index:5; max-width:min(560px, 60vw); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:12px; color:var(--mute); cursor:pointer; }
   #status:empty { display:none; }
   @media (max-width: 900px) { #status { bottom:112px; } }   /* a narrow window: the toast sits above the replay bar, not over its buttons */
   #side details.ref { margin-top:14px; }
-  /* A narrow window gives the map its height back: the legend lives in the help (?) too, so below 900 px it is not drawn on the map. */
-  @media (max-width:900px) { #legend { display:none; } }
+  /* A narrow window still shows the expanded strip on the right; the help (?) holds the same list. */
 
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
 #side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
@@ -218,6 +241,39 @@
 .script-diagram .step-tags { fill: #555; font-size: 11px; }
 .script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
 .script-diagram marker path { fill: #777; }
+
+/* A window under 1024px starts with a narrower drawer; --side-max stays 520px short of the viewport, so 504px of travel at 1024. */
+@media (max-width: 1024px) { body { --side-w:360px; } }
+/* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
+   The map reserves the sheet's height, and the replay bar rises clear of it rather than hiding under it. */
+@media (max-width: 900px) {
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
+  #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  body:not(.noside) #mapbox { padding-bottom:52vh; }
+  body:not(.noside) #view { right:12px; }
+  body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
+}
+
+/* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the
+   hub's pip opens over its maximized board. The card is the panel's own data (core.cardBody), so the two cannot drift. */
+body.card-mode { display: block; margin: 0; }
+body.card-mode #topbar, body.card-mode #left, body.card-mode #graph, body.card-mode #footer,
+body.card-mode #totals, body.card-mode #progress, body.card-mode #replay, body.card-mode #status, body.card-mode #help { display: none; }
+body.card-mode #card { display: block; }
+#card { display: none; height: 100vh; overflow: auto; overscroll-behavior: contain; padding: 8px 10px; background: #0f1115; color: #d8dde6; font: 12px ui-monospace, Menlo, monospace; }
+#card h3 { margin: 8px 0 4px; font-size: 12px; color: #d8dde6; }
+#card .cgroup { border: 1px solid #2a303b; border-radius: 6px; margin: 0 0 6px; padding: 4px 8px 6px; background: #161a21; }
+#card .cgroup.s-running, #card .cgroup.s-started { border-color: #2dd4bf; }
+#card .cgroup.s-failed, #card .cgroup.s-rejected { border-color: #ff6b6b; }
+#card .crow { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#card .crow b { font-weight: 600; }
+#card .crow.s-passed { color: #3ecf8e; }
+#card .crow.s-failed, #card .crow.s-rejected { color: #ff6b6b; }
+#card .crow.s-running, #card .crow.s-started { color: #2dd4bf; }
+#card .crow.s-queued { color: #8a93a3; }
+#card .cnote { color: #8a93a3; line-height: 1.4; }
 </style>
 </head>
 <body>
@@ -248,6 +304,7 @@
   <button id="b-help" title="Show the controls and the color legend (key ?)" aria-expanded="false" aria-label="Help">?</button>
 </header>
 <div id="left">
+  <div id="side-grip" tabindex="0" role="separator" aria-orientation="vertical" aria-valuemin="320" title="Drag to widen or narrow the side panel (arrow keys, Home, End, double-click to reset)"></div>
   <div id="stop" hidden></div>
   <div id="offer" hidden></div>
   <div id="review" hidden></div>
@@ -268,18 +325,20 @@
     <button id="b-redo" title="Redo (Ctrl or Cmd + Shift + Z)">Redo</button>
   </div>
   <div id="view"><button id="b-out" title="Zoom out">&minus;</button><span id="zoom">100%</span><button id="b-in" title="Zoom in">+</button><button id="b-fit" title="Fit the graph to the screen">Fit</button></div>
+  <aside id="legend" aria-label="Legend"><div id="legend-list"></div></aside>
   <datalist id="dl-models"></datalist><datalist id="dl-efforts"></datalist><datalist id="dl-skills"></datalist>
   <div id="replay"><button id="r-start" title="First event">|&lt;</button><button id="r-back" title="One event back (Left arrow)">&lt;</button><input id="r-range" type="range" min="1" max="1" step="1" value="1" title="Replay cursor: a position in the run record"><button id="r-fwd" title="One event forward (Right arrow)">&gt;</button><button id="r-end" title="Last event: a live run keeps following from here">&gt;|</button><span id="r-pos"></span></div>
-  <div id="footer"><div id="hint">Press ? or Help for the controls</div><div id="legend"></div></div>
+  <div id="footer"><div id="hint">Press ? or Help for the controls</div></div>
   <div id="help" hidden><div class="box"><h2>Controls</h2><table id="help-rows"></table><h2>Buttons</h2><table id="help-btns"></table><h2>Colors</h2><div id="help-legend"></div><div class="row"><button id="b-help-close" title="Close the help (Esc)">Close</button></div></div></div>
   <div id="menu"></div>
 </div>
+<div id="card" aria-label="One card of the run panel"></div>
 <div id="totals" role="status" aria-label="Run totals"></div>
 </div>
 <div id="status" role="status" title="Click to dismiss"></div>
 <script>const ENGINE = {"builtin_facts": ["children_count", "depth", "run_spend", "run_spend_remaining", "spawn_rejected_count", "tier_pin"], "forbidden_instrument": "(\\bmodel\\b|\\bjudge\\b|self-report|self report|confidence|pass rate|finding count|\\btrend\\b|\\b(another|other|previous|past|earlier) run\\b|adaptation report)", "forbidden_name": "(pass_rate|finding|trend|self_report|judge|confidence|effectiveness|learning_count)", "gate_registry": {"ac-command-shape": ["duplicate_warn_ratio"], "ac-verify": ["commands_from"], "learning-check": [], "plan-semantics": ["max_work_items"], "scope": ["allowed_generated"], "security": ["sensitive_paths"], "spec-shape": [], "spend-floor": ["min_remaining_usd"], "visual-guard": []}, "kinds": ["agent", "gate", "wait", "loop", "each", "action", "dispatch"], "schema": {"$defs": {"action": {"additionalProperties": false, "description": "Deterministic code with declared side effects. No model, no spend.", "properties": {"deadline": {"$ref": "#/$defs/seconds"}, "effect": {"enum": ["worktree_create", "worktree_revert", "commit", "merge_land"]}, "kind": {"const": "action"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "reads": {"$ref": "#/$defs/paths"}, "when": {"$ref": "#/$defs/when"}, "workspace": {"type": "string"}, "writes": {"$ref": "#/$defs/paths"}}, "required": ["name", "kind", "effect"], "type": "object"}, "adapt": {"additionalProperties": false, "description": "The node's own range for run-time proposals. No block means the node is not adaptable.", "properties": {"efforts": {"items": {"type": "string"}, "minItems": 1, "type": "array"}, "kinds": {"items": {"enum": ["set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend", "shrink_loop_max"]}, "minItems": 1, "type": "array", "uniqueItems": true}, "models": {"items": {"type": "string"}, "minItems": 1, "type": "array"}, "sees": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "tools": {"items": {"type": "string"}, "type": "array"}}, "required": ["kinds"], "type": "object"}, "agent": {"additionalProperties": false, "properties": {"adapt": {"$ref": "#/$defs/adapt"}, "budget": {"$ref": "#/$defs/budget"}, "deadline": {"$ref": "#/$defs/seconds"}, "effort": {"type": "string"}, "instructions": {"description": "The role text the model reads before its inputs. Authored data: the graph hash covers it.", "type": "string"}, "kind": {"const": "agent"}, "may_propose": {"type": "boolean"}, "may_spawn": {"description": "Valid only on the entry agent of a dispatch node. Its output carries a spawns list.", "type": "boolean"}, "model": {"type": "string"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "output_key": {"type": "string"}, "reads": {"$ref": "#/$defs/paths"}, "skill": {"description": "A skill the entry agent runs through the /name prefix.", "type": "string"}, "tools": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "when": {"$ref": "#/$defs/when"}, "workspace": {"type": "string"}, "writes": {"$ref": "#/$defs/paths"}}, "required": ["name", "kind", "model", "tools", "budget"], "type": "object"}, "budget": {"additionalProperties": false, "description": "Turn cap and spend cap, each with a minimum and a maximum. A proposal shrinks toward min and never raises max.", "properties": {"spend": {"$ref": "#/$defs/range_usd"}, "stalls": {"$ref": "#/$defs/range_int"}}, "required": ["stalls", "spend"], "type": "object"}, "dispatch": {"additionalProperties": false, "description": "An agent requests children inside an author-fixed envelope. Code validates each request. A model never widens a field here.", "properties": {"allow": {"additionalProperties": false, "properties": {"efforts": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}, "models": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}, "skills": {"items": {"additionalProperties": false, "properties": {"name": {"minLength": 1, "type": "string"}, "version": {"pattern": "^[0-9a-f]{64}$", "type": "string"}}, "required": ["name"], "type": "object"}, "minItems": 1, "type": "array"}, "tools": {"items": {"type": "string"}, "type": "array", "uniqueItems": true}, "workspaces": {"items": {"type": "string"}, "minItems": 1, "type": "array", "uniqueItems": true}}, "required": ["models", "efforts", "tools", "skills", "workspaces"], "type": "object"}, "budget": {"$ref": "#/$defs/budget"}, "checks": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "deadline": {"$ref": "#/$defs/seconds"}, "entry": {"$ref": "#/$defs/name"}, "join": {"enum": ["all", "first_failure"]}, "kind": {"const": "dispatch"}, "max_children": {"minimum": 1, "type": "integer"}, "max_depth": {"minimum": 1, "type": "integer"}, "max_parallel": {"minimum": 1, "type": "integer"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "entry", "max_depth", "max_children", "max_parallel", "deadline", "join", "allow", "budget", "checks"], "type": "object"}, "each": {"additionalProperties": false, "properties": {"children": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "deadline": {"$ref": "#/$defs/seconds"}, "items": {"$ref": "#/$defs/name"}, "join": {"enum": ["all", "first_failure"]}, "kind": {"const": "each"}, "max_parallel": {"minimum": 1, "type": "integer"}, "mode": {"enum": ["parallel", "sequence"]}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "items", "mode", "join", "children", "deadline"], "type": "object"}, "fact": {"additionalProperties": false, "description": "A registered fact: only code produces it. The families outcome:<node>, run_spend, run_spend_remaining are built in.", "if": {"properties": {"type": {"const": "enum"}}}, "properties": {"instrument": {"minLength": 1, "type": "string"}, "name": {"$ref": "#/$defs/name"}, "source_kind": {"enum": ["artifact", "run_record", "target"]}, "type": {"enum": ["bool", "int", "number", "enum"]}, "values": {"items": {"type": "string"}, "minItems": 1, "type": "array"}}, "required": ["name", "type", "instrument", "source_kind"], "then": {"required": ["values"]}, "type": "object"}, "gate": {"additionalProperties": false, "description": "A deterministic check. No model, no when, no deadline, no adapt. Its fail is repeat or exit:fail and never names a node.", "properties": {"check": {"type": "string"}, "kind": {"const": "gate"}, "name": {"$ref": "#/$defs/name"}, "next": {"additionalProperties": false, "properties": {"fail": {"enum": ["repeat", "exit:fail"]}}, "type": "object"}, "params": {"type": "object"}}, "required": ["name", "kind", "check", "params"], "type": "object"}, "gate_def": {"additionalProperties": false, "properties": {"id": {"pattern": "^[a-z][a-z0-9-]*$", "type": "string"}, "params": {"items": {"type": "string"}, "type": "array"}}, "required": ["id", "params"], "type": "object"}, "loop": {"additionalProperties": false, "description": "Repeats its ordered children up to max. Max may only shrink at run time. Carries no deadline.", "properties": {"adapt": {"$ref": "#/$defs/adapt"}, "children": {"items": {"$ref": "#/$defs/name"}, "minItems": 1, "type": "array", "uniqueItems": true}, "kind": {"const": "loop"}, "max": {"additionalProperties": false, "properties": {"min": {"minimum": 1, "type": "integer"}, "value": {"minimum": 1, "type": "integer"}}, "required": ["value", "min"], "type": "object"}, "max_by": {"const": "task", "description": "Opt-in: make `max` the ceiling of one task's attempts, not of the loop's entries. Each entry adds one attempt to every `task` key its accepted children name; a task that reaches `max` attempts is dropped and recorded, and the loop goes on; an entry that names only dropped tasks ends the loop `fail` with reason task_max_exhausted, and a loop that would end `pass` with a dropped task ends `fail` with task_exhausted:<task>. A loop that advances to a new task never spends the ceiling. An entry that names no task key adds one unnamed attempt. Omit for the old count-every-entry behavior."}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "stall_after": {"additionalProperties": false, "description": "Opt-in: exit `fail` with reason waves_stalled once this many consecutive entries land nothing, before `max` is ever reached. An entry that lands at least one child resets the count. Omit for the old count-only behavior.", "properties": {"by": {"const": "land", "description": "The signal a wave counts as progress. Only \"land\" exists today."}, "count": {"minimum": 1, "type": "integer"}}, "required": ["count"], "type": "object"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "max", "children"], "type": "object"}, "name": {"pattern": "^[a-z][a-z0-9_]*$", "type": "string"}, "next": {"additionalProperties": false, "description": "Reserved words only, per outcome.", "properties": {"deadline": {"$ref": "#/$defs/next_word"}, "fail": {"$ref": "#/$defs/next_word"}, "needs-human": {"$ref": "#/$defs/next_word"}, "pass": {"$ref": "#/$defs/next_word"}}, "type": "object"}, "next_word": {"enum": ["repeat", "continue", "exit:pass", "exit:fail", "exit:deadline", "exit:needs-human"]}, "paths": {"description": "Repo file paths a node declares. A path in one node's `reads` is never in another node's `writes`.", "items": {"minLength": 1, "type": "string"}, "type": "array", "uniqueItems": true}, "range_int": {"additionalProperties": false, "properties": {"max": {"minimum": 1, "type": "integer"}, "min": {"minimum": 1, "type": "integer"}}, "required": ["min", "max"], "type": "object"}, "range_usd": {"additionalProperties": false, "properties": {"max": {"exclusiveMinimum": 0, "type": "number"}, "min": {"exclusiveMinimum": 0, "type": "number"}}, "required": ["min", "max"], "type": "object"}, "run_block": {"additionalProperties": false, "description": "Run-level defaults. An engine option may only lower them.", "properties": {"deadline": {"description": "Seconds for the whole run, or null for no run deadline (owner ruling 2026-09-30: long runs may take days, the per-call deadline is the cap).", "oneOf": [{"$ref": "#/$defs/seconds"}, {"type": "null"}]}, "max_parallel": {"minimum": 1, "type": "integer"}, "spend_cap": {"exclusiveMinimum": 0, "type": "number"}}, "required": ["deadline", "max_parallel", "spend_cap"], "type": "object"}, "seconds": {"minimum": 1, "type": "integer"}, "wait": {"additionalProperties": false, "properties": {"deadline": {"$ref": "#/$defs/seconds"}, "default": {"enum": ["pass", "fail"]}, "kind": {"const": "wait"}, "name": {"$ref": "#/$defs/name"}, "next": {"$ref": "#/$defs/next"}, "owner": {"minLength": 1, "type": "string"}, "when": {"$ref": "#/$defs/when"}}, "required": ["name", "kind", "owner", "deadline", "default"], "type": "object"}, "when": {"additionalProperties": false, "description": "One predicate over a registered fact, read on every entry and never bypassed.", "properties": {"fact": {"pattern": "^([a-z][a-z0-9_]*|outcome:[a-z][a-z0-9_]*)$", "type": "string"}, "op": {"enum": ["eq", "ne", "gt", "gte", "lt", "lte"]}, "value": {"type": ["boolean", "integer", "number", "string"]}}, "required": ["fact", "op", "value"], "type": "object"}}, "$id": "https://github.com/mmctech-ai/agent-squad/docs/design/graph.schema.json", "$schema": "https://json-schema.org/draft/2020-12/schema", "additionalProperties": false, "description": "One flat JSON document. Edges are name references. Rules that a schema cannot express live in check_graph.py.", "properties": {"description": {"type": "string"}, "facts": {"items": {"$ref": "#/$defs/fact"}, "type": "array"}, "gates": {"items": {"$ref": "#/$defs/gate_def"}, "type": "array"}, "name": {"minLength": 1, "type": "string"}, "nodes": {"items": {"oneOf": [{"$ref": "#/$defs/agent"}, {"$ref": "#/$defs/gate"}, {"$ref": "#/$defs/wait"}, {"$ref": "#/$defs/loop"}, {"$ref": "#/$defs/each"}, {"$ref": "#/$defs/action"}, {"$ref": "#/$defs/dispatch"}]}, "minItems": 1, "type": "array"}, "root": {"$ref": "#/$defs/name"}, "run": {"$ref": "#/$defs/run_block"}, "schema_version": {"const": 1}}, "required": ["schema_version", "name", "run", "facts", "gates", "root", "nodes"], "title": "agent-squad graph document", "type": "object"}, "sees_forbidden": ["tier"], "write_tools": ["Bash", "Edit", "NotebookEdit", "Write"]};</script>
 <script>const EXAMPLE = {"description": "The five dev_squad phases in the graph vocabulary. Fixture for the schema.", "facts": [{"instrument": "code: classify tier from scout.size_estimate; a missing estimate is large", "name": "tier", "source_kind": "artifact", "type": "enum", "values": ["trivial", "medium", "large"]}, {"instrument": "code: sensitive path set over scout.paths", "name": "sensitive", "source_kind": "artifact", "type": "bool"}, {"instrument": "code: changed files and web app flag, computed before execute", "name": "visual", "source_kind": "target", "type": "bool"}, {"instrument": "code: git is available in the target", "name": "git", "source_kind": "target", "type": "bool"}, {"instrument": "code: length of decompose.work_items, or 1 when decompose did not run", "name": "work_items", "source_kind": "artifact", "type": "int"}, {"instrument": "code: derived from diff size and sensitive; replaces the size backstop gate", "name": "review_required", "source_kind": "artifact", "type": "bool"}, {"instrument": "code: count of blocking entries in the declared file learnings.json (no cross-run input)", "name": "blocking_learnings", "source_kind": "artifact", "type": "int"}, {"instrument": "code: count of architecture issues in the critic artifact", "name": "architecture_issues", "source_kind": "run_record", "type": "int"}, {"instrument": "code: sum of SDK result spend over agent entries", "name": "run_spend", "source_kind": "run_record", "type": "number"}], "gates": [{"id": "spec-shape", "params": []}, {"id": "ac-command-shape", "params": ["duplicate_warn_ratio"]}, {"id": "plan-semantics", "params": ["max_work_items"]}, {"id": "spend-floor", "params": ["min_remaining_usd"]}, {"id": "scope", "params": ["allowed_generated"]}, {"id": "security", "params": ["sensitive_paths"]}, {"id": "ac-verify", "params": ["commands_from"]}, {"id": "visual-guard", "params": []}, {"id": "learning-check", "params": []}], "name": "dev-squad-default", "nodes": [{"children": ["scout", "spec", "plan", "budget_gate", "execute", "verify", "ship"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "main"}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "sonnet", "name": "scout", "next": {"fail": "repeat"}, "output_key": "size_estimate", "tools": ["Read", "Grep", "Glob"]}, {"children": ["spec_draft", "spec_gate", "spec_proxy"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "spec", "when": {"fact": "tier", "op": "ne", "value": "trivial"}}, {"adapt": {"efforts": ["low", "medium", "high"], "kinds": ["set_model", "set_effort", "shrink_stalls", "shrink_spend"], "models": ["opus", "sonnet"], "sees": ["run_spend"]}, "budget": {"spend": {"max": 4, "min": 0.1}, "stalls": {"max": 5, "min": 2}}, "deadline": 900, "kind": "agent", "may_propose": true, "model": "opus", "name": "spec_draft", "next": {"fail": "repeat"}, "output_key": "spec", "tools": ["Read", "Grep"]}, {"check": "ac-command-shape", "kind": "gate", "name": "spec_gate", "next": {"fail": "repeat"}, "params": {"duplicate_warn_ratio": 0.4}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "spec_proxy", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"children": ["decompose", "plan_gate", "plan_proxy"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "plan", "when": {"fact": "tier", "op": "eq", "value": "large"}}, {"budget": {"spend": {"max": 4, "min": 0.1}, "stalls": {"max": 5, "min": 2}}, "deadline": 900, "kind": "agent", "model": "opus", "name": "decompose", "next": {"fail": "repeat"}, "output_key": "work_items", "tools": ["Read", "Grep"]}, {"check": "plan-semantics", "kind": "gate", "name": "plan_gate", "next": {"fail": "repeat"}, "params": {"max_work_items": 5}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "plan_proxy", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"check": "spend-floor", "kind": "gate", "name": "budget_gate", "next": {"fail": "exit:fail"}, "params": {"min_remaining_usd": 1}}, {"children": ["worktree", "work", "merge", "manual_merge"], "deadline": 7200, "items": "work_items", "join": "all", "kind": "each", "max_parallel": 2, "mode": "parallel", "name": "execute"}, {"effect": "worktree_create", "kind": "action", "name": "worktree", "workspace": "worktrees/item"}, {"adapt": {"kinds": ["shrink_loop_max"]}, "children": ["actor", "scope_gate", "security_gate", "critic"], "kind": "loop", "max": {"min": 1, "value": 12}, "name": "work"}, {"adapt": {"efforts": ["low", "medium", "high"], "kinds": ["set_model", "set_effort", "narrow_tools", "shrink_stalls", "shrink_spend"], "models": ["sonnet", "haiku"], "sees": ["sensitive", "run_spend"], "tools": ["Read", "Edit", "Write"]}, "budget": {"spend": {"max": 8, "min": 0.2}, "stalls": {"max": 5, "min": 2}}, "deadline": 1800, "kind": "agent", "model": "sonnet", "name": "actor", "next": {"fail": "repeat"}, "output_key": "diff", "tools": ["Read", "Edit", "Write", "Bash"], "workspace": "worktrees/item"}, {"check": "scope", "kind": "gate", "name": "scope_gate", "next": {"fail": "repeat"}, "params": {"allowed_generated": ["package-lock.json"]}}, {"check": "security", "kind": "gate", "name": "security_gate", "next": {"fail": "repeat"}, "params": {"sensitive_paths": ["auth", "crypto", ".env*"]}}, {"adapt": {"kinds": ["set_model", "shrink_stalls"], "models": ["opus", "sonnet"], "sees": ["run_spend"]}, "budget": {"spend": {"max": 3, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 900, "kind": "agent", "model": "opus", "name": "critic", "next": {"fail": "repeat"}, "tools": ["Read", "Grep"], "when": {"fact": "review_required", "op": "eq", "value": true}}, {"deadline": 300, "effect": "merge_land", "kind": "action", "name": "merge", "next": {"fail": "continue"}, "workspace": "worktrees/item"}, {"deadline": 86400, "default": "fail", "kind": "wait", "name": "manual_merge", "next": {"fail": "exit:fail"}, "owner": "rafael", "when": {"fact": "outcome:merge", "op": "eq", "value": "fail"}}, {"children": ["ac_verify", "visual", "learning_gate", "audit_a", "audit_b", "audit_c"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "verify"}, {"check": "ac-verify", "kind": "gate", "name": "ac_verify", "next": {"fail": "exit:fail"}, "params": {"commands_from": ["spec", "scout"]}}, {"children": ["visual_actor", "visual_guard", "visual_critic"], "kind": "loop", "max": {"min": 1, "value": 4}, "name": "visual", "when": {"fact": "visual", "op": "eq", "value": true}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "sonnet", "name": "visual_actor", "next": {"fail": "repeat"}, "tools": ["Bash", "Read"]}, {"check": "visual-guard", "kind": "gate", "name": "visual_guard", "next": {"fail": "repeat"}, "params": {}}, {"budget": {"spend": {"max": 2, "min": 0.05}, "stalls": {"max": 5, "min": 2}}, "deadline": 600, "kind": "agent", "model": "opus", "name": "visual_critic", "next": {"fail": "repeat"}, "tools": ["Read"]}, {"check": "learning-check", "kind": "gate", "name": "learning_gate", "next": {"fail": "exit:fail"}, "params": {}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "stalls": {"max": 5, "min": 2}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_a", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "blocking_learnings", "op": "gt", "value": 0}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "stalls": {"max": 5, "min": 2}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_b", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "architecture_issues", "op": "gt", "value": 0}}, {"budget": {"spend": {"max": 0.5, "min": 0.01}, "stalls": {"max": 5, "min": 2}}, "deadline": 300, "kind": "agent", "model": "haiku", "name": "audit_c", "next": {"deadline": "continue", "fail": "continue"}, "tools": ["Read"], "when": {"fact": "work_items", "op": "gt", "value": 1}}, {"children": ["commit"], "kind": "loop", "max": {"min": 1, "value": 1}, "name": "ship"}, {"deadline": 120, "effect": "commit", "kind": "action", "name": "commit", "when": {"fact": "git", "op": "eq", "value": true}, "workspace": "."}], "root": "main", "run": {"deadline": 21600, "max_parallel": 2, "spend_cap": 60}, "schema_version": 1};</script>
-<script>const SERVED = {"efforts": ["high", "low", "medium"], "hash": "3c669b0eeeff8a61af9722cd1a724b75c0a3e8a6c6f94f43874f7e7ef2ddfae4", "models": ["claude-sonnet-5-5", "haiku", "opus", "sonnet"], "skills": ["agent-ask-matt", "agent-grill-me", "agent-grill-with-docs", "agent-handoff", "agent-implement", "agent-implement-spec", "agent-improve-codebase-architecture", "agent-setup-matt-pocock-skills", "agent-squad-dashboard", "agent-to-questionnaire", "agent-to-spec", "agent-to-tickets", "agent-wayfinder", "ask-matt", "codebase-design", "diagnosing-bugs", "ego-browser", "squad-skill-update", "tdd", "to-spec", "to-tickets"], "sources": ["config/agent-defaults.yaml", "vendor/skills/skills", ".claude/skills", "five-phases", "router"], "tools": ["Agent", "Bash", "Edit", "Glob", "Grep", "NotebookEdit", "Read", "Task", "WebFetch", "WebSearch", "Write"]};</script>
+<script>const SERVED = {"efforts": ["high", "low", "medium"], "hash": "c6aa05b7624ecaf364cddeacb15a6fea43195a05b77c1629a8dd713eba0a5a49", "models": ["claude-sonnet-5-5", "haiku", "opus", "sonnet"], "skills": ["agent-ask-matt", "agent-grill-me", "agent-grill-with-docs", "agent-handoff", "agent-implement", "agent-implement-spec", "agent-improve-codebase-architecture", "agent-setup-matt-pocock-skills", "agent-squad-dashboard", "agent-to-questionnaire", "agent-to-spec", "agent-to-tickets", "agent-wayfinder", "ask-matt", "codebase-design", "diagnosing-bugs", "ego-browser", "squad-skill-update", "tdd", "to-spec", "to-test-scenario", "to-tickets"], "sources": ["config/agent-defaults.yaml", "vendor/skills/skills", ".claude/skills", "five-phases", "router"], "tools": ["Agent", "Bash", "Edit", "Glob", "Grep", "NotebookEdit", "Read", "Task", "WebFetch", "WebSearch", "Write"]};</script>
 <script>"use strict";
 // Dashboard core module: canonical form, hash and import. The module the others depend on.
 // A factory: it takes ENGINE and the modules it depends on, and returns its functions. No DOM here.
@@ -675,13 +734,16 @@ function failuresModule({ orNull }) {
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
 function childrenModule({ num, openCalls, orNull, skillName }) {
-  // The issue a spawn ran, read from its own prompt: a tracker reference ("GitHub issue #1179", "issue #14") first, else
-  // the issue file ("issues/14-slug.md" -> 14). The file form must sit under issues/, so another numbered file the prompt
-  // cites ("docs/adr/gui/0272-the-hook.md") never reads as the issue. A prompt with neither names none.
+  // The issue a spawn ran, read from its own prompt: a tracker reference ("GitHub issue #1179", "issue #14") or the issue
+  // file ("issues/14-slug.md" -> 14), whichever the prompt names first. A prompt states its own issue first and cites a
+  // blocker after ("... issues/20-x.md ... Issue #19 has landed"), so the first reference is the one it ran. The file form
+  // must sit under issues/, so another numbered file the prompt cites ("docs/adr/gui/0272-the-hook.md") never reads as the
+  // issue. A prompt with neither names none.
   const issueNumber = (prompt) => {
     const t = typeof prompt === "string" ? prompt : "";
-    const m = /\bissue\s+#(\d+)/i.exec(t) || /(?:^|[\s/`"'(])issues\/(\d+)-[\w-]+\.md/.exec(t);
-    return m ? Number(m[1]) : null;
+    const found = [/\bissue\s+#(\d+)/i, /(?:^|[\s/`"'(])issues\/(\d+)-[\w-]+\.md/].map((re) => re.exec(t)).filter(Boolean);
+    const first = found.sort((a, b) => a.index - b.index)[0];
+    return first ? Number(first[1]) : null;
   };
 
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
@@ -1153,7 +1215,42 @@ function groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, chil
     return segs;
   }
 
-  return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus };
+  // ---- the panel's single-card mode (ticket #1782) ----
+  // One card of the panel, named by the page's `card` parameter, for the second view the hub's pip opens over its
+  // maximized board. The panel has one card it can name cleanly, so the parameter takes that one alone: `groups`, the
+  // run's children grouped by dispatch and state, unfinished first — the one thing worth glancing at while the board
+  // is read. The card is derived from the same record and the same state table the panel's own rows read, never authored.
+  const CARD_NAMES = ["groups"], CARD_TITLES = { groups: "Groups" };
+  // A child in flight or still waiting comes before a finished one, then the outcomes. A rejected request groups as
+  // `rejected`: the record refused it, so it never ran and its outcome alone would read as one more failed child.
+  const CARD_ORDER = ["running", "started", "queued", "failed", "rejected", "deadline", "needs-human", "passed"];
+  const cardRank = (s) => (CARD_ORDER.indexOf(s) < 0 ? CARD_ORDER.length : CARD_ORDER.indexOf(s));
+  const cardStateOf = (c) => (c.rejected ? "rejected" : childMark(c).state);
+  const cardWord = (s) => (MARKS[s] ? MARKS[s].label : s);
+
+  // The children grouped by dispatch and state, unfinished first. Ordered by state, then by dispatch, so the card is
+  // stable while a run works: a child that finishes moves its own group, and the others keep their place.
+  function cardGroups(children) {
+    const by = new Map();
+    for (const c of children || []) {
+      const key = `${c.dispatch}\u0000${cardStateOf(c)}`;
+      if (!by.has(key)) by.set(key, { dispatch: c.dispatch, state: cardStateOf(c), kids: [] });
+      by.get(key).kids.push(c);
+    }
+    return [...by.values()]
+      .map((g) => ({ ...g, label: cardWord(g.state), count: g.kids.length, name: `${g.dispatch} · ${g.kids.length} ${cardWord(g.state)}` }))
+      .sort((a, b) => cardRank(a.state) - cardRank(b.state) || String(a.dispatch).localeCompare(String(b.dispatch)));
+  }
+
+  // What the page paints for a `card` request: the card, or the message that names the cards the panel does have. A
+  // card the panel does not have is a message, never an empty frame.
+  function cardBody(name, children) {
+    if (!CARD_NAMES.includes(name)) return { ok: false, message: `This dashboard has no card named "${name}". It has: ${CARD_NAMES.join(", ")}.` };
+    const groups = cardGroups(children);
+    return { ok: true, name, title: CARD_TITLES[name] || name, groups, empty: groups.length ? "" : "This run has no children yet." };
+  }
+
+  return { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody };
 }
 
 // Dashboard core module: Per-node statistics, the harness a node used, and the run statistics.. Moved from rest.js with no change.
@@ -2082,19 +2179,30 @@ function sourcesModule({ STATES }) {
   // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
-    ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend })),   // the card states: from the one STATES table
-    { cls: "err", label: "Rule error on the node" },
-    { cls: "sel", label: "Selected" },
-    { cls: "drop", label: "Target of the link you drag" },
+    ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
+    { cls: "err", label: "Rule error on the node", group: "node" },
+    { cls: "sel", label: "Selected", group: "interaction" },
+    { cls: "drop", label: "Target of the link you drag", group: "interaction" },
   ];
+  // One run-state vocabulary: the top-bar verdict chip, its legend and the hub's run badges (contrib/squad-goal/scripts/hub.py RUN_STATES) name and
+  // paint a state alike; a Python test holds the two tables equal. `color` is a palette variable; `css` is the extra style of the pill, as the hub's table carries
+  // it; `text` is what both surfaces print in the pill; a `hub_only` state is one the hub derives, so the chip never shows it.
+  const RUN_STATES = [
+    { state: "completed", cls: "v-ok", text: "completed", label: "Run completed", color: "ok", css: "" },
+    { state: "verified", cls: null, text: "verified", label: "Failed or unverified run, verified by hand", color: "ok", css: "font-style:italic", hub_only: true },
+    { state: "unverified", cls: null, text: "unverified", label: "Work landed, the final gate had no command", color: "ok", css: "border-style:dashed", hub_only: true },
+    { state: "failed", cls: "v-bad", text: "failed", label: "Run failed", color: "err", css: "" },
+    { state: "needs-human", cls: "v-human", text: "ended · needs a decision", label: "Run needs a person", color: "warn", css: "" },
+    { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
+    { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
+    { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
+    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
+    { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
+  ];
+  // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.
+  const STATE_TEXT = Object.fromEntries(RUN_STATES.map((x) => [x.state, x.text]));
   // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
-  const LEGEND_CHIPS = [
-    { cls: "v-ok", label: "Run completed" },
-    { cls: "v-bad", label: "Run failed" },
-    { cls: "v-live", label: "Run in progress" },
-    { cls: "v-wait", label: "Run stalled" },
-    { cls: "v-none", label: "No verdict yet" },
-  ];
+  const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
     { how: "Drag empty space", what: "Pan the graph.", covers: ["pan"] },
     { how: "Mouse wheel or trackpad pinch", what: "Zoom at the cursor.", covers: ["wheel"] },
@@ -2111,6 +2219,7 @@ function sourcesModule({ STATES }) {
     { how: "Enter in the name field", what: "Apply the rename.", covers: ["key:Enter"] },
     { how: "Ctrl or Cmd + Z", what: "Undo. Add Shift to redo.", covers: ["key:z"] },
     { how: "Ctrl or Cmd + Y", what: "Redo.", covers: ["key:y"] },
+    { how: "Drag the side panel's edge, or the arrow keys on its grip", what: "Set how wide the panel is — how tall it is when a narrow window makes it a bottom sheet. Home and End go to the narrowest and the widest; a double-click brings the default back.", covers: ["key:Home", "key:End"] },
     { how: "[", what: "Show or hide the side panel.", covers: ["key:["] },
     { how: "?", what: "Show or hide this help.", covers: ["key:?"] },
     { how: "Esc", what: "Close the menu and this help.", covers: ["key:Escape"] },
@@ -2163,7 +2272,7 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
 }
 
 // Dashboard core module: Where a pause leaves the run.
@@ -2306,15 +2415,15 @@ function make(ENGINE) {
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
   const { OUTCOME_STATE, STATES, inFlight, isDone, isRunning, nodeState, stateClass, childStateClass } = stateModule({ num });
-  const { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush } = sourcesModule({ STATES });
+  const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
   const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
   const { unresolvedChildren, replayAt, moveCursor } = replayModule({ num, orNull });
-  const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
+  const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -2406,7 +2515,9 @@ function renderProgress() {
   if (!was && cells.length && S.fitted && S.doc) fit();
 }
 
-function renderLive() { renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
+// A single-card page paints that one card and nothing else: it still reads the run (the same push stream or reread
+// timer), so the card is live, but the map, the totals and the panel are never built for a second view.
+function renderLive() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); if (!$("side").contains(document.activeElement)) renderSide(); renderChrome(); }
 
 // A gui-test script opens as a step diagram in its own view; nothing runs. Any other file goes on to the graph reader.
 function scriptFormat(text) { try { const d = JSON.parse(text); return d && typeof d.format === "string" && d.format.startsWith("gui-test/") ? d : null; } catch (e) { return null; } }
@@ -2442,7 +2553,7 @@ function nodesOf() { return S.doc && Array.isArray(S.doc.nodes) ? S.doc.nodes.fi
 function errsFor(name) { return S.errors.filter((e) => e.node === name); }
 function overlayFor(name) { return S.overlay && S.overlay.shown ? S.overlay.rows.filter((r) => r.target === name) : []; }
 
-function render() { renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
+function render() { if (CARD) return renderCard(); renderReplay(); renderProgress(); renderTotals(); renderMap(); renderSide(); renderAddbar(); renderChrome(); updateChip(); scheduleDraft(); }
 
 
 // --- the graph area: an SVG with one group that pan and zoom move ---
@@ -2458,14 +2569,15 @@ function bottomReserve() {
   const foot = $("footer") ? $("footer").offsetHeight : 0;
   return S.events ? foot + REPLAY_GAP + REPLAY_BAR_H : foot + FOOTER_PAD;
 }
-// The side panel overlays the left of the map, so an open panel takes its width off the area the graph is fitted into.
+// The side panel is a drawer at the right edge, so an open panel takes its width off the area the graph is fitted into and the
+// fitted view stays at the map's left edge, unshifted.
 // `floorKey` (the key of a group just expanded) keeps the fit from shrinking below READABLE_K: the view then starts at the group's dispatch,
 // and the fit stays off (S.fitted false) so a live update does not shrink it again. The Fit button fits all.
 function fit(floorKey) {
-  const s = mapSize(), side = 0; // the panel is a popup now, it no longer takes room from the map
+  const s = mapSize(), side = sideOpen() ? $("left").offsetWidth : 0;
   const all = { ...S.layout, ...S.childPos, ...S.groupPos, ...S.groupPts }, size = { w: Math.max(MIN_FIT, s.w - side), h: Math.max(MIN_FIT, s.h - bottomReserve()) };
   const anchor = floorKey ? floorAnchor(floorKey) : null, v = core.viewFitFloor(all, BOX, size, PAD, anchor ? READABLE_K : 0, anchor);
-  S.view = { ...v, tx: v.tx + side };
+  S.view = { ...v };
   S.floored = !!(anchor && v.k === READABLE_K); S.fitted = !S.floored; applyView();
 }
 // The top-left of what an expanded group shows: its dispatch's entry and the first row of its cards.
@@ -2475,14 +2587,14 @@ function floorAnchor(key) {
 }
 function zoomBy(factor, cx, cy) { const s = mapSize(); S.view = core.viewZoomAt(S.view, cx === undefined ? s.w / 2 : cx, cy === undefined ? s.h / 2 : cy, factor); S.fitted = false; applyView(); }
 
-// The side panel overlays the left of the map. A selection that would sit under it, or off the map, pans the view (never the zoom)
-// until it shows right of the panel; one already in view moves nothing, and a closed panel moves nothing.
+// The side panel covers the right of the map. A selection that would sit under it, or off the map, pans the view (never the zoom)
+// until it shows left of the drawer; one already in view moves nothing, and a closed panel moves nothing.
 function revealSelected() {
   if (!sideOpen() || !S.selected) return;
   const name = S.selected, grp = S.groups.find((g) => g.key === name || g.kids.some((c) => c.name === name));
   const r = S.groupPos[name] || (grp && S.groupPos[grp.key]) || S.childPos[name] || S.layout[name];
   if (!r) return;
-  const v = core.viewReveal(S.view, { x: r.x, y: r.y, w: r.w || BOX.w, h: r.h || BOX.h }, mapSize(), { left: $("left").offsetWidth + REVEAL_INSET, right: REVEAL_INSET, top: REVEAL_INSET, bottom: Math.max(bottomReserve(), REVEAL_INSET) });
+  const v = core.viewReveal(S.view, { x: r.x, y: r.y, w: r.w || BOX.w, h: r.h || BOX.h }, mapSize(), { left: REVEAL_INSET, right: $("left").offsetWidth + REVEAL_INSET, top: REVEAL_INSET, bottom: Math.max(bottomReserve(), REVEAL_INSET) });
   if (v !== S.view) { S.view = v; applyView(); }
 }
 
@@ -2562,14 +2674,14 @@ function clearSelection() { S.selected = null; S.link = null; setSide(false, tru
 function pick(name) {
   S.link = null;
   if (S.selected === name) { clearSelection(); return; }
-  S.selected = name; render(); // the panel is a popup over the map: a selection never pans the view
+  S.selected = name; render(); // the drawer takes the right edge: render() reveals the selection left of it
 }
-// The cards in reading order (top to bottom, then left to right), for the popup's previous / next.
+// The cards in reading order (top to bottom, then left to right), for the panel's previous / next.
 function cardOrder() {
   return [...$("cards").children].filter((c) => c.dataset.name).map((c) => ({ n: c.dataset.name, r: c.getBoundingClientRect() }))
     .sort((a, b) => Math.round(a.r.top) - Math.round(b.r.top) || a.r.left - b.r.left).map((c) => c.n);
 }
-// Previous / next card without closing the popup: the ‹ › buttons, or ← → while the popup is open.
+// Previous / next card without closing the panel: the ‹ › buttons, or ← → while the panel is open.
 function stepCard(k) {
   const o = cardOrder(), i = o.indexOf(S.selected) + k;
   if (i < 0 || i >= o.length) return;
@@ -3249,6 +3361,19 @@ function swatches() {
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
+// The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
+// The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
+// (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
+function legendList() {
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
+  const rows = {
+    node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
+    interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
+  };
+  return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
+}
+$("legend-list").innerHTML = legendList();
 function buttonRows() {
   const els = [...document.querySelectorAll("#left .tools button[title], #left .tools label.btn, #view button[title], #replay button[title]")].filter((b) => b.offsetParent !== null);
   return els.map((b) => `<tr><td>${esc(b.firstChild && b.firstChild.nodeType === 3 ? b.firstChild.textContent.trim() : b.textContent.trim())}</td><td>${esc(b.getAttribute("title") || "")}</td></tr>`).join("");
@@ -3261,12 +3386,16 @@ function openHelp() {
 }
 function closeHelp() { $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false"); }
 function toggleHelp() { if ($("help").hidden) openHelp(); else closeHelp(); }
-$("legend").innerHTML = swatches();
-// #footer (hint + legend) grows upward as the legend wraps; keep the floating #replay bar clear of it, at any width.
+// #footer (the hint) sets the floor; keep the floating #replay bar clear of it, and the side legend above both, at any width.
 (function trackFooterHeight() {
   const footer = $("footer"), bar = $("replay");
-  const sync = () => { bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px"; };
+  const sync = () => {
+    bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px";
+    const barH = bar.offsetHeight ? bar.offsetHeight + REPLAY_GAP : 0;
+    $("legend").style.setProperty("--legend-bottom", (footer.offsetHeight + REPLAY_GAP + barH + REPLAY_GAP) + "px");
+  };
   new ResizeObserver(sync).observe(footer);
+  new ResizeObserver(sync).observe(bar);
   sync();
 })();
 $("b-help").addEventListener("click", toggleHelp);
@@ -3540,6 +3669,36 @@ else if (window.showDirectoryPicker) { $("b-folder").onclick = connectFolder; re
 $("f-folder").addEventListener("change", async (e) => { const fs = [...e.target.files]; if (fs.length) await loadRunSource(fileListSource(fs)); e.target.value = ""; });
 
 
+// --- single-card mode (ticket #1782): the page paints ONE card of the panel, named by its URL ---
+// The hub's pip, floating over the maximized board, points a frame at this page with `?card=<name>`, so the second
+// view shows the panel's own card instead of a copy that drifts. The page still reads the run (the same push stream
+// or reread timer it always uses), so the card follows a live run rather than a snapshot; the mode only cuts what is
+// painted. A name the panel does not have is answered with a message inside the card, never an empty frame. The page
+// tells whoever framed it that it answered the mode, which is how the window tells an older dashboard (one that does
+// not know the parameter at all) from one that does.
+const CARD = (new URLSearchParams(location.search).get("card") || "").trim();
+// The window is a second page paint of the same run: it must not be told twice about anything, so the card is
+// rebuilt only when its own text changed, like the panel's own list.
+let cardHTML = null;
+
+function renderCard() {
+  const box = $("card"), card = core.cardBody(CARD, S.children);
+  const groups = card.groups.map((g) => {
+    const rows = g.kids.map((k) => `<div class="crow s-${esc(core.childMark(k).state)}" title="${esc(k.name)}">${esc(core.childMark(k).glyph)} <b>${esc(k.title || k.label || k.name)}</b>${k.running_for ? ` <span class="cmeta">${esc(core.fmt.seconds(k.running_for))}</span>` : ""}</div>`).join("");
+    return `<section class="cgroup s-${esc(g.state)}"><h3>${esc(g.name)}</h3>${rows}</section>`;
+  }).join("");
+  const html = card.ok ? groups || `<p class="cnote">${esc(card.empty)}</p>` : `<p class="cnote">${esc(card.message)}</p>`;
+  if (html !== cardHTML) { box.innerHTML = html; cardHTML = html; }
+  if (window.parent !== window) window.parent.postMessage({ squadCard: CARD }, "*");   // the window's own handshake: it knows this page answered the mode
+}
+
+if (CARD) {
+  document.body.classList.add("card-mode");
+  $("card").setAttribute("aria-label", `One card of the run panel: ${CARD}`);
+  renderCard();
+  window.addEventListener("message", (e) => { if (e.data && e.data.card === CARD) renderCard(); });   // the window may ask for a repaint
+}
+
 // --- save, draft copy, hash chip, and the changed-file stop ---
 const PICKER = !!window.showOpenFilePicker;
 const JSON_TYPES = [{ description: "JSON", accept: { "application/json": [".json"] } }];
@@ -3700,15 +3859,58 @@ function setSide(open, auto) {
   document.body.classList.toggle("noside", !open);
   $("b-panel").setAttribute("aria-expanded", String(open));
   if (!auto) { UI.side = open; saveUI(); }
+  if (S.doc) fit();   // the drawer takes its width off the map, so an open or closed panel is a fit the graph can feel
 }
 function sideOpen() { return !document.body.classList.contains("noside"); }
 function openSide() { if (!sideOpen()) setSide(true, true); }
 setSide(!!UI.side, true);
 $("b-panel").addEventListener("click", () => setSide(!sideOpen()));
-// The panel is a popup: a click on the dimmed page behind it, or Escape, closes it.
-document.addEventListener("click", (e) => { if (e.target === document.body && sideOpen()) setSide(false); });
+// Escape closes the panel; the map behind it stays the map, so a click there is a click, not a dismissal.
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sideOpen() && !e.defaultPrevented) setSide(false); });
 $("vchip").addEventListener("click", () => setSide(!sideOpen()));
+
+// The drawer's grip. A drag on the 8px strip at its edge, or the arrows on the handle, sets --side-w between the stylesheet's
+// --side-min and --side-max; a double-click puts the 420px default back. The width is page state, like the panel's open flag.
+const SIDE_HIT = 8, SIDE_STEP = 24, SIDE_RESET = 420;
+const sideProbe = document.createElement("div");
+sideProbe.style.cssText = "position:fixed;top:-9999px;left:-9999px;height:0;pointer-events:none";
+document.body.appendChild(sideProbe);
+// The CSS owns the limits: --side-min and --side-max are measured through a probe, so the page and the stylesheet cannot drift.
+function sidePx(tok) { sideProbe.style.width = `var(${tok})`; return Math.round(sideProbe.getBoundingClientRect().width); }
+// A narrow window turns the drawer into a bottom sheet: the same variable is its height and the grip is sideways.
+function sideRow() { return window.matchMedia("(max-width: 900px)").matches; }
+function sideWidth() { const r = $("left").getBoundingClientRect(); return Math.round(sideRow() ? r.height : r.width); }
+function sideAria(now) {
+  const grip = $("side-grip");
+  grip.setAttribute("aria-orientation", sideRow() ? "horizontal" : "vertical");
+  grip.setAttribute("aria-valuemin", String(sidePx("--side-min"))); grip.setAttribute("aria-valuemax", String(sidePx("--side-max"))); grip.setAttribute("aria-valuenow", String(now));
+}
+function setSideWidth(px, store) {
+  const v = Math.min(Math.max(Math.round(px), sidePx("--side-min")), sidePx("--side-max"));
+  document.body.style.setProperty("--side-w", v + "px");
+  sideAria(v);
+  if (store) { UI.sideW = v; saveUI(); }
+  if (S.doc) fit();   // every change to the drawer is a change to the room the graph has
+  return v;
+}
+// The grip is the whole 8px strip either side of the drawer's edge, so the press is judged by where it landed.
+function onGrip(e) { const r = $("left").getBoundingClientRect(); return Math.abs(sideRow() ? e.clientY - r.top : e.clientX - r.left) <= SIDE_HIT; }
+let sideDrag = null;
+function startSideDrag(e) { sideDrag = { x: e.clientX, y: e.clientY, w: sideWidth() }; document.body.style.cursor = sideRow() ? "row-resize" : "col-resize"; }
+document.addEventListener("pointerdown", (e) => { if (sideOpen() && onGrip(e)) startSideDrag(e); });
+document.addEventListener("pointermove", (e) => { if (sideDrag) setSideWidth(sideRow() ? sideDrag.w + (sideDrag.y - e.clientY) : sideDrag.w + (sideDrag.x - e.clientX), false); });
+document.addEventListener("pointerup", () => { if (!sideDrag) return; sideDrag = null; document.body.style.cursor = ""; UI.sideW = sideWidth(); saveUI(); });
+$("side-grip").addEventListener("pointerdown", (e) => { e.stopPropagation(); if (sideOpen()) startSideDrag(e); });
+$("side-grip").addEventListener("keydown", (e) => {
+  const grow = sideRow() ? "ArrowDown" : "ArrowRight", shrink = sideRow() ? "ArrowUp" : "ArrowLeft";
+  if (e.key === grow || e.key === shrink) setSideWidth(sideWidth() + (e.key === grow ? SIDE_STEP : -SIDE_STEP), true);
+  else if (e.key === "Home" || e.key === "End") setSideWidth(sidePx(e.key === "Home" ? "--side-min" : "--side-max"), true);
+  else return;
+  e.preventDefault();
+});
+$("side-grip").addEventListener("dblclick", () => setSideWidth(SIDE_RESET, true));
+window.addEventListener("resize", () => sideAria(sideWidth()));   // the sheet's limits are in vh: the handle follows a resize
+if (UI.sideW !== undefined) setSideWidth(UI.sideW, false); else sideAria(sideWidth());   // a reload lands where the drag left the drawer
 
 // Run mode reads a run; Edit mode shows every control that changes the graph. A loaded run opens in Run mode, a bare page in Edit mode, until the person picks.
 var modePicked = false;
@@ -3723,7 +3925,7 @@ $("m-run").addEventListener("click", () => setMode(false, true));
 $("m-edit").addEventListener("click", () => setMode(true, true));
 function inEdit() { return document.body.classList.contains("edit"); }
 
-var VERDICT_CLASS = { completed: "v-ok", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
+var VERDICT_CLASS = { completed: "v-ok", failed: "v-bad", "needs-human": "v-human", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
 function renderChrome() {
   if (!modePicked && inEdit() !== !S.events) setMode(!S.events);
   const st = S.stats, v = st && st.verdict, chip = $("vchip");
@@ -3732,7 +3934,8 @@ function renderChrome() {
   $("ident").title = st ? `graph ${st.graph_name}, run ${st.run_id}` : "";
   if (st) {
     const past = S.replay && !S.replay.at_end;
-    chip.textContent = past ? `replay · ${st.state}` : (v ? `${st.state} · exit ${v.exit_code}` : st.state);
+    const words = core.STATE_TEXT[st.state] || st.state;   // the sidebar badges the same run with these words, from the one state table
+    chip.textContent = past ? `replay · ${words}` : (v ? `${words} · exit ${v.exit_code}` : words);
     chip.className = VERDICT_CLASS[st.state] || "v-bad";
     chip.title = v && v.reasons.length ? core.causeSummary(v.reasons) : "The run's verdict. Click to open the details.";
   }

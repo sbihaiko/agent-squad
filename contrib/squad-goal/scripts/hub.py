@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib
+import datetime as dt, glob, importlib.util, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
@@ -58,12 +58,13 @@ def priced(d):
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v8" in hist[p]: return hist[p]
+    if p in hist and "v10" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them)
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
-    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False
+    spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None
+    accepted, done_kids, wts = set(), set(), set()
     with open(p) as f:
         for i, l in enumerate(f):
             if i < 200: issues.update(re.findall(r"(?:issue|Refs) #(\d{3,5})", l))
@@ -71,7 +72,11 @@ def scan(p):
                 fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d{3,5})", l)
                 if fm: fix = int(fm.group(1))
             if i < 200 and not merge and "CONFLICT FIX" in l: merge = True   # forkclose conflict-fix run
-            if i < 200 and not bug and re.search(r"\(bug\)|branch fix/", l): bug = True   # a bug-fix run (autobug or a hand request for a bug issue)
+            # A run that fixes something is named "fix": a bug-fix run (autobug, or a hand request naming the bug issue) and a
+            # fork-only fix run alike. forkclose's fix runs name no issue and no `fix/` branch -- their request says "on the
+            # local fork branch gui/<N>" -- so without this they fell through to the "build" label with the issue number, and a
+            # red-gate fix read as new work (#1495, 2026-10-11).
+            if i < 200 and not bug and re.search(r"\(bug\)|branch fix/|on the local fork branch|FIX RUN .*fork", l): bug = True
             if i < 200 and stack is None:   # an optimistically stacked run names its parent PR ("STACKED on #N, whose PR #P")
                 sm = re.search(r"STACKED on #\d{3,5}[^#]{0,40}PR #(\d{3,5})", l)
                 if sm: stack = int(sm.group(1))
@@ -80,6 +85,8 @@ def scan(p):
             except Exception: continue
             ts = d.get("ts"); e = d.get("event")
             if ts and t0 is None: t0 = ts
+            if e == "spawn_accepted" and d.get("child"): accepted.add(d["child"])
+            if e == "outcome" and d.get("node"): done_kids.add(d["node"])
             if e == "outcome" and d.get("spend") is not None:
                 d["spend"] = priced(d)
                 spend += d["spend"]
@@ -89,12 +96,19 @@ def scan(p):
                 x = mod.setdefault(d.get("model") or "unknown", {"in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
                 x["in"] += d.get("tokens_in") or 0; x["out"] += d.get("tokens_out") or 0; x["cache"] += d.get("cache_read") or 0
                 x["spend"] += d.get("spend") or 0; x["calls"] += 1
+                h = ((d.get("workspace") or {}).get("head") if isinstance(d.get("workspace"), dict) else None) or ((d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None)
+                if h: head = h
+                w = d.get("workspace") if isinstance(d.get("workspace"), dict) else None   # the worktrees this run works in: how a load is traced back to it (see attribute)
+                if w and w.get("path") and w.get("name") not in (None, "."): wts.add(w["path"])
             elif e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
-            elif e == "land" and d.get("outcome") == "pass": land = True
-            elif e == "verdict": ver, reasons, t1 = d.get("verdict"), d.get("reasons") or [], ts
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge}
+            elif e == "land":
+                if d.get("outcome") == "pass": land = True
+                h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
+                if h: head = h
+            elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts)}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -105,7 +119,7 @@ def scan(p):
 
 def state_of(r, age):
     ver, reasons = r["verdict"], r["reasons"]
-    if ver is None: return "running" if age < 1800 else "stale"
+    if ver is None: return "running" if age < 1800 else "stalled"
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     return ver
 
@@ -137,9 +151,508 @@ TITLE = {}   # issue number -> short title, refreshed from the board cache (no e
 def _titles():
     for it in board_cache.get("items", []):
         t = re.sub(r"^GUI test squad( pilot)?: ", "", it.get("t") or ""); TITLE[it["n"]] = t[:60] + ("…" if len(t) > 60 else "")
+def demoted(st, r, closed):
+    """A failed / unverified / needs-human run whose every issue was closed afterwards (verified by hand, evidence on the issue) is no longer open business."""
+    if st in ("failed", "unverified", "needs-human") and r["issues"] and all(int(n) in closed for n in r["issues"]) and (r["land"] or st == "needs-human"): return "verified"
+    return st
+def handled_of(st, r, checkout=None):
+    """A needs-human run whose head is an ancestor of the fork's local/next (or whose PR is merged) is handled."""
+    if st != "needs-human": return st
+    if r.get("merged"): return "handled"
+    head = r.get("head")
+    if not head: return st
+    root = pathlib.Path(checkout) if checkout else pathlib.Path(PROF.get("SG_CHECKOUT") or os.getcwd())
+    p = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", str(head), "local/next"], capture_output=True)
+    return "handled" if p.returncode == 0 else st
+def badge_of(st, r=None):
+    """Hub run-list badge: a needs-human run never prints `exit N`; that lives on the tooltip."""
+    r = r or {}
+    color = next((x["color"] for x in RUN_STATES if x["state"] == st), "warn")
+    if st == "handled": text = "ended · handled (landed in fork)"
+    elif st == "needs-human": text = "ended · needs a decision"
+    else: text = st
+    rc = r.get("exit_code")
+    if rc is None and st in ("needs-human", "handled"): rc = 10
+    title = f"exit {rc}" if rc is not None and st in ("needs-human", "handled") else ""
+    return {"text": text, "color": color, "title": title, "state": st}
+LIVE_STATES = ("running", "starting", "stalled")
+def group_of(r):
+    """RUNNING holds a live process (running/starting/stalled). An ended run, needs-human included, goes to an age bucket."""
+    if r.get("live", True) and r.get("state") in LIVE_STATES: return "running"
+    h = (r.get("age") or 0) / 3600
+    return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
+
+def loop_caps():
+    """Occupancy denominators from the live workflow graph. max_parallel is run.max_parallel; max_children is run.max_children or a dispatch node's. None when the graph cannot be read."""
+    p = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json"
+    try:
+        d = json.loads(p.read_text())
+        run = d.get("run") if isinstance(d.get("run"), dict) else {}
+        mp, mc = run.get("max_parallel"), run.get("max_children")
+        if not isinstance(mc, int):
+            for n in d.get("nodes") or []:
+                if isinstance(n, dict) and isinstance(n.get("max_children"), int):
+                    mc = n["max_children"]; break
+        if isinstance(mp, int) and mp > 0 and isinstance(mc, int) and mc > 0:
+            return {"max_parallel": mp, "max_children": mc}
+    except Exception:
+        pass
+    return None
+
+def usd_txt(v):
+    if v is None: return "—"
+    if v >= 100: return "$" + str(int(round(v)))
+    return f"${v:.2f}"
+
+def group_header(kind, rows, caps):
+    """RUNNING shows occupancy (live runs and live children over the caps); other groups keep count · cost. Spend is the tooltip."""
+    n = len(rows)
+    spend = sum((r.get("spend") or 0) for r in rows)
+    agents = sum((r.get("agents") or 0) for r in rows)
+    title = usd_txt(spend)
+    if kind == "running":
+        if caps and isinstance(caps.get("max_parallel"), int) and isinstance(caps.get("max_children"), int):
+            return {"text": f"{n}/{caps['max_parallel']} runs · {agents}/{caps['max_children']} agents", "title": title}
+        return {"text": f"{n} · {agents}", "title": title}
+    return {"text": f"{n} · {title}", "title": title}
+def run_rank(st, live=True):
+    return 0 if live and st in LIVE_STATES else 1
+
+# ---------------------------------------------------------------- machine load (#1776)
+# The strip answers "is this machine saturated?"; a card answers "because of whom?". Both read ONE cached sample, taken by
+# a thread inside this process: serving the page, and polling it, spawn nothing and read no counter, so the hub can never
+# become part of the load it reports. CPU and RAM are read from this process (Mach's own counters, else psutil); the GPU
+# counter is the one exception — an unprivileged `ioreg` read per sample, the only source macOS offers without root.
+LOAD_SAMPLE_SECS = 5      # one sample per interval; the page polls the cached reading on this same cadence
+LOAD_WARN_PCT = 80.0      # machine CPU % at or above which the strip warns and a card may be blamed
+LOAD_WARN_SAMPLES = 2     # consecutive samples above the threshold: one hot sample is not machine load
+LOAD_MIN_SHARE_PCT = 3.0  # a card is marked only for a run whose process tree owns at least this much of the machine
+LOAD_HISTORY = 12         # CPU samples kept, so the warn rule can look back (a minute at the default cadence)
+GPU_CMD = ("/usr/sbin/ioreg", "-r", "-d", "1", "-c", "IOAccelerator", "-w", "0")
+GPU_RE = re.compile(r'"Device Utilization %"\s*=\s*(\d+(?:\.\d+)?)')
+
+def _pct(v):
+    """A source's answer as a percentage, or None when it did not really answer: a string, a negative, NaN. A source that
+    cannot be read has to show `?` — a 0 would read as an idle machine and hide the load the strip exists to show."""
+    try: f = float(v)
+    except (TypeError, ValueError): return None
+    if f != f or f < 0: return None   # NaN compares false to itself
+    return min(f, 100.0)
+
+def pct_cell(v):
+    """One cell of the strip: the rounded percentage, or `?` where the hub cannot see."""
+    f = _pct(v)
+    return "?" if f is None else f"{f:.0f}%"
+
+def load_line(cpu, ram, gpu):
+    """The strip's single line, in the order it is read."""
+    return f"CPU {pct_cell(cpu)} · RAM {pct_cell(ram)} · GPU {pct_cell(gpu)}"
+
+def sustained(samples, warn=LOAD_WARN_PCT, need=LOAD_WARN_SAMPLES):
+    """True when the newest `need` samples all sit at or above `warn`: the load has to outlive a single reading, so a
+    one-off spike blames nobody. A sample that could not be read breaks the run instead of passing for a low one."""
+    n = max(int(need), 1); tail = list(samples or [])[-n:]
+    return len(tail) == n and all(s is not None and s >= warn for s in tail)
+
+def parse_gpu(text):
+    """GPU utilisation out of IOAccelerator's PerformanceStatistics. A machine with no accelerator, or a driver that does
+    not report utilisation, answers None: the cell shows `?` rather than a zero nobody measured."""
+    m = GPU_RE.search(text or "")
+    return float(m.group(1)) if m else None
+
+def owners_of(rows):
+    """run id -> the paths its processes run in: the run's own folder (its child worktrees live under it) plus every
+    worktree its record named. Paths, because a run is told apart by where it runs, not by what its processes are called."""
+    out = {}
+    for r in rows or []:
+        paths = [r.get("dir") or ""] + list(r.get("wts") or [])
+        out[r["id"]] = [p for p in dict.fromkeys(paths) if p]
+    return out
+
+def attribute(prev, cur, owners):
+    """CPU seconds per run between two process snapshots (pid -> (ppid, cpu seconds, argv)).
+    A process is credited to the owner whose worktree path its own argv names, and one that names none inherits its
+    nearest ancestor's owner, so a whole tree (zsh -> claude -> dotnet test) counts, not just the process that carries
+    the path. Attribution is by path and never by process name: every child of every run is the same `claude`, `dotnet`
+    or `python`, so a name would credit whichever run started first. Seconds outside every run (the editor, the browser,
+    a stray build) belong to nobody, and stay only in the strip's machine-wide figure."""
+    hit = {}
+    def owner_of(pid, depth=0):
+        if pid in hit: return hit[pid]
+        row = cur.get(pid)
+        if row is None or depth > 64: return None
+        cmd = row[2] or ""
+        best = None
+        for key, paths in owners.items():
+            for p in paths:
+                if p in cmd and (best is None or len(p) > len(best[1])): best = (key, p)
+        found = best[0] if best else owner_of(row[0], depth + 1)
+        hit[pid] = found
+        return found
+    out = {}
+    for pid, (ppid, secs, cmd) in cur.items():
+        p = prev.get(pid)
+        d = secs - p[1] if p else 0.0
+        if d <= 0: continue
+        k = owner_of(pid)
+        if k: out[k] = out.get(k, 0.0) + d
+    return out
+
+def share_pct(secs, window, ncpu):
+    """One run's CPU seconds as a percentage of the whole machine, the unit the strip's CPU figure uses: a run holding one
+    of eight cores holds 12.5% of the machine."""
+    if not window or not ncpu: return 0.0
+    return round(100.0 * secs / (window * ncpu), 1)
+
+def attach_load(rows, shares, warn):
+    """The card's marker: with the machine warned, every run whose process tree owns a real share of that CPU carries
+    `cpu`, the percentage it owns. A run that owns nothing of it carries none, and the marker is dropped the moment the
+    machine is calm again."""
+    for r in rows:
+        r.pop("cpu", None)
+        if warn and shares.get(r.get("id"), 0.0) >= LOAD_MIN_SHARE_PCT:
+            r["cpu"] = round(shares[r["id"]])
+    return rows
+
+_MACH = None
+def _mach():
+    """libSystem's host_statistics, resolved once: the kernel's own CPU and memory counters, read inside this process."""
+    global _MACH
+    if _MACH is None:
+        try:
+            import ctypes, ctypes.util
+            lib = ctypes.CDLL(ctypes.util.find_library("System") or "/usr/lib/libSystem.B.dylib")
+            lib.mach_host_self.restype = ctypes.c_uint
+            lib.host_statistics.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+            lib.host_page_size.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_uint)]
+            _MACH = (ctypes, lib)
+        except Exception: _MACH = False
+    return _MACH or None
+
+_CPU_TICKS = None
+def cpu_pct():
+    """Machine CPU as a percentage of all cores, from the delta of the kernel's tick counters. The first read has no
+    previous one to compare, so it answers None (`?` in the strip) instead of inventing a number."""
+    global _CPU_TICKS
+    cur = None
+    m = _mach()
+    if m:
+        ctypes, lib = m
+        class Load(ctypes.Structure): _fields_ = [("user", ctypes.c_uint32), ("system", ctypes.c_uint32), ("idle", ctypes.c_uint32), ("nice", ctypes.c_uint32)]
+        i = Load(); n = ctypes.c_uint(4)
+        if lib.host_statistics(lib.mach_host_self(), 3, ctypes.byref(i), ctypes.byref(n)) == 0:
+            cur = (i.user + i.system + i.nice, i.user + i.system + i.nice + i.idle)
+    if cur is None:
+        try:
+            import psutil
+            t = psutil.cpu_times()
+            cur = (t.user + t.system + getattr(t, "nice", 0.0), t.user + t.system + getattr(t, "nice", 0.0) + t.idle)
+        except Exception: cur = None
+    prev, _CPU_TICKS = _CPU_TICKS, cur
+    if not cur or not prev: return None
+    busy, tot = cur[0] - prev[0], cur[1] - prev[1]
+    return 100.0 * busy / tot if tot > 0 else None
+
+def ram_pct():
+    """Used memory as a percentage of the machine's total, from the kernel's page counters (active + wired + compressed),
+    else psutil. None where neither answers."""
+    m = _mach()
+    if m:
+        ctypes, lib = m
+        try:
+            class VM(ctypes.Structure):
+                _fields_ = ([(n, ctypes.c_uint32) for n in ("free", "active", "inactive", "wire")] +
+                            [(n, ctypes.c_uint64) for n in ("zero_fill", "reactivations", "pageins", "pageouts", "faults", "cow_faults", "lookups", "hits", "purges", "purgeable", "speculative", "decompressions", "compressions", "swapins", "swapouts")] +
+                            [(n, ctypes.c_uint32) for n in ("compressor", "throttled", "external", "internal")] + [("total_uncompressed", ctypes.c_uint64)])
+            vm = VM(); n = ctypes.c_uint(ctypes.sizeof(VM) // 4)
+            size = ctypes.c_uint(0)
+            h = lib.mach_host_self()
+            if lib.host_statistics64(h, 4, ctypes.byref(vm), ctypes.byref(n)) == 0 and lib.host_page_size(h, ctypes.byref(size)) == 0 and size.value:
+                total = _sysctl_u64("hw.memsize")
+                used = (vm.active + vm.wire + vm.compressor) * size.value
+                if total: return min(100.0, 100.0 * used / total)
+        except Exception: pass
+    try:
+        import psutil
+        return psutil.virtual_memory().percent
+    except Exception: return None
+
+def _sysctl_u64(name):
+    """One integer out of sysctl, in-process (ctypes), for hw.memsize."""
+    m = _mach()
+    if not m: return 0
+    ctypes, lib = m
+    try:
+        lib.sysctlbyname.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        out = ctypes.c_uint64(0); size = ctypes.c_size_t(8)
+        if lib.sysctlbyname(name.encode(), ctypes.byref(out), ctypes.byref(size), None, 0) != 0: return 0
+        return int(out.value) if size.value == 8 else 0
+    except Exception: return 0
+
+def gpu_pct():
+    """The accelerator's own utilisation counter, one unprivileged `ioreg` read. An ioreg that is missing, slow or has no
+    accelerator to report answers None: the cell shows `?`."""
+    try: out = subprocess.run(list(GPU_CMD), capture_output=True, text=True, timeout=10).stdout
+    except Exception: return None
+    return parse_gpu(out)
+
+SOURCES = {"cpu": cpu_pct, "ram": ram_pct, "gpu": gpu_pct}
+def sample_load(src=None):
+    """One reading of the three cells. A source that raises, hangs or answers with something that is not a percentage is
+    unavailable for that cell, and the page shows `?`: a bad source never prints a traceback and never fakes a number."""
+    out = {}
+    for k in ("cpu", "ram", "gpu"):
+        fn = (src if src is not None else SOURCES).get(k)
+        try: out[k] = _pct(fn()) if fn else None
+        except Exception: out[k] = None
+    return out
+
+LOAD_STATE = {"cpu": [], "ram": None, "gpu": None, "asof": 0.0, "runs": {}}
+LOAD_RUNS = []            # the light rows the last /api/runs served: id, folder and worktrees, for owners_of
+_PROC_PREV, _PROC_AT = None, 0.0
+
+def proc_snapshot():
+    """pid -> (ppid, CPU seconds, argv) for the processes this user can see: psutil when it is importable (a read inside
+    this process), else one `ps`. Only the sampler calls this, and only while the machine is warned."""
+    try:
+        import psutil
+        out = {}
+        for p in psutil.process_iter(["pid", "ppid", "cpu_times", "cmdline"]):
+            i = p.info
+            try: out[i["pid"]] = (i["ppid"], float(sum(i["cpu_times"][:3])), " ".join(i["cmdline"] or []))
+            except Exception: continue
+        if out: return out
+    except Exception: pass
+    out = {}
+    for l in sh("/bin/ps", "-axo", "pid=,ppid=,time=,command=").splitlines():
+        f = l.split(None, 3)
+        if len(f) < 4 or not f[0].isdigit(): continue
+        out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
+    return out
+
+def _ps_time(t):
+    """`ps -o time=` prints CPU time as [[dd-]hh:]mm:ss[.ss]; seconds, 0.0 when it cannot be read."""
+    d, dash, rest = t.partition("-")
+    if not dash: rest = d
+    secs = 0.0
+    try:
+        for p in rest.split(":"): secs = secs * 60 + float(p)
+        return secs + (int(d) * 86400 if dash else 0)
+    except ValueError: return 0.0
+
+def attribute_pass():
+    """CPU per run over the last interval, as a share of the machine. The sampler calls it only while the machine is
+    warned: a calm machine never builds a process table."""
+    global _PROC_PREV, _PROC_AT
+    cur = proc_snapshot()
+    prev, _PROC_PREV = _PROC_PREV, cur
+    now = time.time(); window = now - (_PROC_AT or now); _PROC_AT = now
+    if not prev or window <= 0: return {}
+    ncpu = os.cpu_count() or 1
+    return {k: share_pct(v, window, ncpu) for k, v in attribute(prev, cur, owners_of(LOAD_RUNS)).items()}
+
+def load_tick(sample=None):
+    """One pass of the sampler: publish the reading, keep the history the warn rule looks back over, and — only while the
+    machine is warned — work out which run owns that CPU."""
+    s = sample if sample is not None else sample_load()
+    LOAD_STATE["cpu"] = (LOAD_STATE["cpu"] + [s["cpu"]])[-LOAD_HISTORY:]
+    LOAD_STATE["ram"], LOAD_STATE["gpu"], LOAD_STATE["asof"] = s["ram"], s["gpu"], time.time()
+    LOAD_STATE["runs"] = attribute_pass() if sustained(LOAD_STATE["cpu"]) else {}
+    return LOAD_STATE
+
+# ---------------------------------------------------------------- the footer's facts (#1797)
+# The line answers two questions: "is this machine saturated?" (the three load cells, first and never reordered) and "is
+# the squad working, or merely busy?" (the facts appended after them, in this order). A fact earns a place on this line
+# only if (a) it reads as one short token — a number, `ok` or `?`; (b) its bad value alone, seen from across the room,
+# tells the operator the squad is stuck or lying while the rest of the page looks busy; and (c) the operator could act on
+# it within a minute. Anything needing a second number to interpret, or already drawn within one screen of the footer,
+# goes to a panel or a column header instead. Rejected here for exactly that reason, with where each lives instead:
+#   per-run spend vs `spend_cap`              -> the run's own line in the left pane, where it already is
+#   per-model spend, reviewer latency,        -> the cost & usage panel
+#   who-is-reviewing-what
+#   throughput (runs/hour, median, tks/s)     -> nowhere: `last progress` answers "is it moving?" without a rate that
+#                                                changes too fast to read
+#   per-column board counts                   -> the column headers directly above the footer
+#   the age of the oldest card in a column    -> the column header (`Testing (3) · 2h`), one number per column
+#   fork-ahead / branches waiting / last      -> a fourth left-pane accordion; `fork-parked` already reaches the footer
+#   base-test duration                           through `health`
+# Every value comes from a source this hub already refreshes — no new polling and no new query. A value the hub cannot
+# verify is `?`, never a stale or invented number, and a fact that goes unreadable takes its own `?` with it while the
+# rest of the line stands. The line is one row: on a window too narrow for it, the trailing facts drop (5 -> 4 -> 3) —
+# nothing wraps, and no number is ever cut into a different one.
+FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
+FOOT_SEP = " · "
+
+def foot_age(secs):
+    """An age as the line reads it — one token, the shape the page's own `age()` paints: `45s`, `4m`, `2h`."""
+    s = max(float(secs), 0.0)
+    return f"{int(s)}s" if s < 90 else (f"{int(round(s / 60))}m" if s < 5400 else f"{int(round(s / 3600))}h")
+
+def limited_until(txt, now=None):
+    """The epoch a quota marker names while it skips a model; None when there is no marker or its window has passed (the
+    model is back); `?` when the marker is there but names no time the hub can read — a length is not a reset."""
+    s = (txt or "").strip()
+    if not s: return None
+    try: t = float(s)
+    except ValueError: return "?"
+    return t if t > (time.time() if now is None else now) else None
+
+def _health_fact(h, now):
+    """`health ok`, or `health: <cause> <age>` for the most recent cause still armed. Named, never a count: `3 alerts`
+    would hide the one cause that says the loop is dead, which is the only thing this fact is on the page to say."""
+    if not isinstance(h, dict): return "health ?"
+    causes = [c for c in (h.get("causes") or []) if c]
+    if not causes: return "health ok"
+    armed = h.get("armed") or {}
+    ts = {c: armed[c] for c in causes if isinstance(armed.get(c), (int, float))}
+    if ts: c, t = max(ts.items(), key=lambda kv: kv[1])          # the newest alert still standing: the newest cause
+    elif isinstance(h.get("ts"), (int, float)): c, t = causes[0], h["ts"]   # no alert line left for it: the pass that saw it ages it
+    else: return f"health: {causes[0]} ?"    # the cause is armed but its age cannot be read: named, then `?`
+    return f"health: {c} {foot_age(now - t)}"
+
+def _progress_fact(ts, now):
+    """The age of the newest transition the loop owns — a verdict, a land, a dispatch or a board move."""
+    return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
+
+def _occ_fact(occ, caps):
+    """`4/10 runs 7/20 agents` against the caps the live graph carries, never a hard-coded pair. With no graph there is
+    no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
+    if not isinstance(occ, dict) or not isinstance(caps, dict): return "?"
+    mp, mc = caps.get("max_parallel"), caps.get("max_children")
+    if not isinstance(mp, int) or not isinstance(mc, int): return "?"
+    return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
+
+def _drift_fact(d):
+    """The pair #1795 writes (`runs` and `inprogress` in health.json) and never a second count computed here: a board the
+    health pass could not read reports -1, which is not a drift — it is a `?`."""
+    if not isinstance(d, dict): return "drift ?"
+    runs, ip = d.get("runs"), d.get("inprogress")
+    if not isinstance(runs, int) or not isinstance(ip, int) or runs < 0 or ip < 0: return "drift ?"
+    return f"drift {abs(runs - ip)}"
+
+def _quota_fact(q, now):
+    """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
+    reset time it names. A limited model is what the operator acts on; one that is back reads `ok`."""
+    out = []
+    for name in ("codex", "agy"):
+        v = (q or {}).get(name)
+        if v == "?": out.append(f"{name} ?")
+        elif isinstance(v, (int, float)): out.append(name + " reset " + time.strftime("%H:%M", time.localtime(v)))
+        else: out.append(name + " ok")
+    return FOOT_SEP.join(out)
+
+def foot_items(src, caps=None, now=None):
+    """The five facts, in the order the line reads them, each carrying whether its value is the bad one: `bad` is what
+    the page paints amber, and only `last progress` has one (a stall between the loop's own two thresholds)."""
+    now = time.time() if now is None else now
+    src = src or {}
+    prog = src.get("progress")
+    return [{"key": "health", "text": _health_fact(src.get("health"), now), "bad": False},
+            {"key": "progress", "text": _progress_fact(prog, now),
+             "bad": isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS},
+            {"key": "occ", "text": _occ_fact(src.get("occ"), caps), "bad": False},
+            {"key": "drift", "text": _drift_fact(src.get("drift")), "bad": False},
+            {"key": "quota", "text": _quota_fact(src.get("quota"), now), "bad": False}]
+
+def foot_line(items):
+    """The facts as the line reads them, one `·` between each: the page appends this after the three load cells."""
+    return FOOT_SEP.join(i["text"] for i in (items or []))
+
+# The sources, each one the loop already refreshes: `health.json` plus the `alerts.log` line that armed each cause, the
+# loop's own markers and `cycle.log` (a verdict, a land, a dispatch, a board move), the caps graph, the pair `health.sh`
+# writes, and the markers the review chain skips models over. Reading them is a few small files in the sampler thread
+# that already runs: no source here costs a query, a `ps` or a GitHub call.
+FOOT_ROWS = {"live": None, "agents": None, "asof": 0.0}   # what the `runs()` pass the page already polls saw
+
+def _read(p):
+    try: return pathlib.Path(p).read_text(errors="ignore")
+    except OSError: return ""
+
+def _json(p):
+    try: return json.loads(pathlib.Path(p).read_text())
+    except Exception: return None
+
+def _newest_mtime(*paths):
+    ts = []
+    for p in paths:
+        try: ts.append(pathlib.Path(p).stat().st_mtime)
+        except OSError: pass
+    return max(ts) if ts else None
+
+def _armed_from_alerts(text, causes):
+    """cause -> when its alert last reached alerts.log, i.e. when the health pass armed it. The pass writes one line when
+    a cause appears and re-arms it after it clears, so the newest line for a cause still armed is its age."""
+    out = {}
+    for l in (text or "").splitlines():
+        if " HEALTH " not in l: continue
+        head, _, rest = l.partition(" HEALTH ")
+        cause = rest.split(":", 1)[0].strip()
+        if cause not in causes: continue
+        try: t = time.mktime(time.strptime(head.strip(), "%Y-%m-%d %H:%M:%S"))
+        except ValueError: continue
+        out[cause] = max(t, out.get(cause, 0.0))
+    return out
+
+def foot_sources(now=None):
+    """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
+    so one unreadable file costs one `?` and never the rest of the line."""
+    now = time.time() if now is None else now
+    out = {"health": None, "progress": None, "occ": None, "drift": None,
+           "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
+                     "agy": limited_until(_read(STATE / "agy-limited"), now)}}
+    h = _json(STATE / "health.json")
+    if isinstance(h, dict):
+        causes = [c for c in (h.get("causes") or []) if c]
+        out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts")}
+        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
+    if FOOT_ROWS.get("live") is not None:
+        out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
+    stamps = [_newest_mtime(STATE / "cycle.log", STATE / "auto", STATE / "board-dirty")]
+    for r in list(LOAD_RUNS):   # the live runs' own records: what the loop's children wrote as they moved
+        stamps.append(_newest_mtime(pathlib.Path(r.get("dir") or "") / "record.jsonl"))
+    stamps = [s for s in stamps if s]
+    out["progress"] = max(stamps) if stamps else None
+    return out
+
+def foot_refresh(now=None):
+    """One pass of the footer's sources, kept where the page serves it from: the sampler thread calls this, so the line
+    can never be written from a figure the loop has stopped refreshing. A failed pass keeps the last good facts."""
+    LOAD_STATE["facts"] = foot_items(foot_sources(now), loop_caps(), now)
+    return LOAD_STATE["facts"]
+
+def load_payload():
+    """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
+    sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
+    `facts` the footer's own facts as the sampler last read them."""
+    hist = LOAD_STATE.get("cpu") or []
+    cpu = hist[-1] if hist else None
+    return {"line": load_line(cpu, LOAD_STATE.get("ram"), LOAD_STATE.get("gpu")),
+            "cpu": None if cpu is None else round(cpu),
+            "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
+            "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
+            "facts": list(LOAD_STATE.get("facts") or []),
+            "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
+
+def load_sampler():
+    """The one sampler thread: a failed pass leaves the last reading in place rather than breaking the page."""
+    while True:
+        try: load_tick()
+        except Exception: pass
+        try: foot_refresh()
+        except Exception: pass
+        time.sleep(LOAD_SAMPLE_SECS)
+
+# A coordinator test pass writes `running` at its start and its terminal state at the end; killed in between, the file says
+# `running` forever. Four hours without a touch is longer than any pass this coordinator runs, so an untouched file is not a
+# running pass: the hub shows it as stalled with this note, past the RUNNING group, instead of counting a live run with no
+# process behind it. The runner's file is never
+# rewritten and the loop's own readers keep reading it as it is -- this is the hub's display bound, not a claim the test failed.
+TEST_LOST_SECS = 4 * 3600
+LOST_NOTE = "lost: no state written for over 4 h"
+
 def runs():
     _titles()
-    out = []
+    out = []; load_rows = []
     for l in sh("/bin/ps", "-axo", "pid=,command=").splitlines():
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
@@ -150,22 +663,35 @@ def runs():
         if not pathlib.Path(d).exists(): continue
         if re.search(r"/pytest-\d+/|/pytest-of-", d): continue   # dashboards started by agent-squad's own test suite are fixtures, not runs   # a dashboard server outliving its run folder (worktree removed) must not break the list
         r = scan(p)
-        if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code"}); continue
+        if r is None:
+            b = badge_of("starting")
+            out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "badge": b["text"], "tip": b["title"], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
-        if st in ("failed", "unverified") and r["land"] and r["issues"]:   # its gate failed, but every issue it worked was closed afterwards (verified by hand, evidence on the issue)
-            closed = {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"}
-            if all(int(n) in closed for n in r["issues"]): st = "verified"
-        rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stale": 2}.get(st, 1)
+        st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
+        merged = {p["n"] for p in board_cache.get("prev", []) if p.get("m")}
+        st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
+        b = badge_of(st, r)
+        rank = run_rank(st, live=True)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True, "agents": r.get("agents") or 0})
+        load_rows.append({"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []})   # what the load attribution needs, and nothing else
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
         except Exception: continue
         age = time.time() - f.stat().st_mtime
-        if d.get("state") != "running" and age > 4 * 3600: continue
-        st = d.get("state") or "running"; t1 = d.get("t1") or time.time()
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": 0 if st == "running" else 1, "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}})
-    out.sort(key=lambda r: (r["rank"], r["age"]))   # open runs first, finished next, dead last; then most recently updated first
+        raw = d.get("state") or "running"
+        lost = raw == "running" and age > TEST_LOST_SECS   # the pass died before it could write its terminal state (#1783)
+        if raw != "running" and age > 4 * 3600: continue
+        rec = {"head": d.get("head"), "merged": d.get("merged"), "exit_code": d.get("rc")}
+        st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
+        tip = LOST_NOTE if lost else b["title"]
+        if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
+    LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
+    _live = [r for r in out if group_of(r) == "running"]   # the footer's occupancy (#1797): the same rows the left pane groups
+    FOOT_ROWS.update(live=len(_live), agents=sum(r.get("agents") or 0 for r in _live), asof=time.time())
+    attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
+    out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
 def stats(period, src="both"):
@@ -196,8 +722,18 @@ def stats(period, src="both"):
 BOARD = HUBDIR / "hub-board.json"
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
+def apply_open_blockers(items, nodes):
+    """Attach open native blockers (`Issue.blockedBy`) onto each item as `b`. A closed blocker drops off by itself."""
+    by = {n.get("number"): n for n in nodes or []}
+    for i in items:
+        node = by.get(i.get("n"))
+        if not node: continue
+        open_ns = [x["number"] for x in (node.get("blockedBy") or {}).get("nodes") or [] if (x.get("state") or "").upper() == "OPEN"]
+        if open_ns: i["b"] = open_ns
+        else: i.pop("b", None)
+    return items
 def refresh_board():
-    """Board 4 statuses (REST, no GraphQL quota) + open PRs, every 60 s; last good data survives errors and restarts."""
+    """Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + open PRs, every 60 s; last good data survives errors and restarts."""
     sf = ""
     while True:
         try:
@@ -206,16 +742,6 @@ def refresh_board():
                 '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
-            po = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/pulls?state=open&per_page=100", "--jq",
-                '.[]|{n:.number,t:.title,d:.draft,u:.updated_at,h:.head.sha,o:.created_at}'], capture_output=True, text=True, timeout=60).stdout
-            prs = [json.loads(l) for l in po.splitlines() if l.strip()]
-            for x in prs:   # per open PR: check-run conclusions and mergeable state (2 REST calls each; open PRs are few)
-                try:
-                    ck = subprocess.run(["gh", "api", f"repos/{REPO}/commits/{x['h']}/check-runs?per_page=100", "--jq", "[.check_runs[]|(.conclusion//.status)]"],
-                                        capture_output=True, text=True, timeout=30).stdout
-                    x["ci"] = json.loads(ck or "[]")
-                    x["ms"] = subprocess.run(["gh", "api", f"repos/{REPO}/pulls/{x['n']}", "--jq", ".mergeable_state"], capture_output=True, text=True, timeout=30).stdout.strip()
-                except Exception: pass
             pc = subprocess.run(["gh", "api", f"repos/{REPO}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq",
                 '.[]|{n:.number,t:.title,c:(.merged_at//.closed_at),m:(.merged_at!=null)}'], capture_output=True, text=True, timeout=60).stdout
             prev = [json.loads(l) for l in pc.splitlines() if l.strip()]
@@ -225,6 +751,15 @@ def refresh_board():
                 '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name]}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
             items += [i for i in (json.loads(l) for l in oi.splitlines() if l.strip()) if i["n"] not in have]
+            own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
+            gq = 'query{repository(owner:"%s",name:"%s"){issues(first:100,states:OPEN){nodes{number blockedBy(first:20){nodes{number state}}}}}}' % (own, name)
+            go = subprocess.run(["gh", "api", "graphql", "-f", "query=" + gq], capture_output=True, text=True, timeout=60).stdout
+            try: apply_open_blockers(items, ((json.loads(go) or {}).get("data") or {}).get("repository", {}).get("issues", {}).get("nodes") or [])
+            except Exception: pass
+            pq = OPEN_PR_QUERY % (own, name)   # one query for every open PR (list, head, base, merge state, labels, threads, rollup)
+            po = subprocess.run(["gh", "api", "graphql", "-f", "query=" + pq], capture_output=True, text=True, timeout=60).stdout
+            prs = prs_from_graphql(json.loads(po)) if po.strip() else None
+            if prs is None: raise ValueError("the open-PR query returned nothing; the last good rows stay in place")  # never a fresh empty pass (#1772)
             lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())} or board_cache.get("lc", {})   # label colors as GitHub shows them
             if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
@@ -235,36 +770,311 @@ def refresh_board():
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
             except OSError: pass
 ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
+def _marker_mtime(kind, pr, sha9):
+    """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
+    try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
+    except OSError: return None
+def rereview_minutes():
+    """The loop's own re-queue window (SG_REREVIEW_MINUTES, 20 min by default): how long a head waits for the next attempt."""
+    try: return float(os.environ.get("SG_REREVIEW_MINUTES") or 20)
+    except ValueError: return 20.0
+def review_rows(pr):
+    """review-times.tsv rows for PR `pr`: one per model attempt (timestamp, PR, model, seconds, exit code), written by review.sh."""
+    rows = []
+    try: lines = (STATE / "review-times.tsv").read_text(errors="ignore").splitlines()
+    except OSError: return rows
+    for l in lines:
+        f = l.rstrip("\n").split("\t")
+        if len(f) < 5 or f[1] != str(pr) or not f[3].isdigit() or not f[4].lstrip("-").isdigit(): continue
+        try: ts = time.mktime(time.strptime(f[0].strip(), "%Y-%m-%dT%H:%M:%S"))
+        except ValueError: continue
+        rows.append({"ts": ts, "model": f[2], "secs": int(f[3]), "exit": int(f[4])})
+    return rows
+def review_attempts(pr, sha9):
+    """The loop's review attempts on PR `pr`'s current head `sha9`, newest first. `launched-<pr>-<sha9>` (or a re-queue in
+    `rereview-<pr>-<sha9>`) is the loop's record that it started work on this head: a row written before that belongs to the
+    head that moved, so a new head leaves no attempts and the card goes back to `awaiting review`."""
+    start = _marker_mtime("launched", pr, sha9)
+    if start is None: start = _marker_mtime("rereview", pr, sha9)
+    if start is None: return []
+    att = [r for r in review_rows(pr) if r["ts"] >= start - 5]   # 5 s of slop: the row follows the marker, never precedes it
+    for r in att: r["result"] = "passed" if r["exit"] == 0 else ("timed out" if r["exit"] == 142 else "failed")
+    return sorted(att, key=lambda r: r["ts"], reverse=True)
+def summary_lines(pr, sha9):
+    """The run summaries of revci-<pr>.out for head `sha9`: the `#<pr> <sha9> ` namespace carries the run's summary line
+    only, and a summary always carries `CI=`. The run's progress and terminal notices (CI_DISPATCH, SUPERSEDED,
+    CI_TIMEOUT) are printed with a `NOTICE ` prefix instead, so no reader can take one for a result (#1767)."""
+    try: ls = (STATE / f"revci-{pr}.out").read_text(errors="ignore").splitlines()
+    except OSError: return []
+    return [l for l in ls if l.startswith(f"#{pr} {sha9} ") and "CI=" in l]
+def _verdict_of(pr, sha9):
+    """The verdict of the last completed run of the review loop for this head, from the revci-<pr>.out summary line."""
+    ls = summary_lines(pr, sha9)
+    return (ls[-1].split("VERDICT:", 1)[1].strip() if ls and "VERDICT:" in ls[-1] else "")
+def review_state(pr, sha9, now=None):
+    """The card's review chip when the loop's latest attempt on this head did not pass; None keeps today's chip.
+    A timeout (exit 142) names the model and the seconds it burned; any other failure names the model and keeps the reason
+    (the run's own verdict, else the exit code) in the tooltip. The retry line comes from the loop's re-queue marker.
+    Returns [css class, chip text, tooltip, retry line]."""
+    att = review_attempts(pr, sha9)
+    now = time.time() if now is None else now
+    if not att or att[0]["exit"] == 0: return None
+    last = att[0]
+    reason = _verdict_of(pr, sha9) or f"exit {last['exit']}"
+    chip = f"review timed out · {last['model']} · {last['secs']} s" if last["exit"] == 142 else "review failed"
+    lines = [f"{a['model']} {a['secs']} s · {a['result']}" for a in att]   # newest first, so the card's tooltip reads top-down
+    lines[0] += f" ({reason})"
+    retry = ""
+    mk = _marker_mtime("rereview", pr, sha9)
+    if mk is not None:
+        if last["ts"] < mk: retry = "retrying now"   # the re-queue already started the attempt this head is owed
+        else:
+            left = mk + rereview_minutes() * 60 - now
+            retry = "retrying now" if left <= 0 else f"retry in {int(-(-left // 60))} min"
+    return {"cls": "changes", "chip": chip, "tip": f"attempts on {sha9}, newest first:\n" + "\n".join(lines), "retry": retry}
+GATE_SLOP = 5.0     # the gate line follows the pass stamp by less than a second; 5 s covers a coarse clock
+WATCH_CYCLE = 90.0  # one watch.sh cycle: three 30 s sleeps
+GATE_IDLE_AFTER = 3 * WATCH_CYCLE   # three cycles with no pass: the loop is not deciding anything, so no card may say it did
+def _pass_epoch():
+    """auto/.pass: the epoch of the loop's last pass, stamped at the top of every pass (autopilot.sh)."""
+    try: return float((STATE / "auto" / ".pass").read_text().strip())
+    except (OSError, ValueError): return None
+def _ago(secs): return f"{int(secs)} s" if secs < 90 else f"{int(round(secs / 60))} min"
+def gate_line(n):
+    """auto/gate-<n>: `<head sha9><TAB><epoch><TAB><reason><TAB><what it means>`, the pass's latest decision about this PR,
+    overwritten at every exit so the file carries the latest reason and only it (#1766). None when the file is absent or
+    unreadable — a half-written line cannot be seen, the pass writes it through a temp file + mv."""
+    try: f = (STATE / "auto" / f"gate-{n}").read_text(errors="ignore").rstrip("\n").split("\t")
+    except OSError: return None
+    if len(f) != 4 or not f[1].isdigit(): return None
+    return f[0], float(f[1]), f[2], f[3]
+def gate_state(n, sha9, now=None):
+    """The card's chip from the loop's own reason (#1771), as [css class, chip, tooltip]. The hub used to derive readiness
+    from the review line, so a card could claim `ready to merge` for a head the loop was holding — the loop's verdict is
+    already on disk, so the card reports it instead of guessing, and the two cannot disagree by construction. The reason in
+    auto/gate-<n> is the loop's word only for the head it names, written during the pass auto/.pass stamps; `ready to merge`
+    is reserved for a gate line that says the merge is going ahead. On any other head the chip says which honest state
+    applies: `loop off` (auto/off), `loop idle` (no pass for three watch cycles), `new head, not seen yet`."""
+    now = time.time() if now is None else now
+    if (STATE / "auto" / "off").exists():
+        return ["idle", "loop off", "auto/off is present: the loop is off, so no card can say what it decided"]
+    p = _pass_epoch()
+    if p is None or now - p > GATE_IDLE_AFTER:
+        last = "has never run" if p is None else f"last ran {_ago(now - p)} ago"
+        return ["idle", "loop idle", f"the loop {last} (auto/.pass, idle past {_ago(GATE_IDLE_AFTER)} = three watch cycles)"]
+    g = gate_line(n)
+    if not g or g[0] != sha9: return ["idle", "new head, not seen yet",
+        f"the loop's last reason {'names no head' if not g else f'is for {g[0]}, not {sha9}'}: it has not judged this head"]
+    if g[1] < p - GATE_SLOP: return ["idle", "new head, not seen yet",
+        f"the loop's last reason is from the pass before this one ({g[0]}, written {_ago(now - g[1])} ago): the running pass has not judged this head"]
+    reason, text = g[2], g[3]
+    if reason in ("merged", "merging"): cls, chip = "ready", "ready to merge"   # the gate says the merge is going ahead
+    elif reason.startswith("hold-"): cls, chip = "changes", "held: " + reason[5:]
+    else: cls, chip = "running", reason   # the loop's own word for what it is doing on this head (reviewing, fix-round, ...)
+    return [cls, chip, f"{reason}: {text}\n{g[0]} · written {_ago(now - g[1])} ago"]
+STRIP_MAX_AGE = 180.0   # the strip's own honesty window: past this the facts are no longer the poll's (#1772)
+
+# One GraphQL query per poll for every open PR: the list, the head and base, the merge state, the labels, the review
+# threads and the status rollup, in place of a REST list plus two REST calls per PR every poll (#1772). Nothing in it is
+# optional to the reader: a field the query did not return stays None and renders `?`, never a passing word.
+OPEN_PR_QUERY = """query{repository(owner:"%s",name:"%s"){pullRequests(first:100,states:OPEN,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{
+number title isDraft updatedAt createdAt headRefOid baseRefName mergeStateStatus
+labels(first:30){nodes{name}}
+reviewThreads(first:100){totalCount nodes{isResolved}}
+commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
+
+LIVE_BAD = ("failure", "timed_out", "action_required", "startup_failure", "cancelled", "error")
+LIVE_WAIT = ("queued", "in_progress", "pending", "waiting", "requested", "expected", "completed")
+
+def _live_states(rollup):
+    """The states of the live rollup's contexts: a CheckRun reports its conclusion once it has one and its status before
+    that, a StatusContext reports its state. None when the rollup itself is absent (unknown, not empty)."""
+    if rollup is None: return None
+    out = []
+    for c in ((rollup.get("contexts") or {}).get("nodes") or []):
+        v = c.get("conclusion") or c.get("status") or c.get("state")
+        if v: out.append(str(v).lower())
+    return out
+
+def _live_rollup(states):
+    """The live rollup in the same coarse words the loop's own `CI=` snapshot is read in: pass, fail, pending, none."""
+    if states is None: return None
+    if any(s in LIVE_BAD for s in states): return "fail"
+    if any(s in LIVE_WAIT for s in states): return "pending"
+    return "pass" if states else "none"
+
+def prs_from_graphql(payload):
+    """One row per open PR out of the batched OPEN_PR_QUERY response, or None when the call returned nothing usable
+    (failed, rate-limited, no repository): None means the caller keeps the last good rows, never that no PR is open
+    (#1772). A fact the query did not return stays None, so the strip renders `?` for it."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    nodes = (((data or {}).get("repository") or {}).get("pullRequests") or {}).get("nodes")
+    if nodes is None: return None
+    rows = []
+    for nd in nodes:
+        commit = ((nd.get("commits") or {}).get("nodes") or [{}])[-1].get("commit") or {}
+        states = _live_states(commit.get("statusCheckRollup"))
+        th = nd.get("reviewThreads")
+        threads = None if th is None or (th.get("totalCount") or 0) > len(th.get("nodes") or []) \
+            else sum(1 for t in (th.get("nodes") or []) if not t.get("isResolved"))
+        labels = [l["name"] for l in ((nd.get("labels") or {}).get("nodes") or [])] if nd.get("labels") is not None else None
+        ms = "" if (nd.get("mergeStateStatus") or "").upper() == "UNKNOWN" else (nd.get("mergeStateStatus") or "").lower()
+        base = nd.get("baseRefName") or None
+        rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
+                     "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
+                     "th": threads, "ci": states, "rollup": _live_rollup(states),
+                     "facts": not (states is None or threads is None or labels is None or not ms or not base)})
+    return rows
+
+def _ci_state(tok):
+    """The coarse state of a `CI=` snapshot (`success:9`, `failure:1,success:8`, `none`, `skipped`): pass, fail, pending, none."""
+    parts = [p.split(":")[0] for p in (tok or "").split(",") if p]
+    if not parts: return "?"
+    if any(p in LIVE_BAD for p in parts): return "fail"
+    if any(p in LIVE_WAIT for p in parts): return "pending"
+    return "pass" if "success" in parts else "none"
+
+def ci_snapshot(n, sha9):
+    """The loop's own `CI=` word for this head, out of the run's summary line; None when it printed none for this head."""
+    ls = summary_lines(n, sha9)
+    return ls[-1].split("CI=", 1)[1].split()[0] if ls and "CI=" in ls[-1] else None
+
+def _verdict_token(v):
+    """`OK`, `CHG`, `BLK` for the loop's verdict text, `?` for a word this strip does not know."""
+    if v.startswith("APPROVE"): return "OK"
+    if v.startswith("CHANGES"): return "CHG"
+    if v.startswith("BLOCKED"): return "BLK"
+    return "?"
+
+_REVFORMAT = {}
+def _revformat():
+    """revformat.py, the module that reads a finding's severity off the section it sits in (#1777). The strip asks the
+    same module the merge path asks, so a debt-only CHANGES cannot be called blocking on one surface and merged on the other."""
+    if "m" not in _REVFORMAT:
+        try: _REVFORMAT["m"] = importlib.import_module("revformat")
+        except Exception:
+            spec = importlib.util.spec_from_file_location("revformat", pathlib.Path(__file__).resolve().parent / "revformat.py")
+            m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m); _REVFORMAT["m"] = m
+    return _REVFORMAT["m"]
+
+def review_debt_only(n):
+    """True when the review the loop wrote for this PR raises DEBT only (`blocking=0 debt>0`). The autopilot merges one
+    once the debt is filed, so no card may render it as blocking (#1772). A module that cannot answer is not an answer:
+    no debt claim without it."""
+    try: review = (STATE / f"review-{n}.md").read_text(errors="ignore")
+    except OSError: return False
+    if not review.strip(): return False
+    try: c = _revformat().count(review)
+    except Exception: return False
+    return c.get("Blocking", 0) == 0 and c.get("Debt", 0) > 0
+
+def _summary_any_head(n):
+    """Every summary line the loop printed for this PR, whatever head it names."""
+    try: ls = (STATE / f"revci-{n}.out").read_text(errors="ignore").splitlines()
+    except OSError: return []
+    return [l for l in ls if l.startswith(f"#{n} ") and "CI=" in l]
+
+def review_cell(n, sha9):
+    """The R cell: the review verdict *on this head* (#1772). `-` = the loop has not judged this head, and the tooltip
+    says which head its last word was about; `...` = it queued a review for this head; `debt` = a debt-only CHANGES."""
+    v = _verdict_of(n, sha9)
+    if v:
+        tok = _verdict_token(v)
+        if tok == "CHG" and review_debt_only(n): tok = "debt"
+        tip = f"the loop's review of this head ({sha9}): VERDICT: {v}"
+        if tok == "debt": tip += " -- a debt-only CHANGES: the autopilot merges it once the debt is filed, so it does not block"
+        return tok, tip
+    old = _summary_any_head(n)
+    if old:
+        osha, oline = old[-1].split()[1], old[-1]
+        ov = oline.split("VERDICT:", 1)[1].strip() if "VERDICT:" in oline else ""
+        if osha != sha9 and ov.startswith("APPROVE"):
+            return "-", f"the loop's APPROVE is on {osha}, an older head (this head is {sha9}): an APPROVE is a word about the head it names"
+        if osha != sha9: return "-", f"the loop's last review named {osha}, not this head ({sha9})"
+    if (STATE / "auto" / f"launched-{n}-{sha9}").exists():
+        return "...", f"the loop queued a review for {sha9} (auto/launched-{n}-{sha9}) and has printed no verdict yet"
+    return "-", f"the loop has not reviewed this head ({sha9})"
+
+def gate_strip(x, t=None, now=None):
+    """The five-cell strip under the card's chip: R C T B H, each cell its own word and tooltip (#1772).
+
+    R the review verdict on this head, C the loop's own CI snapshot for it (marked `live!=` when GitHub's live rollup
+    disagrees), T the live unresolved review threads, B base and merge state, H labels and holds. A fact the batched
+    query did not return renders `?` -- unknown never reads as passing -- and the whole strip is `old` past 180 s of
+    `t` (the poll's stamp), so a failed poll greys out instead of standing in as a fresh one."""
+    now = time.time() if now is None else now
+    n, sha9 = x["n"], (x.get("h") or "")[:9]
+    age = int(now - (t or 0))
+    rv, rtip = review_cell(n, sha9)
+    snap = ci_snapshot(n, sha9)
+    if snap is None:
+        cv = ("?", "the loop has printed no CI snapshot for this head" +
+              (f"; GitHub's live rollup says {x['rollup']}" if x.get("rollup") else "; GitHub's live rollup is not in this poll either"))
+    elif x.get("rollup") and _ci_state(snap) != x["rollup"]:
+        cv = (f"{snap} live!={x['rollup']}", f"the loop's CI snapshot for {sha9} is {snap}; GitHub's live rollup says {x['rollup']} for the same head, so they disagree")
+    else:
+        cv = (snap, f"the loop's own CI snapshot for {sha9} (the head it was taken on), from the run's summary line")
+    th = x.get("th")
+    tv = ("?", "the batched query did not return this PR's review threads") if th is None else \
+         (str(th), f"{th} unresolved review threads on GitHub (resolved ones are not counted)")
+    base, ms = x.get("base") or "?", x.get("ms")
+    bv = ("?", "GitHub has not computed the merge state for this head" if x.get("facts") is not False else "the batched query did not return this PR") \
+        if not ms else (f"{base}·{ms}", f"base {base}, merge state {ms}")
+    labels, holds = x.get("l"), []
+    g = gate_line(n)
+    if g and g[2].startswith("hold-"): holds.append("hold:" + g[2][5:])
+    if x.get("d"): holds.append("draft")
+    if labels is None:
+        hv = ("?", "the batched query did not return this PR's labels")
+    else:
+        shown = ", ".join(labels[:3]) + (f" +{len(labels) - 3}" if len(labels) > 3 else "")
+        hv = ("-", "no labels, no hold")
+        if labels or holds: hv = (" ".join(filter(None, [shown, "·".join(holds)])), f"labels: {', '.join(labels) or 'none'}; holds: {'·'.join(holds) or 'none'}")
+    return {"cells": [{"k": "R", "v": rv, "tip": rtip}, {"k": "C", "v": cv[0], "tip": cv[1]}, {"k": "T", "v": tv[0], "tip": tv[1]},
+                      {"k": "B", "v": bv[0], "tip": bv[1]}, {"k": "H", "v": hv[0], "tip": hv[1]}],
+            "age": age, "old": age > STRIP_MAX_AGE}
+
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
-    Worst first: draft, conflict, ci-failed, changes, ci-running, reviewing, ready, merged-soon, awaiting-review."""
+    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review.
+    Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771).
+    A row the batched query did not fill in says so instead of falling through to a passing word (#1772), and a debt-only
+    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed."""
+    n = x["n"]; sha9 = (x.get("h") or "")[:9]
+    if (STATE / "auto" / "off").exists(): return gate_state(n, sha9)   # the loop is off: no card reports a verdict of its own
     if x.get("d"): return ["draft", "draft"]
-    ci = x.get("ci") or []; sha9 = (x.get("h") or "")[:9]; n = x["n"]
+    ci = x.get("ci") or []
+    if x.get("facts") is False: return ["idle", "facts unknown",
+        "the batched open-PR query did not return this PR, so its CI, merge state and threads are unknown -- not passing"]
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
-    line = ""
-    try: line = [l for l in (STATE / f"revci-{n}.out").read_text().splitlines() if l.startswith(f"#{n} {sha9} ")][-1]
-    except Exception: pass
-    if "CHANGES" in line: return ["changes", "changes requested"]
+    line = (summary_lines(n, sha9) or [""])[-1]   # a notice (NOTICE #<pr> <sha9> ...) is not a result: see summary_lines
+    if "CHANGES" in line:
+        if review_debt_only(n): return gate_state(n, sha9)   # a debt-only CHANGES is not blocking: the autopilot merges it (#1772)
+        return ["changes", "changes requested"]
+    rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
+    if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
     if "BLOCKED" in line: return ["broke", "review blocked"]
     if any(c in ("queued", "in_progress", "pending", "waiting", "requested") for c in ci): return ["running", "CI running"]
     if not line and (STATE / "auto" / f"launched-{n}-{sha9}").exists(): return ["running", "reviewing"]
-    if "APPROVE" in line: return ["ready", "merging" if (STATE / "auto" / f"merged-{n}").exists() else "ready to merge"]
+    if "APPROVE" in line: return gate_state(n, sha9)   # a green review line is not the loop's verdict: the gate file is
     return ["idle", "awaiting review"]
 def board():
     by = {}
     for i in board_cache["items"]:
         st = "Done" if i["s"] == "closed" else (i["st"] or "No status")   # a closed issue is Done whatever the card still says
-        by.setdefault(st, []).append({"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []})
+        row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
+        if i.get("b"): row["b"] = i["b"]
+        by.setdefault(st, []).append(row)
     names = [n for n in ORDER if n in by or n != "No status"] + sorted(n for n in by if n not in ORDER)   # the working states always show, even at 0
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
         return (min(w) if w else 10**9, x["n"])
     groups = [{"name": n, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == "Done" else sorted(by.get(n, []), key=wave)} for n in names]
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
-    for x in prs: x["ps"] = pr_state(x)
+    for x in prs: x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t"))   # the chip, then the R C T B H strip under it (#1772)
     prev = sorted(board_cache.get("prev", []), key=lambda p: p["c"] or "", reverse=True)
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"]} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "o": p.get("o")} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"]} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "o": p.get("o")} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
 def issue_detail(n):
@@ -320,16 +1130,38 @@ def speed():
     kills = []
     try: kills = [int(x.split()[0]) for x in open(HUBDIR / "hub-kills.log") if x.strip()]
     except OSError: pass
+    openp = []; now_ts = time.time()   # epoch arithmetic: dt.UTC needs 3.11 and this must run on the system python3 too
+    for x in board_cache.get("prs", []):
+        try: openp.append({"n": x["n"], "min": round((now_ts - dt.datetime.fromisoformat(x["o"].replace("Z", "+00:00")).timestamp()) / 60)})
+        except Exception: pass
+    openp.sort(key=lambda r: -r["min"])
     done = [r["dur"] for r in all_runs() if r["done"] and r["dur"] > 0]
     today = [r["dur"] for r in all_runs() if r["done"] and r["dur"] > 0 and time.localtime(r["t0"])[:3] == time.localtime()[:3]]
-    return {"baseline": BASE, "pr": {"after": agg(after), "series": [{"n": r["n"], "min": r["min"], "after": r["merged"] >= cut} for r in rows[-40:]], "stale": bool(prs_cache["err"]) or time.time() - prs_cache["t"] > 1800},
+    return {"baseline": BASE, "pr": {"open": openp[:8], "after": agg(after), "series": [{"n": r["n"], "min": r["min"], "after": r["merged"] >= cut} for r in rows[-40:]], "stale": bool(prs_cache["err"]) or time.time() - prs_cache["t"] > 1800},
             "runs": {"today_median": round(st.median(today), 1) if today else None, "all_median": round(st.median(done), 1) if done else None},
             "rounds": {"prs": len(rounds), "mean": round(st.mean(rounds), 2) if rounds else None}, "kills": {"count": len(kills), "last": max(kills) if kills else None}}
 
+# One run-state vocabulary for the hub's run badges. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
+# same states alike; tests/test_run_state_vocabulary.py holds the two tables equal. `color` is a palette variable of :root; `css` is extra style.
+RUN_STATES = [
+    {"state": "completed", "label": "Run completed", "color": "ok", "css": ""},
+    {"state": "verified", "label": "Failed or unverified run, verified by hand", "color": "ok", "css": "font-style:italic"},
+    {"state": "unverified", "label": "Work landed, the final gate had no command", "color": "ok", "css": "border-style:dashed"},
+    {"state": "failed", "label": "Run failed", "color": "err", "css": ""},
+    {"state": "needs-human", "label": "Run needs a person", "color": "warn", "css": ""},
+    {"state": "handled", "label": "Needs-human run, landed in the fork", "color": "ok", "css": ""},
+    {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
+    {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
+    {"state": "stalled", "label": "Run stalled", "color": "wait", "css": "border-style:dashed"},
+    {"state": "no verdict yet", "label": "No verdict yet", "color": "none", "css": ""},
+]
+
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
-:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--pin:#5aa9ff}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;height:100vh}
+:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
+:root{--col-w:185px;--col-empty-w:132px}   /* the docked strip's column geometry: the one place its widths are set (#1791) */
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
+#win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #top{position:sticky;top:0;background:linear-gradient(#162033,#121a28);padding:10px 10px 10px 12px;border-bottom:2px solid var(--pin);border-left:3px solid var(--pin);z-index:2;box-shadow:0 2px 8px #0008}#top>b{font-size:13px;letter-spacing:.12em;color:var(--pin)}
 #top .row{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:6px}
@@ -340,39 +1172,41 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .r.show{background:#1f2a3a;box-shadow:inset 3px 0 0 var(--pin)}.r.pinned .pn{color:var(--pin)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 .b{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;border:1px solid}
-.running,.starting{color:var(--run)}.stale{color:var(--mute)}.landed,.pass,.ok{color:var(--ok)}.unverified{color:#4fb8d6}.verified{color:#56d364;font-style:italic}.needs-human,.stalled{color:var(--warn)}.failed{color:var(--err)}
+.landed,.pass,.ok{color:var(--ok)}
+/*RUN_STATE_CSS*/
 .m{color:var(--mute);font-size:11px;margin-top:2px}
 #q{width:100%;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
 .sp{border-bottom:1px solid var(--line);font-size:11px}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:12px;font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:none}
 .sp>summary::-webkit-details-marker{display:none}.sp>summary::before,.gh::before{content:"▸";flex:none;width:10px;color:var(--mute);font-weight:400}.sp[open]>summary::before,.gh.op::before{content:"▾"}.sp>summary:hover,.gh:hover{background:#171c24}.sp>summary:focus-visible,.gh:focus-visible{box-shadow:inset 0 0 0 1px var(--pin)}
 .sp>summary .sr,.gh .sr{margin-left:auto;font-weight:400;color:var(--mute);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.sp[open]>summary .sr{display:none}.sp .sb{padding:4px 10px 10px}
-.sp h4{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin:10px 0 6px;font-size:12px;color:var(--fg);font-weight:600}.sp h4 small{font-weight:400;color:var(--mute);font-size:10px;white-space:nowrap}
-.tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:9px;color:var(--mute)}.tot b{display:block;font-size:15px;color:var(--fg);font-weight:600}
-.kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:11px;line-height:1.3}.kr .l small{display:block;color:var(--mute);font-size:9.5px}.kr b{grid-column:2;justify-self:end;font-size:14px;font-weight:600;line-height:1}.kr b small{font-size:10px;font-weight:400;color:var(--mute)}
-.kr .d{grid-column:2;justify-self:end;font-size:9px;padding:1px 6px;border-radius:9px;white-space:nowrap;background:#1c222b;color:var(--mute)}.kr .d.good{background:#14301f;color:#5fd38d}.kr .d.bad{background:#3a1a1a;color:#ff7b7b}
+.sp h4{display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin:10px 0 6px;font-size:12px;color:var(--fg);font-weight:600;white-space:nowrap}.sp h4 small{font-weight:400;color:var(--mute);font-size:10px;white-space:nowrap}
+.tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:9px;color:var(--mute)}.tot b{display:block;font-size:15px;color:var(--fg);font-weight:600}.tot b.m{color:var(--mute);font-size:10px;line-height:1.5}
+.tot .cash,.cash{grid-column:1/-1;background:none;border:0;padding:0;margin:2px 0 0;font-size:10px;color:var(--mute);line-height:1.35}
+#src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:10px}#per button{padding:1px 3px;font-size:9px}
+.kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px;min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:9.5px}.kr b{grid-column:2;justify-self:end;font-size:14px;font-weight:600;line-height:1}.kr b small{font-size:10px;font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
+.kr .d{grid-column:2;justify-self:end;font-size:9px;padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:12px;font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:11px;color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:12px}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
-.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;gap:4px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:72px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}
-.mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:26px;height:26px;padding:0;font-size:13px;line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
+.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;overflow:hidden;gap:3px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10.5px;height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:none;border-color:var(--pin)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
+.mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:24px;height:24px;padding:0;font-size:12px;line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
 .madd{display:flex;gap:5px;margin-top:4px}.madd input{flex:1;min-width:0;height:28px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:0 8px;font:inherit;font-size:12px}.madd input:focus{outline:none;border-color:var(--pin)}.madd button{height:28px;padding:0 12px}
-.msave{position:sticky;bottom:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 10px;margin:0 -10px -10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;z-index:1}.msave.dirty{background:#1f1b12;border-top-color:#6b5223}.msave button{height:28px;padding:0 12px}.msave button#msv:not(:disabled){background:var(--warn);color:#1a1300;border-color:var(--warn);font-weight:600}.msave button:disabled{opacity:.35;cursor:default}
-.msave .st{flex:1 1 100%;color:var(--mute)}.msave .st.err{color:var(--err)}.msave .st .dot{display:inline-block;width:8px;height:8px;border-radius:4px;background:var(--warn);margin-right:5px;vertical-align:middle}.msave .st.okm{color:var(--ok)}.sub{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:8px 10px;background:#10141a;border:1px solid var(--line);border-radius:8px;font-size:11px}
+.msave{position:sticky;bottom:0;display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px 0 0;margin:12px 0 0;background:var(--panel);border-top:1px solid var(--line);font-size:11px;z-index:1}.msave.dirty{background:#1f1b12;border-top-color:#6b5223}.msave button{height:28px;padding:0 12px}.msave button#msv:not(:disabled){background:var(--warn);color:#1a1300;border-color:var(--warn);font-weight:600}.msave button:disabled{opacity:.35;cursor:default}
+.msave .st{flex:1 1 100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mute)}.msave .st.err{color:var(--err)}.msave .st .dot{display:inline-block;width:8px;height:8px;border-radius:4px;background:var(--warn);margin-right:5px;vertical-align:middle}.msave .st.okm{color:var(--ok)}.sub{display:flex;flex-direction:column;gap:6px;margin:8px 0;padding:8px 10px;background:#10141a;border:1px solid var(--line);border-radius:8px;font-size:11px}
 .sub .hd{display:flex;align-items:center;gap:6px;margin-bottom:2px}.sub .nm{font-weight:600;font-size:13px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sub .sv{font-weight:600;font-size:14px}.sub .sv.good{color:#5fd38d}.sub .sv.bad{color:#ff7b7b}.sub .sv.none{color:var(--mute);font-size:11px;font-weight:400}
 .sub .qw{display:flex;flex-direction:column;gap:3px}.sub .ql{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:11px;color:var(--mute)}.sub .ql b{color:var(--fg);font-weight:600;font-size:12px}.sub .ql .rst{white-space:nowrap;font-size:10px}
 .sub .qw.sm .ql{font-size:10px}.sub .qw.sm .ql b{font-size:10.5px;color:#b9c0cc}.sub .qw .tr{position:relative;height:8px;border-radius:4px;background:#1c222b}.sub .qw.sm .tr{height:4px;border-radius:2px}.sub .qw .fl{height:100%;border-radius:inherit;transition:width .3s}
 .sub .fl.lv-ok{background:var(--ok)}.sub .fl.lv-warn{background:var(--warn)}.sub .fl.lv-err{background:var(--err)}.sub .fl.lv-est{background:#5aa9ff}.sub .qw .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}
 .sub .fr{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:-1px}.sub .fs{color:var(--mute);font-size:9.5px;margin-left:auto}.sub .chip{display:inline-block;padding:0 7px;border-radius:9px;font-size:10px;font-weight:600;line-height:16px}.sub .chip.err{background:#3a1a1a;color:#ff7b7b;border:1px solid #ff6b6b55}
-.sub .kv{display:flex;justify-content:space-between;gap:8px;font-size:10.5px;color:var(--mute);line-height:1.5}.sub .kv b{color:var(--fg);font-weight:600;font-variant-numeric:tabular-nums}.sub .kvs{border-top:1px solid var(--line);padding-top:5px;margin-top:2px}
 .sub .xx{padding:1px 7px;border-radius:9px;background:#14301f;color:#5fd38d;font-size:10px;margin-left:5px}.sub .xx.bad{background:#3a1a1a;color:#ff7b7b}
 .sub .pr{display:flex;gap:6px;align-items:center;color:var(--mute);font-size:10px}.sub select{flex:1;min-width:0;max-width:100%}.sub input{padding:3px 6px;font-size:11px;min-width:0}.sub input[data-f=amount]{flex:1}.sub input[data-f=cur]{width:56px;text-transform:uppercase}
 .sub .dt{color:var(--mute);font-size:10px;line-height:1.4}.sub .dt b{color:var(--fg);font-weight:600}.sub .warn{color:var(--warn);font-size:10px}
 .mb{margin-top:2px}.mb .lab{display:flex;justify-content:space-between;font-size:10px;color:var(--mute);margin-bottom:3px}.mb .lab b{color:var(--fg);font-weight:600}.mb .tr{position:relative;height:9px;border-radius:5px;background:#1c222b;overflow:visible}.mb .fl{height:100%;border-radius:5px;background:#e0a23a}.mb .fl.good{background:#3ecf8e}.mb .fl.bad{background:#d9534f}.mb .fl.warnq{background:#5aa9ff}.mb .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}.mb .sc2{display:flex;justify-content:space-between;font-size:9px;color:var(--mute);margin-top:2px}
-.tot3{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px}.tot3 div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:6px 7px;font-size:10px;color:var(--mute);line-height:1.3}.tot3 b{display:block;font-size:15px;color:var(--fg);font-weight:600;margin:1px 0}.tot3 span{font-size:9px;display:block}.tot3 div:last-child b{color:var(--ok)}.subx{color:var(--mute);font-size:10.5px;line-height:1.45;margin:8px 0 4px}
+.subx{color:var(--mute);font-size:10.5px;line-height:1.45;margin:8px 0 4px}
 .pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:11px}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.warnl{margin-top:4px;font-size:9px;color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}
-#board{width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
+#board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
 #board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
 #bbody .ah{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}
@@ -380,15 +1214,23 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
 #bbody .it{margin:6px 8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--cc,var(--mute));border-radius:6px;background:var(--bg,#1c222c);line-height:1.35;font-size:12.5px;white-space:normal;overflow-wrap:anywhere;box-shadow:0 1px 2px #0006}
 #bbody .it .ft{display:flex;justify-content:flex-end;margin-top:6px}#bbody .age{display:inline-block;padding:0 6px;border-radius:9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:#e3b341;border-color:#6b5223}#bbody .age.old{color:#f85149;border-color:#6e2a27}
-#bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:600;vertical-align:1px;border:1px solid}
+#bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:600;vertical-align:1px;border:1px solid;max-width:100%;overflow-wrap:anywhere}
 #bbody .pst.ready{color:#3fb950;border-color:#2e6b3a;background:#12261a}#bbody .pst.running{color:#5aa9ff;border-color:#24496e;background:#0f1d2c}
 #bbody .pst.changes{color:#e3b341;border-color:#6b5223;background:#261e0f}#bbody .pst.broke,#bbody .pst.conflict{color:#f85149;border-color:#6e2a27;background:#2a1212}
 #bbody .pst.idle,#bbody .pst.draft{color:var(--mute);border-color:var(--line);background:#12161c}
+#bbody .gstrip{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;font-size:10px;color:var(--mute)}
+#bbody .gstrip.old{opacity:.45;filter:grayscale(1)}
+#bbody .gc{border:1px solid var(--line);border-radius:7px;padding:0 5px;white-space:nowrap;background:#12161c}
+#bbody .gc b{color:var(--fg);font-weight:600;margin-left:3px}
+#bbody .gc.ok b{color:#3fb950}#bbody .gc.warn b{color:#e3b341}#bbody .gc.bad b{color:#f85149}
+#bbody .gc.debt b{color:#5aa9ff}#bbody .gc.unk{border-color:#6b5223}#bbody .gc.unk b{color:#e3b341}
 #bbody .it:hover{background:var(--bgh,#232b37);border-color:#3a4352}
 #bbody .it .id{display:inline-block;background:#12161c;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-bottom:4px;font-size:11px;color:var(--pin);text-decoration:none;font-weight:700}
 #lf{display:inline-block;position:relative;font-size:11px;font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
 #lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{border-color:var(--pin)}#bbody .it .tt{display:block}
+#bbody .it .prr{display:block;margin-top:2px;font-size:10.5px;color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#bbody .it .blk{display:block;margin-top:4px;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--pin);text-decoration:none}
 #bbody .it.m{border-style:dashed;text-align:center;background:none;box-shadow:none}
 #bbody .pad{height:6px}#bbody .sc{max-height:58vh;overflow:auto}#bbody .it .dt{float:right;color:var(--mute);font-size:11px}
 #pop{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:50}#pop.on{display:flex}
@@ -420,45 +1262,82 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #pbox .cm{border:1px solid var(--line);border-left:3px solid var(--pin);border-radius:8px;background:#1a2029;padding:8px 14px 10px;margin:10px 0}#pbox .cm .meta{margin-bottom:2px}
 #pbox .prbar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}#pbox .pill{font-size:11.5px;border:1px solid var(--line);background:#1b212b;border-radius:10px;padding:1px 9px}#pbox .pill.ok{border-color:#3ecf8e88;color:var(--ok)}#pbox .pill.bad{border-color:#ff6b6b88;color:var(--err)}
 #pbox h3.sec{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:20px 0 4px}
-body.dockb{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
+body.dockb #win{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
 body.dockb #side{grid-row:1/3}body.dockb #main{grid-column:2;grid-row:1}
 body.dockb #board{grid-column:2;grid-row:2;width:auto;height:320px;border-left:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
 body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
-#grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}
-body.dockb #bbody>.col{flex:1 1 0;min-width:185px;display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
+/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is a live, cross-origin dashboard: it is hidden with `visibility` and never detached, so the very same iframe element (same scroll, same run) is still there when the split comes back. The board is no longer a fixed-height row, so the grip has nothing to resize. */
+body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
+body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0;overflow:hidden}
+body.dockb.max #main{visibility:hidden}
+#grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
+/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and never detached, so the frame — one connection to the run's dashboard — is still there when the board is maximized again. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
+#pip{position:absolute;z-index:10;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 22px #0009;overflow:hidden;overscroll-behavior:contain}
+body:not(.dockb.max) #pip{visibility:hidden}
+#piph{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;background:#1b212b;border-bottom:1px solid var(--line);cursor:move;touch-action:none;flex:none;font-size:11px}
+#piph:hover,#piph.drag{background:#232b37}#piph b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+#piph button{font:inherit;font-size:11px;line-height:1;padding:2px 6px;cursor:pointer}
+#pipb{flex:1;min-height:0;display:flex}#pipf{border:0;border-radius:0 0 5px 5px}
+#pip.off #pipb{height:0;visibility:hidden}
+#pipm{display:none;flex:1;padding:10px;font-size:11px;line-height:1.45;color:var(--mute)}
+#pip.noframe #pipb{visibility:hidden;height:0}#pip.noframe #pipm{display:block}
+body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
-.prs{--cc:var(--run);background:linear-gradient(#2dd4bf14,#2dd4bf08)}
-#bbody .acc.prs{border-bottom:2px solid var(--run);margin-bottom:4px}
-#bbody .prs>.ah,#bbody .prs>.ch{background:#12332f;color:#7ff0df;border-bottom:1px solid #2dd4bf66;letter-spacing:.04em;text-transform:uppercase}
-#bbody .prs .it{border:1px solid #2dd4bf55;border-left:4px solid var(--run);background:#14262a;border-radius:10px}
-#bbody .prs .it .id{background:#2dd4bf22;border-color:var(--run);color:#7ff0df}
-body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--run)}
-body.dockb #bbody>.col.prcol{background:linear-gradient(#2dd4bf14,#2dd4bf08);box-shadow:inset 0 2px 0 var(--run);flex:1.15 1 0}
+.prs{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent))}   /* a PR column wears the colour colOf gave it, faint, so the archive stops looking like the live queue */
+#bbody .acc.prs{border-bottom:2px solid var(--cc);margin-bottom:4px}
+#bbody .prs>.ah,#bbody .prs>.ch{background:color-mix(in srgb,var(--cc) 12%,#0f1115);color:var(--cc);border-bottom:1px solid color-mix(in srgb,var(--cc) 40%,transparent);letter-spacing:.04em;text-transform:uppercase}
+#bbody .prs .it{border:1px solid color-mix(in srgb,var(--cc) 33%,transparent);border-left:4px solid var(--cc);background:color-mix(in srgb,var(--cc) 8%,#10141a);border-radius:10px}
+#bbody .prs .it .id{background:color-mix(in srgb,var(--cc) 13%,transparent);border-color:var(--cc);color:var(--cc)}
+body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
+body.dockb #bbody>.col.prcol{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent));box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
+body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-empty-w);max-width:var(--col-empty-w);border-right:1px solid var(--line)}   /* a visible column with no cards keeps only its header, so the strip still reads as a row of columns (#1791); the columns that do have cards take the freed width */
+body.dockb #bbody>.col.empty>.ch{padding:8px 6px;flex-wrap:wrap;row-gap:2px;justify-content:flex-start}   /* the name falls onto a row of its own rather than clipping the count */
+body.dockb #bbody>.col.empty>.ch>span{white-space:nowrap}body.dockb #bbody>.col.empty>.ch .eye{margin-left:auto}
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
 body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .sec:first-child>.ch{border-top:0}
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
-.hidbar{flex:none;align-self:flex-start;padding:8px 10px;color:var(--mute);font-size:11px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line);min-width:120px}.chip b{font-weight:600;color:var(--pin)}.chip{display:flex;justify-content:space-between;gap:10px;align-items:center;cursor:pointer;background:#2a303b;border-radius:9px;padding:1px 8px;color:var(--fg)}
+.hidbar{flex:none;align-self:stretch;padding:8px 10px;color:var(--mute);font-size:11px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line);min-width:120px;max-width:120px;min-height:0;overflow:hidden}   /* the hidden: strip, the docked row's last child: align-self:stretch is what lets it be divided by height. Both ends of the width are pinned and the strip clips, so a long user-created column name cannot widen the column now that the label sits on its own line (#1792) */
+.hidbar .chip{flex:1 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:2px 8px;background:#2a303b;border:1px solid #353c49;border-radius:9px;cursor:pointer}   /* one full-height tile per hidden column: flex:1 1 0 splits the strip's height equally between however many rows there are, so two rows are half each and eight are an eighth (#1792) */
+.hidbar .chip:hover{background:#333a47;border-color:#414957}
+.hidbar .chip .lbl{flex:0 1 auto;min-height:0;overflow:hidden;max-width:100%;font-size:10px;line-height:11px;color:var(--mute);text-overflow:ellipsis;white-space:nowrap}   /* the name is the tile's caption: it ellipsizes, it never wraps and its font never shrinks. It is flex:0 1 auto and the number is flex:none, so when a row is shorter than its content the name is the one clipped away */
+.hidbar .chip b{flex:none;font-size:20px;line-height:20px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--pin)}   /* the number is what the tile is for, and it is never the element that gets cut. --pin is the fallback for a column the table below does not name. These rules are scoped to .hidbar on purpose: a bare .chip would also repaint the sidebar's .sub .chip */
+/* The strip's own mapping from column to category, one rule per category: the colour says what the count means and
+   never how big it is, because magnitude would light up the two archival piles. The hexes are #1793's, under the
+   names the page already uses for them; Closed PRs' #5aa9ff is --pin, so it is written as the token it is. */
+.hidbar .chip[data-col="Blocked"] b{color:var(--err)}
+.hidbar .chip[data-col="Testing"] b{color:var(--run)}
+.hidbar .chip[data-col="No status"] b{color:var(--warn)}
+.hidbar .chip[data-col="Done"] b{color:var(--ok)}
+.hidbar .chip[data-col="Closed PRs"] b{color:var(--pin)}
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
+#foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
+#foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}
+#ldfacts{margin-left:14px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}
+.load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
 </style>
-<div id=side><div id=top><b>RUNS</b> <span id=mode class=m></span>
-<div class=row id=lay></div><div class=row><button id=unpin>unpin all (auto-follow)</button></div></div>
+<div id=win>
+<div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
-<details id=stats class=sp><summary>cost &amp; speed<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<div id=list></div></div>
+<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<div id=list></div>
+</div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>BUILDER <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
+</div>
+<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
 <script>
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
-let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=ls.N||1,pins=new Set(ls.pins||[]),slots=[],frames=new Map();
-const save=()=>localStorage.hub=JSON.stringify({...ls,N,pins:[...pins],q,per,src});
+let allRuns=[],runs=[],q=ls.q||"",per=ls.per||"day",src=ls.src||"both",N=1,pins=new Set((ls.pins||[]).slice(0,1)),slots=[],frames=new Map();
+const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src});
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
+const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 // a run's name says what it is for: "fix PR #1202 · #1178", "panel · #1179 #1182", "#1183"; the run id moves to the detail line
 const label=r=>{const is=(r.issues||[]).filter(i=>+i!==r.fix).map(i=>"#"+i).join(" ");
@@ -469,7 +1348,7 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   const byId=new Map(runs.map(r=>[r.id,r])),want=[];
   runs.filter(r=>pins.has(r.id)).forEach(r=>want.push(r.id));
   const open=runs.filter(r=>!pins.has(r.id)&&r.rank===0);
-  // open runs auto-fill; with none open, fall back to the most recently finished (landed) ones
+  // live runs auto-fill; with none running, fall back to the most recently finished (landed) ones
   (open.length?open:runs.filter(r=>!pins.has(r.id)&&r.rank===1)).forEach(r=>want.push(r.id));
   const top=want.slice(0,N);
   slots=slots.filter(id=>byId.has(id));
@@ -480,24 +1359,45 @@ function plan(){ // which runs fill the N slots: pinned first, then most recentl
   top.forEach(id=>{if(!next.includes(id)){const j=next.indexOf(null);if(j>=0)next[j]=id}});
   slots=next.filter(Boolean);
 }
-const GROUPS=[["open","OPEN"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
-let openGroup=null,userPicked=false;
-const groupOf=r=>{if(r.rank===0)return"open";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":"d"};
+const GROUPS=[["running","WORKERS"],["1h","≤ 1 h"],["2h","1–2 h"],["4h","2–4 h"],["8h","4–8 h"],["d","8 h+ (days)"]];
+const CAPS=__CAPS__;
+const LOAD_MS=Number("__LOADMS__")||5000;   // the sampler's cadence, substituted when the page is served; the fallback keeps a slice of this script evaluable on its own
+function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu}% of this machine's CPU right now">cpu ${r.cpu}%</span>`:""}   // the card answers "because of whom?"; the strip answers "is it saturated?"
+// The facts after the cells, served by the same tick. On a window too narrow for the whole row the trailing facts drop
+// (5 -> 4 -> 3) exactly as they are — the line never wraps and no number is cut into a different one. The budget is in
+// characters of the font the cells beside them are drawn in, measured off the cells themselves.
+function footFit(items,cols){const k=(items||[]).slice();while(k.length&&k.map(i=>i.text).join(" · ").length>cols)k.pop();return k}
+function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" · ")}
+function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
+ const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
+ return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
+function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)l.textContent=d.line||"CPU ? · RAM ? · GPU ?";
+ if(f)f.innerHTML=footFit(d.facts,footCols()).map(i=>i.bad?`<span class=bad>${esc(i.text)}</span>`:esc(i.text)).join(" · ")}
+async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
+ footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
+function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
+// The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
+// beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
+// run appearing, ending or moving to another age bucket can never move what the user opened.
+let openGroups=Array.isArray(ls.groups)?new Set(ls.groups.filter(k=>GROUPS.some(g=>g[0]===k))):null;
+const saveGroups=()=>{ls.groups=[...openGroups];save()};
+// runs of one issue share the issue label ("#1281"), and today three runs can carry it at once: the list and the panel header
+// then read the same twice. Disambiguate only the labels that repeat, with the run's start time (run-YYYYMMDD-HHMMSS-xxxx).
+const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[2]+":"+m[3]:""};   // run-…-HHMMSS-xxxx and test-<n>-YYYYMMDD-HHMMSS both carry it
+const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
+const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":"d"};
 function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
-  const filled=GROUPS.filter(g=>by[g[0]]);
-  if(!openGroup||!by[openGroup]||!userPicked)openGroup=(filled[0]||[])[0]||null;   // one group open at a time; follows the newest until the user picks one
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}">${r.state}</span> <b>${esc(label(r))}</b>${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="pin">${pins.has(r.id)?"●":"○"}</span></div>`;
-  $("#list").innerHTML=filled.map(([k,t])=>`<div class="gh ${openGroup===k?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr>${by[k].length} · ${usd(by[k].reduce((a,r)=>a+r.spend,0))}</span></div>${openGroup===k?by[k].map(row).join(""):""}`).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
-  document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{openGroup=e.dataset.g;userPicked=true;drawList()});
+  if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
+  const filled=GROUPS.filter(g=>by[g[0]]||openGroups.has(g[0]));   // an open group that emptied keeps its header and shows no rows
+  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b>${loadMark(r)}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
+  document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
+    if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id)}
     save();refresh(true)});
-  $("#mode").textContent=pins.size?pins.size+" pinned":"auto-follow";
-  $("#unpin").disabled=!pins.size;
 }
-function drawLayout(){$("#lay").innerHTML=Object.keys(LAYOUTS).map(k=>`<button data-n=${k} class="${+k===N?"on":""}">${k}</button>`).join("");
-  document.querySelectorAll("#lay button").forEach(b=>b.onclick=()=>{N=+b.dataset.n;save();slots=[];refresh(true)})}
 let built="";
 function drawMain(force){
   const [c,rw]=LAYOUTS[N],key=N+":"+slots.join(",");
@@ -505,36 +1405,52 @@ function drawMain(force){
   const byId=new Map(runs.map(r=>[r.id,r]));
   if(key!==built){built=key;
     for(const id of [...frames.keys()])if(!slots.includes(id))frames.delete(id);
-    main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">No open runs. Pin a finished run from the list to look at it; the next run that starts shows up here on its own.</div>";
+    main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">"+PIP_NORUNS+"</div>";
     slots.forEach(id=>{const r=byId.get(id);let f=frames.get(id);
       if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
-      const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${label(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
+      const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
 }
-function refresh(){plan();drawLayout();drawList();drawMain()}
-$("#unpin").onclick=()=>{pins.clear();save();slots=[];refresh()};
+function refresh(){plan();drawList();drawMain();pipDraw()}
 function applyFilter(){runs=allRuns}
-let known=null;   // run ids already seen: a run that appears open after the first poll is selected on its own (pinned, its group opened)
+let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
   const fresh=allRuns.filter(r=>!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
-  if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);userPicked=false;save()}
+  if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
-function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length;
-  return `<svg viewBox="0 0 ${W} ${H+14}">`+rows.map((r,i)=>`<rect x="${i*bw+1}" y="${H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="#5aa9ff"><title>${r.t}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")+`<text x="0" y="${H+11}" fill="#8a93a3" font-size="9">${rows[0].t}</text><text x="${W}" y="${H+11}" fill="#8a93a3" font-size="9" text-anchor="end">${rows[rows.length-1].t} · max ${usd(mx)}</text></svg>`}
-function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}<small>${sub}</small></span><b>—</b></div>`;
-  let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;chip=d===0?`<span class=d>same as before (${base}${unit})</span>`:`<span class="d ${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")} · was ${base}${unit}</span>`}
-  return `<div class=kr><span class=l>${label}<small>${sub}</small></span><b>${v}<small>${unit}</small></b>${chip}</div>`}
+function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
+  return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
+    +`<line x1="0" y1="${pad}" x2="${W}" y2="${pad}" stroke="#3ecf8e" stroke-dasharray="3 2" stroke-width="1"/>`
+    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" font-size="9" text-anchor="end">max ${usd(mx)}</text>`
+    +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
+    +`<text x="0" y="${H+pad+12}" fill="#8a93a3" font-size="9">${xl(rows[0].t)}</text>`
+    +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" font-size="9" text-anchor="end">now</text></svg>`}
+function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
+  const u=unit?String(unit).trim():"";
+  let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
+    const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
+    chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
+  return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
+function openRows(o){return `<h4>Open PRs <small>oldest first</small></h4>`
+  +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
+   :`<div class=kr><span class=l>none open</span></div>`)}
 let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images."},EFF=["low","medium","high","max"];
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
+const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
+function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
+function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
 function mdlProv(m){const x=m.replace(/^claude:/,"");return /^claude-(sonnet|opus|haiku|fable)/.test(x)||x==="claude-session"?"Claude":/^claude-/.test(x)?"via CLI":/^gpt/.test(x)?"Codex":/^grok/.test(x)?"xAI":/^gemini/.test(x)?"Google":""}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
- $("#mdsr").textContent=(mdl.coding_models||[])[0]||"";
+ $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
- b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),pv=mdlProv(m);return`<div class="mr${i?"":" p"}"><span class=rk title="${i?"fallback "+i:"primary"}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${i?"fallback "+i:"primary"}${pv?" · "+pv:""}">${pv||(i?"fallback "+i:"primary")}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m);return`<div class="mr${i?"":" p"}"><span class=rk title="${i?"fallback "+i:"primary"}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${i?"fallback "+i:"primary"}${pv?" · "+pv:""}">${pv||(i?"fallback "+i:"primary")}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Written per model, beside the chains, in models.json.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
-$("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl||!t.dataset.ef)return;const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value);mdlMsg="";mdlRender()});
+$("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
+ else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
+ else return;mdlRender()});
 $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button");if(!t||!mdl)return;mdlMsg="";
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"")}
@@ -542,33 +1458,42 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
-/* accordion: one group open at a time (RUNS stays outside it, always visible) */
-const ACC=["plans","stats","mdl"];if(!ACC.includes(ls.acc))ls.acc="";
-ACC.forEach(i=>{const e=$("#"+i);e.open=i===ls.acc;e.addEventListener("toggle",()=>{if(e.open){ACC.forEach(j=>{if(j!==i)$("#"+j).open=false});ls.acc=i;save();if(i==="mdl")mdlLoad()}else if(ls.acc===i&&!ACC.some(j=>$("#"+j).open)){ls.acc="";save()}})});mdlLoad();
-const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"k":""+n;
+/* accordions: each of the three answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl"];
+let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
+const saveAcc=()=>{ls.acc=[...openAcc];save()};
+ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open)mdlLoad()})});mdlLoad();
+const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
+const OTHER=0.01;
 function pie(ms){const rows=ms.map(m=>({...m,v:m.in+m.out})).filter(m=>m.v>0);if(!rows.length)return"<span class=m>no token data</span>";
- const top=rows.slice(0,8),rest=rows.slice(8).reduce((a,m)=>a+m.v,0),sl=top.map(m=>({n:m.model,v:m.v,t:`${m.model}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));if(rest)sl.push({n:"other",v:rest,t:"other models"});
- const tot=sl.reduce((a,x)=>a+x.v,0);let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C+4} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
+ const tot=rows.reduce((a,m)=>a+m.v,0);const keep=[],fold=[];
+ for(const m of rows) (m.v/tot<OTHER?fold:keep).push(m);
+ while(keep.length+(fold.length?1:0)>6) fold.unshift(keep.pop());
+ const sl=keep.map(m=>({n:m.model,v:m.v,t:`${m.model}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.model}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
+ let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" font-size=8>tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
 const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m<90?m+" min ago":Math.round(m/60)+" h ago"},rs=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"?";
 const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
 const qbar=(label,pct,resets,sm,tip)=>`<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span>${resets?`<span class=rst title="${esc(rs(resets))}">${rel(resets)}</span>`:""}</div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%"></div></div></div>`;
-const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
+const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${ago(a.asof)}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
 const SUBL={claude:"Claude Team",grok:"SuperGrok",gpt:"ChatGPT Plus",gemini:"Google AI Plus"};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);$("#plsr").textContent=any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices";
- $("#subs").innerHTML=`<div class=tot3><div>plans<b>${usd(d.plans)}</b><span>per month</span></div><div>API<b>${usd(d.api)}</b><span>so far this month</span></div><div>total<b>${usd(d.total)}</b><span>plans + API</span></div></div><div class=subx>Per subscription: API-equivalent usage vs the plan price so far.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
+ $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
+ $("#stsr").textContent=`month ${usdc(d.total)}`;
+ $("#subs").innerHTML=`<div class=subx>Per subscription: API-equivalent usage vs the plan price so far.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" title="R$, U$, € or any 3-letter code"></span>`:"";
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
-  const est=pl&&v.usd?v.eq/v.usd*100:null,aq=v.quota,aw=aq&&aq.windows[0],q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null),win=aw?aw.label:(pl&&pl.qwin||""),pct=q!=null?q:est,today=d.frac*100,cls=q!=null?"warnq":(ok?(v.saved>=0?"good":"bad"):"");
+  const est=pl&&v.usd?v.eq/v.usd*100:null,aq=v.quota,aw=aq&&aq.windows&&aq.windows[0],q=aw?aw.pct:(pl&&pl.quota!=null?pl.quota:null),win=aw?aw.label:(pl&&pl.qwin||""),pct=q!=null?q:est,today=d.frac*100,cls=q!=null?"warnq":(ok?(v.saved>=0?"good":"bad"):"");
   const MT="Fill: API-equivalent used by squad runs ÷ monthly plan price (partial: other uses of the plan are not seen). 100% = plan paid off. Tick: how much of the month has passed.";
-  const bar=aw?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
+  const bar=aw||(aq&&aq.unavailable)?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
   const man=aw||!pl?"":`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${q??""}" placeholder="%" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" maxlength=40 style="flex:1;min-width:0"></div>`;
-  return `<div class=sub><div class=hd><span class=nm>${SUBL[k]}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}<div class=kvs>${v.qval!=null?`<div class=kv title="Weekly quota % consumed x (monthly price x 7 / days in month), summed over this month's weeks (history starts when the hub first read the CLI)"><span>quota value used</span><b>${usd(v.qval)}</b></div>`:""}${ok?`<div class=kv title="Share of the monthly plan price elapsed so far this month"><span>plan paid so far</span><b>${usd(v.prorated)}</b></div>`:""}<div class=kv title="API-equivalent cost of the squad runs billed to this plan (other uses of the plan are not seen)"><span>API-equivalent (squad only)</span><b>${usd(v.eq)}</b></div></div></div>`}).join("")}catch(e){console.error(e)}}
+  return `<div class=sub><div class=hd><span class=nm>${SUBL[k]}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")}catch(e){console.error(e)}}
 $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(!k)return;const row=e.target.closest(".sub");let body;
  const f=e.target.dataset.f,pick=row.querySelector("[data-f=plan]").value;
  if(f==="quota"||f==="qwin"){const x=row.querySelector("[data-f=quota]").value,w=row.querySelector("[data-f=qwin]").value.trim();body={quota:x===""?null:+x,qwin:w||null}}
@@ -577,30 +1502,48 @@ $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(
  try{await fetch("/api/plans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({[k]:body})})}catch(x){}pollSubs()});
 async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json(),sp=await (await fetch("/api/speed")).json();
-  $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">${p}</button>`).join("");
-  $("#src").innerHTML=[["both","both"],["sub","subscription"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
+  $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
+  $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  $("#stsr").textContent=(src==="both"?"":(src==="sub"?"subscription ":"API "))+"today "+usd(st.totals.today);
-  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b>${usd(st.totals.all)}</b></div>`;
+  $("#piet").textContent=tk((st.models||[]).reduce((a,m)=>a+m.in+m.out,0))+" all time";
+  const same=st.totals.all===st.totals.month;
+  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
   const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
-  $("#kpi").innerHTML=`<h4>Speed <small>vs. before ${cut} UTC</small></h4>`
-   +kr("Time to merge a PR","median, open → merged",sp.pr.after.median,"min",b.pr.median)
-   +kr("Time to merge a PR","average",sp.pr.after.mean,"min",b.pr.mean)
-   +kr("Run duration","median, today",sp.runs.today_median,"min",b.run_median)
-   +kr("PRs merged since then","sample size",n,"",0,false)
-   +kr("Review rounds per PR","average",sp.rounds.mean,"",null)
-   +kr("Hung runs killed","by the heartbeat",sp.kills.count,"",null)
-   +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
+  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
+   +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
+   +kr("Merge time",", average",sp.pr.after.mean,"min",b.pr.mean)
+   +kr("Run time",", median today",sp.runs.today_median,"min",b.run_median)
+   +kr("Review rounds",", average",sp.rounds.mean,"",null)
+   +kr("Hung runs killed","",sp.kills.count,"",null)
+  +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
+  $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
-const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,N,pins:[...pins],q,per,bo})};
+loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
+const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
-const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off?(bo.h||320)+"px":""};
-const applyDock=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");sizeBoard();$("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;"};
-$("#board").classList.toggle("off",!!bo.off);applyDock();$("#bx").onclick=()=>{bo.off=!bo.off;$("#board").classList.toggle("off",bo.off);applyDock();saveB()};
+if(bo.max)bo.off=false;else if(bo.off)bo.max=false;   // both controls live in one saved record, so a reload can never bring back a board that is maximized and collapsed at once
+const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off&&!bo.max?(bo.h||320)+"px":""};
+// The board's maximize takes the run pane's cell as well as its own, so the kanban is read at full height. The run pane
+// is a live, cross-origin dashboard: a CSS class hides it with `visibility` and never detaches it, so the very same
+// iframe element — same scroll, same run — is still there when the split comes back. Nothing here rebuilds the panes.
+const MAXI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/></svg>',
+MINI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M9 4v5H4M15 20v-5h5M9 9L4 4M15 15l5 5"/></svg>';
+const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");document.body.classList.toggle("max",!!bo.max);
+  $("#board").classList.toggle("off",!!bo.off);sizeBoard();
+  $("#bx").innerHTML=bo.dock==="bottom"?(bo.off?"&uarr;":"&darr;"):"&raquo;";$("#bx").setAttribute("aria-pressed",String(!!bo.off));
+  $("#bz").innerHTML=bo.max?MINI:MAXI;$("#bz").setAttribute("aria-pressed",String(!!bo.max));
+  $("#bz").title=bo.max?"restore the split: run pane and board":"maximize the board over the run pane"};
+const applyDock=paintBoard;
+const setOff=v=>{bo.off=v;if(v)bo.max=false;paintBoard();saveB()};   // a collapsed board is never a maximized one
+const setMax=v=>{bo.max=v;if(v)bo.off=false;paintBoard();saveB()};  // maximizing a collapsed board restores it first
+const escBoard=()=>{if(bo.max)setMax(false)};
+paintBoard();
+$("#bx").onclick=()=>setOff(!bo.off);
+$("#bz").onclick=()=>setMax(!bo.max);
 const isPR=n=>n==="Open PRs"||n==="Closed PRs";
 const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const OKTAG=new Set("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td h1 h2 h3 h4 h5 h6 blockquote pre a img del s u".split(" ")),VOID=new Set(["br","hr","img"]);
@@ -632,7 +1575,7 @@ else{const p=[];while(i<L.length&&L[i].trim()&&!onlyHold(L[i])&&!/^(#{1,4}\s|\s*
 return out.join("")}
 let html=block(t);for(let k=0;k<3;k++)html=html.replace(/\u0001(\d+)\u0001/g,(_,n)=>keep[+n]);return html.replace(/<p>(<summary>[\s\S]*?<\/summary>)<\/p>/g,"$1")}
 const pop=$("#pop"),when=t=>t.slice(0,16).replace("T"," ");
-pop.onclick=e=>{if(e.target===pop)pop.classList.remove("on")};addEventListener("keydown",e=>{if(e.key==="Escape")pop.classList.remove("on");else if(pop.classList.contains("on")&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))step(e.key==="ArrowLeft"?-1:1)});
+pop.onclick=e=>{if(e.target===pop)pop.classList.remove("on")};addEventListener("keydown",e=>{if(e.key==="Escape"){pop.classList.remove("on");escBoard()}else if(pop.classList.contains("on")&&(e.key==="ArrowLeft"||e.key==="ArrowRight")&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))step(e.key==="ArrowLeft"?-1:1)});
 let nav=[];const step=k=>{const i=nav.indexOf(cur)+k;if(i>=0&&i<nav.length)showIssue(nav[i])};let cur=0;
 async function showIssue(n){cur=+n;pop.classList.add("on");$("#pbox").innerHTML="<span class=m>loading #"+n+"…</span>";
 try{const d=await (await fetch("/api/issue?n="+n)).json();if(d.err){$("#pbox").textContent=d.err;return}
@@ -647,13 +1590,85 @@ document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
 const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
 g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
+// ---- the pip over the maximized board (#1782)
+// Maximized, the run pane is out of sight, and with it the one thing worth glancing at while the board is read. This
+// window floats on the board and shows ONE card of the run's own dashboard — the card is the dashboard's single-card
+// mode, `?card=<name>`, documented in docs/design/README.md. The two pages are served on different ports, so there is no
+// DOM to reach into: the URL is the whole interface, and the hub never renders a second copy of the card, which would
+// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and never detaches it — so
+// nobody closes it twice. The frame is sourced once per run switch: maximizing, collapsing, dragging and resizing never
+// touch it, so the second view is one connection per run switch and one replay of that run's record, paid when the left
+// bar moves to another run and never per paint. A dashboard too old to answer the mode says so inside the window
+// instead of leaving an empty frame.
+const PIP_NORUNS="No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.";
+const PIP={card:"groups",w:360,h:300,minW:240,minH:160,cw:240,ch:34,inset:12,step:16,run:64,wait:2500};
+const PIP_CARDS={groups:"Groups"};
+const PIP_OLD="This run's dashboard has no single-card mode, so the window has nothing to show. It is a dashboard built before `?card=` (docs/design/README.md); the run pane below is unaffected.";
+const pip=()=>bo.pip||(bo.pip={});
+const pipCard=p=>(p&&p.card)||PIP.card;
+const pipClamp=(v,lo,hi)=>hi<lo?lo:Math.max(lo,Math.min(hi,v));
+const pipURL=(r,card)=>r?((r.url||"http://127.0.0.1:"+r.port+"/")+"?card="+encodeURIComponent(card)):"";
+const pipBox=()=>{const b=$("#board").getBoundingClientRect(),h=$("#bhead").getBoundingClientRect();return{w:b.width,h:b.height,head:h.height}};
+// The size it takes on this board: the minimum first, so a place remembered on a wider board shrinks onto a narrow one and still fits.
+const pipSize=(box,off)=>off?{w:PIP.cw,h:PIP.ch}:{w:box.w<PIP.w?PIP.minW:PIP.w,h:box.h-box.head<PIP.h?PIP.minH:PIP.h};
+// A place is kept against the board's top-left and clamped: never left of the board, never above its header (measured, not assumed), never past its far edge.
+const pipPlace=(box,s,x,y)=>({x:pipClamp(Math.round(x),0,box.w-s.w),y:pipClamp(Math.round(y),box.head,box.h-s.h)});
+let pipSrc="",pipSeen="",pipDead="",pipTimer=0;
+const pipRun=()=>{const id=slots[0];return id?runs.find(r=>r.id===id)||null:null};   // the run the left bar selected is the run the window shows
+const pipHead=r=>{const c=PIP_CARDS[pipCard(pip())]||pipCard(pip());return r?name(r)+" · "+r.state+" · "+c:c};
+const pipSet=o=>{Object.assign(pip(),o);saveB();pipDraw()};
+function pipDraw(){
+  const el=$("#pip"),p=pip(),off=!!p.off,box=pipBox(),s=pipSize(box,off);
+  const at=pipPlace(box,s,p.x===undefined?box.w-s.w-PIP.inset:p.x,p.y===undefined?box.h-s.h-PIP.inset:p.y);
+  el.style.left=at.x+"px";el.style.top=at.y+"px";el.style.width=s.w+"px";el.style.height=s.h+"px";
+  el.classList.toggle("off",off);$("#pipx").innerHTML=off?"&#43;":"&#8211;";
+  if(at.x!==p.x||at.y!==p.y){p.x=at.x;p.y=at.y;saveB()}   // a place remembered on a wider board is pulled back onto this one
+  const r=pipRun(),card=pipCard(p),url=pipURL(r,card),f=$("#pipf");
+  if(url)if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
+    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}   // an older dashboard never answers: say so, never an empty frame
+  const miss=!!url&&pipSrc===pipDead&&pipSeen!==pipSrc;
+  el.classList.toggle("noframe",!r||miss);
+  $("#pipm").textContent=!r?PIP_NORUNS:miss?PIP_OLD:"";
+  $("#pipt").textContent=pipHead(r);
+}
+pipDraw();
+$("#pipx").onclick=()=>pipSet({off:!pip().off});
+$("#pipo").onclick=()=>setMax(false);   // closing the window is leaving the maximize mode: the board is never maximized without it
+$("#piph").onpointerdown=e=>{e.preventDefault();const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
+const el=$("#pip"),ox=e.clientX-(parseFloat(el.style.left)||0),oy=e.clientY-(parseFloat(el.style.top)||0);
+const mv=ev=>{if(!ev.buttons){up();return}const box=pipBox(),s=pipSize(box,!!pip().off),at=pipPlace(box,s,ev.clientX-ox,ev.clientY-oy);el.style.left=at.x+"px";el.style.top=at.y+"px"},
+up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);
+const p=pip();p.x=parseFloat(el.style.left)||0;p.y=parseFloat(el.style.top)||0;saveB()};
+g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
+$("#piph").addEventListener("keydown",e=>{
+  if(e.key==="Escape"){e.preventDefault();e.stopPropagation();if(pip().off)$("#bz").focus();else pipSet({off:true});return}   // never restores the split from inside
+  const d={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[e.key];if(!d)return;
+  e.preventDefault();e.stopPropagation();
+  const p=pip(),step=e.shiftKey?PIP.run:PIP.step,box=pipBox(),s=pipSize(box,!!p.off),at=pipPlace(box,s,(p.x||0)+d[0]*step,(p.y||0)+d[1]*step);
+  pipSet({x:at.x,y:at.y})});
+addEventListener("message",e=>{const d=e.data;if(!d||d.squadCard===undefined)return;pipSeen=pipSrc;pipDead="";pipDraw()});   // the dashboard answered the mode
+$("#pip").addEventListener("wheel",e=>e.preventDefault(),{passive:false});   // a wheel over the chrome does not reach the board behind it
+$("#piph").addEventListener("wheel",e=>e.preventDefault(),{passive:false});
+addEventListener("resize",()=>pipDraw());
+// ---- the pip ends here
 document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const h=new Set(bo.hidden||[]),g=t.dataset.eye;h.has(g)?h.delete(g):h.add(g);bo.hidden=[...h];saveB();pollBoard()},true);
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
+// One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
+// hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the seven
+// Project statuses plus the two PR columns — and the flow reads left to right: grey (not started), yellow (being
+// coded), violet (built), teal (verified), green (finished), amber for the pile nobody has triaged, red for the one
+// colour that means look here, blue for a PR in review, and the same blue with its chroma spent for the PR that is
+// retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
+// the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
+// (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
+const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
+const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
+const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
-const col={"Open PRs":"var(--run)","Closed PRs":"var(--run)","In Progress":"var(--warn)","Code Complete":"#a371f7",Testing:"var(--pin)",Todo:"#c9d1d9",Blocked:"var(--err)","No status":"#b48ead",Done:"var(--ok)"};
+const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 $("#bt").textContent=b.err?"(stale)":"";
 const fam=ls=>ls.reduce((o,l)=>{const k=l.includes(":")?l.split(":")[0]:"";(o[k]=o[k]||[]).push(l);return o},{});   // label group = prefix before ":"
 if(bo.label!==undefined){bo.labels=bo.label?[bo.label]:[];delete bo.label;saveB()}   // the single-label filter of the previous version
@@ -669,11 +1684,19 @@ lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"
 const age=o=>{let m=Math.max(0,Math.floor((Date.now()-Date.parse(o))/60000));const d=Math.floor(m/1440),h=Math.floor(m%1440/60);m%=60;return "⏱ "+(d?d+"d "+h+"h":h?h+"h "+String(m).padStart(2,"0")+"m":m+"m")};
 const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=4?"warm":""};
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
-const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${col[g.name]||"var(--mute)"}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}">${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
-const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${col[g.name]||"var(--mute)"}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
-if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
-return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
-const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>hidden: ${all.filter(g=>hid.has(g.name)).map(g=>`<span class=chip data-eye="${esc(g.name)}"><span>${esc(g.name)}</span><b>${g.n}</b></span>`).join("")}</div>`:"");
+const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
+const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
+const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const colCls=(pr,n)=>"col"+(pr?" prs":"")+(n?"":" empty");   // a visible column with no cards left after the filter collapses to the narrow width (#1791)
+const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
+if(bottom)return `<div class="${colCls(isPR(g.name),it.length)}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
+return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
+const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
+// One tile of the hidden: strip: the name as a caption over the count, the count's colour deciding what the count
+// means. data-col names the column, so the colour is a CSS rule per category rather than an inline value; the one
+// exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
+const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
+const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}</div>`:"");
 if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
@@ -682,6 +1705,8 @@ document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
+PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
+
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
 SUBS = ("claude", "grok", "gpt", "gemini")
@@ -777,18 +1802,49 @@ def q_codex():
         x = r.get(key)
         if x: m = x.get("windowDurationMins") or 0; ws.append({"label": "weekly" if m >= 7 * 1440 else ("5 h" if m == 300 else fallback), "pct": x.get("usedPercent"), "resets": x.get("resetsAt")})
     return {"windows": ws, "plan": r.get("planType"), "reached": r.get("rateLimitReachedType")}
+GROK_LOG = HOME / ".grok/logs/unified.jsonl"
+GROK_SETTINGS = HOME / ".grok/settings_cache.json"   # the config the grok CLI caches at startup
+GROK_SCAN_MAX = 64 * 1024 * 1024   # how far back the probe walks before calling the log blind
+GROK_NO_SOURCE = ("no credit line in ~/.grok/logs/unified.jsonl: the grok CLI writes creditUsagePercent only when its "
+                  "billing extension runs (the TUI's /usage view), and no line in the last 64 MB carries one")
+def grok_plan():
+    """The plan the grok CLI itself caches; it is also what proves the settings file is being read at all."""
+    try: p = json.loads(json.loads(GROK_SETTINGS.read_text())["payload"])
+    except Exception: return None
+    return ((p.get("settings") or {}).get("subscription_tier_display")) or None
 def q_grok():
-    """The grok CLI logs `billing: fetched credits config` (creditUsagePercent, current weekly period) each time it runs; read the newest line."""
-    f = HOME / ".grok/logs/unified.jsonl"
-    with open(f, "rb") as fh:
-        fh.seek(0, 2); n = fh.tell(); fh.seek(max(0, n - 3_000_000)); tail = fh.read().decode("utf8", "ignore")
+    """Read the newest log line carrying a BillingConfig: `creditUsagePercent` + `currentPeriod{start,end}`.
+    The grok CLI pushes that payload in the line's `ctx.config`, and its message wording drifts between versions
+    (`billing: fetched credits config` in older ones), so match the fields and never the text. Finding none is a
+    reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing yesterday's number."""
     last = None
-    for l in tail.splitlines():
-        if "billing: fetched credits config" in l: last = l
-    if not last: return None
-    d = json.loads(last); c = d["ctx"]["config"]; per = c.get("currentPeriod") or {}
-    end = dt.datetime.fromisoformat(per["end"]).timestamp() if per.get("end") else None
-    return {"windows": [{"label": "weekly", "pct": c.get("creditUsagePercent"), "resets": end}], "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()}
+    try:
+        with open(GROK_LOG, "rb") as fh:
+            fh.seek(0, 2); size = fh.tell(); pos = size; floor = max(0, size - GROK_SCAN_MAX)
+            while pos > floor and last is None:
+                hi = pos; step = min(4_000_000, pos - floor); pos -= step
+                if hi < size:   # the read would end inside a line: carry it to its newline, so this chunk holds that
+                    fh.seek(hi)  # whole line and not its head alone, the tail of it being what the older chunk drops
+                    while hi < size and hi < pos + 8_000_000:
+                        b = fh.read(65_536); hi += len(b)
+                        if b"\n" in b or not b: break
+                fh.seek(pos); chunk = fh.read(hi - pos)
+                if pos:   # read from the middle: the first line is half a line unless the byte before is the newline
+                    fh.seek(pos - 1)
+                    if fh.read(1) != b"\n": chunk = chunk.split(b"\n", 1)[-1]
+                for l in chunk.decode("utf8", "ignore").splitlines():
+                    try: d = json.loads(l)
+                    except Exception: continue
+                    if not isinstance(d, dict): continue
+                    c = (d.get("ctx") or {}).get("config") or {}
+                    if c.get("creditUsagePercent") is not None and isinstance(c.get("currentPeriod"), dict): last = (d, c)
+    except OSError: pass
+    if not last:
+        return {"windows": [], "unavailable": True, "err": GROK_NO_SOURCE, "plan": grok_plan()}
+    d, c = last; per = c.get("currentPeriod") or {}
+    end = dt.datetime.fromisoformat(per["end"].replace("Z", "+00:00")).timestamp() if per.get("end") else None
+    return {"windows": [{"label": "weekly", "pct": c.get("creditUsagePercent"), "resets": end}], "plan": grok_plan(),
+            "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()}
 def q_agy():
     """`agy -p /quota` prints one line per model group (no model call): name, `Weekly Limit Remaining`, N%, reset ISO. The Gemini group is the Google plan's."""
     r = subprocess.run(["agy", "-p", "/quota"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -815,17 +1871,30 @@ def week_value(k, usd, days, mstart):
     for e in weeks[k].values():
         if e["end"] - 7 * 86400 >= mstart or e["end"] > time.time(): tot += e["pct"] / 100 * usd * 7 / days
     return round(tot, 2)
+QUOTA_PROBES = {"claude": q_claude, "gpt": q_codex, "grok": q_grok, "gemini": q_agy}
+def refresh_quota_once():
+    """One pass: ask each CLI for its quota. A probe that answers with no windows replaces the row outright, so a
+    reading that stopped tracking reality cannot pass as current; a probe that raises keeps the last good value."""
+    for k, fn in QUOTA_PROBES.items():
+        try:
+            r = fn()
+            if r:
+                r.setdefault("asof", time.time()); quota[k] = r
+                if r.get("windows"): note_week(k, r)
+        except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
+    try: QUOTA.write_text(json.dumps(quota))
+    except OSError: pass
 def refresh_quota():
-    """Every 20 min: ask each CLI for its quota; a failed read keeps the last good value (and its age is shown)."""
+    """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row)."""
     while True:
-        for k, fn in (("claude", q_claude), ("gpt", q_codex), ("grok", q_grok), ("gemini", q_agy)):
-            try:
-                r = fn()
-                if r: r.setdefault("asof", time.time()); quota[k] = r; note_week(k, r)
-            except Exception as e: quota.setdefault(k, {"windows": []})["err"] = str(e)[:120]
-        try: QUOTA.write_text(json.dumps(quota))
-        except OSError: pass
-        time.sleep(1200)
+        refresh_quota_once(); time.sleep(1200)
+def quota_row(k):
+    """What the cost panel shows for provider k: the CLI's own reading, or the reason there is no reading."""
+    r = quota.get(k)
+    if not r: return None
+    if r.get("windows"): return r
+    if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
+    return None
 
 def subs_month():
     """Per subscription, this month: API-equivalent used so far, the plan price prorated to today, and the saving."""
@@ -845,51 +1914,177 @@ def subs_month():
         pr = round(usd * frac, 2) if usd is not None else None
         out[k] = {"plan": plan, "usd": round(usd, 2) if usd is not None else None, "rate": rt, "noRate": bool(plan and not rt), "eq": eq, "qval": week_value(k, usd, days, mstart), "prorated": pr, "saved": round(eq - pr, 2) if pr is not None else None, "x": round(eq / pr, 1) if pr else None}
     plans = sum(v["usd"] for v in out.values() if v["usd"] is not None)
-    for k in out: out[k]["quota"] = quota.get(k) if quota.get(k, {}).get("windows") else None
+    for k in out: out[k]["quota"] = quota_row(k)
     return {"subs": out, "frac": round(frac, 3), "plans": round(plans, 2), "api": round(api, 2), "total": round(plans + api, 2)}
 
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")
+READONLY = ("known", "last_coding")   # fields models_get() adds for the panel: posted back, never stored
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
-EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
-    "gpt-5.6-terra", "gpt-6.1-sol", "gpt-5.6-sol", "grok-4.6", "claude-session",
-    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
-    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low", "gemini-3.1-pro-high", "gemini-3.1-pro-low",
-    "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]
+# The add box carries the provider catalogues as they are, minus the two things that made it unreadable: the
+# workflow graph's prose (see known_models) and the same model under two spellings (the alias fold below). The
+# gemini/gpt-oss ids are the Antigravity catalogue; refresh them from `agy models` when it moves.
+EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+    "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
+    "claude-deepseek-v4-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session",
+    "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
+    "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
+    "gemini-3.1-pro-high", "gemini-3.1-pro-low",
+    "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium",
+    "grok-4.5", "grok-4.6"]
+ALIAS = re.compile(r"^claude-(grok|gpt|gemini)-")
+# The gateway's own tier suffix, which no chain consumer serves: review.sh hands a bare id to `codex exec`, never
+# to the gateway. Folded onto the bare id (`gpt-5.6-terra-fast`) it reads as a codex model, so an entry picked
+# from the box failed every call and fell through the chain (#1564).
+GATEWAY_ONLY = re.compile(r"-fast$")
+RUNNER = "claude:"          # review.sh's prefix for "run this one through the claude CLI"
+def bare_id(mid):
+    """The model's own name, without the review-path prefix. This is what the panel shows and what the box offers."""
+    return mid[len(RUNNER):] if mid.startswith(RUNNER) else mid
+def chain_id(chain, mid):
+    """The spelling one chain needs in models.json. review.sh routes by prefix (claude:* -> the claude CLI,
+    gemini-*/grok-* -> agy/grok, anything else -> codex), so an Anthropic id in review_models has to carry
+    `claude:`; every other chain names the bare id the squad hands to the gateway. The panel works in bare ids
+    and never sees the prefix: which spelling a role needs is this file's business, not the reader's."""
+    b = bare_id(mid)
+    return RUNNER + b if chain == "review_models" and b.startswith("claude-") else b
+def last_coding_model(limit=15):
+    """The model the newest run that got far enough to name one actually coded with.
+
+    The chains say what the NEXT child will be given; that is not the same claim, and it read as one while the
+    router was pinned to a model whose provider had stopped serving (2026-10-11). A child's outcome event carries
+    its model (`route.router.N`), so the last one is read from the records, newest run first.
+    """
+    runs = pathlib.Path(PROF["SG_CHECKOUT"] or os.getcwd()) / "runs"
+    try: ds = sorted((d for d in runs.glob("run-*")), key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+    except OSError: return ""
+    for d in ds:
+        rec = d / "record.jsonl"
+        if not rec.exists(): continue
+        best = None
+        for line in rec.read_text(errors="replace").splitlines():
+            if '"outcome"' not in line or '"route.' not in line: continue
+            try: e = json.loads(line)
+            except Exception: continue
+            if e.get("event") == "outcome" and (e.get("node") or "").startswith("route.") and e.get("model"):
+                if best is None or (e.get("ts") or 0) > (best.get("ts") or 0): best = e
+        if best: return best["model"]
+    return ""
+
+GATEWAY = (os.environ.get("ANTHROPIC_BASE_URL") or "http://localhost:8016").rstrip("/")
+_gw = {"t": 0.0, "ids": []}
+def gateway_models(ttl=120):
+    """The ids the gateway itself serves, read from its own `/v1/models` -- the same list Claude Code's `/model` picker
+    shows as "From gateway". Live, because the catalogue changes on the gateway's side and a hardcoded copy went stale
+    (the GPT family was missing from the add box, 2026-10-11); cached briefly, because the panel asks on every load.
+    Empty when the gateway is down, which leaves the other sources to fill the box."""
+    if time.time() - _gw["t"] < ttl: return _gw["ids"]
+    ids = []
+    try:
+        with urllib.request.urlopen(GATEWAY + "/v1/models", timeout=3) as r:
+            d = json.loads(r.read().decode("utf8", "replace"))
+        ids = [m["id"] for m in (d.get("data") or d.get("models") or []) if isinstance(m, dict) and m.get("id")]
+    except Exception: pass
+    _gw.update(t=time.time(), ids=ids)
+    return ids
+
+def runnable_models(ids):
+    """The ids a chain consumer can actually run, which the sources behind the box are not all of.
+
+    No chain consumer goes through the gateway: review.sh sends a bare id to `codex exec`, a `claude:`-prefixed one
+    to `claude -p --model`, `grok-*` to the grok CLI and `gemini-*` to agy. The gateway's `-fast` tier answers only
+    on the gateway route -- the alias that serves it lives in the interactive shell wrapper, which review.sh does
+    not go through -- and under its folded id it reached `codex exec` as a model codex does not have: the 400
+    "The 'gpt-5.6-terra-fast' model is not supported when using Codex with a ChatGPT account" (#1564). Both sources
+    spell it: the gateway's own catalogue and the Claude Code settings, which register the same wrapper aliases.
+    """
+    return [m for m in ids if not GATEWAY_ONLY.search(m)]
+
 def known_models(d):
-    """Suggestions for the add box: everything the squad, Claude Code settings and the workflow allow-list already name, plus EXTRA_MODELS."""
-    out = list(EXTRA_MODELS)
+    """Suggestions for the add box: the models the chains already use, the Claude Code settings, plus EXTRA_MODELS.
+
+    The workflow graph is no longer read: it names a dozen ids in its own prose (the ADR-0113 history of this
+    flow), so scraping it filled the box with models that appear nowhere else.
+
+    One model, one row. A non-Anthropic provider is reachable as `grok-4.6` and as `claude-grok-4.6` and both
+    spellings were listed: the alias is folded onto the bare id, which is the form the chains name and the
+    bridge answers.
+
+    An id offered here is one a chain consumer runs: the assembled list goes through runnable_models, so the
+    gateway's `-fast` tier never reaches the box, where it costs a whole run to discover.
+    """
+    out = list(EXTRA_MODELS) + gateway_models()
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
-    for wf in (pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json",):
-        try: out += re.findall(r'"((?:claude|gpt|grok|gemini)[A-Za-z0-9._:\-]*)"', wf.read_text())
-        except Exception: pass
-    return sorted({m for m in out if MODEL_ID.match(m)})
+    return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in runnable_models(out) if MODEL_ID.match(m)})
 EFFORTS = ("low", "medium", "high", "max")
+# local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
+HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
+def model_hours(d, chain, mid):
+    """The window for one model, or "" when it may always run."""
+    h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
+    hk = h.get(chain) if isinstance(h.get(chain), dict) else {}
+    v = hk.get(mid)
+    return v if isinstance(v, str) and HOURS.match(v) and v[:2] != v[3:] and mid in d.get(chain, []) else ""
+def in_hours(d, chain, mid, when=None):
+    """True when the model may run at `when` (default: now), local hour, and its own window is a rotation."""
+    w = model_hours(d, chain, mid)
+    if not w: return True
+    h = (when or dt.datetime.now()).hour; a, b = int(w[:2]), int(w[3:])
+    return a <= h < b if a <= b else (h >= a or h < b)
+def hours_of(d):
+    """Per-chain {model-id: "HH-HH"} from models.json's optional top-level `hours`; only entries whose model is in that chain."""
+    h = d.get("hours") if isinstance(d.get("hours"), dict) else {}
+    return {k: {m: v for m, v in (h.get(k) or {}).items() if model_hours(d, k, m) == v} for k in CHAINS}
 def efforts_of(d):
     """Per-chain {model-id: effort} from models.json's optional top-level `efforts`; every chain present, only entries whose model is in that chain."""
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
 def models_get():
-    d = json.loads(MODELS.read_text()); return {**{k: d.get(k, []) for k in CHAINS}, "efforts": efforts_of(d), "known": known_models(d)}
+    """The three chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
+
+    The file keeps the spelling each role needs (chain_id); the panel never sees it, so a reader cannot pick the
+    wrong one of two spellings of the same model."""
+    d = json.loads(MODELS.read_text())
+    return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
+            "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
+            "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
+            "known": known_models(d), "last_coding": last_coding_model()}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
-    new = {k: v for k, v in new.items() if k != "known"} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts"}: return {"err": "unknown chain"}
-    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None)
+    # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`
+    # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
+    # the panel invented -- "unknown chain" on every Save (2026-10-11).
+    new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours"}: return {"err": "unknown chain"}
+    d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None)
     for k, v in new.items():
-        if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v) or len(set(v)) != len(v):
+        if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):
             return {"err": f"{k}: need 1-8 distinct model ids"}
+        v = [chain_id(k, m) for m in v]      # the panel works in bare ids; the file gets the spelling the role needs
+        if len(set(v)) != len(v): return {"err": f"{k}: need 1-8 distinct model ids"}
         d[k] = v
     if eff is not None:
         # efforts live beside the chains, never inside them (other scripts jq the arrays of strings); "default" = key absent
         if not isinstance(eff, dict) or set(eff) - set(CHAINS): return {"err": "efforts: unknown chain"}
         for k, ek in eff.items():
-            if not isinstance(ek, dict) or not all(isinstance(m, str) and m in d.get(k, []) and v in EFFORTS for m, v in ek.items()):
+            if not isinstance(ek, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and v in EFFORTS for m, v in ek.items()):
                 return {"err": f"efforts.{k}: model must be in the chain, effort one of {'|'.join(EFFORTS)}"}
-        d["efforts"] = {k: {m: v for m, v in (eff.get(k) or {}).items() if v != "medium"} for k in CHAINS}  # medium is the default: absent
+        # keyed by the spelling the chain stores, like the chain itself (medium is the default: absent)
+        d["efforts"] = {k: {chain_id(k, m): v for m, v in (eff.get(k) or {}).items() if v != "medium"} for k in CHAINS}
+    if hrs is not None:
+        # hours live beside the chains, like efforts; a window equal at both ends is meaningless, so it is dropped
+        if not isinstance(hrs, dict) or set(hrs) - set(CHAINS): return {"err": "hours: unknown chain"}
+        for k, hk in hrs.items():
+            if not isinstance(hk, dict) or not all(isinstance(m, str) and m in {bare_id(x) for x in d.get(k, [])} and isinstance(v, str) and HOURS.match(v) for m, v in hk.items()):
+                return {"err": f"hours.{k}: model must be in the chain, window HH-HH (00-23)"}
+        d["hours"] = {k: {chain_id(k, m): v for m, v in (hrs.get(k) or {}).items() if v[:2] != v[3:]} for k in CHAINS}
+    if "hours" in d:
+        d["hours"] = {k: v for k, v in hours_of(d).items() if v}
+        if not d["hours"]: del d["hours"]
     if "efforts" in d:
         d["efforts"] = {k: v for k, v in efforts_of(d).items() if v}
         if not d["efforts"]: del d["efforts"]
@@ -901,8 +2096,10 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
             n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
-            try: d = json.loads((T / (n + ".json")).read_text()); lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
-            except Exception: d, lg = {}, "no such test"
+            try: d = json.loads((T / (n + ".json")).read_text())
+            except Exception: d = {}
+            try: lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
+            except Exception: lg = "(no output yet)" if d.get("state") == "running" else "no such test"   # test.sh makes the log after the json
             import html as _h
             ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
             body = f'<!doctype html><meta charset=utf-8>{ref}<body style="background:#0d1117;color:#c9d1d9;font:12px ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
@@ -915,7 +2112,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
-        else: body, ct = PAGE.replace("__REPO__", REPO).encode(), "text/html; charset=utf-8"
+        elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
+        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
@@ -937,5 +2135,5 @@ def watch_self():
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

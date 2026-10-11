@@ -1,11 +1,16 @@
-  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
+  :root { --bg:#0f1115; --panel:#161a21; --line:#2a303b; --fg:#d8dde6; --mute:#8a93a3; --acc:#5aa9ff; --ok:#3ecf8e; --warn:#f5b041; --wait:#e8d44d; --err:#ff6b6b; --run:#2dd4bf; --none:#b79cf6; --drop:#c678dd; --mono:ui-monospace, SFMono-Regular, Menlo, monospace; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:grid; grid-template-columns:1fr; grid-template-rows:37px 1fr; height:100vh; }
   body.noside #left { display:none; }
-  #left { grid-row:2; overflow:auto; border-right:1px solid var(--line); background:var(--panel); padding:4px 12px 12px; min-height:0; }
+  /* The side panel is a drawer docked to the right edge, under the top bar: it takes its own column of the screen, so the diagram stays whole.
+     --side-w is its live width (the sheet's height under 900px), and --side-min/--side-max the travel the grip clamps to. The page measures both. */
+  body { --side-w:420px; --side-min:320px; --side-max:calc(100vw - 520px); }
+  #left { position:fixed; top:37px; right:0; bottom:0; left:auto; width:var(--side-w,420px); max-height:none; transform:none; border-radius:0; border:0; border-left:1px solid var(--line); box-shadow:-8px 0 32px #0008; z-index:7; padding:8px 16px 16px; overflow:auto; background:var(--panel); }
+  /* The grip is an 8px strip on either side of the drawer's edge: #side-grip inside, #left::before outside over the map. Both start a drag. */
+  #side-grip { position:fixed; top:37px; bottom:0; right:calc(var(--side-w,420px) - 8px); width:8px; cursor:col-resize; }
+  #side-grip:focus-visible { outline:1px solid var(--acc); outline-offset:-1px; }
+  #left::before { content:""; position:fixed; top:37px; bottom:0; right:var(--side-w,420px); width:8px; z-index:7; cursor:col-resize; }
   #graph { grid-column:1; grid-row:2; }
-  #left { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:min(720px,92vw); max-height:82vh; bottom:auto; z-index:9; border:1px solid var(--line); border-radius:10px; box-shadow:0 12px 48px #000b; padding:8px 20px 20px; }
-  body:not(.noside)::after { content:""; position:fixed; inset:37px 0 0 0; background:#0008; z-index:8; }
   .tools { display:flex; flex-wrap:wrap; gap:6px; }
   button, label.btn, textarea, select, input[type=text], input:not([type]) { background:#0c0e12; color:var(--fg); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:12px var(--mono); }
   button, label.btn { cursor:pointer; }
@@ -67,8 +72,10 @@
   svg#map { position:absolute; inset:0; width:100%; height:100%; background:#0c0e12; cursor:grab; touch-action:none; user-select:none; }
   svg#map.panning { cursor:grabbing; }
   #view { position:absolute; top:12px; right:12px; display:flex; gap:6px; align-items:center; }
+  body:not(.noside) #view { right:calc(var(--side-w) + 12px); }   /* the zoom buttons sit just left of the open drawer */
   #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
   #replay { position:absolute; left:50%; bottom:34px; transform:translateX(-50%); display:none; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; box-shadow:0 6px 20px #0008; }
+  body:not(.noside) #replay { left:calc((100vw - var(--side-w,0px)) / 2); }   /* the bar centers in what the drawer leaves, so it never sits under it */
   #replay input[type=range] { width:320px; accent-color:var(--acc); }
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { min-width:190px; color:var(--mute); font:12px var(--mono); text-align:center; }
@@ -115,8 +122,15 @@
   .group-card.sel > rect { stroke:var(--acc); stroke-width:2.5; }
   .chip-sw { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:0 8px; font-size:11px; font-weight:600; }
   .chip-sw.v-ok { border-color:var(--ok); color:var(--ok); } .chip-sw.v-bad { border-color:var(--err); color:var(--err); }
-  .chip-sw.v-wait { border-color:var(--warn); color:var(--warn); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
-  .chip-sw.v-live { border-color:var(--run); color:var(--run); }
+  .chip-sw.v-wait { border-color:var(--wait); color:var(--wait); } .chip-sw.v-none { border-color:var(--none); color:var(--none); }
+  .chip-sw.v-live { border-color:var(--run); color:var(--run); } .chip-sw.v-human { border-color:var(--warn); color:var(--warn); }
+  /* The run-state pill the legend draws: one rule per state of the hub's table (contrib/squad-goal/scripts/hub.py RUN_STATES), colour and border alike, so a
+     legend row cannot drift from the sidebar pill. A test holds these rules to the hub's table. */
+  .b { display:inline-block; padding:0 6px; border-radius:9px; font-size:11px; border:1px solid; }
+  .b.completed { color:var(--ok); } .b.verified { color:var(--ok); font-style:italic; } .b.unverified { color:var(--ok); border-style:dashed; }
+  .b.failed { color:var(--err); } .b.needs-human { color:var(--warn); } .b.handled { color:var(--ok); }
+  .b.running { color:var(--run); } .b.starting { color:var(--run); border-style:dotted; } .b.stalled { color:var(--wait); border-style:dashed; }
+  .b.no-verdict-yet { color:var(--none); }
   .card:focus { outline:none; } .card:focus-visible > rect { stroke:#fff; stroke-width:2.5; }   /* the keyboard ring: a white outline, like a hovered square */
   .group-card .sq { cursor:pointer; }
   .group-card .sq rect { fill:#1a1f27; stroke:#556; stroke-width:1.2; }
@@ -150,7 +164,16 @@
   .card.drop rect { stroke:var(--drop); stroke-width:2; fill:#2a1f33; }
   #rubber { stroke:var(--acc); stroke-width:1.6; stroke-dasharray:5 4; pointer-events:none; }
   #edges marker path { fill:#4a5568; }
-  #legend { display:flex; flex-wrap:wrap; gap:4px 12px; max-width:62%; justify-content:flex-end; color:var(--mute); font-size:11px; pointer-events:none; flex:1 1 auto; min-width:0; }
+  /* The legend is a strip on the map's right edge, under the zoom controls: always expanded; the graph keeps the remaining width. */
+  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:220px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; }
+  #legend-list { display:flex; flex-direction:column; padding:4px 6px; }
+  body:not(.noside) #legend { visibility:hidden; }   /* the open drawer owns the right edge; the keyboard [ or the ? overlay brings the strip back */
+  #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
+  #legend .lg svg { flex:0 0 24px; }
+  #legend .lt, #legend .lh { overflow:hidden; }
+  #legend .lh { margin:4px 0 0; padding-top:3px; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
+  /* A run-state row carries a full pill, too wide to sit beside its words: the pill takes the row and the description goes under it. */
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
   #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }
@@ -171,9 +194,10 @@
   #vchip[hidden] { display:none; }
   #vchip.v-ok { border-color:var(--ok); color:var(--ok); }
   #vchip.v-bad { border-color:var(--err); color:var(--err); }
-  #vchip.v-wait { border-color:var(--warn); color:var(--warn); }
+  #vchip.v-wait { border-color:var(--wait); color:var(--wait); }
   #vchip.v-none { border-color:var(--none); color:var(--none); }
   #vchip.v-live { border-color:var(--run); color:var(--run); }
+  #vchip.v-human { border-color:var(--warn); color:var(--warn); }
   #modesw { display:flex; }
   #modesw button { border-radius:0; }
   #modesw button:first-child { border-radius:4px 0 0 4px; }
@@ -189,13 +213,12 @@
   #fmenu .drop button:hover, #fmenu .drop label.btn:hover { background:#182a40; }
   #fmenu .drop .sep { color:var(--mute); font-size:11px; padding:4px 8px 0; }
   #fmenu .drop .note { padding:2px 8px; }
-  #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 200px); }
+  #addbar { position:absolute; bottom:34px; left:12px; z-index:3; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px; max-width:calc(100% - 244px); }
   #status { position:fixed; left:12px; bottom:40px; z-index:5; max-width:min(560px, 60vw); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font-size:12px; color:var(--mute); cursor:pointer; }
   #status:empty { display:none; }
   @media (max-width: 900px) { #status { bottom:112px; } }   /* a narrow window: the toast sits above the replay bar, not over its buttons */
   #side details.ref { margin-top:14px; }
-  /* A narrow window gives the map its height back: the legend lives in the help (?) too, so below 900 px it is not drawn on the map. */
-  @media (max-width:900px) { #legend { display:none; } }
+  /* A narrow window still shows the expanded strip on the right; the help (?) holds the same list. */
 
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
 #side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
@@ -212,3 +235,36 @@
 .script-diagram .step-tags { fill: #555; font-size: 11px; }
 .script-diagram .flow { stroke: #777; stroke-width: 1.5; fill: none; }
 .script-diagram marker path { fill: #777; }
+
+/* A window under 1024px starts with a narrower drawer; --side-max stays 520px short of the viewport, so 504px of travel at 1024. */
+@media (max-width: 1024px) { body { --side-w:360px; } }
+/* Under 900px the drawer becomes a bottom sheet: full width, 52vh tall, and the grip turns sideways between 30vh and 75vh.
+   The map reserves the sheet's height, and the replay bar rises clear of it rather than hiding under it. */
+@media (max-width: 900px) {
+  body { --side-w:52vh; --side-min:30vh; --side-max:75vh; }
+  #left { top:auto; left:0; right:0; width:auto; height:var(--side-w,52vh); border-top:1px solid var(--line); border-left:0; }
+  #side-grip { top:auto; bottom:calc(var(--side-w,52vh) - 8px); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
+  body:not(.noside) #mapbox { padding-bottom:52vh; }
+  body:not(.noside) #view { right:12px; }
+  body:not(.noside) #replay { left:50%; bottom:calc(var(--side-w,52vh) + 12px); }
+}
+
+/* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the
+   hub's pip opens over its maximized board. The card is the panel's own data (core.cardBody), so the two cannot drift. */
+body.card-mode { display: block; margin: 0; }
+body.card-mode #topbar, body.card-mode #left, body.card-mode #graph, body.card-mode #footer,
+body.card-mode #totals, body.card-mode #progress, body.card-mode #replay, body.card-mode #status, body.card-mode #help { display: none; }
+body.card-mode #card { display: block; }
+#card { display: none; height: 100vh; overflow: auto; overscroll-behavior: contain; padding: 8px 10px; background: #0f1115; color: #d8dde6; font: 12px ui-monospace, Menlo, monospace; }
+#card h3 { margin: 8px 0 4px; font-size: 12px; color: #d8dde6; }
+#card .cgroup { border: 1px solid #2a303b; border-radius: 6px; margin: 0 0 6px; padding: 4px 8px 6px; background: #161a21; }
+#card .cgroup.s-running, #card .cgroup.s-started { border-color: #2dd4bf; }
+#card .cgroup.s-failed, #card .cgroup.s-rejected { border-color: #ff6b6b; }
+#card .crow { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#card .crow b { font-weight: 600; }
+#card .crow.s-passed { color: #3ecf8e; }
+#card .crow.s-failed, #card .crow.s-rejected { color: #ff6b6b; }
+#card .crow.s-running, #card .crow.s-started { color: #2dd4bf; }
+#card .crow.s-queued { color: #8a93a3; }
+#card .cnote { color: #8a93a3; line-height: 1.4; }

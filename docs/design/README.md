@@ -51,6 +51,21 @@ Each has a working default and an open `needs-ratification` ticket. The stopped-
 
 An agent `outcome` event carries `model` and `effort` (what the engine asked for). It carries `tokens_in` and `tokens_out` only when the SDK result reports usage. `tokens_in` counts every prompt token: plain, cache write, and cache read. It also carries `cache_read` and `cache_write`, the cache share of `tokens_in`; they are 0 when the provider reports 0 and absent when it reports nothing, so an older reader and an older record stay valid. A missing token field means unknown, never zero. Tokens per second is derived by the reader (`tokens_out` over `elapsed`); the record does not store it. An older record without these fields stays valid. Guards: `tests/test_engine_skeleton.py::test_an_agent_outcome_records_the_model_the_effort_and_the_tokens_when_known`, `tests/test_engine_skeleton.py::test_an_outcome_with_unknown_usage_carries_no_token_field_and_still_reads`, `tests/test_sdk_adapter.py::test_the_result_usage_becomes_tokens_in_and_tokens_out`, `tests/test_sdk_adapter.py::test_a_result_with_no_usage_leaves_tokens_unknown_never_zero`, `tests/test_sdk_adapter.py::test_the_cache_split_is_recorded_next_to_the_tokens_and_a_reported_zero_stays_zero`.
 
+## Single-card mode of the run dashboard
+
+`dashboard/agent-squad-run-dashboard.html` takes one query parameter: `?card=<name>` paints a single card of the
+panel and nothing else (page state `cards.js`, data `core.cardBody`). It exists for the picture-in-picture window the
+hub floats over its maximized board (`contrib/squad-goal/scripts/hub.py`), which frames the run's own dashboard at
+that URL: the two live on different ports, so the window reads the same card the panel draws instead of a second
+rendering that drifts.
+
+- `?card=groups` — the run's children grouped by dispatch and state, unfinished first. It is the only card the panel
+  names today; a name it does not have is answered with a message inside the card, never an empty frame.
+- The page follows the run exactly as it does without the parameter (the same push stream, or the reread timer), so
+  the card is live rather than a snapshot; the mode only cuts what is painted.
+- A page that answered the mode posts `{squadCard: "<name>"}` to the window that framed it, which is how the window
+  tells a dashboard that knows the parameter from an older one that does not.
+
 ## Run the engine
 
 ```bash

@@ -1,6 +1,6 @@
 """A fake of the app's Pause overlay and Settings sheet for the pilot's P4 and SET batches (#1194): the behavior the
 manual script expects, so the converted steps run end to end with no real window. A deviation is a constructor switch."""
-from squad.gui_test_checks import UNKNOWN, _same, parse
+from squad.gui_test_checks import _same, parse
 from tests.gui_test_pilot_fake import PilotFake
 
 ROWS = ["resume", "save-states", "pack", "enhancements", "cheats", "settings", "quit-game"]

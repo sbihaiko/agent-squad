@@ -4,6 +4,19 @@ function swatches() {
   const chips = core.LEGEND_CHIPS.map((r) => `<span class="lg"><span class="chip-sw ${r.cls}">${esc(r.label)}</span></span>`);
   return cards.concat(chips).join("");
 }
+// The side strip's list: two headed groups (node outcomes, interaction). Always expanded.
+// The run-state vocabulary is not a legend row: the owner removed that group (2026-10-11). The states live in the core's one table
+// (RUN_STATES) and the surfaces that print a state draw their pill from it; the help overlay still lists the chips.
+const LEGEND_GROUPS = [["node", "Node outcomes"], ["interaction", "Interaction"]];
+function legendList() {
+  const sw = (r) => `<svg width="24" height="14" viewBox="0 0 24 14"><g class="card ${r.cls}"><rect x="1" y="1" width="22" height="12" rx="3"/>${r.glyph ? `<text class="gl" x="12" y="11" text-anchor="middle" style="font-size:10px">${r.glyph}</text>` : ""}</g></svg>`;
+  const rows = {
+    node: core.LEGEND.filter((r) => r.group === "node").map((r) => [sw(r), r.label, ""]),
+    interaction: core.LEGEND.filter((r) => r.group === "interaction").map((r) => [sw(r), r.label, ""]),
+  };
+  return LEGEND_GROUPS.map(([g, title]) => `<div class="lh">${title}</div>` + rows[g].map(([s, l, cls]) => `<span class="lg${cls}">${s}<span class="lt">${esc(l)}</span></span>`).join("")).join("");
+}
+$("legend-list").innerHTML = legendList();
 function buttonRows() {
   const els = [...document.querySelectorAll("#left .tools button[title], #left .tools label.btn, #view button[title], #replay button[title]")].filter((b) => b.offsetParent !== null);
   return els.map((b) => `<tr><td>${esc(b.firstChild && b.firstChild.nodeType === 3 ? b.firstChild.textContent.trim() : b.textContent.trim())}</td><td>${esc(b.getAttribute("title") || "")}</td></tr>`).join("");
@@ -16,12 +29,16 @@ function openHelp() {
 }
 function closeHelp() { $("help").hidden = true; $("b-help").setAttribute("aria-expanded", "false"); }
 function toggleHelp() { if ($("help").hidden) openHelp(); else closeHelp(); }
-$("legend").innerHTML = swatches();
-// #footer (hint + legend) grows upward as the legend wraps; keep the floating #replay bar clear of it, at any width.
+// #footer (the hint) sets the floor; keep the floating #replay bar clear of it, and the side legend above both, at any width.
 (function trackFooterHeight() {
   const footer = $("footer"), bar = $("replay");
-  const sync = () => { bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px"; };
+  const sync = () => {
+    bar.style.bottom = (footer.offsetHeight + REPLAY_GAP) + "px";
+    const barH = bar.offsetHeight ? bar.offsetHeight + REPLAY_GAP : 0;
+    $("legend").style.setProperty("--legend-bottom", (footer.offsetHeight + REPLAY_GAP + barH + REPLAY_GAP) + "px");
+  };
   new ResizeObserver(sync).observe(footer);
+  new ResizeObserver(sync).observe(bar);
   sync();
 })();
 $("b-help").addEventListener("click", toggleHelp);

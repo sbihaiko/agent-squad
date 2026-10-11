@@ -1,5 +1,8 @@
-"""The emulator's gui-test/1 adapter (ADR-0272), pad only: it places the script's fixtures, starts the
-application with the test hook, injects `pad.*` over the hook's local socket and captures the window.
+"""The emulator's gui-test/1 adapter (ADR-0272): it places the script's fixtures, starts the application with the
+test hook, injects the input actions over the hook's local socket and captures the window.
+
+Since #1779 the hook answers the release, the chord, the keyboard and the `nav.goal` read beside the single press,
+so the adapter drives them too (#1780): a pad-only batch is no longer manual for the adapter not asking.
 
 It never skips: a fixture it cannot place, or an application that does not come up, is a failure with the reason.
 """
@@ -15,6 +18,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from squad.gui_test_checks import parse
 from squad.gui_test_run import run
 
 TICK_SECONDS = 0.05
@@ -25,6 +29,41 @@ SETTLE_SECONDS = 5
 PROFILES = {"fresh": {"Preferences": {"UiMode": "Player", "Workspace": "Play", "SingleInstance": False}}}
 KNOWN_PROFILES = tuple(PROFILES)
 NES_HEADER = 16
+# #1780: the actions the adapter drives, and the hook answers them all since #1779 (hook version 2).
+# `pad.press` was the whole of it while the hook drove a single press; `pad.release` and `pad.chord` are the
+# two-button gestures a press cannot express, `key.press` is the application's own keyboard at the layer it
+# reads, and `nav.goal` is not an input at all - it is the hook's read of the state a move is chosen from and
+# the moves it will accept (ADR-0271 items 1-2), which the runner's Navigator chooses among (item 6 A).
+ACTIONS = ["pad.press", "pad.release", "pad.chord", "key.press", "nav.goal"]
+# The advertised actions that inject nothing: asking one is a read, so it is never a press that came too early. They
+# are advertised under `reads` beside them, which is how the runner tells an adapter that answers the hook's read from
+# one that performs the goal itself (`squad.gui_test_run.goal_route`, #1780).
+READS = ("nav.goal",)
+
+
+# #1282: the checks that read what a player sees (the hook's own state, ADR-0271) and the vocabularies
+# they name - the action bar's closed id list, the Play surfaces, and the ports the lamps label.
+# #1282: the checks that read what a player sees (the hook's own state, ADR-0271). The advertised four are
+# the ones a gui-test/1 script may name - `ui.*` is the snapshot namespace. Issue #1282 also names
+# `emu.paused`, `pad.lamps` and `pad.haptics`; ADR-0272 item 7 reserves `emu.*` (not part of v1) and makes
+# `pad.*` the ACTION namespace, so the validator refuses them in a script: the adapter answers them (a
+# direct `session.check`, used by the emulator-side adapter and by the MesenAI hook), and they are NOT
+# advertised, because a name a script cannot write is not a capability of the format. The mismatch is
+# flagged for the owner rather than resolved by amending the accepted ADR.
+CHECKS = ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs", "ui.ring", "ui.footer", "ui.surface", "ui.items"]
+PLAYER_VISIBLE_CHECKS = {"ui.ring", "ui.footer", "ui.surface", "emu.paused", "pad.lamps", "ui.items", "pad.haptics"}
+FOOTER_IDS = ("move", "confirm", "favorite", "search", "settings", "console-filter", "back")
+SURFACES = ("play.quit-game", "play.select-rom", "play.shader", "play.tool", "play.bios",
+            "play.controller-setup", "play.settings.system", "play.settings", "play.controller-sheet",
+            "play.pack-dep", "play.pack-picker", "play.enhancements", "play.pack-detail", "play.cheats",
+            "play.replays", "play.save-states", "play.pause", "play.library", "play.library-browse",
+            "play.library-folders")
+NONE_ID = "none"
+
+
+def _port(value):
+    """One of the four ports the lamps label ("P1"), 1-based; anything else is not a port."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 4 else None
 
 
 class AdapterError(Exception):
@@ -59,9 +98,10 @@ class EmulatorAdapter:
         self.extra_env, self.startup_timeout = dict(env or {}), startup_timeout
         self.session_dir = self.proc = self.sock = self.reader = None
         self.command, self.env, self.token, self._id, self._captures = [], {}, "", 0, 0
+        self._nav_goal, self._nav = None, None
 
     def capabilities(self):
-        return {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"],
+        return {"actions": list(ACTIONS), "reads": list(READS), "checks": list(CHECKS),
                 "input_families": ["ticks"], "variants": {"window.mode": ["windowed"]}}
 
     # ---- fixtures, placed before the process starts ----
@@ -194,23 +234,57 @@ class EmulatorAdapter:
 
     def inject(self, name, args):
         """A press right after launch can answer `unknown button Up on pad 1` until the app has built its key names
-        (the same press a moment later is taken), so that one refusal is retried for up to 10 s."""
+        (the same press a moment later is taken), so that one refusal is retried for up to 10 s.
+
+        `nav.goal` is a read (the hook injects nothing for it), so it is asked once and its answer is kept: `moves`
+        serves the moves it handed, which are the application's own and do not depend on the goal."""
+        self._nav = None
+        if name in READS:
+            self._nav_goal = (args or {}).get("goal") or self._nav_goal
         deadline = time.monotonic() + 10
         while True:
             try:
-                return self._ask({"op": "inject", "action": name, "args": args})
+                reply = self._ask({"op": "inject", "action": name, "args": args})
+                if name in READS:
+                    self._nav = reply
+                return reply
             except AdapterError as e:
-                if "unknown button" not in str(e) or time.monotonic() > deadline:
+                if name in READS or "unknown button" not in str(e) or time.monotonic() > deadline:
                     raise
                 time.sleep(0.25)
 
     def _state(self):
         return self._ask({"op": "state"})
 
+    def ui_state(self):
+        """The state a goal's move is chosen from: the hook's own snapshot, which is what ADR-0271 item 1 asks for -
+        the UI state, never a screenshot."""
+        return self._state()
+
+    def moves(self, family):
+        """The moves the hook handed for the goal it was asked (ADR-0271 item 2), in the family the step names.
+
+        Only the moves the application itself answered are here: the hook hands the pad's own navigation presses in
+        the duration family its clock allows, so a `key` family has none until it hands keyboard moves too. A goal
+        nobody asked yet has no moves, which is why the runner asks before the Navigator chooses."""
+        want = "key.press" if family == "key" else "pad.press"
+        return [m for m in (self._nav or {}).get("moves", []) if m.get("name") == want]
+
+    def advance(self):
+        """One application tick. A Navigator settles by spending ticks, and here they are the application's own clock
+        (the hook's `tick`), the same unit every wait counts in."""
+        start = self._state()["tick"]
+        deadline = time.monotonic() + TICK_SECONDS * 8 + 1
+        while self._state()["tick"] == start and time.monotonic() < deadline:
+            time.sleep(0.01)
+
     def _holds(self, state, cond):
+        """`ui.screen` and `ui.focused` are read off the snapshot the poll already took; every other name the checks
+        answer is read through `check`, so a wait and a step's own check read the same thing (#1780)."""
         key, _, want = cond.partition(" == ")
-        got = {"ui.screen": state.get("screen"), "ui.focused": state.get("focus")}.get(key)
-        return got == want
+        if key in ("ui.screen", "ui.focused"):
+            return {"ui.screen": state.get("screen"), "ui.focused": state.get("focus")}[key] == want
+        return self.check(*parse(cond)) is True
 
     def wait(self, condition, timeout):
         """`timeout` counts the application's ticks. Without a condition the wait spends them all: a step that
@@ -228,7 +302,12 @@ class EmulatorAdapter:
             time.sleep(0.02)
 
     def check(self, name, args):
-        state, want = self._state(), args["is"]
+        state = self._state()
+        # #1282: what a player judges by eye, read from the hook's own UI state - never a pixel. The
+        # ids are the application's own; one the application does not have is "unknown id", never false.
+        if name in PLAYER_VISIBLE_CHECKS:
+            return self._check_player_visible(name, state, args)
+        want = args["is"]
         controls = state.get("controls", [])
         known = {c["id"] for c in controls} | {state.get("screen"), state.get("focus")} | set(state.get("dialogs", []))
         if name == "ui.dialogs" and want == "none":
@@ -243,6 +322,60 @@ class EmulatorAdapter:
             # The first-run and populated Homes both carry play.home.open-rom; one is on screen at a time.
             return any(c["visible"] for c in controls if c["id"] == want)
         return want in state.get("dialogs", [])
+
+    def _check_player_visible(self, name, state, args):
+        """#1282: the ring, the action bar, the open surface, paused, the port lamps, the focused
+        list's entries and the haptic ticks the menu asked for since the last step."""
+        controls = {c["id"] for c in state.get("controls", [])} | {state.get("screen"), state.get("focus")} | set(state.get("dialogs", []))
+        if name == "ui.ring":
+            ring = state.get("ring") or {}
+            if args["is"] != NONE_ID and args["is"] not in controls:
+                return "unknown id"
+            return (ring.get("target") if ring.get("visible") else NONE_ID) == args["is"]
+        if name == "ui.surface":
+            if args["is"] != NONE_ID and args["is"] not in SURFACES:
+                return "unknown id"
+            return state.get("surface", NONE_ID) == args["is"]
+        if name == "ui.footer":
+            bar = [str(action) for action in state.get("footer", [])]
+            if "contains" in args:
+                if args["contains"] not in FOOTER_IDS:
+                    return "unknown id"
+                return args["contains"] in bar
+            if any(word and word not in FOOTER_IDS for word in str(args["is"]).split(",")):
+                return "unknown id"
+            return ",".join(bar) == args["is"]
+        if name == "ui.items":
+            items = [str(item) for item in state.get("items", [])]
+            # #1282: an entry the application does not draw is "unknown id", never a list that happens to
+            # differ - a renamed entry has to break the run loudly, the way a renamed control does. `is`
+            # names the whole list (a bare id names the one entry, the way the shared contract suite asks
+            # every advertised check); `contains` names the one entry that has to be drawn.
+            if "is" in args:
+                named = args["is"] if isinstance(args["is"], (list, tuple)) else [args["is"]]
+                named = [str(entry) for entry in named]
+                return items == named if all(entry in items for entry in named) else "unknown id"
+            if str(args["contains"]) not in items:
+                return "unknown id"
+            return True
+        if name == "emu.paused":
+            return bool(state.get("paused")) == bool(args["is"])
+        if name == "pad.lamps":
+            port = _port(args["port"])
+            if port is None:
+                return "unknown id"
+            lamps = state.get("lamps") or {}
+            if not lamps.get("shown"):
+                got = "hidden"
+            else:
+                got = next((("lit" if lamp["lit"] else "dim") for lamp in lamps.get("ports", [])
+                            if lamp["port"] == port), "hidden")
+            return got == args["is"]
+        port = _port(args["pad"])
+        if port is None:
+            return "unknown id"
+        count = next((entry["count"] for entry in state.get("haptics", []) if entry["pad"] == port), 0)
+        return count >= args["at_least"] if "at_least" in args else count == args["is"]
 
     def _settled(self):
         """The window has drawn its screen: a named control other than the screen's root is on it. The hook names
@@ -305,10 +438,12 @@ def _batch_fixtures(script, batch):
     return wanted
 
 
-def run_launched(script, adapter, record=None, only=None):
+def run_launched(script, adapter, record=None, only=None, goal=None):
     """Run each batch in a fresh process launched with the fixtures it names (ADR-0272); `only` keeps those step ids.
 
-    A fixture that cannot be placed, or a crash, fails the batch's steps with the reason; it never raises.
+    `goal` is the Navigator a `nav.goal` step is reached by (#1780); with none the step is `pending`, which is what
+    ADR-0271 Decision 6 A asks of a run with no chooser. A fixture that cannot be placed, or a crash, fails the
+    batch's steps with the reason; it never raises.
     """
     results, offset = [], 0
 
@@ -323,7 +458,7 @@ def run_launched(script, adapter, record=None, only=None):
         events = []
         try:
             adapter.launch(_batch_fixtures(script, batch))
-            got = run(sub, adapter, record=events.append)
+            got = run(sub, adapter, record=events.append, goal=goal)
         except FixtureError as e:
             got = [{"id": s["id"], "verdict": f"failed (fixture: {e})", "capture": None} for s in batch["setup"] + batch["steps"] + batch["teardown"] if s["mode"] == "automated"]
         except ProcessCrash:
@@ -348,7 +483,10 @@ def run_launched(script, adapter, record=None, only=None):
 def main(argv=None):
     """python -m squad.gui_test_emulator <script.json> --app <cmd> --out <dir> [--library <dir>] [--only <id,id>]
 
-    Runs the script unattended and writes replay events (events.jsonl) and verdicts (results.json) to --out."""
+    Runs the script unattended and writes replay events (events.jsonl) and verdicts (results.json) to --out.
+
+    With `--evidence-repo`, every failed and needs-review capture goes through the privacy gate and onto that repo's
+    evidence branch, and the step records the URL (or `withheld`); a green run uploads nothing (#1244)."""
     import argparse
     ap = argparse.ArgumentParser(prog="squad.gui_test_emulator")
     ap.add_argument("script")
@@ -357,6 +495,8 @@ def main(argv=None):
     ap.add_argument("--library")
     ap.add_argument("--portable", action="store_true", help="run from a clone of the app folder with its own settings.json")
     ap.add_argument("--only", help="comma-separated step ids to run")
+    ap.add_argument("--evidence-repo", help="owner/name whose evidence branch holds this run's failed screenshots")
+    ap.add_argument("--approvals", help="the privacy gate's approvals file (default: <out>/approvals.json)")
     a = ap.parse_args(argv)
     from squad.gui_test import validate
     script = json.loads(Path(a.script).read_text(encoding="utf-8"))
@@ -373,6 +513,10 @@ def main(argv=None):
     validate(script, adapter.capabilities())
     events = []
     results = run_launched(script, adapter, record=events.append, only=only)
+    if a.evidence_repo:
+        from squad.gui_test_report import evidence_lock, evidence_store, upload_evidence
+        results = upload_evidence(results, evidence_store(a.evidence_repo), a.approvals or out / "approvals.json",
+                                  lock_path=evidence_lock(a.evidence_repo))
     (out / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
     (out / "results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     for r in results:

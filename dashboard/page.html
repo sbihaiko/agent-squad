@@ -34,6 +34,7 @@
   <button id="b-help" title="Show the controls and the color legend (key ?)" aria-expanded="false" aria-label="Help">?</button>
 </header>
 <div id="left">
+  <div id="side-grip" tabindex="0" role="separator" aria-orientation="vertical" aria-valuemin="320" title="Drag to widen or narrow the side panel (arrow keys, Home, End, double-click to reset)"></div>
   <div id="stop" hidden></div>
   <div id="offer" hidden></div>
   <div id="review" hidden></div>
@@ -54,12 +55,14 @@
     <button id="b-redo" title="Redo (Ctrl or Cmd + Shift + Z)">Redo</button>
   </div>
   <div id="view"><button id="b-out" title="Zoom out">&minus;</button><span id="zoom">100%</span><button id="b-in" title="Zoom in">+</button><button id="b-fit" title="Fit the graph to the screen">Fit</button></div>
+  <aside id="legend" aria-label="Legend"><div id="legend-list"></div></aside>
   <datalist id="dl-models"></datalist><datalist id="dl-efforts"></datalist><datalist id="dl-skills"></datalist>
   <div id="replay"><button id="r-start" title="First event">|&lt;</button><button id="r-back" title="One event back (Left arrow)">&lt;</button><input id="r-range" type="range" min="1" max="1" step="1" value="1" title="Replay cursor: a position in the run record"><button id="r-fwd" title="One event forward (Right arrow)">&gt;</button><button id="r-end" title="Last event: a live run keeps following from here">&gt;|</button><span id="r-pos"></span></div>
-  <div id="footer"><div id="hint">Press ? or Help for the controls</div><div id="legend"></div></div>
+  <div id="footer"><div id="hint">Press ? or Help for the controls</div></div>
   <div id="help" hidden><div class="box"><h2>Controls</h2><table id="help-rows"></table><h2>Buttons</h2><table id="help-btns"></table><h2>Colors</h2><div id="help-legend"></div><div class="row"><button id="b-help-close" title="Close the help (Esc)">Close</button></div></div></div>
   <div id="menu"></div>
 </div>
+<div id="card" aria-label="One card of the run panel"></div>
 <div id="totals" role="status" aria-label="Run totals"></div>
 </div>
 <div id="status" role="status" title="Click to dismiss"></div>

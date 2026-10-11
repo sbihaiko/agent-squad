@@ -6,6 +6,7 @@ and outcome fields; it gets back what stopped the call.
 """
 import math
 import os
+import re
 from dataclasses import dataclass, field
 
 import anyio
@@ -17,6 +18,49 @@ from squad.adapter import AdapterError
 CHILD_CLAIM = {"out_of_budget": "child_said_out_of_budget"}
 PROVISIONAL = "provisional:"     # the autonomy fragment tells an agent to prefix each decision it made alone
 CAP_REASON ={"stall_cap": "node_stall_cap", "spend_cap": "node_spend_cap", "output_cap": "node_output_cap"}
+
+# A provider that refuses to serve is an outage, not a defect of the work: the chain moves on to its next entry. The
+# status is an HTTP one (402 exhausted, 429 rate-limited, 5xx down) and the error text has to name it as the API's own
+# answer, so a number that happens to sit in a message about something else does not read as a provider failure.
+PROVIDER_STATUS = re.compile(r"\b[45]\d\d\b")
+PROVIDER_MARKERS = ("API Error", "upstream", '"status"')
+CHAIN_LINE = 200     # characters of one entry's error kept in the single message an exhausted chain reports
+
+
+def provider_error(err):
+    """True when an adapter error names an upstream HTTP status. "socket closed" and a malformed result are not."""
+    text = str(err)
+    return bool(PROVIDER_STATUS.search(text)) and any(m in text for m in PROVIDER_MARKERS)
+
+
+def model_chain(models, first):
+    """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`."""
+    return [first] + [m for m in (models or []) if m and m != first]
+
+
+async def run_chain(chain, call):
+    """Call one entry of a model chain at a time while the provider refuses to serve. `call(model, first)` runs one attempt
+    and returns `(outcome, who)`. Return the last outcome, every entry that refused with its error, and the last `who`."""
+    tried, out, who = [], None, None
+    for i, model in enumerate(chain):
+        out, who = await call(model, i == 0)
+        if out.kind != "adapter_error" or not provider_error(out.error):
+            break
+        tried.append((model, str(out.error)))
+    return out, tried, who
+
+
+def exhausted(chain, tried):
+    """True when every entry of the chain refused to serve: the walk never found one that answered."""
+    return bool(tried) and len(tried) == len(chain)
+
+
+def chain_message(tried):
+    """One message naming every entry of a chain that failed and its error. A chain of one keeps its own error, so a node
+    that had no alternative reads exactly as it did before the chain moved."""
+    if len(tried) < 2:
+        return tried[0][1] if tried else ""
+    return "every model in the chain failed: " + "; ".join(f"{m} ({e[:CHAIN_LINE]})" for m, e in tried)
 
 
 def cap_reason(stop_reason, granted, spend_max=None):

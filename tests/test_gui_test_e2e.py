@@ -1,5 +1,6 @@
 """GUI test squad e2e suite (local-only): a 3-step script against a fake adapter,
 the renderer, and the reverse-drift case against MesenAI's committed files."""
+import copy
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ from squad.gui_test import ScriptError, validate
 from squad.gui_test_adapter import FakeAdapter as TickingFake
 from squad.gui_test_render import render
 from squad.gui_test_run import run
+from tests import real_app_guard as guard
 from tests.dashboard_helpers import run_node
 from tests.gui_test_helpers import script, step
 
@@ -259,18 +261,165 @@ def test_the_emulator_adapter_passes_the_shared_contract_suite(tmp_path):
     assert len(made) == len(CONTRACT)
 
 
-def test_the_emulator_adapter_advertises_only_what_the_hook_does(tmp_path):
+# --- #1780: the adapter and the runner drive the verbs the hook answers since #1779 --------------------------
+
+# The verbs ADR-0272's hook answers since #1779 (hook version 2), in the order the adapter advertises them: the
+# pad press it always had, the release and the chord beside it, the keyboard, and the goal read.
+VERBS_1779 = ["pad.press", "pad.release", "pad.chord", "key.press", "nav.goal"]
+
+
+def _verbs_asked(path):
+    """The actions the stub application was asked for, in order: one JSON object per line, appended by the fixture."""
+    return [json.loads(line)["action"] for line in path.read_text().splitlines()]
+
+
+def test_the_emulator_adapter_advertises_the_verbs_the_hook_answers_since_1779(tmp_path):
+    """#1780: the hook answers `pad.release`, `pad.chord` and `key.press`, and reads a goal's state and moves under
+    `nav.goal`, since #1779. An adapter that drives it advertises them, and a verb it does not advertise is the
+    capability the derivation names when it turns the step that writes it into a case a person walks. What it reads
+    is what the hook answers and no more: the checks are the application's own UI state."""
     caps = _emulator(tmp_path).capabilities()
-    assert caps["actions"] == ["pad.press"]
-    assert set(caps["checks"]) == {"ui.screen", "ui.focused", "ui.visible", "ui.dialogs"}
+    assert caps["actions"] == VERBS_1779
+    assert set(caps["checks"]) == {"ui.screen", "ui.focused", "ui.visible", "ui.dialogs",
+                                   "ui.ring", "ui.footer", "ui.surface", "ui.items"}
     assert caps["input_families"] == ["ticks"]
+
+
+def test_the_adapter_drives_the_new_verbs_over_the_hook(tmp_path):
+    """#1780: each verb reaches the hook as its own action, and the keyboard's own press is the one that moves the
+    application - the chord and the release are answered without one. A refusal here is the adapter not asking."""
+    verbs = tmp_path / "verbs.jsonl"
+    d = script(
+        step("b1.open", action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 60},
+             check={"name": "ui.screen", "args": {"is": "play.library"}}),
+        step("b1.enter", action={"name": "key.press", "args": {"key": "Enter", "ticks": 2}},
+             wait={"check": "ui.screen == play.home", "timeout_ticks": 60},
+             check={"name": "ui.screen", "args": {"is": "play.home"}}),
+        step("b1.chord", action={"name": "pad.chord", "args": {"buttons": ["Select", "Start"], "ticks": 4}},
+             wait={"check": "ui.surface == none", "timeout_ticks": 8},
+             check={"name": "ui.surface", "args": {"is": "none"}}),
+        step("b1.release", action={"name": "pad.release", "args": {"button": "A", "ticks": 1}},
+             wait={"check": "ui.surface == none", "timeout_ticks": 8},
+             check={"name": "ui.surface", "args": {"is": "none"}}),
+    )
+    d["requires"] = {"actions": VERBS_1779, "checks": ["ui.screen", "ui.surface"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(verbs)})
+    validate(d, adapter.capabilities())
+    results = run_launched(d, adapter)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.open", "passed"), ("b1.enter", "passed"),
+                                                          ("b1.chord", "passed"), ("b1.release", "passed")]
+    assert _verbs_asked(verbs) == ["pad.press", "key.press", "pad.chord", "pad.release"]
+
+
+def _goal_script():
+    """A `nav.goal` setup step and the case it establishes: the pilot's `after-game.reach-home` shape (#1780)."""
+    d = script(step("b1.reach-library", role="setup",
+                    precondition="by hand: the screen is play.home",
+                    action={"name": "nav.goal", "args": {"goal": "ui.screen == play.library"}},
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 60},
+                    check={"name": "ui.screen", "args": {"is": "play.library"}}),
+               step("b1.library-open", precondition="ui.screen == play.library",
+                    wait={"check": "ui.screen == play.library", "timeout_ticks": 8},
+                    check={"name": "ui.screen", "args": {"is": "play.library"}}))
+    d["batches"][0]["setup"] = [d["batches"][0]["steps"].pop(0)]
+    d["requires"] = {"actions": ["pad.press", "nav.goal"], "checks": ["ui.screen"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    return d
+
+
+def test_a_goal_step_asks_the_hook_and_waits_for_a_chooser(tmp_path):
+    """#1780: `nav.goal` is the hook's read of the state a move is chosen from and the moves it accepts (ADR-0271
+    items 1-2), never a press. An adapter that advertises it is asked; with no chooser (CI, ADR-0271 Decision 6 A)
+    the step is `pending`, and asking is what keeps it from being a red one: injected as a step of its own the read
+    moves nothing, so the wait behind it would time out."""
+    verbs = tmp_path / "verbs.jsonl"
+    d = _goal_script()
+    adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(verbs)})
+    validate(d, adapter.capabilities())
+    results = run_launched(d, adapter)
+    assert (results[0]["id"], results[0]["verdict"]) == ("b1.reach-library", "pending")
+    # The goal step asks the read and nothing else; the press after it is the case that follows, which the pending
+    # setup never established.
+    assert _verbs_asked(verbs) == ["nav.goal", "pad.press"]
+
+
+def test_a_goal_step_the_adapter_drives_itself_is_executed_not_pending(tmp_path):
+    """#1780: the read above is one kind of adapter, and a stale fake is the other: an adapter that lists `nav.goal`
+    among the actions it runs drives the goal itself, so the step's own wait and check are what decide it, exactly as
+    they decide every other action that adapter runs. The #1193-#1197 pilot fixtures were derived against fakes of
+    that kind - every `*.reach-*` setup step of theirs is `automated`, and their assertions hold the run's `pending`
+    set to the fixture's `manual` one - so routing an advertised `nav.goal` to the chosen-by-Nobody path turns those
+    setups into rows nobody established and the batches red."""
+    from tests.gui_test_pilot_fake import PilotFake
+
+    d = _goal_script()
+    adapter = PilotFake(tmp_path)
+    validate(d, adapter.capabilities())
+    results = run_launched(d, adapter)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.reach-library", "passed"),
+                                                          ("b1.library-open", "passed")]
+    assert ("nav.goal", {"goal": "ui.screen == play.library"}) in adapter.log
+
+
+def test_a_goal_is_reached_through_the_hooks_own_moves_and_the_navigators_choice(tmp_path):
+    """#1780: the hook hands the moves it accepts in the duration family its own clock allows, and the runner's
+    Navigator chooses among them (ADR-0271 items 2-3). Confirm on the Home opens the library, so a chooser that
+    takes the hook's own navigation move reaches the goal the pilot's setup names."""
+    from squad.gui_test_goal import Navigator
+
+    d = _goal_script()
+    adapter = _emulator(tmp_path, env={"FAKE_HOOK_VERBS": str(tmp_path / "verbs.jsonl")})
+    validate(d, adapter.capabilities())
+    events = []
+    navigator = Navigator(lambda state, options: {"choice": "pad.press Confirm"}, max_decisions=4)
+    results = run_launched(d, adapter, record=events.append, goal=navigator)
+    assert [(r["id"], r["verdict"]) for r in results] == [("b1.reach-library", "passed"),
+                                                          ("b1.library-open", "passed")]
+    [decision] = [e for e in events if e["event"] == "gui_decision"]
+    assert decision["options"] == ["pad.press Up", "pad.press Down", "pad.press Left", "pad.press Right",
+                                   "pad.press Confirm", "pad.press Back"]
+
+
+def test_the_runner_keeps_a_home_step_naming_one_of_those_verbs_automated(tmp_path):
+    """#1780: the same capability list the run command validates against decides manual vs automated, so a step the
+    adapter can now drive stays a case the runner executes instead of a row a person walks."""
+    from squad.gui_test_subset import runnable
+
+    caps = _emulator(tmp_path).capabilities()
+    d = script(step("home.first-focus"),
+               step("home.release", action={"name": "pad.release", "args": {"button": "A", "ticks": 2}},
+                    wait={"timeout_ticks": 8}),
+               step("home.chord", action={"name": "pad.chord", "args": {"buttons": ["Select", "Start"], "ticks": 4}},
+                    wait={"timeout_ticks": 8}),
+               step("home.key", action={"name": "key.press", "args": {"key": "Enter", "ticks": 2}},
+                    wait={"timeout_ticks": 8}),
+               step("home.second-focus"))
+    d["requires"] = {"actions": caps["actions"], "checks": ["ui.screen", "ui.focused"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    out = runnable(d, caps)
+    assert out["manual"] == []
+    assert out["kept"] == len(d["batches"][0]["steps"])
+
+
+def _slice_batch(b, ids):
+    """Keep only the asked-for steps of `b`; its setup/teardown stay, the way `--case` keeps them (#1241).
+
+    A batch's `setup`/`teardown` are steps too, and the runner runs `setup + steps` in the batch's own process
+    (`squad.gui_test_supervise.run_supervised`). The pilot's `home` batch opens with a `home.first-focus` setup
+    step (#1251) that waits for the focus its cases assume, so a slice of its cases still has to pass it; a slice
+    that names it explicitly gets it back as a step of the continuation (`_pilot_for_the_real_app`).
+    """
+    b["steps"] = [s for s in b["steps"] if s["id"] in ids]
+    return b
 
 
 def _pilot_slice(ids):
     """The pilot's own steps by id, in their own batches, with `requires` trimmed to what the adapter advertises."""
     d = json.loads((_mesenai() / "docs" / "validation" / "process" / PILOT).read_text(encoding="utf-8"))
     for b in d["batches"]:
-        b["steps"] = [s for s in b["steps"] if s["id"] in ids]
+        _slice_batch(b, ids)
     d["batches"] = [b for b in d["batches"] if b["steps"]]
     d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
     d["variants"] = {"window.mode": ["windowed"]}
@@ -293,6 +442,76 @@ def test_a_script_runs_unattended_through_the_adapter_with_a_capture_per_step(tm
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG")
     assert adapter.teardown() == []
+
+
+def test_a_run_reads_what_the_player_sees_through_the_adapter(tmp_path):
+    """#1282: the ring, the action bar, the open surface and the focused list's entries, driven through the
+    runner against the stub application - each one answered from the hook's own UI state, never a pixel."""
+    d = script(
+        step("b1.ring", check={"name": "ui.ring", "args": {"is": "play.home.open-rom"}}),
+        step("b1.bar", check={"name": "ui.footer", "args": {"is": "confirm"}}),
+        step("b1.surface", check={"name": "ui.surface", "args": {"is": "none"}}),
+        step("b1.open", action={"name": "pad.press", "args": {"button": "A", "ticks": 2}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 40},
+             check={"name": "ui.surface", "args": {"is": "play.library"}}),
+        # The library is up: its own wait, or the runner's default (the Home's focus) would time out.
+        step("b1.items", wait={"check": "ui.screen == play.library", "timeout_ticks": 40},
+             check={"name": "ui.items", "args": {"contains": "play.library.tile.Contra (USA).nes"}}),
+        step("b1.bar-again", wait={"check": "ui.screen == play.library", "timeout_ticks": 40},
+             check={"name": "ui.footer", "args": {"contains": "back"}}),
+    )
+    d["requires"] = {"actions": ["pad.press"],
+                     "checks": ["ui.ring", "ui.footer", "ui.surface", "ui.items", "ui.screen"]}
+    d["variants"] = {"window.mode": ["windowed"]}
+    adapter = _emulator(tmp_path)
+    validate(d, adapter.capabilities())
+    try:
+        results = run_launched(d, adapter, record=lambda e: None)
+        assert [(r["id"], r["verdict"]) for r in results] == [
+            ("b1.ring", "passed"), ("b1.bar", "passed"), ("b1.surface", "passed"),
+            ("b1.open", "passed"), ("b1.items", "passed"), ("b1.bar-again", "passed")]
+    finally:
+        adapter.teardown()
+
+
+def test_a_player_visible_check_naming_an_unknown_id_is_unknown_id(tmp_path):
+    """A renamed control or surface breaks the run loudly, never answers false (ADR-0272 item 6)."""
+    adapter = _emulator(tmp_path)
+    adapter.launch({})
+    try:
+        assert adapter.check("ui.surface", {"is": "play.renamed"}) == "unknown id"
+        assert adapter.check("ui.footer", {"contains": "quit"}) == "unknown id"
+        assert adapter.check("ui.ring", {"is": "play.home.renamed"}) == "unknown id"
+        # The focused list's entries resolve the same way (#1282): the shared contract suite asks every
+        # advertised check with one id, and a check that answers a bare False there reads as a state
+        # mismatch instead of the renamed entry the run has to break on. An empty `is` stays a comparison.
+        assert adapter.check("ui.items", {"is": "play.home.renamed"}) == "unknown id"
+        assert adapter.check("ui.items", {"contains": "play.home.renamed"}) == "unknown id"
+        assert adapter.check("ui.items", {"is": []}) is True
+    finally:
+        adapter.teardown()
+
+
+def test_the_names_issue_1282_asks_for_outside_the_ui_namespace_are_refused_by_the_format(tmp_path):
+    """`emu.paused`, `pad.lamps` and `pad.haptics` are names issue #1282 asks for that ADR-0272 item 7 puts
+    outside a gui-test/1 check: `emu.*` is reserved (not part of v1) and `pad.*` is the action namespace.
+    The adapter answers all three when asked directly; a script may not name them, and the validator says so
+    rather than the run quietly checking nothing. Resolving this is the owner's - the ADR is not amended."""
+    adapter = _emulator(tmp_path)
+    adapter.launch({})
+    try:
+        assert adapter.check("emu.paused", {"is": False}) is True
+        assert adapter.check("pad.lamps", {"port": 1, "is": "lit"}) is True
+        assert adapter.check("pad.haptics", {"pad": 1, "at_least": 1}) is True
+        assert adapter.check("pad.lamps", {"port": 9, "is": "lit"}) == "unknown id"
+    finally:
+        adapter.teardown()
+    d = script(step("b1.paused", check={"name": "emu.paused", "args": {"is": False}}),
+               step("b1.lamps", check={"name": "pad.lamps", "args": {"port": 1, "is": "lit"}}))
+    with pytest.raises(ScriptError) as refused:
+        validate(d, adapter.capabilities())
+    assert "emu.paused is reserved and not part of gui-test/1" in str(refused.value)
+    assert "unknown check namespace pad" in str(refused.value)
 
 
 def test_a_missing_rom_fails_the_batch_clearly_before_any_launch(tmp_path):
@@ -388,6 +607,10 @@ def test_the_emulator_process_runs_with_the_hook_flags_and_an_isolated_home(tmp_
 # --- #1183: the real emulator. These need a build of MesenAI main (with the hook) and fail, never skip, without one ---
 
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
+# The home batch opens with a `home.first-focus` setup step (#1251): the focus its first case used to assume is now
+# waited for. A slice keeps the setup its batch needs, the way `--case` does (#1241), so the three cases run as four
+# steps - and every one of them still has to pass.
+THREE_PILOT_RUN = ["launch.first-run-home", "launch.open-rom-focused", "home.first-focus", "home.focus-holds-up"]
 
 
 def _env_path(name, what):
@@ -405,18 +628,38 @@ def test_three_pilot_steps_run_on_the_real_emulator_with_no_pad_attached(tmp_pat
     validate(d, adapter.capabilities())
     events = []
     results = run_launched(d, adapter, record=events.append)
-    assert [(r["id"], r["verdict"]) for r in results] == [(i, "passed") for i in THREE_PILOT_STEPS], results
+    assert [(r["id"], r["verdict"]) for r in results] == [(i, "passed") for i in THREE_PILOT_RUN], results
     nodes = run_node([{"op": "guirun", "events": events}])[0]
-    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS]
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN]
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG")
     assert len({n["capture"]["sha256"] for n in nodes}) >= 1
 
 
+def test_a_headless_tree_that_is_the_binarys_checkout_is_refused_and_a_separate_one_runs(tmp_path):
+    """#1414: the headless case builds the UI into its tree; that must never be the tree MESEN_GUI_BINARY comes from."""
+    from squad.gui_test_headless import SharedTree, headless_repo
+    build, headless = tmp_path / "e2e-build", tmp_path / "e2e-headless"
+    binary = build / "bin" / "osx-arm64" / "Release" / "Mesen"
+    binary.parent.mkdir(parents=True); binary.write_text("x"); headless.mkdir()
+    with pytest.raises(SharedTree, match="MESEN_GUI_BINARY"):
+        headless_repo({"MESENAI_HEADLESS_REPO": str(build), "MESEN_GUI_BINARY": str(binary)})
+    link = tmp_path / "alias"; link.symlink_to(build)
+    with pytest.raises(SharedTree):
+        headless_repo({"MESENAI_HEADLESS_REPO": str(link), "MESENAI_APP": str(binary)})
+    assert headless_repo({"MESENAI_HEADLESS_REPO": str(headless), "MESEN_GUI_BINARY": str(binary)}) == headless
+    assert headless_repo({"MESENAI_HEADLESS_REPO": str(build)}) == build  # no binary configured: nothing to collide with
+
+
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
 def test_hook_e2e_case_of_1182_drives_the_home_over_the_socket():
     """#1182's GuiTestHook_e2e_a_runner_drives_the_Home_over_the_socket, run for real: one case passed, none skipped."""
-    repo = _env_path("MESENAI_HEADLESS_REPO", "a MesenAI checkout with `make core` built (its own bin/, never the read-only MESENAI_REPO)")
+    from squad.gui_test_headless import SharedTree, headless_repo
+    _env_path("MESENAI_HEADLESS_REPO", "a MesenAI checkout with `make core` built (its own bin/, never the read-only MESENAI_REPO)")
+    try:
+        repo = headless_repo(os.environ)
+    except SharedTree as e:
+        pytest.skip(str(e))
     lib = _env_path("MESEN_CORE_LIB", "the MesenCore.dylib built from that checkout")
     assert lib.is_file(), f"MESEN_CORE_LIB {lib} is not a file"
     p = subprocess.run(
@@ -942,8 +1185,7 @@ def test_a_key_the_hook_does_not_know_does_not_open_the_library(tmp_path):
     assert r["verdict"] == "failed (timeout waiting for ui.screen == play.library)"
 # --- #1191: pointer.*, text.type and window.mode as the first variant axis; the local-only real-window mode ---
 
-from squad.gui_test_variants import (  # noqa: E402
-    PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants)
+from squad.gui_test_variants import PermissionsMissing, RealWindowAdapter, RealWindowRefused, run_variants  # noqa: E402
 
 
 class _Modal(TickingFake):
@@ -1180,8 +1422,8 @@ def test_1200_the_dialogs_scope_only_judges_dialog_screens(tmp_path):
 
 
 def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
-    from tests.gui_test_fakes import GraphAdapter
     from squad.gui_test_goal import Navigator
+    from tests.gui_test_fakes import GraphAdapter
     edges = {"play.home": {"Enter": "play.dead"}}
     d = _sweep_script(_sweep_step())
     d["batches"][0]["steps"][0]["action"]["args"]["input"] = "key"
@@ -1191,7 +1433,7 @@ def test_1200_a_sweep_by_keyboard_uses_the_keyboard_moves(tmp_path):
 
 def test_1200_a_sweep_replays_without_asking_jev_and_with_no_navigator_ends_pending(tmp_path):
     from squad.gui_test_goal import Navigator, recorded_moves
-    from tests.gui_test_fakes import GraphAdapter, TRAP_APP
+    from tests.gui_test_fakes import TRAP_APP, GraphAdapter
     d = _sweep_script(_sweep_step())
     events = []
     run(d, GraphAdapter(tmp_path, TRAP_APP), record=events.append, goal=Navigator(_Chooser()))
@@ -1279,7 +1521,6 @@ def test_1193_a_deviation_in_the_library_fails_that_step_and_the_run(tmp_path):
 # --- #1183: the emulator adapter lives in MesenAI (ADR-0272 item 6, P1-A); the fork only loads it from MESENAI_ROOT ---
 
 import sys  # noqa: E402
-import time  # noqa: E402
 
 PILOT = "play-pad-only.gui-test.json"
 THREE_PILOT_STEPS = ["launch.first-run-home", "launch.open-rom-focused", "home.focus-holds-up"]
@@ -1307,20 +1548,29 @@ def _adapter_class(root):
 
 
 def _pilot_for_the_real_app(ids):
-    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom, so the rom and the other fixtures are dropped."""
-    """The pilot's own steps, each batch keeping only `ids`; the launch/home steps need no rom or pack, so those fixtures are dropped."""
+    """The pilot's own steps, each batch keeping only `ids` (in every role); the launch/home steps need no rom or pack, so those fixtures are dropped."""
     d = json.loads((_mesenai_root() / "docs" / "validation" / "process" / PILOT).read_text(encoding="utf-8"))
     for b in d["batches"]:
-        b["steps"] = [s for s in b["steps"] if s["id"] in ids]
+        _slice_batch(b, ids)
     d["batches"] = [b for b in d["batches"] if b["steps"]]
-    d["requires"] = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.focused", "ui.visible", "ui.dialogs"]}
+    # The runner opens one fresh application process per batch (ADR-0272 item 6), so a batch that carries no setup
+    # step can only run as the continuation of the batch before it. The pilot's `home` batch is exactly that: its
+    # steps are preconditioned on `ui.focused == play.home.open-rom`, the state its preceding `launch` batch
+    # establishes, and the Home's first focus lands a few ticks after the window opens. A second process would press
+    # the pad at a Home that has focused nothing yet, so the continuation stays in the session of the batch before.
+    # A slice that names the batch's setup step (`home.first-focus`) asks for it as a case of the continuation: it waits
+    # on the state the batch before leaves, so it runs in that batch's process, in order.
+    kept = []
+    for b in d["batches"]:
+        asked = [s for s in b["setup"] if s["id"] in ids]
+        if kept and asked and len(asked) == len(b["setup"]):
+            kept[-1]["steps"] = kept[-1]["steps"] + b["setup"] + b["steps"]
+        else:
+            kept.append(b)
+    d["batches"] = kept
+    # `requires` stays the pilot's own: its automated steps now press, connect and disconnect pads and read the ring,
+    # lamps and surface through the hook (MesenAI #1283), so narrowing it to pad.press made the run refuse to start.
     d["variants"] = {"window.mode": ["windowed"]}
-    # The three steps need no rom and none of the pilot's other fixture kinds (packs, second rom, zip, fds, library):
-    # the adapter refuses kinds it does not support, so only its settings profiles are kept.
-    d["fixtures"] = {"settings": d["fixtures"]["settings"]}
-    # The pilot also declares fixtures for its other steps (rom-second, rom-zip, rom-fds, pack, ...); these three
-    # need none of them, and the adapter refuses a kind it does not place, so only the profile and the note stay.
-    d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k in ("settings", "note")}
     # The three steps need no rom and no pack: keep only the settings fixture, the one kind every adapter build supports
     # (the pilot also declares pack/rom-* kinds for its later batches, which the adapter rejects at launch).
     d["fixtures"] = {k: v for k, v in d["fixtures"].items() if k == "settings"}
@@ -1377,7 +1627,7 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
             mark = len(events)
             try:
                 results += run({**d, "batches": [batch]}, _Shot(session, tmp_path / "shots"), record=events.append)
-            except Exception as e:  # what run_supervised does with an adapter error: the step in flight fails with it
+            except Exception as e:  # noqa: BLE001 - what run_supervised does with an adapter error: the step in flight fails with it
                 open_step = [ev["node"] for ev in events[mark:] if ev["event"] == "gui_step"][-1]
                 verdict = f"failed ({e})"
                 events.append({"event": "gui_verdict", "node": open_step, "pos": len(events), "verdict": verdict})
@@ -1391,8 +1641,8 @@ def _run_pilot_on_the_real_app(tmp_path, short_work, ids):
 @pytest.mark.slow(reason="starts the real emulator twice (one process per batch) and waits on its window")
 def test_three_pilot_steps_are_executed_through_the_mesenai_adapter_with_a_capture_each(tmp_path, short_work):
     results, nodes = _run_pilot_on_the_real_app(tmp_path, short_work, THREE_PILOT_STEPS)
-    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_STEPS], nodes
-    assert [r["verdict"] for r in results] == ["passed"] * 3, results
+    assert [(n["id"], n["status"], n["verdict"]) for n in nodes] == [(i, "executed", "passed") for i in THREE_PILOT_RUN], nodes
+    assert [r["verdict"] for r in results] == ["passed"] * len(THREE_PILOT_RUN), results
     for n in nodes:
         assert Path(n["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), n
 
@@ -1436,7 +1686,10 @@ class _Shot:
 
 @pytest.mark.slow(reason="runs dotnet test on the headless suite, which builds the UI first")
 def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
-    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line."""
+    """scripts/gui_test/run_headless_e2e.py: the skip=green trap closed, the verdict read off the summary line.
+
+    The runner requires its whole hook e2e case set, and #1242 made that two: the Home walk over the socket and the
+    fresh home's library drive. So the summary this asserts is two passed, none failed, none skipped."""
     root = _mesenai_root()
     lib = _need("MESEN_CORE_LIB", "the MesenCore library built from the MesenAI checkout")
     assert lib.is_file(), f"MESEN_CORE_LIB {lib} is not a file"
@@ -1444,7 +1697,7 @@ def test_the_hook_e2e_case_passes_exactly_one_and_skips_none():
                        env={**os.environ, "MESEN_CORE_LIB": str(lib)}, capture_output=True, text=True, timeout=1500)
     out = p.stdout + p.stderr
     assert p.returncode == 0, out[-2000:]
-    assert re.search(r"Failed:\s*0,\s*Passed:\s*1,\s*Skipped:\s*0,\s*Total:\s*1", out), out[-2000:]
+    assert re.search(r"Failed:\s*0,\s*Passed:\s*2,\s*Skipped:\s*0,\s*Total:\s*2", out), out[-2000:]
     assert HEADLESS_CASE.split(".")[1] in out or "Passed!" in out
 
 
@@ -1810,7 +2063,6 @@ def test_1198_a_save_that_leaves_the_sheet_in_auto_fails_the_promotion_step(tmp_
 
 # --- #1222: a command that runs a whole gui-test/1 script end to end (the /to-test-scenario Run step) ---
 
-from tests.gui_test_run_script_fake import ShapeAdapter  # noqa: E402
 
 RUN_SCRIPT = FORK / "scripts" / "gui_test_run_script.py"
 SMOKE = FORK / "tests" / "fixtures" / "gui_test" / "run-script-smoke.json"
@@ -1828,6 +2080,36 @@ def test_1222_a_failed_check_names_expected_and_observed_from_the_adapters_answe
     d = _shape(check={"name": "ui.screen", "args": {"is": "play.library"}})
     out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
     assert _verdicts(out)["b1.one"] == "failed (expected play.library, observed play.home)"
+
+
+def _hold_step(lost_ticks, tmp_path):
+    """A hold like home.focus-holds-up (press 4 ticks, wait 4 ticks, focus must still be Open a ROM) on a slow host."""
+    d = _shape(action={"name": "pad.press", "args": {"button": "Up", "ticks": 4}}, wait={"timeout_ticks": 4},
+               check={"name": "ui.focused", "args": {"is": "play.home.open-rom"}})
+    return run_supervised(d, "tests.gui_test_run_script_fake:SlowHostAdapter", {"lost_ticks": lost_ticks},
+                          out_dir=tmp_path / "out")
+
+
+def test_1418_a_hold_step_whose_focus_is_unread_at_the_check_settles_on_ticks_and_says_it_retried(tmp_path):
+    """Load makes the hook read no focus right after the hold; the step re-reads for more emulated ticks (never host
+    time), passes when the focus is back, and reports the retry beside the pass."""
+    out = _hold_step(lost_ticks=10, tmp_path=tmp_path)
+    assert _verdicts(out)["b1.one"] == "passed"
+    result = next(r for r in out["results"] if r["id"] == "b1.one")
+    assert result["timing"]["retried"] and result["timing"]["settled"], result
+
+
+def test_1418_a_hold_step_whose_focus_never_returns_gets_a_timing_verdict_not_a_plain_miss(tmp_path):
+    out = _hold_step(lost_ticks=10_000, tmp_path=tmp_path)
+    assert _verdicts(out)["b1.one"].startswith("failed (timing: focus unread after")
+
+
+def test_1418_a_hold_that_really_moved_the_focus_still_fails_on_the_observed_id_without_a_retry(tmp_path):
+    d = _shape(action={"name": "pad.press", "args": {"button": "Up", "ticks": 4}}, wait={"timeout_ticks": 4},
+               check={"name": "ui.focused", "args": {"is": "play.library"}})
+    out = run_supervised(d, SHAPE_SPEC, out_dir=tmp_path / "out")
+    assert _verdicts(out)["b1.one"] == "failed (expected play.library, observed play.home.open-rom)"
+    assert "timing" not in out["results"][0]
 
 
 def test_1222_an_unknown_id_fails_that_step_and_leaves_the_next_batch_running(tmp_path):
@@ -1956,53 +2238,71 @@ def test_1222_one_bug_lists_every_failed_step_and_never_one_per_step(tmp_path):
             {"id": "c", "verdict": "passed", "capture": None, "held": False,
              "batch": "b1", "mode": "automated", "expect": "what c shows"}]
     calls = []
-    url = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
-                           runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
+    detail = mod.file_one_bug(d, rows, "/repo", tmp_path / "approvals.json",
+                              runner=lambda args, **kw: calls.append(args) or "Issue created: https://example.invalid/1\n")
     assert len(calls) == 1, calls
     title, body = calls[0][1], calls[0][2]
-    assert title == "GUI test `tiny`: 2 failed steps"
+    assert title == "tiny: a — expected x, observed y (+1 more steps)", "the title names the failure, not a count"
     assert "### `a`" in body and "### `b`" in body and "### `c`" not in body
     assert "failed (expected x, observed y)" in body
-    assert url == "https://example.invalid/1"
+    assert detail["url"] == "https://example.invalid/1" and detail["existing"] is False
 
 
-HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "launch.port-lamp-p1",
+# `home.first-focus` is the home batch's setup step (#1251): a run reports the batch's setup with its cases, so it is
+# one of the ids this batch is asked for, and it is the state `home.focus-holds-up` is read from. MesenAI ccfd2dfc5
+# (#1492) moved the batch's pad connect - `launch.port-lamp-p1` - from the launch batch's steps to the head of the home
+# batch's, so the setup is asked for before any pad is connected; `_pilot_for_the_real_app` merges that setup into the
+# session of the batch before, which puts `home.first-focus` third and leaves the connect right after it.
+HOME_BATCH_IDS = ["launch.first-run-home", "launch.open-rom-focused", "home.first-focus", "launch.port-lamp-p1",
                   "home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
                   "home.ring-visible", "home.open-library", "home.back-to-home", "home.settings-by-pad-gap"]
-HOME_BATCH_MANUAL = {"launch.port-lamp-p1", "home.ring-visible", "home.settings-by-pad-gap"}
+# None of these is manual any more: MesenAI #1283 made the lamp, ring and surface cases automated (the hook decides them).
+HOME_BATCH_MANUAL = set()
 # `home.open-library` waits on `ui.screen == play.library`, and no control in the application carries that id yet: the
 # pilot says its ids are provisional until the in-app AutomationIds land (#1182). It is the one step this can fail on
 # today, and it is asserted as a subset so the case keeps its meaning when that slice lands and the step passes.
 HOME_BATCH_MAY_FAIL = {"home.open-library"}
 
 
+def test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it():
+    """The runner opens one process per batch (ADR-0272 item 6), so the pilot's launch -> home continuation stays one batch."""
+    d = _pilot_for_the_real_app(HOME_BATCH_IDS)
+    assert [b["id"] for b in d["batches"]] == ["launch"], [b["id"] for b in d["batches"]]
+    assert [s["id"] for b in d["batches"] for s in b["steps"]] == HOME_BATCH_IDS
+    for b in d["batches"][1:]:
+        assert b["setup"], f"batch {b['id']} carries no setup step, so only the batch before it can open it"
+
+
 @pytest.mark.slow(reason="starts the real emulator once per batch of the pilot's Home batch and drives it over the hook")
-def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work):
+def test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core(tmp_path, short_work, clean_app_start):
     """AC 4: the committed pilot's Home batch, through the command, on the built application."""
     root = _mesenai_root()
     _need("MESEN_GUI_BINARY", "the built Mesen launcher of a MesenAI build with the test hook")
     _need("MESEN_CORE_LIB", "the MesenCore library built from the same checkout")
     d = _pilot_for_the_real_app(HOME_BATCH_IDS)
-    # The committed Home batch also names pad.release and pad.chord, which mesen-gui does not advertise: item 6 of
-    # ADR-0272 rejects such a script before launch, so the run covers every step the adapter can drive.
-    d["fixtures"]["note"] = "steps naming pad.release or pad.chord are left out: mesen-gui advertises pad.press only"
+    # The committed Home batch's steps that need pad.release or pad.chord are `manual` (#1251): mesen-gui advertises
+    # pad.press alone, so a person walks those and the run reports them as pending. What is left to inject is the
+    # batch's setup and the steps that press the pad with an advertised button.
+    d["fixtures"]["note"] = "steps needing pad.release or pad.chord are manual: mesen-gui advertises pad.press only"
     script_path = tmp_path / "pilot-home.json"
     script_path.write_text(json.dumps(d))
     out = short_work / "results.json"
     p = _run_script_cmd(script_path, out, "--step-timeout", "180", spec="mesen-gui",
                         env={"MESENAI_ROOT": str(root)})
     r = json.loads(out.read_text())
+    guard.assert_launched(r, clean_app_start)
     assert {s["id"] for s in r["steps"]} == set(HOME_BATCH_IDS)
     assert {s["id"] for s in r["steps"] if s["verdict"] == "pending"} == HOME_BATCH_MANUAL
     failed = {s["id"] for s in r["steps"] if s["verdict"].startswith("failed")}
-    assert failed <= HOME_BATCH_MAY_FAIL and not [b for b in r["batches"] if "crash" in b["verdict"] or "hang" in b["verdict"]]
+    verdicts = {s["id"]: s["verdict"] for s in r["steps"] if s["id"] in failed}
+    assert failed <= HOME_BATCH_MAY_FAIL and not [b for b in r["batches"] if "crash" in b["verdict"] or "hang" in b["verdict"]], verdicts
     assert p.returncode == (1 if failed else 0), p.stdout + p.stderr
     passed = {s["id"] for s in r["steps"] if s["verdict"] == "passed"}
     assert passed >= set(HOME_BATCH_IDS) - HOME_BATCH_MANUAL - HOME_BATCH_MAY_FAIL - {"home.back-to-home"}
     assert r["summary"]["executed"] >= 6 and r["build_sha"] != "unknown"
-    for step in r["steps"]:
-        if step["verdict"] == "passed":
-            assert Path(step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), step
+    for result_step in r["steps"]:
+        if result_step["verdict"] == "passed":
+            assert Path(result_step["capture"]["path"]).read_bytes().startswith(b"\x89PNG"), result_step
 # --- /to-test-scenario plans the committed pilot and publishes idempotently (MesenAI #1223) ---
 
 class _ScenarioGitHub:
@@ -2036,9 +2336,12 @@ def test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them
                           purpose="the pad-only Play script")
     planned = [c for i in plan["issues"] for c in i["cases"]]
     assert planned == tts.step_ids(d) and len(planned) > 100
-    assert all("test-case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
-    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01"]
-    assert plan["manual"] and plan["goals"]
+    assert all("Test-Case" in i["labels"] and "ready-for-agent" not in i["labels"] for i in plan["issues"])
+    assert plan["parent"]["labels"] == ["ready-for-agent", "wave:01", "Test-Scenario"]
+    # `goals` is the plan's own derivation - the steps that navigate by `nav.goal`/`nav.sweep` - and the committed
+    # pad-only pilot has none: #1228 replaced its goal navigation with the pad press the case describes, so every case
+    # it carries is planned above and the goal list is honestly empty.
+    assert plan["manual"] and plan["goals"] == []
 
 
 def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
@@ -2047,10 +2350,371 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     plan = tts.build_plan(d, granularity="per-batch")
     gh = _ScenarioGitHub()
     first = tts.publish(plan, gh)
-    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
+    nodes = len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"])
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + nodes + 1
+    assert len(gh.of("add_sub_issue")) == len(plan["issues"]) + nodes
     again = _ScenarioGitHub()
-    second = tts.publish(plan, again, saved=first["issues"], parent=first["parent"])
+    second = tts.publish(plan, again, saved=first["map"])
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
+# --- to_test_scenario write-back (#1226): the committed run's results land on the pilot's issues ---------------
+# --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
+
+class _IssueTracker:
+    """A GitHub stand-in that remembers what it was told, so a second write-back sees the first one's state.
+
+    It answers `issue_state` from its own memory: the state of the issue and the verdict of the last comment a
+    write-back left there. No network, no `gh`, no model.
+    """
+
+    def __init__(self, numbers):
+        self.state = {n: {"state": "open", "verdict": None} for n in numbers}
+        self.comments = {n: [] for n in numbers}
+        self.calls = []
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        number = kw.get("number")
+        if op == "issue_state":
+            return dict(self.state[number])
+        if op == "comment":
+            self.comments[number].append(kw["body"])
+            verdict = re.match(r"\*\*(passed|failed|needs review|pending)\*\*", kw["body"])
+            if verdict and number in self.state:
+                self.state[number]["verdict"] = verdict.group(1)
+        elif op == "close":
+            self.state[number]["state"] = "closed"
+        elif op == "reopen":
+            self.state[number]["state"] = "open"
+        return {}
+
+    def ops(self):
+        return [op for op, _ in self.calls]
+
+
+def _write_back_fixture():
+    """The committed run of #1222 and the pilot's map: the real results file, the real plan, a mapped issue each."""
+    from squad import to_test_scenario as tts
+
+    results = FORK / "docs" / "evidence" / "1222" / "play-pad-only-home.results.json"
+    if not os.environ.get("MESENAI_REPO") or not results.is_file():
+        pytest.skip("the committed results file of #1222 and MESENAI_REPO are needed")
+    pilot_path = _mesenai() / "docs" / "validation" / "process" / "play-pad-only.gui-test.json"
+    pilot = json.loads(pilot_path.read_text(encoding="utf-8"))
+    plan = tts.build_plan(pilot, script_path="docs/validation/process/play-pad-only.gui-test.json")
+    cases = sorted({case for issue in plan["issues"] for case in issue["cases"]})
+    mapping = {case: 2000 + pos for pos, case in enumerate(cases)}
+    return tts, results, plan, mapping, cases
+
+
+def test_1226_the_committed_run_writes_its_verdicts_back_and_never_files_a_bug(tmp_path):
+    """One real results file and the pilot's map: comments, closes, pending cases and the run's own bug, no network."""
+    tts, results, plan, mapping, cases = _write_back_fixture()
+    map_path = tmp_path / "play-pad-only.gui-test.issues.json"
+    map_path.write_text(json.dumps({**mapping, "parent": 1999}))
+    tracker = _IssueTracker(list(mapping.values()) + [1999])
+    out = tts.write_back(results, map_path, tracker, plan=plan)
+
+    assert out["counts"] == {"passed": 6, "failed": 1, "pending": 4}
+    # The pilot script keeps growing; the run covers 11 of its cases, every other mapped case has no result.
+    assert out["ok"] is False and out["reason"].startswith(f"{len(cases) - 11} case(s) have no result")
+    assert out["bug"] == "https://github.com/sbihaiko/MesenAI/issues/1230"
+    assert "file_bug" not in tracker.ops()
+    assert tracker.state[mapping["home.open-library"]]["state"] == "open"
+    assert "failed" in tracker.comments[mapping["home.open-library"]][0]
+    assert sorted(out["closed"]) == ["home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right",
+                                     "home.focus-holds-up", "launch.first-run-home", "launch.open-rom-focused"]
+    assert all(tracker.state[mapping[c]]["state"] == "closed" for c in out["closed"])
+    assert "home.back-to-home" in out["pending"] and "launch.port-lamp-p1" in out["pending"]
+    summary = tracker.comments[1999][0]
+    assert "https://github.com/sbihaiko/MesenAI/issues/1230" in summary and "darwin-arm64" in summary
+    assert len(cases) >= 67 and cases == sorted(mapping)
+
+
+def test_1226_the_same_run_written_back_twice_adds_no_case_comment_and_reopens_nothing(tmp_path):
+    tts, results, plan, mapping, cases = _write_back_fixture()
+    map_path = tmp_path / "play-pad-only.gui-test.issues.json"
+    map_path.write_text(json.dumps({**mapping, "parent": 1999}))
+    tracker = _IssueTracker(list(mapping.values()) + [1999])
+    first = tts.write_back(results, map_path, tracker, plan=plan)
+    before = {number: len(bodies) for number, bodies in tracker.comments.items() if number != 1999}
+    second = tts.write_back(results, map_path, tracker, plan=plan)
+
+    assert first["commented"] and second["commented"] == [] and second["reopened"] == []
+    assert sorted(second["unchanged"]) == sorted(first["commented"])
+    assert {n: len(b) for n, b in tracker.comments.items() if n != 1999} == before
+    assert len(tracker.comments[1999]) == 2          # the summary runs every time; the cases do not
+
+
+# --- #1244: a failed or needs-review screenshot reaches the evidence branch and the case's comment ---
+
+from squad.gui_test_report import upload_evidence  # noqa: E402
+from squad.gui_test_vision import Vision  # noqa: E402
+
+
+class _EvidenceStore:
+    """Fake evidence store: records every push and returns the URL an issue renders inline."""
+
+    def __init__(self):
+        self.pushed = []
+
+    def __call__(self, path, name):
+        url = f"https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/{name}?raw=true"
+        self.pushed.append((path, name, url))
+        return url
+
+
+def _blind(sid, expect):
+    """An automated step with no check: its verdict is the vision model's."""
+    s = step(sid, expect=expect, wait={"timeout_ticks": 2})
+    del s["check"]
+    return s
+
+
+def _every_verdict_script():
+    return script(
+        step("b1.passed"),
+        step("b1.bad-screen", expect="the library is showing",
+             action={"name": "pad.press", "args": {"button": "A", "ticks": 4}},
+             wait={"check": "ui.screen == play.library", "timeout_ticks": 10},
+             check={"name": "ui.screen", "args": {"is": "play.home"}}),
+        _blind("b1.unsure", "the dialog is open"),
+        step("b1.ran-by-hand", mode="manual", expect="the card glows"),
+        step("b1.nobody-ran", mode="manual", expect="the tooltip shows"),
+    )
+
+
+def _every_verdict_run(tmp_path):
+    """One step of every verdict: passed, failed, needs review (vision), a hand-run pass and a pending one."""
+    d = _every_verdict_script()
+    validate(d)
+    vision = Vision(lambda png, expect: {"answer": "incompatible", "saw": "a dialog", "cost": 0.01})
+
+    def prompt(s):
+        return {"verdict": "passed", "screenshot": _shot(tmp_path, f"{s['id']}.png")} \
+            if s["id"] == "b1.ran-by-hand" else None
+
+    results = run(d, TickingFake(tmp_path), prompt=prompt, vision=vision)
+    return {r["id"]: r for r in results}, results
+
+
+def test_1244_only_failed_and_needs_review_captures_are_uploaded(tmp_path):
+    by_id, results = _every_verdict_run(tmp_path)
+    assert [(i, by_id[i]["verdict"]) for i in by_id] == [
+        ("b1.passed", "passed"), ("b1.bad-screen", "failed (expected ui.screen == play.home, observed play.library)"),
+        ("b1.unsure", "needs review"), ("b1.ran-by-hand", "passed"), ("b1.nobody-ran", "pending")]
+    store = _EvidenceStore()
+    out = {r["id"]: r for r in upload_evidence(results, store, tmp_path / "approvals.json")}
+    # the failed and the needs-review capture went up; the name carries the capture it belongs to
+    assert [name for _, name, _ in store.pushed] == [
+        f"b1.bad-screen-{by_id['b1.bad-screen']['capture']['sha256'][:12]}.png",
+        f"b1.unsure-{by_id['b1.unsure']['capture']['sha256'][:12]}.png"]
+    assert store.pushed[0][0] == by_id["b1.bad-screen"]["capture"]["path"]
+    # the step records the URL the store handed back, which is what the case's comment links
+    assert out["b1.bad-screen"]["evidence"] == store.pushed[0][2]
+    assert out["b1.unsure"]["evidence"] == store.pushed[1][2]
+    # a passed step uploads nothing, even when a person did hand in a screenshot for it
+    assert "evidence" not in out["b1.passed"] and "evidence" not in out["b1.ran-by-hand"]
+    assert "evidence" not in out["b1.nobody-ran"]
+    assert len(store.pushed) == 2
+    # the run's own results are left as the runner recorded them
+    assert "evidence" not in by_id["b1.bad-screen"]
+
+
+def _sensitive_failure(tmp_path):
+    """A sensitive step that fails, and a plain step after it: the gate holds the capture, the run goes on."""
+    d = _privacy_script()
+    d["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.home"
+    d["batches"][0]["steps"].append(step("b1.after"))
+    results = run(d, TickingFake(tmp_path))
+    assert [(r["id"], r["verdict"], r["held"]) for r in results] == [
+        ("b1.plain", "passed", False),
+        ("b1.file-dialog", "failed (expected ui.screen == play.home, observed play.library)", True),
+        ("b1.after", "passed", False)]
+    return results
+
+
+def test_1244_a_capture_the_gate_withholds_is_recorded_withheld_and_the_run_goes_on(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    store = _EvidenceStore()
+    out = upload_evidence(results, store, tmp_path / "approvals.json")
+    by_id = {r["id"]: r for r in out}
+    assert by_id["b1.file-dialog"]["evidence"] == "withheld"
+    assert store.pushed == []                       # nothing left the machine, and nothing else needed to
+    assert [r["verdict"] for r in out] == [r["verdict"] for r in results]   # the run is unchanged by the gate
+
+
+def test_1244_an_approved_capture_is_uploaded_and_the_step_records_its_url(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    ap = tmp_path / "approvals.json"
+    approve(ap, "b1.file-dialog", results[1]["capture"]["sha256"], by="sandro")
+    store = _EvidenceStore()
+    out = {r["id"]: r for r in upload_evidence(results, store, ap)}
+    assert [name for _, name, _ in store.pushed] == [
+        f"b1.file-dialog-{results[1]['capture']['sha256'][:12]}.png"]
+    assert out["b1.file-dialog"]["evidence"] == store.pushed[0][2]
+
+
+def test_1244_a_green_run_uploads_nothing(tmp_path):
+    d = script(step("b1.a"), step("b1.b"))
+    store = _EvidenceStore()
+    out = upload_evidence(run(d, TickingFake(tmp_path)), store, tmp_path / "approvals.json")
+    assert [r["verdict"] for r in out] == ["passed", "passed"]
+    assert store.pushed == [] and all("evidence" not in r for r in out)
+
+
+def test_1244_two_concurrent_uploads_do_not_collide_on_the_evidence_branch(tmp_path):
+    import threading
+    import time
+
+    by_id, _ = _every_verdict_run(tmp_path)
+    inside, overlaps = [], []
+
+    class _SlowStore(_EvidenceStore):
+        """Takes long enough that two unserialized pushes to the branch would be seen overlapping."""
+
+        def __call__(self, path, name):
+            inside.append(name)
+            if len(inside) > 1:
+                overlaps.append(list(inside))
+            time.sleep(0.05)
+            inside.remove(name)
+            return super().__call__(path, name)
+
+    store, ap, lock = _SlowStore(), tmp_path / "approvals.json", tmp_path / "evidence.lock"
+    start = threading.Barrier(2)
+
+    def one_run(result):
+        start.wait()
+        return upload_evidence([result], store, ap, lock_path=lock)
+
+    threads = [threading.Thread(target=one_run, args=(by_id[i],)) for i in ("b1.bad-screen", "b1.unsure")]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert overlaps == []                       # the two pushes never stood on the branch at once
+    assert len(store.pushed) == 2 and not lock.exists()
+
+
+def test_1244_a_lock_a_dead_run_left_behind_is_taken_over(tmp_path):
+    import os
+    import time
+
+    lock = tmp_path / "evidence.lock"
+    lock.write_text("stale")
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    store = _EvidenceStore()
+    by_id, results = _every_verdict_run(tmp_path)
+    # a run that died holding the lock never blocks the next one for good
+    out = upload_evidence([by_id["b1.bad-screen"]], store, tmp_path / "approvals.json", lock_path=lock)
+    assert out[0]["evidence"] == store.pushed[0][2] and not lock.exists()
+
+
+def _comment_on(results, cases, tmp_path, store=None):
+    """Write a run back and return the case comment's body, as the write-back would post it."""
+    from squad import to_test_scenario as tts
+    out = upload_evidence(results, store or _EvidenceStore(), tmp_path / "approvals.json")
+    plan = {"name": "tiny", "issues": [{"cases": [c]} for c in cases]}
+    published = {"parent": 1, "issues": {c: 10 + i for i, c in enumerate(cases)}}
+    gh = _ScenarioGitHub()
+    tts.write_results(plan, {"run_id": "r-1244", "script_sha": "abc", "platform": "macos-arm64",
+                             "build_sha": "def", "core_available": True, "results": out}, gh, published)
+    return {kw["number"]: kw["body"] for kw in gh.of("comment")}
+
+
+def test_1244_the_case_comment_shows_the_failed_steps_screenshot_inline(tmp_path):
+    by_id, results = _every_verdict_run(tmp_path)
+    bodies = _comment_on(results, ["b1.bad-screen"], tmp_path)
+    url = {r["id"]: r for r in upload_evidence(results, _EvidenceStore(), tmp_path / "a.json")}[
+        "b1.bad-screen"]["evidence"]
+    assert url.startswith("https://") and url.endswith(".png?raw=true")
+    assert f"![b1.bad-screen]({url})" in bodies[10]
+
+
+def test_1244_a_withheld_capture_is_said_to_be_withheld_and_never_linked(tmp_path):
+    results = _sensitive_failure(tmp_path)
+    body = _comment_on(results, ["b1.file-dialog"], tmp_path)[10]
+    assert "withheld" in body and "![" not in body
+
+
+def _rows_with_captures(tmp_path):
+    """One row per verdict, shaped as `scripts/gui_test_run_script.py` writes them (id, verdict, capture, held)."""
+    rows = []
+    for sid, verdict in (("a", "passed"), ("b", "failed (expected x, observed y)"), ("c", "needs review"),
+                         ("d", "pending")):
+        p = Path(_shot(tmp_path, f"{sid}.png"))
+        rows.append({"id": sid, "batch": "b1", "mode": "automated", "expect": f"what {sid} shows", "verdict": verdict,
+                     "capture": {"path": str(p), "size": p.stat().st_size,
+                                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}, "held": False})
+    return rows
+
+
+def test_1244_the_run_command_publishes_only_when_a_repo_is_named(tmp_path):
+    mod = _run_script_module()
+    rows, store = _rows_with_captures(tmp_path), _EvidenceStore()
+    # a command a person runs names no repo: nothing is published, the capture stays local (ADR-0135 rule 5)
+    assert mod.attach_evidence(rows, None, tmp_path / "approvals.json", store=store) == rows
+    assert store.pushed == []
+    out = mod.attach_evidence(rows, "sbihaiko/MesenAI", tmp_path / "approvals.json",
+                              store=store, lock=tmp_path / "evidence.lock")
+    assert [name for _, name, _ in store.pushed] == [
+        f"b-{rows[1]['capture']['sha256'][:12]}.png", f"c-{rows[2]['capture']['sha256'][:12]}.png"]
+    assert [r.get("evidence") for r in out] == [None, store.pushed[0][2], store.pushed[1][2], None]
+
+
+def test_1244_the_store_makes_the_orphan_evidence_branch_before_the_first_push(tmp_path):
+    """The contents API refuses a branch it does not have, so a store that only PUTs fails on the very first run."""
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    calls, puts = [], []
+
+    def runner(args, **kw):
+        calls.append((args, kw.get("input")))
+        if args[4].startswith("repos/sbihaiko/MesenAI/contents/"):
+            puts.append(args)
+            if len(puts) == 1:      # the branch is not there yet: what GitHub really answers
+                raise subprocess.CalledProcessError(1, args, output="",
+                                                    stderr="Branch gui-test-evidence not found")
+            return '{"content": {"path": "x"}}'
+        if args[4].endswith("/git/blobs"):
+            return '{"sha": "blob1"}'
+        if args[4].endswith("/git/trees"):
+            return '{"sha": "tree1"}'
+        if args[4].endswith("/git/commits"):
+            return '{"sha": "commit1"}'
+        return '{"ref": "refs/heads/gui-test-evidence"}'
+
+    store = evidence_store("sbihaiko/MesenAI", runner=runner)
+    url = store(str(png), "b1.bad-abc123.png")
+    assert url == ("https://github.com/sbihaiko/MesenAI/blob/gui-test-evidence/b1.bad-abc123.png?raw=true")
+    posts = [(a, i) for a, i in calls if a[4].startswith("repos/sbihaiko/MesenAI/git/")]
+    assert [a[4].rsplit("/", 1)[-1] for a, _ in posts] == ["blobs", "trees", "commits", "refs"]
+    body = {a[4].rsplit("/", 1)[-1]: json.loads(i) for a, i in posts}
+    assert body["trees"] == {"tree": [{"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob1"}]}
+    assert body["commits"]["tree"] == "tree1" and "parents" not in body["commits"]   # a root commit: no shared history
+    assert body["refs"] == {"ref": "refs/heads/gui-test-evidence", "sha": "commit1"}
+    assert len(puts) == 2                                               # the one refused push is retried, not dropped
+
+
+def test_1244_repushing_a_capture_already_on_the_branch_updates_it_with_its_blob_sha(tmp_path):
+    """A second run of the same failing step pushes the same name; the contents API refuses an update without a sha."""
+    png = tmp_path / "a.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    calls, puts = [], []
+
+    def runner(args, **kw):
+        calls.append((args, kw.get("input")))
+        if "PUT" in args:
+            puts.append(args)
+            if len(puts) == 1:
+                raise subprocess.CalledProcessError(1, args, output='', stderr='"sha" wasn\'t supplied.')
+            return '{"content": {"path": "x"}}'
+        return '{"sha": "oldsha"}'      # the GET that reads the file already on the branch
+
+    store = evidence_store("sbihaiko/MesenAI", runner=runner)
+    assert store(str(png), "b1.bad-abc123.png").endswith("b1.bad-abc123.png?raw=true")
+    [read] = [a for a, _ in calls if "PUT" not in a]
+    assert read[2] == "repos/sbihaiko/MesenAI/contents/b1.bad-abc123.png?ref=gui-test-evidence"
+    assert "sha=oldsha" in puts[1] and len(puts) == 2
 
 
 # --- #1241: the run command files its bug only when asked, and a partial run records its selection ---
@@ -2074,12 +2738,18 @@ def _bug_helper(tmp_path, output="Issue created: https://example.invalid/1241", 
     return root, root / "bug-titles.log"
 
 
-def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True):
+def _run_cmd(monkeypatch, tmp_path, script_path, *extra, root=None, spec=SHAPE_SPEC, registered=True,
+             fresh_github=True):
     """The run command driven in-process on its own contract: argv in, one results file out.
 
     The adapter registry is how a fake adapter gets a name the command accepts; a literal `module:Class` spec is never
-    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug.
+    the registered emulator adapter, which is what keeps a test's run off the board even when it asks for a bug. The bug
+    doors are pointed at the fake GitHub (#1249), so a filing lands there and never on the real one; `fresh_github`
+    False keeps the board between two runs of one case.
     """
+    if fresh_github:
+        fake_github.reset()
+    extra = (*extra, "--github-runner", FAKE_GITHUB)
     import importlib.util
     monkeypatch.chdir(FORK)
     monkeypatch.setenv("MESENAI_ROOT", str(root if root is not None else tmp_path / "mesenai"))
@@ -2116,7 +2786,9 @@ def test_1241_asked_it_files_exactly_one_bug_for_every_failed_step_and_records_i
     root, titles = _bug_helper(tmp_path)
     code, r = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
     assert code == 1
-    assert titles.read_text().splitlines() == ["GUI test `run-script-smoke`: 2 failed steps"], "one bug, never one per step"
+    assert titles.read_text().splitlines() == [
+        "run-script-smoke: smoke.still-home — expected play.home, observed play.library (+1 more steps)"], \
+        "one bug, never one per step, and its title says what failed"
     body = (root / "bug-body.log").read_text()
     assert "### `smoke.still-home`" in body and "### `smoke.unknown-id`" in body, "every failed step, in one bug"
     assert "### `smoke.open-library`" not in body, "a step that passed is not a failed step of this bug"
@@ -2187,3 +2859,673 @@ def test_1241_an_unknown_selector_is_refused_before_anything_is_launched(tmp_pat
     assert any("b1.two" in reason or "b2.a" in reason for reason in r["reasons"]), "it names what the script does have"
     assert "selection" not in r
     assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+
+
+# --- #1249: the bug a red run files names the failure, and the same failure is never filed twice ---
+
+from squad.gui_test_report import bug_title, comment_on_bug_with, failure_key, failure_words, find_open_bug_with, report_failures_detail  # noqa: E402
+from tests import gui_test_github_fake as fake_github  # noqa: E402
+
+FAKE_GITHUB = "tests.gui_test_github_fake:shell"
+REPO_1249 = "example/1249"
+
+
+class _Board:
+    """A fake GitHub runner around one board: the search door reads the issues it holds, the file door adds one.
+
+    Filing is the fake board's own, not the checkout helper's: these cases are about which issue a run belongs to,
+    and only the run-command case below goes through the helper route a real run takes.
+    """
+
+    def __init__(self, repo=REPO_1249):
+        fake_github.reset()
+        self.find_open_bug = find_open_bug_with(repo, fake_github.shell)
+        self.comment_on_bug = comment_on_bug_with(repo, fake_github.shell)
+        self.filed = []
+
+    @property
+    def issues(self):
+        return fake_github.ISSUES
+
+    @property
+    def comments(self):
+        return fake_github.COMMENTS
+
+    @property
+    def doors(self):
+        return {"find_open_bug": self.find_open_bug, "comment_on_bug": self.comment_on_bug}
+
+    def file_bug(self, title, body, priority=None):
+        number = 1000 + len(self.issues) + 1
+        url = f"https://example.invalid/bugs/{number}"
+        self.issues.append({"number": number, "title": title, "body": body, "url": url})
+        self.filed.append((title, body))
+        return url
+
+    def store(self, path, name):
+        return f"https://evidence.example/{name}"
+
+
+def test_1249_the_title_names_the_script_the_step_and_the_failure():
+    """The old title was `GUI test <script>: N failed step(s)`: nine of them in one afternoon say nothing."""
+    one = [{"id": "home.focus-holds-up", "verdict": "failed (expected play.home.open-rom, observed none)"}]
+    assert failure_words("failed (expected play.home.open-rom, observed none)") == \
+        "expected play.home.open-rom, observed none"
+    assert failure_words("failed (timeout waiting for ui.screen == play.library)") == \
+        "timeout waiting for ui.screen == play.library"
+    assert failure_words("failed (unknown id)") == "unknown id"
+    assert bug_title("play-pad-only", one) == \
+        "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none"
+    two = one + [{"id": "home.open-library", "verdict": "failed (timeout waiting for ui.screen == play.library)"}]
+    assert bug_title("play-pad-only", two) == \
+        "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none (+1 more steps)"
+    other = [{"id": "home.focus-holds-up", "verdict": "failed (expected play.home.open-rom, observed play.library)"}]
+    assert bug_title("play-pad-only", other) != bug_title("play-pad-only", one), "two failures, two titles"
+    assert failure_key("play-pad-only", one[0]) == "play-pad-only: home.focus-holds-up — expected play.home.open-rom, observed none"
+    for title in (bug_title("play-pad-only", one), bug_title("play-pad-only", two)):
+        assert not re.search(r"\d+ failed step", title), title
+
+
+def test_1249_a_run_of_a_failure_already_open_comments_instead_of_filing_a_second_bug(tmp_path):
+    d = _two_failures_script()
+    results = run(d, TickingFake(tmp_path))
+    board = _Board()
+    first = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json",
+                                   run={"run_id": "run-1", "build_sha": "abc123", "platform": "darwin-arm64"},
+                                   **board.doors)
+    assert first["existing"] is False and len(board.issues) == 1 and board.comments == []
+    again = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json",
+                                   run={"run_id": "run-2", "build_sha": "def456", "platform": "darwin-arm64"},
+                                   **board.doors)
+    assert again["existing"] is True and again["url"] == first["url"], "the run belongs to the open bug"
+    assert len(board.issues) == 1, "the same failure is one open bug, however many runs hit it"
+    [comment] = board.comments
+    assert comment["number"] == board.issues[0]["number"]
+    for text in ("run-2", "def456", "### `b1.bad-screen`", "### `b1.never`",
+                 "the library is showing", "failed (timeout waiting for ui.screen == nowhere)"):
+        assert text in comment["body"], text
+
+
+def test_1249_a_different_failure_is_a_second_bug_with_its_own_readable_title(tmp_path):
+    board = _Board()
+    d = _two_failures_script()
+    report_failures_detail(d, run(d, TickingFake(tmp_path)), board.store, board.file_bug, tmp_path / "a.json",
+                           **board.doors)
+    other = _two_failures_script()
+    other["batches"][0]["steps"][1]["check"]["args"]["is"] = "play.library"  # that step passes; the wait times out
+    report_failures_detail(other, run(other, TickingFake(tmp_path)), board.store, board.file_bug, tmp_path / "a.json",
+                           **board.doors)
+    titles = [i["title"] for i in board.issues]
+    assert len(titles) == 2 and len(set(titles)) == 2, titles
+    assert titles[0].startswith("tiny: b1.bad-screen — ") and titles[1].startswith("tiny: b1.never — "), titles
+    assert board.comments == [], "a different failure is a new bug, never a comment on an unrelated one"
+
+
+def test_1249_a_look_up_that_cannot_run_files_a_bug_rather_than_losing_the_failure(tmp_path):
+    """No `gh`, no network: the run still opens its bug, and the file says why it could not check for a twin."""
+    board = _Board()
+    board.find_open_bug = lambda key: (_ for _ in ()).throw(OSError("no gh"))
+    d = _two_failures_script()
+    detail = report_failures_detail(d, run(d, TickingFake(tmp_path)), board.store, board.file_bug,
+                                    tmp_path / "a.json", **board.doors)
+    assert detail["existing"] is False and len(board.issues) == 1
+    assert "look-up" in detail["lookup_failed"]
+
+
+def test_1249_the_run_command_records_the_issue_the_run_belongs_to(tmp_path, monkeypatch):
+    root, titles = _bug_helper(tmp_path)
+    fake_github.reset()
+    code, first = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root)
+    assert code == 1 and first["bug"]["filed"] is True
+    assert first["bug"]["existing"] is False and len(fake_github.ISSUES) == 1
+    assert first["bug"]["url"] == fake_github.ISSUES[0]["url"] and fake_github.ISSUES[0]["url"]
+    assert first["bug"]["title"].startswith("run-script-smoke: smoke.still-home — ")
+    code, again = _run_cmd(monkeypatch, tmp_path, SMOKE, "--file-bug", root=root, fresh_github=False)
+    assert again["bug"]["filed"] is True and again["bug"]["existing"] is True
+    assert again["bug"]["url"] == first["bug"]["url"], "the second run names the issue it was attached to"
+    assert len(fake_github.ISSUES) == 1 and len(titles.read_text().splitlines()) == 1, "one bug, never two"
+    [comment] = fake_github.COMMENTS
+    assert again["run_id"] in comment["body"] and again["build_sha"] in comment["body"]
+    assert "### `smoke.still-home`" in comment["body"] and "### `smoke.unknown-id`" in comment["body"]
+
+
+def test_1249_a_comment_that_cannot_be_posted_still_reports_the_run(tmp_path):
+    """An open bug the run cannot comment on is still a run to report: it files its own, and says why."""
+    board = _Board()
+    d = _two_failures_script()
+    results = run(d, TickingFake(tmp_path))
+    report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
+    board.comment_on_bug = lambda issue, body: (_ for _ in ()).throw(OSError("no network"))
+    detail = report_failures_detail(d, results, board.store, board.file_bug, tmp_path / "a.json", **board.doors)
+    assert detail["existing"] is False and len(board.issues) == 2 and board.comments == []
+    assert "comment" in detail["lookup_failed"] and board.issues[0]["url"] in detail["lookup_failed"]
+def test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step():
+    """The whole committed pilot script against a target that advertises less than `mesen-gui` does: the pilot as
+    committed is refused before launch (item 6) - dozens of its steps observe `ui.focused`, which this target has no
+    check for - and the narrowing is a `gui-test/1` script the same validator accepts, with every step of the pilot
+    still in it, `manual` where it must be, naming what it is missing (MesenAI #1242).
+
+    The committed pilot is already #1251's narrowing against the real adapter, so what this takes away is the
+    capability drift moves: the day the hook loses a check, the script committed against it narrows again instead of
+    going stale in silence."""
+    from squad import to_test_scenario as tts
+    from squad.gui_test_subset import runnable
+    from squad.to_test_scenario import coverage, read_scenario, read_script, script_steps
+    pilot = _pilot_1223()
+    caps = {"actions": ["pad.press"], "checks": ["ui.screen", "ui.visible", "ui.dialogs"],
+            "input_families": ["pad"], "variants": {"window.mode": ["windowed"]}}
+    with pytest.raises(ScriptError):
+        validate(pilot, caps)
+    out = runnable(pilot, caps)
+    validate(out["script"], caps)
+    assert tts.step_ids(out["script"]) == tts.step_ids(pilot)
+    steps = [s for b in out["script"]["batches"] for p in ("setup", "steps", "teardown") for s in (b.get(p) or [])]
+    assert len(steps) == len(tts.step_ids(pilot))  # converted steps are counted once, and none is dropped
+    assert all(s["mode"] == "manual" or (s.get("check") or {}).get("name") in caps["checks"] for s in steps)
+    by_id = {s["id"]: s for s in steps}
+    assert all(e["missing"] and by_id[e["id"]]["mode"] == "manual" for e in out["manual"])
+    assert all(m in by_id[e["id"]]["expect"] for e in out["manual"] for m in e["missing"])  # a person reads why
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    script, scenario = read_script(script_path), read_scenario(md_path)
+    ids = [s["id"] for s in script_steps(script)]
+    report = coverage(scenario, script)
+    assert len(ids) == len(set(ids)) >= 67
+    assert (report["total_cases"], report["total_steps"]) == (len(ids), len(ids))
+    assert report["missing_steps"] == [] and report["steps_without_case"] == []
+    # The pilot is converted: every step records the content hash of its case as the Markdown has it now, so the
+    # script is reusable - no case is uncovered, no step is orphaned and nothing is stale.
+    assert report["reusable"] is True and report["stale"] == []
+
+
+def test_1242_a_script_with_its_content_hashes_stripped_is_refused_as_stale_not_for_gaps(tmp_path):
+    """The narrowing's other half, pinned without leaning on the committed pilot being un-converted: the same script
+    with every step's `content_hash` removed still covers every case and orphans no step - so `reusable` is what the
+    hashes decide, never the ids - and every case is stale, since nothing says which version of the case the step was
+    converted from. Recording the hashes again is the whole of what makes it reusable (MesenAI #1242)."""
+    from squad.to_test_scenario import coverage, read_scenario, read_script, record_hashes
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    script, scenario = read_script(script_path), read_scenario(md_path)
+    stripped = copy.deepcopy(script)
+    for batch in stripped["batches"]:
+        for part in ("setup", "steps", "teardown"):
+            for s in batch.get(part, []):
+                s.pop("content_hash", None)
+    path = tmp_path / "play-pad-only.gui-test.json"
+    path.write_text(json.dumps(stripped), encoding="utf-8")
+    report = coverage(scenario, read_script(path))  # still a `gui-test/1` script the validator accepts
+    assert report["missing_steps"] == [] and report["steps_without_case"] == []
+    assert report["stale"] == [c["id"] for c in scenario["cases"]]
+    assert report["reusable"] is False
+    assert coverage(scenario, record_hashes(scenario, read_script(path)))["reusable"] is True
+
+
+# --- #1243: the run command runs one variant of a script, and records it as a partial run ---
+
+VARIANT_SPEC = "tests.gui_test_run_script_fake:VariantAdapter"
+ONE_MODE_SPEC = "tests.gui_test_run_script_fake:OneModeAdapter"
+
+
+def _variant_file(tmp_path):
+    """Two batches: b1 carries one case per window mode plus an untagged one, b2 a single untagged case."""
+    d = _two_batch_script([step("b1.any"),
+                           step("b1.win", variants={"window.mode": "windowed"}),
+                           step("b1.fs", variants={"window.mode": "fullscreen"})])
+    path = tmp_path / "variants.json"
+    path.write_text(json.dumps(d))
+    return path
+
+
+def test_1243_a_variant_selection_runs_that_variant_only_and_records_it(tmp_path, monkeypatch):
+    """A full run of this script runs all three cases; one variant runs the cases it applies to, and says so."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen",
+                       spec=VARIANT_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.fs", "b2.a"], \
+        "the windowed case is not run, and an untagged case runs in every variant"
+    switched = (tmp_path / "artifacts" / "variant.log").read_text().splitlines()
+    assert switched == ["window.mode=fullscreen"] * 2, "each batch's fresh process is switched before it launches"
+
+
+def test_1243_an_axis_that_runs_one_way_needs_no_switch(tmp_path, monkeypatch):
+    """The emulator adapter advertises `window.mode: [windowed]` and has no hook: selecting it filters, nothing switches."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=windowed",
+                       spec=ONE_MODE_SPEC)
+    assert code == 0, r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=windowed"}
+    assert [s["id"] for s in r["steps"]] == ["b1.any", "b1.win", "b2.a"]
+
+
+def test_1243_an_unknown_variant_is_refused_before_anything_is_launched(tmp_path, monkeypatch):
+    path = _variant_file(tmp_path)
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=huge")
+    assert code != 0 and r["status"] == "failed" and "selection" not in r
+    assert any("window.mode=huge" in reason for reason in r["reasons"]), r["reasons"]
+    assert any("fullscreen" in reason for reason in r["reasons"]), "it names what the script does have"
+    assert not (tmp_path / "artifacts").exists(), "a refused selector must not launch the application"
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "screen.size=large")
+    assert code != 0 and any("screen.size" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_that_is_not_an_axis_value_pair_is_refused(tmp_path, monkeypatch):
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "fullscreen")
+    assert code != 0 and any("<axis>=<value>" in reason for reason in r["reasons"]), r["reasons"]
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_1243_a_variant_the_adapter_cannot_switch_to_is_refused_before_any_launch(tmp_path, monkeypatch):
+    """The shape fake advertises both window modes and has no `set_variant` hook: nothing would switch the window, so
+    running its fullscreen cases anyway would report a mode that was never entered."""
+    code, r = _run_cmd(monkeypatch, tmp_path, _variant_file(tmp_path), "--variant", "window.mode=fullscreen")
+    assert code != 0 and r["status"] == "failed" and r["steps"] == [] and r["batches"] == []
+    assert any("window.mode=fullscreen" in reason for reason in r["reasons"]), r["reasons"]
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_a_variant_no_case_applies_to_executes_nothing_and_is_red(tmp_path, monkeypatch):
+    """A run that executed no step is a failure, and a variant selection does not change that (#1222's rule)."""
+    d = script(step("b1.win", variants={"window.mode": "windowed"}))  # one batch, and no case runs in fullscreen
+    path = tmp_path / "one-mode.json"
+    path.write_text(json.dumps(d))
+    code, r = _run_cmd(monkeypatch, tmp_path, path, "--variant", "window.mode=fullscreen", spec=VARIANT_SPEC)
+    assert code == 1 and r["status"] == "failed"
+    assert r["reasons"] == ["no step executed"] and r["steps"] == []
+    assert r["selection"] == {"kind": "variant", "value": "window.mode=fullscreen"}
+
+
+def test_1243_the_three_selectors_stay_mutually_exclusive(tmp_path, monkeypatch):
+    import importlib.util
+    monkeypatch.chdir(FORK)
+    loaded = importlib.util.spec_from_file_location("gui_test_run_script_1243", RUN_SCRIPT)
+    mod = importlib.util.module_from_spec(loaded)
+    loaded.loader.exec_module(mod)
+    with pytest.raises(SystemExit):
+        mod.main([str(SMOKE), "--adapter", SHAPE_SPEC, "--out", str(tmp_path / "never.json"),
+                  "--batch", "b1", "--variant", "window.mode=windowed"])
+
+
+
+# --- to_test_scenario (#1225): publishing the plan is idempotent, resumable and paced -------------
+
+# What a published body must never carry: a Portuguese sentence over English prose, or a tool's signature line.
+_ATTRIBUTION = re.compile(r"co-authored-by|generated with|claude\b|🤖", re.I)
+_PT_BR = re.compile(r"\b(não|uma|para|com|sem|caso|casos|jogo|tela|janela|botão|arquivo|quando|então|também|deve|"
+                    r"executa|verifica)\b", re.I)
+
+
+def _assert_en_us_with_no_attribution(bodies):
+    assert bodies
+    for body in bodies:
+        assert not _ATTRIBUTION.search(body), body[:200]
+        assert not _PT_BR.search(body), body[:200]
+
+
+class _PublishGitHub:
+    """A recorded-call stand-in for the real REST runner: no network, no `gh`, and a failing create."""
+
+    def __init__(self, fail_on_create=None, start=100):
+        self.calls, self.made = [], []
+        self.next, self.creates = start, 0
+        self.fail_on_create = fail_on_create
+
+    def __call__(self, op, **kw):
+        self.calls.append((op, kw))
+        if op == "create_issue":
+            self.creates += 1
+            if self.fail_on_create and self.creates == self.fail_on_create:
+                raise RuntimeError("the connection dropped")
+            self.next += 1
+            made = {"number": self.next, "id": 900 + self.next}
+            self.made.append((kw, made))
+            return made
+        return {}
+
+    def of(self, op):
+        return [kw for o, kw in self.calls if o == op]
+
+    def ops(self):
+        return [o for o, _ in self.calls]
+
+
+def _pilot_1225():
+    """The committed pilot as a plan: its scenario, its script with the content hashes a conversion records."""
+    from squad.to_test_scenario import build_plan, read_scenario, read_script, record_hashes
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    script_path, md_path = docs / "play-pad-only.gui-test.json", docs / "play-pad-only.gui-test.md"
+    if not (script_path.exists() and md_path.exists()):
+        pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
+    scenario = read_scenario(md_path)
+    plan = build_plan(scenario, record_hashes(scenario, read_script(script_path)))
+    return script_path, plan
+
+
+def _nodes(plan):
+    """The issues a tree publish makes besides the scenario and the cases: each area, and each area's containers."""
+    return len(plan["areas"]) + sum(len(area["containers"]) for area in plan["areas"])
+
+
+def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
+    from squad import to_test_scenario as tts
+
+    script_path, plan = _pilot_1225()
+    map_path = tmp_path / tts.issues_path(script_path).name
+    gh = _PublishGitHub()
+    out = tts.publish(plan, gh, map_path=map_path)
+
+    assert len(plan["issues"]) >= 67
+    labels = {kw["name"] for kw in gh.of("ensure_label")}
+    assert {"Test-Case", "ready-for-agent"} <= labels
+    assert [kw["title"] for kw in gh.of("create_issue")][0] == plan["parent"]["title"]
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + _nodes(plan) + 1
+    # The relation names each issue's numeric id, and only the parent reaches the board.
+    assert {kw["sub"] for kw in gh.of("add_sub_issue")} == {made["id"] for _, made in gh.made[1:]}
+    assert gh.of("board") == [{"number": out["parent"]}]
+    # The map beside the script is what a second machine resumes from.
+    saved = tts.read_issues(map_path)
+    assert saved == out["map"] and saved["parent"] == out["parent"] and saved["layout"] == "areas"
+    assert all(case["hash"] for case in out["cases"].values())
+    _assert_en_us_with_no_attribution([kw["body"] for kw in gh.of("create_issue")])
+
+
+def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_publish_updates(tmp_path):
+    from squad import to_test_scenario as tts
+
+    script_path, plan = _pilot_1225()
+    map_path = tmp_path / tts.issues_path(script_path).name
+    with pytest.raises(RuntimeError):
+        tts.publish(plan, _PublishGitHub(fail_on_create=5), map_path=map_path)
+    saved = tts.read_issues(map_path)
+    assert saved["parent"] and len(saved["cases"]) == 1      # the parent, an area, its container and one case made it
+
+    resumed = _PublishGitHub(start=5000)
+    out = tts.publish(plan, resumed, map_path=map_path)
+    assert len(resumed.of("create_issue")) == len(plan["issues"]) + _nodes(plan) + 1 - 4
+    assert len(out["cases"]) == len(plan["issues"]) and out["removed"] == []
+    assert len({case["number"] for case in out["cases"].values()}) == len(plan["issues"])
+    assert resumed.of("board") == []                          # the parent is already on the board
+
+    smaller = copy.deepcopy(plan)
+    last = smaller["issues"].pop()["id"]
+    for area in smaller["areas"]:
+        for container in area["containers"]:
+            container["cases"] = [i for i in container["cases"] if i["id"] != last]
+    again = _PublishGitHub(start=9000)
+    dropped = tts.publish(smaller, again, map_path=map_path)
+    assert again.of("create_issue") == []                     # the stub lists no sub-issues, so links are not asserted
+    assert dropped["removed"] == [plan["issues"][-1]["id"]]
+    assert "close" not in again.ops()                         # a removed case is reported, never closed
+
+
+# --- to_test_scenario close-out (#1227): the pilot publishes through the command, within GitHub's sub-issue cap ----
+
+def test_1227_the_pilot_publishes_per_batch_and_per_case_as_a_tree_within_the_sub_issue_cap(tmp_path):
+    import shutil
+
+    from squad import to_test_scenario as tts
+
+    docs = _mesenai() / "docs" / "validation" / "process"
+    if not (docs / "play-pad-only.gui-test.json").exists():
+        pytest.skip("MESENAI_REPO holds no committed pilot script")
+    md, script = tmp_path / "pilot.md", tmp_path / "pilot.gui-test.json"
+    shutil.copy(docs / "play-pad-only.gui-test.md", md)
+    shutil.copy(docs / "play-pad-only.gui-test.json", script)
+    cases = len(tts.read_scenario(md)["cases"])
+
+    class Fake:
+        def __init__(self):
+            self.n, self.creates = 100, 0
+
+        def __call__(self, op, **kw):
+            if op != "create_issue":
+                return {}
+            self.n, self.creates = self.n + 1, self.creates + 1
+            return {"number": self.n, "id": 9000 + self.n}
+
+    per_case = Fake()
+    if cases > tts.SUB_ISSUE_CAP:
+        # The area tree (ADR-0275) holds the cap per node, so a pilot over 100 cases publishes per case instead of being refused.
+        assert tts.main(["publish", str(md), str(script), "--stamp"], github=per_case) == 0
+        plan = tts.build_plan(tts.read_scenario(md), tts.read_script(script))
+        assert per_case.creates == len(plan["issues"]) + len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"]) + 1
+        tts.issues_path(script).unlink()
+    per_batch = Fake()
+    assert tts.main(["publish", str(md), str(script), "--granularity", "batch"], github=per_batch) == 0
+    plan = tts.build_plan(tts.read_scenario(md), tts.read_script(script), granularity="batch")
+    assert per_batch.creates == len(plan["issues"]) + len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"]) + 1
+    assert len(plan["issues"]) == len(tts.read_script(script)["batches"])
+    assert tts.read_issues(tts.issues_path(script))["parent"] is not None
+# --- #1286: every case of the committed pad-only pilot, run on the squad's GUI test infrastructure ---
+
+from squad.gui_test_scenario import cases as scenario_cases  # noqa: E402
+from squad.gui_test_scenario import run_scenario  # noqa: E402
+from tests.gui_test_pilot_fake_1286 import ADAPTERS as PILOT_ADAPTERS  # noqa: E402
+from tests.gui_test_pilot_fake_1286 import MANUAL_ONLY_BATCHES  # noqa: E402
+
+
+def _automated_1286(script):
+    """The ids of the script's automated cases (#1399): every case whose Mode is not `manual`, in script order.
+
+    Derived from the script instead of frozen: the pilot is read from MesenAI's checkout, so a hardcoded list went red
+    on the fork base whenever MesenAI added a case (#1203) with no fork commit to blame."""
+    return [c["id"] for c in scenario_cases(script) if c["mode"] != "manual"]
+
+
+HOLDS_1286 = ["home.focus-holds-up", "home.focus-holds-down", "home.focus-holds-left", "home.focus-holds-right"]
+
+
+def _pilot_1286():
+    return _pilot_1223()
+
+
+def test_1286_the_expected_automated_ids_follow_the_script_not_a_frozen_list():
+    """#1399: the fork reads the pilot from MesenAI's checkout, so a MesenAI-only change (a case added in #1203) must not
+    redden the fork base. The expectation is the script's own non-manual cases, so flipping one case's mode moves it."""
+    d = json.loads(json.dumps(_pilot_1286()))
+    before = _automated_1286(d)
+    flipped = next(c["id"] for c in scenario_cases(d) if c["mode"] == "manual")
+    next(s for b in d["batches"] for part in ("setup", "steps", "teardown") for s in b.get(part) or []
+         if s["id"] == flipped)["mode"] = "auto"
+    after = _automated_1286(d)
+    assert flipped in after and flipped not in before
+    assert [i for i in after if i != flipped] == before
+
+
+def _home_1286(tmp_path):
+    """The committed home batch alone, on the adapter the roster names for it: the seven automated cases, nothing else."""
+    d = _pilot_1286()
+    batch = next(b for b in d["batches"] if b["id"] == "home")
+    return run_scenario({**d, "batches": [batch]}, PILOT_ADAPTERS, out_root=tmp_path)
+
+
+def test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run(tmp_path):
+    """A fresh settings profile has no play history and no favorites, so the Home holds Open a ROM alone and a D-pad
+    press stays on it - which is what the four `home.focus-holds-*` cases and the real emulator say (#1137, and the
+    real-app case above). An adapter whose Home keeps four tiles whatever the profile lets Up escape to Recent, and
+    that one escape is enough to make the whole home batch - six of the scenario's fifteen automated cases - unrunnable.
+    """
+    out = _home_1286(tmp_path)
+    by_id = {r["id"]: r["verdict"] for r in out["rows"]}
+    assert [by_id[i] for i in HOLDS_1286] == ["passed"] * 4, by_id
+
+
+def test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster(tmp_path):
+    out = _home_1286(tmp_path)
+    by_id = {r["id"]: r["verdict"] for r in out["rows"]}
+    home = [c for c in _automated_1286(_pilot_1286()) if c.startswith("home.")]
+    assert set(HOLDS_1286) <= set(home)
+    assert [by_id[i] for i in home] == ["passed"] * len(home), by_id
+
+
+def test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter():
+    """No batch of the committed script is left without a target, and the roster's `manual` claim holds: a batch it
+    calls manual-only has no automated case the adapter would have to answer."""
+    d = _pilot_1286()
+    rows = {c["id"]: c for c in scenario_cases(d)}
+    assert set(PILOT_ADAPTERS) == {b["id"] for b in d["batches"]}
+    for batch in d["batches"]:
+        modes = {rows[s["id"]]["mode"] for part in ("setup", "steps", "teardown") for s in batch.get(part) or []}
+        if batch["id"] in MANUAL_ONLY_BATCHES:
+            assert modes == {"manual"}, f"batch {batch['id']} is on a launch-only adapter and has an automated case"
+
+
+def test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated_ones_pass(tmp_path):
+    """The whole scenario in one call: every case of the committed script, in script order, none dropped and none
+    added; the automated cases (Mode != manual) pass on the roster and every other case is `pending` for a person."""
+    d = _pilot_1286()
+    out = run_scenario(d, PILOT_ADAPTERS, out_root=tmp_path)
+    assert [r["id"] for r in out["rows"]] == [s["id"] for s in scenario_cases(d)]
+    total = len(scenario_cases(d))
+    automated = _automated_1286(d)
+    assert automated and total > len(automated)
+    assert out["summary"]["cases"] == total and len(out["rows"]) == total
+    assert out["status"] == "passed" and out["reasons"] == []
+    assert out["summary"]["failed"] == 0 and out["summary"]["not executed"] == 0
+    assert [r["id"] for r in out["rows"] if r["verdict"] == "passed"] == automated
+    assert {r["id"] for r in out["rows"] if r["verdict"] == "pending"} == \
+        {c["id"] for c in scenario_cases(d)} - set(automated)
+    assert out["summary"]["pending"] == total - len(automated)
+
+
+def test_1286_a_case_names_the_case_that_blocks_it():
+    """The Blocked-by column of the scenario's case issues: a step waits for its batch's last setup step."""
+    rows = {c["id"]: c for c in scenario_cases(_pilot_1286())}
+    assert rows["home.focus-holds-up"]["blocked_by"] == "home.first-focus"
+    assert rows["lib.open-screen"]["blocked_by"] == "lib.reach-library"
+    assert rows["launch.first-run-home"]["blocked_by"] is None
+    assert rows["pause-pack-multi.pack-focus"]["blocked_by"] == "pause-pack-multi.chord-opens"
+
+
+def test_1286_a_batch_the_roster_cannot_serve_is_not_executed_and_never_dropped(tmp_path):
+    """A batch with no adapter is not skipped in silence: its cases keep their row, say `not executed` and name the
+    batch, and the run is red - a scenario whose cases nothing ran is not a green scenario."""
+    out = run_scenario(script(step("b1.auto"), step("b1.look", mode="manual")), {}, out_root=tmp_path)
+    assert [r["id"] for r in out["rows"]] == ["b1.auto", "b1.look"]
+    assert {r["verdict"] for r in out["rows"]} == {"not executed (no adapter for batch b1)"}
+    assert out["batches"] == [{"id": "b1", "verdict": "not executed",
+                               "reason": "the roster has no adapter for batch b1"}]
+    assert out["status"] == "failed"
+    assert out["reasons"] == ["no case executed", "batch b1 was not executed: the roster has no adapter for batch b1"]
+    assert out["summary"] == {"passed": 0, "failed": 0, "pending": 0, "not executed": 2, "cases": 2, "run": 0}
+
+
+def test_1286_a_failed_case_makes_the_scenario_red(tmp_path):
+    """A deviation the roster's adapter cannot show: the step fails, and the run names the case."""
+    d = script(step("b1.auto", check={"name": "ui.focused", "args": {"is": "play.ghost"}},
+                    wait={"check": "ui.focused == play.ghost", "timeout_ticks": 2}))
+    out = run_scenario(d, {"b1": TickingFake}, out_root=tmp_path)
+    assert out["status"] == "failed" and out["reasons"] == ["1 case(s) failed: b1.auto"]
+    assert out["rows"][0]["verdict"] == "failed (timeout waiting for ui.focused == play.ghost)"
+
+
+# --- #1276: the runner hands MESEN_GUI_WINDOW, the emulator adapter's own window switch, on unchanged ---
+
+# The adapter reads the switch out of its own environment (`mesen_gui_adapter.window_mode()`), so a run can only carry
+# it if the runner starts the adapter's process with it set. The runner's `env` tuple names the environment, and the
+# three preconditions are the only names it checks: the switch is a pass-through, unset meaning the adapter's default.
+# The stand-in below is the real adapter's class under its real spec, in a throwaway MESENAI_ROOT, so the case reads
+# what the command actually handed a worker without a build behind it.
+_WINDOW_MODE_LOGGER = '''"""A stand-in for MesenAI's adapter that records the window switch it was started with (#1276)."""
+import os
+from pathlib import Path
+
+from tests.gui_test_run_script_fake import ShapeAdapter
+
+
+class MesenGuiAdapter(ShapeAdapter):
+    def __init__(self, out_dir, **kw):
+        super().__init__(out_dir)
+        (Path(out_dir) / "window-mode.log").write_text(os.environ.get("MESEN_GUI_WINDOW", "(unset)") + "\\n")
+'''
+
+
+def test_1276_a_run_hands_the_window_switch_to_the_adapter_unchanged(tmp_path):
+    """MESEN_GUI_WINDOW is part of the emulator adapter's environment: a run must reach the adapter with it set."""
+    import ctypes
+    import sysconfig
+
+    mod = _run_script_module()
+    assert "MESEN_GUI_WINDOW" in mod.ADAPTERS["mesen-gui"]["env"], \
+        "the emulator adapter's environment must carry the window switch the adapter itself reads"
+
+    pkg = tmp_path / "mesenai" / "scripts" / "gui_test"
+    pkg.mkdir(parents=True)
+    (pkg / "mesen_gui_adapter.py").write_text(_WINDOW_MODE_LOGGER)
+    binary = tmp_path / "Mesen"
+    binary.write_bytes(b"#!/bin/sh\n")
+    # The gate loads the core, so the stand-in points it at a shared library that really loads: this interpreter's own.
+    name = sysconfig.get_config_var("INSTSONAME") or sysconfig.get_config_var("LDLIBRARY")
+    core = Path(sysconfig.get_config_var("LIBDIR") or "") / name
+    assert core.is_file() and ctypes.CDLL(str(core)), core
+
+    clean = tmp_path / "clean.json"
+    clean.write_text(json.dumps(script(step("b1.one"))))
+    # `any` is the escape hatch a runner without a primary display sets; `""` is the value the adapter reads as its own
+    # default. Both reach the adapter byte for byte, and neither makes the run red: the switch is handed on, not checked.
+    for value in ("any", ""):
+        out = tmp_path / f"results-{value or 'default'}.json"
+        p = _run_script_cmd(clean, out, spec="mesen-gui",
+                            env={"MESENAI_ROOT": str(tmp_path / "mesenai"), "MESEN_GUI_BINARY": str(binary),
+                                 "MESEN_CORE_LIB": str(core), "MESEN_GUI_WINDOW": value})
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert json.loads(out.read_text())["status"] == "passed"
+        seen = sorted(Path(str(out) + ".artifacts").rglob("window-mode.log"))
+        assert seen, "the run started no adapter process to record the switch"
+        assert {f.read_text().strip() for f in seen} == {value}, [f.read_text() for f in seen]
+
+
+def test_1392_the_fork_gate_keeps_the_gui_suite_command_and_adds_the_squad_shell_suites(tmp_path):
+    """The fork gate hands SG_FORK_TEST_CMD through unchanged (quotes and env intact) and a red squad suite blocks it."""
+    scripts = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
+    d = tmp_path / "contrib" / "squad-goal" / "scripts"
+    d.mkdir(parents=True)
+    for name in ("fork-gate.sh", "shell-suites.sh", "serial.sh"):
+        (d / name).write_text((scripts / name).read_text())
+    suite = d / "test-x.sh"
+    suite.write_text("#!/bin/bash\nexit 0\n")
+    # Its own lock directory, so the gate's gui-suite lock is not the one a suite run around this test already holds.
+    env = {**os.environ, "SG_STATE": str(tmp_path / "state")}
+    env.pop("SG_SERIAL_HELD", None)
+    seen = tmp_path / "seen"
+    gui = f"MESENAI_ROOT=/r MESEN_GUI_BINARY='/b b' sh -c 'echo \"$MESENAI_ROOT|$MESEN_GUI_BINARY\" > {seen}'"
+    p = subprocess.run(["bash", str(d / "fork-gate.sh"), gui], cwd=tmp_path, capture_output=True, text=True, timeout=15, env=env)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert seen.read_text().strip() == "/r|/b b"
+    suite.write_text("#!/bin/bash\nexit 1\n")
+    p = subprocess.run(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, capture_output=True, text=True, timeout=15, env=env)
+    assert p.returncode != 0 and "FAILED: test-x.sh" in p.stdout, p.stdout
+def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
+    """#1394: the command files each DEBT finding with the debt labels, and a second run files nothing."""
+    log = tmp_path / "issues.jsonl"
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(
+        "#!/bin/sh\n"
+        f'LOG="{log}"; touch "$LOG"\n'
+        'case "$*" in\n'
+        '  *"/labels/debt"*) echo "{}" ;;\n'
+        '  *"--method POST"*"/issues"*) cat >> "$LOG"; echo >> "$LOG"; echo \'{"html_url":"https://x/1"}\' ;;\n'
+        '  *"--paginate"*) cat "$LOG" ;;\n'
+        'esac\n')
+    gh.chmod(0o755)
+    review = tmp_path / "review.md"
+    review.write_text("- BLOCKING a.py:1 — bad. Acceptance: fixed.\n- DEBT b.py:2 — no backoff. Acceptance: backs off.\n")
+    env = {**os.environ, "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}"}
+    cmd = ["python", "-m", "squad.debt_filing", "--repo", "o/r", "--pr", "5", "--issue", "4", "--head", "abc",
+           "--review", str(review)]
+    first = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
+    assert first.returncode == 0, first.stderr
+    filed = [json.loads(line) for line in log.read_text().splitlines() if line]
+    # The filer labels a debt issue `debt` only (#1494): debts are worked like bugs, after the bugs,
+    # so `ready-for-agent` would put them back in the frontier's pick.
+    assert len(filed) == 1 and set(filed[0]["labels"]) == {"debt"}
+    assert "b.py:2" in filed[0]["body"] and "backs off" in filed[0]["body"]
+    again = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
+    assert again.returncode == 0 and "no new DEBT findings" in again.stdout

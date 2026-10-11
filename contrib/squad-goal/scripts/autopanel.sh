@@ -6,7 +6,7 @@
 read -r ref sha < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha'); s9=${sha:0:9}
 max=${AP_PANEL_MAX:-2}; used=$(grep -c . "$A/panel-$pr" 2>/dev/null | head -1); used=${used:-0}
 owner() { gh api -X POST repos/$SG_REPO/issues/$pr/labels -f "labels[]=needs-human" >/dev/null 2>&1
-  printf "Needs the owner — PR #%s @ %s: %s\nThe fix loop is paused on this PR (label needs-human). Refs #%s\n" $pr $s9 "$1" $iss > "$SG_STATE/cq/$iss-owner$$.md"
+  printf "Needs the owner — PR #%s @ %s: %s\nThe fix loop is paused on this PR (label needs-human). Reply /release as the whole comment to hand it back to the loop. Refs #%s\n" $pr $s9 "$1" $iss > "$SG_STATE/cq/$iss-owner$$.md"
   echo "NEEDS OWNER #$pr issue #$iss: $1"; exit 0; }
 [ "$used" -ge "$max" ] && owner "fix rounds and $max panel extensions spent; the review still asks for changes."
 [ -e "$SG_STATE/quota-guard" ] && owner "round cap hit and the Anthropic quota guard is on, so no panel could rule."

@@ -6,19 +6,30 @@ function sourcesModule({ STATES }) {
   // holds the legend to the colors the page paints and the help to the controls the page answers.
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
-    ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend })),   // the card states: from the one STATES table
-    { cls: "err", label: "Rule error on the node" },
-    { cls: "sel", label: "Selected" },
-    { cls: "drop", label: "Target of the link you drag" },
+    ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
+    { cls: "err", label: "Rule error on the node", group: "node" },
+    { cls: "sel", label: "Selected", group: "interaction" },
+    { cls: "drop", label: "Target of the link you drag", group: "interaction" },
   ];
+  // One run-state vocabulary: the top-bar verdict chip, its legend and the hub's run badges (contrib/squad-goal/scripts/hub.py RUN_STATES) name and
+  // paint a state alike; a Python test holds the two tables equal. `color` is a palette variable; `css` is the extra style of the pill, as the hub's table carries
+  // it; `text` is what both surfaces print in the pill; a `hub_only` state is one the hub derives, so the chip never shows it.
+  const RUN_STATES = [
+    { state: "completed", cls: "v-ok", text: "completed", label: "Run completed", color: "ok", css: "" },
+    { state: "verified", cls: null, text: "verified", label: "Failed or unverified run, verified by hand", color: "ok", css: "font-style:italic", hub_only: true },
+    { state: "unverified", cls: null, text: "unverified", label: "Work landed, the final gate had no command", color: "ok", css: "border-style:dashed", hub_only: true },
+    { state: "failed", cls: "v-bad", text: "failed", label: "Run failed", color: "err", css: "" },
+    { state: "needs-human", cls: "v-human", text: "ended · needs a decision", label: "Run needs a person", color: "warn", css: "" },
+    { state: "handled", cls: null, text: "ended · handled (landed in fork)", label: "Needs-human run, landed in the fork", color: "ok", css: "", hub_only: true },
+    { state: "running", cls: "v-live", text: "running", label: "Run in progress", color: "run", css: "" },
+    { state: "starting", cls: null, text: "starting", label: "Run starting", color: "run", css: "border-style:dotted", hub_only: true },
+    { state: "stalled", cls: "v-wait", text: "stalled", label: "Run stalled", color: "wait", css: "border-style:dashed" },
+    { state: "no verdict yet", cls: "v-none", text: "no verdict yet", label: "No verdict yet", color: "none", css: "" },
+  ];
+  // What a pill prints for a state, on any surface: the hub badges a run with the same words. The run header chip and the legend read this one map.
+  const STATE_TEXT = Object.fromEntries(RUN_STATES.map((x) => [x.state, x.text]));
   // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
-  const LEGEND_CHIPS = [
-    { cls: "v-ok", label: "Run completed" },
-    { cls: "v-bad", label: "Run failed" },
-    { cls: "v-live", label: "Run in progress" },
-    { cls: "v-wait", label: "Run stalled" },
-    { cls: "v-none", label: "No verdict yet" },
-  ];
+  const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
     { how: "Drag empty space", what: "Pan the graph.", covers: ["pan"] },
     { how: "Mouse wheel or trackpad pinch", what: "Zoom at the cursor.", covers: ["wheel"] },
@@ -35,6 +46,7 @@ function sourcesModule({ STATES }) {
     { how: "Enter in the name field", what: "Apply the rename.", covers: ["key:Enter"] },
     { how: "Ctrl or Cmd + Z", what: "Undo. Add Shift to redo.", covers: ["key:z"] },
     { how: "Ctrl or Cmd + Y", what: "Redo.", covers: ["key:y"] },
+    { how: "Drag the side panel's edge, or the arrow keys on its grip", what: "Set how wide the panel is — how tall it is when a narrow window makes it a bottom sheet. Home and End go to the narrowest and the widest; a double-click brings the default back.", covers: ["key:Home", "key:End"] },
     { how: "[", what: "Show or hide the side panel.", covers: ["key:["] },
     { how: "?", what: "Show or hide this help.", covers: ["key:?"] },
     { how: "Esc", what: "Close the menu and this help.", covers: ["key:Escape"] },
@@ -87,5 +99,5 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush };
 }

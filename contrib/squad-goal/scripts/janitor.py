@@ -8,6 +8,15 @@
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
  G  an open PR on the base branch whose revci line for its current head says APPROVE (5 min old), mergeable clean, with no auto/merged-<pr>: report READY-NOT-MERGED and run one autopilot pass
     (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why).
+ I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
+    otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
+ J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
+ K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
+    after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
+ O  a run that ended with a `failed` verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): every issue it was dispatched for goes back to the column the dispatch found it in --
+    auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- and the marker is dropped, so autofrontier/autobug dispatch it again.
+    Only the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board) is left, so a card another step moved past it is never downgraded; a run that landed work, an issue a live run works, and an issue an open or merged PR names keep their card and their marker. Once per run; the comment carries the run id and the verdict's reasons.
+ M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
@@ -19,6 +28,54 @@ def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets
     if dry: print("JANITOR " + m, flush=True)
     else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+alerts = st / "alerts.log"
+def alert(msg):   # alerts.log is what health.sh and the session read; the notification reaches the human away from the terminal
+    open(alerts, "a").write(time.strftime("%F %T ") + msg + "\n")
+    if not dry: subprocess.run([os.environ.get("JANITOR_NOTIFY", "/usr/bin/osascript"), "-e", 'display notification "' + msg.replace('"', "'")[:180] + '" with title "squad-goal"'], capture_output=True)
+def issues_named(text):   # the request's CHILD header is the authoritative list; the body of a request also embeds the raw
+    found = set()          # issue text, which names other issues in prose, so a bare `issue #N` scan would free the wrong markers
+    for l in text.splitlines():
+        if not l.startswith("CHILD"): continue
+        for m in re.finditer(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)", l):
+            found.update(x.strip() for x in m.group(1).split(",") if x.strip().isdigit())
+    for m in re.finditer(r"GitHub issue #(\d+)", text):
+        found.add(m.group(1))
+    return found
+def launch_tail(f, n=15):
+    p = f / "launch.log"
+    if not p.exists(): return ""
+    try: return "\n".join(p.read_text(errors="replace").splitlines()[-n:])
+    except OSError: return ""
+def queue_neverstart(n, body):
+    (st / "cq").mkdir(exist_ok=True)
+    (st / "cq" / f"{n}-neverstart-{os.getpid()}.md").write_text(body)
+def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issues the run was dispatched for, at most twice
+    req = f / "request.txt"
+    nums = issues_named(req.read_text()) if req.exists() else set()
+    tail = launch_tail(f)
+    quoted = f"\n```\n{tail}\n```\n" if tail else "\n"
+    for n in sorted(nums, key=int):
+        marks = [st / "auto" / f"{kind}-{n}" for kind in ("bug", "disp")]
+        if not any(m.exists() for m in marks): continue   # nothing dispatched for it: not ours to free, and no comment
+        ctr = st / "auto" / f"neverstart-{n}"
+        try: k = int(ctr.read_text().strip() or "0")
+        except (ValueError, OSError): k = 0
+        if k >= 2:
+            say(f"NEVER-STARTED #{n}: 2 retries already spent, marker kept")
+            continue
+        k += 1
+        if not dry: ctr.write_text(str(k) + "\n")
+        if k < 2:
+            say(f"NEVER-STARTED #{n}: run {f.name} never started, dispatching again (attempt {k} of 2)")
+            if not dry:
+                for mk in marks:
+                    if mk.exists(): mk.unlink()
+                queue_neverstart(n, f"run {f.name} never started, dispatching again (attempt {k} of 2).{quoted}")
+        else:
+            say(f"NEVER-STARTED #{n}: run {f.name} never started (attempt {k} of 2); not retrying, marker kept")
+            if not dry:
+                queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
+                alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
 procs = {}
 for l in sh("/bin/ps", "-axo", "pid=,ppid=,command=").splitlines():
     p = l.split(None, 2)
@@ -44,23 +101,42 @@ def kill(pidv, why):
             except OSError: pass
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
-    v = False; pidc = None; acc = set(); t = f / "record.jsonl"
+    v = False; pidc = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False
     if not t.exists(): return None
     for l in t.read_text().splitlines():
-        if '"verdict"' in l and '"event": "verdict"' in l: v = True
+        if '"verdict"' in l and '"event": "verdict"' in l:
+            v = True
+            try:   # the fold takes the last verdict event of a resumed record (ADR-0105)
+                d = json.loads(l); ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
+            except ValueError: ver = None; rs = []
+        if '"land"' in l:   # only the landing stage's own event counts, and its name is in the JSON, never guessed
+            try:
+                d = json.loads(l)   # a node that merely asked for children (the router's `routed: continue`) is not a landing
+                landed = landed or (d.get("event") == "land" and d.get("outcome") == "pass")
+            except ValueError: pass
         if '"event": "call_start"' in l:
             try: pidc = json.loads(l).get("pid") or pidc
             except ValueError: pass
         if '"spawn_accepted"' in l:
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: acc.add(m.group(1))
-    return {"verdict": v, "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime}
+    return {"verdict": v, "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 live = {}; keep = []
 for r in names:
     f = folder(r); i = read(f)
-    if i is None: keep.append(r); continue
+    if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
+        age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
+        if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
+            say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
+            if not dry:
+                subprocess.run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], capture_output=True, text=True, cwd=co)   # K: re-arm the PR sha of a never-started autofix run
+            free_never_started(f)   # the run frees its own issues; say() reports it in a dry run too
+            for q, (_, c) in procs.items():
+                if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
+            continue
+        keep.append(r); continue
     n = f.name
     if i["verdict"]:
         if i["idle"] > 180:
@@ -86,16 +162,72 @@ for x, rs in byissue.items():
     if len(rs) > 1 and not mk.exists():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
         if not dry: mk.touch()
+repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+_is = {}
+def issue_info(x):
+    if x not in _is:
+        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title] | @tsv').strip().split("\t")
+        _is[x] = (o + ["", "", ""])[:3]
+    return _is[x]
+for n, i in live.items():
+    mk = st / "auto" / f"janitor-closedrun-{n[-6:]}"
+    if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
+    infos = {x: issue_info(x) for x in sorted(i["acc"])}
+    if any(v[0] != "closed" for v in infos.values()): continue
+    dup = all(v[1] == "not_planned" or v[2].startswith("[duplicate") for v in infos.values())
+    nums = ", ".join("#" + x for x in infos)
+    if dup:
+        say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
+        if not dry:
+            mk.touch(); f = folder(n if n.startswith("/") else str(co / "runs" / n))
+            for q in inside(f):
+                if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} works only closed duplicate issues")
+            if i["pid"] and i["pid"] in procs: kill(i["pid"], f"last call of run {n}")
+    else:
+        say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
+        if not dry: mk.touch()
 for d in (st / "auto").glob("disp-*"):
-    if now - d.stat().st_mtime < 1800: continue
     req = d.read_text().strip(); lg = st / f"{req}.log"
-    n = d.name[5:]
-    if not (lg.exists() and "verdict failed" in lg.read_text() and n not in byissue): continue
+    n = d.name[5:]; lt = lg.read_text() if lg.exists() else ""
+    if now - d.stat().st_mtime < (600 if "Nothing ran" in lt else 1800): continue   # K: a refused start (`Nothing ran`) frees the issue after 10 min
+    if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
     if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged): the issue is past dispatch
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
+owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
+def card_status(p, n):   # the card's Status on project p, "" when unreadable (childcc.py reads it the same way)
+    f = sh("gh", "api", f"/users/{owner}/projectsV2/{p}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id').strip()
+    return sh("gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
+              f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")').strip()
+if owner and proj and repo0:
+    for r in names:   # O: a failed run that landed nothing releases its issues: card back where the dispatch found it, marker dropped
+        f = folder(r); i = read(f)
+        if not (i and i["failed"] and not i["landed"] and i["idle"] > 180): continue   # a run that landed work keeps its card
+        req = f / "request.txt"
+        nums = issues_named(req.read_text()) if req.exists() else set()
+        marks = {n: [k for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()] for n in nums}
+        marks = {n: m for n, m in marks.items() if m}
+        if not marks: continue
+        mk = st / "auto" / f"janitor-demoted-{f.name[-6:]}"
+        if mk.exists(): continue
+        if not dry: mk.touch()
+        why = "; ".join(i["reasons"]) or "no reason recorded"
+        for n in sorted(marks, key=int):
+            if n in byissue: continue   # a live run works it: not ours to release
+            if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
+            if card_status(proj, n) != "In Progress": continue   # only the column the dispatch set: never downgrade a card another step moved past it
+            if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch; -f alone would POST and the API answers that with Not Found, which reads as a PR forever
+            moves = [[proj, os.environ.get("SG_TODO", "Todo")]]
+            if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
+            say(f"DISPATCH-FAILED #{n}: run {f.name} ended failed ({why}), nothing landed; card -> {', '.join(s for _, s in moves)}, {'+'.join(marks[n])} marker dropped so it dispatches again")
+            if not dry:
+                for p, s in moves:
+                    subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
+                for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
+                (st / "cq" / f"{n}-dispatchfail-{os.getpid()}.md").write_text(
+                    f"Run {f.name} ended without a landed change (verdict failed: {why}). Its card is back in {moves[-1][1]} and its {' and '.join('auto/' + k + '-' + n for k in marks[n])} marker is dropped, so the next cycle dispatches the issue again.\n")
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
@@ -125,6 +257,22 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
     elif age > 900 and not k2.exists():
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
         if not dry: k2.touch()
+liveq = " ".join((folder(r) / "request.txt").read_text() for r in keep if (folder(r) / "request.txt").exists() and folder(r).name in live)
+for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)"').splitlines():   # M
+    pr, sha, pb, hr, ua = (l.split() + ["", "", "", "", ""])[:5]
+    if not (pr.isdigit() and pb == base and ua): continue
+    try: upd = time.mktime(time.strptime(ua, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+    except ValueError: continue
+    if now - upd < 1200: continue
+    mk = st / "auto" / f"janitor-stuck-{pr}-{sha[:9]}"
+    if mk.exists() or any((st / "auto").glob(f"dupiss-{pr}-*")): continue   # dupiss: autopilot found its issue closed as a duplicate; superseded, not stuck
+    ms = sh("gh", "api", f"repos/{repo}/pulls/{pr}", "-q", ".mergeable_state").strip()
+    ci = sh("bash", "-c", f"grep -h '^#{pr} {sha[:9]} ' '{st}/revci-{pr}.out' 2>/dev/null | tail -1 | sed -n 's/.*CI=\\([^ ]*\\).*/\\1/p'").strip()
+    why = "conflicts with the base (dirty)" if ms == "dirty" else ("CI red (" + ci + ")" if re.search(r"failure|timed_out|cancelled", ci) else "")
+    if not why or f"#{pr}" in liveq or hr in liveq: continue
+    tried = sum(1 for _ in (st / "auto").glob(f"retry-{pr}-{sha[:9]}"))
+    say(f"PR-STUCK #{pr} @ {sha[:9]}: {why}, unchanged {int((now - upd) // 60)} min, no live run on it" + (" (retries spent)" if tried else ""))
+    if not dry: mk.touch(); alert(f"PR #{pr} stuck: {why}; no live fix run for {int((now - upd) // 60)} min")
 hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     if not dry: hm.touch()

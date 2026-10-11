@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Squad hub e2e: pins the hub's contract over HTTP and drives the real page in Chrome.
+
+Usage: cd <checkout> && python3 <skill>/scripts/test-hub-e2e.py
+Run it from the checkout whose profile the hub should read. It works on a throwaway
+copy of the skill on its own port, so the live hub and the real models.json are never
+touched. Needs playwright (python) and Chrome; without either it prints SKIP and exits 0.
+Port: SG_HUB_E2E_PORT (7799). Artifacts: SG_HUB_E2E_ARTIFACTS (default a temp dir).
+"""
+import json, os, pathlib, shutil, signal, subprocess, sys, tempfile, time, urllib.error, urllib.request
+
+SKILL = pathlib.Path(__file__).resolve().parents[1]
+PORT = int(os.environ.get("SG_HUB_E2E_PORT", "7799"))
+BASE = f"http://127.0.0.1:{PORT}"
+REPO = os.getcwd()
+S = pathlib.Path(os.environ.get("SG_HUB_E2E_ARTIFACTS") or tempfile.mkdtemp(prefix="hub-e2e-"))
+shutil.copytree(SKILL, S / "skill", ignore=shutil.ignore_patterns("__pycache__"))
+MODELS = S / "skill/scripts/models.json"
+def browser_ok():
+    """Probe in a child process: a sync playwright session started here would keep its event loop alive."""
+    code = "from playwright.sync_api import sync_playwright\nwith sync_playwright() as p: p.chromium.launch(channel='chrome').close()"
+    return subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0
+
+if not browser_ok():
+    print("SKIP test-hub-e2e.py: needs playwright (python) plus a Chrome it can launch"); sys.exit(0)
+
+fails, checks = [], 0
+
+def ck(cond, label, extra=""):
+    global checks
+    checks += 1
+    print(("  ok   " if cond else "  FAIL ") + label + (f"  [{extra}]" if extra and not cond else ""))
+    if not cond: fails.append(label)
+
+def req(path, data=None, origin=None, ct="application/json"):
+    h = {}
+    if origin: h["Origin"] = origin
+    if data is not None: h["Content-Type"] = ct
+    r = urllib.request.Request(BASE + path, data=json.dumps(data).encode() if data is not None else None, headers=h)
+    try:
+        with urllib.request.urlopen(r, timeout=20) as x: return x.status, x.read()
+    except urllib.error.HTTPError as e: return e.code, e.read()
+
+def wait_up():
+    for _ in range(60):
+        try:
+            with urllib.request.urlopen(BASE + "/api/version", timeout=2): return True
+        except Exception: time.sleep(0.5)
+    return False
+
+print(f"artifacts: {S}")
+print("== 1. boot an isolated hub (throwaway copy of the skill, port %d)" % PORT)
+# A PR whose head's review attempt timed out and was re-queued (#1502): the hub serves it as its last good board data, so the
+# page renders the card through the real data path. A row older than the head's marker belongs to the head that moved.
+PR_SHA, PR9 = "1e38e5a7b41c0d2e9f", "1e38e5a7b"
+# A second open PR with a green review line and no loop reason of its own: the card used to derive `ready to merge` from that
+# line even while the loop held the merge (#1771). The hub serves both cards from its last good board data.
+GATE_SHA, GATE9, GATE_OLD = "abcdef0123456789ab", "abcdef012", "9c0ffee12"
+ST = S / "squadstate"; (ST / "auto").mkdir(parents=True)
+(S / "hubdir").mkdir()
+NOW = time.time()
+(S / "hubdir/hub-board.json").write_text(json.dumps(
+    {"t": NOW, "items": [], "prev": [], "prev_n": 0, "lc": {}, "err": None,
+     "prs": [{"n": 1491, "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
+              "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"},
+             {"n": 1492, "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",
+              "u": "2026-10-11T08:30:00Z", "h": GATE_SHA, "o": "2026-10-11T07:30:00Z"}]}))
+(ST / "revci-1492.out").write_text(f"#1492 {GATE9} clean CI=success:2 VERDICT: APPROVE\n")
+def gate(at, sha9, reason, text):
+    """auto/gate-<pr>: `<head sha9><TAB><epoch><TAB><reason><TAB><what it means>`, the pass's latest decision (#1766)."""
+    (ST / "auto/gate-1492").write_text(f"{sha9}\t{int(at)}\t{reason}\t{text}\n")
+def stamp(at):
+    """auto/.pass: the epoch of the loop's last pass."""
+    (ST / "auto/.pass").write_text(f"{int(at)}\n")
+for kind, at in (("launched", NOW - 1500), ("rereview", NOW - 240)):
+    mk = ST / f"auto/{kind}-1491-{PR9}"
+    mk.write_text(""); os.utime(mk, (at, at))
+with (ST / "review-times.tsv").open("a") as f:
+    f.write("%s\t1491\tdeepseek-v4-flash\t120\t142\n" % time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(NOW - 30)))
+p = subprocess.Popen([sys.executable, str(S / "skill/scripts/hub.py"), str(PORT)], cwd=REPO,
+                     stdout=open(S / "hub.log", "w"), stderr=subprocess.STDOUT, start_new_session=True,
+                     env=dict(os.environ, SG_HUB_DIR=str(S / "hubdir"), SG_STATE=str(ST),
+                              SG_REPO="squad-hub-e2e/none", SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO))
+try:
+    ck(wait_up(), "hub answers /api/version")
+    st, b = req("/api/version")
+    ck(st == 200 and isinstance(json.loads(b).get("v"), int), "GET /api/version -> 200 + int v", f"{st} {b[:80]}")
+
+    print("== 2. every GET endpoint the page calls")
+    for path, key in [("/api/runs", None), ("/api/stats", None), ("/api/board", None),
+                      ("/api/subs", None), ("/api/speed", None), ("/api/models", "coding_models"),
+                      ("/api/issue?n=1", None)]:
+        st, b = req(path)
+        try: d = json.loads(b)
+        except Exception: d = None
+        ck(st == 200 and d is not None, f"GET {path} -> 200 + JSON", f"{st} {b[:80]}")
+        if key and d: ck(key in d, f"{path} carries {key}", list(d)[:6])
+    st, b = req("/")
+    html = b.decode("utf-8", "replace")
+    ck(st == 200 and "<!doctype html" in html.lower() and "Squad hub" in html, "GET / -> the page")
+    ck('placeholder="always"' in html and "vazio" not in html, "page ships the current models row template")
+
+    print("== 3. write protection")
+    st, _ = req("/api/models", {"hours": {}}, origin=None)
+    ck(st == 400, "POST with no Origin -> 400 forbidden", st)
+    st, _ = req("/api/models", {"hours": {}}, origin="http://evil.example")
+    ck(st == 400, "POST with a foreign Origin -> 400", st)
+    st, _ = req("/api/plans", {"x": 1}, origin=BASE)
+    ck(st in (200, 400), "POST /api/plans reachable from our origin", st)
+    st, _ = req("/api/nope", {"x": 1}, origin=BASE)
+    ck(st == 400, "POST to an unknown path -> 400", st)
+
+    print("== 4. the hours round-trip through the API (isolated copy)")
+    before = MODELS.read_text()
+    st, b = req("/api/models", {"hours": {"coding_models": {"claude-sonnet-5-5": "23-06"}}}, origin=BASE)
+    d = json.loads(b)
+    ck(st == 200 and d.get("hours", {}).get("coding_models", {}).get("claude-sonnet-5-5") == "23-06", "valid window stored", f"{st} {b[:120]}")
+    ck(json.loads(MODELS.read_text())["hours"]["coding_models"]["claude-sonnet-5-5"] == "23-06", "written to models.json")
+    st, b = req("/api/models", {"hours": {"coding_models": {"claude-sonnet-5-5": "25-99"}}}, origin=BASE)
+    d = json.loads(b)
+    ck("err" in d, "bad window rejected", b[:120])
+    st, b = req("/api/models", {"hours": {"coding_models": {"claude-sonnet-5-5": "07-07"}}}, origin=BASE)
+    ck("err" in d or "coding_models" not in json.loads(b).get("hours", {}), "degenerate window (07-07) refused")
+    st, b = req("/api/models", {"hours": {"not_a_chain": {"m": "01-02"}}}, origin=BASE)
+    ck("err" in json.loads(b), "unknown chain refused", b[:120])
+    st, b = req("/api/models", {"hours": {"coding_models": {"not-in-chain": "01-02"}}}, origin=BASE)
+    ck("err" in json.loads(b), "model outside the chain refused", b[:120])
+    MODELS.write_text(before)
+    ck(MODELS.read_text() == before, "models.json restored byte for byte")
+
+    print("== 5. the browser: the models panel a user actually sees")
+    SNAP = MODELS.read_text()
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        br = pw.chromium.launch(channel="chrome")
+        pg = br.new_page(viewport={"width": 1500, "height": 950})
+        errs = []
+        pg.on("pageerror", lambda e: errs.append(str(e)))
+        pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
+        pg.goto(BASE, wait_until="domcontentloaded")
+        pg.wait_for_timeout(1200)
+        ck(pg.title().strip() != "", "page loads", pg.title())
+        # the OPEN PRS card of a head whose review timed out: the chip, its tooltip, the retry line, and the column's width (#1502)
+        try: pg.wait_for_selector('#bbody .col[data-g="Open PRs"] .it .pst', timeout=20000)
+        except Exception: pass
+        pv = pg.eval_on_selector_all('#bbody .col[data-g="Open PRs"] .it', """els=>els.map(e=>{const s=e.querySelector('.pst'),r=e.querySelector('.prr');
+            return {n:e.dataset.n, chip:s&&s.textContent, line:r&&r.textContent, tip:(s&&s.title)||'', over:e.scrollWidth-e.clientWidth,
+                    cover:s?s.scrollWidth-s.clientWidth:0, rover:r?r.scrollWidth-r.clientWidth:0}})""")
+        card = next((x for x in pv if x["n"] == "1491"), None)
+        ck(card is not None, "the OPEN PRS column renders the timed-out PR's card", pv)
+        ck(card and card["chip"] == "review timed out · deepseek-v4-flash · 120 s", "the chip names the model and the seconds it burned", card)
+        ck(card and card["line"] == "retry in 16 min", "the muted line says when the loop retries", card)
+        ck(card and "deepseek-v4-flash 120 s · timed out" in card["tip"], "the chip's tooltip lists the attempt for this head", card and card["tip"])
+        ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
+        if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
+        pg.wait_for_selector('#mbody input[data-hr="coding_models|claude-sonnet-5-5"]', timeout=15000)
+        rows = pg.eval_on_selector_all("#mbody .mr", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
+        ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
+        by = {r["m"]: r for r in rows}
+        ck(by.get("claude-sonnet-5-5", {}).get("hr") == "19-07", "coding claude-sonnet-5-5 shows 19-07", by.get("claude-sonnet-5-5"))
+        ck(by.get("claude-opus-5-5", {}).get("hr") == "19-07", "review claude-opus-5-5 shows 19-07", by.get("claude-opus-5-5"))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
+        ck(by.get("grok-4.5", {}).get("hr") == "", "grok-4.5 has no window (all day)", by.get("grok-4.5"))
+        ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
+        ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
+        cur = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("grok-4.5", "")
+        want = "21-05" if cur != "21-05" else "20-04"
+        pg.fill('input[data-hr="review_models|grok-4.5"]', want)
+        pg.dispatch_event('input[data-hr="review_models|grok-4.5"]', "change")
+        pg.wait_for_timeout(300)
+        ck(not pg.is_disabled("#msv"), "Save wakes up on an edit")
+        pg.click("#msv")
+        pg.wait_for_timeout(900)
+        saved = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("grok-4.5")
+        ck(saved == want, f"the browser's Save wrote {want} to models.json", saved)
+        ck("saved" in pg.inner_text(".msave .st").lower(), "the panel says saved", pg.inner_text(".msave .st")[:60])
+        pg.reload(wait_until="domcontentloaded"); pg.wait_for_timeout(1200)
+        if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
+        pg.wait_for_selector('input[data-hr="review_models|grok-4.5"]', timeout=15000)
+        ck(pg.input_value('input[data-hr="review_models|grok-4.5"]') == want, "survives a reload", pg.input_value('input[data-hr="review_models|grok-4.5"]'))
+        pg.fill('input[data-hr="review_models|grok-4.5"]', "99-99")
+        pg.dispatch_event('input[data-hr="review_models|grok-4.5"]', "change")
+        pg.wait_for_timeout(300)
+        ck(pg.input_value('input[data-hr="review_models|grok-4.5"]') == "", "a garbage window never enters the field", pg.input_value('input[data-hr="review_models|grok-4.5"]'))
+        ov = pg.eval_on_selector("#side", "e=>({sw:e.scrollWidth,cw:e.clientWidth})")
+        ck(ov["sw"] <= ov["cw"] + 1, "the sidebar has no horizontal overflow", ov)
+        wide = pg.eval_on_selector_all("#mbody .mr", "els=>els.map(e=>[e.querySelector('.mn').textContent, e.scrollWidth-e.clientWidth]).filter(x=>x[1]>1)")
+        ck(not wide, "no model row overflows its box", wide)
+        out = pg.eval_on_selector_all("#mbody .mr .mb button", "els=>els.map(e=>{const r=e.getBoundingClientRect(),b=e.closest('.mr').getBoundingClientRect();return Math.round(b.right-r.right)})")
+        ck(all(c >= 0 for c in out), "every row's buttons sit inside its box", out)
+        pg.locator("#side").screenshot(path=str(S / "side.png"))
+        pg.screenshot(path=str(S / "panel.png"), full_page=False)
+        pg.click("#mrv"); pg.wait_for_timeout(400)
+        other = pg.eval_on_selector_all(".acc summary, details summary", "els=>els.map(e=>e.textContent.trim())")
+        ck(any("cost" in o for o in other) and any("subscription" in o.lower() or "plans" in o.lower() for o in other), "the other panels are on the page", other[:8])
+        if not pg.eval_on_selector("details#stats", "e=>e.open"): pg.click("details#stats > summary"); pg.wait_for_timeout(1500)
+        ck(pg.eval_on_selector("#stats", "e=>e.open") is True, "cost & usage opens")
+        stxt = pg.inner_text("#sbody") if pg.query_selector("#sbody") else pg.inner_text("#stats")
+        ck(len(stxt) > 40, "cost & usage renders content", stxt[:60].replace("\n", " "))
+        side = pg.eval_on_selector("#stats .sb", "e=>({sw:e.scrollWidth,cw:e.clientWidth})")
+        ck(side["sw"] <= side["cw"] + 1, "cost & usage has no horizontal overflow", side)
+        over = pg.eval_on_selector_all(
+            "#stats .sb h4, #stats .sb h4 small, #stats .sb .tot>div, #stats .sb .cash, #stats .sb .kr, #stats .sb .pie .lg div",
+            "els=>els.map(e=>[(e.textContent||'').trim().slice(0,30),e.scrollWidth-e.clientWidth]).filter(x=>x[1]>1)")
+        ck(not over, "no cost & usage header or row overflows the 300 px sidebar", over)
+        pg.screenshot(path=str(S / "cost.png"))
+        br.close()
+        ck(not errs, "no page errors", errs[:3])
+
+    print("== 6. the OPEN PRS chip is the loop's own reason, never a derived one (#1771)")
+    def chips():
+        """The chip the hub serves for every open PR: [css class, text, tooltip], straight off /api/board."""
+        st, b = req("/api/board")
+        return {x["n"]: x.get("ps") or [] for x in json.loads(b)["prs"]["items"]}
+    now = time.time()
+    stamp(now - 30)
+    gate(now - 20, GATE9, "hold-threads", "unresolved review threads opened after the cache")
+    c = chips().get(1492)
+    ck(c and c[1] == "held: threads", "a current gate that holds the merge is the chip", c)
+    ck(c and c[1] != "ready to merge", "the held head is never `ready to merge`", c)
+    ck(c and "unresolved review threads opened after the cache" in c[2] and "20 s ago" in c[2], "the tooltip carries the gate line and its age", c and c[2])
+    gate(now - 20, GATE_OLD, "hold-threads", "unresolved review threads opened after the cache")
+    ck(chips()[1492][1] == "new head, not seen yet", "a gate line for the head before this one is not a verdict", chips()[1492])
+    gate(now - 20, GATE9, "merged", "merged as abc1234: APPROVE + CI green + clean + no open threads")
+    ck(chips()[1492][1] == "ready to merge", "the gate saying the merge goes ahead is what `ready to merge` is for", chips()[1492])
+    stamp(now - 600)
+    ck(chips()[1492][1] == "loop idle", "no pass for three watch cycles reads `loop idle`", chips()[1492])
+    stamp(now - 30)
+    (ST / "auto/off").write_text("")
+    off = chips()
+    ck(all(v and v[1] == "loop off" for v in off.values()), "auto/off: every open-PR card says `loop off`", off)
+    (ST / "auto/off").unlink()
+    ck(chips()[1492][1] == "ready to merge", "lifting the kill switch gives the loop's reason back", chips()[1492])
+finally:
+    MODELS.write_text(SNAP) if "SNAP" in dir() else None
+    p.send_signal(signal.SIGTERM); time.sleep(1)
+    if p.poll() is None: p.kill()
+
+print(f"\n{checks - len(fails)}/{checks} checks passed")
+if fails:
+    print("FAILED: " + "; ".join(fails)); sys.exit(1)
+print(f"SQUAD HUB E2E: PASS (artifacts in {S})")
