@@ -70,7 +70,19 @@ for n in $cc; do
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   if [ "$($G branch --show-current)" != "$SG_FORK_BASE" ] || [ -n "$($G status --porcelain --untracked-files=no)" ]; then echo "FORKCLOSE WAIT #$n: $SG_FORK_DIR is not a clean $SG_FORK_BASE checkout"; exit 0; fi
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
-  if [ -e "$A/basered-$bs" ]; then echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be $br's fault; waiting for a green base"; continue; fi
+  if [ -e "$A/basered-$bs" ]; then
+    # A park nobody hears about is a silent stall (#1407): say so once per base sha, naming the failing test and who waits.
+    if [ ! -e "$A/basered-$bs.escalated" ]; then touch "$A/basered-$bs.escalated"
+      ft=$(grep -E 'FAIL|not ok' "$SG_STATE/basetest-$bs.log" 2>/dev/null | grep -v 'fork gate' | head -3)
+      wb=""; for w in $cc; do [ "$($G rev-list --count "$SG_FORK_BASE..${SG_FORK_BRANCH//%n/$w}" 2>/dev/null)" -gt 0 ] && wb="$wb ${SG_FORK_BRANCH//%n/$w}"; done
+      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. After %s min the base suite is retried once on its own; a green retry lifts the park, a second red keeps it.\n" "$SG_FORK_BASE" "$bs" "${wb:- $br}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" > "$SG_STATE/cq/$n-basered$$.md"
+    fi
+    # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
+    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
+      if ( cd "$SG_FORK_DIR" && bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; touch "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN #$n: $SG_FORK_BASE $bs passed the solo retry after the park; lifting it"
+      else echo "FORKCLOSE BASE-RED #$n: the solo retry of $SG_FORK_BASE $bs failed too (see $SG_STATE/basetest-$bs.log); the park stays"; continue; fi
+    else echo "FORKCLOSE BASE-RED #$n: $SG_FORK_BASE $bs fails the fork suite on its own, so a red run here would not be $br's fault; waiting for a green base"; continue; fi
+  fi
   if [ ! -e "$A/basetest-$bs" ]; then   # a red base reds every branch at once: test it once per base head, before merging anything
     if ( cd "$SG_FORK_DIR" && bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then touch "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"
     else   # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
@@ -94,9 +106,9 @@ for n in $cc; do
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
   [ -n "${SG_E2E_DIR:-}" ] && [ -d "$SG_E2E_DIR" ] && [ -z "$(/usr/bin/git -C "$SG_E2E_DIR" status --porcelain --untracked-files=no)" ] \
     && /usr/bin/git -C "$SG_E2E_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_DIR" checkout -q --detach "origin/$SG_BASE"
-  if [ -n "${SG_E2E_BUILD_DIR:-}" ] && [ -d "$SG_E2E_BUILD_DIR" ]; then   # the built emulator the real-app cases drive: rebuild at the base's head (incremental)
+  if [ -n "${SG_E2E_BUILD_DIR:-}" ] && [ -d "$SG_E2E_BUILD_DIR" ]; then   # the built emulator the real-app cases drive: rebuild at the base's head (incremental) under the gui-suite lock: the GUI suite never launches a build that is mid-publish (#1410)
     /usr/bin/git -C "$SG_E2E_BUILD_DIR" fetch -q origin && /usr/bin/git -C "$SG_E2E_BUILD_DIR" checkout -q --detach "origin/$SG_BASE" \
-      && (cd "$SG_E2E_BUILD_DIR" && eval "${SG_E2E_BUILD_CMD:-make core && make ui}") > "$SG_STATE/e2e-build.log" 2>&1 \
+      && bash "$here/serial.sh" gui-suite bash -c 'cd "$1" && eval "$2"' _ "$SG_E2E_BUILD_DIR" "${SG_E2E_BUILD_CMD:-make core && make ui}" > "$SG_STATE/e2e-build.log" 2>&1 \
       || echo "FORKCLOSE WARN #$n: rebuilding $SG_E2E_BUILD_DIR failed (see e2e-build.log)"
   fi
   out=$("$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; id=$(awk '{print $NF}' <<<"$out")
