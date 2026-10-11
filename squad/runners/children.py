@@ -189,8 +189,9 @@ class Children:
         if out.kind == "prepare_failed":
             return self.outcome(name, "fail", out.reasons, None, {})
         if out.kind == "adapter_error":
-            return self.outcome(name, "fail", ["adapter_error"], None, {"cap": out.res.amount, "elapsed": out.elapsed,
-                                                                         "diagnostic": {"error": message or str(out.error)}})
+            return self.outcome(name, "fail", session.adapter_reason(out.error), None,
+                                {"cap": out.res.amount, "elapsed": out.elapsed,
+                                 "diagnostic": session.adapter_diagnostic(out.error, message)})
         return self.settle(ctx, name, d, ws, out, model)
 
     def settle(self, ctx, name, d, ws, out, model):
