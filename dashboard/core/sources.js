@@ -11,14 +11,21 @@ function sourcesModule({ STATES }) {
     { cls: "sel", label: "Selected" },
     { cls: "drop", label: "Target of the link you drag" },
   ];
-  // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
-  const LEGEND_CHIPS = [
-    { cls: "v-ok", label: "Run completed" },
-    { cls: "v-bad", label: "Run failed" },
-    { cls: "v-live", label: "Run in progress" },
-    { cls: "v-wait", label: "Run stalled" },
-    { cls: "v-none", label: "No verdict yet" },
+  // One run-state vocabulary: the top-bar verdict chip, its legend and the hub's run badges (contrib/squad-goal/scripts/hub.py RUN_STATES) name and
+  // paint a state alike; a Python test holds the two tables equal. `color` is a palette variable; a `hub_only` state is one the hub derives, so the chip never shows it.
+  const RUN_STATES = [
+    { state: "completed", cls: "v-ok", label: "Run completed", color: "ok" },
+    { state: "verified", cls: null, label: "Failed or unverified run, verified by hand", color: "ok", hub_only: true },
+    { state: "unverified", cls: null, label: "Work landed, the final gate had no command", color: "ok", hub_only: true },
+    { state: "failed", cls: "v-bad", label: "Run failed", color: "err" },
+    { state: "needs-human", cls: "v-human", label: "Run needs a person", color: "warn" },
+    { state: "running", cls: "v-live", label: "Run in progress", color: "run" },
+    { state: "starting", cls: null, label: "Run starting", color: "run", hub_only: true },
+    { state: "stalled", cls: "v-wait", label: "Run stalled", color: "warn" },
+    { state: "no verdict yet", cls: "v-none", label: "No verdict yet", color: "none" },
   ];
+  // The top-bar verdict chip, one row per class it paints (a guard holds this list to the page's CSS and to the chip's class map).
+  const LEGEND_CHIPS = RUN_STATES.filter((x) => !x.hub_only).map((x) => ({ cls: x.cls, label: x.label }));
   const HELP = [
     { how: "Drag empty space", what: "Pan the graph.", covers: ["pan"] },
     { how: "Mouse wheel or trackpad pinch", what: "Zoom at the cursor.", covers: ["wheel"] },
@@ -87,5 +94,5 @@ function sourcesModule({ STATES }) {
     return { close: stop, handlers };
   }
 
-  return { LEGEND, LEGEND_CHIPS, HELP, httpSource, followPush };
+  return { LEGEND, LEGEND_CHIPS, RUN_STATES, HELP, httpSource, followPush };
 }

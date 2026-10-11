@@ -31,7 +31,7 @@ $("m-run").addEventListener("click", () => setMode(false, true));
 $("m-edit").addEventListener("click", () => setMode(true, true));
 function inEdit() { return document.body.classList.contains("edit"); }
 
-var VERDICT_CLASS = { completed: "v-ok", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
+var VERDICT_CLASS = { completed: "v-ok", failed: "v-bad", "needs-human": "v-human", running: "v-live", stalled: "v-wait", "no verdict yet": "v-none" };
 function renderChrome() {
   if (!modePicked && inEdit() !== !S.events) setMode(!S.events);
   const st = S.stats, v = st && st.verdict, chip = $("vchip");

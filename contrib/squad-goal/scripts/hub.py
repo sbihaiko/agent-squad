@@ -105,7 +105,7 @@ def scan(p):
 
 def state_of(r, age):
     ver, reasons = r["verdict"], r["reasons"]
-    if ver is None: return "running" if age < 1800 else "stale"
+    if ver is None: return "running" if age < 1800 else "stalled"
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     return ver
 
@@ -157,7 +157,7 @@ def runs():
         if r is None: out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code"}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
         st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
-        rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stale": 2}.get(st, 1)
+        rank = 1 if (st == "needs-human" and age > 1800) else {"running": 0, "starting": 0, "needs-human": 0, "stalled": 2}.get(st, 1)
         t1 = r["t1"] or time.time()
         out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}})
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
@@ -333,9 +333,23 @@ def speed():
             "runs": {"today_median": round(st.median(today), 1) if today else None, "all_median": round(st.median(done), 1) if done else None},
             "rounds": {"prs": len(rounds), "mean": round(st.mean(rounds), 2) if rounds else None}, "kills": {"count": len(kills), "last": max(kills) if kills else None}}
 
+# One run-state vocabulary for the hub's run badges and its legend. The run dashboard's RUN_STATES (dashboard/core/sources.js) names and paints the
+# same states alike; tests/test_run_state_vocabulary.py holds the two tables equal. `color` is a palette variable of :root; `css` is extra style.
+RUN_STATES = [
+    {"state": "completed", "label": "Run completed", "color": "ok", "css": ""},
+    {"state": "verified", "label": "Failed or unverified run, verified by hand", "color": "ok", "css": "font-style:italic"},
+    {"state": "unverified", "label": "Work landed, the final gate had no command", "color": "ok", "css": "border-style:dashed"},
+    {"state": "failed", "label": "Run failed", "color": "err", "css": ""},
+    {"state": "needs-human", "label": "Run needs a person", "color": "warn", "css": ""},
+    {"state": "running", "label": "Run in progress", "color": "run", "css": ""},
+    {"state": "starting", "label": "Run starting", "color": "run", "css": "border-style:dotted"},
+    {"state": "stalled", "label": "Run stalled", "color": "warn", "css": "border-style:dashed"},
+    {"state": "no verdict yet", "label": "No verdict yet", "color": "none", "css": ""},
+]
+
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
-:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--pin:#5aa9ff}
+:root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--pin:#5aa9ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;height:100vh}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #top{position:sticky;top:0;background:linear-gradient(#162033,#121a28);padding:10px 10px 10px 12px;border-bottom:2px solid var(--pin);border-left:3px solid var(--pin);z-index:2;box-shadow:0 2px 8px #0008}#top>b{font-size:13px;letter-spacing:.12em;color:var(--pin)}
@@ -347,7 +361,9 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .r.show{background:#1f2a3a;box-shadow:inset 3px 0 0 var(--pin)}.r.pinned .pn{color:var(--pin)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 .b{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;border:1px solid}
-.running,.starting{color:var(--run)}.stale{color:var(--mute)}.landed,.pass,.ok{color:var(--ok)}.unverified{color:#4fb8d6}.verified{color:#56d364;font-style:italic}.needs-human,.stalled{color:var(--warn)}.failed{color:var(--err)}
+.landed,.pass,.ok{color:var(--ok)}
+/*RUN_STATE_CSS*/
+#lg{display:flex;flex-wrap:wrap;gap:3px 6px;padding:6px 10px;border-top:1px solid var(--line)}
 .m{color:var(--mute);font-size:11px;margin-top:2px}
 #q{width:100%;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 6px;font:inherit;margin-top:6px}
 .sp{border-bottom:1px solid var(--line);font-size:11px}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:12px;font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:none}
@@ -455,7 +471,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=stats class=sp><summary>cost &amp; speed<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<div id=list></div></div>
+<div id=list></div><div id=lg title="what a run badge means">/*RUN_STATE_LEGEND*/</div></div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>ISSUES &amp; PRs <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bx title="collapse">&raquo;</button></span></div><div id=bbody></div></div>
@@ -695,6 +711,9 @@ document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
+PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES)) \
+    .replace("/*RUN_STATE_LEGEND*/", "".join('<span class="b %s">%s</span>' % (r["state"].replace(" ", "-"), r["label"]) for r in RUN_STATES))
+
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
 SUBS = ("claude", "grok", "gpt", "gemini")
