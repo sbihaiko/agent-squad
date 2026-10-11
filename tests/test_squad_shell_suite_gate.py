@@ -49,10 +49,13 @@ def test_a_suite_that_prints_fail_but_exits_zero_is_not_hidden(tmp_path):
 def test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either(tmp_path):
     d = _tree(tmp_path, {"test-a.sh": "echo ok a"})
     marker = tmp_path / "gui-ran"
-    # FG_SUITES is pinned: an outer gate exports it for the branch's diff (forkclose.sh -> gate-suites.sh), the gate honours it over its
-    # full-mode default, and this test is about the full gate -- GUI suite and shell suites side by side. Left inherited, a `python` outer
-    # gate makes the gate run its pytest branch instead, which this fixture's /usr/bin:/bin PATH cannot even start (fork-gate.sh: uv: not found).
-    gate = lambda gui: _run("bash", str(d / "fork-gate.sh"), gui, cwd=tmp_path, env={"FG_SUITES": "full"})  # noqa: E731
+    # The gate's own inputs are pinned rather than inherited: forkclose.sh exports FG_SUITES for the branch's diff (gate-suites.sh) and this
+    # test runs inside that very gate. Left inherited, a `python` outer gate makes the gate run its pytest branch instead of the full one this
+    # test is about, which the fixture's /usr/bin:/bin PATH cannot even start (fork-gate.sh: uv: not found). SG_STATE is pinned for the same
+    # reason: left shared, the GUI suite waits on the machine's gui-suite lock behind every other run's own suite, so a busy machine reddens a
+    # test that says nothing about locks (serial.sh waits 1800s, the fixture's timeout is 60s). test-forkclose-serial.sh owns that arbitration.
+    gate = lambda gui: _run("bash", str(d / "fork-gate.sh"), gui, cwd=tmp_path,  # noqa: E731
+                            env={"FG_SUITES": "full", "SG_STATE": str(tmp_path / "state")})
     p = gate(f"touch {marker}")
     assert p.returncode == 0, p.stdout + p.stderr
     assert marker.exists(), "the GUI suite the gate already ran must keep running"
