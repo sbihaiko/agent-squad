@@ -136,7 +136,7 @@ const __mk=id=>({id,innerHTML:"",textContent:"",title:"",hidden:false,style:{},a
   addEventListener(t,f){__handlers[id+":"+t]=f},removeEventListener(t,f){delete __handlers[id+":"+t]},
   focus(){__focus.push(id)},setPointerCapture(){},getBoundingClientRect(){return __rect(id)}});
 const $=s=>__el[s]||(__el[s]=__mk(s));
-const __body=__mk("body");
+const __body=__mk("body");__el["body"]=__body;
 globalThis.document={body:__body,createElement:t=>{__made.push(t);return __mk("new:"+__made.length)}};
 globalThis.localStorage={hub:"{}"};
 globalThis.addEventListener=(t,f)=>{__handlers["win:"+t]=f};
@@ -165,7 +165,7 @@ $("#piph").onpointerdown({preventDefault(){},currentTarget:$("#piph"),pointerId:
 steps.dragBody=[...__body.classes];
 __handlers["#piph:pointermove"]({buttons:1,clientX:-900,clientY:-900});
 steps.dragOut=snap();
-__handlers["#piph:pointermove"]({buttons:1,clientX:520,clientY:710});
+__handlers["#piph:pointermove"]({buttons:1,clientX:520,clientY:300});   /* well inside the board: the shift arrow below moves 64px and must not hit the clamp */
 steps.dragIn=snap();
 __handlers["#piph:pointerup"]({});
 steps.dragEnd={body:[...__body.classes],saved:JSON.parse(JSON.stringify(bo.pip||{}))};
@@ -178,6 +178,12 @@ __handlers["#piph:keydown"]({key:"Escape",shiftKey:false,preventDefault(){},stop
 steps.escCollapsed=snap();
 __handlers["#piph:keydown"]({key:"Escape",shiftKey:false,preventDefault(){},stopPropagation(){}});
 steps.escFocus=[...__focus];
+$("#pipx").onclick();   /* back to the full card: the resize steps below read its full height */
+/* the left bar moves to another run: one new frame source, never a second frame */
+runs=[...runs,{id:"run-2",port:"9002",state:"running",name:"fix PR #1202"}];slots=["run-2"];pipDraw();
+steps.switched=snap();
+pipDraw();
+steps.repainted=snap();
 /* a smaller window: the remembered place is clamped back onto the board */
 __board={w:300,h:200,head:34};
 __handlers["win:resize"]();
@@ -185,11 +191,6 @@ steps.small=snap();
 __board={w:1200,h:800,head:34};
 __handlers["win:resize"]();
 steps.back=snap();
-/* the left bar moves to another run: one new frame source, never a second frame */
-runs=[...runs,{id:"run-2",port:"9002",state:"running",name:"fix PR #1202"}];slots=["run-2"];pipDraw();
-steps.switched=snap();
-pipDraw();
-steps.repainted=snap();
 /* no run selected: the hub's own message, and no frame behind it */
 runs=[];slots=[];pipDraw();steps.norun=snap();
 /* a dashboard older than the mode: the frame never answers, and the window says so */
