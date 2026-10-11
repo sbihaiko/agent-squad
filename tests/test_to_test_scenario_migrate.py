@@ -11,6 +11,19 @@ from squad import to_test_scenario as tts
 from tests.test_to_test_scenario_tree_publish import TreeGitHub, pad_plan
 
 KNOWN = 100
+CAP = 100
+
+
+class CappedGitHub(TreeGitHub):
+    """GitHub's cap on top of the tree stand-in: a parent already holding 100 sub-issues refuses the 101st."""
+
+    def __call__(self, op, **kw):
+        if op == "add_sub_issue":
+            held = self.kids.get(kw["parent"], [])
+            sub = next(n for n, i in self.issues.items() if i["id"] == kw["sub"])
+            if sub not in held and len(held) >= CAP and not kw.get("replace_parent"):
+                raise RuntimeError("422: Parent cannot have more than 100 sub-issues")
+        return super().__call__(op, **kw)
 
 
 def flat_scenario(gh, plan, path, known=KNOWN):
@@ -94,3 +107,37 @@ def test_a_dry_run_of_a_flat_map_counts_the_move_and_the_create_and_writes_nothi
     out = tts.publish(plan, gh, map_path=path, dry_run=True)
     assert len(gh.calls) == mark and path.read_text(encoding="utf-8") == text
     assert out["counts"]["move"] == KNOWN and out["counts"]["create"] == 16 + 16 + (281 - KNOWN)
+
+
+def test_a_full_parent_migrates_because_the_areas_are_linked_after_the_records_move(tmp_path):
+    """#1286 as it is: the scenario holds the cap's 100 records, so an area link before the moves is a 422."""
+    plan, gh, path = pad_plan(), CappedGitHub(), tmp_path / "m.json"
+    scenario = flat_scenario(gh, plan, path)
+    flat_numbers = set(gh.kids[scenario])
+    mark = len(gh.calls)
+    out = tts.publish(plan, gh, map_path=path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["layout"] == "areas" and len(saved["cases"]) == 281
+    assert len(gh.kids[scenario]) == 16 and not flat_numbers & set(gh.kids[scenario])
+    links = [kw for op, kw in gh.calls[mark:] if op == "add_sub_issue"]
+    assert [kw["parent"] for kw in links[-16:]] == [scenario] * 16      # the areas go last, on an emptied parent
+    assert all(kw["parent"] != scenario for kw in links[:-16])
+    assert len(out["created"]) == 281 - KNOWN
+    assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
+
+
+def test_an_interrupted_full_parent_migration_resumes_and_links_the_areas_last(tmp_path):
+    plan, gh, path = pad_plan(), CappedGitHub(), tmp_path / "m.json"
+    scenario = flat_scenario(gh, plan, path)
+    gh.fail_on_create = gh.creates + 40                 # dies among the cap's leftovers
+    with pytest.raises(RuntimeError):
+        tts.publish(plan, gh, map_path=path)
+    assert "layout" not in json.loads(path.read_text(encoding="utf-8"))
+    gh.fail_on_create = None
+    mark = len(gh.calls)
+    tts.publish(plan, gh, map_path=path)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    links = [kw for op, kw in gh.calls[mark:] if op == "add_sub_issue"]
+    assert [kw["parent"] for kw in links[-16:]] == [scenario] * 16
+    assert saved["layout"] == "areas" and len(saved["cases"]) == 281
+    assert len(gh.kids[scenario]) == 16 and sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
