@@ -70,6 +70,18 @@ def test_a_line_split_across_the_chunk_boundary_is_not_half_parsed(hub, log):
     assert hub.q_grok()["windows"][0]["pct"] == 100.0
 
 
+def test_a_credit_line_a_read_boundary_cuts_in_half_is_still_found(hub, log):
+    """The 4 MB read starts 10 bytes inside the only credit line, so the fragment it drops is this line's tail and the
+    older read stops at its head: neither half parses. A scan that cuts at its own boundaries calls the log blind
+    while the payload is in it, which is the reading this probe exists to avoid."""
+    body = json.dumps(CREDIT) + "\n"
+    pad = 4_000_010 - len(body)                        # 10 bytes past a whole 4 MB read
+    log.write_text(body + (FILLER + "\n") * (pad // (len(FILLER) + 1)) + "x" * (pad % (len(FILLER) + 1)))
+    assert log.stat().st_size == 4_000_010
+    r = hub.q_grok()
+    assert [w["pct"] for w in r["windows"]] == [100.0], r
+
+
 def test_a_log_with_no_credit_line_reads_unavailable_and_names_the_scan(hub, log):
     _filler_mb(log, 1)
     r = hub.q_grok()
