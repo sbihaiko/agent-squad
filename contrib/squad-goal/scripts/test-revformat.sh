@@ -103,4 +103,28 @@ printf 'VERDICT: APPROVE\n## Blocking\n- src/a.py:12 — null deref — fixed: t
 printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n- src/b.py:42 — the handle leaks — not fixed: still open on the error path\n## Debt\n- src/c.py:7 — the retry loop has no backoff — fixed: it backs off now — tests/test_c.py\n' > "$T/r.md"
 [ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=0" ] && ok "--summary counts only the unfixed bullets" || ko "--summary mixed round: '$(python3 "$src" --summary "$T/r.md")'"
 
+# 11) #1834: a fix round answers its previous findings in a '## Resolved' section of their own, accepted only in
+# fix-round mode (--fix-round). The answered finding moves there with the same bullet, so it stays auditable; the
+# section is an answer, not a severity, so neither the check nor --summary counts it. A full review (no --fix-round)
+# has findings, not answers: the heading is rejected there, named as such, and the verdict stays unusable.
+acc='VERDICT: APPROVE\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] now — tests/test_a.py::empty_list\n- src/b.py:42 — the handle leaks — fixed: it is closed on every path — tests/test_b.py::leaks\n## Debt\n- src/c.py:7 — the retry loop has no backoff — not fixed: it still hammers a 500\n'
+fxr() { printf '%b' "$1" > "$T/r.md"; python3 "$src" --fix-round --max-lines 60 "$T/r.md"; }
+out=$(fxr "$acc")
+[ $? = 0 ] && ok "a fix round whose every Blocking finding sits under '## Resolved' may APPROVE (#1834)" || ko "APPROVE with '## Resolved' rejected: '$out'"
+printf '%b' "$acc" > "$T/r.md"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=0 debt=1" ] && ok "--summary reads blocking=0 for it and counts the Debt bullet" || ko "--summary resolved: '$(python3 "$src" --summary "$T/r.md")'"
+printf '%b' "$acc" > "$T/r.md"
+out=$(python3 "$src" --max-lines 60 "$T/r.md"); rc=$?
+[ $rc = 1 ] && case "$out" in *Resolved*fix*) ok "a full review may not write '## Resolved', and the reason names it as a fix round's";; *) ko "the reason does not name '## Resolved' as a fix round's: '$out'";; esac || ko "'## Resolved' accepted outside a fix round (rc=$rc)"
+printf 'VERDICT: APPROVE\n## Blocking\n- src/b.py:42 — the handle leaks — not fixed: still open on the error path\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Debt\n- src/c.py:7 — the retry loop has no backoff — not fixed: it still hammers a 500\n' > "$T/r.md"
+out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md"); rc=$?
+[ $rc = 1 ] && ok "a 'not fixed' finding stays under '## Blocking' and still blocks the APPROVE" || ko "APPROVE + 'not fixed' Blocking accepted with Resolved (rc=$rc)"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=1" ] && ok "--summary counts the 'not fixed' Blocking finding and the Debt bullet, never a resolved one" || ko "--summary fix round: '$(python3 "$src" --summary "$T/r.md")'"
+printf 'VERDICT: CHANGES\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Blocking\n- src/b.py:42 — the handle leaks — it is open on every error path — close it there\n' > "$T/r.md"
+out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md")
+[ $? = 0 ] && ok "the delta may still add a new Blocking finding beside the resolved ones" || ko "new Blocking finding beside '## Resolved' rejected: '$out'"
+printf 'VERDICT: CHANGES\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Resolved\n- src/b.py:42 — the handle leaks — fixed: it is closed\n' > "$T/r.md"
+out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md")
+[ $? = 1 ] && case "$out" in *twice*) ok "'## Resolved' may not appear twice";; *) ko "the duplicate reason is not the shape's: '$out'";; esac || ko "two '## Resolved' sections accepted"
+
 rm -rf "$T"; exit $fail
