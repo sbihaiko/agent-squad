@@ -150,7 +150,18 @@
   .card.drop rect { stroke:var(--drop); stroke-width:2; fill:#2a1f33; }
   #rubber { stroke:var(--acc); stroke-width:1.6; stroke-dasharray:5 4; pointer-events:none; }
   #edges marker path { fill:#4a5568; }
-  #legend { display:flex; flex-wrap:wrap; gap:4px 12px; max-width:62%; justify-content:flex-end; color:var(--mute); font-size:11px; pointer-events:none; flex:1 1 auto; min-width:0; }
+  /* The legend is a strip on the map's right edge, under the zoom controls: it widens itself to the left on hover, focus or the sticky .open. */
+  #legend { position:absolute; right:12px; top:52px; z-index:4; box-sizing:border-box; width:28px; max-height:calc(100% - 52px - var(--legend-bottom, 40px)); overflow:auto; overscroll-behavior:contain; pointer-events:auto; background:var(--panel); border:1px solid var(--line); border-radius:6px; color:var(--mute); font-size:11px; transition:width .15s ease .15s; }
+  #legend:hover, #legend:focus-within, #legend.open { width:220px; transition-delay:0s; }
+  #b-legend { display:flex; align-items:center; gap:6px; width:100%; box-sizing:border-box; padding:4px 5px; border:0; background:none; color:var(--fg); font-size:11px; cursor:pointer; }
+  #legend-list { display:flex; flex-direction:column; padding:0 2px 4px; }
+  #legend .lg { display:flex; align-items:center; gap:6px; padding:2px 1px; white-space:nowrap; }
+  #legend .lg svg { flex:0 0 24px; }
+  #legend .lt, #legend .lh { opacity:0; transition:opacity .15s ease .15s; overflow:hidden; }
+  #legend:hover .lt, #legend:focus-within .lt, #legend.open .lt, #legend:hover .lh, #legend:focus-within .lh, #legend.open .lh { opacity:1; transition-delay:0s; }
+  #legend .lh { height:0; margin:4px 0 0; border-top:1px solid var(--line); text-transform:uppercase; letter-spacing:.06em; font-size:10px; }
+  #legend:hover .lh, #legend:focus-within .lh, #legend.open .lh { height:auto; padding-top:3px; }
+  #legend .dot { width:10px; height:10px; padding:0; margin:0 7px; background:currentColor; flex:0 0 10px; }
   .lg { display:inline-flex; align-items:center; gap:5px; }
   #legend .card, #help .card { cursor:default; }
   #help { position:fixed; inset:0; z-index:20; background:#000a; display:flex; align-items:center; justify-content:center; }
@@ -195,8 +206,7 @@
   #status:empty { display:none; }
   @media (max-width: 900px) { #status { bottom:112px; } }   /* a narrow window: the toast sits above the replay bar, not over its buttons */
   #side details.ref { margin-top:14px; }
-  /* A narrow window gives the map its height back: the legend lives in the help (?) too, so below 900 px it is not drawn on the map. */
-  @media (max-width:900px) { #legend { display:none; } }
+  /* A narrow window keeps the legend as the collapsed strip; the help (?) holds the full legend too. */
 
 #side .pnav { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:center; gap:10px; padding:4px 0 6px; background:var(--panel); }
 #side .pnav button { min-width:36px; font-size:16px; line-height:1; padding:3px 10px; }
