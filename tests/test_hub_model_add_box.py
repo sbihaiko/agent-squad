@@ -8,6 +8,7 @@ on every call -- `codex exec -m gpt-5.6-terra-fast` answers 400 "The 'gpt-5.6-te
 when using Codex with a ChatGPT account" -- and the chain fell through to its next entry.
 """
 import importlib.util
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -41,8 +42,14 @@ def hub():
 
 
 @pytest.fixture
-def box(hub, monkeypatch):
-    """The add box's own list, with the gateway's catalogue pinned to the observed one."""
+def box(hub, monkeypatch, tmp_path):
+    """The add box's own list, with both sources of gateway spellings pinned to what they held on 2026-10-11: the
+    gateway's catalogue and the Claude Code settings, which registers the same wrapper aliases (the real one carries
+    `claude-gpt-5.6-sol-fast` beside `claude-opus-5-5`)."""
+    monkeypatch.setattr(hub.pathlib.Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps(
+        {"modelSettings": {"claude-gpt-5.6-sol-fast": {}, "claude-opus-5-5": {}}}))
     monkeypatch.setattr(hub, "gateway_models", lambda ttl=120: list(GATEWAY))
     return lambda d=None: hub.known_models(d or dict(NO_CHAINS))
 
@@ -54,7 +61,7 @@ def test_the_add_box_offers_no_id_only_the_gateway_route_serves(box):
 
 def test_the_add_box_still_offers_the_gateway_ids_a_chain_consumer_answers(box):
     offered = box()
-    assert [m for m in RUNNABLE if m not in offered] == []
+    assert [m for m in RUNNABLE + ["claude-opus-5-5"] if m not in offered] == []   # claude-opus-5-5: from the settings
 
 
 def test_one_model_is_still_one_row(box):
