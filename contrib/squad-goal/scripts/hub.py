@@ -434,10 +434,12 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .sp{border-bottom:1px solid var(--line);font-size:11px}#mdl>summary{border-top:0}.sp>summary,.gh{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 10px;font-size:12px;font-weight:600;color:var(--fg);cursor:pointer;user-select:none;background:#10141a;border-top:1px solid var(--line);outline:none}
 .sp>summary::-webkit-details-marker{display:none}.sp>summary::before,.gh::before{content:"▸";flex:none;width:10px;color:var(--mute);font-weight:400}.sp[open]>summary::before,.gh.op::before{content:"▾"}.sp>summary:hover,.gh:hover{background:#171c24}.sp>summary:focus-visible,.gh:focus-visible{box-shadow:inset 0 0 0 1px var(--pin)}
 .sp>summary .sr,.gh .sr{margin-left:auto;font-weight:400;color:var(--mute);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}.sp[open]>summary .sr{display:none}.sp .sb{padding:4px 10px 10px}
-.sp h4{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin:10px 0 6px;font-size:12px;color:var(--fg);font-weight:600}.sp h4 small{font-weight:400;color:var(--mute);font-size:10px;white-space:nowrap}
-.tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:9px;color:var(--mute)}.tot b{display:block;font-size:15px;color:var(--fg);font-weight:600}
-.kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:11px;line-height:1.3}.kr .l small{display:block;color:var(--mute);font-size:9.5px}.kr b{grid-column:2;justify-self:end;font-size:14px;font-weight:600;line-height:1}.kr b small{font-size:10px;font-weight:400;color:var(--mute)}
-.kr .d{grid-column:2;justify-self:end;font-size:9px;padding:1px 6px;border-radius:9px;white-space:nowrap;background:#1c222b;color:var(--mute)}.kr .d.good{background:#14301f;color:#5fd38d}.kr .d.bad{background:#3a1a1a;color:#ff7b7b}
+.sp h4{display:flex;align-items:baseline;justify-content:space-between;gap:4px;margin:10px 0 6px;font-size:12px;color:var(--fg);font-weight:600;white-space:nowrap}.sp h4 small{font-weight:400;color:var(--mute);font-size:10px;white-space:nowrap}
+.tot{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.tot div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:4px 6px;font-size:9px;color:var(--mute)}.tot b{display:block;font-size:15px;color:var(--fg);font-weight:600}.tot b.m{color:var(--mute);font-size:10px;line-height:1.5}
+.tot .cash,.cash{grid-column:1/-1;background:none;border:0;padding:0;margin:2px 0 0;font-size:10px;color:var(--mute);line-height:1.35}
+#src,#per{display:inline-flex;flex-wrap:nowrap;gap:2px;margin:0}#src button{padding:1px 5px;font-size:10px}#per button{padding:1px 3px;font-size:9px}
+.kr{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-auto-rows:min-content;column-gap:8px;row-gap:2px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px;min-width:0}.kr:last-child{border:0}.kr .l{grid-row:1/3;min-width:0;font-size:11px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.kr .l small{display:inline;color:var(--mute);font-size:9.5px}.kr b{grid-column:2;justify-self:end;font-size:14px;font-weight:600;line-height:1}.kr b small{font-size:10px;font-weight:400;color:var(--mute)}.kr b.m{color:var(--mute)}.kr b.w{color:var(--warn)}
+.kr .d{grid-column:2;justify-self:end;font-size:9px;padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:12px;font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:11px;color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:12px}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
 .mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;overflow:hidden;gap:3px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10.5px;height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:none;border-color:var(--pin)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
@@ -454,7 +456,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .sub .pr{display:flex;gap:6px;align-items:center;color:var(--mute);font-size:10px}.sub select{flex:1;min-width:0;max-width:100%}.sub input{padding:3px 6px;font-size:11px;min-width:0}.sub input[data-f=amount]{flex:1}.sub input[data-f=cur]{width:56px;text-transform:uppercase}
 .sub .dt{color:var(--mute);font-size:10px;line-height:1.4}.sub .dt b{color:var(--fg);font-weight:600}.sub .warn{color:var(--warn);font-size:10px}
 .mb{margin-top:2px}.mb .lab{display:flex;justify-content:space-between;font-size:10px;color:var(--mute);margin-bottom:3px}.mb .lab b{color:var(--fg);font-weight:600}.mb .tr{position:relative;height:9px;border-radius:5px;background:#1c222b;overflow:visible}.mb .fl{height:100%;border-radius:5px;background:#e0a23a}.mb .fl.good{background:#3ecf8e}.mb .fl.bad{background:#d9534f}.mb .fl.warnq{background:#5aa9ff}.mb .tk{position:absolute;top:-3px;bottom:-3px;width:2px;background:#d8dde6;border-radius:1px}.mb .sc2{display:flex;justify-content:space-between;font-size:9px;color:var(--mute);margin-top:2px}
-.tot3{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-top:4px}.tot3 div{background:#10141a;border:1px solid var(--line);border-radius:6px;padding:6px 7px;font-size:10px;color:var(--mute);line-height:1.3}.tot3 b{display:block;font-size:15px;color:var(--fg);font-weight:600;margin:1px 0}.tot3 span{font-size:9px;display:block}.tot3 div:last-child b{color:var(--ok)}.subx{color:var(--mute);font-size:10.5px;line-height:1.45;margin:8px 0 4px}
+.subx{color:var(--mute);font-size:10.5px;line-height:1.45;margin:8px 0 4px}
 .pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:11px}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.warnl{margin-top:4px;font-size:9px;color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
@@ -535,7 +537,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
-<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class=tot3 id=tot3></div><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
+<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
 <div id=list></div></div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
@@ -607,11 +609,22 @@ function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new S
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);userPicked=false;save()}
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}
-function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length;
-  return `<svg viewBox="0 0 ${W} ${H+14}">`+rows.map((r,i)=>`<rect x="${i*bw+1}" y="${H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="#5aa9ff"><title>${r.t}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")+`<text x="0" y="${H+11}" fill="#8a93a3" font-size="9">${rows[0].t}</text><text x="${W}" y="${H+11}" fill="#8a93a3" font-size="9" text-anchor="end">${rows[rows.length-1].t} · max ${usd(mx)}</text></svg>`}
-function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}<small>${sub}</small></span><b>—</b></div>`;
-  let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;chip=d===0?`<span class=d>same as before (${base}${unit})</span>`:`<span class="d ${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")} · was ${base}${unit}</span>`}
-  return `<div class=kr><span class=l>${label}<small>${sub}</small></span><b>${v}<small>${unit}</small></b>${chip}</div>`}
+function bars(rows,W=280,H=40){if(!rows.length)return"";const mx=Math.max(...rows.map(r=>r.spend),0.01),bw=W/rows.length,pad=12,xl=t=>String(t).replace(/^\d{4}-/,"");
+  return `<svg viewBox="0 0 ${W} ${H+pad+14}">`
+    +`<line x1="0" y1="${pad}" x2="${W}" y2="${pad}" stroke="#3ecf8e" stroke-dasharray="3 2" stroke-width="1"/>`
+    +`<text x="${W}" y="${pad-3}" fill="#3ecf8e" font-size="9" text-anchor="end">max ${usd(mx)}</text>`
+    +rows.map((r,i)=>`<rect x="${i*bw+1}" y="${pad+H-r.spend/mx*H}" width="${Math.max(bw-2,1)}" height="${r.spend/mx*H}" fill="${r.spend>=mx?"#3ecf8e":"#5aa9ff"}"><title>${xl(r.t)}: ${usd(r.spend)} · ${r.runs} runs</title></rect>`).join("")
+    +`<text x="0" y="${H+pad+12}" fill="#8a93a3" font-size="9">${xl(rows[0].t)}</text>`
+    +`<text x="${W}" y="${H+pad+12}" fill="#8a93a3" font-size="9" text-anchor="end">now</text></svg>`}
+function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b>—</b></div>`;
+  const u=unit?String(unit).trim():"";
+  let chip="";if(base){const d=Math.round((v-base)/base*100),good=lowerBetter?d<0:d>0;
+    const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
+    chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
+  return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
+function openRows(o){return `<h4>Open PRs <small>oldest first</small></h4>`
+  +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
+   :`<div class=kr><span class=l>none open</span></div>`)}
 let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images."},EFF=["low","medium","high","max"];
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
@@ -639,11 +652,16 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
 /* accordion: one group open at a time */
 const ACC=["plans","stats","mdl"];if(!ACC.includes(ls.acc))ls.acc="";
 ACC.forEach(i=>{const e=$("#"+i);e.open=i===ls.acc;e.addEventListener("toggle",()=>{if(e.open){ACC.forEach(j=>{if(j!==i)$("#"+j).open=false});ls.acc=i;save();if(i==="mdl")mdlLoad()}else if(ls.acc===i&&!ACC.some(j=>$("#"+j).open)){ls.acc="";save()}})});mdlLoad();
-const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"k":""+n;
+const PCOL=["#5aa9ff","#3ecf8e","#f5b041","#b79cf6","#2dd4bf","#ff6b6b","#c678dd","#e5c07b","#8a93a3"],tk=n=>n>=1e9?(n/1e9).toFixed(2)+"B":n>=1e6?(n/1e6).toFixed(1)+"M":n>=1e3?(n/1e3).toFixed(0)+"K":""+n;
+const OTHER=0.01;
 function pie(ms){const rows=ms.map(m=>({...m,v:m.in+m.out})).filter(m=>m.v>0);if(!rows.length)return"<span class=m>no token data</span>";
- const top=rows.slice(0,8),rest=rows.slice(8).reduce((a,m)=>a+m.v,0),sl=top.map(m=>({n:m.model,v:m.v,t:`${m.model}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));if(rest)sl.push({n:"other",v:rest,t:"other models"});
- const tot=sl.reduce((a,x)=>a+x.v,0);let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
- return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C+4} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
+ const tot=rows.reduce((a,m)=>a+m.v,0);const keep=[],fold=[];
+ for(const m of rows) (m.v/tot<OTHER?fold:keep).push(m);
+ while(keep.length+(fold.length?1:0)>6) fold.unshift(keep.pop());
+ const sl=keep.map(m=>({n:m.model,v:m.v,t:`${m.model}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
+ if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.model}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
+ let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
+ return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" font-size=8>tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
 const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<2?"just now":m<90?m+" min ago":Math.round(m/60)+" h ago"},rs=t=>t?new Date(t*1000).toLocaleString([],{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}):"?";
 const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now";const d=Math.floor(x/86400),h=Math.floor(x%86400/3600),m=Math.floor(x%3600/60);return"resets in "+(d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`)};
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
@@ -654,7 +672,7 @@ const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","�
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);$("#plsr").textContent=any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices";
- $("#tot3").innerHTML=`<div>plans<b>${usd(d.plans)}</b><span>per month</span></div><div>API<b>${usd(d.api)}</b><span>so far this month</span></div><div>total<b>${usd(d.total)}</b><span>plans + API</span></div>`;
+ $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#subs").innerHTML=`<div class=subx>Per subscription: API-equivalent usage vs the plan price so far.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" title="R$, U$, € or any 3-letter code"></span>`:"";
@@ -672,24 +690,24 @@ $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(
  try{await fetch("/api/plans",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({[k]:body})})}catch(x){}pollSubs()});
 async function pollStats(){try{pollSubs();
   const st=await (await fetch("/api/stats?period="+per+"&src="+src)).json(),sp=await (await fetch("/api/speed")).json();
-  $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">${p}</button>`).join("");
-  $("#src").innerHTML=[["both","both"],["sub","subscription"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
+  $("#per").innerHTML=["hour","day","month"].map(p=>`<button data-p=${p} class="${p===per?"on":""}">per ${p}</button>`).join("");
+  $("#src").innerHTML=[["both","all"],["sub","plans"],["api","API"]].map(([v,l])=>`<button data-s=${v} class="${v===src?"on":""}">${l}</button>`).join("");
   document.querySelectorAll("#src button").forEach(b=>b.onclick=()=>{src=b.dataset.s;save();pollStats()});
   document.querySelectorAll("#per button").forEach(b=>b.onclick=()=>{per=b.dataset.p;save();pollStats()});
   $("#chart").innerHTML=bars(st.buckets);$("#pie").innerHTML=pie(st.models||[]);
-  $("#stsr").textContent=(src==="both"?"":(src==="sub"?"subscription ":"API "))+"today "+usd(st.totals.today);
-  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b>${usd(st.totals.all)}</b></div>`;
+  $("#piet").textContent=tk((st.models||[]).reduce((a,m)=>a+m.in+m.out,0))+" all time";
+  $("#stsr").textContent=`today ${usd(st.totals.today)} · merge ${Math.round(sp.pr.after.median||0)} min`;
+  const same=st.totals.all===st.totals.month;
+  $("#tot").innerHTML=`<div>today<b>${usd(st.totals.today)}</b></div><div>this month<b>${usd(st.totals.month)}</b></div><div>all time<b${same?" class=m":""}>${same?"= this month":usd(st.totals.all)}</b></div>`;
   const b=sp.baseline,n=sp.pr.after.n,cut=b.cutoff.slice(5,16).replace("T"," ");
-  $("#kpi").innerHTML=`<h4>Speed <small>vs. before ${cut} UTC</small></h4>`
-   +kr("Time to merge a PR","median, open → merged",sp.pr.after.median,"min",b.pr.median)
-   +kr("Time to merge a PR","average",sp.pr.after.mean,"min",b.pr.mean)
-   +kr("Run duration","median, today",sp.runs.today_median,"min",b.run_median)
-   +kr("PRs merged since then","sample size",n,"",0,false)
-   +kr("Review rounds per PR","average",sp.rounds.mean,"",null)
-   +kr("Hung runs killed","by the heartbeat",sp.kills.count,"",null)
-   +((sp.pr.open&&sp.pr.open.length)?`<h4>Open now <small>oldest first · the loop ages a PR past 30 min</small></h4>`
-     +sp.pr.open.map(o=>`<div class=kr><div class=l>#${o.n}</div><b${o.min>=30?' style="color:var(--warn)"':''}>${o.min}<small>min</small></b></div>`).join(""):"")
+  $("#kpi").innerHTML=`<h4>Speed <small>since ${cut} UTC · ${n} PR${n===1?"":"s"}</small></h4>`
+   +kr("Merge time",", median",sp.pr.after.median,"min",b.pr.median)
+   +kr("Merge time",", average",sp.pr.after.mean,"min",b.pr.mean)
+   +kr("Run time",", median today",sp.runs.today_median,"min",b.run_median)
+   +kr("Review rounds",", average",sp.rounds.mean,"",null)
+   +kr("Hung runs killed","",sp.kills.count,"",null)
   +(n<10?`<div class=warnl>Provisional: only ${n} PR${n===1?"":"s"} so far; the comparison firms up at ~10.</div>`:"")+(sp.pr.stale?"<div class=warnl>PR data stale</div>":"");
+  $("#open").innerHTML=openRows(sp.pr.open);
 }catch(e){}}
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);

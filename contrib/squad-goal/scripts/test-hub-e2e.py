@@ -155,6 +155,12 @@ try:
         ck(pg.eval_on_selector("#stats", "e=>e.open") is True, "cost & usage opens")
         stxt = pg.inner_text("#sbody") if pg.query_selector("#sbody") else pg.inner_text("#stats")
         ck(len(stxt) > 40, "cost & usage renders content", stxt[:60].replace("\n", " "))
+        side = pg.eval_on_selector("#stats .sb", "e=>({sw:e.scrollWidth,cw:e.clientWidth})")
+        ck(side["sw"] <= side["cw"] + 1, "cost & usage has no horizontal overflow", side)
+        over = pg.eval_on_selector_all(
+            "#stats .sb h4, #stats .sb h4 small, #stats .sb .tot>div, #stats .sb .cash, #stats .sb .kr, #stats .sb .pie .lg div",
+            "els=>els.map(e=>[(e.textContent||'').trim().slice(0,30),e.scrollWidth-e.clientWidth]).filter(x=>x[1]>1)")
+        ck(not over, "no cost & usage header or row overflows the 300 px sidebar", over)
         pg.screenshot(path=str(S / "cost.png"))
         br.close()
         ck(not errs, "no page errors", errs[:3])
