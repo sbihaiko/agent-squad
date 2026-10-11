@@ -11,7 +11,8 @@ model judgment and lives in the skill, not here.
 Two outside dependencies are injected, and they are the only ones this module has:
 
 - **the GitHub runner** — a callable `runner(op, **kwargs)`; the ops are `ensure_label`, `create_issue`,
-  `update_issue`, `add_sub_issue`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
+  `update_issue`, `add_sub_issue`, `remove_sub_issue`, `list_sub_issues`, `set_title`, `issue_body`,
+  `search_open_bug`, `comment`, `close`, `reopen`, `issue_state`, `board` and `file_bug`. `rest_runner`
   builds the real one on `gh api` (REST, never GraphQL: a scenario publishes dozens of sub-issues). This module reads
   `issue_state` to know whether a verdict changed and whether a case is closed, and it **never** calls `file_bug`: the
   run command owns the one bug a red run files, and the write-back only links it.
@@ -44,10 +45,13 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 from squad.gui_test import validate
@@ -73,6 +77,13 @@ CASE_LABEL = "testcase"
 
 SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
+AREA_LABEL = "testarea"
+CASES_EMOJI = "📋"
+DASHBOARD_START = "<!-- gui-test:dashboard:start -->"
+DASHBOARD_END = "<!-- gui-test:dashboard:end -->"
+AREA_BODY_LIMIT = 60_000                 # GitHub refuses an issue body over 65,536 characters; the rest is headroom
+EXPECT_LIMIT = 160                       # the Cases table shows this much of a case's expected result
+NO_OBJECTIVE = "(no objective stated)"
 
 _SCRIPT_SUFFIXES = (".gui-test.json", ".gui-test")
 _SEPARATOR = re.compile(r":?-{2,}:?")
@@ -350,7 +361,7 @@ def _batch_issue(batch, steps, edges):
             "hash": hashlib.sha256(hashes.encode("utf-8")).hexdigest() if hashes else None}
 
 
-def _scenario_parent_body(scenario, script, steps, edges):
+def _scenario_parent_body(scenario, script, steps, edges, areas):
     fixtures = script.get("fixtures") or {}
     variants = script.get("variants") or {}
     rows = "\n".join(f"| `{s['id']}` | `{s['batch']}` | `{s['mode']}` | "
@@ -367,6 +378,7 @@ def _scenario_parent_body(scenario, script, steps, edges):
         "## Variants", "",
         "\n".join(f"- `{axis}`: " + ", ".join(f"`{value}`" for value in values)
                   for axis, values in variants.items()) or "None.", "",
+        _areas_table(areas),
         "## Cases", "",
         "| Case | Batch | Mode | Blocked by |",
         "|---|---|---|---|",
@@ -396,14 +408,97 @@ def _plan_from_scenario(scenario, script, *, granularity="case", wave="01"):
     edges = _setup_edges(steps)
     by_case = {c["id"]: c for c in scenario["cases"]}
     if granularity == "case":
-        issues = [_case_issue(by_case[s["id"]], s, edges) for s in steps]
+        issues = [dict(_case_issue(by_case[s["id"]], s, edges), batch=s["batch"]) for s in steps]
     else:
-        issues = [_batch_issue(batch["id"], steps, edges) for batch in script["batches"]]
+        issues = [dict(_batch_issue(batch["id"], steps, edges), batch=batch["id"]) for batch in script["batches"]]
+    areas = _area_tree(script, issues)
     return {"scenario": scenario["name"], "granularity": granularity,
             "parent": {"title": f"Test scenario: {scenario['name']}",
                        "labels": [PARENT_LABEL, f"wave:{wave}"],
-                       "body": _scenario_parent_body(scenario, script, steps, edges)},
-            "issues": issues}
+                       "body": _scenario_parent_body(scenario, script, steps, edges, areas)},
+            "areas": areas, "issues": issues}
+# --------------------------------------------------------------------------- the area tree (ADR-0275)
+
+
+def _area_key(batch):
+    """The batch's `area` field, else its id up to the first `-` (ADR-0275 section 2)."""
+    return batch.get("area") or batch["id"].split("-", 1)[0]
+
+
+def _cell(text, limit=None):
+    text = " ".join(str(text or "").split()).replace("|", "\\|")
+    return text if limit is None or len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _action_check(step):
+    return f"{_call(step.get('action'))} -> {_call(step.get('check'))}"
+
+
+def _area_body(objective, batches):
+    rows = [f"| `{s['id']}` | {_cell(s.get('expect'), EXPECT_LIMIT)} | {_cell(_action_check(s))} | "
+            f"{s.get('severity', '-')} | {'manual' if s.get('mode') == 'manual' else 'automated'} | - |"
+            for batch in batches for _batch, _kind, s in steps({"batches": [batch]})]
+    return "\n".join([objective, "", "## Cases", "",
+                      "| Case | Expected | Action -> check | Severity | Mode | Record |",
+                      "|---|---|---|---|---|---|", *rows, ""])
+
+
+def _containers(batches, by_batch):
+    """The area's case issues in containers of at most SUB_ISSUE_CAP, each batch whole.
+
+    Titles are plain ASCII like every plan title; publishing adds the container's emoji, as it adds a case's verdict.
+    """
+    groups, current = [], []
+    for batch in batches:
+        own = by_batch.get(batch["id"], [])
+        if current and len(current) + len(own) > SUB_ISSUE_CAP:
+            groups.append(current)
+            current = []
+        current = current + own
+    groups.append(current)
+    return [{"title": "Cases" if len(groups) == 1 else f"Cases ({n}/{len(groups)})", "cases": cases}
+            for n, cases in enumerate(groups, 1)]
+
+
+def _area_tree(script, issues):
+    """The areas of the plan: each one's containers hold the very objects of `issues`, the flat run-ordered view.
+
+    Raises ScenarioError — before anything is written — when a batch alone outgrows a container, a node holds more
+    than SUB_ISSUE_CAP sub-issues, or an area body is over AREA_BODY_LIMIT characters.
+    """
+    by_batch = {}
+    for issue in issues:
+        by_batch.setdefault(issue["batch"], []).append(issue)
+    grouped, problems = {}, []
+    for batch in script["batches"]:
+        area = grouped.setdefault(_area_key(batch), {"objective": None, "batches": []})
+        area["objective"] = area["objective"] or batch.get("objective")
+        area["batches"].append(batch)
+        count = len(by_batch.get(batch["id"], []))
+        if count > SUB_ISSUE_CAP:
+            problems.append(f"batch {batch['id']!r} has {count} case issues and a node holds at most {SUB_ISSUE_CAP} "
+                            "sub-issues: split the batch")
+    if len(grouped) > SUB_ISSUE_CAP:
+        problems.append(f"the scenario has {len(grouped)} areas and a node holds at most {SUB_ISSUE_CAP} sub-issues")
+    areas = []
+    for key, area in grouped.items():
+        objective = area["objective"] or NO_OBJECTIVE
+        body = _area_body(objective, area["batches"])
+        if len(body) > AREA_BODY_LIMIT:
+            problems.append(f"area {key!r}: the body is {len(body)} characters and the limit is {AREA_BODY_LIMIT}")
+        areas.append({"key": key, "title": f"Area: {key}", "labels": [AREA_LABEL], "objective": objective,
+                      "body": body, "containers": [] if problems else _containers(area["batches"], by_batch),
+                      "cases": sum(len(list(steps({"batches": [b]}))) for b in area["batches"])})
+    if problems:
+        raise ScenarioError(problems)
+    return areas
+
+
+def _areas_table(areas):
+    rows = [f"| `{a['key']}` | {_cell(a['objective'], EXPECT_LIMIT)} | {a['cases']} | - |" for a in areas]
+    return "\n".join(["## Areas", "", "| Area | Objective | Cases | Latest result |", "|---|---|---|---|", *rows, ""])
+
+
 # --------------------------------------------------------------------------- the plan
 
 
@@ -466,16 +561,18 @@ def _plan_from_script(script, markdown=None, granularity="per-case", script_path
     name = script.get("name") or "scenario"
     parent_title = title or f"Test scenario: {name}"
     parent_blocked = script.get("blocked_by") or []
-    parent_body = _parent_body(name, script, script_path, purpose, parent_blocked)
     issues = (_plan_per_case if granularity == "per-case" else _plan_per_batch)(script, parent)
     for i in issues:
         i["wave"] = f"{i['wave']:02d}"
         i["labels"] = [CASE_LABEL, f"wave:{i['wave']}"]
+    areas = _area_tree(script, issues)
+    parent_body = _parent_body(name, script, script_path, purpose, parent_blocked, areas)
     all_steps = [s for _, _, s in steps(script)]
     return {
         "name": name,
         "granularity": granularity,
         "parent": {"title": parent_title, "body": parent_body, "labels": [TRIAGE_LABEL, "wave:01"]},
+        "areas": areas,
         "issues": issues,
         "variants": script.get("variants") or {},
         "fixtures": script.get("fixtures") or {},
@@ -485,7 +582,7 @@ def _plan_from_script(script, markdown=None, granularity="per-case", script_path
     }
 
 
-def _parent_body(name, script, script_path, purpose, blocked):
+def _parent_body(name, script, script_path, purpose, blocked, areas):
     lines = [f"Scenario `{name}`: every case below is run against the target adapter and its verdict is written back "
              "to the case's sub-issue.", ""]
     if purpose:
@@ -495,7 +592,7 @@ def _parent_body(name, script, script_path, purpose, blocked):
     lines += ["## Fixtures", "", "```json", json.dumps(script.get("fixtures") or {}, indent=2), "```", ""]
     lines += ["## Variants", ""]
     lines += [f"- `{axis}`: {', '.join(values)}" for axis, values in (script.get("variants") or {}).items()]
-    lines += ["", "## Cases", "", "| Batch | Case | Expected | Mode |", "|---|---|---|---|"]
+    lines += ["", _areas_table(areas), "## Cases", "", "| Batch | Case | Expected | Mode |", "|---|---|---|---|"]
     for batch in script["batches"]:
         for _, kind, s in steps({"batches": [batch]}):
             lines.append(f"| `{batch['id']}` | `{s['id']}` | {s.get('expect', '')} | "
@@ -570,36 +667,103 @@ def issues_path(script_path):
 
 
 def read_issues(path):
-    """The map beside the script, or an empty one: the parent's number, whether it is on the board, and per case."""
+    """The map beside the script, or an empty one: the parent's number, whether it is on the board, and per case.
+
+    Every other key of the document is kept as it is — `layout`, `areas` and whatever a later slice adds — and so is
+    every key of a case entry (`area`, `container`, ...), because publishing writes the whole document back.
+    """
+    blank = {"parent": None, "boarded": False, "cases": {}}
     if not path:
-        return {"parent": None, "boarded": False, "cases": {}}
+        return blank
     try:
         saved = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {"parent": None, "boarded": False, "cases": {}}
-    return {"parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
-            "cases": {key: {"number": value.get("number"), "hash": value.get("hash")}
-                      for key, value in (saved.get("cases") or {}).items()}}
+        return blank
+    if not isinstance(saved, dict):
+        return blank
+    return dict(saved, parent=saved.get("parent"), boarded=bool(saved.get("boarded")),
+                cases={key: dict(value) for key, value in (saved.get("cases") or {}).items()})
 
 
-def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4, backoff=1.0):
-    """Publish the plan: one parent, one natively linked sub-issue per case, and only the parent on the board.
+def _with_dashboard(body, held):
+    """`body` carrying the dashboard block `held` (the body GitHub has now) has between its markers, if it has one."""
+    start = held.find(DASHBOARD_START) if isinstance(held, str) else -1
+    end = held.find(DASHBOARD_END, start) if start >= 0 else -1
+    if end < 0:
+        return body
+    block = held[start:end + len(DASHBOARD_END)]
+    first = body.find(DASHBOARD_START)
+    last = body.find(DASHBOARD_END, first) if first >= 0 else -1
+    if last >= 0:
+        return body[:first] + block + body[last + len(DASHBOARD_END):]
+    return body.rstrip("\n") + "\n\n" + block + "\n"
 
-    Idempotent and resumable through the map beside the script, flushed after every issue is created: a case the map
-    knows is updated, never created twice, so an interrupted publish — or another machine — resumes from it. A case
-    the map knows and the plan no longer covers is reported in `removed` and stays open. Creations are paced: a
-    secondary rate limit (`RateLimited` from the runner) is waited out and retried, never a failure.
+
+def _case_key(issue):
+    return issue["id"] if "id" in issue else issue["cases"][0]
+
+
+def _dry_counts(plan, state):
+    """What a publish would do to this map, counted from the map alone: nothing is asked of GitHub."""
+    counts = {"create": 0, "link": 0, "move": 0, "update": 0}
+
+    def need(entry):
+        counts["update" if entry else "create"] += 1
+        counts["link"] += 0 if entry else 1
+
+    if state["parent"]:
+        counts["update"] += 1
+    else:
+        counts["create"] += 1
+    known = state.get("areas") or {}
+    for area in plan.get("areas") or []:
+        held = known.get(area["key"])
+        need(held)
+        for container in area["containers"]:
+            have = next((c for c in (held or {}).get("containers", []) if c["title"] == container["title"]), None)
+            need(have)
+            for issue in container["cases"]:
+                entry = state["cases"].get(_case_key(issue))
+                need(entry)
+                if entry and (entry.get("area") != area["key"] or not entry.get("container")):
+                    counts["move"] += 1
+    if not plan.get("areas"):
+        for issue in plan["issues"]:
+            need(state["cases"].get(_case_key(issue)))
+    return counts
+
+
+def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=None, attempts=4, backoff=1.0,
+            dry_run=False):
+    """Publish the plan as a tree: the scenario, its areas, each area's containers, each container's case records.
+
+    Idempotent and resumable through the map beside the script, flushed after every issue created and every link
+    made: a known issue is updated, never created twice, so an interrupted publish — or another machine — resumes
+    from it. Links go top-down (scenario → area → container → record; a record is never linked to the scenario), and
+    a node's existing sub-issues are read before it is linked to or created in, so a lost map or a concurrent writer
+    never makes two containers. Re-publishing rewrites titles after their emoji prefix and bodies outside their
+    dashboard block, and never touches a record's state. A case whose area changed is re-parented. A case, or an
+    area, the map knows and the plan no longer covers is reported in `removed` / `removed_areas` and stays open.
+    Creations are paced: a secondary rate limit (`RateLimited` from the runner) is waited out and retried.
+
+    `dry_run` returns the counts to create, link, move and update, asks GitHub nothing and writes nothing. A plan with
+    no `areas` is published flat, every case a sub-issue of the scenario.
     """
     if script_path is None and map_path is None and saved:
         path = None
     else:
         path = Path(map_path) if map_path else (issues_path(script_path) if script_path else None)
-    state = read_issues(path) if saved is None else {
-        "parent": saved.get("parent"), "boarded": bool(saved.get("boarded")),
-        "cases": {key: dict(value) for key, value in (saved.get("cases") or {}).items()}}
-    if len(plan["issues"]) > SUB_ISSUE_CAP:
+    if saved is None:
+        state = read_issues(path)
+    else:
+        state = copy.deepcopy(dict(saved))
+        state.update(parent=saved.get("parent"), boarded=bool(saved.get("boarded")), cases=state.get("cases") or {})
+    tree = plan.get("areas") or []
+    if not tree and len(plan["issues"]) > SUB_ISSUE_CAP:
         raise ScenarioError([f"the plan has {len(plan['issues'])} issues and GitHub allows {SUB_ISSUE_CAP} sub-issues "
                              "per parent: publish per batch, or split the scenario; nothing was created"])
+    if dry_run:
+        return {"dry_run": True, "counts": _dry_counts(plan, state), "map_path": None}
     wait = sleep or time.sleep
     call = _paced(github, wait=wait, attempts=attempts, backoff=backoff)
 
@@ -607,48 +771,156 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
         if path:
             Path(path).write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    issues, created, updated = {}, [], []
+    fresh, listed = set(), {}
+
+    def children(number):
+        """The sub-issues a node has now; a node this publish just created has none, so nothing is asked."""
+        if number not in listed:
+            listed[number] = [] if number in fresh else list(call("list_sub_issues", number=number) or [])
+        return listed[number]
+
+    def adopt(parent, matches):
+        return next((kid for kid in children(parent) if matches(kid.get("title") or "")), None)
+
+    def link(parent, number, ident, replace=False):
+        held = children(parent)
+        if any(kid["number"] == number for kid in held):
+            return
+        extra = {"replace_parent": True} if replace else {}
+        call("add_sub_issue", parent=parent, sub=ident, **extra)   # the numeric id, never the number
+        held.append({"number": number, "id": ident})
+
+    def refresh(number, title, body, labels, default):
+        """Update a known issue: its title keeps the emoji prefix it has, else takes `default`."""
+        held = (call("issue_state", number=number) or {}).get("title") or ""
+        prefix = _held_emoji(held) or default
+        call("update_issue", number=number, title=with_emoji(title, prefix) if prefix else title, body=body,
+             labels=labels)
+
+    def create(title, body, labels):
+        made = call("create_issue", title=title, body=body, labels=labels)
+        fresh.add(made["number"])
+        return made
+
     for label in _labels(plan):
         call("ensure_label", name=label)
+    updated, created, issues = [], [], {}
+    areas_done = {"created": [], "updated": []}
+    containers_created = []
     if state["parent"]:
-        call("update_issue", number=state["parent"], title=plan["parent"]["title"],
-             body=plan["parent"]["body"], labels=plan["parent"]["labels"])
+        body = _with_dashboard(plan["parent"]["body"], call("issue_body", number=state["parent"]))
+        refresh(state["parent"], plan["parent"]["title"], body, plan["parent"]["labels"], None)
         updated.append("parent")
     else:
-        made = call("create_issue", title=plan["parent"]["title"], body=plan["parent"]["body"],
-                    labels=plan["parent"]["labels"])
+        made = create(plan["parent"]["title"], plan["parent"]["body"], plan["parent"]["labels"])
         state["parent"] = made["number"]
         flush()                     # known from here on, so an interrupt below never buys a second parent
     if not state["boarded"]:
         call("board", number=state["parent"])
         state["boarded"] = True
         flush()
-    for issue in plan["issues"]:
-        key = issue["id"] if "id" in issue else issue["cases"][0]
-        if key in state["cases"]:
-            number = state["cases"][key]["number"]
-            held = (call("issue_state", number=number) or {}).get("title") or ""
-            title = with_emoji(issue["title"], _held_emoji(held) or NOT_RUN)   # keeps a verdict, back-fills ⚪ once
-            call("update_issue", number=number, title=title, body=issue["body"], labels=issue["labels"])
-            updated.append(key)
-        else:
-            made = call("create_issue", title=with_emoji(issue["title"], NOT_RUN), body=issue["body"],
-                        labels=issue["labels"])
-            number = made["number"]
-            call("add_sub_issue", parent=state["parent"], sub=made["id"])   # the numeric id, never the number
+    scenario = state["parent"]
+
+    def place(issue, area_key, container):
+        """One case record: created or adopted or updated, then linked into its container, then written to the map."""
+        key = _case_key(issue)
+        entry = state["cases"].get(key)
+        if entry is None:
+            kid = adopt(container, lambda held: title_base(held) == issue["title"])
+            entry = {"number": kid["number"], "id": kid["id"]} if kid else None
+        if entry is None:
+            made = create(with_emoji(issue["title"], NOT_RUN), issue["body"], issue["labels"])
+            entry = {"number": made["number"], "id": made["id"]}
             created.append(key)
-        state["cases"][key] = {"number": number, "hash": issue.get("hash")}
-        issues[key] = dict(state["cases"][key])
+            state["cases"][key] = dict(entry, hash=issue.get("hash"), area=area_key)
+            flush()
+            link(container, entry["number"], entry["id"])
+        else:
+            refresh(entry["number"], issue["title"], issue["body"], issue["labels"], NOT_RUN)
+            updated.append(key)
+            held = state["cases"].setdefault(key, {})
+            if held.get("container") != container:
+                ident = entry.get("id") or held.get("id") or _id_in(children(scenario), entry["number"])
+                link(container, entry["number"], ident, replace=True)    # a moved case, or one never linked
+        state["cases"][key].update(entry, hash=issue.get("hash"), area=area_key, container=container)
+        issues[key] = state["cases"][key]
         flush()
-    return {"parent": state["parent"], "boarded": state["boarded"], "cases": issues,
+
+    if not tree:
+        for issue in plan["issues"]:
+            key = _case_key(issue)
+            if key in state["cases"]:
+                number = state["cases"][key]["number"]
+                refresh(number, issue["title"], issue["body"], issue["labels"], NOT_RUN)   # keeps a verdict, back-fills ⚪
+                updated.append(key)
+            else:
+                made = create(with_emoji(issue["title"], NOT_RUN), issue["body"], issue["labels"])
+                number = made["number"]
+                call("add_sub_issue", parent=scenario, sub=made["id"])
+                created.append(key)
+            state["cases"][key] = dict(state["cases"].get(key, {}), number=number, hash=issue.get("hash"))
+            issues[key] = state["cases"][key]
+            flush()
+    else:
+        state["layout"] = "areas"
+        known = state.setdefault("areas", {})
+    for area in tree:
+        entry = known.get(area["key"])
+        if entry is None:
+            kid = adopt(scenario, lambda held: title_base(held) == area["title"])
+            entry = {"number": kid["number"], "id": kid["id"]} if kid else None
+        if entry is None:
+            made = create(with_emoji(area["title"], NOT_RUN), area["body"], area["labels"])
+            entry = known[area["key"]] = {"number": made["number"], "id": made["id"], "containers": [], "runs": {}}
+            areas_done["created"].append(area["key"])
+            flush()
+        else:
+            body = _with_dashboard(area["body"], call("issue_body", number=entry["number"]))
+            refresh(entry["number"], area["title"], body, area["labels"], NOT_RUN)
+            known[area["key"]] = entry = dict(entry, containers=entry.get("containers") or [],
+                                              runs=entry.get("runs") or {})
+            areas_done["updated"].append(area["key"])
+        ident = entry.get("id") or _id_in(children(scenario), entry["number"])
+        entry["id"] = ident
+        link(scenario, entry["number"], ident)
+        flush()
+        for container in area["containers"]:
+            held = next((c for c in entry["containers"] if c["title"] == container["title"]), None)
+            if held is None:
+                title = f"{CASES_EMOJI} {container['title']}"
+                kid = adopt(entry["number"], lambda text: text == title)
+                if kid is None:
+                    made = create(title, _container_body(area["key"]), [])
+                    containers_created.append(f"{area['key']}: {title}")
+                    kid = {"number": made["number"], "id": made["id"]}
+                held = {"title": container["title"], "number": kid["number"], "id": kid["id"]}
+                entry["containers"].append(held)
+                flush()
+            link(entry["number"], held["number"], held["id"])
+            for issue in container["cases"]:
+                place(issue, area["key"], held["number"])
+    return {"parent": scenario, "boarded": state["boarded"], "cases": issues,
             "issues": {key: value["number"] for key, value in issues.items()}, "created": created,
             "updated": updated, "removed": [k for k in state["cases"] if k not in issues],
+            "removed_areas": [k for k in (state.get("areas") or {}) if tree and k not in {a["key"] for a in tree}],
+            "areas": areas_done, "containers_created": containers_created,
             "map_path": str(path) if path else None, "map": state}
+
+
+def _id_in(kids, number):
+    """The numeric id of an issue among the sub-issues listed, for an entry an older map wrote with no id."""
+    return next(kid["id"] for kid in kids if kid["number"] == number)
+
+
+def _container_body(area_key):
+    return f"The permanent case records of the area `{area_key}`, one issue per case."
 
 
 def _labels(plan):
     """Every label the plan's issues need, the case label included, whatever the granularity."""
     out = {CASE_LABEL, *plan["parent"]["labels"]}
+    for area in plan.get("areas") or []:
+        out.update(area["labels"])
     for issue in plan["issues"]:
         out.update(issue["labels"])
     return sorted(out)
@@ -781,7 +1053,8 @@ def read_map(path):
 
     Tolerant of the shapes a publish writes (#1225): a flat `case id -> number` map, or a `cases`/`issues` object whose
     values are a number or `{"number": ..., "content_hash": ...}`. A missing map is an empty map, never an error: the
-    scenario has simply not been published yet.
+    scenario has simply not been published yet. Every other key of the document comes through unchanged, `cases`
+    (the full entries) and `areas` among them.
     """
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -799,7 +1072,10 @@ def read_map(path):
         if isinstance(number, int) and not isinstance(number, bool):
             issues[case] = number
     parent = raw.get("parent")
-    return {"parent": parent if isinstance(parent, int) and not isinstance(parent, bool) else None, "issues": issues}
+    kept = {key: value for key, value in raw.items()
+            if key not in ("parent", "issues") and not (source is raw and key in issues)}
+    return dict(kept, parent=parent if isinstance(parent, int) and not isinstance(parent, bool) else None,
+                issues=issues)
 
 
 def _bug_url(run):
@@ -917,6 +1193,230 @@ def _summary(plan, run, counts, review, pending, missing, bug):
     return "\n".join(lines)
 
 
+RUN_LABEL = "testrun"
+RUN_BLOCK = re.compile(r"<!-- gui-test:run (\{.*\}) -->")
+RUNS_EMOJI = "📅"
+RUNS_CONTAINER = re.compile(rf"{RUNS_EMOJI} Runs (\d{{4}}-\d{{2}})(?: \((\d+)\))?$")
+TREND_WINDOW = 10                        # a trend and a flaky check read this many runs containing the case
+RUN_CAP = 100                            # a month's runs container holds this many run issues before the next one
+_WORST_FIRST = ("failed", "needs review", "pending", "skipped", "passed")    # ADR-0275 §3: ❌ > 🟡 > 👤 > ⚪ > ✅
+_RUN_EMOJI = dict(VERDICT_EMOJI, skipped=NOT_RUN)
+
+
+def _family(verdict):
+    return next((f for f in VERDICT_FAMILIES if verdict.startswith(f)), "skipped")
+
+
+def _overall(families):
+    return next(f for f in _WORST_FIRST if f in families) if families else "skipped"
+
+
+def _utc(text):
+    """A results file's `started` as an aware UTC datetime; a time with no offset is read as UTC."""
+    when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def _totals(families):
+    counts = {f: sum(1 for x in families if x == f) for f in _WORST_FIRST}
+    return " · ".join(f"{_RUN_EMOJI[f]} {counts[f]}" for f in ("passed", "failed", "needs review", "pending", "skipped")) \
+        + f" (of {len(families)})"
+
+
+def _ranked(history):
+    """The run blocks of an area, oldest first: by `started`, ties by run id, never by issue number (ADR-0275 §4)."""
+    return sorted(history, key=lambda run: (run["block"]["started"], run["block"]["run_id"]))
+
+
+def _runs_listing(call, area_number):
+    """The area's 📅 containers as they are on GitHub now, newest month first, each with the run issues it holds."""
+    found = []
+    for kid in call("list_sub_issues", number=area_number) or []:
+        hit = RUNS_CONTAINER.match(kid.get("title") or "")
+        if hit:
+            found.append({"title": kid["title"], "number": kid["number"], "id": kid["id"], "month": hit.group(1),
+                          "n": int(hit.group(2) or 1), "kids": list(call("list_sub_issues", number=kid["number"]) or [])})
+    return sorted(found, key=lambda c: (c["month"], c["n"]), reverse=True)
+
+
+def _runs_container(call, entry, listing, month):
+    """The container this month's next run goes into: adopted when it exists and has room, else created and linked."""
+    held = sorted((c for c in listing if c["month"] == month), key=lambda c: c["n"])
+    if held and len(held[-1]["kids"]) < RUN_CAP:
+        return held[-1]
+    n = held[-1]["n"] + 1 if held else 1
+    title = f"{RUNS_EMOJI} Runs {month}" + (f" ({n})" if n > 1 else "")
+    made = call("create_issue", title=title, body="", labels=[])
+    call("add_sub_issue", parent=entry["number"], sub=made["id"])
+    container = {"title": title, "number": made["number"], "id": made["id"], "month": month, "n": n, "kids": []}
+    listing.append(container)
+    listing.sort(key=lambda c: (c["month"], c["n"]), reverse=True)
+    return container
+
+
+def _read_history(call, listing, cases):
+    """The run blocks of an area, read from its containers newest month first until each case has a full window."""
+    seen, runs = {case: 0 for case in cases}, []
+    for container in listing:
+        if cases and all(n >= TREND_WINDOW for n in seen.values()):
+            break
+        for kid in container["kids"]:
+            hit = RUN_BLOCK.search(call("issue_body", number=kid["number"]) or "")
+            if hit:
+                run = {"number": kid["number"], "block": json.loads(hit.group(1))}
+                runs.append(run)
+                for case in run["block"]["cases"]:
+                    if case in seen:
+                        seen[case] += 1
+    return runs
+
+
+def _changes(block, earlier):
+    """New failures, fixed and still failing, each case against its newest earlier run of the area that has it."""
+    new, fixed, still = [], [], []
+    for case, verdict in block["cases"].items():
+        prior = next((r["block"]["cases"][case] for r in reversed(earlier) if case in r["block"]["cases"]), None)
+        if verdict == "failed":
+            (still if prior == "failed" else new).append(case)
+        elif verdict == "passed" and prior == "failed":
+            fixed.append(case)
+    return new, fixed, still
+
+
+def _names(cases):
+    return ", ".join(f"`{c}`" for c in cases) or "none"
+
+
+def _run_body(report, area, block, changes, numbers, evidence):
+    new, fixed, still = changes
+    lines = [f"- Started: {block['started']} | run `{block['run_id']}` | area `{area}`",
+             f"- Script `{report['script']['sha256']}` | build `{report['build_sha']}` | platform `{report['platform']}`",
+             "", "## Totals", "", _totals(list(block["cases"].values())), "", "## Changes", "",
+             f"- New failures: {_names(new)}", f"- Fixed: {_names(fixed)}", f"- Still failing: {_names(still)}",
+             "", "## Cases", "", "| | Case | Record | Evidence | Bug |", "|---|---|---|---|---|"]
+    for case, verdict in block["cases"].items():
+        shown = evidence.get(case) if verdict in ("failed", "needs review") else None
+        shown = "withheld by the privacy gate" if shown == WITHHELD else (f"![{case}]({shown})" if shown else "-")
+        record = f"#{numbers[case]}" if case in numbers else "-"
+        lines.append(f"| {_RUN_EMOJI[verdict]} | `{case}` | {record} | {shown} | - |")
+    return "\n".join(lines + ["", f"<!-- gui-test:run {json.dumps(block, sort_keys=True)} -->"])
+
+
+def _trend(history, cases):
+    """Per case: its last verdicts oldest to newest (runs that did not contain it are not in it) and its pass rate."""
+    rows = ["### Trend (last 10 runs)", "", "| Case | Trend | Pass rate |", "|---|---|---|"]
+    ranked = _ranked(history)
+    for case in cases:
+        seen = [r["block"]["cases"][case] for r in ranked if case in r["block"]["cases"]][-TREND_WINDOW:]
+        if not seen:
+            continue
+        ran = [v for v in seen if v in ("passed", "failed", "needs review")]
+        rate = f"{round(100 * ran.count('passed') / len(ran))}%" if ran else "-"
+        rows.append(f"| `{case}` | {' '.join(_RUN_EMOJI[v] for v in seen)} | {rate} |")
+    return "\n".join(rows)
+
+
+def _flaky(histories, cases_of):
+    """Cases that alternated ✅/❌ within their last 10 runs: at least two flips between a pass and a failure."""
+    flaky = []
+    for area, history in histories.items():
+        ranked = _ranked(history)
+        for case in cases_of(area):
+            seen = [r["block"]["cases"][case] for r in ranked if case in r["block"]["cases"]][-TREND_WINDOW:]
+            ran = [v for v in seen if v in ("passed", "failed")]
+            if sum(1 for a, b in zip(ran, ran[1:]) if a != b) >= 2:
+                flaky.append(f"- `{case}` ({area}): {' '.join(_RUN_EMOJI[v] for v in seen)}")
+    return flaky
+
+
+def _scenario_dashboard(histories, cases_of):
+    by_run = {}
+    for area, history in histories.items():
+        for run in history:
+            by_run.setdefault(run["block"]["run_id"], []).append((area, run))
+    ordered = sorted(by_run.items(), key=lambda kv: (min(r["block"]["started"] for _, r in kv[1]), kv[0]), reverse=True)
+    lines = ["### Latest run", ""]
+    if ordered:
+        lines += [f"Run `{ordered[0][0]}`", "", "| Area | Result | Totals |", "|---|---|---|"]
+        for area, run in sorted(ordered[0][1], key=lambda x: x[0]):
+            fam = list(run["block"]["cases"].values())
+            lines.append(f"| {area} | {_RUN_EMOJI[_overall(fam)]} | {_totals(fam)} |")
+    else:
+        lines.append("No run yet.")
+    lines += ["", "### Runs", "", "| Run | Started | Result | Totals | Area runs |", "|---|---|---|---|---|"]
+    for run_id, parts in ordered[:TREND_WINDOW]:
+        fam = [v for _, r in parts for v in r["block"]["cases"].values()]
+        links = " · ".join(f"{a} #{r['number']}" for a, r in sorted(parts, key=lambda x: x[0]))
+        started = min(r["block"]["started"] for _, r in parts)
+        lines.append(f"| {run_id} | {started} | {_RUN_EMOJI[_overall(fam)]} | {_totals(fam)} | {links} |")
+    return "\n".join(lines + ["", "### Flaky cases", ""] + (_flaky(histories, cases_of) or ["None."]))
+
+
+def _set_dashboard(call, number, content):
+    """Rewrite the block between the markers of an issue's body, or append one when it has none; the rest stays."""
+    held = call("issue_body", number=number) or ""
+    block = f"{DASHBOARD_START}\n{content}\n{DASHBOARD_END}"
+    start = held.find(DASHBOARD_START)
+    end = held.find(DASHBOARD_END, start) if start >= 0 else -1
+    body = held[:start] + block + held[end + len(DASHBOARD_END):] if end >= 0 else held.rstrip("\n") + "\n\n" + block + "\n"
+    call("set_body", number=number, body=body)
+
+
+def _write_areas(report, doc, map_path, github):
+    """Slice E of ADR-0275: one closed run issue per touched area, then every dashboard from the run blocks."""
+    call = _paced(github, wait=time.sleep, attempts=4, backoff=1.0)
+    areas, cases = doc["areas"], doc.get("cases") or {}
+    numbers = {case: entry["number"] for case, entry in cases.items() if isinstance(entry, dict) and "number" in entry}
+    of_area = {}
+    for case, entry in cases.items():
+        of_area.setdefault(entry.get("area") if isinstance(entry, dict) else None, []).append(case)
+    cases_of = lambda area: sorted(of_area.get(area, []))   # noqa: E731
+    mine, unknown = {}, []
+    for step in report["steps"]:
+        area = (cases.get(step["id"]) or {}).get("area")
+        if area in areas:
+            mine.setdefault(area, []).append(step)
+        else:
+            unknown.append(step["id"])
+    when = _utc(report["started"])
+    stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
+    call("ensure_label", name=RUN_LABEL)
+    histories, listings, written = {}, {}, []
+    for area in sorted(areas):
+        entry = areas[area]
+        listings[area] = _runs_listing(call, entry["number"])
+        histories[area] = _read_history(call, listings[area], cases_of(area))
+    failed = []
+    for area, steps in sorted(mine.items()):
+        entry, month = areas[area], when.strftime("%Y-%m")
+        container = _runs_container(call, entry, listings[area], month)
+        held = entry.setdefault("runs", {}).setdefault(month, [])
+        if not any(c["number"] == container["number"] for c in held):
+            held.append({"title": container["title"], "number": container["number"], "id": container["id"]})
+            Path(map_path).write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        block = {"run_id": report["run_id"], "started": stamp, "area": area, "build_sha": report["build_sha"],
+                 "cases": {s["id"]: _family(s["verdict"]) for s in steps}}
+        key = (block["started"], block["run_id"])
+        earlier = [r for r in _ranked(histories[area]) if (r["block"]["started"], r["block"]["run_id"]) < key]
+        changes = _changes(block, earlier)
+        title = f"{_RUN_EMOJI[_overall(list(block['cases'].values()))]} Run {when:%Y-%m-%d %H:%M} UTC · {area} · " \
+                f"{report['build_sha'][:7]}"
+        evidence = {s["id"]: s.get("evidence") for s in steps}
+        made = call("create_issue", title=title, body=_run_body(report, area, block, changes, numbers, evidence),
+                    labels=[RUN_LABEL])
+        call("add_sub_issue", parent=container["number"], sub=made["id"])
+        call("close", number=made["number"])
+        container["kids"].append({"number": made["number"], "id": made["id"]})
+        histories[area].append({"number": made["number"], "block": block})
+        failed += [c for c, v in block["cases"].items() if v == "failed"]
+        written.append({"area": area, "number": made["number"], "title": title, "container": container["number"]})
+    for area in mine:
+        _set_dashboard(call, areas[area]["number"], _trend(histories[area], cases_of(area)))
+    _set_dashboard(call, doc["parent"], _scenario_dashboard(histories, cases_of))
+    return {"ok": not failed, "written": True, "runs": written, "failed": failed,
+            **({"unknown_cases": unknown} if unknown else {})}
+
+
 # --------------------------------------------------------------------------- the write-back command (#1226)
 
 def write_back(results_path, map_path, github, plan=None):
@@ -926,8 +1426,10 @@ def write_back(results_path, map_path, github, plan=None):
     (a per-batch publish), and without it every case id of the map is one issue. This never opens a bug: the run
     command owns the one bug a red run files, and this links it on the parent.
 
-    A malformed results file, a map that names no case or no parent, a run that executed no step and a core that never
-    loaded are all failures, and none of them writes anything back.
+    A map in the areas layout (ADR-0275 slice E) is written as one closed run issue per area plus the rewritten
+    dashboards, under a lock beside the map; a flat map keeps the per-case comments. A malformed results file, a map
+    that names no case or no parent, a run that executed no step and a core that never loaded are all failures, and
+    none of them writes anything back.
     """
     try:
         report = read_results(results_path)
@@ -935,36 +1437,53 @@ def write_back(results_path, map_path, github, plan=None):
         return {"ok": False, "reason": "malformed results file: " + "; ".join(ex.problems),
                 "problems": ex.problems}
     report.setdefault("script_sha", report["script"]["sha256"])
-    published = read_map(map_path)
-    if not published["issues"]:
-        return {"ok": False, "reason": f"the map {map_path} names no case: publish the scenario first (#1225)"}
-    if published["parent"] is None:
-        return {"ok": False, "reason": f"the map {map_path} names no parent issue: publish the scenario first"}
-    if plan is None:
-        plan = {"name": report["script"]["name"],
-                "issues": [{"cases": [case]} for case in sorted(published["issues"])]}
-    out = write_results(plan, report, github, published)
-    grouped = {case for issue in plan["issues"] for case in issue["cases"]}
-    unknown = [r["id"] for r in report["steps"] if r["id"] not in grouped]
-    if unknown:
-        out["unknown_cases"] = unknown
-    return out
+    lock = Path(str(map_path) + ".lock")
+    try:
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        return {"ok": False, "reason": f"another write-back holds the lock {lock}: nothing was written"}
+    try:
+        published = read_map(map_path)     # read again under the lock: another writer may have changed the map
+        if not published["issues"]:
+            return {"ok": False, "reason": f"the map {map_path} names no case: publish the scenario first (#1225)"}
+        if published["parent"] is None:
+            return {"ok": False, "reason": f"the map {map_path} names no parent issue: publish the scenario first"}
+        if published.get("layout") == "areas" and published.get("areas") and not plan:
+            if report.get("core_available") is False or not report["steps"]:
+                return write_results({"name": "", "issues": []}, report, github, published)
+            return _write_areas(report, read_issues(map_path), map_path, github)
+        if plan is None:
+            plan = {"name": report["script"]["name"],
+                    "issues": [{"cases": [case]} for case in sorted(published["issues"])]}
+        out = write_results(plan, report, github, published)
+        grouped = {case for issue in plan["issues"] for case in issue["cases"]}
+        unknown = [r["id"] for r in report["steps"] if r["id"] not in grouped]
+        if unknown:
+            out["unknown_cases"] = unknown
+        return out
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def _publish_command(args, github):
     scenario, script = read_scenario(args.markdown), read_script(args.script)
     if args.stamp:
         script = record_hashes(scenario, script)
-        Path(args.script).write_text(json.dumps(script, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        if not args.dry_run:
+            Path(args.script).write_text(json.dumps(script, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     runner = github if github is not None else rest_runner(args.repo, project=args.board)
     try:
         plan = build_plan(scenario, script, granularity=args.granularity)
-        out = publish(plan, runner, script_path=args.script)
+        out = publish(plan, runner, script_path=args.script, dry_run=args.dry_run)
     except ScenarioError as err:
         print(json.dumps({"ok": False, "published": False, "problems": err.problems}, indent=2))
         return 1
+    if args.dry_run:
+        print(json.dumps({"ok": True, "dry_run": True, "counts": out["counts"]}, indent=2))
+        return 0
     print(json.dumps({"ok": True, "parent": out["parent"], "created": len(out["created"]),
-                      "updated": len(out["updated"]), "removed": out["removed"], "map": out["map_path"]}, indent=2))
+                      "updated": len(out["updated"]), "removed": out["removed"], "removed_areas": out["removed_areas"],
+                      "map": out["map_path"]}, indent=2))
     return 0
 
 
@@ -996,6 +1515,7 @@ def main(argv=None, github=None):
     pb.add_argument("script", help="its gui-test/1 script; the issue map is written beside it")
     pb.add_argument("--granularity", choices=("case", "batch"), default="case")
     pb.add_argument("--stamp", action="store_true", help="record each case's content hash on its step, in the script file")
+    pb.add_argument("--dry-run", action="store_true", help="print the counts to create, link, move and update; write nothing")
     for flag in ("--repo", "--board"):
         pb.add_argument(flag)
     args = ap.parse_args(argv)
@@ -1137,7 +1657,29 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             fields = [("title", kw["title"]), ("body", kw["body"])] + [("labels[]", x) for x in kw["labels"]]
             return api("PATCH", f"issues/{kw['number']}", fields, json_out=True)
         if op == "add_sub_issue":
-            return api("POST", f"issues/{kw['parent']}/sub_issues", [("sub_issue_id", kw["sub"])], json_out=True)
+            fields = [("sub_issue_id", kw["sub"])] + ([("replace_parent", "true")] if kw.get("replace_parent") else [])
+            return api("POST", f"issues/{kw['parent']}/sub_issues", fields, json_out=True)
+        if op == "remove_sub_issue":
+            return api("DELETE", f"issues/{kw['parent']}/sub_issue", [("sub_issue_id", kw["sub"])], json_out=True)
+        if op == "list_sub_issues":
+            found, page = [], 1
+            while True:
+                batch = api("GET", f"issues/{kw['number']}/sub_issues?per_page=100&page={page}", json_out=True) or []
+                found += batch
+                if len(batch) < 100:
+                    return found
+                page += 1
+        if op == "set_body":
+            return api("PATCH", f"issues/{kw['number']}", [("body", kw["body"])], json_out=True)
+        if op == "set_title":
+            return api("PATCH", f"issues/{kw['number']}", [("title", kw["title"])], json_out=True)
+        if op == "issue_body":
+            return ((api("GET", f"issues/{kw['number']}", json_out=True) or {}).get("body")) or ""
+        if op == "search_open_bug":
+            query = urllib.parse.quote(f'repo:{repo} is:issue is:open label:bug in:title "{kw["title"]}"')
+            found = json.loads(call(["gh", "api", f"search/issues?q={query}"])).get("items", [])
+            hit = next((i for i in found if i.get("title") == kw["title"]), None)
+            return None if hit is None else {"number": hit["number"], "url": hit.get("html_url"), "title": hit["title"]}
         if op == "comment":
             return api("POST", f"issues/{kw['number']}/comments", [("body", kw["body"])], json_out=True)
         if op == "retitle":
@@ -1167,7 +1709,9 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             if not bug_helper:
                 raise ValueError("file_bug needs bug_helper (the repo's scripts/report-bug.sh path)")
             out = call([bug_helper, kw["title"], kw["body"], kw["priority"]])
-            return {"url": next((w for w in out.split() if w.startswith("http")), None)}
+            url = next((w for w in out.split() if w.startswith("http")), None)
+            tail = url.rstrip("/").rsplit("/", 1)[-1] if url else ""
+            return {"url": url, "number": int(tail) if tail.isdigit() else None}
         raise ValueError(f"unknown op {op!r}")
     return gh
 

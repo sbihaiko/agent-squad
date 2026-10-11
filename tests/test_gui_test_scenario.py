@@ -183,13 +183,13 @@ def test_publish_creates_the_parent_and_one_sub_issue_per_case_and_links_them():
     out = tts.publish(plan, gh)
     created = gh.of("create_issue")
     assert [c["title"] for c in created][0] == "Test scenario: tiny"
-    assert [c["title"] for c in created][1:] == [
+    assert [c["title"] for c in created if "Test case" in c["title"]] == [
         "⚪ Test case HOME-01", "⚪ Test case HOME-02", "⚪ Test case LIB-01"]
     assert sorted(out["issues"]) == ["HOME-01", "HOME-02", "LIB-01"]
-    links = gh.of("add_sub_issue")
-    assert [link["sub"] for link in links] == [gh.id_of(out["issues"][c])
-                                                  for c in ("HOME-01", "HOME-02", "LIB-01")]
-    assert {link["parent"] for link in links} == {out["parent"]}
+    links = {link["sub"]: link["parent"] for link in gh.of("add_sub_issue")}
+    containers = {c["number"] for a in out["map"]["areas"].values() for c in a["containers"]}
+    assert {links[gh.id_of(out["issues"][c])] for c in ("HOME-01", "HOME-02", "LIB-01")} == containers
+    assert out["parent"] not in {links[gh.id_of(out["issues"][c])] for c in out["issues"]}   # never the scenario
 
 
 def test_publish_ensures_the_labels_it_applies_before_the_first_issue():
@@ -329,7 +329,7 @@ def test_the_scenario_stops_after_publishing_when_the_run_command_does_not_exist
     out = tts.run_scenario(MARKDOWN, covered_script(), gh, run_command=None)
     assert out["run"] is None and out["reason"] == "run command unavailable"
     assert out["published"]["parent"] == 101          # the parent is the first issue created
-    assert gh.ops().count("create_issue") == 4
+    assert gh.ops().count("create_issue") == 1 + 3 * 3          # the scenario, then an area, a container, a case each
     assert "comment" not in gh.ops()
 
 
@@ -398,7 +398,7 @@ def test_the_rest_runner_files_a_bug_through_the_repos_own_helper():
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh, bug_helper="/repo/scripts/report-bug.sh")
     out = gh("file_bug", title="GUI test: 2 failed", body="steps", priority="P1")
     assert sh.args[0] == ["/repo/scripts/report-bug.sh", "GUI test: 2 failed", "steps", "P1"]
-    assert out == {"url": None}
+    assert out == {"url": None, "number": None}
 
 
 class _cmd:
@@ -587,7 +587,8 @@ def test_1226_the_map_beside_the_script_is_read_in_the_shape_the_publish_writes(
     nested = tmp_path / "nested.json"
     nested.write_text(json.dumps({"parent": 7, "cases": {"HOME-01": {"number": 11, "content_hash": "a" * 64}}}),
                       encoding="utf-8")
-    assert tts.read_map(nested) == {"parent": 7, "issues": {"HOME-01": 11}}
+    assert tts.read_map(nested) == {"parent": 7, "issues": {"HOME-01": 11},
+                                    "cases": {"HOME-01": {"number": 11, "content_hash": "a" * 64}}}
     assert tts.read_map(tmp_path / "absent.json") == {"parent": None, "issues": {}}
 
 
@@ -689,3 +690,99 @@ def test_1226_everything_the_write_back_writes_is_en_us(tmp_path):
                                                         [tts.write_back(results_file(tmp_path, steps=[]),
                                                                         map_file(tmp_path), FakeGitHub())]]
     assert bodies and all(body.encode("ascii") for body in bodies)
+
+
+# --- #1473 (ADR-0275 Slice B): the rest_runner's re-parenting, listing, title, body and bug-search ops ---
+
+class _Scripted:
+    """A stub shell answering by the argv's text: `{substring: [answers...]}`, one answer per call."""
+
+    def __init__(self, answers=None):
+        self.args = []
+        self.answers = {k: list(v) for k, v in (answers or {}).items()}
+
+    def __call__(self, args, **kw):
+        self.args.append(list(args))
+        text = " ".join(args)
+        for key, queue in self.answers.items():
+            if key in text and queue:
+                return queue.pop(0)
+        return "{}"
+
+
+def test_1473_add_sub_issue_replace_parent_asks_github_to_move_the_child():
+    sh = _Scripted()
+    gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
+    gh("add_sub_issue", parent=7, sub=99, replace_parent=True)
+    gh("add_sub_issue", parent=7, sub=98)
+    assert "replace_parent=true" in sh.args[0] and "sub_issue_id=99" in sh.args[0]
+    assert not any(a.startswith("replace_parent") for a in sh.args[1])
+
+
+def test_1473_remove_sub_issue_deletes_the_link_through_rest():
+    sh = _Scripted()
+    tts.rest_runner("sbihaiko/MesenAI", shell=sh)("remove_sub_issue", parent=7, sub=99)
+    assert sh.args[0][:4] == ["gh", "api", "--method", "DELETE"]
+    assert "repos/sbihaiko/MesenAI/issues/7/sub_issue" in sh.args[0] and "sub_issue_id=99" in sh.args[0]
+
+
+def test_1473_list_sub_issues_follows_every_page():
+    import json
+    page1 = json.dumps([{"number": n} for n in range(100)])
+    page2 = json.dumps([{"number": 100}])
+    sh = _Scripted({"page=1": [page1], "page=2": [page2]})
+    out = tts.rest_runner("sbihaiko/MesenAI", shell=sh)("list_sub_issues", number=7)
+    assert [i["number"] for i in out] == list(range(101))
+    assert all("issues/7/sub_issues" in " ".join(a) for a in sh.args) and len(sh.args) == 2
+
+
+def test_1473_set_title_patches_only_the_title():
+    sh = _Scripted()
+    tts.rest_runner("sbihaiko/MesenAI", shell=sh)("set_title", number=5, title="New")
+    assert sh.args[0][:4] == ["gh", "api", "--method", "PATCH"]
+    assert "repos/sbihaiko/MesenAI/issues/5" in sh.args[0] and "title=New" in sh.args[0]
+    assert not any(a.startswith("body=") for a in sh.args[0])
+
+
+def test_1473_issue_body_returns_the_body_text():
+    sh = _Scripted({"issues/5": ['{"body": "hello"}']})
+    assert tts.rest_runner("sbihaiko/MesenAI", shell=sh)("issue_body", number=5) == "hello"
+    sh = _Scripted({"issues/5": ['{"body": null}']})
+    assert tts.rest_runner("sbihaiko/MesenAI", shell=sh)("issue_body", number=5) == ""
+
+
+def test_1473_search_open_bug_finds_an_open_issue_by_exact_title():
+    import json
+    items = [{"number": 3, "title": "GUI test: 2 failed (old)", "html_url": "u3"},
+             {"number": 4, "title": "GUI test: 2 failed", "html_url": "u4"}]
+    sh = _Scripted({"search/issues": [json.dumps({"items": items})]})
+    hit = tts.rest_runner("sbihaiko/MesenAI", shell=sh)("search_open_bug", title="GUI test: 2 failed")
+    assert hit == {"number": 4, "url": "u4", "title": "GUI test: 2 failed"}
+    import urllib.parse
+    q = urllib.parse.unquote(" ".join(sh.args[0]))
+    assert "is:issue" in q and "is:open" in q and "label:bug" in q and "repo:sbihaiko/MesenAI" in q
+    sh = _Scripted({"search/issues": ['{"items": []}']})
+    assert tts.rest_runner("sbihaiko/MesenAI", shell=sh)("search_open_bug", title="x") is None
+
+
+def test_1473_file_bug_returns_the_number_parsed_from_the_url():
+    sh = _Scripted({"report-bug": ["created https://github.com/sbihaiko/MesenAI/issues/1500\n"]})
+    gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh, bug_helper="/repo/scripts/report-bug.sh")
+    assert gh("file_bug", title="t", body="b", priority="P1") == {
+        "url": "https://github.com/sbihaiko/MesenAI/issues/1500", "number": 1500}
+
+
+def test_1473_a_rate_limit_on_a_new_op_is_waited_out_not_failed():
+    import subprocess
+    state = {"n": 0}
+
+    def shell(args, **kw):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise subprocess.CalledProcessError(1, args, "", "You have exceeded a secondary rate limit")
+        return '[{"number": 1}]'
+
+    waits = []
+    call = tts._paced(tts.rest_runner("sbihaiko/MesenAI", shell=shell), wait=waits.append, attempts=3, backoff=1.0)
+    assert call("list_sub_issues", number=7) == [{"number": 1}]
+    assert waits == [1.0]
