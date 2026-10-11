@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 
-LOST_AFTER = 4 * 3600   # well past the suite's own timeout: a pass that has not touched its file is not running
+LOST_AFTER = 4 * 3600   # the hub's bound: past it, a pass that has not touched its file is not running
 
 
 @pytest.fixture(scope="module")

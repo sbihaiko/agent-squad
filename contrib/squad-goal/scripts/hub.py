@@ -479,8 +479,9 @@ def load_sampler():
         time.sleep(LOAD_SAMPLE_SECS)
 
 # A coordinator test pass writes `running` at its start and its terminal state at the end; killed in between, the file says
-# `running` forever. Well past the suite's own timeout, an untouched file is not a running pass: the hub shows it as stalled
-# with this note, past the RUNNING group, instead of counting a live run with no process behind it. The runner's file is never
+# `running` forever. Four hours without a touch is longer than any pass this coordinator runs, so an untouched file is not a
+# running pass: the hub shows it as stalled with this note, past the RUNNING group, instead of counting a live run with no
+# process behind it. The runner's file is never
 # rewritten and the loop's own readers keep reading it as it is -- this is the hub's display bound, not a claim the test failed.
 TEST_LOST_SECS = 4 * 3600
 LOST_NOTE = "lost: no state written for over 4 h"
