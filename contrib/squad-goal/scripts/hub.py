@@ -530,8 +530,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </style>
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
-<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class=tot3 id=tot3></div><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
+<details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><div class=tot3 id=tot3></div><h4>Spend <span class=row id=src title="Subscription = Claude, Grok, GPT and Gemini models. API = every other model (deepseek…) and calls that name no model. DeepSeek, Grok and GPT are re-priced from their tokens at list prices (API-equivalent)." style="display:inline-flex;margin:0"></span></h4><div class=tot id=tot></div><h4>Spend per <span class=row id=per style="display:inline-flex;margin:0"></span></h4><div id=chart></div><h4>Tokens by model <small class=m>in + out · all time</small></h4><div id=pie></div><div id=kpi></div></div></details>
 <div id=list></div></div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
