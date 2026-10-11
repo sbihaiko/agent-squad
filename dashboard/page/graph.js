@@ -5,11 +5,13 @@ function applyView() {
   $("zoom").textContent = Math.round(v.k * 100) + "%";
 }
 function mapSize() { const r = $("map").getBoundingClientRect(); return { w: r.width, h: r.height }; }
-// What sits on the map's bottom edge and the graph must clear: the footer (hint and legend) alone, or with the replay bar above it while
-// a record is open. The bar is placed after fit() first runs, so its height is a constant, not a measure.
+// What sits on the map's bottom edge and the graph must clear: #footer, the row that carries the hint and the replay bar (#1813).
+// Measured from the map's own bottom edge to the row's top, so a layout that lifts the row — the bottom sheet under 900px — lifts
+// the reserve with it, and no constant has to be kept in step with the stylesheet.
 function bottomReserve() {
-  const foot = $("footer") ? $("footer").offsetHeight : 0;
-  return S.events ? foot + REPLAY_GAP + REPLAY_BAR_H : foot + FOOTER_PAD;
+  const f = $("footer"); if (!f) return FOOTER_PAD;
+  const m = $("map").getBoundingClientRect();
+  return Math.max(0, m.bottom - f.getBoundingClientRect().top) + FOOTER_PAD;
 }
 // The side panel is a drawer at the right edge, so an open panel takes its width off the area the graph is fitted into and the
 // fitted view stays at the map's left edge, unshifted.

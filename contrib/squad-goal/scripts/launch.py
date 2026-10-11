@@ -23,12 +23,16 @@ def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window
     if not isinstance(w, str) or not re.match(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$", w) or w[:2] == w[3:]: return True
     h = time.localtime().tm_hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
+def _may_run(chain, mid):   # mirrors hub.py's may_run: the panel's switch first, then the model's own window
+    return not (mdoc.get("off") or {}).get(chain, {}).get(mid) and _in_hours(chain, mid)
 cm = mdoc.get("coding_models") or []
 # the model the request must name is the first of the chain that may run now: a window in the hub's models panel
-# (e.g. claude-sonnet-5-5 at night) is honoured here, and the reason is printed when one is skipped.
-primary = next((m for m in cm if _in_hours("coding_models", m)), None)
+# (e.g. claude-sonnet-5-5 at night) is honoured here, and so is the row's switch, and the reason is printed when one
+# is skipped. Every entry off or out of window is the same refusal: no model may run now.
+primary = next((m for m in cm if _may_run("coding_models", m)), None)
 if cm and not primary and not os.environ.get("SG_ALLOW_MODEL"):
-    sys.exit(f"every coding model is outside its `hours` window in models.json right now ({cm}): fix the windows in the hub's models panel, or set SG_ALLOW_MODEL=1 to override.")
+    sys.exit(f"every coding model is switched off, or outside its `hours` window, in models.json right now ({cm}): "
+             "put one back in the chain (or widen its window) in the hub's models panel, or set SG_ALLOW_MODEL=1 to override.")
 # The "Coding model:" line is the one that decides what the child runs, so it is the line this gate reads: a substring
 # test over the whole request passed whenever the body merely mentioned the primary elsewhere, which let a request name an
 # out-of-window model (an Anthropic one during the day) and still clear the hours gate.
