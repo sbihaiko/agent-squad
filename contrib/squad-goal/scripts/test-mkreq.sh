@@ -133,5 +133,48 @@ run auto-fix-8-27aaaf5b5 && ko "an auto-fix request naming another PR's file lau
 body p10 scripts/shared.py plain-overlap
 run plain-overlap && ko "a plain request on an open PR's file launched" || ok "a plain request on an open PR's file still refuses"
 /usr/bin/grep -q 'open PR #7' "$T/plain-overlap.err" && ok "the plain refusal names the PR" || ko "plain refusal text: $(cat "$T/plain-overlap.err")"
+# 11. (#1774) a path named only inside quoted or code context is not a slice. A frontier/autobug request embeds the full text of
+# every issue it dispatches, so a path quoted as evidence counted as a file the request would edit: issue #1769's body indents
+# `refusing: request auto-fix-1706-27aaaf5b5 names scripts/checks/verify_report_bug_prefix.sh` as a code block, PR #1706 was
+# open on exactly that file, and every frontier and autobug pass embedding that body was refused -- on 2026-10-11 the whole
+# wave:01 panel (#1765-#1770) could not dispatch. Only prose counts: fenced blocks, lines indented by 4+ spaces and blockquote
+# lines are dropped before matching. Each claimed path below is named ONLY inside one of those three contexts.
+cat > "$T/quo.body" <<'B'
+IMPORTANT: your first and only action is X
+Edit scripts/quoted-free.py
+
+--- issue #9001
+Evidence from an earlier pass:
+
+    refusing: request auto-fix-1706-27aaaf5b5 names scripts/shared.py, which open PR #7 already changes.
+
+> refusing: request frontier-x names contrib/squad-goal/scripts/hub.py, which the unmerged fork branch gui/1497 touches.
+
+```
+refusing: request autobug-y names dashboard/page.py, which the unmerged fork branch gui/1498 touches.
+```
+B
+run quo && [ -f "$R/quo.txt" ] && ok "a path only quoted as evidence does not claim a slice" || ko "quoted prose refused the request: $(cat "$T/quo.err")"
+$G -q 'refusing' "$T/quo.err" && ko "the quoted-context body was still refused: $(cat "$T/quo.err")" || ok "the quoted-context body prints no refusal"
+$G -qF -- 'scripts/quoted-free.py' "$R/quo.txt" && ok "the prose path of the same body is still the slice" || ko "the accepted body lost its prose path"
+# 11b. the prose scan is intact: the same three paths named at column 0 refuse exactly as before (test 5 and 5b are that case)
+# 12. (#1786) a rebase of an already-written branch is not a second writer. forkclose.sh names its request
+# `forkrebase-<issue>-<sha9>` and its body names the conflicting files, which the branch it repairs holds by definition -- with
+# gui/1767 and gui/1768 both editing contrib/squad-goal/scripts/autopilot.sh, the guard refused each rebase run citing the other
+# branch, and the only request that could break the deadlock was the one refused. The file of the branch this request repairs is
+# exempt, exactly as #1769 exempts a fix run's own PR (#1769): the closes are serialized, not deadlocked.
+# 12a. another branch's file still refuses, naming that branch
+body p12 contrib/squad-goal/scripts/hub.py forkrebase-1600-abc123456
+run forkrebase-1600-abc123456 && ko "a rebase naming another branch's file launched" || ok "a rebase naming another branch's file refuses"
+$G -q 'gui/1497' "$T/forkrebase-1600-abc123456.err" && ok "the rebase refusal names the holding branch" || ko "rebase refusal text: $(cat "$T/forkrebase-1600-abc123456.err")"
+[ -f "$R/forkrebase-1600-abc123456.txt" ] && ko "the rebase refusal left a file" || ok "the rebase refusal wrote no file"
+# 12b. another request's file still refuses too: the exemption is the rebase's own branch, not the request name
+body p12 scripts/a.py forkrebase-1497-def456789
+run forkrebase-1497-def456789 && ko "a rebase naming a queued request's file launched" || ok "a rebase naming a request's file refuses"
+$G -q 'request a' "$T/forkrebase-1497-def456789.err" && ok "the rebase-vs-request refusal names the request" || ko "rebase-vs-request text: $(cat "$T/forkrebase-1497-def456789.err")"
+# 12c. the rebase's own branch is exempt: gui/1497 holds the file this request repairs
+body p12 contrib/squad-goal/scripts/hub.py forkrebase-1497-abc123456
+run forkrebase-1497-abc123456 && [ -f "$R/forkrebase-1497-abc123456.txt" ] && ok "a rebase of the branch holding the file launches" || ko "the rebase of its own branch was refused: $(cat "$T/forkrebase-1497-abc123456.err")"
+$G -q 'refusing' "$T/forkrebase-1497-abc123456.err" && ko "the rebase of its own branch was still refused" || ok "the rebase of its own branch prints no refusal"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail

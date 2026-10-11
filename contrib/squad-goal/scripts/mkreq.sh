@@ -19,7 +19,23 @@ grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body l
 # A path a body can claim: the trees a child edits, the fork's own tree included (contrib/squad-goal/..., dashboard/...), which
 # the old UI|UI.<x>|Core|scripts|docs|tests list was blind to -- a fork-only child's slice lives there and matched nothing.
 SLICE_RE='(^|[^A-Za-z0-9_./-])(UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/squad-goal|dashboard)/[A-Za-z0-9_./-]+'
-slice_paths() { grep -oE "$SLICE_RE" "$1" 2>/dev/null | sed -E 's#^[^A-Za-z0-9_/.-]+##' | sort -u; }
+# (#1774) Only prose counts as a slice. A frontier/autobug request embeds the full text of every issue it dispatches, so a path
+# named only inside quoted or code context is evidence someone pasted, not a file the child was asked to change: issue #1769's
+# body indents `refusing: request auto-fix-1706-27aaaf5b5 names scripts/checks/verify_report_bug_prefix.sh` as a code block, PR
+# #1706 was open on exactly that file, and every frontier and autobug pass embedding that body was refused -- on 2026-10-11 the
+# whole wave:01 panel (#1765-#1770) could not dispatch at all. So fenced blocks, blockquote lines and lines indented by four
+# spaces (or a tab) are dropped before matching. A path at column 0 still claims its slice, and a refusal message pasted as
+# prose still does too: the guard reads what the request says it will edit, not what it quotes.
+slice_paths() {
+  /usr/bin/awk '
+    BEGIN { indent = "    "; tab = sprintf("%c", 9) }
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }         # a fenced block opens and closes: nothing inside it is a slice
+    fence { next }
+    { if ($0 ~ /^[[:space:]]*>/) next                         # a blockquote: quoted evidence
+      if (substr($0, 1, 4) == indent || substr($0, 1, 1) == tab) next   # an indented code block
+      print }
+  ' "$1" 2>/dev/null | grep -oE "$SLICE_RE" | sed -E 's#^[^A-Za-z0-9_/.-]+##' | sort -u
+}
 # Slice guard. Two requests that name the same file both edit it, and whichever merges second conflicts with the first: the
 # sibling pair #1285/#1391 shared scripts/gui_test/mesen_gui_adapter.py and UI/Logic/TestHook/TestHookProtocol.cs, and #1285
 # spent a whole review plus a conflict round on it; gui/1497, gui/1498 and gui/1502 each landed a branch on
@@ -92,7 +108,7 @@ slice_guard() {
 "; done
   done
   # A fork-only child commits on gui/<N> off the fork base and opens no PR, so its slice is only visible in the fork checkout.
-  local bglob=${SG_FORK_BRANCH:-gui/%n} br; bglob="refs/heads/${bglob%%/%n*}"
+  local bglob=${SG_FORK_BRANCH:-gui/%n} br bref; bref=${bglob%%/%n*}; bglob="refs/heads/${bglob%%/%n*}"
   if [ -n "$fdir" ] && [ -d "$fdir" ]; then
     for br in $(/usr/bin/git -C "$fdir" for-each-ref --format='%(refname:short)' "$bglob/*" 2>/dev/null || true); do
       [ -n "$(/usr/bin/git -C "$fdir" rev-list -1 "$fbase..$br" 2>/dev/null)" ] || continue
@@ -116,6 +132,18 @@ slice_guard() {
     # and of an unmerged fork branch refuses exactly as before, and so does any request whose name is not a fix run's.
     if [[ $1 =~ ^auto-fix-([0-9]+)-[0-9a-f]{9}$ ]] && [ "$holder" = "PR #${BASH_REMATCH[1]}" ]; then
       echo "SLICE SELF-FIX $1: $f is $holder's own file; a fix run on the PR it repairs is not a second slice (#1769)" >&2; continue
+    fi
+    # (#1786) A rebase of an already-written branch is not a second writer either. forkclose.sh names its request
+    # `forkrebase-<issue>-<sha9>` and its body names the files the branch no longer merges over -- which that same branch holds
+    # by definition, since it is the branch being merged. With gui/1767 and gui/1768 both editing
+    # contrib/squad-goal/scripts/autopilot.sh, the guard refused each rebase run citing the other branch's claim, and the only
+    # request that could break the deadlock was the one refused. So the file of the branch this request repairs is exempt,
+    # exactly as #1769 exempts a fix run's own PR -- and the claim record already carries the number the request name carries.
+    # The closes are serialized instead: the first branch's rebase lands, and the second then collides with the base, not with a
+    # branch. Another branch, another request and an open PR over the same file refuse exactly as before, and so does any
+    # request whose name is not a rebase run's.
+    if [[ $1 =~ ^forkrebase-([0-9]+)-[0-9a-f]{9}$ ]] && [ "$holder" = "branch ${bref}/${BASH_REMATCH[1]}" ]; then
+      echo "SLICE SELF-REBASE $1: $f is ${bref}/${BASH_REMATCH[1]}'s own file; a rebase of the branch it repairs is not a second slice (#1786)" >&2; continue
     fi
     case "$holder" in
       "request "*)
