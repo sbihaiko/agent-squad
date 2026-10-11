@@ -949,6 +949,7 @@ def subs_month():
 
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")
+READONLY = ("known", "last_coding")   # fields models_get() adds for the panel: posted back, never stored
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
 # The add box carries the provider catalogues as they are, minus the two things that made it unreadable: the
@@ -1048,7 +1049,10 @@ def models_get():
             "known": known_models(d), "last_coding": last_coding_model()}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
-    new = {k: v for k, v in new.items() if k != "known"} if isinstance(new, dict) else new
+    # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`
+    # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
+    # the panel invented -- "unknown chain" on every Save (2026-10-11).
+    new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
     if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours"}: return {"err": "unknown chain"}
     d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None)
     for k, v in new.items():
