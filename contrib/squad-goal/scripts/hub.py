@@ -732,13 +732,14 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
-def refresh_board():
-    """Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + open PRs, every 60 s; last good data survives errors and restarts."""
-    sf = ""
-    while True:
-        try:
-            sf = sf or status_field()
-            out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={sf}", "--jq",
+_board_sf = ""   # the Status field's REST id: read once per process, not once per pass
+def board_pass():
+    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + open PRs. The 60 s loop and the
+    header's refresh button both run exactly this, so a press reads the board the same way the timer does (#1810)."""
+    global _board_sf
+    try:
+            _board_sf = _board_sf or status_field()
+            out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={_board_sf}", "--jq",
                 '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
@@ -763,8 +764,14 @@ def refresh_board():
             lo = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/labels?per_page=100", "--jq", '.[]|{n:.name,c:.color}'], capture_output=True, text=True, timeout=60).stdout
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())} or board_cache.get("lc", {})   # label colors as GitHub shows them
             if items: board_cache.update(t=time.time(), items=items, prs=prs, prev=prev, prev_n=prev_n, lc=lc, err=None); BOARD.write_text(json.dumps(board_cache))
-        except Exception as e: board_cache["err"] = str(e)[:80]
-        for _ in range(30):   # every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag)
+    except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
+    return board_cache
+def refresh_board():
+    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag). The header's
+    refresh button asks for the same pass by hand; it never replaces this timer (#1810)."""
+    while True:
+        board_pass()
+        for _ in range(30):
             time.sleep(2)
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
@@ -1159,7 +1166,7 @@ RUN_STATES = [
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
-:root{--col-w:185px;--col-empty-w:132px}   /* the docked strip's column geometry: the one place its widths are set (#1791) */
+:root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
@@ -1208,8 +1215,10 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}
 #board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
-#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
-#bbody .ah{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}
+#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}#board.off #br{display:none}
+#br{margin-left:8px;margin-right:auto;padding:0 6px;font-weight:400;line-height:1.4}   /* beside the title, so it reads as part of it and never as the labels / maximize / collapse group (#1810) */
+#br[aria-busy=true]{opacity:.55;cursor:progress}#br.busy>span{display:inline-block;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+#bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
 #bbody .it{margin:6px 8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--cc,var(--mute));border-radius:6px;background:var(--bg,#1c222c);line-height:1.35;font-size:12.5px;white-space:normal;overflow-wrap:anywhere;box-shadow:0 1px 2px #0006}
@@ -1265,7 +1274,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 body.dockb #win{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
 body.dockb #side{grid-row:1/3}body.dockb #main{grid-column:2;grid-row:1}
 body.dockb #board{grid-column:2;grid-row:2;width:auto;height:320px;border-left:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
-body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}
+body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}body.dockb #board.off #br{display:inline-block}
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
@@ -1285,7 +1294,7 @@ body:not(.dockb.max) #pip{visibility:hidden}
 #pipm{display:none;flex:1;padding:10px;font-size:11px;line-height:1.45;color:var(--mute)}
 #pip.noframe #pipb{visibility:hidden;height:0}#pip.noframe #pipm{display:block}
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
-body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
+body.dockb .ch{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}   /* the gap is stated: without it a header that is asked to pack its spans reads `Todo0` (#1809) */
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
 .prs{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent))}   /* a PR column wears the colour colOf gave it, faint, so the archive stops looking like the live queue */
 #bbody .acc.prs{border-bottom:2px solid var(--cc);margin-bottom:4px}
@@ -1294,14 +1303,11 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 #bbody .prs .it .id{background:color-mix(in srgb,var(--cc) 13%,transparent);border-color:var(--cc);color:var(--cc)}
 body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb #bbody>.col.prcol{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent));box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
-body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-empty-w);max-width:var(--col-empty-w);border-right:1px solid var(--line)}   /* a visible column with no cards keeps only its header, so the strip still reads as a row of columns (#1791); the columns that do have cards take the freed width */
-body.dockb #bbody>.col.empty>.ch{padding:8px 6px;flex-wrap:wrap;row-gap:2px;justify-content:flex-start}   /* the name falls onto a row of its own rather than clipping the count */
-body.dockb #bbody>.col.empty>.ch>span{white-space:nowrap}body.dockb #bbody>.col.empty>.ch .eye{margin-left:auto}
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
 body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .sec:first-child>.ch{border-top:0}
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
 .hidbar{flex:none;align-self:stretch;padding:8px 10px;color:var(--mute);font-size:11px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line);min-width:120px;max-width:120px;min-height:0;overflow:hidden}   /* the hidden: strip, the docked row's last child: align-self:stretch is what lets it be divided by height. Both ends of the width are pinned and the strip clips, so a long user-created column name cannot widen the column now that the label sits on its own line (#1792) */
-.hidbar .chip{flex:1 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:2px 8px;background:#2a303b;border:1px solid #353c49;border-radius:9px;cursor:pointer}   /* one full-height tile per hidden column: flex:1 1 0 splits the strip's height equally between however many rows there are, so two rows are half each and eight are an eighth (#1792) */
+.hidbar .chip{flex:1 1 0;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;padding:2px 8px;background:#2a303b;border:1px solid #353c49;border-radius:9px;cursor:pointer;color:#939cab}   /* one full-height tile per hidden column: flex:1 1 0 splits the strip's height equally between however many rows there are, so two rows are half each and eight are an eighth (#1792). The chip's own colour is the one #1809's quiet lines are measured against: the name inside the tile wears the caption's --mute (#1793), so the chip keeps the fill and the text colour the two kinds are told apart by */
 .hidbar .chip:hover{background:#333a47;border-color:#414957}
 .hidbar .chip .lbl{flex:0 1 auto;min-height:0;overflow:hidden;max-width:100%;font-size:10px;line-height:11px;color:var(--mute);text-overflow:ellipsis;white-space:nowrap}   /* the name is the tile's caption: it ellipsizes, it never wraps and its font never shrinks. It is flex:0 1 auto and the number is flex:none, so when a row is shorter than its content the name is the one clipped away */
 .hidbar .chip b{flex:none;font-size:20px;line-height:20px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--pin)}   /* the number is what the tile is for, and it is never the element that gets cut. --pin is the fallback for a column the table below does not name. These rules are scoped to .hidbar on purpose: a bare .chip would also repaint the sidebar's .sub .chip */
@@ -1313,6 +1319,8 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .chip[data-col="No status"] b{color:var(--warn)}
 .hidbar .chip[data-col="Done"] b{color:var(--ok)}
 .hidbar .chip[data-col="Closed PRs"] b{color:var(--pin)}
+.hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
+.hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:#6f7987;font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 #foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}
@@ -1328,7 +1336,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>BUILDER <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>BUILDER <span id=bt class=m></span></b><button id=br title="re-read the board now: the Project statuses, the blockers and the open PRs" aria-label="refresh the board now" aria-busy=false><span>&#8635;</span></button><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
 <script>
@@ -1651,7 +1659,10 @@ $("#pip").addEventListener("wheel",e=>e.preventDefault(),{passive:false});   // 
 $("#piph").addEventListener("wheel",e=>e.preventDefault(),{passive:false});
 addEventListener("resize",()=>pipDraw());
 // ---- the pip ends here
-document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const h=new Set(bo.hidden||[]),g=t.dataset.eye;h.has(g)?h.delete(g):h.add(g);bo.hidden=[...h];saveB();pollBoard()},true);
+document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const g=t.dataset.eye;
+ if(t.closest(".hidline")){const k=new Set(bo.kept||[]);k.add(g);bo.kept=[...k]}   // the hidden: strip's line: show the column again and keep it shown, even while it holds nothing (#1809)
+ else{const h=new Set(bo.hidden||[]),k=new Set(bo.kept||[]);if(h.has(g))h.delete(g);else{h.add(g);k.delete(g)}bo.hidden=[...h];bo.kept=[...k]}   // the header's eye: the user's own hidden set, and the keep it ends
+ saveB();pollBoard()},true);
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
@@ -1677,7 +1688,7 @@ if(lfl.dataset.k!==LB.join("\n")){lfl.dataset.k=LB.join("\n");lfl.innerHTML=`<di
 lfl.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));lfl.querySelectorAll("[data-lm]").forEach(x=>x.classList.toggle("on",(bo.lmode||"any")===x.dataset.lm));
 lf.classList.toggle("set",sel.length>0);lf.querySelector("summary").textContent=sel.length?(bo.lmode==="all"&&sel.length>1?"all of: ":"")+(bo.lmode==="all"?sel.join(", "):Object.values(fam(sel)).map(g=>g.length>1?"("+g.join(" | ")+")":g[0]).join(" & ")):"labels";
 const lok=x=>!sel.length||(bo.lmode==="all"?sel.every(l=>(x.l||[]).includes(l)):Object.values(fam(sel)).every(g=>g.some(l=>(x.l||[]).includes(l))));
-const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=g=>`<span class=eye data-eye="${esc(g.name)}" title="${hid.has(g.name)?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${hid.has(g.name)?'<path d="M3 3l18 18"/>':""}</svg></span>`;
+const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
 lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"";
@@ -1687,21 +1698,30 @@ setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textConte
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
 const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
-const colCls=(pr,n)=>"col"+(pr?" prs":"")+(n?"":" empty");   // a visible column with no cards left after the filter collapses to the narrow width (#1791)
-const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
-if(bottom)return `<div class="${colCls(isPR(g.name),it.length)}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
+// A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
+// collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
+// every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
+// stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
+const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)));
+const kept=new Set(bo.kept||[]),
+ autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn
+ vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
+const badge=g=>`<span class=n>${f||sel.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
+const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
+if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
 // One tile of the hidden: strip: the name as a caption over the count, the count's colour deciding what the count
 // means. data-col names the column, so the colour is a CSS rule per category rather than an inline value; the one
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
-const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}</div>`:"");
+const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
 if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
 $("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
 document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});
+$("#br").onclick=async()=>{const b=$("#br");if(b.disabled)return;b.disabled=true;b.setAttribute("aria-busy","true");b.classList.add("busy");try{await fetch("/api/board/refresh")}catch(e){}try{await pollBoard()}finally{b.disabled=false;b.setAttribute("aria-busy","false");b.classList.remove("busy")}};   // one real pass, asked for by hand; the button says it is busy while it runs and clears when it ends, failure included (#1810)
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
@@ -2107,6 +2127,8 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); body, ct = json.dumps(issue_detail(int(m[1])) if m else {"err": "bad n"}).encode(), "application/json"
+        elif self.path.startswith("/api/board/refresh"):
+            board_pass(); body, ct = json.dumps(board()).encode(), "application/json"   # the header's refresh button: one real pass, not another read of the cache (#1810)
         elif self.path.startswith("/api/board"): body, ct = json.dumps(board()).encode(), "application/json"
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": LOADED}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
