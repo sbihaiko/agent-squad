@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """A child that finished with outcome pass moves its issue to Code Complete (called by watch.sh every loop).
-The child's issue is read from its own spawn prompt ("GitHub issue #N" first, else "issue #N"), as the dashboard labels it.
+The child's issue is read from its own spawn prompt, first match wins: "GitHub issue #N", "issue #N",
+"GitHub issues N", "GitHub issue N", then a "gui/N" or "wt-as-N" branch/worktree name.
+A pass whose prompt names no issue is logged once (CHILDCC UNMAPPED <run> <child>) instead of being skipped silently.
 Live runs move at once; a run that already has its verdict (tiny and fork-only runs go pass -> verdict in under 1 s, so they are never seen live) is backfilled once,
 but only when the card is still in Todo/In Progress/Blocked, never past Code Complete. Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
 Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never overrides a later column: an issue already
@@ -14,20 +16,27 @@ def card_status(n):   # REST, no GraphQL quota; "" when unreadable
     f = g("api", f"/users/{owner}/projectsV2/{proj}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id')
     return g("api", "--paginate", f"/users/{owner}/projectsV2/{proj}/items?per_page=100&fields[]={f}", "--jq",
              f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")')
+def issue_from(df):
+    m = (re.search(r"GitHub issue #(\d+)", df) or re.search(r"\bissue #(\d+)", df)
+         or re.search(r"GitHub issues (\d+)", df) or re.search(r"GitHub issue (\d+)", df)
+         or re.search(r"(?:gui/|wt-as-)(\d+)", df))
+    return int(m.group(1)) if m else None
 for r in (st / "active-runs.txt").read_text().split():
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
     finished = '"event": "verdict"' in rec.read_text()
-    issue, done = {}, []
+    issue, seen, done, unmapped = {}, set(), [], []
     for l in rec.open():
         if '"spawn_accepted"' not in l and '"outcome"' not in l: continue
         try: d = json.loads(l)
         except Exception: continue
         if d.get("event") == "spawn_accepted":
-            df = json.dumps(d.get("definition")); m = re.search(r"GitHub issue #(\d+)", df) or re.search(r"\bissue #(\d+)", df)
-            if m: issue[d["child"]] = int(m.group(1))
+            seen.add(d["child"]); n = issue_from(json.dumps(d.get("definition")))
+            if n is not None: issue[d["child"]] = n
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in issue:
             done.append((d["node"], (d.get("reasons") or [""])[0]))
+        elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
+            unmapped.append(d["node"])
     for child, why in done:
         mk = A / f"cc-{pathlib.Path(r).name}-{child}"
         if mk.exists(): continue
@@ -38,3 +47,7 @@ for r in (st / "active-runs.txt").read_text().split():
         subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)
         (st / "cq" / f"{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {pathlib.Path(r).name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
         print(f"CODE COMPLETE #{n} ({pathlib.Path(r).name} {child})")
+    for child in unmapped:
+        mk = A / f"unmap-{pathlib.Path(r).name}-{child}"
+        if mk.exists(): continue
+        mk.touch(); print(f"CHILDCC UNMAPPED {pathlib.Path(r).name} {child}")
