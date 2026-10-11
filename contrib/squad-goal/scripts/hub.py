@@ -1305,7 +1305,14 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .chip:hover{background:#333a47;border-color:#414957}
 .hidbar .chip .lbl{flex:0 1 auto;min-height:0;overflow:hidden;max-width:100%;font-size:10px;line-height:11px;color:var(--mute);text-overflow:ellipsis;white-space:nowrap}   /* the name is the tile's caption: it ellipsizes, it never wraps and its font never shrinks. It is flex:0 1 auto and the number is flex:none, so when a row is shorter than its content the name is the one clipped away */
 .hidbar .chip b{flex:none;font-size:20px;line-height:20px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--pin)}   /* the number is what the tile is for, and it is never the element that gets cut. --pin is the fallback for a column the table below does not name. These rules are scoped to .hidbar on purpose: a bare .chip would also repaint the sidebar's .sub .chip */
-/* STRIP_COLOURS */
+/* The strip's own mapping from column to category, one rule per category: the colour says what the count means and
+   never how big it is, because magnitude would light up the two archival piles. The hexes are #1793's, under the
+   names the page already uses for them; Closed PRs' #5aa9ff is --pin, so it is written as the token it is. */
+.hidbar .chip[data-col="Blocked"] b{color:var(--err)}
+.hidbar .chip[data-col="Testing"] b{color:var(--run)}
+.hidbar .chip[data-col="No status"] b{color:var(--warn)}
+.hidbar .chip[data-col="Done"] b{color:var(--ok)}
+.hidbar .chip[data-col="Closed PRs"] b{color:var(--pin)}
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 #foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}

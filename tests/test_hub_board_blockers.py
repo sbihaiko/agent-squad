@@ -239,8 +239,8 @@ def test_the_dot_the_card_border_and_the_strip_read_one_resolution_point(hub):
         "the column header's dot must ask colOf for its colour"
     assert re.search(r"--cc:\$\{colOf\(g\.name,\w+\)\}", board), \
         "the card's left border must ask colOf for its colour"
-    assert re.search(r'<b style="color:\$\{colOf\(g\.name,\w+\)\}"', board), \
-        "the hidden: strip's number must ask colOf for its colour"
+    assert re.search(r"^const hidchip=.*colOf\(g\.name,CN\)", board, re.M), \
+        "the hidden: strip's number must ask colOf for the colour of a column the map does not name"
     cols = re.search(r"--cc:\$\{colOf\(g\.name,(\w+)\)\}", board).group(1)
     assert board.count('style="--cc:${colOf(g.name,' + cols + ')}"') == 2, \
         "both layouts put the column's colour on the column itself, for the PR chrome to read"
@@ -430,3 +430,68 @@ def test_counts_of_a_thousand_and_over_carry_a_thousands_separator(hub):
         assert _fmt(hub, n) == want, f"{n} renders as {_fmt(hub, n)}"
     assert 'title="Closed PRs — 1,234"' in _chip(hub, "Closed PRs", 1234), \
         "the hover text reads the count the same way the number does"
+
+
+# ---- the strip's numbers are coloured by category, not by magnitude (#1792) --------------------------
+
+# The decision, not a starting point: the strip's own mapping from column to category, with the hexes
+# #1793 owns. Magnitude would light up the two archival piles (688, 522) and bury the Blocked 2.
+HID_COL = {
+    "Blocked": "#ff6b6b",        # --err
+    "Testing": "#2dd4bf",        # --run
+    "No status": "#f5b041",      # --warn
+    "Done": "#3ecf8e",           # --ok
+    "Closed PRs": "#5aa9ff",     # what #1793 gives the retired pair, and what --pin is
+}
+
+
+def _hid_rule(hub, name):
+    """The colour a category's rule paints its number with, resolved through the page's own tokens."""
+    decls = _rule(hub, '.hidbar .chip[data-col="%s"] b' % name)
+    tokens = dict(re.findall(r"--([a-z-]+):(#[0-9a-f]{6})", re.search(r":root\{[^}]*\}", _css(hub)).group(0)))
+    m = re.fullmatch(r"color:(var\(--([a-z-]+)\)|#[0-9a-f]{6})", decls)
+    assert m, f"the rule for {name} does not decide the number's colour in one word: {decls!r}"
+    return tokens[m.group(2)] if m.group(2) else m.group(1)
+
+
+def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
+    for name, want in HID_COL.items():
+        assert _hid_rule(hub, name) == want, f"{name} is painted {_hid_rule(hub, name)}, not {want}"
+    fallback = _rule(hub, ".hidbar .chip b")
+    assert re.search(r"color:var\(--pin\)", fallback), \
+        "a column the table does not name must fall back to --pin"
+    assert _token(hub, "--pin") == HID_COL["Closed PRs"], "the archive's blue and the fallback are not one colour"
+    for name in list(HID_COL) + [""]:
+        sel = f'.hidbar .chip[data-col="{name}"] b' if name else ".hidbar .chip b"
+        assert "var(--mute)" not in _rule(hub, sel), f"{name or 'the fallback'} draws a number in the caption colour"
+
+
+def test_a_category_is_not_a_magnitude(hub):
+    """The two archival piles are the biggest numbers on the board and must not be the loudest."""
+    counts = {"Closed PRs": 688, "Done": 522, "Blocked": 2}
+    loud = [_hid_rule(hub, c) for c in counts]
+    assert len(set(loud)) == len(counts), "two categories share a colour, so the colour says nothing"
+    assert _hid_rule(hub, "Blocked") != _hid_rule(hub, "Closed PRs"), \
+        "the pile nobody is reading and the one that wants eyes wear the same colour"
+    for c, n in counts.items():
+        assert re.search(r"data-col", _chip(hub, c, n)), "the chip carries no data-col, so no rule can reach it"
+
+
+def test_a_column_the_map_does_not_name_keeps_the_colour_its_header_dot_wears(hub):
+    names = ["Stale", "Waiting on review"]
+    assert _col(hub, f'colOf("Stale",{json.dumps(names)})') == RING[0]
+    assert f'style="color:{RING[0]}"' in _chip(hub, "Stale", 5, names), \
+        "a user column's number must take the ring colour, which only colOf can give it"
+    assert "color:" not in _chip(hub, "Blocked", 2), \
+        "a category with a rule of its own must not also carry an inline colour: that is the second copy"
+
+
+def test_the_named_columns_still_read_the_one_map(hub):
+    """The strip is #1793's third reader: header dot, card border, number — one resolution point."""
+    board = _board_js(hub)
+    assert re.search(r'<b\$\{ring\?` style="color:\$\{c\}"`', board), \
+        "the strip's number must ask colOf for the colour of a column the map does not name"
+    assert "colOf(g.name,CN)" in re.search(r"^const hidchip=.*$", board, re.M).group(0), \
+        "the strip resolves its colour somewhere other than the one map"
+    assert re.search(r"const html=vis\.map\(one\)\.join\(\"\"\)\+\(bottom&&hid\.size\?`<div class=hidbar>\$\{all\.filter\(g=>hid\.has\(g\.name\)\)\.map\(hidchip\)", board), \
+        "the strip is not built from the one chip builder"
