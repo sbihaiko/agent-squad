@@ -961,10 +961,8 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
             n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
-            try: d = json.loads((T / (n + ".json")).read_text())
-            except Exception: d = {}
-            try: lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
-            except Exception: lg = "(no output yet)" if d.get("state") == "running" else "no such test"   # test.sh makes the log after the json
+            try: d = json.loads((T / (n + ".json")).read_text()); lg = (T / (n + ".log")).read_text(errors="replace")[-60000:]
+            except Exception: d, lg = {}, "no such test"
             import html as _h
             ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
             body = f'<!doctype html><meta charset=utf-8>{ref}<body style="background:#0d1117;color:#c9d1d9;font:12px ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
