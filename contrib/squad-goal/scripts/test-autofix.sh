@@ -8,6 +8,7 @@ SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_CHECKOUT=$T
 J
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
+printf '%s\n' "gh $*" >> "${GHLOG:-/dev/null}"
 case "$*" in
   *'.head.ref+" "'*) echo "feat/child aaaaaaaaaaaa dirty${GH_BASE:+ $GH_BASE}" ;;
   *graphql*) echo 0 ;;
@@ -63,5 +64,18 @@ miss=""; for needle in 'ONE PR comment' '## Blocking' '## Debt' 'fixed|not fixed
   case "$r" in *"$needle"*) ;; *) miss="$miss '$needle'";; esac; done
 [ -z "$miss" ] && ok "the reply is one comment in the checklist shape, ending with Refs #N" || ko "the reply instruction lacks$miss"
 case "$r" in *"every finding"*) ok "the review finding is addressed as a bullet, not a numbered line";; *) ko "the review finding is not addressed as a bullet";; esac
+
+# 8) #1820: autofix.sh takes the PR's own repository as its first argument -- the fix run is told which repository it
+# fixes and which one it pushes to, and the reads (head, threads, check runs) go there. No argument: the profile's one.
+export GHLOG="$T/ghlog"; : > "$GHLOG"; unset GH_BASE
+r=$(AF_DRY=1 bash "$T/s/autofix.sh" o/tool 9 8 2>&1)
+case "$r" in *"repo o/tool"*) ok "the request names the PR's own repository";; *) ko "the request does not name o/tool: $(printf '%s' "$r" | head -2)";; esac
+case "$r" in *"repo x/y"*) ko "the request still names the profile's repository";; *) ok "the request names no other repository";; esac
+/usr/bin/grep -q 'repos/o/tool/pulls/9' "$GHLOG" && ok "the reads go to the PR's own repository" || ko "no read of o/tool: $(head -3 "$GHLOG")"
+/usr/bin/grep -q 'repos/x/y/' "$GHLOG" && ko "a read stayed on the profile's repository ($(/usr/bin/grep -m1 'repos/x/y/' "$GHLOG"))" || ok "nothing read the profile's repository"
+: > "$GHLOG"; bash "$T/s/autofix.sh" o/tool --threads 9 >/dev/null 2>&1
+/usr/bin/grep -q 'owner:"o"' "$GHLOG" && /usr/bin/grep -q 'name:"tool"' "$GHLOG" && ok "the thread read asks the PR's own repository" || ko "thread read: $(cat "$GHLOG")"
+: > "$GHLOG"; AF_DRY=1 bash "$T/s/autofix.sh" 9 8 >/dev/null 2>&1
+/usr/bin/grep -q 'repos/x/y/pulls/9' "$GHLOG" && ok "with no argument the profile's repository is the one read" || ko "default repo: $(head -3 "$GHLOG")"
 
 rm -rf "$T"; exit $fail

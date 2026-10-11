@@ -69,7 +69,7 @@ def test_pressing_the_button_forces_a_real_pass_over_the_project_the_blockers_an
     assert f"/users/{hub.OWNER}/projectsV2/{hub.PROJECT_NO}/items" in ep      # the Project statuses
     assert "blockedBy" in ep                                                 # the blocked-by page
     assert "pullRequests(first:100" in ep                                    # the open PRs
-    assert calls[-1][:2] == ["gh", "api"] and "labels?" in " ".join(calls[-1])
+    assert "labels?" in ep, "a real pass re-reads the labels too (the label filter); the PR columns read after it (#1820)"
     assert hub.board_cache["t"] > 1.0                                        # fresh data, not another read of the cache
     assert [i["n"] for i in hub.board_cache["items"]] == [11]
     assert [p["n"] for p in hub.board_cache["prs"]] == [7]

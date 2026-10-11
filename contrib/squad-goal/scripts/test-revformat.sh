@@ -85,4 +85,22 @@ norm() { printf '%b' "$1" > "$T/r.md"; python3 "$src" --normalize "$T/r.md"; }
 [ "$(norm 'Narration first.\nVERDICT: APPROVE\n')" = "$(printf 'VERDICT: APPROVE\nNarration first.')" ] && ok "--normalize moves the verdict up and keeps the narration" || ko "--normalize narration: '$(norm 'Narration first.\nVERDICT: APPROVE\n')'"
 [ "$(norm 'no verdict here\n')" = "no verdict here" ] && ok "--normalize leaves a verdictless review alone (the check then says so)" || ko "--normalize verdictless: '$(norm 'no verdict here\n')'"
 
+# 10) #1832: a bullet that answers a previous finding with 'fixed' is the answer to a finding, not a finding -- so a
+# fix round whose every Blocking previous finding is fixed may end APPROVE, and the soft path (ADR-0273 Decision 3/5)
+# reads blocking=0 for it. A bullet saying 'not fixed' keeps the severity it was raised with (#1777), and so does one
+# with no marker at all (a full review's Blocking bullet).
+fx() { printf '%b' "$1" > "$T/r.md"; python3 "$src" --max-lines 60 "$T/r.md"; }
+out=$(fx 'VERDICT: APPROVE\n## Blocking\n- src/a.py:12 — null deref — fixed: the guard returns [] now — tests/test_a.py::empty_list\n- src/b.py:42 — the handle leaks — fixed: it is closed on every path — tests/test_b.py::leaks\n## Debt\n- src/c.py:7 — the retry loop has no backoff — not fixed: it still hammers a 500\n')
+[ $? = 0 ] && ok "APPROVE with every Blocking bullet fixed is the shape (#1832)" || ko "APPROVE + fixed Blocking rejected: '$out'"
+printf 'VERDICT: APPROVE\n## Blocking\n- src/a.py:12 — null deref — not fixed: the guard still returns None\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 1 ] && ok "APPROVE with a 'not fixed' Blocking bullet still fails" || ko "APPROVE + 'not fixed' Blocking accepted"
+printf 'VERDICT: APPROVE\n## Blocking\n- src/a.py:12 — null deref — an empty list raises — return []\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 1 ] && ok "APPROVE with an unmarked Blocking bullet still fails" || ko "APPROVE + unmarked Blocking accepted"
+printf 'VERDICT: APPROVE\n## Blocking\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Debt\n- src/c.py:7 — the retry loop has no backoff — not fixed: it still hammers a 500\n' > "$T/r.md"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=0 debt=1" ] && ok "--summary sees blocking=0 once every Blocking bullet is fixed" || ko "--summary fix round: '$(python3 "$src" --summary "$T/r.md")'"
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n- src/b.py:42 — the handle leaks — not fixed: still open on the error path\n## Debt\n- src/c.py:7 — the retry loop has no backoff — fixed: it backs off now — tests/test_c.py\n' > "$T/r.md"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=0" ] && ok "--summary counts only the unfixed bullets" || ko "--summary mixed round: '$(python3 "$src" --summary "$T/r.md")'"
+
 rm -rf "$T"; exit $fail
