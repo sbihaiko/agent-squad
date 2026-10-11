@@ -26,9 +26,13 @@ those five verbs `automated` for an adapter that advertises them.
 
 `runnable` only ever *narrows*: an `automated` step the target cannot run becomes `manual`, and one already carrying
 `mode: "manual"` in the file keeps it. So a capability change alone cannot flip the committed script's stamps — the
-flip comes from **re-publishing** the scenario against the new capabilities, which is a write to the MesenAI checkout.
-What follows is therefore the classification, not a flip: the reason each stamped step carries today, and whether the
-reason is a verb this fork now drives or the behaviour itself.
+flip comes from **re-publishing** the scenario, which is a write to the MesenAI checkout. Two rules decide a stamp:
+this adapter's capabilities (which `runnable` models) and the publisher's own reasons for a step no run can reach
+(which it does not). Measured on a copy of the pilot with the stamps stripped, `runnable` against the five verbs
+leaves `home` at **1** manual — `launch.port-lamp-p1`, needing `pad.connect`, a verb this slice does not add — and
+`home-after-game` at **0**. Everything else the published pilot still stamps manual is the publisher's rule: a ROM,
+a profile fixture, an on-screen keyboard, box art, bug #1485. That is why the table below reads as it does: the
+reason each stamped step carries today, and whether it is a verb this fork now drives or the behaviour itself.
 
 ### `home` — 13 steps, 3 manual
 
