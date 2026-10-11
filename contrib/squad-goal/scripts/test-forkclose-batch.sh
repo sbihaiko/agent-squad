@@ -9,7 +9,7 @@ setup() {   # setup <issue>...: a fork whose base has hub.py (10 lines) and one 
   cp "$here/forkclose.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
   printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"
   printf '#!/bin/bash\necho %s/req.txt\n' "$T" > "$T/s/mkreq.sh"; printf 'open(__import__("sys").argv[1]+".launched","w")\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
-  printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log; [ ! -e bad ]"\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
+  printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log; [ ! -e bad ]"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
   g init -q -b local/next; seq 1 10 > "$T/fork/hub.py"; g add .; g commit -q -m init
   local n items=""; for n in "$@"; do g checkout -q -b gui/$n local/next
     case $n in 1|3) sed -i '' "1s/.*/edit-$n/" "$T/fork/hub.py";; 2) sed -i '' "10s/.*/edit-$n/" "$T/fork/hub.py";; 4) echo x > "$T/fork/bad";; *) echo $n > "$T/fork/f$n";; esac

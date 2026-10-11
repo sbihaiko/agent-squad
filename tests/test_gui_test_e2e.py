@@ -3490,8 +3490,9 @@ def test_1392_the_fork_gate_keeps_the_gui_suite_command_and_adds_the_squad_shell
         (d / name).write_text((scripts / name).read_text())
     suite = d / "test-x.sh"
     suite.write_text("#!/bin/bash\nexit 0\n")
-    # Its own lock directory, so the gate's gui-suite lock is not the one a suite run around this test already holds.
-    env = {**os.environ, "SG_STATE": str(tmp_path / "state")}
+    # Its own lock directory, so the gate's gui-suite lock is not the one a suite run around this test already holds. The pytest
+    # command is pinned: the full gate runs the pytest suite too (#1822), and running the suite this test lives in is not the point here.
+    env = {**os.environ, "SG_STATE": str(tmp_path / "state"), "SG_FORK_PY_CMD": "true"}
     env.pop("SG_SERIAL_HELD", None)
     seen = tmp_path / "seen"
     gui = f"MESENAI_ROOT=/r MESEN_GUI_BINARY='/b b' sh -c 'echo \"$MESENAI_ROOT|$MESEN_GUI_BINARY\" > {seen}'"
