@@ -69,7 +69,7 @@ def test_closed_blocker_is_dropped_so_the_card_has_no_row(hub):
 
 def test_page_renders_blocked_by_links_and_omits_an_empty_row(hub):
     page = hub.PAGE
-    cards = page[page.index("const cards="): page.index("const vis=")]
+    cards = page[page.index("const cards="): page.index("const fits=")]
     assert "blocked by" in cards
     assert 'href="https://github.com/__REPO__/issues/${' in cards or 'href="https://github.com/__REPO__/issues/' in cards
     assert "x.b" in cards
@@ -98,79 +98,38 @@ def _rule(hub, selector):
 
 
 def _strip(hub):
-    """The client-side render of the docked strip: from the visible columns to the painted HTML."""
+    """The client-side render of the docked strip: from the derived sets to the painted HTML."""
     page = hub.PAGE
-    return page[page.index("const vis="): page.index("const html=")]
+    return page[page.index("const kept="): page.index("const html=")]
 
 
-def _col_class(hub, pr, cards):
-    """The class the board really puts on a column, run by node from the page's own function."""
-    js = re.search(r"^const colCls=.*$", hub.PAGE, re.M)
-    assert js, "the board has no column-class function (colCls) to mark an empty column"
-    script = "%s\nconsole.log(colCls(%s, %s))" % (js.group(0), json.dumps(pr), json.dumps(cards))
-    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    return out.stdout.strip()
-
-
-def test_a_column_with_no_cards_collapses_and_a_populated_one_does_not(hub):
-    assert "empty" in _col_class(hub, False, 0)
-    assert "empty" not in _col_class(hub, False, 3)
-    assert "empty" in _col_class(hub, True, 0)      # the PR column collapses too when it has no PRs
-    assert "empty" not in _col_class(hub, True, 4)
-    assert "prs" in _col_class(hub, True, 0)        # and stays a PR column while it is narrow
-
-
-def test_the_collapse_reads_the_count_left_by_the_label_filter(hub):
-    assert re.search(r"colCls\(isPR\(g\.name\),\s*it\.length\)", _strip(hub)), \
-        "the collapse must read the filtered list (it), not the unfiltered one (g.items)"
-
-
-def test_the_collapsed_width_is_a_named_constant(hub):
+def test_the_docked_columns_read_their_width_out_of_one_config_block(hub):
     css = _css(hub)
-    cfg = re.search(r":root\{[^}]*--col-w:(\d+)px[^}]*--col-empty-w:(\d+)px[^}]*\}", css)
-    assert cfg, "the strip's column widths need one config block naming them (--col-w, --col-empty-w)"
-    assert css.count("--col-empty-w:") == 1, "the narrow width is declared more than once"
-    assert "flex:0 0 var(--col-empty-w)" in _rule(hub, "body.dockb #bbody>.col.empty")
-    assert not re.search(r"(?:flex|min-width|max-width|width):[^;]*\d+px", _rule(hub, "body.dockb #bbody>.col.empty")), \
-        "the collapse rule carries a magic number instead of the named constant"
+    assert re.search(r":root\{[^}]*--col-w:(\d+)px[^}]*\}", css), "the docked column's width is a named constant (#1791)"
+    assert "col-empty" not in css, "an empty column reserves no width of its own: it is not drawn at all (#1809)"
+    rule = _rule(hub, "body.dockb #bbody>.col")
+    assert "flex:1 1 0" in rule and "min-width:var(--col-w)" in rule
+    assert not re.search(r"(?:flex|min-width|max-width|width):[^;]*\d+px", rule), \
+        "the rule carries a magic number instead of the named constant"
 
 
-def test_the_populated_columns_keep_their_proportions_when_one_collapses(hub):
+def test_the_columns_that_hold_cards_keep_their_proportions(hub):
     assert "flex:1 1 0" in _rule(hub, "body.dockb #bbody>.col")
     assert "flex:1.15 1 0" in _rule(hub, "body.dockb #bbody>.col.prs")     # the PR column's extra weight
-    assert "flex:0 0 var(--col-empty-w)" in _rule(hub, "body.dockb #bbody>.col.empty")
-    css = _css(hub)
-    assert css.index("body.dockb #bbody>.col.empty{") > css.index("body.dockb #bbody>.col.prcol{"), \
-        "an empty PR column has to collapse too: the collapse rule must come after the PR column's weight"
-
-
-def test_the_narrow_column_keeps_its_header_readable_and_its_border(hub):
-    empty = _rule(hub, "body.dockb #bbody>.col.empty")
-    assert "border-right:1px solid var(--line)" in empty, "the narrow column lost its separating border"
-    ch = _rule(hub, "body.dockb #bbody>.col.empty>.ch")
-    assert "flex-wrap:wrap" in ch, "the name and the count must fall onto two rows instead of clipping"
-    assert "overflow:hidden" not in ch and "text-overflow:ellipsis" not in ch
-    css = _css(hub)
-    assert not re.search(r"\.col\.empty[^{]*\.n\{[^}]*display:none", css), "the count is hidden"
-    assert not re.search(r"\.col\.empty[^{]*\.eye\{[^}]*display:none", css), "the eye is hidden"
-    w = int(re.search(r"--col-empty-w:(\d+)px", css).group(1))
-    assert w >= 110, "narrower than the widest header token (OPEN PRS is 8 chars at 13px monospace)"
-
-
-def test_a_strip_of_only_empty_columns_stays_narrow_and_is_never_squeezed_to_zero(hub):
-    empty = _rule(hub, "body.dockb #bbody>.col.empty")
-    assert "min-width:var(--col-empty-w)" in empty and "max-width:var(--col-empty-w)" in empty
-    css = _css(hub)
-    narrow = int(re.search(r"--col-empty-w:(\d+)px", css).group(1))
-    full = int(re.search(r"--col-w:(\d+)px", css).group(1))
-    assert 0 < narrow < full, "collapsing must free width, so it can never add a scrollbar the populated strip did not have"
+    assert "flex:1.15 1 0" in _rule(hub, "body.dockb #bbody>.col.prcol")   # and the archive's
     assert "overflow-x:auto" in _rule(hub, "body.dockb #bbody")
 
 
-def test_a_column_hidden_by_the_eye_is_absent_from_the_strip_rather_than_narrow(hub):
-    assert re.search(r"const vis=all\.filter\(g=>!bottom\|\|!hid\.has\(g\.name\)\)", hub.PAGE)
-    assert "vis.map(one)" in hub.PAGE        # only visible columns are ever laid out
+def test_an_auto_hidden_column_reads_the_count_left_by_the_label_filter(hub):
+    assert re.search(r"const fits=\{\};all\.forEach\(g=>fits\[g\.name\]=", hub.PAGE)
+    assert "fits[g.name].length" in _strip(hub), "the collapse reads the filtered list, not the unfiltered one"
+
+
+def test_a_column_hidden_by_the_eye_keeps_its_chip_and_never_gets_a_line(hub):
+    assert re.search(r"vis=all\.filter\(g=>!bottom\|\|\(!hid\.has\(g\.name\)&&!autoHidden\(g\)\)\)", hub.PAGE)
+    assert "vis.map(one)" in hub.PAGE        # only the columns that are drawn are laid out
+    assert re.search(r"autoHidden=g=>!hid\.has\(g\.name\)", hub.PAGE), \
+        "a column the user hid is a chip, never one of the strip's lines (#1809)"
 
 
 def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
@@ -236,15 +195,16 @@ def test_the_dot_the_card_border_and_the_strip_read_one_resolution_point(hub):
     assert re.search(r'<b style="color:\$\{colOf\(g\.name,\w+\)\}"', board), \
         "the hidden: strip's number must ask colOf for its colour"
     cols = re.search(r"--cc:\$\{colOf\(g\.name,(\w+)\)\}", board).group(1)
-    assert board.count('style="--cc:${colOf(g.name,' + cols + ')}"') == 2, \
-        "both layouts put the column's colour on the column itself, for the PR chrome to read"
+    assert board.count('style="--cc:${colOf(g.name,' + cols + ')}"') == 3, \
+        "both layouts put the column's colour on the column itself, for the PR chrome to read, and the hidden: " \
+        "strip's line puts it on the tick that stands for the collapsed column (#1809)"
     assert not re.search(r"col\[", board), "a second map of column colours is one waiting to drift from this one"
     assert '||"var(--mute)"' not in board, "an unnamed column drawn in the colour of a caption"
 
 
 def test_the_pr_columns_wear_their_own_colour_not_the_run_token(hub):
     css = _css(hub)
-    pr = css[css.index(".prs{"): css.index("body.dockb #bbody>.col.empty")]
+    pr = css[css.index(".prs{"): css.index("body.dockb .sec{")]
     assert "var(--run)" not in pr, "the PR columns still borrow the run state's teal: the archive looks like the live queue"
     assert "2dd4bf" not in pr, "a second literal for a column colour, next to the map that decides it"
     assert "border-left:4px solid var(--cc)" in _rule(hub, "#bbody .prs .it"), \

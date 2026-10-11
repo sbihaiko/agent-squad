@@ -1,8 +1,8 @@
-"""Hub board: an empty visible column collapses to a narrow vertical strip, and its header count is never flush
-against the column name (#1809).
+"""Hub board: a visible column holding no cards is not drawn at all, and it is accounted for by one thin quiet line
+at the foot of the `hidden:` strip (#1809).
 
-The strip is CSS only, so the contract under test is the one the server actually paints: the declarations served in
-the page's stylesheet plus the class the page hands a column. Every assertion names the seam it reads.
+The contract under test is the one the server actually paints: the declarations served in the page's stylesheet, the
+HTML the docked render builds, and the derivation the page runs on every poll. Every assertion names its seam.
 """
 import importlib.util
 import json
@@ -16,7 +16,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
-STRIP = "body.dockb #bbody>.col.empty"          # the docked strip: the one place the empty state paints (#1791)
+LINE = ".hidbar .hidline"       # the thin line an auto-hidden column gets, at the end of the hidden: strip (#1809)
+CHIP = ".hidbar .chip"          # the chip a column the user hid gets, above it
 
 
 @pytest.fixture(scope="module")
@@ -33,8 +34,10 @@ def hub():
 
 
 def _css(hub, selector):
-    """Every declaration the served page paints for `selector`, joined: one selector may sit in more than one rule."""
-    return ";".join(m.group(2).strip() for m in re.finditer(r"([^{}\n;]+)\{([^{}]*)\}", hub.PAGE)
+    """Every declaration the served page paints for `selector`, joined: comments stripped, a selector may repeat."""
+    page = hub.PAGE[:hub.PAGE.index("</style>")]
+    css = re.sub(r"/\*.*?\*/", "", page, flags=re.S)
+    return ";".join(m.group(2).strip() for m in re.finditer(r"([^{}\n;]+)\{([^{}]*)\}", css)
                     if selector in [s.strip() for s in m.group(1).split(",")])
 
 
@@ -44,89 +47,172 @@ def _prop(decls, name):
     return m.group(1).strip() if m else None
 
 
-def test_an_empty_column_is_a_strip_one_line_wide_and_the_wide_columns_take_the_rest(hub):
-    root = _css(hub, ":root")
-    w = _prop(root, "--col-empty-w")
-    assert w, "the strip's width belongs in :root beside --col-w (#1809), not inline in the rule"
-    assert re.fullmatch(r"\d+px", w), f"--col-empty-w is a px width, not {w!r}"
-    assert 20 <= int(w[:-2]) <= 40, f"an empty column is one line of text wide (~28px), well under the 132px it was: {w}"
-    assert _prop(root, "--col-w"), "the width of a column that holds cards is still set in :root"
-    rule = _css(hub, STRIP)
-    assert "flex:0 0 var(--col-empty-w)" in rule      # the freed width goes to the columns that have cards
-    assert "min-width:var(--col-empty-w)" in rule and "max-width:var(--col-empty-w)" in rule
-    widths = re.findall(r"(?:^|;)(flex|min-width|max-width|width)\s*:[^;]*", rule)
-    assert widths, f"the strip's rule states its geometry: {rule}"
-    assert _prop(rule, "flex") == "0 0 var(--col-empty-w)", "the rule reads the geometry out of :root, never a literal"
+def _page_line(hub, prefix):
+    """The one line of the board's script that starts with `prefix`."""
+    m = re.search(rf"^{re.escape(prefix)}.*$", hub.PAGE, re.M)
+    assert m, f"the board's script has no line starting with {prefix!r}"
+    return m.group(0)
 
 
-def test_the_strip_name_reads_bottom_to_top_on_one_line_and_is_never_clipped(hub):
-    name = _css(hub, STRIP + ">.ch>span:first-child")
-    assert _prop(name, "writing-mode") == "vertical-rl"
-    assert _prop(name, "transform") == "rotate(180deg)"          # the collapsed-column reading, bottom to top
-    assert _prop(name, "white-space") == "nowrap"                # one line: a long name makes a taller strip
-    assert _prop(name, "text-overflow") is None                  # never ellipsized
-    assert _prop(name, "overflow") is None and _prop(name, "overflow-x") is None   # never clipped away
-    assert _prop(name, "flex") in ("none", "0 0 auto"), "the name keeps its own length instead of shrinking into a clip"
+def _lum(hexcolour):
+    """Relative luminance of a `#rrggbb`, so `dimmer than` is measured rather than asserted by eye."""
+    ch = [int(hexcolour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in ch]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
 
 
-def test_the_count_badge_is_never_flush_against_the_name(hub):
-    ch = _css(hub, STRIP + ">.ch")
-    assert _prop(ch, "flex-direction") == "column", "the name and the count take a row each, never one line"
-    gap = _prop(ch, "gap")
-    assert gap and gap != "0", "the two spans keep a gap: the name reads `Todo`, the badge reads `0`"
-    assert "justify-content:flex-start" not in ch, "the rule that glued `Todo` and `0` into `Todo0` is gone"
+def _derivation(hub):
+    """The bare derivation the page runs on every render: which columns are laid out, which lines the strip carries."""
+    page = hub.PAGE
+    return page[page.index("const kept="): page.index("const badge=")]
 
 
-def test_the_count_and_the_eye_fit_inside_the_strip(hub):
-    """Measured in the running hub: the 18px badge and the 14px eye side by side are 32px, four more than the strip
-    holds, so the eye spilled into the column beside it. Stacked, both stay inside it."""
-    last = _css(hub, STRIP + ">.ch>span:last-child")
-    assert _prop(last, "flex-direction") == "column", "the count and the eye take a row each, inside the strip"
-    assert _prop(last, "flex") == "0 0 auto", "the pair keeps its own size instead of stretching the strip"
+def _run_derivation(hub, *, kept=(), hidden=(), filled=(), bottom=True):
+    """The page's own derivation, run by node over a stubbed board: every column `filled` does not name holds nothing."""
+    names = ["Todo", "Doing", "Testing", "Closed Issues"]
+    assert set(filled) <= set(names)
+    stub = ("const bo=%s,hid=new Set(%s),bottom=%s,all=%s,fits=%s;\n" % (
+        json.dumps({"kept": list(kept)}), json.dumps(list(hidden)), json.dumps(bottom),
+        json.dumps([{"name": n} for n in names]),
+        json.dumps({n: ([{"n": 1}] if n in filled else []) for n in names})))
+    script = stub + _derivation(hub) + "\nconsole.log(JSON.stringify({vis:vis.map(g=>g.name),autos:autos.map(g=>g.name)}))"
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
 
 
-def test_the_colour_dot_carries_the_category_colour_in_the_strip(hub):
-    """Measured in the running hub: only `#bbody .ah i` sizes the dot, so in the docked header it keeps its
-    background colour and paints nothing -- a 0px box. Inside the strip it gets the size the accordion gives it."""
-    dot = _css(hub, STRIP + ">.ch i")
-    assert _prop(dot, "width") == "8px" and _prop(dot, "height") == "8px", f"the dot the accordion header paints: {dot!r}"
-    assert _prop(dot, "border-radius") == "50%"
-    assert _prop(dot, "display") == "inline-block"
+# --- what the board draws ---------------------------------------------------------------------------------------
+
+def test_a_visible_column_holding_no_cards_is_not_drawn_at_all(hub):
+    for gone in ("--col-empty-w", ".col.empty", "colCls", "col empty"):
+        assert gone not in hub.PAGE, f"the rejected strip is still painted by the board: {gone!r} (#1809)"
+    col = _css(hub, "body.dockb #bbody>.col")
+    assert _prop(col, "flex") == "1 1 0", "only the columns holding cards are laid out, and they take the width"
+    assert "min-width:var(--col-w)" in col
 
 
-def test_the_strip_holds_no_card_body_and_reserves_no_height_for_one(hub):
-    assert _prop(_css(hub, STRIP + ">.sc"), "display") == "none"   # no cards, no scroll area, no reserved height
-    ch = _css(hub, STRIP + ">.ch")
-    assert _prop(ch, "flex") == "1 1 auto", "the header fills the strip instead of leaving a body-sized gap"
+def test_the_rotated_name_is_gone_with_the_strip(hub):
+    assert "writing-mode" not in hub.PAGE, "the rotated column name is what the owner rejected (#1809)"
+    assert "rotate(180deg)" not in hub.PAGE
+
+
+def test_an_empty_visible_column_leaves_the_board_and_lands_on_the_strip(hub):
+    d = _run_derivation(hub, filled=["Doing", "Closed Issues"])
+    assert d["vis"] == ["Doing", "Closed Issues"], "the columns that have cards take the freed width"
+    assert d["autos"] == ["Todo", "Testing"], "each collapsed column is accounted for by one line"
+
+
+def test_the_strip_is_derived_on_every_render_and_never_stored(hub):
+    block = _derivation(hub)
+    assert "!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length" in block, "the line's set, derived and named"
+    assert "bo.autos" not in hub.PAGE and "bo.empty" not in hub.PAGE, "the auto-hidden set is never user state (#1809)"
+    script = ("const bo={kept:[]},hid=new Set(),bottom=true,all=[{name:\"Todo\"}],fits={Todo:[]};\n"
+              + block + "\nconsole.log(JSON.stringify(Object.keys(bo)))")
+    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == ["kept"], "a render writes nothing back: the set is derived, not kept"
+
+
+def test_a_column_the_user_hid_keeps_its_chip_and_gets_no_line(hub):
+    d = _run_derivation(hub, hidden=["Closed Issues"], filled=["Todo", "Doing", "Testing"])
+    assert d["vis"] == ["Todo", "Doing", "Testing"], "a column the user hid is not laid out at all"
+    assert "Closed Issues" not in d["autos"], "... and it is a chip, never one of the strip's lines"
+
+
+def test_the_lines_eye_keeps_the_column_shown_even_at_zero(hub):
+    board = dict(filled=["Todo", "Doing", "Closed Issues"])     # Testing is the column holding nothing
+    without = _run_derivation(hub, **board)
+    with_kept = _run_derivation(hub, kept=["Testing"], **board)
+    assert without["vis"] == ["Todo", "Doing", "Closed Issues"] and without["autos"] == ["Testing"]
+    assert with_kept["vis"] == ["Todo", "Doing", "Testing", "Closed Issues"], \
+        "a column the user asked to keep comes back, header and all"
+    assert with_kept["autos"] == [], "... and is never auto-hidden again"
+
+
+def test_a_card_appearing_returns_the_column_and_its_line_leaves(hub):
+    assert _run_derivation(hub, filled=["Todo", "Doing", "Testing", "Closed Issues"])["autos"] == []
+
+
+def test_the_non_docked_accordion_has_no_empty_state_at_all(hub):
+    d = _run_derivation(hub, filled=["Doing"], bottom=False)
+    assert d["autos"] == [], "the accordion lays out every column, empty or not"
+    assert d["vis"] == ["Todo", "Doing", "Testing", "Closed Issues"]
+
+
+# --- the strip's lines ------------------------------------------------------------------------------------------
+
+def test_the_strip_carries_a_line_per_auto_hidden_column_below_the_chips(hub):
+    html = _page_line(hub, "const html=")
+    assert "class=hidbar" in html
+    assert "hid.size||autos.length" in html, \
+        "the strip now exists for an auto-hidden column alone, with nothing the user hid"
+    assert html.index("class=chip") < html.index("hidsep") < html.index("class=hidline"), \
+        "the quiet lines come after the chips the user hid, behind a divider"
+    assert "autos.map(" in html
+
+
+def test_the_line_carries_the_name_the_count_and_the_headers_own_eye_slashed(hub):
+    html = _page_line(hub, "const html=")
+    line = html[html.index("class=hidline"):]
+    assert "<span>${esc(g.name)}</span>" in line, "the line names the column"
+    assert "${badge(g)}" in line, "the line carries the number the header would have shown"
+    assert "${eye(g,true)}" in line, "the line ends with the header's own eye, drawn slashed"
+
+
+def test_one_eye_and_one_badge_serve_the_header_and_the_line(hub):
+    m = re.search(r"[,;]eye=\(g,(\w+)=hid\.has\(g\.name\)\)=>", hub.PAGE)
+    assert m, "the eye takes the slashed state as an argument: the line draws it slashed without a second control"
+    flag = m.group(1)
+    assert f'${{{flag}?"show":"hide"}} this column' in hub.PAGE, \
+        "the title names what the click does, exactly as the header's does"
+    assert f"{flag}?'<path d=\"M3 3l18 18\"/>':\"\"" in hub.PAGE, "the flag is what draws the slash"
+    badge = _page_line(hub, "const badge=")
+    assert "${g.n}" in badge and "fits[g.name].length" in badge, "one badge, read by the header and by the line"
+    assert "badge(g)" in _page_line(hub, "const one=")
+
+
+def test_the_lines_eye_reuses_the_boards_one_click_handler(hub):
+    assert hub.PAGE.count('const t=e.target.closest("[data-eye]")') == 1, \
+        "the line's eye adds no second handler (#1809); the accordion header's handler only steps aside for it"
+    m = re.search(r'document\.addEventListener\("click",e=>\{const t=e\.target\.closest\("\[data-eye\]"\).*?\},true\);',
+                  hub.PAGE, re.S)
+    assert m, "the handler the header's eye already used is still there"
+    handler = m.group(0)
+    assert ".hidline" in handler and "bo.kept" in handler, "the line's eye keeps the column shown"
+    assert "bo.hidden" in handler, "... and the header's eye is still the one that writes the user's hidden set"
+
+
+def test_the_divider_is_the_only_thing_between_the_chips_and_the_lines(hub):
+    assert _prop(_css(hub, ".hidbar .hidsep"), "border-top"), "the divider the auto-hidden lines sit under"
+
+
+def test_the_line_is_quieter_than_a_chip_and_wears_the_columns_own_colour(hub):
+    chip, line = _css(hub, CHIP), _css(hub, LINE)
+    assert _prop(chip, "background"), "the chip keeps the fill that tells the two kinds apart"
+    assert _prop(line, "background") in (None, "none"), "the line carries no chip fill"
+    assert _prop(line, "border-left") == "2px solid var(--cc,var(--mute))", \
+        "the 2px tick is the column's own colour, the value the header's dot carries (#1793)"
+    chip_colour, line_colour = _prop(chip, "color"), _prop(line, "color")
+    assert re.fullmatch(r"#[0-9a-f]{6}", chip_colour or "") and re.fullmatch(r"#[0-9a-f]{6}", line_colour or ""), \
+        f"both kinds name a colour: chip {chip_colour!r}, line {line_colour!r}"
+    assert _lum(line_colour) < _lum(chip_colour), \
+        f"the line's text is dimmer than the chip's: {line_colour} vs {chip_colour}"
+
+
+# --- what must not change ---------------------------------------------------------------------------------------
+
+def test_the_count_is_never_flush_against_the_name_in_either_rendering(hub):
+    """`Todo0` is what the empty column's header read while it dropped the gap it was laying out with (#1809)."""
+    for sel in ("body.dockb .ch", "#bbody .ah"):
+        gap = _prop(_css(hub, sel), "gap")
+        assert gap and gap != "0", f"{sel} keeps the name and the count apart, and states the gap: {gap!r}"
+    css = re.sub(r"/\*.*?\*/", "", hub.PAGE[:hub.PAGE.index("</style>")], flags=re.S)
+    assert not re.search(r"\.(?:ch|ah)\{[^}]*justify-content:flex-start", css), \
+        "a header that packs its spans together is `Todo0` again (#1809)"
 
 
 def test_a_column_that_holds_a_card_paints_exactly_as_before(hub):
-    assert "flex:1 1 0" in _css(hub, "body.dockb #bbody>.col") and "min-width:var(--col-w)" in _css(hub, "body.dockb #bbody>.col")
-    ch = _css(hub, "body.dockb .ch")
-    assert "justify-content:space-between" in ch                  # the wide column keeps its horizontal header
-    assert _prop(ch, "writing-mode") is None and _prop(ch, "transform") is None
-    assert "flex-wrap" not in ch                                  # ... and still lays the name and count out side by side
-    assert _prop(_css(hub, "body.dockb .col>.sc"), "display") is None   # the body of a column with cards is never hidden
-
-
-def test_the_collapse_never_reaches_the_non_docked_accordion(hub):
-    for m in re.finditer(r"([^{}\n;]+)\{", hub.PAGE):
-        sel = m.group(1)
-        assert not (".acc" in sel and "empty" in sel), f"the accordion has no empty state to collapse: {sel}"
-    acc = re.search(r'^return `<div class="acc.*$', hub.PAGE, re.M).group(0)
-    assert "empty" not in acc
-
-
-def test_the_empty_class_means_a_visible_enabled_column_holding_no_card(hub):
-    """The class the strip hangs on, run in the browser's own language: zero cards and nothing else puts it there."""
-    line = re.search(r"^const colCls=.*$", hub.PAGE, re.M).group(0)
-    script = line + "\nconsole.log(JSON.stringify([colCls(false,0),colCls(false,1),colCls(true,0)]))"
-    out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    assert json.loads(out.stdout) == ["col empty", "col", "col prs empty"]
-
-
-def test_the_class_follows_the_filtered_count_so_a_column_collapses_and_expands_live(hub):
-    assert "colCls(isPR(g.name),it.length)" in hub.PAGE, "the class is recomputed from the filtered cards on every poll"
-    assert "setInterval(pollBoard,5000)" in hub.PAGE, "the board is re-rendered on the timer, so no reload is needed"
-    assert '${f||sel.length?it.length+"/":""}${g.n}' in hub.PAGE, "the badge still says `Todo 0/` while a filter is on"
+    assert "flex:1.15 1 0" in _css(hub, "body.dockb #bbody>.col.prs")
+    assert "justify-content:space-between" in _css(hub, "body.dockb .ch")
+    assert _prop(_css(hub, "body.dockb .col>.sc"), "display") is None, "the body of a column with cards is never hidden"
+    assert "flex-direction:column" not in _css(hub, "body.dockb .ch")

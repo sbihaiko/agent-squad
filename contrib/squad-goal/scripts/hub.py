@@ -1166,7 +1166,7 @@ RUN_STATES = [
 PAGE = r"""<!doctype html><meta charset=utf-8><title>Squad hub</title>
 <style>
 :root{--bg:#0f1115;--panel:#161a21;--line:#2a303b;--fg:#d8dde6;--mute:#8a93a3;--ok:#3ecf8e;--warn:#f5b041;--err:#ff6b6b;--run:#2dd4bf;--none:#b79cf6;--wait:#e8d44d;--pin:#5aa9ff}
-:root{--col-w:185px;--col-empty-w:28px}   /* the docked strip's column geometry: the one place its widths are set (#1791); an empty column keeps one line of text and nothing else (#1809) */
+:root{--col-w:185px}   /* the docked strip's column geometry: the one place its width is set (#1791); a column holding no cards is not drawn at all, so it reserves none (#1809) */
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px ui-monospace,Menlo,monospace;display:flex;flex-direction:column;height:100vh}
 #win{flex:1;min-height:0;display:flex;overflow:hidden}
 #side{width:300px;border-right:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
@@ -1218,7 +1218,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}#board.off #br{display:none}
 #br{margin-left:8px;margin-right:auto;padding:0 6px;font-weight:400;line-height:1.4}   /* beside the title, so it reads as part of it and never as the labels / maximize / collapse group (#1810) */
 #br[aria-busy=true]{opacity:.55;cursor:progress}#br.busy>span{display:inline-block;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
-#bbody .ah{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}
+#bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
 #bbody .it{margin:6px 8px;padding:8px 10px;border:1px solid var(--line);border-left:3px solid var(--cc,var(--mute));border-radius:6px;background:var(--bg,#1c222c);line-height:1.35;font-size:12.5px;white-space:normal;overflow-wrap:anywhere;box-shadow:0 1px 2px #0006}
@@ -1294,7 +1294,7 @@ body:not(.dockb.max) #pip{visibility:hidden}
 #pipm{display:none;flex:1;padding:10px;font-size:11px;line-height:1.45;color:var(--mute)}
 #pip.noframe #pipb{visibility:hidden;height:0}#pip.noframe #pipm{display:block}
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
-body.dockb .ch{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}
+body.dockb .ch{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}   /* the gap is stated: without it a header that is asked to pack its spans reads `Todo0` (#1809) */
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
 .prs{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent))}   /* a PR column wears the colour colOf gave it, faint, so the archive stops looking like the live queue */
 #bbody .acc.prs{border-bottom:2px solid var(--cc);margin-bottom:4px}
@@ -1303,18 +1303,12 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 #bbody .prs .it .id{background:color-mix(in srgb,var(--cc) 13%,transparent);border-color:var(--cc);color:var(--cc)}
 body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb #bbody>.col.prcol{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent));box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
-body.dockb #bbody>.col.empty{flex:0 0 var(--col-empty-w);min-width:var(--col-empty-w);max-width:var(--col-empty-w);border-right:1px solid var(--line)}   /* a visible column with no cards keeps only its header, so the strip still reads as a row of columns (#1791); the columns that do have cards take the freed width */
-body.dockb #bbody>.col.empty>.sc{display:none}   /* the strip holds no card, no scroll area and no body-sized gap reserved for one (#1809) */
-body.dockb #bbody>.col.empty>.ch{flex:1 1 auto;flex-direction:column;flex-wrap:nowrap;align-items:center;gap:6px;padding:8px 0}   /* the header fills the strip, and the name and the count take a row each: `Todo0` cannot be read any more (#1809) */
-body.dockb #bbody>.col.empty>.ch>span:first-child{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;flex:0 0 auto}   /* the collapsed-column reading, bottom to top; a long name makes a taller strip, never a wider one (#1809) */
-body.dockb #bbody>.col.empty>.ch>span:last-child{display:flex;flex-direction:column;align-items:center;gap:4px;white-space:nowrap;flex:0 0 auto}   /* the badge and the eye are 32px side by side in a 28px strip, so they stack: the eye is a control and must not leave the strip (#1809) */
-body.dockb #bbody>.col.empty>.ch i{display:inline-block;width:8px;height:8px;border-radius:50%;margin:0 0 4px}   /* the dot carries the column's colour inline, but only `#bbody .ah i` sizes it: the strip gives it the accordion's size, so the colour still names the column (#1809) */
-body.dockb #bbody>.col.empty>.ch .n{padding:0 5px}   /* the count badge stays legible in the strip it now lives in (#1809) */
-body.dockb #bbody>.col.empty>.ch .eye{margin-left:0;flex:none}   /* the eye is a control: it keeps its place inside the strip instead of being clipped away (#1809) */
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
 body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .sec:first-child>.ch{border-top:0}
 .eye{cursor:pointer;margin-left:8px;opacity:.55;display:inline-flex;vertical-align:middle}.eye:hover{opacity:1}#bbody .acc.hidcol>.ah{opacity:.45}#bbody .acc:not(.open)>.sc,#bbody .acc:not(.open)>.pad{display:none}
 .hidbar{flex:none;align-self:flex-start;padding:8px 10px;color:var(--mute);font-size:11px;display:flex;flex-direction:column;gap:4px;border-right:1px solid var(--line);min-width:120px}.hidbar .chip b{font-weight:600}.hidbar .chip{display:flex;justify-content:space-between;gap:10px;align-items:center;cursor:pointer;background:#2a303b;border-radius:9px;padding:1px 8px;color:#939cab}   /* the name inside a chip is a label, and #939cab is the first mute that clears AA at that size (--mute is 4.28:1, under it); the number beside it is painted in the column's own colour */
+.hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
+.hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:#6f7987;font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
 #foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}
@@ -1653,7 +1647,10 @@ $("#pip").addEventListener("wheel",e=>e.preventDefault(),{passive:false});   // 
 $("#piph").addEventListener("wheel",e=>e.preventDefault(),{passive:false});
 addEventListener("resize",()=>pipDraw());
 // ---- the pip ends here
-document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const h=new Set(bo.hidden||[]),g=t.dataset.eye;h.has(g)?h.delete(g):h.add(g);bo.hidden=[...h];saveB();pollBoard()},true);
+document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(!t)return;e.preventDefault();e.stopPropagation();const g=t.dataset.eye;
+ if(t.closest(".hidline")){const k=new Set(bo.kept||[]);k.add(g);bo.kept=[...k]}   // the hidden: strip's line: show the column again and keep it shown, even while it holds nothing (#1809)
+ else{const h=new Set(bo.hidden||[]),k=new Set(bo.kept||[]);if(h.has(g))h.delete(g);else{h.add(g);k.delete(g)}bo.hidden=[...h];bo.kept=[...k]}   // the header's eye: the user's own hidden set, and the keep it ends
+ saveB();pollBoard()},true);
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
@@ -1679,7 +1676,7 @@ if(lfl.dataset.k!==LB.join("\n")){lfl.dataset.k=LB.join("\n");lfl.innerHTML=`<di
 lfl.querySelectorAll("input").forEach(c=>c.checked=sel.includes(c.value));lfl.querySelectorAll("[data-lm]").forEach(x=>x.classList.toggle("on",(bo.lmode||"any")===x.dataset.lm));
 lf.classList.toggle("set",sel.length>0);lf.querySelector("summary").textContent=sel.length?(bo.lmode==="all"&&sel.length>1?"all of: ":"")+(bo.lmode==="all"?sel.join(", "):Object.values(fam(sel)).map(g=>g.length>1?"("+g.join(" | ")+")":g[0]).join(" & ")):"labels";
 const lok=x=>!sel.length||(bo.lmode==="all"?sel.every(l=>(x.l||[]).includes(l)):Object.values(fam(sel)).every(g=>g.some(l=>(x.l||[]).includes(l))));
-const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=g=>`<span class=eye data-eye="${esc(g.name)}" title="${hid.has(g.name)?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${hid.has(g.name)?'<path d="M3 3l18 18"/>':""}</svg></span>`;
+const hid=new Set(bo.hidden||[]),bottom=bo.dock==="bottom",eye=(g,off=hid.has(g.name))=>`<span class=eye data-eye="${esc(g.name)}" title="${off?"show":"hide"} this column"><svg viewBox="0 0 24 24" width=14 height=14 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx=12 cy=12 r=3 />${off?'<path d="M3 3l18 18"/>':""}</svg></span>`;
 const LC=b.lc||{},rgb=h=>[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),mix=(a,t)=>a.map((v,i)=>Math.round(v*t+[28,34,44][i]*(1-t))),   // label color blended into the card's #1c222c
 tint=x=>{const cs=(x.l||[]).map(l=>LC[l]).filter(c=>/^[0-9a-f]{6}$/.test(c||"")).map(rgb);if(!cs.length)return"";const avg=[0,1,2].map(i=>cs.reduce((s,c)=>s+c[i],0)/cs.length);return`;--bg:rgb(${mix(avg,.10)});--bgh:rgb(${mix(avg,.16)})`},
 lbc=l=>/^[0-9a-f]{6}$/.test(LC[l]||"")?` style="--lb:rgba(${rgb(LC[l])},.30)"`:"";
@@ -1689,11 +1686,19 @@ setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textConte
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
 const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/__REPO__/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
-const colCls=(pr,n)=>"col"+(pr?" prs":"")+(n?"":" empty");   // a visible column with no cards left after the filter collapses to the narrow width (#1791)
-const vis=all.filter(g=>!bottom||!hid.has(g.name)),one=g=>{const it=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)),shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=`<span class=n>${f||sel.length?it.length+"/":""}${g.n}</span>`,isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
-if(bottom)return `<div class="${colCls(isPR(g.name),it.length)}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
+// A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
+// collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
+// every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
+// stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
+const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)));
+const kept=new Set(bo.kept||[]),
+ autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn
+ vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
+const badge=g=>`<span class=n>${f||sel.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
+const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
+if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${cards(g,it,shown)}</div><div class=pad></div></div>`};
-const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>hidden: ${all.filter(g=>hid.has(g.name)).map(g=>`<span class=chip data-eye="${esc(g.name)}"><span>${esc(g.name)}</span><b style="color:${colOf(g.name,CN)}">${g.n}</b></span>`).join("")}</div>`:"");
+const html=vis.map(one).join("")+((bottom&&(hid.size||autos.length))?`<div class=hidbar>hidden: ${all.filter(g=>hid.has(g.name)).map(g=>`<span class=chip data-eye="${esc(g.name)}"><span>${esc(g.name)}</span><b style="color:${colOf(g.name,CN)}">${g.n}</b></span>`).join("")}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // the chips the user hid, then, after a divider, one quiet line per column that is hidden because it is empty (#1809)
 if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
