@@ -352,3 +352,55 @@ def test_closed_summary_reads_the_api_part_without_a_plan_price():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required")
 def test_named_constant_folds_models_under_one_percent():
     assert re.search(r"const OTHER=0\.01", SRC)
+
+
+# ---- the subscriptions panel renders with a quota probe that has no windows (#1512) ----
+
+_PRE = """
+const __els = {};
+const $ = s => (__els[s] = __els[s] || { textContent: "", innerHTML: "", addEventListener(){},
+  querySelector(){return null}, querySelectorAll(){return []}, closest(){return null},
+  classList:{toggle(){}}, dataset:{} });
+globalThis.__els = __els;
+globalThis.localStorage = { getItem(){return null}, setItem(){} };
+const ls = { acc: "" };
+globalThis.document = { activeElement: null, querySelector: $, querySelectorAll: () => [],
+  addEventListener(){}, body:{classList:{add(){},remove(){}}} };
+globalThis.window = globalThis;
+globalThis.setInterval = () => 0; globalThis.setTimeout = () => 0;
+globalThis.location = { hash: "" };
+"""
+
+_POST = """
+const PAYLOAD = { frac: 0.34, plans: 255, api: 28, total: 283,
+  presets: { grok: { g1: { name: "SuperGrok", usd: 30 } }, claude: { c1: { name: "Max 20x", usd: 200 } } },
+  subs: {
+    grok:  { saved: null, usd: null, rate: 1, noRate: false, eq: 0, plan: null,
+             quota: { unavailable: true, err: "cli probe failed", asof: 1 } },
+    claude:{ saved: 10, usd: 200, rate: 1, noRate: false, eq: 250,
+             plan: { plan: "max20", amount: 200, currency: "USD" },
+             quota: { windows: [ { label: "weekly", pct: 77, resets: 2 } ], asof: 1 } } } };
+globalThis.fetch = async () => ({ json: async () => PAYLOAD, ok: true });
+pollSubs().then(() => console.log("RESULT" + JSON.stringify(
+  { subs: (__els["#subs"] || {}).innerHTML || "", err: null })))
+  .catch(e => console.log("RESULT" + JSON.stringify({ err: String(e && e.stack || e) })));
+"""
+
+
+def _subs_slice():
+    """The page slice holding pollSubs and every helper it reaches, plus the `esc` defined after it."""
+    i = SRC.index("const usd=v=>")
+    j = SRC.index("async function pollStats(")
+    esc = SRC[SRC.index("const esc=t=>"):]
+    return SRC[i:j].replace("__CAPS__", "{}") + "\n" + esc[: esc.index("\n")] + "\n"
+
+
+def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
+    """#1512: a provider's quota probe answers `unavailable` with no `windows` at all (grok did),
+    and `aq.windows[0]` threw inside pollSubs. The throw is caught, so the page kept its header
+    totals while `#subs` stayed empty: the group opened onto nothing and read as broken."""
+    out = json.loads(_node(_PRE + _subs_slice() + _POST).split("RESULT")[-1])
+    assert not out["err"], out["err"]
+    assert "SuperGrok" in out["subs"] and "unavailable" in out["subs"], out["subs"][:300]
+    assert "Claude Team" in out["subs"], out["subs"][:300]
+    assert "77%" in out["subs"], out["subs"][:300]
