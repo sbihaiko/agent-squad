@@ -84,5 +84,35 @@ n=$(/usr/bin/git -C "$F" log --oneline local/next..gui/42 | wc -l | tr -d ' ')
 # a PR with no such line is skipped by the autopilot, so the child has to be handed the line, not only the rule.
 body p7 scripts/z.py g; run g && [ -f "$R/g.txt" ] && ok "PR request builds" || ko "PR request: $(cat "$T/g.err" 2>/dev/null)"
 $G -qF -- 'Refs #<N>' "$R/g.txt" && ok "PR request carries the literal Refs #<N> line" || ko "PR request lacks the literal Refs #<N> line"
+# 9. (#1529) a request whose work is over is history, not in flight. Request files are never deleted, so reading every one of
+# them as in flight made the guard refuse forever, naming runs that ended days ago (auto-fix-1203-3fbfa13ca, PR #1203 closed
+# 2026-10-10): the in-flight set only grew. The run folder is what says whether a request's work is still going -- launch.py
+# copies the request into runs/<run>/request.txt and record.jsonl's verdict ends it.
+mkdir -p "$T/co/runs" "$T/home/.cache/squad-goal"
+fin() { printf 'IMPORTANT: your first and only action is X\nPANEL: p9\nEdit %s\n' "$1" > "$R/$2.txt"; touch -t 202610010000 "$R/$2.txt"; }
+# 9a. an old request whose run recorded a verdict is history: it must not refuse a slice naming the same file
+fin scripts/gone.py dead-req; mkdir -p "$T/co/runs/run-9001"
+cp "$R/dead-req.txt" "$T/co/runs/run-9001/request.txt"; echo '{"event": "verdict"}' > "$T/co/runs/run-9001/record.jsonl"
+echo "$T/co/runs/run-9001" >> "$T/home/.cache/squad-goal/active-runs.txt"
+body p9 scripts/gone.py m
+run m && [ -f "$R/m.txt" ] && ok "a finished run's request does not refuse" || ko "finished run's request still refuses: $(cat "$T/m.err")"
+# 9b. a request no run ever carried is in flight only inside the launch window, then it is history too
+fin scripts/abandoned.py lost-req
+body p9 scripts/abandoned.py o
+run o && [ -f "$R/o.txt" ] && ok "an old request with no run behind it does not refuse" || ko "abandoned request still refuses: $(cat "$T/o.err")"
+# 9c. the accepted half of the same rule: the run is live (no verdict yet), so a slice naming its file still refuses
+fin scripts/live.py live-req; mkdir -p "$T/co/runs/run-9002"
+cp "$R/live-req.txt" "$T/co/runs/run-9002/request.txt"; echo '{"event": "spawn_accepted"}' > "$T/co/runs/run-9002/record.jsonl"
+echo "$T/co/runs/run-9002" >> "$T/home/.cache/squad-goal/active-runs.txt"
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/live.py\n' > "$T/n.body"
+run n && ko "a live run's request launched" || ok "a live run's request still refuses"
+$G -q 'request live-req' "$T/n.err" && $G -q 'scripts/live.py' "$T/n.err" && ok "the refusal names the live request and the path" || ko "live refusal text: $(cat "$T/n.err")"
+[ -f "$R/n.txt" ] && ko "the live refusal left a file" || ok "the live refusal wrote no file"
+# 9d. a run that recorded a verdict seconds ago is history at once: age alone must not decide it (the request file is fresh)
+printf 'IMPORTANT: your first and only action is X\nPANEL: p9\nEdit scripts/justdone.py\n' > "$R/just-req.txt"; mkdir -p "$T/co/runs/run-9003"
+cp "$R/just-req.txt" "$T/co/runs/run-9003/request.txt"; echo '{"event": "verdict"}' > "$T/co/runs/run-9003/record.jsonl"
+echo "$T/co/runs/run-9003" >> "$T/home/.cache/squad-goal/active-runs.txt"
+body p9 scripts/justdone.py p
+run p && [ -f "$R/p.txt" ] && ok "a verdict makes the request history at once" || ko "fresh request of a finished run refuses: $(cat "$T/p.err")"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
