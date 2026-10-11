@@ -153,6 +153,23 @@ def _check_verdict(got, check):
     return "passed" if got else "failed"
 
 
+SETTLE_TICKS = 30  # emulated ticks a focus the hook could not read is given to come back; ticks, never host time
+
+
+def _focus_unread(got, check):
+    """A `ui.focused` check the hook answered with no focus at all: a loaded host, not a control the focus moved to."""
+    return (check["name"] == "ui.focused" and isinstance(got, dict) and got.get("passed") is False
+            and got.get("observed") is None)
+
+
+def _settle(session, check):
+    """#1418: one retry for an unread focus, spent on the application's own ticks. Returns (got, timing note)."""
+    want = check["args"]["is"]
+    met = session.call("wait", f"ui.focused == {want}", SETTLE_TICKS) == "met"
+    return session.call("check", check["name"], check.get("args", {})), {"retried": True, "budget_ticks": SETTLE_TICKS,
+                                                                           "settled": met}
+
+
 def _step(session, s, emit, tick_args):
     emit("gui_step", s["id"])
     pre = s.get("precondition")
@@ -163,7 +180,7 @@ def _step(session, s, emit, tick_args):
     if s.get("action"):
         session.call("inject", s["action"]["name"], s["action"].get("args", {}))
     cond = s["wait"].get("check")
-    capture = None
+    capture, timing = None, None
     if session.call("wait", cond, s["wait"].get("timeout_ticks") or s["wait"]["timeout_frames"]) != "met":
         verdict = f"failed (timeout waiting for {cond})"
     else:
@@ -179,9 +196,18 @@ def _step(session, s, emit, tick_args):
                     raise
                 verdict = "failed (unknown id)"
             else:
-                verdict = _check_verdict(got, s["check"])
+                verdict = ""
+                if _focus_unread(got, s["check"]):
+                    got, timing = _settle(session, s["check"])
+                    if _focus_unread(got, s["check"]):
+                        verdict = f"failed (timing: focus unread after {SETTLE_TICKS} more ticks, expected {s['check']['args']['is']})"
+                if not verdict:
+                    verdict = _check_verdict(got, s["check"])
     emit("gui_verdict", s["id"], verdict=verdict)
-    return {"id": s["id"], "verdict": verdict, "capture": capture}, verdict == "passed"
+    result = {"id": s["id"], "verdict": verdict, "capture": capture}
+    if timing:
+        result["timing"] = timing
+    return result, verdict == "passed"
 
 
 def run_supervised(script, spec, kwargs=None, *, step_timeout_s=10, out_dir, record=None, report_dir=None,

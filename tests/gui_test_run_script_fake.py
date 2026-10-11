@@ -44,3 +44,32 @@ class OneModeAdapter(ShapeAdapter):
 
     def capabilities(self):
         return super().capabilities() | {"variants": {"window.mode": ["windowed"]}}
+
+
+class SlowHostAdapter(ShapeAdapter):
+    """A host too loaded to keep up (#1418): after a pad press the hook reads no focus at all (`observed None`) until
+    `lost_ticks` emulated ticks have passed, which is what a hold step saw at load ~185 with the focus then settling."""
+
+    def __init__(self, out_dir, lost_ticks):
+        super().__init__(out_dir)
+        self.lost_ticks, self._lost_until = lost_ticks, None
+
+    def inject(self, name, args):
+        super().inject(name, args)
+        if name == "pad.press":
+            self._lost_until = self.tick + self.lost_ticks
+
+    def _focused(self):
+        return None if self._lost_until is not None and self.tick < self._lost_until else self.focus
+
+    def wait(self, condition, timeout):
+        for _ in range(timeout + 1):
+            if condition is not None and condition.partition(" == ")[2] == self._focused():
+                return "met"
+            self._advance()
+        return "met" if condition is None else "timeout"
+
+    def check(self, name, args):
+        if name != "ui.focused":
+            return super().check(name, args)
+        return {"passed": self._focused() == args["is"], "observed": self._focused()}
