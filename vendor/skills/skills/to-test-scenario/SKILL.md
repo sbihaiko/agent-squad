@@ -73,10 +73,10 @@ python3 -m squad.to_test_scenario publish <scenario>.md <name>.gui-test.json \
 
 ```
 Scenario issue            purpose, Areas table, dashboard; the only issue on the board
-└─ Area issue             `Test-Area`; objective and a Cases table
+└─ Area issue             `testarea`; objective and a Cases table
    ├─ 📋 Cases            container; one sub-issue per case record
    └─ 📅 Runs YYYY-MM     container; one sub-issue per run of the area that month (UTC)
-      └─ Run issue        `Test-Run`; totals, changes, one emoji row per case
+      └─ Run issue        `testrun`; totals, changes, one emoji row per case
 ```
 
 - **The area rule.** A batch goes to the area named by its optional `area` field; without one, the batch id up to its first `-` (`pause-pack-multi` → `pause`). A batch may carry an `objective`, which becomes the area's objective (the first one found wins); an area without one reads "(no objective stated)". Add `area` / `objective` to the script where a prefix reads poorly.
