@@ -35,10 +35,13 @@ case "$r" in *"left on gui/1"*) ok "the recovery names the branch it was left on
 $G -C "$T/fork" log --oneline local/next | grep -q "Merge gui/1" && ok "the finished branch landed in the pass that recovered it" || ko "gui/1 is still unlanded"
 case "$r" in *WAIT*) ko "a WAIT line survived the recovery: '$(grep -m1 WAIT <<<"$r")'";; *) ok "no WAIT on a clean, unheld checkout";; esac
 
-# 2: uncommitted work is never moved (a checkout is not reset, and it is not waited on in silence either)
-g checkout -q gui/2; echo dirty >> "$T/fork/f"
+# 2: uncommitted work is never moved (a checkout is not reset, and it is not waited on in silence either). A branch the first
+# pass already merged carries its marker, so this half lands on a branch of its own.
+g checkout -q -b gui/3 local/next; echo 3 > "$T/fork/f3"; g add .; g commit -q -m "work 3"
+echo '{"items":[{"n":3,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
+echo dirty >> "$T/fork/f"
 r=$(FC_NOBATCH=1 bash "$T/s/forkclose.sh" 2>&1)
 case "$r" in *"uncommitted changes"*) ok "a dirty shared checkout is named";; *) ko "the dirty checkout is not named: '$r'";; esac
-[ "$(g branch --show-current)" = gui/2 ] && ok "a dirty checkout is left where it is" || ko "moved a dirty checkout to $(g branch --show-current)"
+[ "$(g branch --show-current)" = gui/3 ] && ok "a dirty checkout is left where it is" || ko "moved a dirty checkout to $(g branch --show-current)"
 if g diff --quiet; then ko "the uncommitted change is gone (the checkout was reset)"; else ok "the uncommitted change is still there"; fi
 rm -rf "$T"; exit $fail
