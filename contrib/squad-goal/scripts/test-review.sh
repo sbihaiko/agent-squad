@@ -13,6 +13,7 @@ SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUD
 J
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
+printf '%s\n' "gh $*" >> "${GHLOG:-/dev/null}"
 case "$*" in
   *'.head.sha+" "+.base.ref'*) echo "aaa111 main";;
   *compare*'-q .status'*|*compare*'.status'*) echo ahead;;
@@ -98,4 +99,18 @@ printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_
 rm -f "$T/st/agy-limited" "$T/st/quota-guard" "$T/st/review-7".* "$T/st/cq/"*
 out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 [ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && /usr/bin/grep -q 'after 2s' "$T/st/cq/"*mtimeout* && ok "leash + several reachable models: still clamped" || ko "several reachable leash: rc=$rc '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
+# 9) #1820: review.sh takes the PR's own repository as its first argument -- the squad works in two repositories now,
+# and a tooling PR is reviewed through the same chain. Every read of the PR (head, base, files, diff, the head that
+# supersedes it) goes to the repository it was given; with no argument it is the profile's repository, as before.
+printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+unset CLAUDE_NARRATE CLAUDE_TAGGED; export GHLOG="$T/ghlog"; : > "$GHLOG"
+rm -f "$T/st/review-7".* "$T/st/cq/"*; export CLAUDE_PROMPT="$T/prompt9"
+out=$(bash "$T/s/review.sh" o/tool 7 8 2>/dev/null); rc=$?
+case "$out" in model=*) ok "the repository is the first argument (the review ran)";; *) ko "repo argument: rc=$rc '$out'";; esac
+/usr/bin/grep -q 'repos/o/tool/pulls/7' "$GHLOG" && ok "every read of the PR goes to the repository it was given" || ko "repo argument: no read of o/tool ($(head -3 "$GHLOG"))"
+/usr/bin/grep -q 'repos/x/y/' "$GHLOG" && ko "repo argument: a read still went to the profile's repository ($(/usr/bin/grep -m1 'repos/x/y/' "$GHLOG"))" || ok "repo argument: nothing read the profile's repository"
+/usr/bin/grep -q 'repo o/tool' "$CLAUDE_PROMPT" && ok "the prompt names the PR's own repository" || ko "prompt names: $(/usr/bin/grep -o 'of repo [^ ]*' "$CLAUDE_PROMPT" | head -1)"
+unset CLAUDE_PROMPT; : > "$GHLOG"; rm -f "$T/st/review-7".*
+out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
+/usr/bin/grep -q 'repos/x/y/pulls/7' "$GHLOG" && ok "with no argument the profile's repository is the one read" || ko "default repo: $(head -3 "$GHLOG")"
 rm -rf "$T"; exit $fail

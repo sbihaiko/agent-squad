@@ -1,4 +1,9 @@
 #!/bin/bash
+# usage: autopilot.sh [repo]    one pass per watch cycle, over every repository the hub reads ($SG_REPO plus
+#                               SG_TOOLING_REPO) -- or over the one repository named as the argument (#1820).
+# The squad works in two repositories: the emulator ($SG_REPO) and its own tooling (SG_TOOLING_REPO). A pass reads the
+# open PRs of BOTH and routes each one in its own repository -- the head, the gate, the review, the fix and the merge
+# all name the PR's repository -- so a tooling PR is reviewed and merged by this machinery, not by hand.
 # One pass per watch cycle. Open PRs that name an issue ("Refs #N") are reviewed, fixed and merged:
 # a PR with no Refs #N is repaired when the issue can be derived — the branch (`gui/<N>`, fork work) or the run
 # that produced the branch (its record names the branch and the issue) — by appending `Refs #N` to the body with
@@ -27,6 +32,9 @@
 #  so their mtime is the FIRST gate, not the last, and most exits write none at all.
 # Events: AUTOREVIEW, STALE-REVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS, REFSADDED.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; printf '%s\n' "$(date +%s)" > "$A/.pass"; [ -e "$A/off" ] && exit 0
+# The repositories this pass reads, named in ONE place and never guessed: the profile's SG_REPO plus SG_TOOLING_REPO --
+# the same pair hub.py reads (#1820) -- or the single repository named as the argument (autopilot.sh x/tool).
+case "${1:-}" in */*) REPOS=${1}; shift;; *) REPOS="$SG_REPO${SG_TOOLING_REPO:+ $SG_TOOLING_REPO}";; esac
 L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo 0); tot=$(wc -l < "$L" | tr -d ' ')
 [ "$tot" -gt "$seen" ] && tail -n +$((seen+1)) "$L" | grep -E "^(AUTOFIX|AUTOPANEL|NEEDS OWNER)"; echo "$tot" > "$A/.logseen"
 MAX=${AP_MAX_ROUNDS:-2}; MIN=${AP_MIN_ISSUE:-1090}; here="$(dirname "$0")"
@@ -50,7 +58,14 @@ derive_issue() {
   done
   return 1
 }
-now=$(date +%s); list=$(mktemp)
+now=$(date +%s)
+# One iteration per repository (#1820). `SG_REPO` is the repository this iteration works in: every read below goes to
+# it, and it is exported, so every script this pass launches (revci, autofix, autopanel, prepush) works in the same
+# repository -- revci detaches with the environment on its own line, and autofix, which also takes a repository
+# argument, has it already in `$SG_REPO` (its own default). What follows is one pass, unchanged, once per repository.
+for SG_REPO in $REPOS; do
+export SG_REPO
+list=$(mktemp)
 gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null \
  | jq -r '.[]|select(.draft==false)|[.number,.head.sha,(((.title+" "+(.body//""))|capture("Refs #(?<n>[0-9]+)")|.n) // ""),.head.ref,([.labels[].name]|join(",")),.base.ref,.created_at]|join("\u001f")' > "$list"
 # oldest first. auto/seen-<pr> holds the PR's own birthday (the epoch of its created_at), so the age is the PR's and not
@@ -159,7 +174,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
       gate prepush "$(printf '%s' "$pp" | wc -l | tr -d ' ') process problem(s): a fix round runs without a model review"
       echo "PREPUSH #$pr @ $s9: $(printf '%s' "$pp" | wc -l | tr -d ' ') process problem(s), fix round without a model review"; continue; fi
     aenv=""; [ -n "$aging" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=${SG_REVIEW_TIMEOUT:-120}"
-    nohup env $aenv bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &
+    nohup env $aenv SG_REPO="$SG_REPO" bash "$here/revci.sh" $pr $iss >> "$out" 2>&1 </dev/null &   # revci.sh takes no repository argument: it is told by the environment, and its own review.sh uses it (#1820)
     echo $! > "$A/launched-$pr-$s9"   # the pid the marker is judged by on the next pass (see the stale check above)
     gate reviewing "no review of this head yet: revci.sh $pr was started (review + CI wait)"
     echo "AUTOREVIEW #$pr @ $s9 (issue #$iss) revci started${aging:+ (aging: short leash)}"; continue
@@ -193,7 +208,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
       lrc=$(printf '%s\n' "$last" | awk -F'\t' '{print $5}')
       [ "$lrc" = 142 ] && [ -n "$sec" ] && [ "$sec" -ge "$leash" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1"
     fi
-    touch "$rf"; nohup env $aenv bash "$here/revci.sh" $pr $iss >> "$SG_STATE/revci-$pr.out" 2>&1 </dev/null &
+    touch "$rf"; nohup env $aenv SG_REPO="$SG_REPO" bash "$here/revci.sh" $pr $iss >> "$SG_STATE/revci-$pr.out" 2>&1 </dev/null &
     gate reviewing "every review model failed (BLOCKED) and nothing else is wrong with the head: the review was re-queued"
     echo "REREVIEW #$pr @ $s9: every review model failed and nothing else is wrong with it; the review is re-queued (next attempt no sooner than ${SG_REREVIEW_MINUTES:-20} min)"
     continue
@@ -268,3 +283,4 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   else echo "AUTOMERGE FAILED #$pr: $m"; gate merge-failed "the merge call failed: $m"; touch "$A/merged-$pr"; fi
 done < "$list.s"
 rm -f "$list" "$list.s"
+done

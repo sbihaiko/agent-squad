@@ -1,35 +1,38 @@
 #!/bin/bash
-# usage: autofix.sh <pr> <issue> [panel-notes-file]    launch one agent-squad FIX RUN on the PR's own branch
-#        autofix.sh --threads <pr>                    print the count of unresolved, not-outdated review threads
+# usage: autofix.sh [repo] <pr> <issue> [panel-notes-file]   launch one agent-squad FIX RUN on the PR's own branch
+#        autofix.sh [repo] --threads <pr>                    print the count of unresolved, not-outdated review threads
+# `repo` is the repository the PR belongs to (owner/name): the squad works in two, and a tooling PR is fixed and pushed
+# by the same run, with its own repository in the request. With no argument it is the profile's $SG_REPO (#1820).
 # The request carries every open problem on the head sha: the latest review's CHANGES findings, failed CI checks,
 # a merge conflict with the base, and unresolved review threads (CodeRabbit or people: reply, then resolve).
 # One fix per head sha ($SG_STATE/auto/fix-<pr>-<sha9>); the push of the fix is the new sha that re-arms it.
 # A request mkreq.sh refuses, or a launch that printed no run id, is NOT a dispatch: the fix- and queued-<pr>-<sha9>
 # markers go back, no round is charged (exit 75), and the head is retried on the next pass instead of staying queued with
 # nothing working it and a round spent against its cap (#1770, #1775).
-. "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; own=${SG_REPO%/*} name=${SG_REPO#*/}
+. "$(dirname "$0")/env.sh"; repo=$SG_REPO; case "${1:-}" in */*) repo=$1; shift;; esac
+A="$SG_STATE/auto"; mkdir -p "$A"; own=${repo%/*} name=${repo#*/}
 threads() { gh api graphql -f query="query{repository(owner:\"$own\",name:\"$name\"){pullRequest(number:$1){reviewThreads(first:100){nodes{isResolved isOutdated}}}}}" \
   -q '[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false and .isOutdated==false)]|length' 2>/dev/null; }
-dupissue() { local v; v=$(gh api repos/$SG_REPO/issues/$1 -q '.state+" "+(.state_reason//"-")+" "+.title' 2>/dev/null) || return 1
+dupissue() { local v; v=$(gh api repos/$repo/issues/$1 -q '.state+" "+(.state_reason//"-")+" "+.title' 2>/dev/null) || return 1
   [[ $v == "closed not_planned "* || $v == "closed "*" [duplicate"* ]]; }   # exit 0: the issue is closed as a duplicate / not planned
 [ "$1" = --threads ] && { threads "$2"; exit; }
 [ "$1" = --dupissue ] && { dupissue "$2"; exit; }
 pr=$1 iss=$2 notes=${3:-}
 dupissue $iss && { echo "AUTOFIX SKIPPED #$pr: issue #$iss is closed as a duplicate / not planned (the PR is superseded)"; exit 0; }
-read -r ref sha ms pbase < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha+" "+.mergeable_state+" "+.base.ref') || exit 1; pbase=${pbase:-$SG_BASE}   # pbase: the PR's base, a parent PR's branch while stacked
+read -r ref sha ms pbase < <(gh api repos/$repo/pulls/$pr -q '.head.ref+" "+.head.sha+" "+.mergeable_state+" "+.base.ref') || exit 1; pbase=${pbase:-$SG_BASE}   # pbase: the PR's base, a parent PR's branch while stacked
 s9=${sha:0:9}; [ -e "$A/fix-$pr-$s9" ] && [ -z "${AF_DRY:-}" ] && exit 0
 b=$(mktemp); probs=""
-{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $SG_REPO). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
+{ echo "IMPORTANT: your first and only action is to call the spawn tool for the child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX RUN on the existing PR #$pr for GitHub issue #$iss (repo $repo). Check out origin/$ref, commit on top, push to the SAME branch (git push origin HEAD:$ref); no new PR. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo "Fix every problem below on head $s9; do not change scope beyond them."
   echo "Out of scope for a fix run: any finding that needs a push to, or a change in, the agent-squad fork (a gui/<n> branch to land on local/next, fork-side validator or runner code). The run has no write access to the fork; forkclose.sh lands those after the merge. Do not end the run needs-human for them: list each in your PR comment as 'fork-only, pending the close step' and fix everything else."
   line=$(grep "^#$pr $s9 " "$SG_STATE/revci-$pr.out" 2>/dev/null | tail -1)
   if [[ $line == *CHANGES* ]]; then probs+=" review"
     echo; echo "[review] The latest automated review says VERDICT: CHANGES. Address every finding — each bullet of the review (fix it, or say in the reply why it is wrong, with file:line evidence):"
     sed -n '/VERDICT/,$p' "$SG_STATE/review-$pr.md" | tail -n +2; fi
-  bad=$(gh api "repos/$SG_REPO/commits/$sha/check-runs?per_page=100" -q '.check_runs[]|select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled")|"- \(.name): \(.details_url)"' 2>/dev/null)
+  bad=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" -q '.check_runs[]|select(.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="cancelled")|"- \(.name): \(.details_url)"' 2>/dev/null)
   if [ -n "$bad" ]; then probs+=" ci"
     echo; echo "[ci] CI failed on $s9:"; echo "$bad"
-    echo "Read each log (gh run view <run-id> --repo $SG_REPO --log-failed; the run id is in the URL). Reproduce locally and fix the root cause, never by weakening the test. A failure that is clearly infrastructure (runner died, network timeout, rate limit) gets 'gh run rerun <run-id> --repo $SG_REPO --failed' instead of a code change; say which in the PR comment."; fi
+    echo "Read each log (gh run view <run-id> --repo $repo --log-failed; the run id is in the URL). Reproduce locally and fix the root cause, never by weakening the test. A failure that is clearly infrastructure (runner died, network timeout, rate limit) gets 'gh run rerun <run-id> --repo $repo --failed' instead of a code change; say which in the PR comment."; fi
   if [ "$ms" = dirty ]; then probs+=" conflict"
     if [ "$pbase" != "$SG_BASE" ]; then echo; echo "[conflict] This PR is STACKED on the open parent branch $pbase and conflicts with it (the parent was rewritten or advanced). Rebase onto origin/$pbase (git fetch origin $pbase first; no merge commits), never onto $SG_BASE: that would replay the parent's commits. If the parent was rewritten, this branch still carries the parent's OLD commits: replay only this PR's own commits (message says Refs #$iss; list them with git log --reverse --format=%h --grep='Refs #$iss' origin/$ref ^origin/$pbase) with git rebase --onto origin/$pbase <the commit just before the first of them> HEAD, or cherry-pick them onto origin/$pbase. Resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."
     else echo; echo "[conflict] The branch conflicts with $SG_BASE. Rebase onto origin/$SG_BASE (no merge commits), resolve keeping both sides' intent, rerun the checks for the touched files, and push with git push --force-with-lease origin HEAD:$ref."; fi
