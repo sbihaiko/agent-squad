@@ -1737,7 +1737,10 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
         args = ["gh", "api", "--method", method, f"repos/{repo}/{path}"] if method != "GET" else \
                ["gh", "api", f"repos/{repo}/{path}"]
         for k, v in fields:
-            args += ["-F" if isinstance(v, int) and not isinstance(v, bool) else "-f", f"{k}={v}"]
+            # `-F` types the value: numbers, and booleans — GitHub wants a JSON boolean, and `-f` would send the
+            # string "true", which it answers with 422. `-f` stays for everything else.
+            args += ["-F" if isinstance(v, (int, bool)) else "-f",
+                     f"{k}={str(v).lower() if isinstance(v, bool) else v}"]
         out = call(args)
         return json.loads(out) if json_out else out
 
@@ -1752,7 +1755,7 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             fields = [("title", kw["title"]), ("body", kw["body"])] + [("labels[]", x) for x in kw["labels"]]
             return api("PATCH", f"issues/{kw['number']}", fields, json_out=True)
         if op == "add_sub_issue":
-            fields = [("sub_issue_id", kw["sub"])] + ([("replace_parent", "true")] if kw.get("replace_parent") else [])
+            fields = [("sub_issue_id", kw["sub"])] + ([("replace_parent", True)] if kw.get("replace_parent") else [])
             return api("POST", f"issues/{kw['parent']}/sub_issues", fields, json_out=True)
         if op == "remove_sub_issue":
             return api("DELETE", f"issues/{kw['parent']}/sub_issue", [("sub_issue_id", kw["sub"])], json_out=True)

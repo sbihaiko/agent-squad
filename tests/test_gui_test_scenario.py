@@ -719,6 +719,16 @@ def test_1473_add_sub_issue_replace_parent_asks_github_to_move_the_child():
     assert not any(a.startswith("replace_parent") for a in sh.args[1])
 
 
+def test_1561_add_sub_issue_sends_replace_parent_as_a_json_boolean_not_a_string():
+    sh = _Scripted()
+    gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
+    gh("add_sub_issue", parent=7, sub=99, replace_parent=True)
+    argv = sh.args[0]
+    # `gh api -f k=v` sends a string, so GitHub answers 422 ("true" is not of type boolean); only `-F` types it.
+    at = argv.index("replace_parent=true")
+    assert argv[at - 1] == "-F"
+
+
 def test_1473_remove_sub_issue_deletes_the_link_through_rest():
     sh = _Scripted()
     tts.rest_runner("sbihaiko/MesenAI", shell=sh)("remove_sub_issue", parent=7, sub=99)
