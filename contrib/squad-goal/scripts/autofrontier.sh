@@ -4,8 +4,8 @@
 # autobug.sh owns those) with no open PR naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
 # which stack.sh says READY or STACK, all in ONE squad start within the free run slots, wave label first; READY issues naming a common file share one child
 # and one PR (cluster.py). The profile's
-# $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The marker is never removed by the loop: delete auto/disp-<n>
-# to dispatch again. Empty SG_FRONTIER_LABEL turns it off.
+# $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
+# to dispatch again, or let the janitor drop it when the run never starts (at most twice). Empty SG_FRONTIER_LABEL turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'

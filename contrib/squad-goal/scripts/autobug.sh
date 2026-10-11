@@ -3,8 +3,8 @@
 # Automatic bug fixing: every open issue labeled $SG_BUG_LABEL that has no open PR naming it ("Refs #N"), no dispatch
 # marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
 # PR per root-cause cluster (cluster.py), TDD with the RED output in the PR), within the free run slots (max_parallel of the workflow graph minus live
-# runs). The marker is never removed by the loop: a run that ends without a PR is surfaced by its RUN verdict, and the
-# coordinator deletes auto/bug-<n> to retry. SG_AUTO_BUGFIX=no turns it off.
+# runs). The marker is never removed by the dispatcher: a run that ends without a PR is surfaced by its RUN verdict, and the
+# coordinator deletes auto/bug-<n> to retry. A run that never starts (no record.jsonl) is freed by the janitor (at most twice). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}

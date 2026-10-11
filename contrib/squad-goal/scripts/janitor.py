@@ -10,7 +10,7 @@
     (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why).
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
- J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs.
+ J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
  K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
     after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
  M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
@@ -25,6 +25,54 @@ def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets
     if dry: print("JANITOR " + m, flush=True)
     else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+alerts = st / "alerts.log"
+def alert(msg):   # alerts.log is what health.sh and the session read; the notification reaches the human away from the terminal
+    open(alerts, "a").write(time.strftime("%F %T ") + msg + "\n")
+    if not dry: subprocess.run([os.environ.get("JANITOR_NOTIFY", "/usr/bin/osascript"), "-e", 'display notification "' + msg.replace('"', "'")[:180] + '" with title "squad-goal"'], capture_output=True)
+def issues_named(text):   # the request's CHILD header is the authoritative list; the body of a request also embeds the raw
+    found = set()          # issue text, which names other issues in prose, so a bare `issue #N` scan would free the wrong markers
+    for l in text.splitlines():
+        if not l.startswith("CHILD"): continue
+        for m in re.finditer(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)", l):
+            found.update(x.strip() for x in m.group(1).split(",") if x.strip().isdigit())
+    for m in re.finditer(r"GitHub issue #(\d+)", text):
+        found.add(m.group(1))
+    return found
+def launch_tail(f, n=15):
+    p = f / "launch.log"
+    if not p.exists(): return ""
+    try: return "\n".join(p.read_text(errors="replace").splitlines()[-n:])
+    except OSError: return ""
+def queue_neverstart(n, body):
+    (st / "cq").mkdir(exist_ok=True)
+    (st / "cq" / f"{n}-neverstart-{os.getpid()}.md").write_text(body)
+def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issues the run was dispatched for, at most twice
+    req = f / "request.txt"
+    nums = issues_named(req.read_text()) if req.exists() else set()
+    tail = launch_tail(f)
+    quoted = f"\n```\n{tail}\n```\n" if tail else "\n"
+    for n in sorted(nums, key=int):
+        marks = [st / "auto" / f"{kind}-{n}" for kind in ("bug", "disp")]
+        if not any(m.exists() for m in marks): continue   # nothing dispatched for it: not ours to free, and no comment
+        ctr = st / "auto" / f"neverstart-{n}"
+        try: k = int(ctr.read_text().strip() or "0")
+        except (ValueError, OSError): k = 0
+        if k >= 2:
+            say(f"NEVER-STARTED #{n}: 2 retries already spent, marker kept")
+            continue
+        k += 1
+        if not dry: ctr.write_text(str(k) + "\n")
+        if k < 2:
+            say(f"NEVER-STARTED #{n}: run {f.name} never started, dispatching again (attempt {k} of 2)")
+            if not dry:
+                for mk in marks:
+                    if mk.exists(): mk.unlink()
+                queue_neverstart(n, f"run {f.name} never started, dispatching again (attempt {k} of 2).{quoted}")
+        else:
+            say(f"NEVER-STARTED #{n}: run {f.name} never started (attempt {k} of 2); not retrying, marker kept")
+            if not dry:
+                queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
+                alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
 procs = {}
 for l in sh("/bin/ps", "-axo", "pid=,ppid=,command=").splitlines():
     p = l.split(None, 2)
@@ -70,7 +118,9 @@ for r in names:
         age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
         if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
             say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
-            if not dry: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], capture_output=True, text=True, cwd=co)   # K: re-arm the PR sha of a never-started autofix run
+            if not dry:
+                subprocess.run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], capture_output=True, text=True, cwd=co)   # K: re-arm the PR sha of a never-started autofix run
+            free_never_started(f)   # the run frees its own issues; say() reports it in a dry run too
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
             continue
@@ -163,10 +213,6 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
     elif age > 900 and not k2.exists():
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
         if not dry: k2.touch()
-alerts = st / "alerts.log"
-def alert(msg):   # alerts.log is what health.sh and the session read; the notification reaches the human away from the terminal
-    open(alerts, "a").write(time.strftime("%F %T ") + msg + "\n")
-    if not dry: subprocess.run([os.environ.get("JANITOR_NOTIFY", "/usr/bin/osascript"), "-e", 'display notification "' + msg.replace('"', "'")[:180] + '" with title "squad-goal"'], capture_output=True)
 liveq = " ".join((folder(r) / "request.txt").read_text() for r in keep if (folder(r) / "request.txt").exists() and folder(r).name in live)
 for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)"').splitlines():   # M
     pr, sha, pb, hr, ua = (l.split() + ["", "", "", "", ""])[:5]
