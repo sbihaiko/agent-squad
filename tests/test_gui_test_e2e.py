@@ -1,6 +1,5 @@
 """GUI test squad e2e suite (local-only): a 3-step script against a fake adapter,
 the renderer, and the reverse-drift case against MesenAI's committed files."""
-import copy
 import hashlib
 import json
 import os
@@ -2181,11 +2180,9 @@ def test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case():
     plan = tts.build_plan(d, granularity="per-batch")
     gh = _ScenarioGitHub()
     first = tts.publish(plan, gh)
-    nodes = len(plan["areas"]) + sum(len(a["containers"]) for a in plan["areas"])
-    assert len(gh.of("create_issue")) == len(plan["issues"]) + nodes + 1
-    assert len(gh.of("add_sub_issue")) == len(plan["issues"]) + nodes
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1 and len(gh.of("add_sub_issue")) == len(plan["issues"])
     again = _ScenarioGitHub()
-    second = tts.publish(plan, again, saved=first["map"])
+    second = tts.publish(plan, again, saved={"parent": first["parent"], "boarded": True, "cases": first["cases"]})
     assert again.of("create_issue") == [] and second["issues"] == first["issues"] and second["removed"] == []
 # --- to_test_scenario write-back (#1226): the committed run's results land on the pilot's issues ---------------
 # --- to_test_scenario (#1224): the pilot's case ids are covered by its own scenario ---------------
@@ -3010,12 +3007,8 @@ def _pilot_1225():
         pytest.skip("MESENAI_REPO holds no committed pilot script and its rendered Markdown")
     scenario = read_scenario(md_path)
     plan = build_plan(scenario, record_hashes(scenario, read_script(script_path)))
-    return script_path, plan
-
-
-def _nodes(plan):
-    """The issues a tree publish makes besides the scenario and the cases: each area, and each area's containers."""
-    return len(plan["areas"]) + sum(len(area["containers"]) for area in plan["areas"])
+    # The pilot outgrew GitHub's 100 sub-issues per parent (#1227): these cases exercise the first parent's worth.
+    return script_path, dict(plan, issues=plan["issues"][:100])
 
 
 def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively(tmp_path):
@@ -3030,13 +3023,13 @@ def test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_nati
     labels = {kw["name"] for kw in gh.of("ensure_label")}
     assert {"testcase", "ready-for-agent"} <= labels
     assert [kw["title"] for kw in gh.of("create_issue")][0] == plan["parent"]["title"]
-    assert len(gh.of("create_issue")) == len(plan["issues"]) + _nodes(plan) + 1
+    assert len(gh.of("create_issue")) == len(plan["issues"]) + 1
     # The relation names each issue's numeric id, and only the parent reaches the board.
     assert {kw["sub"] for kw in gh.of("add_sub_issue")} == {made["id"] for _, made in gh.made[1:]}
     assert gh.of("board") == [{"number": out["parent"]}]
     # The map beside the script is what a second machine resumes from.
     saved = tts.read_issues(map_path)
-    assert saved == out["map"] and saved["parent"] == out["parent"] and saved["layout"] == "areas"
+    assert saved == {"parent": out["parent"], "boarded": True, "cases": out["cases"]}
     assert all(case["hash"] for case in out["cases"].values())
     _assert_en_us_with_no_attribution([kw["body"] for kw in gh.of("create_issue")])
 
@@ -3049,23 +3042,19 @@ def test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_pub
     with pytest.raises(RuntimeError):
         tts.publish(plan, _PublishGitHub(fail_on_create=5), map_path=map_path)
     saved = tts.read_issues(map_path)
-    assert saved["parent"] and len(saved["cases"]) == 1      # the parent, an area, its container and one case made it
+    assert saved["parent"] and len(saved["cases"]) == 3      # the parent and three cases made it
 
     resumed = _PublishGitHub(start=5000)
     out = tts.publish(plan, resumed, map_path=map_path)
-    assert len(resumed.of("create_issue")) == len(plan["issues"]) + _nodes(plan) + 1 - 4
+    assert len(resumed.of("create_issue")) == len(plan["issues"]) - 3
     assert len(out["cases"]) == len(plan["issues"]) and out["removed"] == []
     assert len({case["number"] for case in out["cases"].values()}) == len(plan["issues"])
     assert resumed.of("board") == []                          # the parent is already on the board
 
-    smaller = copy.deepcopy(plan)
-    last = smaller["issues"].pop()["id"]
-    for area in smaller["areas"]:
-        for container in area["containers"]:
-            container["cases"] = [i for i in container["cases"] if i["id"] != last]
+    smaller = dict(plan, issues=plan["issues"][:-1])
     again = _PublishGitHub(start=9000)
     dropped = tts.publish(smaller, again, map_path=map_path)
-    assert again.of("create_issue") == []                     # the stub lists no sub-issues, so links are not asserted
+    assert again.of("create_issue") == [] and again.of("add_sub_issue") == []
     assert dropped["removed"] == [plan["issues"][-1]["id"]]
     assert "close" not in again.ops()                         # a removed case is reported, never closed
 
