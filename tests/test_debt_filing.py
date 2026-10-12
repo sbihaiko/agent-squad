@@ -1,7 +1,9 @@
 """Filing a review's DEBT findings as board tasks (ADR-0273 Decision 4), against a stub `gh`."""
 import json
+import re
 import subprocess
 
+import squad.debt_filing as debt_filing
 from squad.debt_filing import file_debt
 
 REVIEW = """VERDICT: CHANGES
@@ -31,11 +33,28 @@ LEGACY = """Review of PR #77
 class StubGh:
     def __init__(self, labels=()):
         self.labels, self.issues, self.calls = set(labels), [], []
+        self.opened, self.moved, self.on_board = [], [], set()   # items created, the Status set, what the board holds
 
     def __call__(self, args, input=None):
         self.calls.append(args)
-        path = next(a for a in args if a.startswith("repos/"))
+        path = next((a for a in args if a.startswith(("repos/", "users/", "/users/"))), "")
         method = args[args.index("--method") + 1] if "--method" in args else "GET"
+        if method == "GET" and path == "users/o":
+            return json.dumps({"type": "User"})
+        if method == "GET" and "projectsV2/4/fields" in path:
+            return json.dumps([{"name": "Status", "id": "F1", "options": [{"name": "Todo", "id": "O1"}]}])
+        if method == "GET" and re.fullmatch(r"repos/o/r/issues/\d+", path):
+            n = int(path.rsplit("/", 1)[1])
+            return json.dumps({"number": n, "id": 9000 + n})
+        if method == "GET" and "projectsV2/4/items" in path:
+            return "".join(json.dumps([n, "https://api.github.com/repos/o/r"]) + "\n" for n in sorted(self.on_board))
+        if method == "POST" and path.endswith("/items"):
+            self.opened.append(json.loads(input)["id"])
+            self.on_board.add(json.loads(input)["id"] - 9000)
+            return json.dumps({"id": f"PVTI_{json.loads(input)['id']}"})
+        if method == "PATCH" and "/items/" in path:
+            self.moved.append((path.rsplit("/", 1)[1], json.loads(input)["fields"][0]["value"]))
+            return "{}"
         if method == "GET" and "/labels/" in path:
             if path.rsplit("/", 1)[1] not in self.labels:
                 raise subprocess.CalledProcessError(1, args, stderr="Not Found")
@@ -45,10 +64,11 @@ class StubGh:
             return "{}"
         if method == "POST" and path.endswith("/issues"):
             body = json.loads(input)
+            body["number"] = max((b.get("number", 0) for b in self.issues), default=0) + 1
             self.issues.append(body)
-            return json.dumps({"number": len(self.issues), "html_url": f"https://x/{len(self.issues)}"})
+            return json.dumps({"number": body["number"], "html_url": f"https://x/{body['number']}"})
         if method == "GET" and "/issues" in path:
-            return json.dumps([{"number": i + 1, "body": b["body"]} for i, b in enumerate(self.issues)])
+            return json.dumps([{"number": b.get("number", i + 1), "body": b["body"]} for i, b in enumerate(self.issues)])
         raise AssertionError(args)
 
 
@@ -119,6 +139,47 @@ def test_existing_debt_plus_ready_for_agent_issue_is_still_a_duplicate():
     assert all("retry" not in (u or "").lower() for u in filed)
     assert sum(1 for i in gh.issues if MARK + key(first) in i["body"]) == 1
     assert any("dead flag" in i["body"] for i in gh.issues)
+
+
+def test_the_filer_puts_each_issue_it_opens_on_the_board(monkeypatch, tmp_path):
+    """#1838: the filer mints the card as it files the issue, the way report-bug.sh does for a bug.
+
+    A filed task with no card is invisible to the frontier and to the close passes, which read the board, and
+    board.py answers every later move for it with `#<n> not on the board` on stderr and rc 1 while the caller's
+    action line still reads as success -- so it sits open forever. The board comes from the loop's own
+    SG_OWNER/SG_PROJECT, the same pair every other board move uses."""
+    monkeypatch.setenv("SG_OWNER", "o")
+    monkeypatch.setenv("SG_PROJECT", "4")
+    gh = StubGh()
+    monkeypatch.setattr(debt_filing, "_sh", gh)
+    review = tmp_path / "review.md"
+    review.write_text(REVIEW, encoding="utf-8")
+    rc = debt_filing.main(["--repo", "o/r", "--pr", "77", "--issue", "70",
+                           "--head", "abc123", "--review", str(review)])
+    assert rc == 0
+    assert gh.opened == [9001, 9002]                                # one card per filed issue
+    assert gh.moved == [("PVTI_9001", "O1"), ("PVTI_9002", "O1")]   # Status Todo: dispatchable without a human
+
+
+def test_an_issue_already_filed_without_a_card_gets_its_card_on_a_later_run(monkeypatch, tmp_path):
+    """#1838: the repair half. #1826/#1827 were filed by a run that could not mint a card, and every later run
+    answered "no new DEBT findings" and walked past them -- so the merge got its filing and the issue stayed
+    invisible to the frontier and to the close passes for good."""
+    from squad.debt_filing import MARK, key, parse
+
+    monkeypatch.setenv("SG_OWNER", "o")
+    monkeypatch.setenv("SG_PROJECT", "4")
+    gh = StubGh(labels={"debt"})
+    first = parse(REVIEW)[0]
+    gh.issues.append({"number": 5, "title": "Debt: retry loop has no backoff (src/b.py:42)",
+                      "body": f"filed long ago\n<!-- {MARK}{key(first)} -->\n", "labels": ["debt"]})
+    monkeypatch.setattr(debt_filing, "_sh", gh)
+    review = tmp_path / "review.md"
+    review.write_text(REVIEW, encoding="utf-8")
+    assert debt_filing.main(["--repo", "o/r", "--pr", "77", "--issue", "70",
+                             "--head", "abc123", "--review", str(review)]) == 0
+    assert gh.opened == [9005, 9006]              # the already-filed issue and the newly filed one, once each
+    assert len(gh.issues) == 2                    # the other finding was filed; the debt was not filed twice
 
 
 def test_second_run_same_head_is_a_noop_and_new_head_files_once():
