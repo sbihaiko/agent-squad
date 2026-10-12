@@ -702,7 +702,7 @@ def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
     assert all(c in palette for c in order), order                             # a colour the hub already has, not a new one
     state = {"ok", "warn", "err"}                                              # a block's colour may never say the value is fine
     assert not state & set(order), order
-    assert all(a != b for a, b in zip(order, order[1:])), order                # told apart at a glance, neighbours never equal
+    assert all(a != b for a, b in zip(order, order[1:], strict=False)), order   # told apart at a glance, neighbours never equal
 
 
 def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
