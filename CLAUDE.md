@@ -85,7 +85,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 
 ### Work in a host project
 
-- **A defect is fixed test-first, and the red run kept** ([ADR-0136](docs/adr/0136-a-defect-is-fixed-test-first.md)). Guard: none yet; a draft.
+- **A defect is fixed test-first, and the red run kept** ([ADR-0136](docs/adr/0136-a-defect-is-fixed-test-first.md)). Guard: `scripts/check-tdd-red.sh`, wired into `$SG_PREPUSH_CHECKS` by the profile: the test a range adds or changes, checked out at its parent commit, must fail there, and a range that carries no test is the same refusal; `scripts/test-tdd-red.sh` covers both directions and the squash (test and code in one commit is accepted only with the red run recorded in the deliverable). A fork-only landing refuses a missing `TDD RED` comment on the issue (`scripts/test-forkclose-red.sh`).
 - **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: the host-free compile of the rule layer, plus `contrib/squad-goal/scripts/verify-view-domain-firewall.sh` beside it in the host's make/CI.
 
 ## Where decisions go
