@@ -34,9 +34,28 @@ The exit code is the contract a script reads, because a script cannot see a Pyth
     2  a refusal; stdout is the one-line refusal naming GitHub's message and request id, and it is not JSON
     1  a failure before GitHub reached a verdict
 
-Scope (ADR-0277): this is the outcome contract and nothing else. The token bucket, the shared `$SG_STATE` cooldown, the
-per-resource response cache and the api.log/health reporting are separate clauses of that decision, each with its own
-ticket; adding them here would put a rate governor behind an interface whose whole job is to keep three outcomes apart.
+Aggregate routes (#5). A caller asks for a *fact*, and the fact is one request whatever the transport behind it. Two
+routes are declared aggregate today -- the open PRs of a repository, with the head ref, the draft flag, the labels, the
+review-thread count and the check rollup, and its open issues, with the labels and the blocking edges:
+
+    repos/<owner>/<repo>/pulls?state=open      one query, one response, every open PR of that repository
+    repos/<owner>/<repo>/issues?state=open     one query, one response, every open issue of that repository
+
+Both are answered by GraphQL, which is what makes them one request: REST needs one read per PR for the review threads and
+one per PR head for the check rollup, and one read per issue for its state and its body, which is the per-item fan-out
+the landing pass paid on every beat. The answer is shaped like REST's -- `head.ref`, `draft`, `labels[].name`, the
+issue's `state` -- so a caller cannot tell which transport answered it, and the fields REST has no equivalent for
+(`review_threads`, `check_rollup`, `blocked_by`) arrive beside them. A single issue read (`repos/<o>/<r>/issues/<n>`)
+carries `blocked_by` too, so a caller that falls back to one issue reads the same fact it would have read from the list.
+
+REST stays the transport for Project v2 items, for every write, and for every other route: where the equivalent query is
+not demonstrably cheaper, the route is not aggregate. `errors` beside a `data` in a GraphQL answer is a *partial*
+failure, and `Read.partial` names it: the field that failed is null and the rest of the answer is kept.
+
+Scope (ADR-0277): this is the outcome contract and the transports behind it, nothing else. The token bucket, the shared
+`$SG_STATE` cooldown, the per-resource response cache and the api.log/health reporting are separate clauses of that
+decision, each with its own ticket; adding them here would put a rate governor behind an interface whose whole job is to
+keep three outcomes apart.
 """
 
 from __future__ import annotations
@@ -79,6 +98,7 @@ class Read:
     message: str = ""
     request_id: str = ""
     detail: str = ""
+    partial: tuple[str, ...] = ()  # the fields that failed to compute while the rest of the answer was computed
 
     @property
     def is_answer(self) -> bool:
@@ -136,11 +156,14 @@ WriteTransportFn = Callable[[list[str]], Transport]
 
 
 def gh_transport(route: str) -> Transport:
-    """The default transport: `gh api --include <route>`, the one place in the loop that calls `gh` for a read.
+    """The default transport: `gh api --include <route>` -- or the aggregate route's one GraphQL request.
 
-    `--include` is what puts GitHub's response headers in front of the body, and the request id is one of them.
+    `--include` is what puts GitHub's response headers in front of the body, and the request id is one of them. The
+    transport is chosen from the route and from nothing else, so the caller that asked for the fact never learns which
+    one answered it.
     """
-    p = subprocess.run(["gh", "api", "--include", route], capture_output=True, text=True, check=False)
+    argv = ["gh", "api", "--include", *aggregate_argv(route)]
+    p = subprocess.run(argv, capture_output=True, text=True, check=False)
     return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
 
 
@@ -211,11 +234,249 @@ def _verdict(res: Transport, success_kind: str) -> tuple[str, Any, str, str, str
     return success_kind, value, "", "", "", body
 
 
+# --- the aggregate routes: the facts the loop re-reads every beat -----------------------------------------------------
+
+_PAGE = 100  # the bound of one request: GitHub's first page. A repository with more open items than this is not the
+# loop's case -- the repositories it watches hold tens -- and walking the cursor is the fan-out this route removes.
+# An answer the bound cut short says so, in `Read.partial`, rather than passing as the whole repository.
+
+_PULLS_QUERY = """query($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(states: OPEN, first: %d, orderBy: {field: CREATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage }
+      nodes {
+        number title body isDraft headRefName headRefOid
+        labels(first: 100) { nodes { name } }
+        reviewThreads { totalCount }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 100) {
+                  totalCount
+                  nodes { __typename ... on CheckRun { conclusion status } ... on StatusContext { state } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}""" % _PAGE
+
+_ISSUES_QUERY = """query($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    issues(states: OPEN, first: %d) {
+      pageInfo { hasNextPage }
+      nodes { number title body state labels(first: 100) { nodes { name } } }
+    }
+  }
+}""" % _PAGE
+
+_FAILED_CONCLUSIONS = ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
+_PASSED_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
+_FAILED_STATES = ("FAILURE", "ERROR")
+_BLOCKED_SECTION = re.compile(r"^## Blocked by\s*\n(.*?)(?=^## |\Z)", re.S | re.M)
+_BULLET = re.compile(r"\s*([-*] |\d+\. )")
+_ISSUE_REF = re.compile(r"#(\d+)")
+_ROUTE = re.compile(r"^repos/(?P<owner>[^/?]+)/(?P<repo>[^/?]+)/(?P<rest>[^?]*)(?:\?(?P<params>.*))?$")
+_SINGLE_ISSUE = re.compile(r"^issues/\d+$")
+
+
+def blocked_by(body: Any) -> list[int]:
+    """The `## Blocked by` edges of an issue body (#1803): the section is a LIST, so reading stops at the first line that
+    is neither blank nor a bullet and a later prose line that merely names an issue is not an edge. The same parse the
+    shell it replaces did, address-qualified refs (`owner/repo#N`) included: the edge is resolved per address.
+    """
+    found = _BLOCKED_SECTION.search(body if isinstance(body, str) else "")
+    if found is None:
+        return []
+    listed: list[str] = []
+    for line in found.group(1).splitlines():
+        if not line.strip():
+            continue
+        if not _BULLET.match(line):
+            break
+        listed.append(line)
+    return [int(n) for n in _ISSUE_REF.findall("\n".join(listed))]
+
+
+def _connection(node: Any) -> dict[str, Any]:
+    return node if isinstance(node, dict) else {}
+
+
+def _labels(connection: Any) -> list[dict[str, Any]]:
+    nodes = _connection(connection).get("nodes")
+    return [{"name": n.get("name")} for n in nodes or [] if isinstance(n, dict)]
+
+
+def _total(connection: Any) -> int:
+    nodes = _connection(connection).get("nodes") or []
+    total = _connection(connection).get("totalCount")
+    return total if isinstance(total, int) else len(nodes)
+
+
+def _context_verdict(context: Any) -> str:
+    """One check context's own verdict: passed, failed, or still pending. A context with no verdict yet is pending."""
+    if not isinstance(context, dict):
+        return "pending"
+    if context.get("__typename") == "StatusContext":
+        state = context.get("state")
+        if state == "SUCCESS":
+            return "passed"
+        return "failed" if state in _FAILED_STATES else "pending"
+    conclusion, status = context.get("conclusion"), context.get("status")
+    if conclusion in _FAILED_CONCLUSIONS:
+        return "failed"
+    if status == "COMPLETED" and conclusion in _PASSED_CONCLUSIONS:
+        return "passed"
+    return "pending"
+
+
+def _check_rollup(commits: Any) -> dict[str, Any]:
+    """The check rollup of a PR's last commit: the state GitHub reports and the counts a landing decision reads."""
+    rollup: dict[str, Any] | None = None
+    for commit in _connection(commits).get("nodes") or []:
+        candidate = _connection(_connection(commit).get("commit")).get("statusCheckRollup")
+        if isinstance(candidate, dict):
+            rollup = candidate
+            break
+    if rollup is None:
+        return {"state": None, "total": 0, "failed": 0, "pending": 0}
+    contexts = _connection(rollup.get("contexts"))
+    verdicts = [_context_verdict(c) for c in contexts.get("nodes") or []]
+    state = rollup.get("state")
+    return {
+        "state": state.lower() if isinstance(state, str) else None,
+        "total": _total(contexts),
+        "failed": verdicts.count("failed"),
+        "pending": verdicts.count("pending"),
+    }
+
+
+def _pull(node: Any) -> dict[str, Any]:
+    """One PR of the fact, on REST's names -- `head.ref`, `draft`, `labels[].name` -- plus what REST cannot answer in
+    the same request. A field that failed to compute arrives null and does not take the rest of the PR with it."""
+    node = _connection(node)
+    return {
+        "number": node.get("number"),
+        "title": node.get("title"),
+        "body": node.get("body"),
+        "state": "open",
+        "draft": node.get("isDraft") is True,
+        "head": {"ref": node.get("headRefName"), "sha": node.get("headRefOid")},
+        "labels": _labels(node.get("labels")),
+        "review_threads": _total(node.get("reviewThreads")) if node.get("reviewThreads") is not None else None,
+        "check_rollup": _check_rollup(node.get("commits")),
+    }
+
+
+def _issue(node: Any) -> dict[str, Any]:
+    """One issue of the fact, on REST's names (`state` lowercased, as REST spells it) plus its blocking edges."""
+    node = _connection(node)
+    state = node.get("state")
+    return {
+        "number": node.get("number"),
+        "title": node.get("title"),
+        "body": node.get("body"),
+        "state": state.lower() if isinstance(state, str) else None,
+        "labels": _labels(node.get("labels")),
+        "blocked_by": blocked_by(node.get("body")),
+    }
+
+
+@dataclass(frozen=True)
+class Fact:
+    """One aggregate route: its query, how GitHub's `data` becomes the fact, and whether the page bound cut it short."""
+
+    name: str
+    document: str
+    of: Callable[[Any], list[dict[str, Any]]]
+    more: Callable[[Any], bool]
+
+
+_FACT_PULLS = Fact(
+    "the open PRs of the repository",
+    _PULLS_QUERY,
+    lambda data: [_pull(n) for n in _connection(_connection(_connection(data).get("repository")).get("pullRequests")).get("nodes") or []],
+    lambda data: _connection(_connection(_connection(data).get("repository")).get("pullRequests")).get("pageInfo", {}).get("hasNextPage") is True,
+)
+_FACT_ISSUES = Fact(
+    "the open issues of the repository",
+    _ISSUES_QUERY,
+    lambda data: [_issue(n) for n in _connection(_connection(_connection(data).get("repository")).get("issues")).get("nodes") or []],
+    lambda data: _connection(_connection(_connection(data).get("repository")).get("issues")).get("pageInfo", {}).get("hasNextPage") is True,
+)
+_AGGREGATE = {"pulls": _FACT_PULLS, "issues": _FACT_ISSUES}
+
+
+def _route(route: Any) -> re.Match[str] | None:
+    return _ROUTE.match(route) if isinstance(route, str) else None
+
+
+def aggregate(route: str) -> Fact | None:
+    """The fact a route asks for -- or `None`, which is every route that stays REST: Project v2 items, writes, and any
+    endpoint whose equivalent query is not demonstrably cheaper."""
+    m = _route(route)
+    if m is None or m.group("rest") not in _AGGREGATE:
+        return None
+    params = dict(p.split("=", 1) for p in (m.group("params") or "").split("&") if "=" in p)
+    return _AGGREGATE[m.group("rest")] if params.get("state") == "open" else None
+
+
+def _single_issue(route: str) -> bool:
+    m = _route(route)
+    return m is not None and _SINGLE_ISSUE.match(m.group("rest")) is not None and not m.group("params")
+
+
+def aggregate_argv(route: str) -> list[str]:
+    """The argv the fact's one request runs: `graphql` with the query and its variables, or the REST route unchanged."""
+    fact = aggregate(route)
+    if fact is None:
+        return [route]
+    m = _route(route)
+    owner, repo = (m.group("owner"), m.group("repo")) if m is not None else ("", "")
+    return ["graphql", "-f", f"query={fact.document}", "-F", f"owner={owner}", "-F", f"repo={repo}"]
+
+
+def _aggregate_read(fact: Fact, value: dict[str, Any], headers: dict[str, str]) -> Read:
+    """GitHub's GraphQL answer as the fact. A query refused outright is a refusal; a failed field inside an answer this
+    GitHub computed is not, and the rest of the answer is kept and the field is named."""
+    errors = tuple(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in value.get("errors") or [])
+    data = value.get("data")
+    if data is None:
+        if errors:
+            request_id = headers.get("x-github-request-id") or (_REQUEST_ID_IN_MESSAGE.search("; ".join(errors)) or [None, ""])[1]
+            return Read(kind=REFUSED, message="; ".join(errors), request_id=str(request_id))
+        return Read(kind=FAILED, detail=f"the query answered no data for {fact.name}")
+    shaped = fact.of(data)
+    partial = list(errors)
+    if fact.more(data):
+        partial.append(f"{fact.name}: more than {_PAGE} exist, and the first {_PAGE} are here")
+    return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped), partial=tuple(partial))
+
+
 def read(route: str, transport: TransportFn | None = None) -> Read:
-    """Read one route. Returns an answer, a refusal, or a failure -- never a mixture, and never `[]` for a refusal."""
+    """Read one route. Returns an answer, a refusal, or a failure -- never a mixture, and never `[]` for a refusal.
+
+    An aggregate route is answered by its fact, whichever transport answered it; every other route is answered as it
+    arrives. A single issue route carries the derived `blocked_by` its list carries, so a caller that falls back to one
+    issue reads the same fact it would have read from the repository's list.
+    """
+    fact = aggregate(route)
     res = (transport or gh_transport)(route)
-    kind, value, message, request_id, detail, body = _verdict(res, ANSWER)
-    return Read(kind=kind, answer=value, body=body, message=message, request_id=request_id, detail=detail)
+    body, headers = _split_headers(res.body)
+    value, parsed = _decode(body)
+    if parsed and isinstance(value, dict) and ("data" in value or "errors" in value):
+        if fact is not None:
+            return _aggregate_read(fact, value, headers)
+    kind, value, message, request_id, detail, raw = _verdict(res, ANSWER)
+    if kind == ANSWER and isinstance(value, dict) and _single_issue(route):
+        shaped = _issue(value)
+        return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped))
+    return Read(kind=kind, answer=value, body=raw, message=message, request_id=request_id, detail=detail)
 
 
 def gh_write_transport(argv: list[str]) -> Transport:
