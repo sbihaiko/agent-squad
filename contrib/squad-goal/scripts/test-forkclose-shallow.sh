@@ -30,7 +30,7 @@ J
 #!/bin/bash
 case "$*" in
   *"pulls?state=open"*) ;;
-  *"issues/1/comments"*|*"issues/2/comments"*) echo "TDD RED (test-forkclose-shallow.sh): FAIL test_x" ;;
+  *"issues/1/comments"*|*"issues/2/comments"*|*"issues/3/comments"*) echo "TDD RED (test-forkclose-shallow.sh): FAIL test_x" ;;
   *"-q .state"*) echo open ;;
 esac
 J
@@ -80,6 +80,21 @@ miss=$(/usr/bin/git -C "$T1/fork" rev-list "origin/local/next..local/next" | whi
 [ "${miss%% *}" = "$B1" ] && ok "the merged tip drags the boundary ${B1:0:9} into origin/local/next..local/next" || ko "the merged tip does not carry the boundary: '$miss'"
 p=${miss#* }
 [ -n "$p" ] && ! /usr/bin/git -C "$T1/origin.git" cat-file -e "$p" 2>/dev/null && ok "the parent $p index-pack would name is not on the remote either" || ko "the remote has the parent: '$p'"
+# The recipe the refusal prints must not lose the branch. `rebase --onto $SG_FORK_BASE $sc $br` takes `$sc..$br`, and $sc can be
+# the branch TIP -- the range is then empty and a rebase applies nothing, or worse, drops the commits the operator meant to keep
+# (#1852). The line must name the branch's own commits, and a branch whose $sc IS its tip must still be described usefully.
+own1=$(/usr/bin/git -C "$T1/fork" rev-list --reverse "local/next..gui/1" | tr '\n' ' ')
+# The recipe must BE the cherry-pick form. The message may still mention the range form -- it names it to say why it is wrong --
+# so the assertion is on the recipe it hands over, which is what an operator runs.
+case "$r" in *"switch -c gui/1-rebuilt local/next"*) ok "the recipe branches the rebuilt branch off the base";; *) ko "the recipe does not rebuild from $SG_FORK_BASE: $(printf '%s' "$r" | tr '`' ' ' | cut -c1-160)";; esac
+for c1 in $own1; do case "$r" in *"${c1:0:9}"*) ;; *) ko "the recipe omits own commit ${c1:0:9}"; break;; esac; done
+[ -n "$own1" ] && ok "the recipe names the branch's own commits ($(wc -w <<<"$own1") of them)"
+# and the recipe actually works: cherry-picking those commits onto the base yields a tree equal to the branch's own tree
+/usr/bin/git -C "$T1/fork" checkout -q -b fix1 local/next
+/usr/bin/git -C "$T1/fork" cherry-pick -q $own1 >/dev/null 2>&1
+t1=$(/usr/bin/git -C "$T1/fork" rev-parse 'fix1^{tree}'); t2=$(/usr/bin/git -C "$T1/fork" rev-parse 'gui/1^{tree}')
+[ "$t1" = "$t2" ] && ok "the recipe reproduces the branch's tree on the rebuilt branch" || ko "the recipe changes the tree: $t1 vs $t2"
+/usr/bin/git -C "$T1/fork" checkout -q local/next; /usr/bin/git -C "$T1/fork" branch -q -D fix1
 /usr/bin/git -C "$T1/fork" reset -q --hard "$b0"
 rm -rf "$T1"
 # 2: a branch born on the published lineage still lands -- the guard refuses a boundary, not everything
