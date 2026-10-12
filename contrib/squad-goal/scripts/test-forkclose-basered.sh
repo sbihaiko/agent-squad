@@ -30,6 +30,7 @@ printf 'orig\n' > "$T/fork/test-pilot-script.sh"; g add .; g commit -q -m "the s
 g revert --no-edit HEAD >/dev/null 2>&1; rs=$(g log -1 --format='%s' HEAD)
 bs2=$(g rev-parse --short=9 local/next)
 printf 'FAIL test-pilot-script.sh: case home-06\n' > "$T/st/basetest-$bs2.log"; touch "$A/basered-$bs2"
+rm -f "$A"/fork-1-*   # the green retry above landed gui/1 and left its "wait for a fix commit" marker; a pass that reaches the base gate is one whose branch is not parked behind that marker
 r=$(run)
 case "$r" in *"BASE-RED #1"*) case "$r" in *"$rs"*) ok "#16: the park line names the revert that took the failing test's merge out";; *) ko "#16: the park line names no revert: '$r'";; esac;; *) ko "#16: no BASE-RED line: '$r'";; esac
 rm -rf "$T"; exit $fail

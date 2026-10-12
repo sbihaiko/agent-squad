@@ -121,27 +121,33 @@ basesuites() { local a c
   [ -n "$a" ] || { echo full; return; }
   $G diff --name-only "$a" "$1" 2>/dev/null | suiteset; }
 # a red base reds every branch at once: test it once per base head, before merging anything. 0 = the base is green (or already known green), 1 = wait
-basegate() { local l=$1 bt bgs
-  bgs=$(basesuites "$bs")   # the park and its solo retry reuse the candidate gate's selection, so the base is never parked by a suite its diff cannot affect
+# A red base whose failing test arrived with a revert names that revert (#16): the last commit to touch the failing test's file says
+# whether a revert is why it fails here, so a reader is not sent looking for a branch that was already taken back. Prints a clause, or nothing.
+redrevert() { local f s
+  f=$(redfile "$SG_STATE/basetest-$1.log") || return 0
+  s=$($G log -1 --format='%h %s' "$SG_FORK_BASE" -- "$f" "*/$f" 2>/dev/null)
+  case "${s#* }" in Revert\ *) printf '; the failing test file %s was last touched by the revert %s, so a revert of a merge, not a branch waiting to land, is where to look' "$f" "$s";; esac; }
+basegate() { local l=$1 bt bgs rvt
+  bgs=$(basesuites "$bs"); rvt=$(redrevert "$bs")   # the park and its solo retry reuse the candidate gate's selection, so the base is never parked by a suite its diff cannot affect
   if [ -e "$A/basered-$bs" ]; then
     # A park nobody hears about is a silent stall (#1407): say so once per base sha, naming the failing test and who waits.
     if [ ! -e "$A/basered-$bs.escalated" ]; then touch "$A/basered-$bs.escalated"
       ft=$(grep -E 'FAIL|not ok' "$SG_STATE/basetest-$bs.log" 2>/dev/null | grep -v 'fork gate' | head -3)
       wb=""; for w in $cc; do [ "$($G rev-list --count "$SG_FORK_BASE..$(sg_fork_branch "$w")" 2>/dev/null)" -gt 0 ] && wb="$wb $(sg_fork_branch "$w")"; done
-      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. This base's own diff is answered with the %s gate; past %s min it is retried once on its own, and a green retry lifts the park, a second red keeps it.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "$bgs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" > "$SG_STATE/cq/${l//[^0-9a-z]/}-basered$$.md"
+      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. This base's own diff is answered with the %s gate; past %s min it is retried once on its own, and a green retry lifts the park, a second red keeps it%s.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "$bgs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" "$rvt" > "$SG_STATE/cq/${l//[^0-9a-z]/}-basered$$.md"
     fi
     # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
     if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
       if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN $l: $SG_FORK_BASE $bs passed the solo retry ($bgs gate) after the park; lifting it"; return 0
       else echo "FORKCLOSE BASE-RED $l: the solo retry of $SG_FORK_BASE $bs ($bgs gate) failed too (see $SG_STATE/basetest-$bs.log); the park stays"; return 1; fi
-    else echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the $bgs gate on its own, so a red run here would not be the branch's fault; waiting for a green base"; return 1; fi
+    else echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the $bgs gate on its own, so a red run here would not be the branch's fault$rvt; waiting for a green base"; return 1; fi
   fi
   [ -e "$A/basetest-$bs" ] && return 0
   if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"; return 0; fi
   # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
   # parallel), and a single red would park every branch on a flake. Two consecutive reds is the base, one is a retry.
   bt=$(( $(cat "$A/basered-$bs.tries" 2>/dev/null || echo 0) + 1 )); echo "$bt" > "$A/basered-$bs.tries"
-  if [ "$bt" -ge "${SG_FORK_BASERED_TRIES:-2}" ]; then touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the $bgs gate on its own $bt runs in a row (see $SG_STATE/basetest-$bs.log); not merging, no revert, no fix run. Every branch is parked until the base is green."
+  if [ "$bt" -ge "${SG_FORK_BASERED_TRIES:-2}" ]; then touch "$A/basered-$bs"; echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the $bgs gate on its own $bt runs in a row (see $SG_STATE/basetest-$bs.log); not merging, no revert, no fix run. Every branch is parked until the base is green$rvt."
   else echo "FORKCLOSE BASE-FLAKE $l: $SG_FORK_BASE $bs failed the $bgs gate on its own (run $bt of ${SG_FORK_BASERED_TRIES:-2}); one red is not proof, retrying next cycle."; fi
   return 1; }
 e2eprep() {   # $1 = label; the e2e checkouts the real-app cases drive, at the base's head
@@ -170,6 +176,33 @@ ldiff() { $G diff --name-only "$1" "$2" 2>/dev/null; }
 redfile() { local l
   l=$(grep -m1 -E '^FAILED |^FAIL |^not ok ' "$1" 2>/dev/null) || return 1
   printf '%s\n' "$l" | grep -oE '[A-Za-z0-9_./-]+\.(py|sh)' | head -1; }
+# A revert of a merge takes the spec that merge brought (#16): `revert -m 1` reverses the merge's whole diff, tests included, so a
+# red landing never leaves the spec of a feature that is no longer there. The merges of one branch that still stand in the base are
+# interdependent -- a branch that landed, was built on, and came back with a fix that goes red -- so taking back only the tip merge
+# would mint a new bug (the first merge's work standing without the fix on top of it). They are reverted by ONE run, newest first,
+# folded into ONE commit whose body says WHY ("the gate went red", never "the change is wrong"): both or neither. A spec file a later
+# commit changed cannot go back out with the merge that added it (it is not that merge's any more); it stays in the base and is
+# QUARANTINED, named with its reason. Any other conflict means the set cannot be taken back as a whole: nothing is reverted.
+isspec() { case $1 in tests/*|*/tests/*|test_*|*/test_*|test-*|*/test-*) return 0;; esac; return 1; }
+standing() { local m   # the merges of branch $1 still in the base, newest first; one an earlier revert already took back is not standing
+  for m in $($G log --first-parent --merges --format=%H --grep="^Merge $1 (Refs #" "$SG_FORK_BASE" 2>/dev/null); do
+    [ -n "$($G log -1 --format=%h --grep="This reverts commit $m" "$SG_FORK_BASE" 2>/dev/null)" ] || echo "$m"; done; }
+unland() { local ms=$1 why=$2 start m u q="" subj body   # prints the QUARANTINE lines; returns 1, with the base exactly as it was, when the set cannot all be reverted
+  start=$($G rev-parse HEAD); subj=$($G log -1 --format=%s "${ms%% *}")
+  for m in $ms; do
+    if ! $G revert -m 1 --no-edit "$m" >/dev/null 2>&1; then
+      for u in $($G diff --name-only --diff-filter=U); do
+        isspec "$u" || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; echo "$u"; return 1; }
+        $G checkout -q HEAD -- "$u" 2>/dev/null || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; echo "$u"; return 1; }
+        q="$q $u"; echo "FORKCLOSE QUARANTINE #$n: $u stays in $SG_FORK_BASE: a later commit changed it after ${m:0:9} brought it, so taking it back would drop that change (reverting the merge for a red gate: $why)"; done
+      if [ -n "$($G diff --cached --name-only)" ]; then $G -c core.editor=true revert --continue >/dev/null 2>&1 || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; return 1; }
+      else $G revert --skip >/dev/null 2>&1 || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; return 1; }; fi
+    fi; done
+  [ "$($G rev-parse HEAD)" != "$start" ] || return 1
+  body=$(printf '%s\n\n%s\n\n' "Revert \"${subj}\"" "Taken back because the fork gate went red: $why. The change is not judged wrong here; a red gate is the reason, and a fix on the branch re-arms the close."
+    for m in $ms; do printf 'This reverts commit %s.\n' "$m"; done
+    [ -z "$q" ] || printf '\nQuarantined (a later commit changed them after the merge brought them, so they stay in the base):%s\n' "$q")
+  $G reset -q --soft "$start" && printf '%s\n' "$body" | $G commit -q -F - ; }
 # WHICH landed branch put the failing test in the candidate (#13). The candidate tree is what the gate just ran on, so the last
 # commit that touched the file there is the one that added it, and the member whose branch carries that commit is the one to drop.
 # Prints "<branch>\t<subject>\t<file>"; prints nothing -- leaving the reason in brwhy -- when the log names no test file, the file
@@ -363,7 +396,12 @@ EOT
     [ -n "$late" ] && { printf "Fork-only close: %s was already in %s as %s and its issue #%s was still open, but the fork suite failed on the base itself (test pass %s, exit %s). Nothing of the branch was merged here and the branch has nothing to fix, so there is no revert and no fix run; the next pass retries.\n\`\`\`\n%s\n\`\`\`\n" "$br" "$SG_FORK_BASE" "$late" "$n" "$id" "$rc" "$tl" > "$SG_STATE/cq/$n-latered$$.md"
       echo "FORKCLOSE LATE-RED #$n ($id exit $rc): $br was already in $SG_FORK_BASE and the suite is red on the base itself; no revert, no fix run"; continue; }
     ek=""; { [ $rc = 143 ] || [ $rc = 137 ] || grep -q '"state": "running"' "$SG_STATE/tests/$id.json" 2>/dev/null; } && ek=1   # killed by a signal (or never finalized): the environment failed, not the code (#1470)
-    $G revert -m 1 --no-edit "$m" >/dev/null 2>&1; rv=$($G rev-parse HEAD)
+    ms="$m $(standing "$br" | grep -vx "$m" | tr '\n' ' ')"   # the tip merge first, then the earlier merges of the branch still standing: one set, both or neither (#16)
+    if ! blk=$(unland "$ms" "test pass $id exit $rc"); then
+      printf "Fork-only close: the fork suite failed after merging %s (test pass %s, exit %s) and the merge(s) of it (%s) cannot be taken back together: %s. NOTHING was reverted, because taking back only some of them would leave the others standing without the work on top of them. Owner: resolve the revert by hand (git revert -m 1 each merge, newest first); the base stays parked red until then.\n" "$br" "$id" "$rc" "$ms" "${blk##*$'\n'}" > "$SG_STATE/cq/$n-revertrefused$$.md"
+      echo "FORKCLOSE NEEDS OWNER #$n ($id exit $rc): the merges of $br ($ms) cannot be reverted as a set (${blk##*$'\n'}); nothing was reverted, no fix run"; continue; fi
+    [ -z "$blk" ] || echo "$blk"
+    rv=$($G rev-parse HEAD)
     # the branch is now an ancestor of the base, so a later merge would be a no-op: re-apply its work on the branch
     # (merge the base in, then revert the revert) so the branch is ahead again and a fix commit re-arms the close
     bw=$($G worktree list --porcelain | awk -v b="refs/heads/$br" '/^worktree /{w=$2} $0=="branch "b{print w}')
