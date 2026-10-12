@@ -105,25 +105,6 @@ mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; el
 relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
   t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") && $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
 brof() { sg_fork_branch "$1"; }   # the land and the request name the branch from one setting (#1836)
-# #11: a candidate lands on the base as it is NOW, not on the one it forked from. The evidence (2026-10-12): ten gui/* branches
-# landed by hand -- 9 minutes to merge, 53 minutes to make the merged tree green (13 files, +148/-87). The three deepest branches
-# (87, 119 and 122 commits behind) produced most of the 18 conflict hunks and every post-merge failure; replaying those three tips
-# onto the base they were merged into (same commits, same bases) left 1 hunk to resolve against 15. So a tip that is behind the base
-# is replayed before its gate runs, the stale merge is refused by name, and a replay that cannot be resolved falls back to the merge
-# path saying which way it went. The branch's OWN worktree is where the child is, so the replay happens there and the child sees it;
-# a worktree with uncommitted changes is never rewritten (a live child owns those files) and the refusal is by name.
-# Returns 0 = the branch was replayed onto the current base; 1 = the replay conflicts (the merge path takes it); 2 = refused.
-rebasestale() { local w t nh
-  w=$($G worktree list --porcelain | awk -v x="refs/heads/$br" '/^worktree /{p=$2} $0=="branch "x{print p}')
-  if [ -n "$w" ]; then
-    [ -z "$(/usr/bin/git -C "$w" status --porcelain --untracked-files=no 2>/dev/null)" ] || return 2
-    /usr/bin/git -C "$w" rebase "$SG_FORK_BASE" >/dev/null 2>&1 && return 0
-    /usr/bin/git -C "$w" rebase --abort >/dev/null 2>&1; return 1; fi
-  t="$(mktemp -d)"; rmdir "$t" 2>/dev/null   # no worktree of its own: replay the tip in a throwaway detached one and move the branch onto the result
-  $G worktree add -q --detach "$t" "$br" >/dev/null 2>&1 || { rm -rf "$t"; return 1; }
-  if /usr/bin/git -C "$t" rebase "$SG_FORK_BASE" >/dev/null 2>&1; then nh=$(/usr/bin/git -C "$t" rev-parse HEAD)
-    $G worktree remove --force "$t" >/dev/null 2>&1; rm -rf "$t"; $G branch -f "$br" "$nh" >/dev/null 2>&1; return 0; fi
-  /usr/bin/git -C "$t" rebase --abort >/dev/null 2>&1; $G worktree remove --force "$t" >/dev/null 2>&1; rm -rf "$t"; return 1; }
 # The base gate asks the candidate gate's question -- which suites can this base's own diff affect -- and answers it from the one
 # table (gate-suites.sh), over the base's diff since the last base recorded green ($A/basetest-<sha>, written by every green merge,
 # batch and base test). Every landing commits to the base, so a base whose own diff only touches contrib/squad-goal/ was paying the
@@ -257,12 +238,7 @@ for n in $cc; do
   reland=""; late=""; lf=""
   if [ "$($G rev-list --count "$SG_FORK_BASE..$br")" != 0 ]; then lf=$(lost "$br")   # ahead: a reverted ancestor's files are lost too, and the merge below must restore them
   else lf=$(lost "$br")
-    if [ -n "$lf" ]; then reland=1; else late=$($G log --format=%h -1 --grep="Merge $br" "$SG_FORK_BASE" 2>/dev/null)
-      # A replayed landing is a fast-forward of the branch's own commits, so it carries no `Merge $br` subject: the record the
-      # landing wrote ($A/landed-<head9>) is what still names the branch that produced this head (#11). Without it every later
-      # pass reads "landed" with nothing to point at, and the close is lost.
-      if [ -z "$late" ]; then lp=$($G rev-parse --short=9 "$br" 2>/dev/null); [ -n "$lp" ] && [ "$(cat "$A/landed-$lp" 2>/dev/null)" = "$br" ] && late=$lp; fi
-      [ -n "$late" ] || continue; fi; fi
+    if [ -n "$lf" ]; then reland=1; else late=$($G log --format=%h -1 --grep="Merge $br" "$SG_FORK_BASE" 2>/dev/null); [ -n "$late" ] || continue; fi; fi
   [ -n "$late" ] && [ "$st" = closed ] && continue   # landed and the issue is already closed: the close is not late, it happened
   wait=""; for d in $(gh api repos/$SG_REPO/issues/$n -q .body 2>/dev/null | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '#[0-9]+' | tr -d '#'); do   # the section is a LIST: it ends at the first line that is neither blank nor a bullet, so a trailing prose line naming another issue is not an edge (#1803)   # a blocker whose fork half is not in the base yet: merging this one now only goes red (it imports the blocker's files)
     bb=$(sg_fork_branch "$d"); $G rev-parse -q --verify "refs/heads/$bb" >/dev/null && { [ "$($G rev-list --count "$SG_FORK_BASE..$bb")" -gt 0 ] || [ -n "$(lost "$bb")" ]; } && wait="$wait #$d"; done
@@ -294,18 +270,7 @@ for n in $cc; do
   basegate "#$n" || continue
   fs=full; [ -z "$late$reland" ] && fs=$(bdiff "$SG_FORK_BASE" "$br" | bash "$here/gate-suites.sh")   # suites by path; late/reland: doubt, full
   [ -z "$late" ] && touch "$mk"
-  way=merge
-  if [ -z "$late$reland" ] && [ "$($G rev-list --count "$br..$SG_FORK_BASE")" != 0 ]; then   # the base moved on after this branch forked: a fresh candidate is replayed before its gate, never merged stale (#11)
-    echo "FORKCLOSE STALE #$n: $br (${head:0:9}) is behind $SG_FORK_BASE by $($G rev-list --count "$br..$SG_FORK_BASE") commit(s) it does not carry: a candidate that skipped its rebase is refused by name and never merged stale; rebasing it onto the current base and running the gate on the rebased tree (#11)"
-    rebasestale; rs=$?
-    if [ $rs = 0 ]; then head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"; way=rebase
-      echo "FORKCLOSE REBASE #$n: $br replayed onto $SG_FORK_BASE ($($G rev-parse --short=9 "$br")); the gate below runs on the rebased tree"
-    elif [ $rs = 2 ]; then
-      echo "FORKCLOSE STALE #$n: $br is checked out with uncommitted changes, so its replay is refused by name: a live child owns those files and its branch is never rewritten under it. Commit them on $br and the next pass replays it; nothing stale is merged."
-      continue
-    else way=merge; echo "FORKCLOSE STALE-UNREBASABLE #$n: $br does not replay onto $SG_FORK_BASE cleanly; the merge path takes it (which way it went: merge, not rebase) and a conflict fix run is dispatched if it conflicts"; fi
-  fi
-  if [ -z "$late" ] && ! { if [ "$way" = rebase ]; then $G merge --ff-only -q "$br" || { way=merge; echo "FORKCLOSE STALE-MOVED #$n: $SG_FORK_BASE moved while $br was being replayed; the merge path takes it (which way it went: merge)"; }; elif [ -n "$reland" ]; then relandbr; else mergebr; fi; }; then
+  if [ -z "$late" ] && ! { if [ -n "$reland" ]; then relandbr; else mergebr; fi; }; then
     $G merge --abort 2>/dev/null
     files=$($G merge-tree --write-tree --name-only "$SG_FORK_BASE" "$br" 2>/dev/null | sed -n '2,/^$/p' | grep . | tr '\n' ' ')
     nm="forkrebase-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"
@@ -317,7 +282,6 @@ for n in $cc; do
       echo "FORKCLOSE CONFLICT-REFUSED #$n $br into $SG_FORK_BASE ($files): mkreq.sh refused the fix request $nm; no fix run was launched, card left as it is"; continue; fi
     printf "Fork-only close: merging %s (%s) into %s conflicts (%s). A conflict-fix squad run (%s) merges the base into the branch keeping both sides; the loop retries the close when the branch head moves.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "$files" "$nm" > "$SG_STATE/cq/$n-forkconflict$$.md"
     echo "FORKCLOSE CONFLICT #$n $br into $SG_FORK_BASE ($files) -> fix run $nm"; continue; fi
-  if [ "$way" = rebase ]; then printf '%s\n' "$br" > "$A/landed-$($G rev-parse --short=9 HEAD)"; fi   # the fast-forward landing has no `Merge $br` subject: this record is what names the branch it came from (#11)
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
   if [ -n "$late" ] && [ -e "$A/basetest-$bs" ]; then   # the base that holds the branch is already tested green (a batch that just landed it, or the base test above): no second run
     rc=0; id=base-$bs; lg=$(cat "$A/basetest-$bs"); tl=$(tail -3 "${lg:-/dev/null}" 2>/dev/null)
@@ -349,9 +313,7 @@ EOT
     [ -n "$late" ] && { printf "Fork-only close: %s was already in %s as %s and its issue #%s was still open, but the fork suite failed on the base itself (test pass %s, exit %s). Nothing of the branch was merged here and the branch has nothing to fix, so there is no revert and no fix run; the next pass retries.\n\`\`\`\n%s\n\`\`\`\n" "$br" "$SG_FORK_BASE" "$late" "$n" "$id" "$rc" "$tl" > "$SG_STATE/cq/$n-latered$$.md"
       echo "FORKCLOSE LATE-RED #$n ($id exit $rc): $br was already in $SG_FORK_BASE and the suite is red on the base itself; no revert, no fix run"; continue; }
     ek=""; { [ $rc = 143 ] || [ $rc = 137 ] || grep -q '"state": "running"' "$SG_STATE/tests/$id.json" 2>/dev/null; } && ek=1   # killed by a signal (or never finalized): the environment failed, not the code (#1470)
-    # A replayed landing has no merge commit to reverse (-m 1 has nothing to reverse): its own commits are the landing, so the
-    # revert is of the range the base gained. Either way the base stops carrying the branch, which is what the re-apply below needs (#11).
-    $G revert -m 1 --no-edit "$m" >/dev/null 2>&1 || { $G revert --no-commit $($G rev-list --reverse "$bs..$m" 2>/dev/null | tr '\n' ' ') >/dev/null 2>&1 && $G commit -q --no-edit -m "Revert the landing of $br (Refs #$n)" >/dev/null 2>&1; }; rv=$($G rev-parse HEAD)
+    $G revert -m 1 --no-edit "$m" >/dev/null 2>&1; rv=$($G rev-parse HEAD)
     # the branch is now an ancestor of the base, so a later merge would be a no-op: re-apply its work on the branch
     # (merge the base in, then revert the revert) so the branch is ahead again and a fix commit re-arms the close
     bw=$($G worktree list --porcelain | awk -v b="refs/heads/$br" '/^worktree /{w=$2} $0=="branch "b{print w}')

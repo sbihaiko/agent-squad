@@ -2,21 +2,23 @@
 # A profile (scripts/profiles/<name>.sh) supplies the per-repo defaults: repo, board, base branch,
 # merge method, e2e command, review and coding rules. Pick one with SG_PROFILE, else it is matched
 # from the origin remote of the current checkout. Add a repo by copying a profile.
-# SG_TOOLING_REPO (optional): the squad's own tooling repository, which the board reads beside SG_REPO and whose
-# PRs the loop acts on with the same chain (#1820). Empty or unset keeps a single-repository squad.
+# One profile is one repository. SG_TOOLING_REPO, the second repository a profile could name, is retired (#20): a profile
+# that sets it stops here, naming it; give that repository its own profile instead.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -z "${SG_PROFILE:-}" ]; then
-  url=$(git remote get-url origin 2>/dev/null | tr A-Z a-z || true)
-  for f in "$here"/profiles/*.sh; do n=$(basename "$f" .sh); case "$url" in *"$n"*|*"$(echo "$n" | tr A-Z a-z)"*) SG_PROFILE=$n;; esac; done
-fi
+. "$here/repoctx.sh"   # the one resolution of a repository: profiles dir, origin match, state directory (#20)
+[ -n "${SG_PROFILE:-}" ] || SG_PROFILE=$(sg_profile_from_origin .) || SG_PROFILE=""
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
-. "$here/profiles/$SG_PROFILE.sh"
+. "$(sg_profiles_dir)/$SG_PROFILE.sh"
+[ -z "${SG_TOOLING_REPO:-}" ] || { echo "env.sh: SG_TOOLING_REPO is set (by profile $SG_PROFILE or the environment) and is retired: unset it and give $SG_TOOLING_REPO its own profile" >&2; exit 2; }
 if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
-: "${SG_STATE:=$HOME/.cache/squad-goal}"
+# One state directory per repository (#20): markers, locks, active-runs.txt, auto/, cq/, tests, alerts, watch.log and
+# health.json of one profile never share a namespace with another's. SG_STATE set in the environment still wins.
+: "${SG_STATE_BASE:=$HOME/.cache/squad-goal}"
+: "${SG_STATE:=$SG_STATE_BASE/$SG_PROFILE}"
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
-export SG_PROFILE SG_REPO SG_TOOLING_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
+export SG_STATE_BASE SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req"
 touch "$SG_STATE/active-runs.txt"

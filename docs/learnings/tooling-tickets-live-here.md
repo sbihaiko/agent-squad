@@ -1,5 +1,10 @@
 # Tooling tickets and learnings live here
 
+**Superseded by #20.** `SG_TOOLING_REPO` is retired: `env.sh` stops, naming it, when it is set, and
+`repoctx.sh` refuses a profile that sets it. Each repository has its own profile, its own state
+directory (`~/.cache/squad-goal/<profile>`) and its own path on the hub (`/<profile>`). The sections
+below record the two-repository setup as it stood before.
+
 Decided 2026-10-12: **every new ticket and every learning about the loop's own tooling is
 recorded in this repository** (`sbihaiko/agent-squad`), not in the emulator repository.
 The emulator repository's tracker stays for the emulator.
