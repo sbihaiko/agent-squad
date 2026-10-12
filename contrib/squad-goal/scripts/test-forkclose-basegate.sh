@@ -63,7 +63,7 @@ touch -t 202001010000 "$A/basered-$bs"; printf 'FAIL x\n' > "$T/st/basetest-$bs.
 pass
 want "shell " "the solo retry of a parked base runs the suites its diff needs, not the GUI suite"
 [ -e "$A/basered-$bs" ] && ok "a red solo retry keeps the park" || ko "the park was lifted by a red retry"
-rm -f "$T/red" "$A/basered-$bs.retried"; touch -t 202001010000 "$A/basered-$bs"
+rm -f "$T/red" "$A/basered-$bs.retried" "$T/suites.log"; touch -t 202001010000 "$A/basered-$bs"
 pass
 want "shell shell " "a green solo retry lifts the park, and the branch gate reuses the same selection"
 [ ! -e "$A/basered-$bs" ] && ok "the park is gone after the green retry" || ko "the park survived a green retry"
