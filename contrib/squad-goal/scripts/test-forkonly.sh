@@ -42,8 +42,9 @@ E
 req() { cat "$HOME"/.cache/squad-goal/req/*.txt 2>/dev/null; }
 forkfree() { # <label> : the request carries the fork preamble and none of the MesenAI one
   local r; r=$(req); [ -n "$r" ] || { ko "$1: no request written"; return; }
-  for w in "local/next" "gui/" "never push" "never open a PR"; do printf '%s' "$r" | $G -qF -- "$w" || ko "$1: fork preamble lacks '$w'"; done
-  for w in "origin/main" "open the PR" "prepush.sh" "fix/<N>" "RULE: open the PR"; do printf '%s' "$r" | $G -qF -- "$w" && ko "$1: fork request still carries '$w'"; done
+  # one route (#32): the child pushes its branch to the remote the fork checkout names, and the land opens and merges the PR
+  for w in "local/next" "gui/" "git push origin gui/"; do printf '%s' "$r" | $G -qF -- "$w" || ko "$1: fork preamble lacks '$w'"; done
+  for w in "origin/main" "open the PR" "prepush.sh" "fix/<N>" "RULE: open the PR" "never push" "NEVER push" "the local commit on"; do printf '%s' "$r" | $G -qF -- "$w" && ko "$1: fork request still carries '$w'"; done
   printf '%s' "$r" | $G -q "pass" >/dev/null; ok "$1: checked"; }
 export PATH="$T/bin:$PATH"
 # 1-2: autobug, fork-only by label, then by body line
