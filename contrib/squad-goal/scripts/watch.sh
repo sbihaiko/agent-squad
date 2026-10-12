@@ -2,9 +2,53 @@
 # Monitor stream: one line per run verdict, new PR, or review+CI summary. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
 . "$(dirname "$0")/env.sh"
+# One watch.sh per checkout, whoever started it (#1872). The lock is keyed on this script's resolved path, NOT on
+# $SG_STATE: `watchd.sh start` under a temp SG_STATE walks past watchd's own pidfile guard and would otherwise spawn a
+# second watch.sh on the live path, which polls the real repository beside the supervised one and doubles every read.
+# Same shape as single.sh: a directory holding the holder's pid, stale when the pid is gone. Taken before the first gh
+# call, so a refused process never reads GitHub at all.
+wme="$(cd "$(dirname "$0")" && pwd -P)/watch.sh"
+wlock="$HOME/.cache/squad-goal/watch-locks/$(printf '%s' "$wme" | tr -c 'A-Za-z0-9' '_')"
+mkdir -p "$(dirname "$wlock")"
+if ! mkdir "$wlock" 2>/dev/null; then
+  wh=$(cat "$wlock/pid" 2>/dev/null)
+  if [ -n "$wh" ] && ! kill -0 "$wh" 2>/dev/null; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # stale: take over
+  elif [ -z "$wh" ] && [ $(( $(date +%s) - $(stat -f %m "$wlock" 2>/dev/null || echo 0) )) -gt 10 ]; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
+  else echo "watch.sh already running pid=$wh for $wme"; exit 0; fi
+fi
+echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit 0' INT TERM   # a TERM'd loop stops, it does not keep polling without its lock
+# ONE reader owns every GitHub read of this cycle (#1893, ADR-0277): ghread.py answers in exactly three outcomes -- the
+# answer in stdout with exit 0, a refusal naming GitHub's own message and request id with exit 2, and a failure before
+# GitHub reached a verdict with exit 1 -- and the body of a refusal is never on stdout as data. `gh api` writes the error
+# body to stdout and exits non-zero, and it does not honour -q on a failed request, so every `gh api … 2>/dev/null` here
+# used to treat a 403/404/500 body as a valid answer: on 2026-10-12 a rate-limit body became the open-PR list and the
+# loop below read each word of the JSON message as a PR number.
+#
+# The outcome travels in the exit code with its line in stdout, never in a variable: every call site below reads the
+# list inside `$( )`, and a subshell cannot set a variable in its caller, so a refusal kept in `$gh_api_err` reached the
+# log as `the open-PR list is not a list: ;` -- GitHub's own words lost, the empty tail read as "no PRs".
+gh_api() {
+  local route=$1; shift
+  local q=""; [ "${1:-}" = "-q" ] && q=${2:-}
+  local o rc
+  o=$(python3 "$(dirname "$0")/ghread.py" "$route"); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi
+    return 0
+  fi
+  printf '%s' "$o"   # the refusal/failure line: stdout is the only channel a subshell has
+  return "$rc"
+}
 # reported verdicts / stalls persist across restarts ($W); a first start (no file) records current verdicts silently
 W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
-seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"; prs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number' | tr '\n' ' ')"
+seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
+# the set of PRs already announced is only ever built from an answer (#1870, #1893): a read that did not answer leaves it
+# as it was instead of filling it with the words of the error body, which is what silently swallowed the real PRs for the
+# life of the process. The refusal is named in the log from the module's own line, which carries GitHub's message and
+# request id -- a caller that only ever learns from an answer cannot clear what it already knew.
+prs=" "
+if pl=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number'); then prs=" $(printf '%s\n' "$pl" | tr '\n' ' ')"
+else echo "WATCH: the open-PR list is not readable, keeping the last known set: $pl"; fi
 for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rs"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
 tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
@@ -29,9 +73,15 @@ if v:
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
           printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$SG_STATE/cq/$n-run$$-${r##*-}.md"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
-  for n in $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number' 2>/dev/null); do case "$prs" in *" $n "*) ;; *)
-    t=$(gh api repos/$SG_REPO/pulls/$n -q '.head.ref+" "+.title+"\t"+(.body//"")'); echo "NEW PR #$n ${t%%$'\t'*}"; prs="$prs$n "
-    for i in $(printf '%s' "$t" | grep -oE 'Refs #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do printf "PR #%s opened: %s. Refs #%s\n" $n "${t%%$'\t'*}" $i > "$SG_STATE/cq/$i-pr$n.md"; done;; esac; done
+  # a refusal is not an open-PR list (#1870): the words of an error body are never PR numbers, the per-PR follow-up is
+  # read only after the list answered, and a PR the follow-up could not read stays unannounced for the next cycle
+  if lp=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number'); then
+    for n in $lp; do case "$n" in ''|*[!0-9]*) continue;; esac; case "$prs" in *" $n "*) ;; *)
+      t=$(gh_api repos/$SG_REPO/pulls/$n -q '.head.ref+" "+.title+"\t"+(.body//"")') \
+        || { echo "WATCH: PR #$n is not readable: $t"; continue; }
+      echo "NEW PR #$n ${t%%$'\t'*}"; prs="$prs$n "
+      for i in $(printf '%s' "$t" | grep -oE 'Refs #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do printf "PR #%s opened: %s. Refs #%s\n" $n "${t%%$'\t'*}" $i > "$SG_STATE/cq/$i-pr$n.md"; done;; esac; done
+  else echo "WATCH: the open-PR list is not readable, keeping the last known set: $lp"; fi
   for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rn"
   comm -13 "$SG_STATE/.rs" "$SG_STATE/.rn" | sed 's/^/REVIEW /'; cp "$SG_STATE/.rn" "$SG_STATE/.rs"
   # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes; review with no summary after review_stall_minutes
