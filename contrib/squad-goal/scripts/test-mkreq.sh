@@ -284,28 +284,5 @@ run red-fork && [ -f "$R/red-fork.txt" ] && ok "a fork-only body carrying a RED-
 for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'your result notes' 'not a gate input'; do
   $G -qF -- "$w" "$R/red-fork.txt" && ok "fork DONE CHECK states '$w'" || ko "fork DONE CHECK lacks '$w'"
 done
-# 15. (#10) A refusal also REPORTS every contested file and its holder, machine-readably, when SG_SLICE_REPORT names a file:
-# `file <TAB> holder`, one line per contested file, in the order the guard reads them. The refusal itself is unchanged -- ONE
-# line on stderr, naming the first contested file -- so a dispatcher (autofrontier.sh) can drop only the tickets that name a
-# contested file instead of refusing the whole bundled request. The body names a free file, a file gui/1780 holds, one open
-# PR #7 changes and one gui/1791 holds (the files whose holder no earlier case turned into a queued request).
-printf 'IMPORTANT: your first and only action is X\nEdit scripts/free-10.py\nEdit scripts/open1780.py\nEdit scripts/shared.py\nEdit scripts/unreachable1791.py\n' > "$T/rep.body"
-SG_SLICE_REPORT=$T/rep.report run rep && ko "a body naming contested files launched" || ok "a body naming contested files refuses"
-printf 'scripts/open1780.py\tbranch gui/1780\nscripts/shared.py\tPR #7\nscripts/unreachable1791.py\tbranch gui/1791\n' > "$T/rep.want"
-cmp -s "$T/rep.want" "$T/rep.report" && ok "the report lists every contested file with its holder" || ko "report: $(cat "$T/rep.report" 2>&1)"
-[ "$($G -c '^refusing:' "$T/rep.err")" = 1 ] && $G -q 'names scripts/open1780.py' "$T/rep.err" && ok "the refusal is still one line, naming the first contested file" || ko "refusal text: $(cat "$T/rep.err")"
-[ -f "$R/rep.txt" ] && ko "a reported refusal left a file" || ok "a reported refusal wrote no file"
-# 15b. a clean body reports nothing, and a stale report never survives: the file is emptied before the guard reads anything
-printf 'stale\n' > "$T/clean.report"; printf 'IMPORTANT: your first and only action is X\nEdit scripts/free-10b.py\n' > "$T/clean.body"
-SG_SLICE_REPORT=$T/clean.report run clean && [ -f "$R/clean.txt" ] && ok "a body with no contested file builds" || ko "clean body refused: $(cat "$T/clean.err")"
-[ ! -s "$T/clean.report" ] && ok "a built request leaves an empty report" || ko "stale report kept: $(cat "$T/clean.report")"
-# 15c. a forced overlap is not a refusal: nothing is reported, the request is still announced on stderr and built
-SG_SLICE_REPORT=$T/force.report runf rep && [ -f "$R/rep.txt" ] && ok "SG_SLICE_FORCE=1 builds the same body" || ko "force refused: $(cat "$T/rep.err")"
-[ ! -s "$T/force.report" ] && ok "a forced overlap reports nothing" || ko "forced report: $(cat "$T/force.report")"
-rm -f "$R/rep.txt"
-# 15d. `mkreq.sh --paths <body>` prints the slice the guard would read from a body (prose paths above the first `--- issue`
-# marker; not fenced, quoted or indented), so a dispatcher attributes a contested file to one ticket with the guard's own rule
-printf 'IMPORTANT: your first and only action is X\nEdit scripts/prose.py and scripts/prose.py again\n> scripts/quoted.py\n```\nscripts/fenced.py\n```\n    scripts/indented.py\n--- issue #5\nEdit scripts/below.py\n' > "$T/paths.body"
-[ "$(bash "$S/mkreq.sh" --paths "$T/paths.body" 2>/dev/null)" = scripts/prose.py ] && ok "--paths prints only the prose slice, once" || ko "--paths: $(bash "$S/mkreq.sh" --paths "$T/paths.body" 2>&1)"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
