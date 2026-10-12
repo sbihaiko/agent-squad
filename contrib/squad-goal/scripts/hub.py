@@ -245,6 +245,9 @@ LOAD_WARN_SAMPLES = 2     # consecutive samples above the threshold: one hot sam
 LOAD_ERR_PCT = 95.0       # machine % at or above which that ONE reading is red: the machine is at its ceiling right now
                           # (#1816). Amber is the machine-wide, sustained statement above; red is per attribute and immediate
                           # — and it wins over the amber. The page is served this constant, never a literal of its own.
+FOOT_WARN_PCT = LOAD_WARN_PCT   # the footer's facts draw the strip's own ladder (#1843): a subscription token at or above
+FOOT_ERR_PCT = LOAD_ERR_PCT     # this reads amber, at or above the ceiling reads red. Named here once, beside the pair
+                                # they mirror, and never as a magic number inside the render.
 LOAD_MIN_SHARE_PCT = 3.0  # a card is marked only for a run whose process tree owns at least this much of the machine
 LOAD_HISTORY = 12         # CPU samples kept, so the warn rule can look back (a minute at the default cadence)
 GPU_CMD = ("/usr/sbin/ioreg", "-r", "-d", "1", "-c", "IOAccelerator", "-w", "0")
@@ -506,6 +509,14 @@ def load_tick(sample=None):
 # narrow for it, the trailing facts drop (6 -> 5 -> 4 -> 3) — nothing wraps, and no number is ever cut into a different one.
 FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
 FOOT_SEP = " · "
+# Every block of the line reads in its own palette colour, so six facts are told apart at a glance without a character
+# more on the row (#1843). The five colours that are not a state signal are the hub's own variables, and six blocks
+# means the two ends share one — neighbours are what must never collide. The tone a value earns is NOT a block colour:
+# `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
+FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
+FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
+FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "occ": "mute", "drift": "wait", "quota": "none",
+                     "subs": "run"}  # subs last, and teal again: it shares with health, which is not its neighbour
 
 def foot_age(secs):
     """An age as the line reads it — one token, the shape the page's own `age()` paints: `45s`, `4m`, `2h`."""
@@ -578,11 +589,20 @@ def _subs_reset(resets, now):
     d, h, m = int(x // 86400), int(x % 86400 // 3600), int(x % 3600 // 60)
     return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
 
-def _subs_fact(subs, now):
-    """One token per subscription in SUBS' own order — `CL 42% 3h 20m`: its acronym (#1839's one map), the quota and the
-    time to the reset. The quota and the reset are `quota_row()`'s first window, the probe the cost panel already shows.
+def consumption_tone(pct):
+    """The tone one consumption reading earns (#1843), on the ladder the load strip already draws (#1816): green under
+    the warn threshold, amber at or above it, red at or above the ceiling. A reading the hub cannot verify — a string, a
+    negative, a NaN — earns no tone at all: it reads in the bar's own neutral colour, never as if it carried a number."""
+    f = _pct(pct)
+    if f is None: return FOOT_NEUTRAL
+    return "err" if f >= FOOT_ERR_PCT else ("warn" if f >= FOOT_WARN_PCT else "ok")
+
+def _subs_parts(subs, now):
+    """One part per subscription in SUBS' own order — `CL 42% 3h 20m`: its acronym (#1839's one map), the quota and the
+    time to the reset, each token carrying the tone its OWN reading earns (#1843), so a glance says which subscription
+    is running out. The quota and the reset are `quota_row()`'s first window, the probe the cost panel already shows.
     A probe that did not answer (or names no window) falls back to the percentage the owner typed by hand and reads `?`
-    for the reset; a subscription with neither reads `?` alone. A number this hub cannot verify is never invented."""
+    for the reset; a subscription with neither reads `?` alone — neutral, never painted as if it carried a number."""
     out = []
     for k in SUBS:
         a, s = SUB_ACR.get(k) or k.upper(), (subs or {}).get(k) or {}
@@ -590,25 +610,40 @@ def _subs_fact(subs, now):
         pct = w.get("pct") if isinstance(w, dict) else None
         hand = s.get("quota")
         if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-            out.append(f"{a} {_subs_pct(pct)} {_subs_reset(w.get('resets'), now)}")
+            out.append({"text": f"{a} {_subs_pct(pct)} {_subs_reset(w.get('resets'), now)}", "tone": consumption_tone(pct)})
         elif isinstance(hand, (int, float)) and not isinstance(hand, bool):
-            out.append(f"{a} {_subs_pct(hand)} ?")
-        else: out.append(f"{a} ?")
-    return FOOT_SEP.join(out)
+            out.append({"text": f"{a} {_subs_pct(hand)} ?", "tone": consumption_tone(hand)})
+        else: out.append({"text": f"{a} ?", "tone": FOOT_NEUTRAL})
+    return out
+
+def _subs_fact(subs, now):
+    """The subs block as one string: its parts in the order they are read, which is the text the line carries."""
+    return FOOT_SEP.join(p["text"] for p in _subs_parts(subs, now))
+
+def _fact(key, text, bad=False, parts=None):
+    """One block of the line (#1843): its text, its own palette colour, and the parts it paints. A block with no parts
+    of its own is the single part its text already is, with no tone — so the block's colour stands for the whole value.
+    A part whose own reading earns a tone keeps it on top of that colour, which is how the block still says WHICH fact
+    it is while the value says whether it is the bad one."""
+    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key],
+            "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
 def foot_items(src, caps=None, now=None):
-    """The six facts, in the order the line reads them, each carrying whether its value is the bad one: `bad` is what
-    the page paints amber, and only `last progress` has one (a stall between the loop's own two thresholds)."""
+    """The six facts, in the order the line reads them, each carrying whether its value is the bad one (`bad` is what
+    the page paints amber, and only `last progress` has one — a stall between the loop's own two thresholds), the
+    palette colour of its block, and the parts it paints: a subscription token carries the tone its own consumption
+    earns, so the block is never painted as one value (#1843)."""
     now = time.time() if now is None else now
     src = src or {}
     prog = src.get("progress")
-    return [{"key": "health", "text": _health_fact(src.get("health"), now), "bad": False},
-            {"key": "progress", "text": _progress_fact(prog, now),
-             "bad": isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS},
-            {"key": "occ", "text": _occ_fact(src.get("occ"), caps), "bad": False},
-            {"key": "drift", "text": _drift_fact(src.get("drift")), "bad": False},
-            {"key": "quota", "text": _quota_fact(src.get("quota"), now), "bad": False},
-            {"key": "subs", "text": _subs_fact(src.get("subs"), now), "bad": False}]   # last, so a narrow window drops the block whole
+    return [_fact("health", _health_fact(src.get("health"), now)),
+            _fact("progress", _progress_fact(prog, now),
+                  bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
+            _fact("occ", _occ_fact(src.get("occ"), caps)),
+            _fact("drift", _drift_fact(src.get("drift"))),
+            _fact("quota", _quota_fact(src.get("quota"), now)),
+            # subs last, so a narrow window drops the block whole
+            _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
 
 def foot_line(items):
     """The facts as the line reads them, one `·` between each: the page appends this after the three load cells."""
@@ -1525,11 +1560,19 @@ function ldPaint(l,d){l.textContent="";ldCells(d).forEach((c,i)=>{if(i)l.appendC
 // characters of the font the cells beside them are drawn in, measured off the cells themselves.
 function footFit(items,cols){const k=(items||[]).slice();while(k.length&&k.map(i=>i.text).join(" · ").length>cols)k.pop();return k}
 function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" · ")}
+// The colour of each fact (#1843). A block wears its own palette colour, so the six blocks are told apart without one
+// character more; a token whose own reading earned one of the three tones the load strip already paints (#1816) keeps
+// it ON that colour, so a block colour never says the value is fine, and `neutral` is the bar's own plain colour for a
+// value the hub could not verify. The parts of a block keep the line's own separator between them, the text the hub
+// serves already carries it. The tone is decided where the number is — the hub serves it — never here:
+const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
+function footParts(i){return (i.parts||[{text:i.text}]).map(p=>FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text)).join(" · ")}
+function footItem(i){const t=footParts(i);return i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`}
 function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
  const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
  return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
 function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
- if(f)f.innerHTML=footFit(d.facts,footCols()).map(i=>i.bad?`<span class=bad>${esc(i.text)}</span>`:esc(i.text)).join(" · ")}
+ if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
