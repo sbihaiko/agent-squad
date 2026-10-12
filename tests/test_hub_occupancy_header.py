@@ -87,6 +87,54 @@ def test_loop_caps_is_none_when_the_graph_cannot_be_read(hub):
         assert hub.loop_caps() is None          # an unparsable graph shows no cap either
 
 
+def _owner_graph(checkout, name, run, nodes=()):
+    p = Path(checkout) / f"docs/squad/workflows/{name}.graph.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"schema_version": 1, "name": name, "run": run, "nodes": list(nodes)}))
+    return p
+
+
+def test_loop_caps_reads_the_router_seed_when_the_checkout_has_no_workflows_folder(hub):
+    co = tempfile.mkdtemp()      # no docs/squad/workflows/: the engine runs the router seed (squad/workflows.py DYNAMIC_SEED)
+    with _with_checkout(co):
+        assert hub.loop_caps() == {"max_parallel": 2, "max_children": 4, "dispatch_max_parallel": 2}
+
+
+def test_loop_caps_reads_the_owner_default_graph_and_both_dispatch_numbers(hub):
+    co = tempfile.mkdtemp()
+    _owner_graph(co, "default", {"max_parallel": 7}, [{"name": "route", "kind": "dispatch", "max_children": 9, "max_parallel": 3}])
+    with _with_checkout(co):
+        assert hub.loop_caps() == {"max_parallel": 7, "max_children": 9, "dispatch_max_parallel": 3}
+
+
+def test_loop_caps_prefers_default_over_the_old_dynamic_name(hub):
+    co = tempfile.mkdtemp()
+    _owner_graph(co, "dynamic", {"max_parallel": 5}, [{"name": "route", "kind": "dispatch", "max_children": 6}])
+    _owner_graph(co, "default", {"max_parallel": 7}, [{"name": "route", "kind": "dispatch", "max_children": 9}])
+    with _with_checkout(co):
+        assert hub.loop_caps() == {"max_parallel": 7, "max_children": 9}
+
+
+def test_loop_caps_prefers_the_graph_the_live_run_was_launched_with(hub):
+    co, run = tempfile.mkdtemp(), Path(tempfile.mkdtemp())
+    _owner_graph(co, "default", {"max_parallel": 7}, [{"name": "route", "kind": "dispatch", "max_children": 9}])
+    (run / "graph.json").write_text(json.dumps({"run": {"max_parallel": 3}, "nodes": [{"name": "route", "kind": "dispatch", "max_children": 5, "max_parallel": 2}]}))
+    with _with_checkout(co):
+        assert hub.loop_caps([str(run)]) == {"max_parallel": 3, "max_children": 5, "dispatch_max_parallel": 2}
+        assert hub.loop_caps([str(run / "no-such-run")]) == {"max_parallel": 7, "max_children": 9}   # no run graph: the checkout's
+
+
+def test_the_header_labels_the_dispatch_parallel_limit(hub):
+    rows = [{"state": "running", "live": True, "spend": 1.0, "agents": 3}] * 2
+    h = hub.group_header("running", rows, {"max_parallel": 2, "max_children": 4, "dispatch_max_parallel": 2})
+    assert h["text"] == "2/2 runs · 6/4 agents · 2 parallel"
+
+
+def test_the_page_renders_the_dispatch_parallel_limit(hub):
+    h = _render_in_the_browser(hub, {"max_parallel": 2, "max_children": 4, "dispatch_max_parallel": 2}, [{"spend": 1.0, "agents": 3}] * 2)
+    assert h["text"] == "2/2 runs · 6/4 agents · 2 parallel"
+
+
 def test_scan_counts_the_children_still_working(hub):
     p = Path(tempfile.mkdtemp()) / "record.jsonl"
     ev = [{"event": "run_start", "ts": "2026-10-11T10:00:00Z"}]
