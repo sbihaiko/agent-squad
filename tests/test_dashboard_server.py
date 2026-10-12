@@ -437,3 +437,46 @@ def test_a_client_that_went_away_leaves_no_thread_behind(served, run):
         pos += 1
         time.sleep(0.1)
     assert left() == []
+
+
+def _watchers(before):
+    """The record-feed threads this test started and that still run."""
+    return [t for t in threading.enumerate() if t not in before and t.name == "record-feed" and t.is_alive()]
+
+
+def test_a_server_with_no_stream_open_runs_no_watcher_timer(served, run, monkeypatch):
+    monkeypatch.setattr(ds, "HEARTBEAT_SECONDS", 0.2)
+    before = set(threading.enumerate())
+    served.feed()
+    assert _watchers(before) == []                    # no page asked for a stream: nothing stats the record
+    c, r = stream(served)
+    try:
+        blocks(r, 1)
+        assert len(_watchers(before)) == 1            # one open stream, one watcher
+    finally:
+        r.close()
+        c.close()
+    deadline = time.monotonic() + 10
+    while _watchers(before) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _watchers(before) == []                    # the last stream left: the watcher stops with it
+
+
+def test_a_stream_opened_after_the_watcher_stopped_still_gets_the_events_written_meanwhile(served, run, monkeypatch):
+    monkeypatch.setattr(ds, "HEARTBEAT_SECONDS", 0.2)
+    before = set(threading.enumerate())
+    c, r = stream(served)
+    blocks(r, 1)
+    r.close()
+    c.close()
+    deadline = time.monotonic() + 10
+    while _watchers(before) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert _watchers(before) == []
+    append(run, {"event": "outcome", "node": "a", "pos": 2})   # written while no page was watching
+    c2, r2 = stream(served, last=1)
+    try:
+        assert [g[1] for g in parse(blocks(r2, 1))] == [2]
+    finally:
+        r2.close()
+        c2.close()

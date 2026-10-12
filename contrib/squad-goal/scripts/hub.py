@@ -1416,7 +1416,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:11px}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.warnl{margin-top:4px;font-size:9px;color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
-.cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}
+.cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--pin);color:var(--fg,inherit)}
 #board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
 #board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}#board.off #br{display:none}
@@ -1482,12 +1482,12 @@ body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{disp
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
-/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is a live, cross-origin dashboard: it is hidden with `visibility` and never detached, so the very same iframe element (same scroll, same run) is still there when the split comes back. The board is no longer a fixed-height row, so the grip has nothing to resize. */
+/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is out of sight, so its live dashboard is detached by liveSync (one live stream per page): it is hidden with `visibility` so the grid keeps its space, and the split comes back with the focused pane sourced again. The board is no longer a fixed-height row, so the grip has nothing to resize. */
 body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
 body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0;overflow:hidden}
 body.dockb.max #main{visibility:hidden}
 #grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
-/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and never detached, so the frame — one connection to the run's dashboard — is still there when the board is maximized again. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
+/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and holds no dashboard (its source is blank), so it opens no stream; maximizing sources it and detaches the run pane's frame. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
 #pip{position:absolute;z-index:10;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 22px #0009;overflow:hidden;overscroll-behavior:contain}
 body:not(.dockb.max) #pip{visibility:hidden}
 #piph{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;background:#1b212b;border-bottom:1px solid var(--line);cursor:move;touch-action:none;flex:none;font-size:11px}
@@ -1635,18 +1635,38 @@ function drawList(){
     save();refresh(true)});
 }
 let built="";
-function drawMain(force){
-  const [c,rw]=LAYOUTS[N],key=N+":"+slots.join(",");
+// ---- one live stream per page
+// A dashboard in a frame holds its own stream and its own timers on its run's server, so a frame per pane made the page's
+// cost grow with the runs it showed. The page lets ONE frame be live: the focused pane follows its run. Every other pane is
+// a card of the state this page already has, and a press on it moves the focus. A pane or window that is not shown holds no
+// frame at all — it is detached, never hidden — so it costs nothing. The budget with N runs is one stream and no timer of
+// the panes' own; the page's other timers are fixed and read no run's dashboard. It reads no cap: a missing file cannot raise it.
+let focus="";
+const focused=()=>slots.includes(focus)?focus:slots[0]||"";
+const liveAt=()=>bo.max?(pip().off?"":"pip"):"pane";   // the surface that holds the live frame: the maximized board's window takes it from the run pane
+const snapText=r=>r?`${name(r)} · ${r.state} · ${usd(r.spend)} · ${age(r.age)} ago`:"";
+const snaps=new Map();
+function drawMain(){
+  const [c,rw]=LAYOUTS[N],f0=liveAt()==="pane"?focused():"",key=N+":"+slots.join(",")+":"+f0;
   const main=$("#main");main.style.gridTemplateColumns=`repeat(${c},1fr)`;main.style.gridTemplateRows=`repeat(${rw},1fr)`;
   const byId=new Map(runs.map(r=>[r.id,r]));
-  if(key!==built){built=key;
-    for(const id of [...frames.keys()])if(!slots.includes(id))frames.delete(id);
+  if(key!==built){built=key;snaps.clear();
+    for(const id of [...frames.keys()])if(id!==f0||!slots.includes(id))frames.delete(id);   // a frame that leaves the page is dropped, so its stream closes
     main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">"+PIP_NORUNS+"</div>";
-    slots.forEach(id=>{const r=byId.get(id);let f=frames.get(id);
-      if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
-      const cell=document.createElement("div");cell.className="cell";cell.innerHTML=`<small><span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;cell.appendChild(f);main.appendChild(cell)})}
+    slots.forEach(id=>{const r=byId.get(id),cell=document.createElement("div");cell.className="cell"+(id===f0?" live":"");cell.dataset.id=id;
+      cell.innerHTML=`<small><span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;
+      if(id===f0){let f=frames.get(id);
+        if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
+        cell.appendChild(f)}
+      else{const s=document.createElement("div");s.className="snap";s.dataset.snap=id;snaps.set(id,s);cell.appendChild(s);
+        if(f0){cell.title="press to follow this run live";cell.tabIndex=0;
+          const go=()=>{focus=id;liveSync()};cell.onclick=go;cell.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go()}})}}
+      main.appendChild(cell)})}
+  snaps.forEach((el,id)=>{el.textContent=snapText(byId.get(id))});
 }
-function refresh(){plan();drawList();drawMain();pipDraw()}
+function liveSync(){drawMain();pipDraw()}   // the one place the live frame moves: a press on a pane, the maximize toggle, the window's collapse
+// ---- the live panes end here
+function refresh(){plan();drawList();liveSync()}
 function applyFilter(){runs=allRuns}
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
 function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
@@ -1770,8 +1790,8 @@ bo.dock="bottom";   // the board always docks at the bottom
 if(bo.max)bo.off=false;else if(bo.off)bo.max=false;   // both controls live in one saved record, so a reload can never bring back a board that is maximized and collapsed at once
 const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off&&!bo.max?(bo.h||320)+"px":""};
 // The board's maximize takes the run pane's cell as well as its own, so the kanban is read at full height. The run pane
-// is a live, cross-origin dashboard: a CSS class hides it with `visibility` and never detaches it, so the very same
-// iframe element — same scroll, same run — is still there when the split comes back. Nothing here rebuilds the panes.
+// is out of sight, so liveSync detaches its live dashboard and sources the pip's instead: one live stream per page. A CSS
+// class hides the pane with `visibility`, so the grid keeps its space; the split brings the focused pane's frame back.
 const MAXI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/></svg>',
 MINI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M9 4v5H4M15 20v-5h5M9 9L4 4M15 15l5 5"/></svg>';
 const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");document.body.classList.toggle("max",!!bo.max);
@@ -1780,8 +1800,8 @@ const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom")
   $("#bz").innerHTML=bo.max?MINI:MAXI;$("#bz").setAttribute("aria-pressed",String(!!bo.max));
   $("#bz").title=bo.max?"restore the split: run pane and board":"maximize the board over the run pane"};
 const applyDock=paintBoard;
-const setOff=v=>{bo.off=v;if(v)bo.max=false;paintBoard();saveB()};   // a collapsed board is never a maximized one
-const setMax=v=>{bo.max=v;if(v)bo.off=false;paintBoard();saveB()};  // maximizing a collapsed board restores it first
+const setOff=v=>{bo.off=v;if(v)bo.max=false;paintBoard();saveB();liveSync()};   // a collapsed board is never a maximized one
+const setMax=v=>{bo.max=v;if(v)bo.off=false;paintBoard();saveB();liveSync()};  // maximizing a collapsed board restores it first
 const escBoard=()=>{if(bo.max)setMax(false)};
 paintBoard();
 $("#bx").onclick=()=>setOff(!bo.off);
@@ -1840,10 +1860,10 @@ g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEve
 // window floats on the board and shows ONE card of the run's own dashboard — the card is the dashboard's single-card
 // mode, `?card=<name>`, documented in docs/design/README.md. The two pages are served on different ports, so there is no
 // DOM to reach into: the URL is the whole interface, and the hub never renders a second copy of the card, which would
-// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and never detaches it — so
-// nobody closes it twice. The frame is sourced once per run switch: maximizing, collapsing, dragging and resizing never
-// touch it, so the second view is one connection per run switch and one replay of that run's record, paid when the left
-// bar moves to another run and never per paint. A dashboard too old to answer the mode says so inside the window
+// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and it holds no dashboard there — so
+// nobody closes it twice. The frame is sourced only while the window is the live surface (maximized and expanded) and once
+// per run switch: dragging and resizing never touch it, so the second view is one connection per run switch and one replay of
+// that run's record, never per paint. Collapsing or leaving the maximize mode blanks it, so no stream stays open behind it. A dashboard too old to answer the mode says so inside the window
 // instead of leaving an empty frame.
 const PIP_NORUNS="No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.";
 const PIP={card:"groups",w:360,h:300,minW:240,minH:160,cw:240,ch:34,inset:12,step:16,run:64,wait:2500};
@@ -1859,7 +1879,7 @@ const pipSize=(box,off)=>off?{w:PIP.cw,h:PIP.ch}:{w:box.w<PIP.w?PIP.minW:PIP.w,h
 // A place is kept against the board's top-left and clamped: never left of the board, never above its header (measured, not assumed), never past its far edge.
 const pipPlace=(box,s,x,y)=>({x:pipClamp(Math.round(x),0,box.w-s.w),y:pipClamp(Math.round(y),box.head,box.h-s.h)});
 let pipSrc="",pipSeen="",pipDead="",pipTimer=0;
-const pipRun=()=>{const id=slots[0];return id?runs.find(r=>r.id===id)||null:null};   // the run the left bar selected is the run the window shows
+const pipRun=()=>{const id=focused();return id?runs.find(r=>r.id===id)||null:null};   // the run the left bar selected is the run the window shows
 const pipHead=r=>{const c=PIP_CARDS[pipCard(pip())]||pipCard(pip());return r?name(r)+" · "+r.state+" · "+c:c};
 const pipSet=o=>{Object.assign(pip(),o);saveB();pipDraw()};
 function pipDraw(){
@@ -1868,9 +1888,10 @@ function pipDraw(){
   el.style.left=at.x+"px";el.style.top=at.y+"px";el.style.width=s.w+"px";el.style.height=s.h+"px";
   el.classList.toggle("off",off);$("#pipx").innerHTML=off?"&#43;":"&#8211;";
   if(at.x!==p.x||at.y!==p.y){p.x=at.x;p.y=at.y;saveB()}   // a place remembered on a wider board is pulled back onto this one
-  const r=pipRun(),card=pipCard(p),url=pipURL(r,card),f=$("#pipf");
-  if(url)if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
-    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}   // an older dashboard never answers: say so, never an empty frame
+  const r=pipRun(),card=pipCard(p),url=liveAt()==="pip"?pipURL(r,card):"",f=$("#pipf");
+  if(url){if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
+    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}}   // an older dashboard never answers: say so, never an empty frame
+  else if(pipSrc){pipSrc="";pipSeen="";pipDead="";clearTimeout(pipTimer);f.src="about:blank"}   // not the live surface: the window holds no dashboard, so no stream
   const miss=!!url&&pipSrc===pipDead&&pipSeen!==pipSrc;
   el.classList.toggle("noframe",!r||miss);
   $("#pipm").textContent=!r?PIP_NORUNS:miss?PIP_OLD:"";
