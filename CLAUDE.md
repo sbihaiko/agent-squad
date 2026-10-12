@@ -85,8 +85,8 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 
 ### Work in a host project
 
-- **A defect is fixed test-first, and the red run kept** ([ADR-0136](docs/adr/0136-a-defect-is-fixed-test-first.md)). Guard: `scripts/check-tdd-red.sh` in the host project, from `$SG_PREPUSH_CHECKS`; none yet.
-- **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: the host-free compile of the rule layer, plus a check on the code-behind; the second is none yet.
+- **A defect is fixed test-first, and the red run kept** ([ADR-0136](docs/adr/0136-a-defect-is-fixed-test-first.md)). Guard: none yet; a draft.
+- **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: none yet; a draft.
 
 ## Where decisions go
 
