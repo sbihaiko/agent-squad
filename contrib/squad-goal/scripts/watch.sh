@@ -44,6 +44,7 @@ if v:
   # fork-only Code Complete: merge into the fork base, fork suite, close. In the background under single.sh: the fork suite waits for the GUI lock for minutes and must not hold the cycle (#1239)
   [ -n "${SG_FORKCLOSE_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" forkclose "$(dirname "$0")/forkclose.sh" 2>&1 & ) 2>/dev/null
   tm python3 "$(dirname "$0")/forkrescue.py" 2>&1   # a fork-only run that ended needs-human/fail with its commit off gui/<N>: re-point it, Code Complete (#1411)
+  tm python3 "$(dirname "$0")/forkstrand.py" 2>&1   # after the rescue: a fork commit on a branch no landing path reads, for a card at the landing stage, is reported once per head (#1837)
   [ $((tick % 2)) -eq 1 ] && tm "$(dirname "$0")/autofrontier.sh" 2>&1   # dispatch the frontier as soon as a blocker falls, every ~3 min
   [ $((tick % 4)) -eq 1 ] && tm "$(dirname "$0")/autobug.sh" 2>&1   # open bug issues dispatched automatically, every ~6 min
   tm "$(dirname "$0")/autohunt.sh" 2>&1   # idle loop: one read-only bug hunt that files reproducible defects

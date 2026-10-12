@@ -13,6 +13,9 @@ sg_fork_only() { gh api "repos/$SG_REPO/issues/$1" 2>/dev/null | jq -e '([.label
 # creating gui/<N> while the land resolves an empty ref no pass ever merges.
 sg_fork_branch() { local br=${SG_FORK_BRANCH:-gui/%n}; echo "${br//%n/$1}"; }
 sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
+# The file paths a fork-only commit may touch, ONE source for the passes that read a branch's diff (forkrescue, forkstrand;
+# #1837). A trailing / is a directory prefix, anything else is that exact root file. Prints one per line.
+sg_fork_paths() { printf '%s\n' contrib/squad-goal/ .claude-plugin/ CHANGELOG.md; }
 # The fork preamble: all a fork-only child is told about where its work goes. Nothing in it mentions a PR to open, so nothing contradicts it.
 sg_fork_preamble() { local br; br=$(sg_fork_branch '<N>')
   echo "FORK-ONLY (label fork-only): this work lands in the agent-squad local fork, never in $SG_REPO. Create the worktree from ${SG_FORK_BASE:-local/next}: \`git -C ${SG_FORK_DIR:-<fork checkout>} worktree add ~/wt-as-<N> -b $br ${SG_FORK_BASE:-local/next}\` (N = the issue number) and work only there. Commit locally on $br; never push; never open a PR; never ask where a PR goes: the local commit on $br is the deliverable. Keep the worktree. End your result with the commands you ran as \`cd ~/wt-as-<N> && <command>\`."; }
