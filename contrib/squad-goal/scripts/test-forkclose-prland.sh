@@ -10,12 +10,11 @@ for f in forkonly.sh address.sh prland.sh fork-gate.sh serial.sh ghread.py ghthr
 printf "exit 0\n" > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/emu SG_REPOS="x/emu x/tool" SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
-$G init -q --bare -b local/next "$T/origin.git"
-g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init; g remote add origin "$T/origin.git"; g push -q origin local/next
-g remote set-url --add --push origin "$T/origin.git"; g config remote.origin.url "$T/origin.git"
+O=$T/gh/x/tool.git; $G init -q --bare -b local/next "$O"   # a path ending in x/tool: the address seam resolves the checkout to x/tool
+g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init; g remote add origin "$O"; g push -q origin local/next
 g checkout -q -b gui/1 local/next; echo one > "$T/fork/one.py"; g add .; g commit -q -m "work 1"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-# the fake GitHub: x/tool is the repository whose remote is $T/origin.git (the stub maps the checkout's origin to it)
+# the fake GitHub for x/tool: its merge endpoint merges in the bare remote, as GitHub would
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 echo "$*" >> "$GH_LOG"; R=$GH_REMOTE
@@ -35,12 +34,10 @@ case "$*" in
   *"graphql"*) echo "[]";;
 esac
 J
-chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" GH_LOG=$T/gh.log GH_DIR=$T GH_REMOTE=$T/origin.git
-# the fork checkout names x/tool: the stub GitHub answers for it, and the address seam resolves the checkout by its origin URL
-g config remote.origin.url "https://github.com/x/tool"; g config remote.origin.pushurl "$T/origin.git"
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" GH_LOG=$T/gh.log GH_DIR=$T GH_REMOTE=$O
 echo in_progress > "$T/ci"
 r=$(bash "$T/s/forkclose.sh" 2>&1)
-[ -n "$($G --git-dir="$T/origin.git" rev-parse -q --verify refs/heads/gui/1)" ] && ok "the branch is pushed to the fork checkout's remote" || ko "gui/1 is not on the remote (an unpushed local land): $r"
+[ -n "$($G --git-dir="$O" rev-parse -q --verify refs/heads/gui/1)" ] && ok "the branch is pushed to the fork checkout's remote" || ko "gui/1 is not on the remote (an unpushed local land): $r"
 /usr/bin/grep -qE "POST repos/x/tool/pulls" "$T/gh.log" && /usr/bin/grep -q "head=gui/1" "$T/gh.log" && /usr/bin/grep -q "Refs #1" "$T/gh.log" && ok "a PR naming the issue is opened from gui/1" || ko "no PR opened for gui/1: $(tr '\n' ';' < "$T/gh.log" | cut -c1-600)"
 [ ! -e "$T/closed" ] && ok "a pending check closes nothing" || ko "the issue closed with no merged PR: $r"
 /usr/bin/grep -q "pulls/7/merge" "$T/gh.log" && ko "the PR was merged on a pending check" || ok "a pending check merges nothing"
@@ -48,7 +45,7 @@ echo completed > "$T/ci"
 r=$(bash "$T/s/forkclose.sh" 2>&1)
 /usr/bin/grep -q "PUT repos/x/tool/pulls/7/merge" "$T/gh.log" && ok "a green check merges the PR" || ko "the PR was not merged on a green check: $r"
 [ -e "$T/closed" ] && ok "the issue closes after the PR merged" || ko "no close after the merge: $r"
-[ "$(g rev-parse local/next)" = "$($G --git-dir="$T/origin.git" rev-parse local/next)" ] && ok "the fork's base is the remote's base after the land" || ko "the fork's base diverges from the remote: local $(g rev-parse --short local/next), remote $($G --git-dir="$T/origin.git" rev-parse --short local/next)"
+[ "$(g rev-parse local/next)" = "$($G --git-dir="$O" rev-parse local/next)" ] && ok "the fork's base is the remote's base after the land" || ko "the fork's base diverges from the remote: local $(g rev-parse --short local/next), remote $($G --git-dir="$O" rev-parse --short local/next)"
 [ -z "$(g status --porcelain)" ] && ok "checkout left clean" || ko "dirty checkout: $(g status --porcelain)"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
