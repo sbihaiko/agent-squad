@@ -33,3 +33,16 @@ Three ways out, in the owner's hands:
    bug.
 
 Whichever is chosen, this file is the place to record it.
+
+## The route is the address, not a label (#1869)
+
+`forkonly.sh` carries the one rule: **an issue that lives in the tooling repository
+(`SG_TOOLING_REPO`) is delivered there — a local commit on the branch the land reads, no
+PR — and an issue in `SG_REPO` is delivered as a PR.** The `squad-only` label, the
+`fork-only` spelling before it, the `Squad-only work` body line and the `FORK-ONLY: all`
+request marker all retire with that rule; `check-squad-only-retired.sh` fails while a live
+script still reads any of them.
+
+Two consequences: with **no** `SG_TOOLING_REPO` named, *nothing* is fork-only — the
+retired route never comes back as a fallback; and a bare issue number resolves against the
+repositories the loop operates, the profile's first and the tooling one second.
