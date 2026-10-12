@@ -4,12 +4,12 @@
 # 2) the PR head moving during the review kills the reviewer and ends BLOCKED (superseded), not a hang.
 # 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/cq" "$T/shared" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$T/s/"; : > "$T/s/codex-reset.py"
 cat > "$T/s/models.json" <<J
 {"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}
 J
 cat > "$T/s/env.sh" <<J
-SG_REPO=x/y; SG_STATE=\${TEST_STATE:-$T/st}; SG_SHARED=$T/shared; SG_BASE=main; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md
+SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md
 J
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -113,23 +113,15 @@ unset CLAUDE_RESOLVED
 # the leash (2 s). A 4 s answer must be accepted, not killed at the leash.
 h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wa '%02d-%02d' $a $b
 printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-deepseek-v4-flash"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-deepseek-v4-flash":8}}' "$wa" > "$T/s/models.json"
-echo $(( $(date +%s) + 3600 )) > "$T/shared/agy-limited"; touch "$T/shared/quota-guard"
+echo $(( $(date +%s) + 3600 )) > "$T/st/agy-limited"; touch "$T/st/quota-guard"
 rm -f "$T/st/review-7".* "$T/st/cq/"*
 t=$(date +%s)
 out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 el=$(( $(date +%s) - t ))
 case "$out" in model=claude:claude-deepseek-v4-flash*) [ $rc = 0 ] && [ $el -ge 4 ] && ok "leash + one reachable model: survivor uses its own timeout ($el s)" || ko "leash + one reachable: rc=$rc ${el}s '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null)";; *) ko "leash + one reachable: wanted deepseek, got '$out' rc=$rc ${el}s $(head -1 "$T/st/review-7.md" 2>/dev/null)";; esac
-# 7b) #20: a provider's 429 is machine-wide, so it lives in SG_SHARED and every repository's loop skips it: Gemini is
-# agy-limited once, in the shared directory, and two profiles (two state directories) both pass over it to the next model.
-printf '{"review_models":["gemini-3.8-flash-high","claude:ok"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
-echo $(( $(date +%s) + 3600 )) > "$T/shared/agy-limited"
-for p in st st2; do mkdir -p "$T/$p/cq"; rm -f "$T/$p/review-7".*
-  out=$(TEST_STATE="$T/$p" SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 bash "$T/s/review.sh" 7 8 2>/dev/null)
-  case "$out" in model=claude:ok*) ok "profile state $p: the shared agy-limited marker is honored";; *) ko "profile state $p ignored the shared agy-limited marker: '$out'";; esac; done
-rm -f "$T/shared/agy-limited"
 # 8) with several reachable models the leash still applies: two healthy claude entries, 4 s answer, 2 s leash -> first dies, chain depth 1, BLOCKED
 printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
-rm -f "$T/shared/agy-limited" "$T/shared/quota-guard" "$T/st/review-7".* "$T/st/cq/"*
+rm -f "$T/st/agy-limited" "$T/st/quota-guard" "$T/st/review-7".* "$T/st/cq/"*
 out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 [ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && /usr/bin/grep -q 'after 2s' "$T/st/cq/"*mtimeout* && ok "leash + several reachable models: still clamped" || ko "several reachable leash: rc=$rc '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 # 9) #1820: review.sh takes the PR's own repository as its first argument -- the squad works in two repositories now,
@@ -173,10 +165,10 @@ case "$out" in model=claude:slow*) ok "no record at all: the configured order st
 # a model with no record is ranked after the measured ones, never dropped: the measured head is skipped by quota,
 # and the unmeasured tail must still be reachable (a chain that dropped it would end BLOCKED untried)
 printf '{"review_models":["claude:fast","claude:unmeasured"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:fast"]}' > "$T/s/models.json"
-printf 'x\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; touch "$T/shared/quota-guard"; rm -f "$T/st/review-7".*
+printf 'x\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; touch "$T/st/quota-guard"; rm -f "$T/st/review-7".*
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:unmeasured*) ok "a model with no record is not dropped when the measured head is skipped";; *) ko "no-record model dropped: '$out'";; esac
-rm -f "$T/shared/quota-guard"
+rm -f "$T/st/quota-guard"
 # the skip wins over the latency: the fast model outside its window is not promoted, the slower one runs
 h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wc '%02d-%02d' $a $b
 printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:fast":"%s"}}}' "$wc" > "$T/s/models.json"

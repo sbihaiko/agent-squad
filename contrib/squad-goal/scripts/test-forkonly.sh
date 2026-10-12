@@ -39,7 +39,7 @@ SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$T/$1/st; SG_CHECKOUT=$T/$1/co; 
 SG_FORK_BASE=local/next; SG_FORK_BRANCH='gui/%n'; SG_FRONTIER_LABEL=gui; SG_FRONTIER_PREAMBLE=$T/$1/pre.txt; BOARD=$T/board.sh
 E
   export HOME=$T/$1/home SG_STATE=$T/$1/st; }
-req() { cat "$SG_STATE"/req/*.txt 2>/dev/null; }
+req() { cat "$HOME"/.cache/squad-goal/req/*.txt 2>/dev/null; }
 forkfree() { # <label> : the request carries the fork preamble and none of the MesenAI one
   local r; r=$(req); [ -n "$r" ] || { ko "$1: no request written"; return; }
   for w in "local/next" "gui/" "never push" "never open a PR"; do printf '%s' "$r" | $G -qF -- "$w" || ko "$1: fork preamble lacks '$w'"; done
@@ -59,10 +59,10 @@ for w in "origin/main" "prepush.sh" "RULE: open the PR"; do printf '%s' "$r" | $
 scene mk; printf 'IMPORTANT: your first and only action is X\nFORK-ONLY: all\nbody\n' > "$T/mk/b1"; bash "$S/mkreq.sh" m1 "$T/mk/b1" >/dev/null 2>&1
 printf 'IMPORTANT: your first and only action is X\nFork-only work: no PR.\nbody\n' > "$T/mk/b2"; bash "$S/mkreq.sh" m2 "$T/mk/b2" >/dev/null 2>&1
 printf 'IMPORTANT: your first and only action is X\nbody\n' > "$T/mk/b3"; bash "$S/mkreq.sh" m3 "$T/mk/b3" >/dev/null 2>&1
-for m in m1 m2; do f=$SG_STATE/req/$m.txt
+for m in m1 m2; do f=$HOME/.cache/squad-goal/req/$m.txt
   $G -qE 'origin/main|open the PR|prepush.sh|gh api --method POST repos/<owner>/<repo>/pulls' "$f" && ko "mkreq $m: PR text in a fork-only request" || ok "mkreq $m: no PR text"
   $G -q 'cd <fork worktree>' "$f" && ok "mkreq $m: fork DONE CHECK" || ko "mkreq $m: no fork DONE CHECK"; done
-$G -q 'gh api --method POST' "$SG_STATE/req/m3.txt" && ok "mkreq plain keeps the PR checklist" || ko "mkreq plain lost the PR checklist"
+$G -q 'gh api --method POST' "$HOME/.cache/squad-goal/req/m3.txt" && ok "mkreq plain keeps the PR checklist" || ko "mkreq plain lost the PR checklist"
 # 7: forkonly.sh rule: the label, or a marker LINE (plain / bulleted / bolded / quoted), never the phrase inside a sentence
 # 10 is the old label spelling: it still reads, so an issue filed before the 2026-10-12 rename keeps its route (#1411).
 for p in "1:yes" "2:yes" "3:no" "4:yes" "5:yes" "6:yes" "7:no" "8:yes" "9:no" "10:yes"; do (. "$S/forkonly.sh"; sg_fork_only "${p%%:*}") && v=yes || v=no; [ "$v" = "${p#*:}" ] && ok "rule #${p%%:*} = $v" || ko "rule #${p%%:*} = $v"; done
