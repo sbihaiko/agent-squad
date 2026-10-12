@@ -15,6 +15,8 @@ import http.client
 import json
 import os
 import re
+import select
+import socket
 import subprocess
 import sys
 import tempfile
@@ -136,14 +138,22 @@ class RecordFeed:
         self.lines = []          # (position, raw line) for every event read so far, in record order
         self.end = None          # the reason nothing more will come, or None while the run lives
         self.reads = 0           # how many times the file was read: one watcher, whatever the client count
+        self.clients = 0         # streams open now; the watcher runs only while this is above zero
         self._stamp, self._seen, self._thread = None, False, None
 
-    def start(self):
+    def attach(self):
+        """A stream opened: start the watcher if no stream held it."""
         with self.lock:
-            if self._thread is None:
+            self.clients += 1
+            if self._thread is None and not self.end:
                 self._thread = threading.Thread(target=self._watch, daemon=True, name="record-feed")
                 self._thread.start()
         return self
+
+    def detach(self):
+        """A stream closed: the watcher stops at its next step when none is left."""
+        with self.lock:
+            self.clients -= 1
 
     def since(self, pos):
         """The (position, line) pairs after `pos`, and the reason the feed ended."""
@@ -167,6 +177,9 @@ class RecordFeed:
         while True:
             with self.lock:
                 if self.end:
+                    return
+                if self.clients <= 0:       # no page is following: stop here, and the next stream starts a new watcher
+                    self._thread = None
                     return
             path = record_path(self.folder)
             if path is None:
@@ -243,10 +256,10 @@ class RunServer(ThreadingHTTPServer):
         self.timeout = min(1.0, idle / 4)   # handle_request wakes at least once a second (less for a short idle time), so the idle check runs
 
     def feed(self):
-        """The one watcher of this run, started by the first stream and shared by every later one."""
+        """The one feed of this run, shared by every stream. Its watcher runs only while a stream is attached."""
         with self._feed_lock:
             if self._feed is None:
-                self._feed = RecordFeed(self.folder, self.watch).start()
+                self._feed = RecordFeed(self.folder, self.watch)
             return self._feed
 
     def route(self, path):
@@ -348,6 +361,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        feed.attach()
         try:
             while True:
                 fresh, end = feed.since(pos)
@@ -360,9 +374,22 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 self._run.last = self._run.clock()       # a connected stream keeps the server past its idle window
                 if not feed.wait(pos, HEARTBEAT_SECONDS):
+                    if self._peer_gone():                # a page that left (its frame was detached) frees the watcher at once
+                        return
                     self._chunk(b": ping\n\n")
         except (BrokenPipeError, ConnectionResetError, OSError, ValueError):
             return
+        finally:
+            feed.detach()
+
+    def _peer_gone(self):
+        """True when the client closed its end: the socket is readable and reads nothing."""
+        try:
+            if not select.select([self.connection], [], [], 0)[0]:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError):
+            return True
 
     def _refuse(self):
         self._send(405, b"read only\n")
