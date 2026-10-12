@@ -556,9 +556,9 @@ async def test_a_dispatch_with_no_accepted_child_names_why_each_request_was_refu
     v = await eng.run()
     d = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
     assert d["reasons"][0] == "no_dispatch" and v.verdict == "failed"
-    assert {"spawn_rejected:model_supplied_identity:name", "spawn_rejected:unknown_field:skills", "spawn_rejected:unknown_field:budget",
-            "spawn_rejected:unknown_field:acceptance_commands", "spawn_rejected:missing_skill"} <= set(d["reasons"])
-    assert v.reasons[0] == "no_dispatch" and "spawn_rejected:unknown_field:budget" in v.reasons       # the verdict line carries them too
+    assert {"spawn_rejected:model_supplied_identity:name", "spawn_rejected:missing_skill"} <= set(d["reasons"])
+    assert not [r for r in d["reasons"] if "unknown_field" in r]
+    assert v.reasons[0] == "no_dispatch" and "spawn_rejected:missing_skill" in v.reasons       # the verdict line carries them too
 
 
 def test_the_router_prompt_documents_every_request_field_and_one_example():
