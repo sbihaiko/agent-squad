@@ -33,6 +33,24 @@ rm -f "$T/r/watch.sh"; out=$(audit watch.sh); rc=$?
 [ $rc = 1 ] && ok "a resolution that deletes the file drops the shared lines and fails" || ko "a deleted file passed"
 resolve "$PIDLINE" 'work ours'; g add watch.sh; out=$(audit watch.sh); rc=$?
 [ $rc = 2 ] && ok "a file with no conflict stages is refused with exit 2" || ko "no stages: rc=$rc: $out"
+# The same rule after the fact: a merge commit is audited through its two parents, so a resolution a child made in its own
+# worktree -- the shape that cost #9 two hours -- is caught when the landing reads the tip, not when someone notices.
+mergecommit() {   # mergecommit <drop the shared line?> -- <commit> on stdout
+  mkbase; g checkout -q -b side; sed -i.bak 's/^work$/work side/' "$T/r/watch.sh"; rm "$T/r/watch.sh.bak"; g commit -q -am side
+  g checkout -q base; sed -i.bak 's/^exit 0$/exit 1/' "$T/r/watch.sh"; rm "$T/r/watch.sh.bak"; g commit -q -am moved
+  g checkout -q side; g merge -q --no-commit base >/dev/null 2>&1 || true
+  MK='mkdir "$wlock" || { echo "watch.sh already running pid=$(cat "$wlock/pid")"; exit 1; }'
+  if [ "$1" = drop ]; then printf '%s\n' '#!/bin/bash' 'wlock=/tmp/w' "$MK" 'work side' 'exit 1' > "$T/r/watch.sh"
+  else printf '%s\n' '#!/bin/bash' 'wlock=/tmp/w' "$MK" "$PIDLINE" 'work side' 'exit 1' > "$T/r/watch.sh"; fi
+  g add watch.sh; g -c core.editor=true commit -q --no-edit; g rev-parse HEAD; }
+c=$(mergecommit keep); out=$(audit watch.sh "$c"); rc=$?
+[ $rc = 0 ] && ok "a merge commit that keeps both sides passes" || ko "a kept commit failed rc=$rc: $out"
+c=$(mergecommit drop); out=$(audit watch.sh "$c"); rc=$?
+bash -n "$T/r/watch.sh" && ok "the fabricated merge commit still parses its tree" || ko "the fabricated tree does not parse"
+[ $rc = 1 ] && ok "a merge commit whose resolution dropped a shared line fails" || ko "the fabricated commit passed rc=$rc"
+case "$out" in *'echo $$ > "$wlock/pid"'*) ok "and the commit mode shows the dropped text";; *) ko "no text: $out";; esac
+out=$(audit watch.sh "$(g rev-parse HEAD~1)"); rc=$?
+[ $rc = 2 ] && ok "a commit that is not a merge is refused with exit 2" || ko "a single-parent commit: rc=$rc: $out"
 out=$(audit); rc=$?; [ $rc = 2 ] && ok "no file argument is refused with exit 2" || ko "no argument: rc=$rc"
 [ ! -e "$T/netcall" ] && ok "offline: no network or gate command ran" || ko "the audit called out"
 rm -rf "$T"; exit $fail

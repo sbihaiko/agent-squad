@@ -136,10 +136,30 @@ dirtywt() { local w
   echo "$w"; }
 mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; else [ -n "$lf" ] || return 1; fi   # ahead of the base AND files lost to a revert: the merge only brings the commits after the revert, so a modify/delete conflict on a lost file is expected and the branch's version of every lost file wins
   if [ -n "$lf" ]; then $G checkout -q "$br" -- $lf || return 1; [ -z "$($G diff --name-only --diff-filter=U)" ] || return 1; fi
-  $G commit -q --no-edit -m "Merge $br (Refs #$n)" >/dev/null 2>&1 || [ -z "$($G rev-parse -q --verify MERGE_HEAD)" ]; }
+  $G commit -q --no-edit -m "Merge $br (Refs #$n)" >/dev/null 2>&1 || [ -z "$($G rev-parse -q --verify MERGE_HEAD)" ] || return 1
+  auditmerge HEAD || { $G reset -q --hard HEAD^ 2>/dev/null; return 1; }; }   # (#14) the resolution this pass just made is audited before it becomes the base: a line both parents hold that the resolution dropped is refused, and the base is put back
 relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
-  t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") && $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
+  t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") || { $G reset -q --hard HEAD; return 1; }
+  auditmerge "$c" || { $G reset -q --hard HEAD; return 1; }   # (#14) the same audit before the commit is moved onto the branch
+  $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
 brof() { sg_fork_branch "$1"; }   # the land and the request name the branch from one setting (#1836)
+# (#14) A merge is a resolution, and a resolution can drop a line both parents hold without anything noticing: the file still
+# parses, `bash -n` is happy, and the symptom arrives hours later in a tree nobody wrote (#9's evidence: a deleted `watch.sh`
+# statement took two hours to surface as two red suites). merge-audit.sh is the rule; these two run it.
+# auditmerge <merge-commit>: names every line both parents hold that the commit's tree dropped. Prints nothing when clean.
+auditmerge() { local c=$1 f o r=0
+  [ -n "$c" ] || return 0
+  for f in $($G diff --name-only "$c^1" "$c^2" 2>/dev/null); do
+    o=$(cd "$SG_FORK_DIR" && bash "$here/merge-audit.sh" "$f" "$c" 2>&1) || case $? in 1) r=1; printf '%s\n' "$o" >&2;; esac; done
+  return $r; }
+# auditbranch: every merge the BRANCH carries, which is a conflict a child resolved in its own worktree and no pass ever saw.
+# Prints the fabrication lines (or nothing) and returns 1 on the first merge commit that dropped a shared line.
+auditbranch() { local c f o r=0
+  for c in $($G rev-list --merges "$SG_FORK_BASE..$br" 2>/dev/null); do
+    for f in $($G diff --name-only "$c^1" "$c^2" 2>/dev/null); do
+      o=$(cd "$SG_FORK_DIR" && bash "$here/merge-audit.sh" "$f" "$c" 2>&1) || case $? in 1) r=1;; esac
+      [ $r = 0 ] || { printf '%s\n' "$o" >&2; printf 'FORKCLOSE FABRICATION #%s: the merge %s on %s dropped a line both of its parents hold (%s)\n' "$n" "$($G rev-parse --short=9 "$c")" "$br" "$f" >&2; return 1; }; done; done
+  return 0; }
 # #11: a candidate lands on the base as it is NOW, not on the one it forked from. The evidence (2026-10-12): ten gui/* branches
 # landed by hand -- 9 minutes to merge, 53 minutes to make the merged tree green (13 files, +148/-87). The three deepest branches
 # (87, 119 and 122 commits behind) produced most of the 18 conflict hunks and every post-merge failure; replaying those three tips
@@ -285,7 +305,7 @@ batchculprit() { local f c b
 # against max_parallel=10 (#13). So the red is attributed here first: the culprit is named, dropped, and the REST is re-gated as
 # its own candidate in this same pass (FC_SET names the remainder, so there is no second landing path). The one-at-a-time
 # fallback below stays for a red this cannot attribute -- a base that was already red, or a failure that names no test file.
-batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at cb cs cfr rest b0b
+batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at cb cs cfr rest b0b c fb
   if [ -n "${FC_SET:-}" ]; then bl="$FC_SET"; else cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"; fi   # the re-gated remainder names its own set; otherwise the loop's own eligibility rules, whose notices (WAIT, ORPHAN) print here
   [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
   needbase "batch" || return 0   # a checkout left on a branch is returned to the base here, so the batch is not skipped for a pass (the loop below says WAIT when it cannot be)
@@ -295,6 +315,21 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
   $G checkout -q -b fc-batch "$SG_FORK_BASE" || return 0
   for nn in $bl; do b2=$(brof $nn)   # in order; a branch that conflicts with an earlier one stays out and gets its conflict fix from the loop below
     if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; $G reset -q --hard HEAD; fi; done
+  # (#14) A merge git made without a conflict can still drop a line both of its parents hold (a rename/delete it settled on its
+  # own). Each merge the candidate just made is audited here, and the member it came from is dropped by name like a culprit -- the
+  # rest of the batch is re-gated in this same pass instead of the whole set paying for one member's fabricated merge.
+  for c in $($G rev-list --merges "$b0b..HEAD" 2>/dev/null); do
+    auditmerge "$c" > "$A/batchfabrication.txt" 2>&1 || { sed 's/^/  /' "$A/batchfabrication.txt" >&2
+      # the member behind this merge: the branch whose tip IS its second parent, or else the branch that carries the commit
+      fb=""; for nn in $bl; do [ "$($G rev-parse "$(brof $nn)")" = "$($G rev-parse "$c^2" 2>/dev/null)" ] && fb=$nn; done
+      [ -n "$fb" ] || for nn in $bl; do $G merge-base --is-ancestor "$c" "$(brof $nn)" 2>/dev/null && fb=$nn; done
+      [ -n "$fb" ] || continue   # a merge the candidate made for no member of this batch: the one-at-a-time pass owns it
+      rest=" ${merged# } "; rest=${rest// $fb / }; rest=${rest# }; rest=${rest% }
+      $G checkout -q "$SG_FORK_BASE"; $G branch -q -D fc-batch
+      echo "FORKCLOSE BATCH FABRICATION (${merged# }): the merge of $(brof "${fb:-?}") (#${fb:-?}) dropped a line both of its parents hold; dropping it and re-gating the rest"
+      if [ -n "$fb" ] && [ "$(wc -w <<<"$rest")" -ge 2 ]; then FC_SET="${rest}" batchpass
+      else touch "$A/nobatch-$key"; echo "FORKCLOSE BATCH PARKED (${rest}; the fabricated merge is the only member left): memoized nobatch-$key"; fi
+      return 0; }; done
   if [ "$(wc -w <<<"$merged")" -lt 2 ]; then $G checkout -q "$SG_FORK_BASE"; $G branch -q -D fc-batch; return 0; fi
   files=$(ldiff "$b0b" HEAD)   # the candidate's own change to the base, the same rule the single landing uses (#15): what the merges did, never what each branch did at its own fork point
   suites=$(printf '%s\n' $files | suiteset); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
@@ -419,6 +454,17 @@ for n in $cc; do
     um="$A/forkunlanded-$n"; [ -e "$um" ] || { touch "$um"; echo "FORKCLOSE UNLANDED #$n: $br is checked out at $uw with uncommitted changes, so the branch tip ${head:0:9} is not the run's final state and merging it would close #$n with its code missing from $SG_FORK_BASE. Commit them on $br (or discard them); the pass resumes on its own."; }
     continue; fi
   rm -f "$A/forkunlanded-$n"
+  # (#14) Every merge the branch carries is a conflict a CHILD resolved in its own worktree, and no pass saw it. The audit runs
+  # here, before the branch is merged or gated: a resolution that dropped a line both of its parents hold fails this landing
+  # alone, is named with the file and the line in the log and on the issue, and is not retried while the branch head stands.
+  fm="$A/fabrication-$n-${head:0:9}"
+  [ -e "$fm" ] && continue   # this head was already refused for a fabricated merge: the refusal is memoized, and a new commit on the branch releases it
+  if [ -z "$late$reland" ] && ! auditbranch > "$A/fabrication-$n-${head:0:9}.txt" 2>&1; then
+    touch "$fm"; mkdir -p "$SG_STATE/cq"
+    sed 's/^/  /' "$A/fabrication-$n-${head:0:9}.txt" >&2
+    printf 'Fork-only close (#%s): %s did not land. A merge it carries was made by hand and dropped a line both of its parents hold, so the merge is a fabrication, not a resolution (merge-audit.sh). The file and the line are below. Put the line back -- or re-make the merge keeping both sides -- and commit on %s: a new head releases this landing.\n\n```\n%s\n```\n' "$n" "$br" "$br" "$(cat "$A/fabrication-$n-${head:0:9}.txt")" > "$SG_STATE/cq/$n-fabrication$$.md"
+    continue
+  fi
   [ -n "${FC_COLLECT:-}" ] && { [ -z "$late$reland$mixed" ] && echo "$n" >> "$FC_COLLECT"; continue; }   # a plain open fork-only candidate
   # A fork-only fix has no PR body to carry its TDD RED output, so the child posts it on the issue ("TDD RED" first line, req-checklist-fork.txt). Missing: say so, once per issue; a warning only, the landing goes on (#1413).
   if ! gh api "repos/$SG_REPO/issues/$n/comments" --paginate -q '.[].body' 2>/dev/null | grep -q 'TDD RED'; then
@@ -451,6 +497,7 @@ for n in $cc; do
     { echo "FORK-ONLY: all"   # mkreq.sh: fork DONE CHECK and checklist, no PR text (#1411)
       echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a CONFLICT FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
       echo "In $SG_FORK_DIR the branch $br (head ${head:0:9}) no longer merges into $SG_FORK_BASE: conflict in $files. Work in a worktree: \`git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br\` (or reuse the existing worktree of $br), then \`git merge $SG_FORK_BASE\` into $br and resolve every conflict KEEPING BOTH SIDES (sibling issues appended their own cases; never drop one). Run \`$SG_FORK_TEST_CMD\` there until it passes, commit the merge on $br, NEVER push, keep the worktree. Do not change anything beyond the conflict resolution."
+      echo "Before you commit that merge: for every file you resolved, WHILE the merge is in progress and before \`git add\`, run \`bash $here/merge-audit.sh <file>\`. A line both parents hold that your resolution drops is a fabrication, and the landing refuses the branch for it (#14); putting the line back is the fix."
       echo "GitHub issue #$n: the issue is already implemented; only the conflict is in scope."; } > "$body"
     if ! dispatch "$nm" "$n" conflict; then
       echo "FORKCLOSE CONFLICT-REFUSED #$n $br into $SG_FORK_BASE ($files): mkreq.sh refused the fix request $nm; no fix run was launched, card left as it is"; continue; fi
