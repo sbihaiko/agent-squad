@@ -97,13 +97,13 @@ case "$r" in *"REFSADDED #10"*) ko "existing Refs logged REFSADDED: '$r'";; *) o
 # --- the dispatch request template carries the literal line the child pastes
 MK=$T/mk; mkdir -p "$MK/scripts" "$MK/bin" "$MK/home"
 cp "$here/mkreq.sh" "$here/forkonly.sh" "$here/models.json" "$here/req-checklist.txt" "$MK/scripts/"   # forkonly.sh: the one source of the fork branch (#1836)
-echo 'export SG_REPO=o/r' > "$MK/scripts/env.sh"
+printf 'export SG_REPO=o/r SG_STATE=%s\n' "$MK/st" > "$MK/scripts/env.sh"; mkdir -p "$MK/st/req"
 printf '#!/bin/bash\ncase "$*" in *"/files"*) echo scripts/shared.py;; *pulls\\?state=open*) echo 7;; esac\n' > "$MK/bin/gh"
 chmod +x "$MK/bin/gh"
 export HOME=$MK/home PATH="$MK/bin:$PATH"
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/z.py\n' > "$MK/body"
-bash "$MK/scripts/mkreq.sh" ac4 "$MK/body" >/dev/null 2>&1
-req=$HOME/.cache/squad-goal/req/ac4.txt
+SG_STATE="$MK/st" bash "$MK/scripts/mkreq.sh" ac4 "$MK/body" >/dev/null 2>&1
+req=$MK/st/req/ac4.txt
 if [ -f "$req" ] && $G -qF 'Refs #<N>' "$req"; then ok "dispatch request carries the literal Refs #<N> line"
 else ko "dispatch request lacks the literal line: $(head -c 400 "$req" 2>/dev/null)"; fi
 

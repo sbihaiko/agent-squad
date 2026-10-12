@@ -13,7 +13,7 @@ cat > "$P/Beta.sh" <<EOF
 : "\${SG_REPO:=Y/Beta}"; : "\${SG_OWNER:=Y}"; : "\${SG_PROJECT:=9}"; : "\${SG_CHECKOUT:=$T/co-beta}"; : "\${SG_BASE:=develop}"
 EOF
 printf ': "${SG_REPO:=owner/repo}"\n' > "$P/example.sh"
-printf ': "${SG_REPO:=x/legacy}"; SG_TOOLING_REPO=x/tool\n' > "$P/legacy.sh"   # names the retired second repository
+printf ': "${SG_REPO:=x/legacy}"; : "${SG_PROJECT:=4}"; : "${SG_CHECKOUT:=%s/co-legacy}"; SG_TOOLING_REPO=x/tool\n' "$T" > "$P/legacy.sh"   # names the retired second repository
 git init -q "$T/clone" && git -C "$T/clone" remote add origin git@github.com:Y/Beta.git
 export SG_PROFILES_DIR=$P SG_STATE_BASE=$B; unset SG_PROFILE SG_REPO SG_CHECKOUT SG_STATE
 # resolve <want: field=value ...> -- <input> [SG_PROFILE]: every named field of the printed context must match
@@ -45,14 +45,23 @@ refused example example
 refused 12 'no profile in force'
 refused 12 gone gone
 refused "$T/plain" "$T/plain"
-# the retired two-repository key fails loudly: repoctx refuses the profile and env.sh stops, both naming the key
-refused legacy SG_TOOLING_REPO
-out=$(cd "$T/plain" && SG_PROFILE=legacy SG_SQUAD=/dev/null bash -c '. "$1/env.sh"; echo reached' _ "$(dirname "$src")" 2>&1); rc=$?
-[ $rc != 0 ] && printf '%s' "$out" | /usr/bin/grep -q SG_TOOLING_REPO && ! printf '%s' "$out" | /usr/bin/grep -q reached \
-  && ok "env.sh stops on a profile that sets SG_TOOLING_REPO, naming it" || ko "env.sh with SG_TOOLING_REPO set (rc $rc): $out"
+# the retired settings map into the repository list with one named warning each, and never stop the run
+out=$(cd "$T/plain" && bash "$src" legacy 2>"$T/warn1"); rc=$?
+[ $rc = 0 ] && printf '%s\n' "$out" | /usr/bin/grep -qx 'SG_REPOS=x/legacy\\ x/tool' \
+  && ok "a profile that names SG_TOOLING_REPO resolves, the tooling repository one more entry after its own" || ko "legacy (rc $rc): $out"
+[ "$(/usr/bin/grep -c 'SG_TOOLING_REPO' "$T/warn1")" = 1 ] && /usr/bin/grep -q 'retired' "$T/warn1" \
+  && ok "the retired SG_TOOLING_REPO draws one named warning" || ko "legacy warning: $(cat "$T/warn1")"
+(cd "$T/plain" && bash "$src" legacy >/dev/null 2>"$T/warn2"); [ ! -s "$T/warn2" ] \
+  && ok "the warning is given once per state directory, not on every call" || ko "second call warned again: $(cat "$T/warn2")"
+rm -rf "$B/alpha"; out=$(cd "$T/plain" && bash "$src" alpha 2>"$T/warn3"); /usr/bin/grep -q 'SG_FORK_DIR' "$T/warn3" && printf '%s\n' "$out" | /usr/bin/grep -qx 'SG_FORK_DIR='"$T"'/fork-alpha' \
+  && ok "the retired SG_FORK_DIR draws a named warning and is still carried for the legacy land route" || ko "alpha fork warning: $(cat "$T/warn3")"
+rm -rf "$B/legacy"
+out=$(cd "$T/plain" && SG_PROFILE=legacy SG_SQUAD=/dev/null bash -c '. "$1/env.sh"; echo "reached $SG_REPOS"' _ "$(dirname "$src")" 2>&1); rc=$?
+[ $rc = 0 ] && printf '%s' "$out" | /usr/bin/grep -q 'SG_TOOLING_REPO' && printf '%s' "$out" | /usr/bin/grep -qF 'reached x/legacy x/tool' \
+  && ok "env.sh warns by name, runs, and exports SG_REPOS" || ko "env.sh with SG_TOOLING_REPO set (rc $rc): $out"
 # the source form: sg_repo_ctx sets the context in the caller's shell
 out=$(cd "$T/plain" && . "$src" && sg_repo_ctx 'y/beta#5' && echo "$SG_REPO $SG_ISSUE $SG_STATE")
 [ "$out" = "Y/Beta 5 $B/Beta" ] && ok "sourced, sg_repo_ctx sets the context in the caller" || ko "sourced form: '$out'"
-out=$(bash "$src" --list 2>&1); [ "$out" = "$(printf 'Beta\tY/Beta\nalpha\tx/alpha\nlegacy\t')" ] \
+out=$(bash "$src" --list 2>&1); [ "$out" = "$(printf 'Beta\tY/Beta\nalpha\tx/alpha\nlegacy\tx/legacy')" ] \
   && ok "--list names every known profile and its repository, the example excluded" || ko "--list: $out"
 rm -rf "$T"; exit $fail

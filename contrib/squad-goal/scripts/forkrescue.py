@@ -11,7 +11,7 @@ fork-only-branded issue's stray branch is fork work by the issue's own word. The
 landing stage (Code Complete/Testing, open) is rescued, so a branch a run is still working on (In Progress) is never taken
 from under it. Once per child (marker auto/rescue-<run>-<child>)."""
 import json, os, pathlib, re, subprocess, sys
-st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
+st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)   # exported by env.sh: one state directory per repository (#20)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 fork, base, pat = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main"), os.environ.get("SG_FORK_BRANCH", "gui/%n")
 here = pathlib.Path(__file__).resolve().parent

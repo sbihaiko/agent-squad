@@ -229,7 +229,7 @@ Per-repo values live in `scripts/profiles/<name>.sh` (repo, owner, board project
 2. Read every issue body and its "Blocked by" list. Build the ticket graph.
 3. Check `git worktree list`, active runs, and open PRs. Another session may already be advancing the same tickets. Reconcile durable state before dispatching duplicates.
 4. Start the background machinery once per session, with the Monitor tool where it fits:
-   - `nohup ~/.claude/skills/squad-goal/scripts/cqflush.sh > ~/.cache/squad-goal/cqflush.log 2>&1 &`
+   - `nohup ~/.claude/skills/squad-goal/scripts/cqflush.sh > "$SG_STATE/cqflush.log" 2>&1 &`
      Then monitor `tail -n0 -F` on that log.
    - Monitor `~/.claude/skills/squad-goal/scripts/watch.sh`, run from the checkout (monitors expire after 30 min: re-arm on expiry). It emits:
      - `RUN <id> verdict=…`
@@ -304,7 +304,7 @@ For a fix or continuation run, also say:
 
 For speculative work based on an unmerged dependency branch, explicitly name the base branch and require rebase onto `origin/$SG_BASE` once the dependency merges. With `SG_MERGE_METHOD=squash` the dependency's own commits never reach the base and a plain `git rebase origin/$SG_BASE` replays them and conflicts (with `merge` a plain rebase or merge is fine). The rebase request must say: `git rebase --onto origin/$SG_BASE <old-dependency-tip> <child-branch>`, where `<old-dependency-tip>` is the dependency head the child last built on (`git merge-base <child-branch> origin/<dependency-branch>` before the dependency branch is deleted). Record that SHA in the dispatch comment.
 
-**Launch:** write the request to `~/.cache/squad-goal/req/<name>.txt`, then run:
+**Launch:** write the request to `$SG_STATE/req/<name>.txt`, then run:
 
 `python3 ~/.claude/skills/squad-goal/scripts/launch.py <file>`
 
@@ -334,7 +334,7 @@ Never wait for CI, review, merge, e2e, another child, or a model retry when unre
 
 Any meaningful change goes to the issue immediately by writing:
 
-`$SG_STATE/cq/<issue>-<tag>.md` (`$SG_STATE` is `~/.cache/squad-goal/<profile>`)
+`$SG_STATE/cq/<issue>-<tag>.md` (`$SG_STATE` is the repository's own state directory, one per profile; a comment addressed to another repository is named `<owner>__<repo>#<issue>-<tag>.md` and is posted to that address)
 
 `cqflush` posts it with retries.
 
@@ -391,7 +391,7 @@ Optimistic while testing: a blocker whose PR is already merged into the base cou
 
 | Event | Action |
 |---|---|
-| `NEW PR #n` | Queue the PR-opened event on the issue immediately. Start `nohup scripts/revci.sh <pr> <issue> > ~/.cache/squad-goal/revci-<pr>.out 2>&1 &`. `revci.sh` moves the card to Code Complete; Testing waits for the merge. Review with the preferred independent review model, currently Gemini 3.8 flash high, then Grok 4.6, GPT 6.1 Sol, Opus (models.json; owner, 2026-10-10, by review-times.tsv latency), automatically falling back to the next configured review model on model/provider failure. Wait for CI inside the detached review machinery, not in the orchestration loop. Recompute the frontier immediately. |
+| `NEW PR #n` | Queue the PR-opened event on the issue immediately. Start `nohup scripts/revci.sh <pr> <issue> > "$SG_STATE/revci-<pr>.out" 2>&1 &`. `revci.sh` moves the card to Code Complete; Testing waits for the merge. Review with the preferred independent review model, currently Gemini 3.8 flash high, then Grok 4.6, GPT 6.1 Sol, Opus (models.json; owner, 2026-10-10, by review-times.tsv latency), automatically falling back to the next configured review model on model/provider failure. Wait for CI inside the detached review machinery, not in the orchestration loop. Recompute the frontier immediately. |
 | `REVIEW … CHANGES` or CI red | Queue findings on the issue immediately. Read `review-<pr>.md`. Fix real defects through a squad fix run on the PR branch, never by hand. Card back to In Progress. A wrong base means rebase on `origin/$SG_BASE`. Recompute the frontier before launching so compatible fixes/work are grouped when safe. |
 | `REVIEW … APPROVE` + CI green + clean | Queue approval/CI evidence. Merge via REST: `gh api -X PUT repos/$SG_REPO/pulls/<pr>/merge -f merge_method=$SG_MERGE_METHOD` (only when `SG_AUTO_MERGE=yes`; otherwise stop at approval and list the PR for the owner). Never merge into a protected branch the repo rules reserve for the owner; promotion between branches stays with the owner. Respect declared merge order, including an ADR before PRs that cite it. Then start e2e detached on the exact merged SHA. Recompute the frontier immediately rather than waiting for e2e. |
 | `RUN … verdict` | Queue the verdict if meaningful. Remove that run's worktrees only after the run is no longer alive: `git worktree remove --force <abs path>`, then `git worktree prune`. Drop it from `active-runs.txt`. Recompute the frontier and fill freed slots immediately. |
@@ -420,7 +420,7 @@ Current chains: read `scripts/models.json` (source of truth, edited from the hub
 
 ### Anthropic quota guard
 
-Apply `anthropic_weekly_reserve_percent` as a hard eligibility gate before ordinary model preference/fallback selection. The guard is a file: `touch ~/.cache/squad-goal/quota-guard` turns it on (scripts skip `anthropic_models`), `rm` turns it off. No programmatic reading of the Anthropic weekly quota exists in a headless session, so the guard is event-driven. It turns on when any Anthropic call (squad child, `claude -p` review, the session itself) fails with a usage-limit or weekly-limit error, or when the owner reports the quota at or under the reserve. It turns off when the limit's stated reset time passes. Codex works the same way: a `hit your usage limit` error writes `codex-limited`, and `review.sh` skips every Codex model until that time. Note the orchestrating session itself is Anthropic: when the guard is on, keep its own turns lean (monitor events, short commands) since it cannot switch models.
+Apply `anthropic_weekly_reserve_percent` as a hard eligibility gate before ordinary model preference/fallback selection. The guard is a file: `touch "$SG_SHARED/quota-guard"` (`$SG_SHARED` is the one machine-wide directory: every repository's loop reads it) turns it on (scripts skip `anthropic_models`), `rm` turns it off. No programmatic reading of the Anthropic weekly quota exists in a headless session, so the guard is event-driven. It turns on when any Anthropic call (squad child, `claude -p` review, the session itself) fails with a usage-limit or weekly-limit error, or when the owner reports the quota at or under the reserve. It turns off when the limit's stated reset time passes. Codex works the same way: a `hit your usage limit` error writes `codex-limited`, and `review.sh` skips every Codex model until that time. Note the orchestrating session itself is Anthropic: when the guard is on, keep its own turns lean (monitor events, short commands) since it cannot switch models.
 
 When the latest reliable Anthropic weekly quota reading is at or below the configured reserve threshold (default: 10%), remove all Anthropic models from the eligible model set for autonomous squad work until the quota window resets or a later reliable reading shows quota above the threshold.
 
