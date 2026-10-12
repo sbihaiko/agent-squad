@@ -8,7 +8,7 @@
 #                             failing CI on its head: branch from origin/<branch>, open the PR with base <branch>, and put
 #                             "Merge after #<pr>" in the body (autopilot never merges it first and retargets it after)
 #   WAIT <reason>             anything else (two open blockers, a blocker with no PR, a parent that is itself stacked, red CI)
-. "$(dirname "$0")/env.sh"; iss=$1
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; iss=$1
 body=$(gh api repos/$SG_REPO/issues/$iss -q .body)
 # The blockers are a LIST: reading stops at the first line that is neither blank nor a bullet, so a prose line that
 # merely names another issue ("Blocks #1792: ...", information the author wrote for a human) cannot become an edge.
@@ -23,7 +23,7 @@ prof() { printf '%s' "$prs" | jq -r --arg b "$1" '[.[]|select(((.title+" "+(.bod
 open=(); fork=(); for b in $bl; do [ "$(gh api repos/$SG_REPO/issues/$b -q .state)" = open ] || continue
   case "$testing" in *" $b "*) continue;; esac   # its card is in Testing (code merged, test pass running): does not gate
   case "$cc" in *" $b "*)   # Code Complete: a PR stacks like an open blocker; fork-only work is merged into the child's fork branch
-    br=${SG_FORK_BRANCH:-gui/%n}; br=${br//%n/$b}   # an issue can carry both a PR and fork work: hand over both
+    br=$(sg_fork_branch "$b")   # an issue can carry both a PR and fork work: hand over both
     [ -n "${SG_FORK_DIR:-}" ] && [ -n "$(/usr/bin/git -C "$SG_FORK_DIR" rev-list -1 "${SG_FORK_BASE:-main}..$br" 2>/dev/null)" ] && fork+=("$br")
     [ -n "$(prof "$b")" ] && open+=("$b")
     continue;; esac

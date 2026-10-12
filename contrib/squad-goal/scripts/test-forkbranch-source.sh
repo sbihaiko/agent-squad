@@ -35,7 +35,7 @@ GH
 chmod +x "$T/bin/gh"
 export PATH="$T/bin:$PATH" HOME=$T/home
 # One env.sh for the whole scene: the request builders and the land read the SAME setting from it, which is the point.
-env_of() { printf 'export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_STATE=%s SG_CHECKOUT=%s SG_BASE=main SG_CODING_RULES=rules SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_FRONTIER_LABEL=gui SG_FRONTIER_PREAMBLE=%s BOARD=%s\n' "$T/st" "$T/co" "$T/fork" "$1" "$T/pre.txt" "$T/board.sh" > "$S/env.sh"; }
+env_of() { printf "export SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_STATE=%s SG_CHECKOUT=%s SG_BASE=main SG_CODING_RULES=rules SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH='%s' SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_FRONTIER_LABEL=gui SG_FRONTIER_PREAMBLE=%s BOARD=%s\n" "$T/st" "$T/co" "$T/fork" "$1" "$T/pre.txt" "$T/board.sh" > "$S/env.sh"; }
 g() { /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 forkrepo() { rm -rf "$T/fork"; mkdir -p "$T/fork"; g init -q -b local/next
   echo 0 > "$T/fork/f"; g add f; g commit -q -m init
@@ -51,7 +51,8 @@ bash "$S/autofrontier.sh" >/dev/null 2>&1
 r=$(reqtext)
 [ -n "$r" ] || ko "the fork-only request was never written"
 printf '%s' "$r" | $G -qF 'issue/1' && ok "the request names issue/1: the branch the land resolves for #1" || ko "the request never names issue/1 (the land's branch for #1): $(printf '%s' "$r" | $G -o 'one local commit on [^) ]*')"
-printf '%s' "$r" | $G -qF 'gui/1' && ko "the request also names gui/1, a branch this land would not read" || ok "the request names no other branch for #1"
+printf '%s' "$r" | $G -qF 'issue/<N>' && ok "the request carries the land's branch template, preamble and checklist alike" || ko "the request never names issue/<N>"
+printf '%s' "$r" | $G -qF 'gui/' && ko "the request still names a gui/ branch: the name has a second source" || ok "no gui/ anywhere in the request"
 bash "$S/forkclose.sh" >/dev/null 2>&1
 [ -e "$T/fork/one.py" ] && ok "the land merged issue/1: the name in the request is the one it resolves" || ko "forkclose did not land issue/1 (the request's name is not the land's)"
 $G -q 'Merge issue/1' <(g log --format=%s -3) && ok "the merge commit names issue/1" || ko "no merge commit naming issue/1: $(g log --format=%s -3 | tr '\n' ';')"
