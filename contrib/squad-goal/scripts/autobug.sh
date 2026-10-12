@@ -8,6 +8,30 @@
 # happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+# ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
+# -q on a failed request, so every `gh api … 2>/dev/null` here used to treat a 403/404/500 body as a valid answer: on
+# 2026-10-12 a rate-limit body became the whole candidate list and the dispatch spent money on children spawned from it.
+# Three outcomes, never mixed: 0 = the answer in stdout, 2 = GitHub refused it (its own message in $gh_api_err while the
+# body is kept out of stdout), 1 = the command failed before GitHub reached a verdict. `-q` output on a non-zero exit is
+# never data, and a consumer cannot see a refusal as an answer by accident.
+gh_api_err=""
+gh_api() {
+  local o rc
+  o=$(gh api "$@" 2>/dev/null); rc=$?
+  if [ "$rc" -eq 0 ]; then printf '%s' "$o"; gh_api_err=""; return 0; fi
+  gh_api_err=$(printf '%s' "$o" | python3 -c 'import json,sys
+try:
+    v = json.loads(sys.stdin.read() or "{}")
+except Exception:
+    v = {}
+if not isinstance(v, dict): v = {}
+msg = v.get("message"); st = v.get("status")
+print(f"GitHub refused (HTTP {st}): {msg}" if (msg and st) else "no verdict: the request failed before GitHub answered")' 2>/dev/null)
+  [ -n "$gh_api_err" ] || gh_api_err="no verdict: the request failed before GitHub answered"
+  case "$gh_api_err" in "GitHub refused"*) return 2;; *) return 1;; esac
+}
+# The candidate list is validated, never assumed (#1855): a decimal issue number AND an issue that is not a pull request.
+sg_is_issue() { local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1; printf '%s' "$j" | grep -q '"pull_request"' && return 1; printf '%s' "$j" | grep -q "\"number\":[[:space:]]*$1\b"; }
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
@@ -44,28 +68,52 @@ PY
 
 )
 [ "${free:-0}" -gt 0 ] || exit 0
-refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
+# bugs first, then debt (only when no bug is startable -- AB_SKIP_DEBT=1 is the idle hunt's startable check, bugs only)
+# gather <label>: prints "number<US>labels" per issue; a refusal is not a candidate list at all (#1855).
+gather() {
+  local q out rc
+  q="repos/$SG_REPO/issues?state=open&labels=$1&per_page=100&sort=created&direction=asc"
+  out=$(gh_api "$q" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")'); rc=$?
+  if [ "$rc" -ne 0 ]; then echo "AUTOBUG: the ${1} candidate list is not a list: $gh_api_err; nothing dispatched" >&2; return 3; fi
+  printf '%s\n' "$out"
+}
+pulls=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))') \
+  || { echo "AUTOBUG: the open-PR list is not a list: $gh_api_err; nothing dispatched" >&2; exit 0; }
+refs=" $(printf '%s\n' "$pulls" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["
-while IFS=$'\x1f' read -r n labels; do
-  [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
-  s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
-  cand+=("$n")
-done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$lab&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null)
-# debt only when no bug is startable (AB_SKIP_DEBT=1: the idle hunt's startable check, bugs only)
-if [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ]; then
+for sel in "$lab" debt; do
+  [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
+  list=$(gather "$sel") || exit 0            # refused selection: no candidate, no marker, no request (#1855)
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
     cand+=("$n")
-  done < <(gh api "repos/$SG_REPO/issues?state=open&labels=debt&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null)
-fi
+  done <<<"$list"
+done
 [ ${#cand[@]} -gt 0 ] || exit 0
-for n in "${cand[@]}"; do cj+="$(gh api repos/$SG_REPO/issues/$n -q '{number,title,body,created_at}' 2>/dev/null),"; done; cj="${cj%,}]"
-cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || cl=$(printf '%s\n' "${cand[@]}")   # unreadable issues: one child each, as before
+# every candidate is a decimal issue number that resolves to a non-PR issue; anything else is dropped and logged. On
+# 2026-10-12 the exit-code fix alone was not enough: one line of rate-limit text reached here and its words became
+# "issues" -- so the check is on the whole cluster, never on the number alone (#1855).
+for n in "${cand[@]}"; do
+  case "$n" in ''|*[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac
+  sg_is_issue "$n" || { echo "AUTOBUG: dropping candidate #$n: ${gh_api_err:-not a readable non-PR issue}; nothing dispatched" >&2; exit 0; }
+  j=$(gh_api "repos/$SG_REPO/issues/$n") || { echo "AUTOBUG: issue #$n is not readable: $gh_api_err; nothing dispatched" >&2; exit 0; }
+  cj+="$j,"
+done
+cj="${cj%,}]"
+cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0   # cluster.py itself never answered: no cluster to trust
 clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[@]} -ge "$free" ] && break; done <<<"$cl"
-[ ${#clusters[@]} -gt 0 ] || exit 0
-pick=(); for c in "${clusters[@]}"; do pick+=($c); done
+# a cluster is a list of issue numbers, read as one list: the words of a bad payload must never be re-split into issues,
+# and a cluster whose numbers are not all valid is dropped (#1855).
+pick=()
+for c in "${clusters[@]}"; do
+  read -ra parts <<<"$c"; ok=1
+  for p in "${parts[@]}"; do case "$p" in ''|*[!0-9]*) ok=0;; esac; done
+  [ "$ok" = 1 ] || { echo "AUTOBUG: dropping cluster '$c': not a list of issue numbers" >&2; continue; }
+  pick+=("${parts[@]}")
+done
+[ ${#pick[@]} -gt 0 ] || exit 0
 [ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass
@@ -75,8 +123,8 @@ name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # and drops it with the cards when the run ended failed and landed nothing.
 for n in "${pick[@]}"; do echo "$name" > "$A/bug-$n"; done
 # A cluster is fork-only when any of its issues is (sg_fork_only: label, or the body line); fork clusters get the fork preamble ONLY
-fk=(); nfork=0; for c in "${clusters[@]}"; do f=0; for n in $c; do sg_fork_only "$n" && f=1; done; fk+=($f); nfork=$((nfork+f)); done
-allfork=0; [ "$nfork" -eq ${#clusters[@]} ] && allfork=1
+fk=(); nfork=0; for n in "${pick[@]}"; do f=0; sg_fork_only "$n" && f=1; fk+=("$f"); nfork=$((nfork+f)); done
+allfork=0; [ "$nfork" -eq ${#pick[@]} ] && allfork=1
 { if [ $allfork = 1 ]; then
     echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#clusters[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one local commit each. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line."
     echo "FORK-ONLY: all"; sg_fork_preamble

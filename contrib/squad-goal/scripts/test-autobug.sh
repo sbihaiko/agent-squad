@@ -96,4 +96,58 @@ else
   ko "5 autohunt.sh missing (hunt request cannot list open debt)"
 fi
 
+# 6) (#1855) a refused gh api is a refusal, never a candidate list. On 2026-10-12 the account was rate-limited on
+# 2026-10-12 05:12:10 UTC, gh wrote the 403 body to stdout and exited 1, `2>/dev/null` hid the one line that said so, the
+# body became the whole candidate list, and `pick+=($c)` (unquoted) then split it on whitespace: every word of the
+# message became an "issue number" and a `bug-<word>` marker was written for each of the ~50 tokens. Three children were
+# spawned on that text. The fixture keeps the exact shape of that body: many words, digits inside them, one long line.
+cp "$d/autobug.sh" "$T/s/"   # test 5 stubbed it out; put the real pass back
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
+cat > "$T/refusal.json" <<'JSON'
+{"message":"API rate limit exceeded for user ID 122891372. If you reach out to GitHub Support for help, please include the request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2A and timestamp 2026-10-12 05:12:10 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)","documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api#rate-limiting","status":"403"}
+JSON
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*) cat "$T/refusal.json"; exit 1 ;;                 # the rate limit: the error body on stdout, exit 1
+  *issues/*) echo '{}' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\n[ -n "\${AB_DRY:-}" ] && exit 0\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf '#!/bin/bash\ntouch %s/req-built\n' "$T" > "$T/s/mkreq.sh"; chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err"); rc=$?
+[ "$rc" = 0 ] && ok "6 a refused gh api exits 0" || ko "6 a refused gh api exited $rc: '$r'"
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "6 a refused gh api dispatched candidates: '$r'" || ok "6 a refused gh api dispatches nothing"
+m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "6 a refused gh api writes no bug-* marker" || ko "6 a refused gh api wrote ${#m[@]} marker(s), e.g. ${m[0]##*/}: words of the error body read as issue numbers"
+[ -e "$T/req-built" ] && ko "6 a refused selection built a request" || ok "6 a refused selection builds no request"
+[ -e "$T/launched" ] && ko "6 a refused selection launched a run" || ok "6 a refused selection launches no run"
+# a non-zero gh whose stdout is not a body at all (empty): same refusal, no candidate
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in *pulls?state=open*) echo "" ;; *"issues?state=open"*) exit 1 ;; *issues/*) echo '{}' ;; *) echo "" ;; esac
+J
+chmod +x "$T/bin/gh"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>/dev/null)
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "6b an empty refused body dispatched: '$r'" || ok "6b a refused gh api with an empty stdout dispatches nothing"
+
+# 6c) a gh api that answers 0 but whose line is not an issue number: dropped and logged, never a candidate. One line of
+# words is still the shape #1855 was about -- the reader must not fall back to word-splitting it.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*) printf '%s\n' 'API rate limit exceeded for user ID 122891372' ;;
+  *) echo '{}' ;;
+esac
+J
+chmod +x "$T/bin/gh"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>"$T/err2")
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "6c words from a zero-exit line were dispatched: '$r'" || ok "6c words from a zero-exit line dispatch nothing"
+$G -q "not a decimal issue number" "$T/err2" && ok "6c the dropped line is logged" || ko "6c the dropped line was not logged: '$(cat "$T/err2")'"
+m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "6c no marker for a word" || ko "6c a word became a marker: ${m[0]##*/}"
+
 rm -rf "$T"; exit $fail
