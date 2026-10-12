@@ -44,4 +44,48 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 echo '{"event": "verdict"}' > "$T/co/runs/run-live/record.jsonl"
 out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d "$T/hm/wt-as-7" ] && ok "F: fork tree removed once the run has a verdict" || ko "F: fork tree kept after the verdict: $out"
+# W: the PR-worktree rule (~/wt-<n>-*) force-deletes a branch, so it must act only on the branch's OWN merged PR. GitHub ignores a
+# head= value with an unencoded ':' or '/' and answers with the repo's newest closed PR, whatever its head is: the old rule then
+# removed every clean tree and force-deleted its branch, unmerged work included (see the issue "wtclean deletes a branch whose PR
+# never merged"). The stub below behaves like GitHub: an encoded head= is honoured, an unencoded one is ignored, and GH_MODE=ignore
+# ignores it always (the worst case: the .head.ref check must still hold).
+printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR= SG_REPO=x/y SG_OWNER=x SG_BASE=main\n' "$T/co" "$T/st" > "$T/s/env.sh"
+cat > "$T/bin/gh" <<'STUB'
+#!/bin/bash
+q=; a=("$@"); for ((i=0;i<${#a[@]};i++)); do [ "${a[i]}" = -q ] && q=${a[i+1]}; done
+case "$*" in
+  *pulls?state=closed*)
+    head=${*#*head=}; head=${head%%&*}; json=$(jq -c . "$GH_POOL")
+    if [ "$GH_MODE" = honour ] && [[ $head != *:* && $head != */* ]]; then
+      h=$(printf '%s' "$head" | sed 's/%3A/:/;s/%2F/\//g'); h=${h#*:}; json=$(printf '%s' "$json" | jq -c --arg h "$h" '[.[]|select(.head.ref==$h)]')
+    fi
+    printf '%s' "$json" | jq -r "${q:-.}";;
+  *) echo "";;
+esac
+STUB
+chmod +x "$T/bin/gh"
+cd "$T/co"; ci() { $G -C "$1" -c user.email=a@b -c user.name=t commit -q --allow-empty -m "$2"; }
+for b in nopr partial done squash; do $G worktree add -q -b gui/$b "$T/hm/wt-18-$b" main; done
+ci "$T/hm/wt-18-nopr" local-only                                       # no PR at all, commit the base lacks
+ci "$T/hm/wt-18-partial" first; A=$($G -C "$T/hm/wt-18-partial" rev-parse HEAD); ci "$T/hm/wt-18-partial" after-merge   # merged PR, then one more commit
+ci "$T/hm/wt-18-done" shipped; D=$($G -C "$T/hm/wt-18-done" rev-parse HEAD); $G push -q origin "$D:refs/heads/main" 2>/dev/null   # merged as is
+ci "$T/hm/wt-18-squash" squashed; S=$($G -C "$T/hm/wt-18-squash" rev-parse HEAD)   # squash merge: base holds another commit with the same content
+M=$($G -c user.email=a@b -c user.name=t commit-tree -p origin/main -m squash "origin/main^{tree}"); $G push -q origin "$M:refs/heads/main" 2>/dev/null
+jq -n --arg A "$A" --arg D "$D" --arg S "$S" --arg M "$M" '[
+  {number:2,merged_at:"2026-01-01T00:00:00Z",head:{ref:"fix/other",sha:"0"},merge_commit_sha:"0"},
+  {number:5,merged_at:"2026-01-01T00:00:00Z",head:{ref:"gui/partial",sha:$A},merge_commit_sha:$A},
+  {number:6,merged_at:"2026-01-01T00:00:00Z",head:{ref:"gui/done",sha:$D},merge_commit_sha:$D},
+  {number:7,merged_at:"2026-01-01T00:00:00Z",head:{ref:"gui/squash",sha:$S},merge_commit_sha:$M}]' > "$T/pool.json"
+export GH_POOL="$T/pool.json"
+alive() { [ -d "$T/hm/wt-18-$1" ] && $G rev-parse -q --verify "refs/heads/gui/$1" >/dev/null; }
+export GH_MODE=ignore; out=$(bash "$T/s/wtclean.sh" 2>&1)
+for b in nopr partial done squash; do alive $b && ok "W: filter ignored, PR head is another branch: gui/$b kept with its branch" || ko "W: filter ignored, gui/$b was removed: $out"; done
+case "$out" in *"pr-merged"*) ko "W: filter ignored but a pr-merged line was logged: $out";; *) ok "W: filter ignored: no pr-merged decision logged";; esac
+export GH_MODE=honour; out=$(bash "$T/s/wtclean.sh" 2>&1)
+alive nopr && ok "W: branch with no PR kept" || ko "W: no-PR branch was removed: $out"
+alive partial && ok "W: merged PR but commits the base lacks: tree and branch kept" || ko "W: unmerged commits were deleted: $out"
+case "$out" in *KEPT*gui/partial*) ok "W: the refusal names the branch";; *) ko "W: refusal does not name gui/partial: $out";; esac
+! alive done && ! [ -d "$T/hm/wt-18-done" ] && ok "W: own merged PR, branch in the base: tree removed and branch deleted" || ko "W: merged branch was not cleaned: $out"
+case "$out" in *"WT CLEAN pr-merged gui/done"*"PR #6"*"head gui/done"*) ok "W: the decision line names branch, PR and head";; *) ko "W: decision line lacks branch, PR or head: $out";; esac
+! alive squash && ok "W: squash-merged PR (tip is the PR head, merge commit in the base): cleaned" || ko "W: squash-merged branch was kept: $out"
 kill $spid 2>/dev/null; rm -rf "$T"; exit $fail
