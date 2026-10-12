@@ -105,6 +105,7 @@ def _pieces():
         _decl(SRC, "GROUPS"),
         _decl(SRC, "save"),
         _decl(SRC, "label"),
+        _decl(SRC, "labelTip"),
         _decl(SRC, "sub"),
         _fn(SRC, "groupHeader"),
         _fn(SRC, "loadMark"),
