@@ -4,16 +4,21 @@ The review is the checklist of `contrib/squad-goal/scripts/revformat.py` (#1777)
 its severity, and a bullet reads `- <file>:<line> — <defect> — <concrete failure> — <fix>`, at most two lines.
 BLOCKING findings block the merge and are never filed; the acceptance criterion of a filed task is that fix.
 A review saved before the checklist (an inline DEBT tag, no sections) is still read the old way.
+The filed issue is put on the loop's project board as it is opened (#1838): the frontier and the close passes read
+the board, so an issue filed without a card is one nobody works and nobody closes, and every later move for it is a
+no-op on stderr. The board is `$SG_OWNER`/`$SG_PROJECT`, the pair every other board move of the loop uses.
 GitHub goes through REST only (`gh api`), never GraphQL.
 """
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 
 LABELS = ("debt",)
+BOARD_STATUS = "Todo"   # where a filed task waits: the frontier and autobug read that column
 FINDING = re.compile(r"^\W*DEBT\W+(?P<loc>\S+?:\d+)\s*[—–:-]+\s*(?P<defect>.*?)\s*(?:Acceptance:\s*(?P<ac>.*))?$",
                      re.IGNORECASE)   # the shape of a review saved before #1777: an inline DEBT tag on the line
 SECTION = re.compile(r"^##\s*(Blocking|Debt)\s*$", re.IGNORECASE)
@@ -86,8 +91,32 @@ def _body(finding, pr, issue, head):
             f"**Acceptance criterion:** {ac}\n\n<!-- {MARK}{key(finding)} -->\n")
 
 
-def file_debt(repo, pr, issue, review, head, runner=None):
-    """File one issue per DEBT finding not already filed (on any head); return the new issue URLs."""
+def card(sh, repo, owner, project, number, status=BOARD_STATUS):
+    """Put issue `number` on `owner`'s project board with `status`; the board move board.py would do with `--add`.
+
+    The same REST walk (never GraphQL): the owner kind, the Status field's options, the item, then one PATCH. A
+    board with no `status` option is a configuration this filer cannot invent its way out of, so it raises and the
+    loop holds the merge with the reason (a filed task nobody can see is not a filed task).
+    """
+    kind = "orgs" if json.loads(sh(["gh", "api", f"users/{owner}"]))["type"] == "Organization" else "users"
+    base = f"/{kind}/{owner}/projectsV2/{project}"
+    field = next((f for f in json.loads(sh(["gh", "api", f"{base}/fields?per_page=100"])) if f.get("name") == "Status"), None)
+    opts = {o["name"]["raw"] if isinstance(o["name"], dict) else o["name"]: o["id"] for o in field["options"]}
+    if status not in opts:
+        raise RuntimeError(f"the board has no Status option {status!r} (it has: {', '.join(opts)})")
+    iid = json.loads(sh(["gh", "api", f"repos/{repo}/issues/{number}"]))["id"]
+    item = json.loads(sh(["gh", "api", "--method", "POST", f"{base}/items", "--input", "-"],
+                         input=json.dumps({"type": "Issue", "id": iid})))["id"]
+    sh(["gh", "api", "--method", "PATCH", f"{base}/items/{item}", "--input", "-"],
+       input=json.dumps({"fields": [{"id": field["id"], "value": opts[status]}]}))
+
+
+def file_debt(repo, pr, issue, review, head, runner=None, owner="", project="", status=BOARD_STATUS):
+    """File one issue per DEBT finding not already filed (on any head); return the new issue URLs.
+
+    `owner` and `project` are the board the new issues are added to; empty means the caller runs no board (a manual
+    filing outside the loop), and the issue is then filed without a card, said so on stderr rather than silently.
+    """
     sh = runner or _sh
     findings = parse(review)
     if not findings:
@@ -107,6 +136,11 @@ def file_debt(repo, pr, issue, review, head, runner=None):
         out = json.loads(sh(["gh", "api", "--method", "POST", f"repos/{repo}/issues", "--input", "-"],
                             input=json.dumps(body)))
         seen += body["body"]   # two findings that collapse to one key file once
+        if owner and project:
+            card(sh, repo, owner, project, out["number"], status)
+        else:
+            print(f"#{out['number']} filed without a card: no board (--owner/--project or SG_OWNER/SG_PROJECT)",
+                  file=sys.stderr)
         filed.append(out["html_url"])
     return filed
 
@@ -118,9 +152,13 @@ def main(argv=None):
     p.add_argument("--issue", type=int, required=True)
     p.add_argument("--head", required=True, help="head sha of the reviewed PR")
     p.add_argument("--review", required=True, help="path of the saved review")
+    p.add_argument("--owner", default=os.environ.get("SG_OWNER", ""), help="project board owner (default: $SG_OWNER)")
+    p.add_argument("--project", default=os.environ.get("SG_PROJECT", ""), help="project board number (default: $SG_PROJECT)")
+    p.add_argument("--status", default=BOARD_STATUS, help=f"Status a filed task waits in (default: {BOARD_STATUS})")
     a = p.parse_args(argv)
     with open(a.review, encoding="utf-8") as fh:
-        urls = file_debt(a.repo, a.pr, a.issue, fh.read(), a.head)
+        urls = file_debt(a.repo, a.pr, a.issue, fh.read(), a.head,
+                         owner=a.owner, project=a.project, status=a.status)
     print("\n".join(urls) if urls else "no new DEBT findings")
     return 0
 
