@@ -8,6 +8,7 @@ result and the card showed a state with no verdict behind it, while the loop sto
 import importlib.util
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,14 @@ def _launched(st, pr=1491, sha9=SHA9):
     (st / "auto" / f"launched-{pr}-{sha9}").write_text("")
 
 
+def _gate(st, pr=1491, sha9=SHA9, reason="merging"):
+    """The loop's own two files (#1771): auto/.pass stamps the pass, auto/gate-<pr> carries its word for this head.
+    pr_state reads the card's readiness off them, so a test that expects a verdict must leave them behind too."""
+    at = int(time.time())
+    (st / "auto" / ".pass").write_text(f"{at}\n")
+    (st / "auto" / f"gate-{pr}").write_text(f"{sha9}\t{at}\t{reason}\tthe merge is going ahead\n")
+
+
 def _pr(n=1491, head=SHA):
     return {"n": n, "t": "Hub: the OPEN PRS card says why a review is late", "u": "2026-10-11T09:00:00Z", "h": head,
             "d": False, "ci": [], "ms": "clean", "o": "2026-10-11T08:00:00Z"}
@@ -77,10 +86,13 @@ def test_a_notice_outside_the_namespace_leaves_the_state_alone(hub, state):
 
 
 def test_the_summary_line_still_decides_the_state(hub, state):
-    """The summary line keeps its authority: `CI=` plus a verdict is what the card reads (guards against over-filtering)."""
+    """The summary line keeps its authority: `CI=` plus a verdict is what the card reads (guards against over-filtering).
+    A green summary line is not the verdict by itself since #1771: the loop's gate line is, and it says the merge goes ahead."""
     _launched(state)
+    _gate(state)
     _out(state, [f"NOTICE #1491 {SHA9} CI_DISPATCH: dispatched", f"#1491 {SHA9} clean CI=success:9 VERDICT: APPROVE"])
-    assert hub.pr_state(_pr()) == ["ready", "ready to merge"]
+    ps = hub.pr_state(_pr())   # the gate line's own tip rides third, as on every card the loop judged (#1771)
+    assert ps[0] == "ready" and ps[1] == "ready to merge"
 
 
 def test_a_notice_after_the_summary_does_not_erase_the_verdict(hub, state):
