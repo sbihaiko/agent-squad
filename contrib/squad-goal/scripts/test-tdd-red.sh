@@ -15,19 +15,19 @@ mk() { # mk <name>: a repo whose lib.sh prints old
 }
 newlib() { printf '#!/bin/bash\necho new\n' > "$1/lib.sh"; }
 newtest() { printf '#!/bin/bash\n[ "$(bash lib.sh)" = new ]\n' > "$1/test-lib.sh"; }   # red on the unfixed lib
-add() { $G -C "$1" add -A; shift; $G -C "$1" commit -q "$@"; }
+add() { r=$1; shift; $G -C "$r" add -A; $G -C "$r" commit -q "$@"; }
 at() { $G -C "$1" rev-parse "$2"; }
 guard() { # guard <repo>: run the check over the whole branch; sets $r (output) and $rc
   b=$($G -C "$1" rev-list --max-parents=0 HEAD | tail -1); h=$($G -C "$1" rev-parse HEAD)
   r=$(cd "$1" && bash "$src" "$b..$h" 2>&1); rc=$?
 }
 # 1. red before green: the test's commit, then the fix's -- the test is red at the fix's parent, the push passes
-A=$(mk A); newlib "$A"; add "$A" -m "test: lib prints new"; newlib "$A"; add "$A" -m "fix: the lib prints new"
+A=$(mk A); newtest "$A"; add "$A" -m "test: lib prints new"; newlib "$A"; add "$A" -m "fix: the lib prints new"
 guard "$A"
 [ "$rc" = 0 ] && ok "a test that fails at the fix's parent passes" || ko "a measured red was refused: $r"
 case "$r" in *"TDD-RED OK"*) ok "the pass names the measurement";; *) ko "no verdict line: '$r'";; esac
 # 2. the same test, added after the fix: it passes at its own parent, so it is not this fix's red
-B=$(mk B); newlib "$B"; add "$B" -m "fix: the lib prints new"; newlib "$B"; add "$B" -m "test: lib prints new"
+B=$(mk B); newlib "$B"; add "$B" -m "fix: the lib prints new"; newtest "$B"; add "$B" -m "test: lib prints new"
 guard "$B"
 [ "$rc" != 0 ] && ok "a test that passes at its parent is refused" || ko "a green-at-parent test passed the guard: $r"
 case "$r" in *test-lib.sh*) ok "the refusal names the test";; *) ko "the refusal does not name the test: '$r'";; esac
