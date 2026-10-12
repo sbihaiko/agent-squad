@@ -41,7 +41,8 @@ out=$(bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 [ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && ok "a prose review is a format failure (BLOCKED, not saved)" || ko "prose review: rc=$rc '$(head -1 "$T/st/review-7.md")'"
 /usr/bin/grep -q 'line 2' "$T/st/cq/"*mformat* 2>/dev/null && ok "the format failure names the first line that is not the shape" || ko "no format reason: $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
 unset CLAUDE_NARRATE
-# 4) fast lane: a docs/tests-only PR goes to the fastest model by measured latency, at low effort; product code keeps the order
+# 4) fast lane: a docs/tests-only PR goes to the fastest model by measured latency, at low effort. Product code is not a
+# fast lane -- it keeps its own effort -- but the order is the same measured one there too (#1846, block 10 below).
 unset CLAUDE_NARRATE; export CLAUDE_ARGS="$T/args"
 printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t0\n' >> "$T/st/review-times.tsv"
@@ -49,7 +50,8 @@ rm -f "$T/st/review-7.sha"; out=$(GH_FILES="docs/a.md UI.Tests/b.cs scripts/test
 case "$out" in "model=claude:fast (fast lane"*) ok "docs/tests-only PR: fastest model, fast lane";; *) ko "fast lane: '$out'";; esac
 /usr/bin/grep -q -- "--model fast --effort low" "$T/args" && ok "fast lane runs at low effort" || ko "effort: $(tail -1 "$T/args")"
 rm -f "$T/st/review-7.sha"; out=$(GH_FILES="docs/a.md UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
-case "$out" in model=claude:slow*) case "$out" in *"fast lane"*) ko "product PR got the fast lane";; *) ok "product code keeps the configured chain";; esac;; *) ko "product chain: '$out'";; esac
+case "$out" in model=claude:fast*) case "$out" in *"fast lane"*) ko "product PR got the fast lane";; *) ok "product code is ordered by measured latency too, without the fast-lane label (#1846)";; esac;; *) ko "product chain: '$out'";; esac
+case "$(tail -1 "$T/args")" in *"--model fast --effort low"*) ko "product code ran at fast-lane effort";; *) ok "product code keeps its own effort (not low)";; esac
 # 5) hours: a model whose window in models.json does not contain the current local hour is skipped and the chain moves on
 h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wa '%02d-%02d' $a $b
 printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:slow":"%s"}}}' "$wa" > "$T/s/models.json"
@@ -136,4 +138,41 @@ case "$out" in model=*) ok "the repository is the first argument (the review ran
 unset CLAUDE_PROMPT; : > "$GHLOG"; rm -f "$T/st/review-7".*
 out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
 /usr/bin/grep -q 'repos/x/y/pulls/7' "$GHLOG" && ok "with no argument the profile's repository is the one read" || ko "default repo: $(head -3 "$GHLOG")"
+# 10) #1846: the normal path walks the eligible chain by the same measured latency the fast lane uses, not the config's
+# order -- a review that lands on the slow end costs the PR minutes for the same verdict. Only a SUCCESSFUL try is a
+# latency; ties and models with no record fall back to the configured order (never dropped, never given an invented
+# number), and every skip still runs, so a latency never promotes an ineligible model.
+printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".* "$T/st/cq/"*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:fast*) case "$out" in *"fast lane"*) ko "normal-path ordering: product code was labelled a fast lane";; *) ok "normal path: the fastest measured model first (20 s over 200 s)";; esac;; *) ko "normal-path ordering: '$out'";; esac
+# the fast lane is unchanged: the same order, and it still says so
+rm -f "$T/st/review-7".*
+out=$(GH_FILES="docs/a.md" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in "model=claude:fast (fast lane"*) ok "fast lane: still the fastest model, still labelled";; *) ko "fast lane changed: '$out'";; esac
+# a tie in the measured median falls back to the configured order
+printf 'x\t1\tclaude:slow\t50\t0\nx\t1\tclaude:fast\t50\t0\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:slow*) ok "a tie in the median keeps the configured order";; *) ko "tie fallback: '$out'";; esac
+# a failed try is not a latency: rc != 0 rows never order the chain
+printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t1\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:slow*) ok "only successful tries order the chain";; *) ko "successful-tries-only: '$out'";; esac
+# no record at all: the configured order stands and no model is dropped from the chain
+: > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:slow*) ok "no record at all: the configured order stands";; *) ko "no-record fallback: '$out'";; esac
+# a model with no record is ranked after the measured ones, never dropped: the measured head is skipped by quota,
+# and the unmeasured tail must still be reachable (a chain that dropped it would end BLOCKED untried)
+printf '{"review_models":["claude:fast","claude:unmeasured"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:fast"]}' > "$T/s/models.json"
+printf 'x\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; touch "$T/st/quota-guard"; rm -f "$T/st/review-7".*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:unmeasured*) ok "a model with no record is not dropped when the measured head is skipped";; *) ko "no-record model dropped: '$out'";; esac
+rm -f "$T/st/quota-guard"
+# the skip wins over the latency: the fast model outside its window is not promoted, the slower one runs
+h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wc '%02d-%02d' $a $b
+printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:fast":"%s"}}}' "$wc" > "$T/s/models.json"
+printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".* "$T/st/cq/"*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:slow*) ok "an ineligible model is not promoted by its latency ($wc)";; *) ko "skip before ordering: '$out'";; esac
 rm -rf "$T"; exit $fail

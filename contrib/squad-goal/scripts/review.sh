@@ -82,15 +82,23 @@ out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev="
 # autopilot's age SLA (a PR open past SG_AGE_MINUTES) pins the review to one model and one try: an old PR may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
 [ -n "${SG_REVIEW_RETRY_BUDGET:-}" ] && tries=$SG_REVIEW_RETRY_BUDGET
-# fast lane: a PR whose files are all docs (docs/**, *.md) or tests (*Tests*/**, test_*, *_test.*, tests/**) is reviewed by the
-# FASTEST review model (median latency of its successful tries in review-times.tsv; config order breaks ties), at low effort;
-# the rest of the chain is only its infrastructure fallback. Product code keeps the configured order. SG_REVIEW_FASTLANE=no: off.
+# fast lane: a PR whose files are all docs (docs/**, *.md) or tests (*Tests*/**, test_*, *_test.*, tests/**) is reviewed at
+# low effort; the rest of the chain is only its infrastructure fallback. SG_REVIEW_FASTLANE=no: off.
 chain=$(jq -r '.review_models[]' "$cfg"); lane=""
 if [ "${SG_REVIEW_FASTLANE:-yes}" = yes ]; then
   files=$(gh api "repos/$repo/pulls/$pr/files?per_page=100" -q '.[].filename' 2>/dev/null)
   if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -vqE '^docs/|\.md$|Tests?/|(^|/)tests?/|(^|/)test_[^/]*$|_test\.[a-z]+$'; then
     lane=" (fast lane: docs/tests only)"
-    chain=$(python3 - "$SG_STATE/review-times.tsv" $chain <<'PY'
+  fi
+fi
+# #1846: the chain is walked fastest-first on the normal path too, not in the config's order. The measured medians in
+# review-times.tsv spread an order of magnitude (gemini-3.8-flash ~25 s, claude-opus-5-5 ~50 s, gpt-5.6-terra ~110 s,
+# grok-4.6 ~200 s, grok-4.5 ~250 s), so a PR whose review lands on the slow end pays minutes for the same verdict. The
+# key is the median of a model's SUCCESSFUL tries only (a failed try is not a latency). A tie, and a model with no
+# record at all, keeps the config's order -- unranked, never dropped, no latency invented for it.
+# This is ordering, not eligibility: it runs after the chain is read and before the loop, so every skip below (quota,
+# hours, switched off, codex/agy limits, the aging leash) still runs and the order never promotes an ineligible model.
+chain=$(python3 - "$SG_STATE/review-times.tsv" $chain <<'PY'
 import statistics, sys
 t = {}
 try:
@@ -102,8 +110,6 @@ ms = sys.argv[2:]
 print("\n".join(sorted(ms, key=lambda m: (statistics.median(t[m]) if m in t else float("inf"), ms.index(m)))))
 PY
 )
-  fi
-fi
 # SG_REVIEW_CHAIN_DEPTH bounds how many models an aging PR may burn (autopilot sets 1). It counts only models that
 # are actually tried, so a chain whose head is out of quota still falls through instead of ending BLOCKED untried.
 # #1501: the aging leash (SG_REVIEW_TIMEOUT) exists so an old PR does not burn the whole chain. It must not
