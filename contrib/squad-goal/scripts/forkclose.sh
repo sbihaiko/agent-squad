@@ -157,6 +157,12 @@ e2eprep() {   # $1 = label; the e2e checkouts the real-app cases drive, at the b
   fi
 }
 bdiff() { $G diff --name-only "$($G merge-base "$1" "$2" 2>/dev/null)" "$2" 2>/dev/null; }   # what branch $2 changed since it left $1 (empty on any doubt: the full gate)
+# The suite set a LANDING is judged by comes from the landing's OWN change to the base (#15), not from the branch's diff at its fork
+# point: a resolution that restores a file the base lost to a sibling's revert touches files the branch's diff never named, and a
+# gate judged as if it did not would run too narrow a suite for the tree it just made. bdiff() stays exactly as it is -- the base
+# test (basesuites) and the conflict request both ask about a branch that has NOT landed, and there the fork point is the right
+# question. Which rule answered is printed beside the class, so a reader never has to guess (#15).
+ldiff() { $G diff --name-only "$1" "$2" 2>/dev/null; }
 # The failing test a red gate log names (#13). A pytest line is `FAILED <file>::<test> - ...`, a shell suite `FAIL <file>: <case>`
 # or `not ok 1 - <name>`; only the first two name a FILE, which is why an empty answer is "cannot attribute" and not "no failure".
 # The anchor is the start of the line, so fork-gate.sh's own markers (`--- fork gate: python tests FAILED`) are never read as one.
@@ -181,16 +187,18 @@ batchculprit() { local f c b
 # against max_parallel=10 (#13). So the red is attributed here first: the culprit is named, dropped, and the REST is re-gated as
 # its own candidate in this same pass (FC_SET names the remainder, so there is no second landing path). The one-at-a-time
 # fallback below stays for a red this cannot attribute -- a base that was already red, or a failure that names no test file.
-batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at cb cs cfr rest
+batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at cb cs cfr rest b0b
   if [ -n "${FC_SET:-}" ]; then bl="$FC_SET"; else cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"; fi   # the re-gated remainder names its own set; otherwise the loop's own eligibility rules, whose notices (WAIT, ORPHAN) print here
   [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
   needbase "batch" || return 0   # a checkout left on a branch is returned to the base here, so the batch is not skipped for a pass (the loop below says WAIT when it cannot be)
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); basegate "batch" || exit 0
   key=$(for nn in $bl; do $G rev-parse "$(brof $nn)"; done | cksum | cut -d' ' -f1); [ -e "$A/nobatch-$key" ] && return 0   # this exact set already went red as a batch
+  b0b=$($G rev-parse "$SG_FORK_BASE")   # the base the candidate's own change is measured against (#15)
   $G checkout -q -b fc-batch "$SG_FORK_BASE" || return 0
-  for nn in $bl; do b2=$(brof $nn); files="$files $(bdiff HEAD "$b2")"   # in order; a branch that conflicts with an earlier one stays out and gets its conflict fix from the loop below
+  for nn in $bl; do b2=$(brof $nn)   # in order; a branch that conflicts with an earlier one stays out and gets its conflict fix from the loop below
     if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; $G reset -q --hard HEAD; fi; done
   if [ "$(wc -w <<<"$merged")" -lt 2 ]; then $G checkout -q "$SG_FORK_BASE"; $G branch -q -D fc-batch; return 0; fi
+  files=$(ldiff "$b0b" HEAD)   # the candidate's own change to the base, the same rule the single landing uses (#15): what the merges did, never what each branch did at its own fork point
   suites=$(printf '%s\n' $files | bash "$here/gate-suites.sh"); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
   id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
   out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
@@ -198,7 +206,7 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
   $G checkout -q "$SG_FORK_BASE"
   if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
     echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
-    echo "FORKCLOSE BATCH landed ${merged# } ($suites suites, $id green); each issue closes below"
+    echo "FORKCLOSE BATCH landed ${merged# } ($suites suites by the landing rule, $id green); each issue closes below"
   else $G branch -q -D fc-batch
     echo "FORKCLOSE BATCH RED (${merged# }; $id exit $rc): nothing landed"
     if [ -n "$at" ]; then   # attributable: name the culprit, drop it, and re-gate the rest in this same pass
@@ -302,9 +310,11 @@ for n in $cc; do
   fi
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   needbase "#$n" || exit 0
-  bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
+  bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); b0=$($G rev-parse "$SG_FORK_BASE")   # b0: the base this landing is measured against (#15)
   basegate "#$n" || continue
-  fs=full; [ -z "$late$reland" ] && fs=$(bdiff "$SG_FORK_BASE" "$br" | bash "$here/gate-suites.sh")   # suites by path; late/reland: doubt, full
+  # The fork-point rule, kept for the conflict request and as the answer when this pass makes no landing diff of its own; the landing
+  # itself is judged by its own change to the base, printed below with which rule answered (#15). late/reland: doubt, full.
+  fs=full; fsf=full; [ -z "$late$reland" ] && fsf=$(bdiff "$SG_FORK_BASE" "$br" | bash "$here/gate-suites.sh"); fs=$fsf
   [ -z "$late" ] && touch "$mk"
   if [ -z "$late" ] && ! { if [ -n "$reland" ]; then relandbr; else mergebr; fi; }; then
     $G merge --abort 2>/dev/null
