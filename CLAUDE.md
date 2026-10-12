@@ -86,7 +86,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 ### Work in a host project
 
 - **A defect is fixed test-first, and the red run kept** ([ADR-0136](docs/adr/0136-a-defect-is-fixed-test-first.md)). Guard: none yet; a draft.
-- **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: none yet; a draft.
+- **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: the host-free compile of the rule layer, plus `contrib/squad-goal/scripts/verify-view-domain-firewall.sh` beside it in the host's make/CI.
 
 ## Where decisions go
 
