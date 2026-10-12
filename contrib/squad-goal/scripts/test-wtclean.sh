@@ -36,6 +36,7 @@ case "$out" in *"WT PUSHED run-moved"*) ko "P: diverged branch was pushed";; *"W
 printf '#!/bin/bash\ncase "$*" in *pulls?state=open*head=*) echo 77;; *issues/*) echo closed;; *) echo "";; esac\n' > "$T/bin/gh"
 for d in run-zombie run-fresh run-busy run-landed run-moved; do rm -rf "$T/co/runs/$d"; done
 $G init -q -b local/next "$T/fork"; cd "$T/fork"; $G -c user.email=a@b -c user.name=t commit -q --allow-empty -m base; $G branch gui/7
+$G init -q --bare "$T/fork-origin.git"; $G remote add origin "$T/fork-origin.git"; $G push -q origin local/next 2>/dev/null; $G fetch -q origin   # a fork tree goes once the remote base holds its branch (#32)
 $G worktree add -q "$T/hm/wt-as-7" gui/7
 mkdir -p "$T/co/runs/run-live/ws"; echo '{"event": "call_start"}' > "$T/co/runs/run-live/record.jsonl"; echo "Work on gui/7 in ~/wt-as-7" > "$T/co/runs/run-live/request.txt"
 printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_REPO=x/y SG_OWNER=x\n' "$T/co" "$T/st" "$T/fork" > "$T/s/env.sh"

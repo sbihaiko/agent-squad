@@ -9,9 +9,11 @@ def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
     seam, address.sh, for the profile in force (SG_PROFILE); never from the cwd. A profile the seam refuses gives
-    nothing. One profile is one repository: the retired SG_TOOLING_REPO is never read (#20)."""
-    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT"]
-    if all(os.environ.get(k) for k in keys): return {k: os.environ.get(k, "") for k in keys}
+    nothing. One profile is one repository: the retired SG_TOOLING_REPO is never read (#20).
+    SG_FORK_DIR rides the same seam -- the context it prints names it -- and SG_REPOS comes from the environment, since
+    the context does not print the profile's list: together they name every other repository a delivery opens a PR in (#32)."""
+    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_FORK_DIR", "SG_REPOS"]
+    if all(os.environ.get(k) for k in keys[:4]): return {k: os.environ.get(k, "") for k in keys}
     here = pathlib.Path(__file__).resolve().parent
     p = subprocess.run(["bash", str(here / "address.sh"), os.environ.get("SG_PROFILE", "")], capture_output=True, text=True, timeout=30)
     ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
@@ -22,13 +24,24 @@ CHECKOUT = PROF["SG_CHECKOUT"]
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
-    repository given after it, deduplicated in order (#1820). A profile gives none: one profile is one repository (#20)."""
+    repository given after it, deduplicated in order (#1820): the SG_REPOS list and the fork checkout's repository (#32)."""
     out = []
     for r in (primary,) + tuple(others):
         r = (r or "").strip()
         if r and r not in out: out.append(r)
     return out
-REPOS = repos_from(REPO)
+def fork_repo(checkout):
+    """The repository of the fork checkout's origin remote, through the address seam (address.sh sg_resolve_repo): its
+    branches land by pull request too (#32), so its PRs belong in the view. "" when there is no checkout or no answer."""
+    if not checkout: return ""
+    seam = pathlib.Path(__file__).resolve().parent / "address.sh"
+    try:
+        return subprocess.run(["bash", "-c", '. "$1"; sg_resolve_repo "$2"', "_", str(seam), checkout], capture_output=True, text=True, timeout=30).stdout.strip()
+    except Exception:
+        return ""
+# Every repository a delivery opens a PR in (#32): the profile's, the ones it lists in SG_REPOS, and the fork checkout's.
+# The retired SG_TOOLING_REPO is never read (#20).
+REPOS = repos_from(REPO, *(PROF.get("SG_REPOS") or "").split(), fork_repo(PROF.get("SG_FORK_DIR")))
 def repo_tag(repo, repos=None):
     """The short tag a card wears for its repository: the name after the owner when that name stands for exactly one
     repository the board reads, else the full owner/name -- the tag that does not fit (#1820)."""

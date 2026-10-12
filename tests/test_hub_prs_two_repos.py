@@ -25,7 +25,9 @@ TOOL = "sbihaiko/agent-squad"
 def hub():
     # the hub reads its profile from the environment at import, so the values this module pins are restored at the end:
     # a module that leaves SG_TOOLING_REPO behind makes every later hub test read a second repository (#1820)
-    pinned = {"SG_REPO": EMU, "SG_OWNER": "sbihaiko", "SG_PROJECT": "4", "SG_TOOLING_REPO": TOOL,
+    # SG_REPOS and SG_FORK_DIR name the other repositories a delivery opens a PR in (#32); they are pinned empty so the
+    # list read at import is this module's profile and not the machine's
+    pinned = {"SG_REPO": EMU, "SG_OWNER": "sbihaiko", "SG_PROJECT": "4", "SG_TOOLING_REPO": TOOL, "SG_REPOS": "", "SG_FORK_DIR": "",
               "SG_CHECKOUT": tempfile.mkdtemp(), "SG_HUB_DIR": tempfile.mkdtemp()}
     before = {k: os.environ.get(k) for k in pinned}
     os.environ.update(pinned)
