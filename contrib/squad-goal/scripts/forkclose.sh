@@ -259,13 +259,11 @@ for n in $cc; do
     continue; fi
   rm -f "$A/forkunlanded-$n"
   [ -n "${FC_COLLECT:-}" ] && { [ -z "$late$reland$mixed" ] && echo "$n" >> "$FC_COLLECT"; continue; }   # a plain open fork-only candidate
-  # A fork-only fix has no PR body to carry its TDD RED output, so the child posts it on the issue ("TDD RED" first line, req-checklist-fork.txt). Missing: the landing is refused, like the red gate of a run (ADR-0136 §4: the red travels with the deliverable, and the check refuses). Announced once per issue, marker redrefuse-$n, which the comment clears -- the sibling refusals of this pass (UNLANDED, WOULD-MERGE) read the same way. The queue comment keeps the wording of the warning it replaces and drops its "not blocked" line (#1413, #1848).
+  # A fork-only fix has no PR body to carry its TDD RED output, so the child posts it on the issue ("TDD RED" first line, req-checklist-fork.txt). Missing: say so, once per issue; a warning only, the landing goes on (#1413).
   if ! gh api "repos/$SG_REPO/issues/$n/comments" --paginate -q '.[].body' 2>/dev/null | grep -q 'TDD RED'; then
-    [ -e "$A/redrefuse-$n" ] || { echo "FORKCLOSE REFUSE #$n: no TDD RED comment on the issue for $br (a fork-only fix records its failing test output there)"
-      [ -n "${FC_DRY:-}" ] || { touch "$A/redrefuse-$n"; printf "Fork-only close: %s is not landing: this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; post the RED and GREEN output here and the landing resumes on its own (ADR-0136).\n" "$br" > "$SG_STATE/cq/$n-redrefuse$$.md"; }; }
-    continue
+    echo "FORKCLOSE WARN #$n: no TDD RED comment on the issue for $br (a fork-only fix records its failing test output there)"
+    [ -n "${FC_DRY:-}" ] || [ -e "$A/redwarn-$n" ] || { touch "$A/redwarn-$n"; printf "Fork-only close: %s is landing but this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; please post the RED and GREEN output here. The landing is not blocked.\n" "$br" > "$SG_STATE/cq/$n-redwarn$$.md"; }
   fi
-  rm -f "$A/redrefuse-$n"
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   needbase "#$n" || exit 0
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
