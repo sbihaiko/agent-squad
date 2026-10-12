@@ -76,7 +76,7 @@ slice_guard() {
     ev=$( ( . "$(cd "$(dirname "$0")" && pwd)/env.sh" >/dev/null 2>&1; printf '%s\n%s\n%s\n%s\n' "${SG_REPO:-}" "${SG_FORK_DIR:-}" "${SG_FORK_BASE:-}" "${SG_CHECKOUT:-}" ) 2>/dev/null ) || true
     [ -n "$repo" ] || repo=$(printf '%s\n' "$ev" | sed -n 1p)
     [ -n "$fdir" ] || fdir=$(printf '%s\n' "$ev" | sed -n 2p)
-    [ -n "${SG_FORK_BASE:-}" ] || fbase=$(printf '%s\n' "$ev" | sed -n 3p); fbase=${fbase:-local/next}
+    [ -n "${SG_FORK_BASE:-}" ] || fbase=$(printf '%s\n' "$ev" | sed -n 3p); fbase=${fbase:-main}
     [ -n "$co" ] || co=$(printf '%s\n' "$ev" | sed -n 4p)
   fi
   # "file <TAB> holder", one line per file in flight; the first holder found for a file is the one reported.
@@ -126,7 +126,7 @@ slice_guard() {
   done
   # A fork-only child commits on gui/<N> off the fork base and opens no PR, so its slice is only visible in the fork checkout.
   # (#1794) A branch whose issue is closed claims no slice: it can never land. gui/1510-mine (#1510, closed 2026-10-11) sat one
-  # commit ahead of local/next touching contrib/squad-goal/scripts/hub.py, so the guard refused every request naming that file
+  # commit ahead of the fork base (then local/next, now main) touching contrib/squad-goal/scripts/hub.py, so the guard refused every request naming that file
   # -- five startable issues, zero live runs, and the refusal on stderr once per pass was all anyone was told. The digits of the
   # branch name are its issue (gui/1510-mine -> 1510), and `gh issue view` is asked once per number, cached for the pass. A
   # branch GitHub cannot answer for (no `gh`, no repo, an API error, an empty answer) stays in flight exactly as before: an

@@ -1,10 +1,10 @@
 #!/bin/bash
-# usage: refresh-from-fork.sh [--check]   The counterpart of sync-to-fork.sh: copies the fork's local/next contrib/squad-goal into this live skill.
-# --check changes nothing and exits 1 naming every shipped file where live and local/next disagree.
+# usage: refresh-from-fork.sh [--check]   The counterpart of sync-to-fork.sh: copies the fork's main contrib/squad-goal into this live skill.
+# --check changes nothing and exits 1 naming every shipped file where live and main disagree.
 # Not shipped (ignored on both sides): __pycache__/, *.pyc, *.bak*.
 # Out of scope: a file only live carries (the fork never shipped it, so it can never converge) is not divergence.
 # Never touched: scripts/models.json, per-repo profiles (only profiles/example.sh ships) and $SG_STATE (sync-deny, fork-base).
-# Refused (SG_REFRESH_FORCE=1 overrides) when live carries edits neither synced to the fork nor on local/next, which the copy would erase.
+# Refused (SG_REFRESH_FORCE=1 overrides) when live carries edits neither synced to the fork nor on main, which the copy would erase.
 set -euo pipefail
 live="$(cd "$(dirname "$0")/.." && pwd)"; F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-main}; st=${SG_STATE:-$HOME/.cache/squad-goal}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
