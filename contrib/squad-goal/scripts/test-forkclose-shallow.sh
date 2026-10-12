@@ -55,7 +55,7 @@ J
   echo g1 > "$F/g"; /usr/bin/git -C "$F" add g; /usr/bin/git -C "$F" commit -qm "work 1"
   # a branch born on the published lineage, the control: it is created by the scenario that needs it, so no pass here has two candidates
   /usr/bin/git -C "$F" checkout -q local/next
-  echo '{"items":[{"n":1,"st":"Code Complete","s":"open"},{"n":2,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
+  echo '{"items":[{"n":1,"st":"Code Complete","s":"open"},{"n":2,"st":"Code Complete","s":"open"},{"n":3,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
 }
 control() { /usr/bin/git -C "$1/fork" checkout -q -b gui/2 local/next; echo g2 > "$1/fork/g2"; /usr/bin/git -C "$1/fork" add g2; /usr/bin/git -C "$1/fork" commit -qm "work 2"; /usr/bin/git -C "$1/fork" checkout -q local/next; }
 base_of() { /usr/bin/git -C "$1/fork" rev-parse local/next; }
@@ -98,4 +98,23 @@ r=$(bash "$T3/s/forkclose.sh" 2>&1)
 case "$r" in *"FORKCLOSE PUSH-BLOCKED"*) ok "a base ahead of origin carrying the boundary is reported: $(echo "$r" | grep -o 'FORKCLOSE PUSH-BLOCKED[^.]*' | head -1 | cut -c1-110)";; *) ko "the unpushable base stayed silent: '$r'";; esac
 [ -n "$(ls "$T3/st/cq/"*pushblocked* 2>/dev/null)" ] && ok "the report is queued as a cq/ card too" || ko "no cq/ card for the unpushable base"
 [ "$(base_of "$T3")" != "$b3" ] && ok "the pass still lands the healthy branch beside the report" || ko "the report blocked the whole pass"
-rm -rf "$T3"; exit $fail
+rm -rf "$T3"
+# 4: (#1852) the parents come from the commit HEADER, never from a `sed` over the whole object. `cat-file -p` prints the
+# message verbatim after the headers, so a body line beginning with "parent " was collected as a parent hash, `cat-file -e`
+# failed on the words, and the branch was parked forever as a shallow boundary. This is the 2026-10-12 case on gui/1848,
+# whose message carries "parent commit and refuses a test that passes there, a range with no test, and a".
+T4=$(mktemp -d); mkfix "$T4"; export FCT=$T4; b4=$(base_of "$T4")
+/usr/bin/git -C "$T4/fork" branch -q -D gui/1   # the fixture's own boundary branch: its SHALLOW refusal would be the only card here
+/usr/bin/git -C "$T4/fork" checkout -q -b gui/3 local/next
+echo g3 > "$T4/fork/g3"; /usr/bin/git -C "$T4/fork" add g3
+/usr/bin/git -C "$T4/fork" commit -q -m "Docs: the guard reads the parent from the header
+
+The paragraph whose continuation line begins with
+parent commit and refuses a test that passes there, a range with no test, and a
+span that names no commit."
+/usr/bin/git -C "$T4/fork" checkout -q local/next
+r=$(bash "$T4/s/forkclose.sh" 2>&1)
+case "$r" in *"FORKCLOSE SHALLOW #3"*) ko "a message line beginning with 'parent ' was read as a shallow boundary: '$r'";; *) ok "a body line beginning with 'parent ' is not a parent hash";; esac
+[ "$(base_of "$T4")" != "$b4" ] && ok "the branch whose message says 'parent ...' still lands" || ko "it was parked as shallow: '$r'"
+if [ -n "$(ls "$T4/st/cq/"*shallow* 2>/dev/null)" ]; then ko "a shallow cq/ card was written for a present-parent commit"; else ok "no shallow card for a commit whose parents are all here"; fi
+rm -rf "$T4"; exit $fail

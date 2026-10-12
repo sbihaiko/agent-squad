@@ -78,7 +78,16 @@ lost() { $G diff --name-only --diff-filter=A "$SG_FORK_BASE" "$1" 2>/dev/null; }
 # parent, so the branch has to be rebuilt on the base instead of landed.
 shallowrange() { local c p
   for c in $($G rev-list "$1" 2>/dev/null); do
-    for p in $($G cat-file -p "$c" 2>/dev/null | sed -n 's/^parent //p'); do
+    # The parents come from the commit HEADER, never from a `sed` over the whole object: `cat-file -p` prints the message
+    # verbatim after the headers, so a body line beginning with "parent " was collected as a parent hash, `cat-file -e` failed
+    # on the words, and the branch was parked forever as a shallow boundary (#1852). `awk` stops at the first blank line --
+    # the end of the headers -- so only real `parent` fields are read, whatever the message says.
+    # NOT `rev-list --parents`: it is the obvious form and it is wrong here. `rev-list` honours `.git/shallow` and prints a
+    # boundary commit with NO parents, so it reports an empty parent list for exactly the commits this function exists to
+    # find -- the guard would never fire. `cat-file -p` reads the stored object, which still names the parent it does not have.
+    for p in $($G cat-file -p "$c" 2>/dev/null | awk '/^$/{exit} /^parent /{print $2}'); do
+      case $p in *[!0-9a-f]*|"") continue;; esac   # a field that is not a hash is not a parent
+      [ ${#p} = 40 ] || continue
       $G cat-file -e "$p" 2>/dev/null || { echo "$c $p"; return 0; }; done; done
   return 1; }
 # The run's final state is what the child left in the worktree it worked in, and a pass can only land what a commit carries. Prints
@@ -205,7 +214,11 @@ for n in $cc; do
   # produces a $SG_FORK_BASE that cannot be pushed (#1823), and no later pass can undo that without rewriting history.
   if sb=$(shallowrange "$SG_FORK_BASE..$br"); then
     sc=${sb%% *}; sp=${sb#* }; sm="$A/shallow-$n-${sc:0:9}"
-    echo "FORKCLOSE SHALLOW #$n: $br carries $sc, whose parent $sp is not in this clone (shallow boundary, a lineage that was never published). Merging it would drag $sc into $SG_FORK_BASE and the push of $SG_FORK_BASE would be rejected (remote: fatal: did not receive expected object $sp). Not merging: rebuild $br on $SG_FORK_BASE (\`git -C $SG_FORK_DIR rebase --onto $SG_FORK_BASE $sc $br\`, or cherry-pick its own commits onto a fresh branch) and the next pass lands it."
+    # The recipe names the branch's OWN commits, never `rebase --onto $SG_FORK_BASE $sc $br`: $sc is the first commit of the
+    # range with a missing parent, so it can be the branch tip, and `$sc..$br` is then empty -- a rebase that silently drops
+    # the whole branch is a worse hand-off than the refusal itself (#1852).
+    own=$($G rev-list --reverse "$SG_FORK_BASE..$br" 2>/dev/null | tr '\n' ' ')
+    echo "FORKCLOSE SHALLOW #$n: $br carries $sc, whose parent $sp is not in this clone (shallow boundary, a lineage that was never published). Merging it would drag $sc into $SG_FORK_BASE and the push of $SG_FORK_BASE would be rejected (remote: fatal: did not receive expected object $sp). Not merging. Rebuild $br on $SG_FORK_BASE by cherry-picking its own commits onto a fresh branch: \`git -C $SG_FORK_DIR switch -c $br-rebuilt $SG_FORK_BASE && git -C $SG_FORK_DIR cherry-pick $own\` (its own commits are $own; a \`rebase --onto $SG_FORK_BASE $sc $br\` would take $sc..$br instead, which is empty when $sc is the tip -- it would drop the whole branch). The next pass lands the rebuilt branch."
     if [ ! -e "$sm" ]; then touch "$sm"
       mkdir -p "$SG_STATE/cq"
       printf "Fork-only close (#%s): %s did not land. The commit %s in its history has parent %s, which this clone never received (shallow boundary), so merging it would leave %s ahead of origin/%s with a tip the remote refuses (\`index-pack: did not receive expected object %s\`) and no later pass could undo that without rewriting history. Rebuild %s on %s and it lands on its own.\n" "$n" "$br" "$sc" "$sp" "$SG_FORK_BASE" "$SG_FORK_BASE" "$sp" "$br" "$SG_FORK_BASE" > "$SG_STATE/cq/$n-shallow$$.md"
