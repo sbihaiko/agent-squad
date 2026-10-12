@@ -135,3 +135,38 @@ def test_the_page_renders_plain_counts_when_the_graph_is_unreadable(hub):
     h = _render_in_the_browser(hub, None, rows)   # json null: what loop_caps() returns for an unreadable graph
     assert h["text"] == "3 · 9"
     assert h["title"] == "$3.00"
+
+
+def _graph(path, run_parallel, children, parallel):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run": {"max_parallel": run_parallel},
+                                "nodes": [{"name": "route", "kind": "dispatch", "max_children": children, "max_parallel": parallel}]}))
+
+
+def test_loop_caps_names_the_seeds_per_run_ceilings_on_a_fresh_checkout(hub):
+    co = tempfile.mkdtemp()                                 # no docs/squad/workflows/ at all
+    seed = json.loads((ROOT / "docs/design/router.graph.json").read_text())
+    node = next(n for n in seed["nodes"] if n["kind"] == "dispatch")
+    with _with_checkout(co):
+        got = hub.loop_caps()
+    assert (got["runs"], got["children"]) == (10, 20)       # the machine-wide pair is untouched
+    assert got["per_run"]["max_parallel"] == seed["run"]["max_parallel"]
+    assert (got["per_run"]["dispatch"][0]["max_children"], got["per_run"]["dispatch"][0]["max_parallel"]) == (node["max_children"], node["max_parallel"])
+
+
+def test_loop_caps_names_the_owner_defaults_per_run_ceilings(hub):
+    co = Path(tempfile.mkdtemp())
+    _graph(co / "docs/squad/workflows/default.graph.json", 9, 8, 5)
+    with _with_checkout(co):
+        got = hub.loop_caps()
+    assert got["per_run"]["max_parallel"] == 9
+    assert [(d["max_children"], d["max_parallel"]) for d in got["per_run"]["dispatch"]] == [(8, 5)]
+
+
+def test_the_running_header_tooltip_labels_the_per_run_pair_beside_the_spend(hub):
+    rows = [{"spend": 1.0, "agents": 1}]
+    caps = {"runs": 10, "children": 20, "per_run": {"label": "per run: max_parallel 2 · route: max_children 4, max_parallel 2"}}
+    h = hub.group_header("running", rows, caps)
+    assert h["text"] == "RUNS 1/10 · AGENTS 1/20"          # the machine-wide pair stays the text
+    assert h["title"] == "$1.00 · per run: max_parallel 2 · route: max_children 4, max_parallel 2"
+    assert _render_in_the_browser(hub, caps, rows) == h     # the page paints the same line
