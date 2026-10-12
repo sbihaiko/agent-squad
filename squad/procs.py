@@ -21,6 +21,8 @@ def _signal_group(proc, sig):
         os.killpg(proc.pid, sig)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        pass   # the group is ours: macOS answers EPERM, not ESRCH, once every member is a zombie, so the group is gone
 
 
 async def stop_group(proc, teardown=TEARDOWN_S):
