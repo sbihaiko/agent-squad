@@ -9,7 +9,7 @@ d=$(dirname "$0"); T=$(mktemp -d); log=$T/report; : > "$log"; fail=0
 unset $(compgen -e | /usr/bin/grep '^SG_') 2>/dev/null || true
 ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }
 S=$T/scripts; mkdir -p "$S" "$T/bin" "$T/home"
-cp "$d/mkreq.sh" "$d/models.json" "$d/req-checklist.txt" "$d/req-checklist-fork.txt" "$S/"
+cp "$d/mkreq.sh" "$d/forkonly.sh" "$d/models.json" "$d/req-checklist.txt" "$d/req-checklist-fork.txt" "$S/"   # forkonly.sh: the one source of the fork branch (#1836)
 # The fork checkout (#1519): gui/1497 is unmerged over the fork's own tree, gui/1498 over dashboard/, gui/1400 is already on
 # local/next -- a merged slice is not in flight and must never refuse.
 FK=$T/fork; /usr/bin/git init -q -b local/next "$FK"; mkdir -p "$FK/contrib/squad-goal/scripts" "$FK/dashboard" "$FK/scripts"

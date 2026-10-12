@@ -96,7 +96,7 @@ case "$r" in *"REFSADDED #10"*) ko "existing Refs logged REFSADDED: '$r'";; *) o
 
 # --- the dispatch request template carries the literal line the child pastes
 MK=$T/mk; mkdir -p "$MK/scripts" "$MK/bin" "$MK/home"
-cp "$here/mkreq.sh" "$here/models.json" "$here/req-checklist.txt" "$MK/scripts/"
+cp "$here/mkreq.sh" "$here/forkonly.sh" "$here/models.json" "$here/req-checklist.txt" "$MK/scripts/"   # forkonly.sh: the one source of the fork branch (#1836)
 echo 'export SG_REPO=o/r' > "$MK/scripts/env.sh"
 printf '#!/bin/bash\ncase "$*" in *"/files"*) echo scripts/shared.py;; *pulls\\?state=open*) echo 7;; esac\n' > "$MK/bin/gh"
 chmod +x "$MK/bin/gh"

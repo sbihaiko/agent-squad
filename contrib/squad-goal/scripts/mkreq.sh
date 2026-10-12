@@ -17,6 +17,13 @@ for m in $(jq -r '.coding_models[]' "$mjson"); do mayrun "$m" || continue
 [ -n "$fb" ] || fb=$(jq -r --arg c "$cm" 'first(.coding_models[]|select(.!=$c)) // empty' "$mjson")
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"; out="$HOME/.cache/squad-goal/req/$1.txt"
+. "$here/forkonly.sh"   # sg_fork_branch: the one source of the branch a fork-only child commits on (#1836)
+# The setting behind it is read from the environment first -- every request builder sources env.sh and exports it -- and
+# from env.sh itself otherwise, exactly as the slice guard below resolves SG_FORK_BASE. forkonly.sh owns the only default.
+if [ -z "${SG_FORK_BRANCH:-}" ]; then
+  SG_FORK_BRANCH=$( ( . "$here/env.sh" >/dev/null 2>&1; printf '%s' "${SG_FORK_BRANCH:-}" ) 2>/dev/null ) || true
+  export SG_FORK_BRANCH
+fi
 grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body lacks the 'IMPORTANT: your first and only action' line" >&2; exit 1; }
 # A path a body can claim: the trees a child edits, the fork's own tree included (contrib/squad-goal/..., dashboard/...), which
 # the old UI|UI.<x>|Core|scripts|docs|tests list was blind to -- a fork-only child's slice lives there and matched nothing.
@@ -125,7 +132,8 @@ slice_guard() {
   # branch GitHub cannot answer for (no `gh`, no repo, an API error, an empty answer) stays in flight exactly as before: an
   # unreachable API must never silently drop a live slice, and it says nothing. A branch that is skipped is NAMED, because what
   # can no longer land is what the operator has to retire and nothing else on the loop says so.
-  local bglob=${SG_FORK_BRANCH:-gui/%n} br bref bnum bstate ghcache=" "; bref=${bglob%%/%n*}; bglob="refs/heads/${bglob%%/%n*}"
+  local bglob br bref bnum bstate ghcache=" "; bglob=$(sg_fork_branch_pattern)   # the same setting the request names and the land resolves (#1836)
+  bref=${bglob%%/%n*}; bglob="refs/heads/${bglob%%/%n*}"
   if [ -n "$fdir" ] && [ -d "$fdir" ]; then
     for br in $(/usr/bin/git -C "$fdir" for-each-ref --format='%(refname:short)' "$bglob/*" 2>/dev/null || true); do
       [ -n "$(/usr/bin/git -C "$fdir" rev-list -1 "$fbase..$br" 2>/dev/null)" ] || continue
@@ -197,11 +205,44 @@ slice_guard() {
   done
 }
 slice_guard "$1" "$2" || exit 1
+# (#1836) The branch a fork-only child commits on has ONE source: $SG_FORK_BRANCH (%n = the issue), the setting
+# forkclose.sh substitutes into the ref it merges (sg_fork_branch, forkonly.sh). Two builders used to carry their own
+# literal beside it -- autofrontier and autobug each wrote `gui/<N>` while the land resolved whatever the profile said --
+# and a hand-written body could name anything at all. The MesenAI habit `fix/<N>-<short-slug>` reached fork-only children
+# that way, the commit landed on a branch no close pass reads, and the card sat at Code Complete with nobody waiting for
+# it (#1831). The check runs HERE, before the request file exists and so before launch.py makes a run folder: a fork-only
+# dispatch that would name anything else is refused, naming both branches, and so is one whose setting cannot name a
+# landing branch at all.
+fork_landing_refusal() {   # <body> : the reason this fork-only request could never land; empty when it can
+  local pat pref ref own cl scan t exp num
+  pat=$(sg_fork_branch_pattern)
+  case "$pat" in *%n*) ;; *)
+    echo "is fork-only and cannot name a landing branch: SG_FORK_BRANCH=$pat carries no %n, so it names no branch per issue and forkclose.sh would resolve one ref for every issue."; return;; esac
+  ref=$(sg_fork_branch 1)
+  /usr/bin/git check-ref-format --branch "$ref" >/dev/null 2>&1 ||
+    { echo "is fork-only and cannot name a landing branch: SG_FORK_BRANCH=$pat yields '$ref' for issue #1, which is not a valid branch name (\`git worktree add -b '$ref'\` refuses it), so no fork-only commit could land."; return; }
+  pref=${pat%%/%n*}
+  # What the request TELLS the child: its own lines above the first CHILD line, plus each CHILD line's own note. The ticket
+  # text pasted below those is DATA the request hands over, and a ticket that happens to name a branch must never refuse
+  # the dispatch carrying it (#1790).
+  own=$(/usr/bin/awk '/^CHILD/ { exit } { print }' "$1" 2>/dev/null)
+  cl=$(/usr/bin/grep -E '^CHILD' "$1" 2>/dev/null) || true
+  scan=$(printf '%s\n%s\n' "$own" "$cl")
+  for t in $(printf '%s\n' "$scan" | /usr/bin/grep -oE '(^|[^A-Za-z0-9_./-])[A-Za-z][A-Za-z0-9._-]*/(<N>|[0-9]+)(-[A-Za-z0-9._-]+)?' | sed -E 's#^[^A-Za-z]+##' | sort -u); do
+    case "$t" in *'/<N>'*) exp=$(sg_fork_branch '<N>');; *)
+      num=${t##*/}; num=${num%%-*}; exp=$(sg_fork_branch "$num")
+      # A branch-shaped token whose number this request does not dispatch, and whose family is not the land's, is not a
+      # name for its issue: a path, a run folder, another issue's ref. A `gui/1` under a gui/%n land is checked either way.
+      [ "${t%%/*}" = "$pref" ] || printf '%s\n' "$cl" | /usr/bin/grep -qE "(^|[^0-9])$num([^0-9]|\$)" || continue;; esac
+    [ "$t" = "$exp" ] || { echo "is fork-only and names $t, but the branch a fork-only child commits on has ONE source: SG_FORK_BRANCH=$pat, so forkclose.sh resolves $exp. A commit on $t reaches no close pass (#1831)."; return; }
+  done
+}
 # Fork-only (#1411, the rule of forkonly.sh): the builders write a `FORK-ONLY: all` line when every child is fork-only; a hand-written body
 # with no CHILD blocks is fork-only when it carries the "Fork-only work" line. A fork-only request gets the fork DONE CHECK and checklist:
 # nothing in it names a PR, a push or prepush.sh.
 fork=0; if grep -qE '^FORK-ONLY: all' "$2"; then fork=1; elif ! grep -qE '^CHILD' "$2" && grep -q 'Fork-only work' "$2"; then fork=1; fi
 if [ $fork = 1 ]; then
-  mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence, each as \"cd <fork worktree> && <command>\" (the gate runs in the fork worktree you committed in). Use the targeted commands (the touched test files, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in your result notes, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for your result notes, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist-fork.txt"; } > "$out"; echo "$out"; exit 0
+  rea=$(fork_landing_refusal "$2"); [ -z "$rea" ] || { echo "refusing: request $1 $rea" >&2; exit 1; }
+  mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence, each as \"cd <fork worktree> && <command>\" (the gate runs in the fork worktree you committed in). Use the targeted commands (the touched test files, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in your result notes, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for your result notes, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; ck=$(cat "$here/req-checklist-fork.txt"); ck=${ck//gui\/<N>/$(sg_fork_branch '<N>')}; echo "$ck"; } > "$out"; echo "$out"; exit 0
 fi
 mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a PR branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in the PR body, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for the PR body, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; echo "$out"
