@@ -6,10 +6,12 @@
 # SG_STATE and HOME. mkreq.sh and launch.py only count their calls, so no request is written and no run is launched.
 # usage: bash test-autofrontier-one-run.sh [path/to/autofrontier.sh]
 src=${1:-$(dirname "$0")/autofrontier.sh}; T=$(mktemp -d); fail=0
+repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/grep
 if [ ! -f "$src" ]; then echo "FAIL three startable issues open one run: $src not found"; rm -rf "$T"; exit 1; fi
 for v in $(compgen -e | $G '^SG_'); do unset "$v"; done   # the live loop exports its own SG_*; a leaked one would walk past a stub
+export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed
 mkdir -p "$T/bin" "$T/scripts"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash

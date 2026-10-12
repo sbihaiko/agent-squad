@@ -22,13 +22,13 @@ rm -rf "$T"
 # added go back out with it -- and the revert commit's body has to say WHY (a red gate, not a wrong change), because the two are
 # indistinguishable from the tree alone.
 T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
+cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $(dirname "$src")/ghread.py $(dirname "$src")/ghthrottle.py "$T/s/"
 printf '#!/bin/bash\necho "FAILED tests/test_spec.py::test_spec - boom"; exit 1\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
 g checkout -q -b gui/1 local/next; mkdir -p "$T/fork/tests"; printf 'orig\n' > "$T/fork/one.py"; printf 'spec\n' > "$T/fork/tests/test_spec.py"; g add .; g commit -q -m "work 1"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-printf '#!/bin/bash\ncase "$*" in *"issues/"*" -q .state"*) echo open;; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in *"issues/"*" -q .state"*) echo open;; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"   # the aggregate reads (#5): the list is one GraphQL request the stub answers empty, so each candidate falls back to its own read
 out=$(bash "$T/s/forkclose.sh" 2>&1)
 [ ! -e "$T/fork/one.py" ] && [ ! -e "$T/fork/tests/test_spec.py" ] && ok "#16: the revert of the merge took the spec it added back out with it" || ko "#16: the red work is still in the base: one.py $( [ -e "$T/fork/one.py" ] && echo present || echo gone), tests/test_spec.py $( [ -e "$T/fork/tests/test_spec.py" ] && echo present || echo gone)"
 g log -1 --format=%B HEAD | grep -qi 'red\|fail' && ok "#16: the revert commit's body says why the merge is being undone (a red gate, not a wrong change)" || ko "#16: the revert body names no reason: '$(g log -1 --format=%B HEAD | head -2 | tr '\n' '|')'"
@@ -38,7 +38,7 @@ rm -rf "$T"
 # would leave the first one's work standing, so the set is reverted by ONE sequencer run; the spec a later commit rewrote cannot go
 # back (it is not that merge's any more), so it stays in the base as quarantined, with the reason in the log.
 T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
+cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $(dirname "$src")/ghread.py $(dirname "$src")/ghthrottle.py "$T/s/"
 printf '#!/bin/bash\ncd %s/fork 2>/dev/null || exit 1\n[ -e fix.py ] && { echo "FAILED tests/test_spec.py::test_spec - boom"; exit 1; }\nexit 0\n' "$T" > "$T/s/test.sh"; chmod +x "$T/s/test.sh"   # green on the base, red once the branch's tip is merged
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
@@ -47,7 +47,7 @@ g merge -q --no-ff -m "Merge gui/1 (Refs #1)" gui/1   # the first merge of the b
 printf 'spec\nrewritten by a sibling\n' > "$T/fork/tests/test_spec.py"; g commit -qam "a sibling rewrites the spec that merge brought"
 g checkout -q gui/1; echo fix > "$T/fork/fix.py"; g add .; g commit -q -m "fix 1"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-printf '#!/bin/bash\ncase "$*" in *"issues/"*" -q .state"*) echo open;; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in *"issues/"*" -q .state"*) echo open;; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"   # the aggregate reads (#5): the list is one GraphQL request the stub answers empty, so each candidate falls back to its own read
 out=$(bash "$T/s/forkclose.sh" 2>&1)
 [ ! -e "$T/fork/one.py" ] && [ ! -e "$T/fork/fix.py" ] && ok "#16: both merges of the branch came back out (the first one is not left standing)" || ko "#16: half reverted: one.py $( [ -e "$T/fork/one.py" ] && echo present || echo gone), fix.py $( [ -e "$T/fork/fix.py" ] && echo present || echo gone)"
 [ "$(g log --format=%s | grep -c '^Revert')" = 1 ] && ok "#16: the two interdependent merges were reverted by one sequencer run, so it was both or neither" || ko "#16: reverts in the base: $(g log --format=%s | grep -c '^Revert') -- $(g log --format=%s | tr '\n' '|')"

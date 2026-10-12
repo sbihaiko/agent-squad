@@ -6,6 +6,8 @@
 # and no live run state is read or written.
 # usage: bash test-autofrontier-merged.sh [path/to/autofrontier.sh]
 src=${1:-$(dirname "$0")/autofrontier.sh}; T=$(mktemp -d); fail=0
+repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
+export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/grep
 if [ ! -f "$src" ]; then echo "FAIL issue 1778 with a merged PR is not redispatched: $src not found"; rm -rf "$T"; exit 1; fi

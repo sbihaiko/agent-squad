@@ -60,15 +60,18 @@ for r in open(sys.argv[2]).read().split():
             held += 1
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: busy.add(m.group(1))
-# The children ONE run may take (#33): its envelope, never more than the machine-wide child ceiling less what the live runs
-# already hold. "-" when neither names a bound, and then the free run slots bound the picks, as they did before.
-limits = [x for x in (env, max(ceil.caps["children"] - held, 0)) if x is not None]
+# The children ONE run may take (#33): its envelope, and the child ceiling the run block of the graph names, both less the
+# children the live runs already hold -- and (#21) never more than the machine-wide ceiling caps.children, which is the one
+# resolution the engine enforces. "-" when nothing names a bound, and then the free run slots bound the picks, as before.
+run = doc.get("run") if isinstance(doc, dict) else None
+gmc = run.get("max_children") if isinstance(run, dict) else None
+limits = [x for x in (env, (gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
 print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-", min(limits) if limits else "-")
 PY
 )
 [ -n "${free:-}" ] || { echo "autofrontier: no free-slot count; see the squad.caps line above" >&2; exit 1; }
 [ "$free" -gt 0 ] || exit 0
-cap=$free; case "${room:--}" in -) ;; *) cap=$room;; esac   # the children this run may take: its envelope when it has one, else the free run slots
+cap=$free; case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac   # the children this run may take: the free run slots, and never more than the room the envelope and the child ceilings leave (the tighter of the two bounds wins, never the room alone)
 [ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 # A MERGED PR that names the issue already delivered it (#1808), and janitor.py reports FIXED-NOT-CLOSED without closing:

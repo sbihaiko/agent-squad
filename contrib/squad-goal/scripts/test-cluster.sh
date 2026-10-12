@@ -49,12 +49,12 @@ case "$r" in *"2 child(ren): [1500 1501] [1502]"*) ok "frontier: an unrelated fo
 # The machine-wide ceiling (#21): a project that lowers caps.runs to 1 dispatches one child; a ceiling filled by another
 # repository's live runs dispatches none and fails nothing; a project that raises the pair stops the pass by name.
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
-r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"as 1 child(ren): [1500] (1 free slots)"*) ok "caps: a project lowering caps.runs to 1 dispatches one run";; *) ko "caps.runs 1: '$r'";; esac
+r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"as 1 child(ren): [1500] (1 free slots, room for"*) ok "caps: a project lowering caps.runs to 1 dispatches one run";; *) ko "caps.runs 1: '$r'";; esac
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"; sleep 300 & held=$!
 (cd "$SG_SQUAD" && python3 -c 'import sys; from squad import caps; c = caps.ceiling(); [c.try_take("runs", f"other-repo-{i}", pid=int(sys.argv[1])) for i in range(2)]' "$held")
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; [ $rc -eq 0 ] && [ -z "$r" ] && ok "caps: a ceiling full of another repository's runs dispatches nothing and fails nothing" || ko "caps full: rc=$rc '$r'"
 kill "$held"; wait "$held" 2>/dev/null
-r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"(2 free slots)"*) ok "caps: the leases of a dead holder are reclaimed in one pass";; *) ko "caps reclaim: '$r'";; esac
+r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"(2 free slots, room for"*) ok "caps: the leases of a dead holder are reclaimed in one pass";; *) ko "caps reclaim: '$r'";; esac
 printf 'caps:\n  runs: 11\n' > "$T/co/docs/squad/defaults.yaml"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; case "$rc:$r" in 1:*"caps.runs"*"may only lower"*) ok "caps: a project raising caps.runs stops the pass by name";; *) ko "caps raise: rc=$rc '$r'";; esac
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"

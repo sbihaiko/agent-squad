@@ -356,7 +356,7 @@ def _sandbox(tmp_path: Path, issues: list[int], closed: tuple[int, ...] = ()):
     t = tmp_path / "t"
     for d in ("s", "st/auto", "bin", "co/runs/.hub", "fork"):
         (t / d).mkdir(parents=True, exist_ok=True)
-    for name in ("forkclose.sh", "forkonly.sh", "ghread.py"):
+    for name in ("forkclose.sh", "forkonly.sh", "ghread.py", "ghthrottle.py"):   # the landing reads through the throttle (#4/#5): the readers both sit beside the script under test
         shutil.copy(SCRIPTS / name, t / "s" / name)
     (t / "s" / "env.sh").write_text(
         f'export SG_STATE={t}/st SG_FORK_DIR={t}/fork SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%n\n'

@@ -47,6 +47,7 @@ rm -rf "$T"
 T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"
 export HOME="$T/home"; mkdir -p "$HOME"
 cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"
+cp "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the landing reads through the throttle (#5): the readers must sit beside the script under test
 printf 'echo shell >> %s/shell.log; exit 0\n' "$T" > "$T/s/shell-suites.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log"\nexport SG_FORK_PY_CMD="echo py >> %s/py.log"\n' "$T/st" "$T/fork" "$T/co" "$T" "$T" > "$T/s/env.sh"
@@ -58,7 +59,7 @@ g revert -m 1 --no-edit "$rv" >/dev/null   # the base lost tests/test_spec.py to
 touch "$T/st/auto/basetest-$(g rev-parse --short=9 local/next)"   # a base recorded green there: the base test answers from the base's OWN diff since it
 printf 'base\n' > "$T/fork/contrib/squad-goal/g"; g add .; g commit -q -m "a base-only squad-goal change"   # so the base's own answer is shell, not full
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-printf '#!/bin/bash\ncase "$*" in\n  *"issues/"*" -q .state"*) echo open;;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in\n  *"issues/"*" -q .state"*) echo open;;\n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"   # the aggregate reads (#5): the list answers empty, so each candidate falls back to its own read
 out=$(FC_NOBATCH=1 bash "$T/s/forkclose.sh" 2>&1)
 case "$out" in *"full by the landing rule"*) ok "#15: the landing gate answers from the landing's own change, not from the branch's fork point";; *) ko "#15: no landing-rule line in: $out";; esac
 case "$out" in *"the branch's fork-point diff answered shell"*) ok "#15: the log line names which rule answered, and here the two disagree";; *) ko "#15: the rule that answered is not named: $out";; esac
