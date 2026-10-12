@@ -406,13 +406,20 @@ def _sandbox(tmp_path: Path, issues: list[int], closed: tuple[int, ...] = ()):
     gh = t / "bin" / "gh"
     gh.write_text(
         "#!/bin/bash\n"
-        f"printf '%s\\n' \"$*\" >> {t}/gh-calls\n"
+        "# One marker per request: what the pass asked for, not the query text it asked with. A request is one line\n"
+        "# even when the query it carries spans thirty, which is what makes the count below the beat's own count.\n"
+        f'case "$*" in\n'
+        f'  *graphql*) case "$*" in *pullRequests*) k=pulls-fact ;; *) k=issues-fact ;; esac ;;\n'
+        f'  *"issues/"*) k="issue-$(printf %s "$*" | sed -n \'s#.*/issues/\\([0-9]*\\).*#\\1#p\')" ;;\n'
+        f'  *) k=other ;;\n'
+        f"esac\n"
+        f"printf '%s\\n' \"$k\" >> {t}/gh-calls\n"
         'if [[ "$*" == *graphql* ]]; then\n'
         f'  if [[ "$*" == *pullRequests* ]]; then cat {t}/fact-prs.json; else cat {t}/fact-issues.json; fi\n'
         "  exit 0\n"
         "fi\n"
         'if [[ "$*" == *issues/* ]]; then\n'
-        '  n=${*##*/}\n'
+        '  n=${k#issue-}\n'
         f'  grep -qx "$n" {t}/closed && echo \'{{"state":"closed"}}\' && exit 0\n'
         "  echo '{\"state\":\"open\"}'\n"
         "  exit 0\n"
@@ -449,9 +456,10 @@ def test_the_landing_pass_collection_spends_one_request_per_fact(tmp_path):
     t = _sandbox(tmp_path, [1, 2, 3, 4])
     p, collected, calls = _collect(t)
     assert collected == ["1", "2", "3", "4"], f"the collection still finds every eligible branch: {p.stdout}{p.stderr}"
-    assert len(calls) <= 3, f"the beat is bounded and small, not one request per candidate: {calls}"
-    assert sum(1 for c in calls if "graphql" in c) == 2, f"one request for the open PRs and one for the open issues: {calls}"
-    assert not [c for c in calls if "issues/" in c], f"no per-item read is left in the collection: {calls}"
+    assert calls.count("pulls-fact") == 1, f"the open PRs are one request: {calls}"
+    assert calls.count("issues-fact") == 1, f"the open issues are one request: {calls}"
+    assert not [c for c in calls if c.startswith("issue-")], f"no per-item read is left in the collection: {calls}"
+    assert len(calls) == 2, f"the beat is bounded and small: two requests, whatever the candidate count: {calls}"
 
 
 def test_the_collection_does_not_follow_the_number_of_candidates(tmp_path):
