@@ -454,8 +454,7 @@ def test_escape_restores_the_split(hub):
 # The strip answered "is this machine saturated?". These pin the facts that answer the other half — whether the squad is
 # working or merely looks busy — and nothing else: the order they are read in, the `?` for a source that went unreadable,
 # `ok` for an empty health pass, the pair #1795 writes for the drift, the caps the graph carries, the quota markers the
-# review chain skips models over, the amber past the quarter hour, the drop on a window too narrow for the row, and the
-# one token per subscription (#1839) the line carries last — the acronym, the quota and the time to its reset.
+# review chain skips models over, the amber past the quarter hour, and the drop on a window too narrow for the row.
 
 NOW = 1_000_000.0
 CAPS = {"max_parallel": 10, "max_children": 20}
@@ -473,13 +472,13 @@ def _facts(hub, src=None, caps=CAPS):
     return [i["text"] for i in hub.foot_items(src or _src(), caps, NOW)]
 
 
-def test_the_six_facts_follow_the_load_cells_in_this_order(hub):
+def test_the_five_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names, read as a clock time
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
-    assert [i["key"] for i in items] == ["health", "progress", "occ", "drift", "quota", "subs"]
+    assert [i["key"] for i in items] == ["health", "progress", "occ", "drift", "quota"]
     assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · drift 0 · "
-                                    "codex ok · agy reset 14:20 · CL ? · GK ? · GPT ? · GEM ?")
-    assert [i["bad"] for i in items] == [False] * 6
+                                    "codex ok · agy reset 14:20")
+    assert [i["bad"] for i in items] == [False] * 5
 
 
 def test_health_names_the_most_recent_still_armed_cause_with_its_age(hub):
@@ -536,11 +535,10 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
     line = hub.foot_line(hub.foot_items(_src(progress=None), CAPS, NOW))
-    assert line == ("health ok · last progress ? · 4/10 runs 7/20 agents · drift 0 · codex ok · agy ok · "
-                    "CL ? · GK ? · GPT ? · GEM ?")
+    assert line == "health ok · last progress ? · 4/10 runs 7/20 agents · drift 0 · codex ok · agy ok"
     assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None, "drift": None,
                                         "quota": {"codex": "?", "agy": None}}, None, NOW)) \
-        == "health ? · last progress ? · ? · drift ? · codex ? · agy ok · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · ? · drift ? · codex ? · agy ok"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
@@ -561,7 +559,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     assert "health: watch-stalled 9m" in facts and "drift 3" in facts and "agy reset " in facts
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
-        == "health ? · last progress ? · ? · drift ? · codex ok · agy ok · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · ? · drift ? · codex ok · agy ok"
 
 
 def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub, monkeypatch):
@@ -572,7 +570,7 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
                            "facts": hub.foot_items(_src(), CAPS, NOW)})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
-    assert p["facts"][0]["text"] == "health ok" and len(p["facts"]) == 6
+    assert p["facts"][0]["text"] == "health ok" and len(p["facts"]) == 5
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):

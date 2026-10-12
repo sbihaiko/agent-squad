@@ -495,15 +495,10 @@ def load_tick(sample=None):
 #   the age of the oldest card in a column    -> the column header (`Testing (3) · 2h`), one number per column
 #   fork-ahead / branches waiting / last      -> a fourth left-pane accordion; `fork-parked` already reaches the footer
 #   base-test duration                           through `health`
-# One fact earned the line after that list was drawn, and it earns it by (b) alone (subscriptions, #1839): one token per
-# subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
-# SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
-# looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
-# Every value comes from a source this hub already refreshes — no new polling and no new query. The subscription tokens
-# cost none either: they read `quota_row()`, the cached probe the subscriptions panel already renders, inside the pass
-# this sampler already makes. A value the hub cannot verify is `?`, never a stale or invented number, and a fact that
-# goes unreadable takes its own `?` with it while the rest of the line stands. The line is one row: on a window too
-# narrow for it, the trailing facts drop (6 -> 5 -> 4 -> 3) — nothing wraps, and no number is ever cut into a different one.
+# Every value comes from a source this hub already refreshes — no new polling and no new query. A value the hub cannot
+# verify is `?`, never a stale or invented number, and a fact that goes unreadable takes its own `?` with it while the
+# rest of the line stands. The line is one row: on a window too narrow for it, the trailing facts drop (5 -> 4 -> 3) —
+# nothing wraps, and no number is ever cut into a different one.
 FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
 FOOT_SEP = " · "
 
@@ -565,39 +560,8 @@ def _quota_fact(q, now):
         else: out.append(name + " ok")
     return FOOT_SEP.join(out)
 
-def _subs_pct(p):
-    """A quota percentage as the cost panel paints it (`fpct`): one decimal under 10, whole numbers from there up."""
-    return f"{p:.1f}%" if 0 < p < 10 else f"{int(p + 0.5)}%"
-
-def _subs_reset(resets, now):
-    """The time to a reset in the page's own `rel()` shape (`3h 20m`), without its `resets in` lead — the token already
-    says what the number is. A time the hub cannot read is `?`; one already past reads `now`, as the page reads it."""
-    if isinstance(resets, bool) or not isinstance(resets, (int, float)): return "?"
-    x = resets - now
-    if x <= 0: return "now"
-    d, h, m = int(x // 86400), int(x % 86400 // 3600), int(x % 3600 // 60)
-    return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
-
-def _subs_fact(subs, now):
-    """One token per subscription in SUBS' own order — `CL 42% 3h 20m`: its acronym (#1839's one map), the quota and the
-    time to the reset. The quota and the reset are `quota_row()`'s first window, the probe the cost panel already shows.
-    A probe that did not answer (or names no window) falls back to the percentage the owner typed by hand and reads `?`
-    for the reset; a subscription with neither reads `?` alone. A number this hub cannot verify is never invented."""
-    out = []
-    for k in SUBS:
-        a, s = SUB_ACR.get(k) or k.upper(), (subs or {}).get(k) or {}
-        w = ((s.get("probe") or {}).get("windows") or [None])[0]
-        pct = w.get("pct") if isinstance(w, dict) else None
-        hand = s.get("quota")
-        if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-            out.append(f"{a} {_subs_pct(pct)} {_subs_reset(w.get('resets'), now)}")
-        elif isinstance(hand, (int, float)) and not isinstance(hand, bool):
-            out.append(f"{a} {_subs_pct(hand)} ?")
-        else: out.append(f"{a} ?")
-    return FOOT_SEP.join(out)
-
 def foot_items(src, caps=None, now=None):
-    """The six facts, in the order the line reads them, each carrying whether its value is the bad one: `bad` is what
+    """The five facts, in the order the line reads them, each carrying whether its value is the bad one: `bad` is what
     the page paints amber, and only `last progress` has one (a stall between the loop's own two thresholds)."""
     now = time.time() if now is None else now
     src = src or {}
@@ -607,8 +571,7 @@ def foot_items(src, caps=None, now=None):
              "bad": isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS},
             {"key": "occ", "text": _occ_fact(src.get("occ"), caps), "bad": False},
             {"key": "drift", "text": _drift_fact(src.get("drift")), "bad": False},
-            {"key": "quota", "text": _quota_fact(src.get("quota"), now), "bad": False},
-            {"key": "subs", "text": _subs_fact(src.get("subs"), now), "bad": False}]   # last, so a narrow window drops the block whole
+            {"key": "quota", "text": _quota_fact(src.get("quota"), now), "bad": False}]
 
 def foot_line(items):
     """The facts as the line reads them, one `·` between each: the page appends this after the three load cells."""
@@ -663,8 +626,6 @@ def foot_sources(now=None):
         out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
-    plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
-    out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     stamps = [_newest_mtime(STATE / "cycle.log", STATE / "auto", STATE / "board-dirty")]
     for r in list(LOAD_RUNS):   # the live runs' own records: what the loop's children wrote as they moved
         stamps.append(_newest_mtime(pathlib.Path(r.get("dir") or "") / "record.jsonl"))
@@ -1889,7 +1850,6 @@ PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (
 
 PLANS = pathlib.Path(__file__).resolve().parent / "plans.json"
 SUBS = ("claude", "grok", "gpt", "gemini")
-SUB_ACR = dict(zip(SUBS, ("CL", "GK", "GPT", "GEM")))   # the footer's token for each subscription (#1839): 2-3 letters, spelled here and nowhere else
 def provider(m):
     m = m or ""
     if re.search(r"grok", m): return "grok"
