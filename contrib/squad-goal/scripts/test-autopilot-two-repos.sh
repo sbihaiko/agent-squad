@@ -1,5 +1,6 @@
 #!/bin/bash
-# Regression for the loop reading ONE repository (#1820): the squad works in two -- the emulator ($SG_REPO) and its
+# A pass reads the profile's repository, or the one repository named as its argument (#20 retired the second, tooling,
+# repository a profile could name). Formerly: regression for the loop reading ONE repository (#1820): the squad works in two -- the emulator ($SG_REPO) and its
 # own tooling (SG_TOOLING_REPO) -- and the autopilot listed only the first, so a pull request in the tooling
 # repository was something a human merged by hand. One pass must now read the open PRs of BOTH, act on a tooling PR
 # through the same machinery (here: launch revci.sh for a head with no review, with the repository it belongs to in
@@ -37,23 +38,19 @@ pr() { printf '[{"number":%s,"head":{"sha":"%s"},"ref":"%s","title":"t","body":"
 run() { bash "$S/s/autopilot.sh" "$@" 2>/dev/null; }
 wait_launched() { for i in $(seq 1 20); do [ "$($G -c '^revci.sh' "$LAUNCHED" 2>/dev/null)" -ge "$1" ] && break; sleep 0.3; done; }
 
-# --- one pass, no argument: both repositories are read and both PRs are acted on
+# --- one pass, no argument: the profile's repository alone is read, even with the retired SG_TOOLING_REPO left in the
+# environment (#20: a repository is worked through its own profile, never as a second repository of another's loop)
 export EMU_JSON="$(pr 1512 aaaaaaaaaaaa gui/1512 1512)" TOOL_JSON="$(pr 1821 bbbbbbbbbbbb gui/1821 1809)"
-r=$(run); wait_launched 2
-$G -q 'repos/x/emu/pulls?state=open' "$GHLOG" && $G -q 'repos/x/tool/pulls?state=open' "$GHLOG" \
-  && ok "one pass reads the open PRs of both repositories" || ko "the pass did not read both repositories: $($G 'pulls?state=open' "$GHLOG" | tr '\n' ' ')"
+r=$(run); wait_launched 1
+$G -q 'repos/x/emu/pulls?state=open' "$GHLOG" && ok "one pass reads the open PRs of the profile's repository" || ko "the pass did not read x/emu: $($G 'pulls?state=open' "$GHLOG" | tr '\n' ' ')"
+$G -q 'repos/x/tool/pulls?state=open' "$GHLOG" && ko "the pass read the retired tooling repository" || ok "the retired SG_TOOLING_REPO is never read"
 $G -q '^revci.sh x/emu 1512 1512$' "$LAUNCHED" && ok "the emulator PR is reviewed by the loop's own chain, in its repository" || ko "no review of the emulator PR: $(cat "$LAUNCHED")"
-$G -q '^revci.sh x/tool 1821 1809$' "$LAUNCHED" && ok "the tooling PR is reviewed by the same machinery, in its own repository" || ko "no review of the tooling PR: $(cat "$LAUNCHED")"
-case "$r" in *"NOREFS #1821"*) ko "a tooling PR saying Refs #1809 was still treated as having no issue";; *) ok "the tooling PR's own Refs #1809 maps it to an issue";; esac
-# the fix machinery too: autofix answers the PR's question in the PR's own repository (it reads $SG_REPO, which this
-# pass exports for the iteration), so a tooling PR is fixed there and not against the emulator.
-$G -q '^autofix.sh x/tool --dupissue 1809$' "$LAUNCHED" && ok "the tooling PR's fix machinery works in its repository" || ko "autofix did not answer for the tooling PR: $(cat "$LAUNCHED")"
 $G -q '^autofix.sh x/emu --dupissue 1512$' "$LAUNCHED" && ok "the emulator PR's fix machinery works in its repository" || ko "autofix did not answer for the emulator PR: $(cat "$LAUNCHED")"
-case "$r" in *"AUTOREVIEW #1821 @ bbbbbbbbb"*) ok "the tooling PR is announced as reviewed by this pass";; *) ko "the pass did not announce the tooling review: '$r'";; esac
 
 # --- a named repository is the only one that pass reads
 : > "$GHLOG"; r=$(run x/tool)
 $G -q 'repos/x/tool/pulls?state=open' "$GHLOG" && ok "a named repository is read" || ko "the named repository was not read"
+wait_launched 2; $G -q '^revci.sh x/tool 1821 1809$' "$LAUNCHED" && ok "a named repository's PR is reviewed in that repository, with its own Refs" || ko "no review of the named repository's PR: $(cat "$LAUNCHED")"
 $G -q 'repos/x/emu/pulls?state=open' "$GHLOG" && ko "the pass read the other repository too" || ok "the pass read no other repository"
 
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'

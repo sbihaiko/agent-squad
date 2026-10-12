@@ -82,12 +82,6 @@ def _state(tmp_path, script):
     }
 
 
-def _env(tmp_path, script):
-    """The caller's environment minus every SG_*, plus the test's own: a session started by autobug.sh exports
-    SG_SINGLE_AUTOBUG, which skips the single.sh wrap and lets two overlapping passes both dispatch."""
-    return {**{k: v for k, v in os.environ.items() if not k.startswith("SG_")}, **_state(tmp_path, script)}
-
-
 def _pass(d, env, tmp_path, label):
     return subprocess.Popen(["bash", str(d / label)], env=env, cwd=tmp_path,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -100,7 +94,7 @@ def _bodies(tmp_path):
 def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
     """The second pass starts inside the first one's pick: it must see the claim and dispatch nothing."""
     d, _ = _scripts(tmp_path, cluster_sleep=3)
-    env = _env(tmp_path, "autobug.sh")
+    env = {**os.environ, **_state(tmp_path, "autobug.sh")}
     (tmp_path / "home").mkdir()
     first = _pass(d, env, tmp_path, "autobug.sh")
     time.sleep(1.2)                                      # the first pass is inside its pick (cluster.py sleeps 3 s)
@@ -116,7 +110,7 @@ def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
 def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
     """A crash between the pick and the launch must still leave the issue claimed (#1514)."""
     d, _ = _scripts(tmp_path, cluster_sleep=0)
-    env = _env(tmp_path, "autobug.sh")
+    env = {**os.environ, **_state(tmp_path, "autobug.sh")}
     (tmp_path / "home").mkdir()
     out = _pass(d, env, tmp_path, "autobug.sh").communicate(timeout=90)[0]
     assert "AUTOBUG dispatched" in out, out
@@ -130,7 +124,7 @@ def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
 def test_autofrontier_claims_the_issue_before_it_builds_the_request(tmp_path):
     """The same claim-before-build rule holds for the frontier dispatcher (#1514)."""
     d, _ = _scripts(tmp_path, cluster_sleep=0)
-    env = _env(tmp_path, "autofrontier.sh")
+    env = {**os.environ, **_state(tmp_path, "autofrontier.sh")}
     (tmp_path / "home").mkdir()
     out = _pass(d, env, tmp_path, "autofrontier.sh").communicate(timeout=90)[0]
     assert "FRONTIER dispatched" in out, out

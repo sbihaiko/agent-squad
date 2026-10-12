@@ -8,23 +8,23 @@ def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment, else from env.sh (the profile matched from the cwd's
-    origin). SG_TOOLING_REPO is the optional second repository the board reads, empty when the profile names none."""
-    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_TOOLING_REPO"]
+    origin). One profile is one repository: the retired SG_TOOLING_REPO is never read (#20)."""
+    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT"]
     if all(os.environ.get(k) for k in keys[:4]): return {k: os.environ.get(k, "") for k in keys}
     here = pathlib.Path(__file__).resolve().parent
-    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT" "$SG_TOOLING_REPO"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
+    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
     return {k: os.environ.get(k) or (out[i] if i < len(out) else "") for i, k in enumerate(keys)}
 PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], PROF["SG_PROJECT"]
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE or run from a checkout a profile matches)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
-    repository the profile names after it (SG_TOOLING_REPO, the squad's own tooling repository) (#1820)."""
+    repository given after it, deduplicated in order (#1820). A profile gives none: one profile is one repository (#20)."""
     out = []
     for r in (primary,) + tuple(others):
         r = (r or "").strip()
         if r and r not in out: out.append(r)
     return out
-REPOS = repos_from(REPO, PROF.get("SG_TOOLING_REPO"))
+REPOS = repos_from(REPO)
 def repo_tag(repo, repos=None):
     """The short tag a card wears for its repository: the name after the owner when that name stands for exactly one
     repository the board reads, else the full owner/name -- the tag that does not fit (#1820)."""

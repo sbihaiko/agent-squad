@@ -32,6 +32,9 @@ def hub():
     spec = importlib.util.spec_from_file_location("hub_prs_two_repos", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # the board reads the profile's repository alone (#20); the column machinery below is still proven over two
+    # repositories, handed to it directly, so the list read at import is kept aside for the one test that checks it
+    mod.read_at_import, mod.REPOS = list(mod.REPOS), [EMU, TOOL]
     yield mod
     for k, v in before.items():
         if v is None:
@@ -84,8 +87,8 @@ def reads(hub):
 
 # --- the repositories the hub reads, named in one place -----------------------------------------------------------
 
-def test_the_board_reads_the_repo_the_profile_names_and_the_tooling_repo(hub):
-    assert hub.REPOS == [EMU, TOOL], "the column reads both the profile's repository and the tooling one"
+def test_the_board_reads_the_repo_the_profile_names_and_never_the_retired_tooling_repo(hub):
+    assert hub.read_at_import == [EMU], "the board reads the profile's repository alone; SG_TOOLING_REPO is retired (#20)"
 
 
 def test_a_tag_that_names_one_repository_is_the_short_name(hub):
