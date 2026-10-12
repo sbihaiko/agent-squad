@@ -93,7 +93,7 @@ def _css(hub):
 def _rule(hub, selector):
     """The declarations of one CSS rule, read off the page the hub serves."""
     m = re.search(re.escape(selector) + r"\{([^}]*)\}", _css(hub))
-    assert m, "rule %s is missing from the docked board's CSS" % selector
+    assert m, f"rule {selector} is missing from the docked board's CSS"
     return m.group(1)
 
 
@@ -333,7 +333,8 @@ def test_the_rows_divide_the_strip_equally_and_fill_the_board_s_height(hub):
     gap = _px(bar, "gap")
     vert = 2 * int(re.search(r"padding:(\d+)px", bar).group(1))     # padding:8px 10px, top and bottom
     board = 340                                                    # a docked board's height
-    row = lambda n: (board - vert - gap * (n - 1)) / n
+    def row(n):
+        return (board - vert - gap * (n - 1)) / n
     for n in (2, 8):
         assert row(n) * n + gap * (n - 1) + vert == board, f"{n} rows leave a gap at the bottom"
     assert row(2) == pytest.approx(board / 2 - 8 - gap / 2), "two rows are half the strip each"
@@ -351,7 +352,7 @@ def test_the_strip_is_still_the_last_child_of_the_docked_board_row(hub):
 
 def test_the_strip_width_is_pinned_in_both_directions_and_never_scrolls(hub):
     bar, chip = _rule(hub, ".hidbar"), _rule(hub, ".hidbar .chip")
-    assert ("min-width:%dpx" % STRIP_W) in bar and ("max-width:%dpx" % STRIP_W) in bar, \
+    assert f"min-width:{STRIP_W}px" in bar and f"max-width:{STRIP_W}px" in bar, \
         "the width is not pinned in both directions"
     assert "*{box-sizing:border-box}" in _css(hub), "the pinned width is measured against a content box"
     assert "overflow:hidden" in bar, "a long name can widen the strip"
@@ -407,7 +408,7 @@ HID_COL = {
 
 def _hid_rule(hub, name):
     """The colour a category's rule paints its number with, resolved through the page's own tokens."""
-    decls = _rule(hub, '.hidbar .chip[data-col="%s"] b' % name)
+    decls = _rule(hub, f'.hidbar .chip[data-col="{name}"] b')
     tokens = dict(re.findall(r"--([a-z-]+):(#[0-9a-f]{6})", re.search(r":root\{[^}]*\}", _css(hub)).group(0)))
     m = re.fullmatch(r"color:(var\(--([a-z-]+)\)|#[0-9a-f]{6})", decls)
     assert m, f"the rule for {name} does not decide the number's colour in one word: {decls!r}"

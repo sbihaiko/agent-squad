@@ -40,17 +40,27 @@ def _fake_gh(calls, fail=False):
     """The gh CLI as the pass uses it: each call is recorded, and the answer is canned per endpoint."""
     def run(cmd, **kw):
         calls.append(cmd)
-        if fail: raise FileNotFoundError("gh is not on PATH")
+        if fail:
+            raise FileNotFoundError("gh is not on PATH")
         s = " ".join(cmd)
-        if "/fields?" in s: out = "PVTSSF_status\n"                                    # status_field()
-        elif "projectsV2" in s and "/items" in s: out = json.dumps({"n": 11, "t": "a card", "s": "OPEN", "c": None, "st": "Todo", "l": []}) + "\n"
-        elif "pulls?state=closed" in s: out = ""
-        elif "search/issues" in s: out = "0\n"
-        elif "issues?state=open" in s: out = ""
-        elif "blockedBy" in s: out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
-        elif "pullRequests(first:100" in s: out = PRS_PAYLOAD                        # the open-PR query
-        elif "/labels?" in s: out = ""
-        else: out = ""
+        if "/fields?" in s:
+            out = "PVTSSF_status\n"                                # status_field()
+        elif "projectsV2" in s and "/items" in s:
+            out = json.dumps({"n": 11, "t": "a card", "s": "OPEN", "c": None, "st": "Todo", "l": []}) + "\n"
+        elif "pulls?state=closed" in s:
+            out = ""
+        elif "search/issues" in s:
+            out = "0\n"
+        elif "issues?state=open" in s:
+            out = ""
+        elif "blockedBy" in s:
+            out = json.dumps({"data": {"repository": {"issues": {"nodes": []}}}})
+        elif "pullRequests(first:100" in s:
+            out = PRS_PAYLOAD                                      # the open-PR query
+        elif "/labels?" in s:
+            out = ""
+        else:
+            out = ""
         return subprocess.CompletedProcess(cmd, 0, out, "")
     return run
 

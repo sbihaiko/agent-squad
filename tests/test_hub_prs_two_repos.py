@@ -34,8 +34,10 @@ def hub():
     spec.loader.exec_module(mod)
     yield mod
     for k, v in before.items():
-        if v is None: os.environ.pop(k, None)
-        else: os.environ[k] = v
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
 
 
 # --- the fixture/stub seam: the GraphQL payload the hub already parses, one node per PR ---------------------------
@@ -63,16 +65,19 @@ def reads(hub):
 
         def fetch_open(self, repo):
             self.seen.append(repo)
-            if repo in self.boom: raise RuntimeError(f"{repo} is unreachable")
+            if repo in self.boom:
+                raise RuntimeError(f"{repo} is unreachable")
             return hub.prs_from_graphql(_payload(self.open.get(repo, [])), repo)
 
         def fetch_closed(self, repo):
-            if repo in self.boom: raise RuntimeError(f"{repo} is unreachable")
+            if repo in self.boom:
+                raise RuntimeError(f"{repo} is unreachable")
             return [{"n": n, "t": "a closed PR", "c": "2026-10-11T07:00:00Z", "m": True, "r": repo}
                     for n in self.closed.get(repo, [])]
 
         def fetch_total(self, repo):
-            if repo in self.boom: raise RuntimeError(f"{repo} is unreachable")
+            if repo in self.boom:
+                raise RuntimeError(f"{repo} is unreachable")
             return len(self.closed.get(repo, []))
     return Reads()
 
@@ -197,7 +202,8 @@ def test_the_panel_read_resolves_the_number_in_the_repository_it_was_given(hub, 
 
     def gh_json(path, timeout=30):
         asked.append(path)
-        if path.endswith("/comments?per_page=100"): return []
+        if path.endswith("/comments?per_page=100"):
+            return []
         return {"number": 1809, "title": "t", "state": "open", "html_url": "u", "user": {"login": "x"},
                 "created_at": "2026-10-11T08:00:00Z", "updated_at": "2026-10-11T09:00:00Z", "labels": [], "body": ""}
 

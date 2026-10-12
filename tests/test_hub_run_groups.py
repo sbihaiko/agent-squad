@@ -59,7 +59,7 @@ def test_run_list_group_header_reads_workers_not_open(hub):
 
 
 def _fn(src, name):
-    i = src.index("function %s(" % name)
+    i = src.index(f"function {name}(")
     j = src.index("{", i)
     depth = 0
     for k in range(j, len(src)):
@@ -69,12 +69,12 @@ def _fn(src, name):
             depth -= 1
             if depth == 0:
                 return src[i : k + 1]
-    raise AssertionError("function %s is not closed" % name)
+    raise AssertionError(f"function {name} is not closed")
 
 
 def _decl(src, name):
-    i = src.index("const %s=" % name)
-    depth, k = 0, i + len("const %s=" % name)
+    i = src.index(f"const {name}=")
+    depth, k = 0, i + len(f"const {name}=")
     while k < len(src):
         c = src[k]
         if c in "([{":
@@ -84,7 +84,7 @@ def _decl(src, name):
         elif c == ";" and depth == 0:
             return src[i : k + 1]
         k += 1
-    raise AssertionError("const %s is not closed" % name)
+    raise AssertionError(f"const {name} is not closed")
 
 
 def _slice(src, start, end):
@@ -179,7 +179,7 @@ def _run(js):
 
 
 def _run_row(tag, rank, age, **kw):
-    r = {"id": "run-20261011-1010%s0-%s" % (tag, "abcd"), "rank": rank, "age": age, "spend": 1.0, "agents": 1, "dur": 4, "port": 1234, "state": "running" if rank == 0 else "completed"}
+    r = {"id": f"run-20261011-1010{tag}0-abcd", "rank": rank, "age": age, "spend": 1.0, "agents": 1, "dur": 4, "port": 1234, "state": "running" if rank == 0 else "completed"}
     r.update(kw)
     return r
 
@@ -192,7 +192,7 @@ FRESH = _run_row("4", 0, 2)             # a run that just appeared
 
 
 def _js(rows, body):
-    return "const R=%s;" % json.dumps(rows) + body
+    return f"const R={json.dumps(rows)};" + body
 
 
 def test_a_group_header_click_toggles_it_both_ways():
@@ -218,24 +218,24 @@ def test_two_run_groups_can_stay_open_at_once():
 
 
 def test_a_run_leaving_its_bucket_leaves_the_open_groups_alone():
-    out = _run(_js([LIVE, HOUR_1, HOUR_2], """
+    out = _run(_js([LIVE, HOUR_1, HOUR_2], f"""
       const a = boot(); a.runs(R); a.draw();
       a.click("2h"); const before = a.openGroups();
-      a.runs(%s); a.poll();                       // the 2h run aged out of the bucket
-      return { before, after: a.openGroups(), rows: a.groupRows() };
-    """ % json.dumps([LIVE, HOUR_1, HOUR_2_GONE])))
+      a.runs({json.dumps([LIVE, HOUR_1, HOUR_2_GONE])}); a.poll();   // the 2h run aged out of the bucket
+      return {{ before, after: a.openGroups(), rows: a.groupRows() }};
+    """))
     assert set(out["before"]) == {"running", "2h"}
     assert out["after"] == out["before"], "a bucket change never moves the open groups"
     assert out["rows"]["2h"] == 0, "an open group that emptied stays open and empty"
 
 
 def test_a_run_appearing_does_not_move_the_open_groups():
-    out = _run(_js([LIVE, HOUR_1], """
+    out = _run(_js([LIVE, HOUR_1], f"""
       const a = boot(); a.runs(R); a.draw(); a.poll();
       a.click("1h"); const before = a.openGroups();
-      a.runs(R.concat([%s])); a.poll();           // a new run starts: the list must not re-pick
-      return { before, after: a.openGroups() };
-    """ % json.dumps(FRESH)))
+      a.runs(R.concat([{json.dumps(FRESH)}])); a.poll();   // a new run starts: the list must not re-pick
+      return {{ before, after: a.openGroups() }};
+    """))
     assert set(out["before"]) == {"running", "1h"}
     assert out["after"] == out["before"], "a run appearing never moves the open groups"
 
@@ -306,4 +306,4 @@ def test_no_poll_path_writes_the_open_state():
     }
     for name, body in slices.items():
         for token in ("openGroup", "openAcc", "userPicked", "ls.acc"):
-            assert token not in body, "%s writes %s" % (name, token)
+            assert token not in body, f"{name} writes {token}"
