@@ -198,19 +198,31 @@ def group_of(r):
     h = (r.get("age") or 0) / 3600
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
 
-def loop_caps():
-    """Occupancy denominators from the live workflow graph. max_parallel is run.max_parallel; max_children is run.max_children or a dispatch node's. None when the graph cannot be read."""
-    p = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json"
+def _engine_workflows():
+    """The engine's own workflow resolution (squad/workflows.py), loaded by path so the hub keeps one copy of the order."""
+    path = pathlib.Path(__file__).resolve().parents[3] / "squad" / "workflows.py"
+    spec = importlib.util.spec_from_file_location("sg_engine_workflows", path)
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+def _graph_file(run_dirs):
+    """The graph a run was launched with (the newest live run's graph.json), else the one the engine resolves for the checkout: owner default, owner dynamic, router seed."""
+    mine = [pathlib.Path(d) / "graph.json" for d in run_dirs if (pathlib.Path(d) / "graph.json").is_file()]
+    if mine: return max(mine, key=lambda g: (g.parent / "record.jsonl").stat().st_mtime if (g.parent / "record.jsonl").exists() else g.stat().st_mtime)
+    wf = _engine_workflows()
+    return wf.resolve(None, pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / wf.SUBDIR)
+def loop_caps(run_dirs=None):
+    """Occupancy ceilings from the workflow graph. max_parallel is run.max_parallel; max_children is run.max_children or a dispatch node's; dispatch_max_parallel is that dispatch node's own max_parallel, present only when it sets one. None when the graph cannot be read."""
     try:
-        d = json.loads(p.read_text())
+        d = json.loads(_graph_file([r["dir"] for r in LOAD_RUNS] if run_dirs is None else run_dirs).read_text())
         run = d.get("run") if isinstance(d.get("run"), dict) else {}
-        mp, mc = run.get("max_parallel"), run.get("max_children")
-        if not isinstance(mc, int):
-            for n in d.get("nodes") or []:
-                if isinstance(n, dict) and isinstance(n.get("max_children"), int):
-                    mc = n["max_children"]; break
+        mp, mc, dp = run.get("max_parallel"), run.get("max_children"), None
+        for n in d.get("nodes") or []:
+            if isinstance(n, dict) and (n.get("kind") == "dispatch" or isinstance(n.get("max_children"), int)):
+                if not isinstance(mc, int) and isinstance(n.get("max_children"), int): mc = n["max_children"]
+                if isinstance(n.get("max_parallel"), int) and n["max_parallel"] > 0: dp = n["max_parallel"]
+                break
         if isinstance(mp, int) and mp > 0 and isinstance(mc, int) and mc > 0:
-            return {"max_parallel": mp, "max_children": mc}
+            return {"max_parallel": mp, "max_children": mc, **({"dispatch_max_parallel": dp} if dp else {})}
     except Exception:
         pass
     return None
@@ -228,7 +240,8 @@ def group_header(kind, rows, caps):
     title = usd_txt(spend)
     if kind == "running":
         if caps and isinstance(caps.get("max_parallel"), int) and isinstance(caps.get("max_children"), int):
-            return {"text": f"{n}/{caps['max_parallel']} runs · {agents}/{caps['max_children']} agents", "title": title}
+            dp = caps.get("dispatch_max_parallel")
+            return {"text": f"{n}/{caps['max_parallel']} runs · {agents}/{caps['max_children']} agents" + (f" · {dp} parallel" if isinstance(dp, int) else ""), "title": title}
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
 def run_rank(st, live=True):
@@ -1581,7 +1594,7 @@ function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
  if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
-function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
+function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`+(CAPS.dispatch_max_parallel?` · ${CAPS.dispatch_max_parallel} parallel`:""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
 // run appearing, ending or moving to another age bucket can never move what the user opened.

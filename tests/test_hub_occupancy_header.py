@@ -79,8 +79,6 @@ def test_loop_caps_reads_max_parallel_from_run_and_max_children_from_the_dispatc
 
 def test_loop_caps_is_none_when_the_graph_cannot_be_read(hub):
     co = tempfile.mkdtemp()
-    with _with_checkout(co):
-        assert hub.loop_caps() is None          # no graph file at all
     _graph(co, {"max_parallel": 10}, [{"name": "route", "kind": "dispatch", "max_children": 20}])
     Path(co, "docs/squad/workflows/dynamic.graph.json").write_text("{not json")
     with _with_checkout(co):
