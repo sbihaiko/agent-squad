@@ -101,7 +101,19 @@ public partial class NoteView : UserControl {
 CS
 want "a comment is not a dependency" 0 "$T/comment" "OK"
 
-# 9. the rule carries no host: a host that declares no domain still gets the two generic reaches
+# 9. what is refused is the reach, not the mention: a namespace import with nothing reached through it is not an offence
+mkdir -p "$T/using"
+cat > "$T/using/PlainView.axaml.cs" <<'CS'
+using System.IO;
+using Avalonia.Controls;
+namespace Host.Views;
+public partial class PlainView : UserControl {
+	public void OnGo() => (DataContext as PlainViewModel)?.GoCommand.Execute(null);
+}
+CS
+want "a mere namespace import is not a reach" 0 "$T/using" "OK"
+
+# 10. the rule carries no host: a host that declares no domain still gets the two generic reaches
 out=$(env SG_VIEW_DOMAIN= SG_VIEW_STATE= bash "$V" "$T/file" 2>&1); rc=$?
 if [ "$rc" = 1 ] && printf '%s' "$out" | /usr/bin/grep -qF "file"; then ok "the generic reaches stand without host config"; else ko "generic reaches: exit $rc ($out)"; fi
 out=$(env SG_VIEW_DOMAIN= SG_VIEW_STATE= bash "$V" "$T/svc" 2>&1); rc=$?
