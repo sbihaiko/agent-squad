@@ -8,6 +8,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 
 GH = """#!/bin/bash
@@ -23,6 +25,13 @@ exit 0
 FORKONLY = """sg_fork_only() { return 1; }
 sg_fork_preamble() { :; }
 """
+
+@pytest.fixture(autouse=True)
+def _hermetic(monkeypatch):
+    """The live loop exports SG_SINGLE_<stage> to a run it dispatches; a leaked one lets a pass walk past the lock it must hold."""
+    for k in [k for k in os.environ if k.startswith("SG_SINGLE_")]:
+        monkeypatch.delenv(k)
+
 
 STACK = """#!/bin/bash
 echo "READY"
