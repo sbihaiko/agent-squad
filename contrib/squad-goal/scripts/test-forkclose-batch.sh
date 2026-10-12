@@ -8,7 +8,15 @@ setup() {   # setup <issue>...: a fork whose base has hub.py (10 lines) and one 
   T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
   export HOME="$T/home"; mkdir -p "$HOME"   # serial.sh's durable GUI kill switch is $HOME/.squad-gui-tests-off, so a private home is what keeps THIS fixture's gate decision observable instead of letting the machine's switch answer for it (the command the gate runs is the stub in SG_FORK_TEST_CMD, so no emulator can start either way)
   cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
-  printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"
+  # test.sh's stub models the seam the landing reads its failures from: the real test.sh writes the gate's whole output to
+  # $SG_STATE/tests/<TEST_ID>.log, which is what the batch pass reads a red batch's failing test out of (#13).
+  cat > "$T/s/test.sh" <<'EOS'
+#!/bin/bash
+iss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift
+o=$("$@" 2>&1); rc=$?
+mkdir -p "$SG_STATE/tests"; [ -n "$TEST_ID" ] && printf '%s\n' "$o" > "$SG_STATE/tests/$TEST_ID.log"
+printf '%s\n' "$o" | tail -3; echo "TEST #$iss x test-$iss-x"; exit $rc
+EOS
   printf '#!/bin/bash\necho %s/req.txt\n' "$T" > "$T/s/mkreq.sh"; printf 'open(__import__("sys").argv[1]+".launched","w")\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log; [ ! -e bad ]"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
   g init -q -b local/next; seq 1 10 > "$T/fork/hub.py"; g add .; g commit -q -m init

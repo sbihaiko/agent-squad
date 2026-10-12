@@ -157,8 +157,32 @@ e2eprep() {   # $1 = label; the e2e checkouts the real-app cases drive, at the b
   fi
 }
 bdiff() { $G diff --name-only "$($G merge-base "$1" "$2" 2>/dev/null)" "$2" 2>/dev/null; }   # what branch $2 changed since it left $1 (empty on any doubt: the full gate)
-batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
-  cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"   # the loop's own eligibility rules; its notices (WAIT, ORPHAN) print here
+# The failing test a red gate log names (#13). A pytest line is `FAILED <file>::<test> - ...`, a shell suite `FAIL <file>: <case>`
+# or `not ok 1 - <name>`; only the first two name a FILE, which is why an empty answer is "cannot attribute" and not "no failure".
+# The anchor is the start of the line, so fork-gate.sh's own markers (`--- fork gate: python tests FAILED`) are never read as one.
+redfile() { local l
+  l=$(grep -m1 -E '^FAILED |^FAIL |^not ok ' "$1" 2>/dev/null) || return 1
+  printf '%s\n' "$l" | grep -oE '[A-Za-z0-9_./-]+\.(py|sh)' | head -1; }
+# WHICH landed branch put the failing test in the candidate (#13). The candidate tree is what the gate just ran on, so the last
+# commit that touched the file there is the one that added it, and the member whose branch carries that commit is the one to drop.
+# Prints "<branch>\t<subject>\t<file>"; prints nothing -- leaving the reason in brwhy -- when the log names no test file, the file
+# is not in the candidate tree, or no member of the batch carries the commit: the three shapes the caller has to fall back on.
+batchculprit() { local f c b
+  brwhy=""; f=$(redfile "$SG_STATE/tests/$1.log") || f=""
+  [ -n "$f" ] || { brwhy="the gate log names no test file"; return 1; }
+  $G cat-file -e "fc-batch:$f" 2>/dev/null || { brwhy="$f is not in the candidate tree, so no branch of the batch added it there"; return 1; }
+  c=$($G log -1 --format=%H fc-batch -- "$f" 2>/dev/null); [ -n "$c" ] || { brwhy="no commit in the candidate touches $f"; return 1; }
+  for b in $2; do $G merge-base --is-ancestor "$c" "$(brof "$b")" 2>/dev/null && { printf '%s\t%s\t%s\n' "$b" "$($G log -1 --format=%s "$c" 2>/dev/null)" "$f"; return 0; }; done
+  brwhy="the commit $($G rev-parse --short=9 "$c") that added $f is in no branch of the batch"; return 1; }
+# A red batch is the most informative signal the loop produces, and it used to discard it: the pass held the failing test (in the
+# gate log it had just read), the commit that added it (in the candidate it still had checked out) and the branch that commit
+# belongs to, and it printed "falling back to one branch at a time so the culprit is named" with none of them. Measured
+# 2026-10-12: five ruff errors in one file of gui/1879 dropped six branches out of one batch and cost them their parallelism
+# against max_parallel=10 (#13). So the red is attributed here first: the culprit is named, dropped, and the REST is re-gated as
+# its own candidate in this same pass (FC_SET names the remainder, so there is no second landing path). The one-at-a-time
+# fallback below stays for a red this cannot attribute -- a base that was already red, or a failure that names no test file.
+batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at cb cs cfr rest
+  if [ -n "${FC_SET:-}" ]; then bl="$FC_SET"; else cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"; fi   # the re-gated remainder names its own set; otherwise the loop's own eligibility rules, whose notices (WAIT, ORPHAN) print here
   [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
   needbase "batch" || return 0   # a checkout left on a branch is returned to the base here, so the batch is not skipped for a pass (the loop below says WAIT when it cannot be)
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); basegate "batch" || exit 0
@@ -170,12 +194,24 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
   suites=$(printf '%s\n' $files | bash "$here/gate-suites.sh"); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
   id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
   out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
+  at=""; [ $rc = 0 ] || at=$(batchculprit "$id" "${merged# }")   # read off the candidate, which is still checked out here
   $G checkout -q "$SG_FORK_BASE"
   if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
     echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
     echo "FORKCLOSE BATCH landed ${merged# } ($suites suites, $id green); each issue closes below"
-  else $G branch -q -D fc-batch; touch "$A/nobatch-$key"
-    echo "FORKCLOSE BATCH RED (${merged# }; $id exit $rc): nothing landed, falling back to one branch at a time so the culprit is named"; fi; }
+  else $G branch -q -D fc-batch
+    echo "FORKCLOSE BATCH RED (${merged# }; $id exit $rc): nothing landed"
+    if [ -n "$at" ]; then   # attributable: name the culprit, drop it, and re-gate the rest in this same pass
+      cb=${at%%$'\t'*}; rest=${at#*$'\t'}; cs=${rest%%$'\t'*}; cfr=${rest#*$'\t'}
+      rest=" ${merged# } "; rest=${rest// $cb / }; rest=${rest# }; rest=${rest% }
+      echo "FORKCLOSE BATCH CULPRIT (${merged# }) $cfr: $(brof "$cb") (#$cb), commit \"$cs\" (git log -1 --format=%s -- $cfr); dropping $(brof "$cb") and re-gating the rest (${rest}) on the same gate"
+      if [ "$(wc -w <<<"$rest")" -lt 2 ]; then   # a candidate is built from at least two branches: re-gating one buys nothing, and retrying the set would spend this same red pass on every later pass
+        touch "$A/nobatch-$key"
+        echo "FORKCLOSE BATCH PARKED (${rest}; $(brof "$cb") (#$cb) was one of the two candidates, and a candidate is built from at least two): the set is memoized nobatch-$key so the same batch is not retried, and the loop below takes ${rest# } one branch at a time"
+      else FC_SET="${rest# }" batchpass; fi
+    else touch "$A/nobatch-$key"
+      echo "FORKCLOSE BATCH FALLBACK (${merged# }; $suites gate, $id red): falling back to one branch at a time so the culprit is named -- ${brwhy:-the gate exited $rc without naming a failing test}"; fi
+  fi; }
 # Dispatch the fix request this pass just wrote. forkclose is the sole owner of the branch that request repairs (forkred-<n>-<sha>
 # for a red gate, forkrebase-<n>-<sha> for a conflict), so the request is ABOUT that branch and must go past mkreq.sh's slice guard:
 # the branch it has to fix, gui/<n>, is itself unmerged and touches exactly the files the fix edits, so the guard refuses it and
