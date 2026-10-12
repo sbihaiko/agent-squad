@@ -14,6 +14,9 @@ sg_fork_only() { gh api "repos/$SG_REPO/issues/$1" 2>/dev/null | jq -e '([.label
 # name it through this function, so the name a child is given and the name the close pass looks for cannot come from two
 # sources. The default lives here and nowhere else: with the setting unset, both sides read gui/<N> instead of the child
 # creating gui/<N> while the land resolves an empty ref no pass ever merges.
+# The address seam (sg_resolve_repo, sg_same_repo, sg_land_target) lives beside this file. A copy of this file made without
+# it still loads, with no seam: `if` and not `&&`, so a caller under `set -e` is not aborted.
+if [ -f "$(dirname "${BASH_SOURCE[0]}")/address.sh" ]; then . "$(dirname "${BASH_SOURCE[0]}")/address.sh"; fi
 sg_fork_branch() { local br=${SG_FORK_BRANCH:-gui/%n}; echo "${br//%n/$1}"; }
 # An issue the loop itself has marked not startable (#1858): a run that ended failed on it SG_HEALTH_REPEAT_COUNT times running
 # leaves a `SQUAD-NOT-STARTABLE:` line among its comments, and every dispatch path reads that line before it starts -- so the loop

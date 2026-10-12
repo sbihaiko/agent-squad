@@ -1,9 +1,8 @@
 #!/bin/bash
-# usage: autopilot.sh [repo]    one pass per watch cycle, over every repository the hub reads ($SG_REPO plus
-#                               SG_TOOLING_REPO) -- or over the one repository named as the argument (#1820).
-# The squad works in two repositories: the emulator ($SG_REPO) and its own tooling (SG_TOOLING_REPO). A pass reads the
-# open PRs of BOTH and routes each one in its own repository -- the head, the gate, the review, the fix and the merge
-# all name the PR's repository -- so a tooling PR is reviewed and merged by this machinery, not by hand.
+# usage: autopilot.sh [repo]    one pass per watch cycle, over the profile's repository ($SG_REPO) -- or over the one
+#                               repository named as the argument (#1820).
+# A pass routes each open PR in its own repository -- the head, the gate, the review, the fix and the merge all name the
+# PR's repository. One profile is one repository: another repository is worked by its own profile (#20).
 # One pass per watch cycle. Open PRs that name an issue ("Refs #N") are reviewed, fixed and merged:
 # a PR with no Refs #N is repaired when the issue can be derived — the branch (`gui/<N>`, fork work) or the run
 # that produced the branch (its record names the branch and the issue) — by appending `Refs #N` to the body with
@@ -32,9 +31,9 @@
 #  so their mtime is the FIRST gate, not the last, and most exits write none at all.
 # Events: AUTOREVIEW, STALE-REVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS, REFSADDED.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; printf '%s\n' "$(date +%s)" > "$A/.pass"; [ -e "$A/off" ] && exit 0
-# The repositories this pass reads, named in ONE place and never guessed: the profile's SG_REPO plus SG_TOOLING_REPO --
-# the same pair hub.py reads (#1820) -- or the single repository named as the argument (autopilot.sh x/tool).
-case "${1:-}" in */*) REPOS=${1}; shift;; *) REPOS="$SG_REPO${SG_TOOLING_REPO:+ $SG_TOOLING_REPO}";; esac
+# The repositories this pass reads, named in ONE place and never guessed: the profile's SG_REPO, as hub.py reads it --
+# or the single repository named as the argument (autopilot.sh x/tool). SG_TOOLING_REPO is retired and never read (#20).
+case "${1:-}" in */*) REPOS=${1}; shift;; *) REPOS="$SG_REPO";; esac
 L="$SG_STATE/auto.log"; touch "$L"; seen=$(cat "$A/.logseen" 2>/dev/null || echo 0); tot=$(wc -l < "$L" | tr -d ' ')
 [ "$tot" -gt "$seen" ] && tail -n +$((seen+1)) "$L" | grep -E "^(AUTOFIX|AUTOPANEL|NEEDS OWNER)"; echo "$tot" > "$A/.logseen"
 MAX=${AP_MAX_ROUNDS:-2}; MIN=${AP_MIN_ISSUE:-1090}; here="$(dirname "$0")"

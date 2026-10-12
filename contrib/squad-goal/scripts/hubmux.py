@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Squad hub for every repository: one process on one loopback port, one path per repository (#20).
+usage: hubmux.py [port]   default 7700. `/<profile>` is that profile's hub page (hub.py, loaded once per profile with the
+profile's own context from repoctx.sh); `/` lists the known repositories and their live workers; a path no profile owns
+answers 404 with that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other
+listener. Read-only, as hub.py is: it starts no run."""
+import html, importlib.util, io, json, os, pathlib, shlex, subprocess, sys, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = pathlib.Path(__file__).resolve().parent
+CTX = HERE / "repoctx.sh"
+
+
+def _ctx(arg):
+    """The repository context repoctx.sh resolves for one input, as a dict; empty when it refuses."""
+    p = subprocess.run(["bash", str(CTX), arg], capture_output=True, text=True, timeout=30)
+    return {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
+
+
+def load_apps():
+    """{slug: {"repo", "state", "mod" or "err"}}: one hub.py instance per profile, each imported with its own context. A
+    broken profile is a named entry with its error, never a machine-wide stop."""
+    out = subprocess.run(["bash", str(CTX), "--list"], capture_output=True, text=True, timeout=30).stdout
+    apps = {}
+    for slug in [ln.split("\t")[0] for ln in out.splitlines() if ln.strip()]:
+        c = _ctx(slug)
+        app = {"repo": c.get("SG_REPO", ""), "state": c.get("SG_STATE", "")}
+        if not c:
+            apps[slug] = {**app, "err": "repoctx.sh refuses this profile"}
+            continue
+        pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
+                  "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": ""}
+        before = {k: os.environ.get(k) for k in pinned}
+        try:
+            os.environ.update(pinned)
+            spec = importlib.util.spec_from_file_location(f"hub_{slug}", HERE / "hub.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            app["mod"] = mod
+        except (Exception, SystemExit) as e:
+            app["err"] = str(e) or type(e).__name__
+        finally:
+            for k, v in before.items():
+                if v is None: os.environ.pop(k, None)
+                else: os.environ[k] = v
+        apps[slug] = app
+    return apps
+
+
+def live(app):
+    """The live workers of one repository: the run folders on its live-run list (<state>/active-runs.txt)."""
+    try: lines = pathlib.Path(app["state"], "active-runs.txt").read_text().split()
+    except OSError: return []
+    return [pathlib.Path(x).name for x in lines]
+
+
+def listing(apps):
+    return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
+
+
+def root_page(apps, title):
+    rows = "".join(f'<li><a href="/{html.escape(r["slug"])}">{html.escape(r["slug"])}</a> {html.escape(r["repo"])} &middot; '
+                   + (f'<b>broken profile</b>: {html.escape(r["err"])}' if "err" in r else f'{len(r["live"])} live: {html.escape(" ".join(r["live"]) or "none")}')
+                   + "</li>" for r in listing(apps)["repos"])
+    return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><body style="background:#0d1117;color:#c9d1d9;font:14px system-ui;margin:16px">'
+            f"<h1>{html.escape(title)}</h1><ul>{rows or '<li>no profile known</li>'}</ul>").encode()
+
+
+def rewrite(body, slug):
+    """A repository's page calls its own API: every absolute /api/ and /test/ reference gains the /<slug> prefix."""
+    for q in (b'"', b"'", b"`"):
+        for p in (b"/api/", b"/test/"):
+            body = body.replace(q + p, q + b"/" + slug.encode() + p)
+    return body
+
+
+def server(port, apps):
+    class Mux(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def _send(self, code, body, ct):
+            self.send_response(code); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
+
+        def _route(self, method):
+            path = self.path.split("?", 1)[0]
+            if path == "/": return self._send(200, root_page(apps, "squad hub"), "text/html; charset=utf-8")
+            if path == "/api/hub": return self._send(200, json.dumps(listing(apps)).encode(), "application/json")
+            slug = path.split("/")[1]
+            app = apps.get(slug)
+            if not app or "mod" not in app:
+                return self._send(404, root_page(apps, f"no repository at /{slug}"), "text/html; charset=utf-8")
+            self.path = self.path[len(slug) + 1:] or "/"
+            if self.path.startswith("?"): self.path = "/" + self.path
+            real, buf = self.wfile, io.BytesIO()
+            self.wfile = buf
+            try: getattr(app["mod"].H, "do_" + method)(self)
+            finally: self.wfile = real
+            head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
+            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head else body))
+
+        def do_GET(self): self._route("GET")
+        def do_POST(self): self._route("POST")
+
+    return ThreadingHTTPServer(("127.0.0.1", port), Mux)
+
+
+if __name__ == "__main__":
+    apps = load_apps()
+    for k in ("SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_STATE"):   # each page reads its own profile, never the shell's
+        os.environ.pop(k, None)
+    for a in apps.values():
+        m = a.get("mod")
+        if m is None: continue
+        for f in ("refresh_prs", "refresh_quota", "refresh_board", "load_sampler"):
+            threading.Thread(target=getattr(m, f), daemon=True).start()
+    server(int(sys.argv[1]) if len(sys.argv) > 1 else 7700, apps).serve_forever()

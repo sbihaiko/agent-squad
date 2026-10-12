@@ -7,11 +7,11 @@ unset SG_E2E_DIR SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD   # the real e2e checkouts of
 here="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; A="$T/st/auto"
 mkdir -p "$T/s" "$T/bin"
-cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/gate-suites.sh" "$T/s/"
+cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/gate-suites.sh" "$T/s/"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py "$T/s/"
 # The gate stub records the FG_SUITES it was handed and runs the GUI command only for the full gate, like fork-gate.sh does.
 printf '#!/bin/bash\ns=${FG_SUITES:-full}; echo "$s" >> %s/suites.log\n[ "$s" = full ] && eval "$1"\n[ -e %s/red ] && exit 1\nexit 0\n' "$T" "$T" > "$T/s/fork-gate.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
-printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"/comments"*) echo "TDD RED (test-x.sh, line): FAIL y";; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"/comments"*) echo "TDD RED (test-x.sh, line): FAIL y";; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 fresh() { rm -rf "$T/fork" "$T/st" "$T/co" "$T/suites.log" "$T/runs" "$T/red"; mkdir -p "$T/fork" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/co/runs/.hub"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo run >> %s/runs"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"

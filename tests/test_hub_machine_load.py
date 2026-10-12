@@ -458,7 +458,7 @@ def test_escape_restores_the_split(hub):
 # one token per subscription (#1839) the line carries last — the acronym, the quota and the time to its reset.
 
 NOW = 1_000_000.0
-CAPS = {"max_parallel": 10, "max_children": 20}
+CAPS = {"runs": 10, "children": 20}
 
 
 def _src(**over):
@@ -504,9 +504,9 @@ def test_progress_is_the_newest_transition_the_loop_owns_and_turns_bad_past_the_
     assert _facts(hub, _src(progress=NOW - 2400))[1] == "last progress 40m"
 
 
-def test_occupancy_reads_the_caps_the_graph_carries_and_never_a_hard_coded_pair(hub):
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"max_parallel": 3, "max_children": 40})[2] \
-        == "4/3 runs 7/40 agents"                                            # the caps come from the graph, not from 10/20
+def test_occupancy_reads_the_resolved_ceiling_and_never_a_hard_coded_pair(hub):
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"runs": 3, "children": 40})[2] \
+        == "4/3 runs 7/40 agents"                                            # the ceiling comes from the caps resolution, not from 10/20
     assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[2] == "?"
     assert _facts(hub, _src(occ=None))[2] == "?"
 
@@ -557,7 +557,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     assert abs(src["health"]["armed"]["watch-stalled"] - (now - 540)) < 2
     assert src["drift"] == {"runs": 2, "inprogress": 5}                       # the pair #1795 writes, read as it stands
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
-    facts = hub.foot_line(hub.foot_items(src, {"max_parallel": 10, "max_children": 20}, now))
+    facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
     assert "health: watch-stalled 9m" in facts and "drift 3" in facts and "agy reset " in facts
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \

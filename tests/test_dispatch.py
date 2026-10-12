@@ -185,6 +185,15 @@ async def test_max_children_per_entry_is_enforced(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_one_request_for_three_children_records_three_accepted_children_and_no_rejection(tmp_path):   # #33 acceptance 1: one run carries the issues
+    reqs = [req(f) for f in ("tdd", "diagnosing-bugs", "codebase-design")]
+    eng = make(tmp_path, {"router": routed(*reqs), "route.router.1": CHILD}, adapter={"repeat_last": True, "default": CHILD})
+    await eng.run()
+    assert [e["child"] for e in ev(tmp_path, "spawn_accepted")] == ["route.router.1", "route.router.2", "route.router.3"]
+    assert ev(tmp_path, "spawn_rejected") == []
+
+
+@pytest.mark.anyio
 async def test_children_run_in_parallel_up_to_max_parallel(tmp_path):
     slow = dict(CHILD, delay=0.6)
     ro = {"tools": ["Read"]}    # read-only children get no worktree, so the timing shows the fan-out alone

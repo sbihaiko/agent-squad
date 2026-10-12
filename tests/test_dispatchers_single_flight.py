@@ -5,8 +5,11 @@ SG_STATE, so nothing here touches the network, a model or the live loop.
 """
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 
@@ -23,6 +26,13 @@ exit 0
 FORKONLY = """sg_fork_only() { return 1; }
 sg_fork_preamble() { :; }
 """
+
+@pytest.fixture(autouse=True)
+def _hermetic(monkeypatch):
+    """The live loop exports SG_SINGLE_<stage> to a run it dispatches; a leaked one lets a pass walk past the lock it must hold."""
+    for k in [k for k in os.environ if k.startswith("SG_SINGLE_")]:
+        monkeypatch.delenv(k)
+
 
 STACK = """#!/bin/bash
 echo "READY"
@@ -69,20 +79,16 @@ def _state(tmp_path, script):
     (tmp_path / "checkout").mkdir()
     labels = "wave:01" if script == "autofrontier.sh" else "bug,wave:01"
     return {
-        "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin",
+        # the python3 of this suite first: the dispatchers read the free slots through squad/caps.py, which needs PyYAML
+        "PATH": f"{tmp_path / 'bin'}:{Path(sys.executable).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(tmp_path / "home"),
         "SG_STATE": str(st),
         "SG_CHECKOUT": str(tmp_path / "checkout"),
         "SG_REPO": "o/n", "SG_OWNER": "o", "SG_PROJECT": "1", "SG_BUG_PROJECT": "",
         "SG_BASE": "main", "SG_BUG_LABEL": "bug", "SG_FRONTIER_LABEL": "ready-for-agent",
         "SG_FRONTIER_PREAMBLE": "", "BOARD": "true", "LABELS": labels,
+        "SG_SQUAD": str(SCRIPTS.parents[2]), "SQUAD_CAPS_DIR": str(tmp_path / "caps"),   # the free slots come from squad/caps.py
     }
-
-
-def _env(tmp_path, script):
-    """The caller's environment minus every SG_*, plus the test's own: a session started by autobug.sh exports
-    SG_SINGLE_AUTOBUG, which skips the single.sh wrap and lets two overlapping passes both dispatch."""
-    return {**{k: v for k, v in os.environ.items() if not k.startswith("SG_")}, **_state(tmp_path, script)}
 
 
 def _pass(d, env, tmp_path, label):
@@ -97,7 +103,7 @@ def _bodies(tmp_path):
 def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
     """The second pass starts inside the first one's pick: it must see the claim and dispatch nothing."""
     d, _ = _scripts(tmp_path, cluster_sleep=3)
-    env = _env(tmp_path, "autobug.sh")
+    env = {**os.environ, **_state(tmp_path, "autobug.sh")}
     (tmp_path / "home").mkdir()
     first = _pass(d, env, tmp_path, "autobug.sh")
     time.sleep(1.2)                                      # the first pass is inside its pick (cluster.py sleeps 3 s)
@@ -113,7 +119,7 @@ def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
 def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
     """A crash between the pick and the launch must still leave the issue claimed (#1514)."""
     d, _ = _scripts(tmp_path, cluster_sleep=0)
-    env = _env(tmp_path, "autobug.sh")
+    env = {**os.environ, **_state(tmp_path, "autobug.sh")}
     (tmp_path / "home").mkdir()
     out = _pass(d, env, tmp_path, "autobug.sh").communicate(timeout=90)[0]
     assert "AUTOBUG dispatched" in out, out
@@ -127,7 +133,7 @@ def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
 def test_autofrontier_claims_the_issue_before_it_builds_the_request(tmp_path):
     """The same claim-before-build rule holds for the frontier dispatcher (#1514)."""
     d, _ = _scripts(tmp_path, cluster_sleep=0)
-    env = _env(tmp_path, "autofrontier.sh")
+    env = {**os.environ, **_state(tmp_path, "autofrontier.sh")}
     (tmp_path / "home").mkdir()
     out = _pass(d, env, tmp_path, "autofrontier.sh").communicate(timeout=90)[0]
     assert "FRONTIER dispatched" in out, out

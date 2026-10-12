@@ -8,23 +8,23 @@ def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment, else from env.sh (the profile matched from the cwd's
-    origin). SG_TOOLING_REPO is the optional second repository the board reads, empty when the profile names none."""
-    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_TOOLING_REPO"]
+    origin). One profile is one repository: the retired SG_TOOLING_REPO is never read (#20)."""
+    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT"]
     if all(os.environ.get(k) for k in keys[:4]): return {k: os.environ.get(k, "") for k in keys}
     here = pathlib.Path(__file__).resolve().parent
-    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT" "$SG_TOOLING_REPO"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
+    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
     return {k: os.environ.get(k) or (out[i] if i < len(out) else "") for i, k in enumerate(keys)}
 PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], PROF["SG_PROJECT"]
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE or run from a checkout a profile matches)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
-    repository the profile names after it (SG_TOOLING_REPO, the squad's own tooling repository) (#1820)."""
+    repository given after it, deduplicated in order (#1820). A profile gives none: one profile is one repository (#20)."""
     out = []
     for r in (primary,) + tuple(others):
         r = (r or "").strip()
         if r and r not in out: out.append(r)
     return out
-REPOS = repos_from(REPO, PROF.get("SG_TOOLING_REPO"))
+REPOS = repos_from(REPO)
 def repo_tag(repo, repos=None):
     """The short tag a card wears for its repository: the name after the owner when that name stands for exactly one
     repository the board reads, else the full owner/name -- the tag that does not fit (#1820)."""
@@ -71,21 +71,27 @@ def priced(d):
             return ((cr * hit) + (max(tin - cr, 0) * miss) + ((d.get("tokens_out") or 0) * out)) / 1e6
     return d["spend"]
 
+# A run's issue is named by its own request (runs/<run>/request.txt, written before the run starts). The forms are
+# owner/repo#N, "issue #N" and "Refs #N", with any run of digits: this repository's issues start at one digit.
+ISSUE_REF = re.compile(r"(?:\b[\w.-]+/[\w.-]+#|\b(?:issue|Refs) #)(\d+)", re.I)
+
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v10" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them)
+    if p in hist and "v11" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None
     accepted, done_kids, wts = set(), set(), set()
+    try: req_issues = set(ISSUE_REF.findall((pathlib.Path(p).parent / "request.txt").read_text(errors="replace"))); has_req = True
+    except OSError: req_issues = set(); has_req = False
     with open(p) as f:
         for i, l in enumerate(f):
-            if i < 200: issues.update(re.findall(r"(?:issue|Refs) #(\d{3,5})", l))
+            if i < 200: issues.update(ISSUE_REF.findall(l))   # the fallback when request.txt is missing: a reference quoted in the transcript is not the run's own issue
             if i < 200 and fix is None:
-                fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d{3,5})", l)
+                fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d+)", l)
                 if fm: fix = int(fm.group(1))
             if i < 200 and not merge and "CONFLICT FIX" in l: merge = True   # forkclose conflict-fix run
             # A run that fixes something is named "fix": a bug-fix run (autobug, or a hand request naming the bug issue) and a
@@ -94,7 +100,7 @@ def scan(p):
             # red-gate fix read as new work (#1495, 2026-10-11).
             if i < 200 and not bug and re.search(r"\(bug\)|branch fix/|on the local fork branch|FIX RUN .*fork", l): bug = True
             if i < 200 and stack is None:   # an optimistically stacked run names its parent PR ("STACKED on #N, whose PR #P")
-                sm = re.search(r"STACKED on #\d{3,5}[^#]{0,40}PR #(\d{3,5})", l)
+                sm = re.search(r"STACKED on #\d+[^#]{0,40}PR #(\d+)", l)
                 if sm: stack = int(sm.group(1))
             if '"ts"' not in l: continue
             try: d = json.loads(l)
@@ -124,7 +130,9 @@ def scan(p):
                 h = (d.get("effect") or {}).get("head") if isinstance(d.get("effect"), dict) else None
                 if h: head = h
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues), "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts)}
+    if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
+    else: src, why = ("transcript" if issues else None), "request-missing"
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts)}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -199,21 +207,22 @@ def group_of(r):
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
 
 def loop_caps():
-    """Occupancy denominators from the live workflow graph. max_parallel is run.max_parallel; max_children is run.max_children or a dispatch node's. None when the graph cannot be read."""
-    p = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json"
+    """The machine-wide ceiling (squad/caps.py), from the one resolution the engine and the loop enforce: {runs, children, waiting}.
+    `waiting` lists each live wait as {ceiling, holder}. The project file of SG_CHECKOUT may lower the pair. None when the
+    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling."""
+    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
     try:
-        d = json.loads(p.read_text())
-        run = d.get("run") if isinstance(d.get("run"), dict) else {}
-        mp, mc = run.get("max_parallel"), run.get("max_children")
-        if not isinstance(mc, int):
-            for n in d.get("nodes") or []:
-                if isinstance(n, dict) and isinstance(n.get("max_children"), int):
-                    mc = n["max_children"]; break
-        if isinstance(mp, int) and mp > 0 and isinstance(mc, int) and mc > 0:
-            return {"max_parallel": mp, "max_children": mc}
+        if root not in sys.path: sys.path.insert(0, root)
+        from squad import caps as C
+        c = C.ceiling(os.environ.get("SG_CHECKOUT") or os.getcwd())
+        return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting()}
     except Exception:
-        pass
-    return None
+        return None
+
+def waiting_txt(caps):
+    """What waits for a slot, named: ` · waiting: <holder> (caps.runs)`. Empty when nothing waits."""
+    w = (caps or {}).get("waiting") or []
+    return " · waiting: " + ", ".join(f"{x['holder']} ({x['ceiling']})" for x in w) if w else ""
 
 def usd_txt(v):
     if v is None: return "—"
@@ -221,14 +230,15 @@ def usd_txt(v):
     return f"${v:.2f}"
 
 def group_header(kind, rows, caps):
-    """RUNNING shows occupancy (live runs and live children over the caps); other groups keep count · cost. Spend is the tooltip."""
+    """RUNNING shows occupancy against the machine-wide ceiling, runs then agents, and names what waits; other groups keep
+    count · cost. Spend is the tooltip."""
     n = len(rows)
     spend = sum((r.get("spend") or 0) for r in rows)
     agents = sum((r.get("agents") or 0) for r in rows)
     title = usd_txt(spend)
     if kind == "running":
-        if caps and isinstance(caps.get("max_parallel"), int) and isinstance(caps.get("max_children"), int):
-            return {"text": f"{n}/{caps['max_parallel']} runs · {agents}/{caps['max_children']} agents", "title": title}
+        if caps and isinstance(caps.get("runs"), int) and isinstance(caps.get("children"), int):
+            return {"text": f"RUNS {n}/{caps['runs']} · AGENTS {agents}/{caps['children']}{waiting_txt(caps)}", "title": title}
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
 def run_rank(st, live=True):
@@ -550,10 +560,10 @@ def _progress_fact(ts, now):
     return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
 
 def _occ_fact(occ, caps):
-    """`4/10 runs 7/20 agents` against the caps the live graph carries, never a hard-coded pair. With no graph there is
-    no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
+    """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
+    resolution there is no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
     if not isinstance(occ, dict) or not isinstance(caps, dict): return "?"
-    mp, mc = caps.get("max_parallel"), caps.get("max_children")
+    mp, mc = caps.get("runs"), caps.get("children")
     if not isinstance(mp, int) or not isinstance(mc, int): return "?"
     return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
 
@@ -772,7 +782,7 @@ def runs():
         b = badge_of(st, r)
         rank = run_rank(st, live=True)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True, "agents": r.get("agents") or 0})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True, "agents": r.get("agents") or 0})
         load_rows.append({"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []})   # what the load attribution needs, and nothing else
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
@@ -1530,6 +1540,9 @@ const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
 const label=r=>{const is=(r.issues||[]).filter(i=>+i!==r.fix).map(i=>"#"+i).join(" ");
   if(r.url)return "test "+is;
   return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?(r.merge?"merge ":r.bug?"fix ":"build ")+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or build issues (stacked on a parent PR); "test" is kept for test-only runs
+// where the label's issue came from, or why the run has none: the request names it; the transcript is only the fallback when the request is missing
+const labelTip=r=>{if((r.issues||[]).length)return r.issue_src==="transcript"?"issue read from the transcript: request.txt is missing":"issue named by the run's request";
+  return r.issue_why==="request-missing"?"no issue: the request is missing (no request.txt in the run folder)":r.issue_why==="request-no-issue"?"no issue: the request names no issue":""};
 const sub=r=>{const t=r.titles||{},ks=(r.issues||[]).filter(i=>+i!==r.fix&&t[i]);return ks.length===1?t[ks[0]]:ks.length?ks.map(i=>"#"+i+" "+t[i].split(" ").slice(0,4).join(" ")).join(" · "):""};
 function plan(){ // which runs fill the N slots: pinned first, then most recently updated; slots stay stable, top slot has hysteresis
   const byId=new Map(runs.map(r=>[r.id,r])),want=[];
@@ -1581,7 +1594,7 @@ function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
  if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
-function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
+function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
 // run appearing, ending or moving to another age bucket can never move what the user opened.
@@ -1596,7 +1609,7 @@ function drawList(){
   const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS.filter(g=>by[g[0]]||openGroups.has(g[0]));   // an open group that emptied keeps its header and shows no rows
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b>${esc(name(r))}</b>${loadMark(r)}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});

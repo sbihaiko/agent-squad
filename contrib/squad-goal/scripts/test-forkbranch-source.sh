@@ -9,9 +9,10 @@
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # Hermetic (#1410): every inherited SG_* is cleared, so the live loop's fork, repo and profile never reach an assertion.
 unset $(compgen -e | /usr/bin/grep '^SG_') 2>/dev/null || true
+export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"   # the request builders read the machine-wide ceilings from the checkout under test, and the leases stay in the sandbox (#21)
 G=/usr/bin/grep; S=$T/s
 mkdir -p "$S" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/bin" "$T/home" "$T/co/runs/.hub" "$T/fork"
-cp "$d"/{autobug.sh,autofrontier.sh,mkreq.sh,forkonly.sh,forkclose.sh,fork-gate.sh,serial.sh,single.sh,cluster.py,models.json,req-checklist.txt,req-checklist-fork.txt} "$S/" 2>/dev/null
+cp "$d"/{autobug.sh,autofrontier.sh,mkreq.sh,forkonly.sh,forkclose.sh,fork-gate.sh,serial.sh,single.sh,cluster.py,models.json,req-checklist.txt,req-checklist-fork.txt} "$S/"; cp "$d"/ghread.py "$d"/ghthrottle.py "$S/" 2>/dev/null
 : > "$S/launch.py"; printf '#!/bin/bash\necho READY\n' > "$S/stack.sh"; printf 'exit 0\n' > "$S/shell-suites.sh"
 printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$S/test.sh"; chmod +x "$S"/*.sh
 printf 'RULE: open the PR with origin/main, run prepush.sh\n' > "$T/pre.txt"

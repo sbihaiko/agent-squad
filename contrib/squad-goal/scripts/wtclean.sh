@@ -72,11 +72,17 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     $G -C "$SG_FORK_DIR" worktree remove "$w" && { [ -n "$b" ] && $G -C "$SG_FORK_DIR" branch -d "$b" >/dev/null 2>&1; echo "WT CLEAN fork #$n ${b:-detached}"; }
   done; $G -C "$SG_FORK_DIR" worktree prune
 fi
-# PR worktrees under ~ (git worktree add ~/wt-<n>-*): drop once the branch's PR is merged and the tree clean
+# PR worktrees under ~ (git worktree add ~/wt-<n>-*): drop once the branch's OWN PR is merged, its commits are in the base and the tree is clean.
+# GitHub silently drops a head= value with an unencoded ':' or '/' and answers with the repo's newest closed PR, so the value is
+# URL-encoded and the PR's .head.ref must equal the branch (never trust .[0] blindly). The branch is force-deleted, so it must also
+# be in origin/$SG_BASE: an ancestor of it (merge, rebase) or, for a squash merge, still at the PR's head with the merge commit in it.
 $G worktree list --porcelain | awk '/^worktree /{w=$2} /^branch /{sub("refs/heads/","",$2); print w, $2}' | while read -r w b; do
   case $w in "$HOME"/wt-*) ;; *) continue;; esac
   [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
-  [ "$(gh api "repos/$SG_REPO/pulls?state=closed&head=$SG_OWNER:$b&per_page=1" -q '.[0].merged_at // ""' 2>/dev/null)" != "" ] || continue
-  $G worktree remove "$w" && $G branch -D "$b" >/dev/null 2>&1 && echo "WT CLEAN pr-merged $b"
+  IFS='|' read -r pn hsha mat msha href < <(gh api "repos/$SG_REPO/pulls?state=closed&head=$SG_OWNER%3A$(printf %s "$b" | jq -sRr @uri)&per_page=1" -q '.[0] // empty | [.number, .head.sha, (.merged_at // ""), (.merge_commit_sha // ""), .head.ref] | join("|")' 2>/dev/null </dev/null)
+  [ "$href" = "$b" ] && [ -n "$mat" ] || continue   # no PR of its own, or not merged
+  if $G merge-base --is-ancestor "$b" "origin/$SG_BASE" 2>/dev/null || { [ "$($G -C "$w" rev-parse HEAD)" = "$hsha" ] && [ -n "$msha" ] && $G merge-base --is-ancestor "$msha" "origin/$SG_BASE" 2>/dev/null; }; then
+    $G worktree remove "$w" && $G branch -D "$b" >/dev/null 2>&1 && echo "WT CLEAN pr-merged $b (PR #$pn, head $href)"
+  else grep -qx "kept $w" "$seen" || { echo "WT KEPT pr-merged $b (PR #$pn, head $href): the base lacks some of its commits; nothing removed"; echo "kept $w" >> "$seen"; }; fi
 done
 $G worktree prune

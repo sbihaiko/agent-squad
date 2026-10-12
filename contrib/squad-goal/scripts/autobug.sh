@@ -38,22 +38,20 @@ sg_is_issue() { local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1; pri
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOBUG:-}" ] || exec env SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
-read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
-import json, re, sys, pathlib
-def find(o):
-    if isinstance(o, dict):
-        if isinstance(o.get("max_parallel"), int): return o["max_parallel"]
-        for v in o.values():
-            r = find(v)
-            if r: return r
-    if isinstance(o, list):
-        for v in o:
-            r = find(v)
-            if r: return r
-g = pathlib.Path(f"docs/squad/workflows/{sys.argv[1]}.graph.json")
-cap = (find(json.loads(g.read_text())) if g.exists() else None) or 10
+read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
+import os, re, sys, pathlib
+# The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
+# by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
+# every repository. A missing caps block is a named failure: the pass stops and says so, never a default.
+sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
+from squad import caps as C
+try:
+    ceil = C.ceiling(".")
+except Exception as e:
+    print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
+cap, held = ceil.caps["runs"], ceil.occupancy()["runs"]
 live = 0; busy = set()
-for r in open(sys.argv[2]).read().split():
+for r in open(sys.argv[1]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not f.exists(): continue
     t = f.read_text()
@@ -63,11 +61,12 @@ for r in open(sys.argv[2]).read().split():
         if '"spawn_accepted"' in l:
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: busy.add(m.group(1))
-print(max(cap - live, 0), ",".join(sorted(busy)) or "-")
+print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-")
 PY
 
 )
-[ "${free:-0}" -gt 0 ] || exit 0
+[ -n "${free:-}" ] || { echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
+[ "$free" -gt 0 ] || exit 0
 # bugs first, then debt (only when no bug is startable -- AB_SKIP_DEBT=1 is the idle hunt's startable check, bugs only)
 # gather <label>: prints "number<US>labels" per issue; a refusal is not a candidate list at all (#1855).
 gather() {

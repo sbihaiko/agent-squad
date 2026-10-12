@@ -1,0 +1,35 @@
+# The migration budget of #8 (ADR-0277): the loop scripts that still reach GitHub with a call site of their own, and the
+# number of reaches each one is still allowed. Every other script already goes through the door
+# (contrib/squad-goal/scripts/ghcall.sh: `gh_api` for a read, `gh_get` for a read GitHub answers with another
+# representation, `gh_send` for a write), and a script this file does not name is allowed none -- so a live script that
+# starts reading or writing GitHub on its own is refused from its first line, and the budget grows for nobody.
+#
+# The budget only shrinks. A script above its line is refused by check-gh-interface.sh, naming the script and the route;
+# a script below its line is reported as SHRINK, so a number cannot be left standing after the caller moved. Lower a
+# line -- or delete it, which is what an empty file means: every reach through the door, no grandfather list at all --
+# in the same change that migrates the caller, and prove that migration with a case over the caller.
+#
+# Counted from the tree by: python3 contrib/squad-goal/scripts/check-gh-interface.py --ledger .
+# 2026-10-12, at the base of slice #8: 95 reaches in 22 scripts.
+autobug.sh 1
+autofix.sh 3
+autofrontier.sh 4
+autohunt.sh 3
+autopanel.sh 1
+autopilot.sh 13
+board.py 1
+childcc.py 2
+forkclose.sh 3
+forkonly.sh 1
+health.sh 5
+hub.py 11
+janitor.py 16
+mkreq.sh 3
+prepush.sh 3
+reconcile.py 2
+revci.sh 7
+review.sh 5
+speed.py 1
+stack.sh 4
+watch.sh 3
+wtclean.sh 3

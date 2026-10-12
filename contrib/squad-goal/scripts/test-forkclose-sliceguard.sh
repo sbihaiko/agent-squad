@@ -10,7 +10,7 @@ src=${1:-$(dirname "$0")/forkclose.sh}; here=$(cd "$(dirname "$src")" && pwd); o
 unset SG_E2E_DIR SG_E2E_BUILD_DIR
 # mkfix <dir>: a fork repo with one branch, gui/1, ahead of local/next, and a fork gate that goes red on it.
 mkfix() { T=$1; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"
   printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"
   cat > "$T/s/test.sh" <<'J'
 #!/bin/bash
@@ -39,7 +39,7 @@ J
   /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t commit -q -m "work 1"
   /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t checkout -q local/next
   echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-  printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"issues/1/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"
+  printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"issues/1/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"
 }
 # 1: a red fork gate on a branch the guard would refuse must still launch the fix run
 T1=$(mktemp -d); mkfix "$T1"; export FCT=$T1 PATH="$T1/bin:$PATH"

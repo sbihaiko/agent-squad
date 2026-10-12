@@ -1,13 +1,14 @@
 """Guards for deadlines, sessions and teardown."""
 import json
 import os
+import signal
 import sys
 import time
 
 import anyio
 import pytest
 
-from squad import record
+from squad import procs, record
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
@@ -125,6 +126,14 @@ async def test_a_fake_child_is_stopped_at_the_deadline_and_leaves_no_orphan(tmp_
     events = outs(tmp_path, "a")
     assert len(events) == 1 and events[0]["outcome"] == "deadline"
     assert v.verdict == "failed" and time.monotonic() - t0 < 8
+
+
+def test_a_group_signal_the_os_refuses_for_a_gone_group_is_not_an_error(monkeypatch):
+    # macOS answers EPERM, not ESRCH, for a group whose members are all zombies; the group is ours, so EPERM means it is gone
+    def refuse(pgid, sig):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(os, "killpg", refuse)
+    procs._signal_group(type("P", (), {"pid": 1})(), signal.SIGKILL)
 
 
 async def test_a_child_that_finishes_returns_its_json_result(tmp_path):

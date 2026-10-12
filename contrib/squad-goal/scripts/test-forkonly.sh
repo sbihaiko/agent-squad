@@ -3,6 +3,7 @@
 # request builder carry ONLY the fork preamble, and forkrescue.py re-points a stray fix/<N>-x commit to gui/<N>.
 # Offline: stub gh/board/launch over throwaway repos, HOME and state. usage: bash test-forkonly.sh
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"   # the dispatch scripts read the machine-wide ceilings from the checkout under test, and the leases stay in the sandbox (#21)
 G=/usr/bin/grep; mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -30,7 +31,7 @@ GH
 chmod +x "$T/bin/gh"; printf '#!/bin/bash\necho "$@" >> "$SG_STATE/moves"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
 # scene <name>: scripts dir + state + home for one case
 scene() { S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/home" "$T/$1/co"
-  cp "$d"/{autobug.sh,autofrontier.sh,mkreq.sh,single.sh,forkonly.sh,forkrescue.py,cluster.py,models.json,req-checklist.txt,req-checklist-fork.txt} "$S/" 2>/dev/null
+  cp "$d"/{autobug.sh,autofrontier.sh,mkreq.sh,single.sh,forkonly.sh,forkrescue.py,cluster.py,models.json,req-checklist.txt,req-checklist-fork.txt} "$S/" 2>/dev/null; cp "$d"/ghread.py "$d"/ghthrottle.py "$S/" 2>/dev/null
   : > "$S/launch.py"; printf '#!/bin/bash\necho "READY"\n' > "$S/stack.sh"; chmod +x "$S/stack.sh"; : > "$T/$1/st/active-runs.txt"
   echo 'RULE: open the PR with origin/main, run prepush.sh' > "$T/$1/pre.txt"
   cat > "$S/env.sh" <<E
