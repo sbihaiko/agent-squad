@@ -709,7 +709,7 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
     items = hub.foot_items(_src(progress=NOW - 901), CAPS, NOW)
     prog = [i for i in items if i["key"] == "progress"][0]
     assert prog["bad"] is True and prog["color"]
-    assert _foot_paint(hub, [prog]) == "<span class=bad>last progress 16m</span>", _foot_paint(hub, [prog])
+    assert _foot_paint(hub, [prog]) == "<span class=bad>last progress 15m</span>", _foot_paint(hub, [prog])
     subs = [i for i in items if i["key"] == "subs"][0]
     out = _foot_paint(hub, [subs])
     assert f"var(--{subs['color']})" in out                                    # the block wears its own colour...
