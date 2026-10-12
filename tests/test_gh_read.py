@@ -1,12 +1,17 @@
-"""One interface owns every GitHub read, and a refusal is never an answer (#1893, ADR-0277).
+"""One interface owns every GitHub read and write the loop makes, and a refusal is never an answer (#1893, ADR-0277).
 
 The loop reads GitHub from shell scripts through `gh api`, which writes the error body to *stdout* and exits non-zero:
 on 2026-10-12 a rate-limit body became the open-PR list and the cycle read each word of the JSON message as a PR number.
 The remedy is a contract with three distinguishable outcomes -- an answer, a refusal carrying GitHub's own message and
 request id, and a failure before GitHub reached a verdict -- so that a `403` can never again be mistaken for an empty
 list. The whole point of the seam is that it is *injectable*: every case below drives a stub transport and no case
-touches the network. The two CLI cases drive the same contract through a stub `gh` on PATH, which is how a shell script
+touches the network. The CLI cases drive the same contract through a stub `gh` on PATH, which is how a shell script
 reaches the module.
+
+The same three outcomes own the writes (revision 2026-10-12): on that afternoon the pass moved 16 board cards and closed
+16 issues, and a `403` on any of those writes would have been a silent no-op -- the loop believed the card moved because
+nothing counted the refusal as a failure. A write therefore answers `done`, `refused` or `failed`, a refusal is reported
+with GitHub's message and request id, and only `done` may be counted as a write that happened.
 """
 
 from __future__ import annotations
@@ -203,3 +208,148 @@ def test_the_cli_reports_a_pre_verdict_failure_with_its_own_exit_code(tmp_path):
     r = _cli(tmp_path, "", 127)
     assert r.returncode == 1
     assert "no verdict" in r.stdout
+
+
+# --- the same three outcomes own the writes (revision 2026-10-12) -----------------------------------------------------
+# The loop's writes are the card move (GraphQL) and the close (REST PATCH). Both used to be a bare `gh api ...` whose
+# failure nobody read: the command exits non-zero, the loop printed nothing and went on counting the card as moved. The
+# write seam hands the transport the argv `gh api` would have run, because that is what a stub has to see to prove the
+# method and the fields reached GitHub -- a refusal is not a fact about the route alone.
+
+
+def write_stub(rc: int, body: str = "", detail: str = ""):
+    """A write transport that answers from a literal instead of from GitHub; it records the argv it was asked to run."""
+    seen: list[list[str]] = []
+
+    def transport(argv: list[str]):
+        seen.append(list(argv))
+        return ghread.Transport(rc=rc, body=body, detail=detail)
+
+    transport.seen = seen  # type: ignore[attr-defined]
+    return transport
+
+
+# The card move is a GraphQL mutation, which is the write that moved those 16 cards.
+CARD_MOVE = "mutation { updateProjectV2ItemFieldValue(input: {itemId: \"x\", fieldId: \"y\"}) { projectV2Item { id } } }"
+CARD_MOVE_ROUTE = "graphql"
+
+
+def test_a_refused_status_move_is_a_refusal_and_never_done():
+    t = write_stub(1, REFUSAL_BODY)
+    out = ghread.write(CARD_MOVE_ROUTE, fields={"query": CARD_MOVE}, transport=t)
+    assert out.kind == "refused"
+    assert out.is_done is False, "a refused status move must never be counted as a move"
+    assert out.answer is None
+    assert out.message == RATE_LIMIT_MESSAGE, "the refusal carries GitHub's own message"
+    assert out.request_id == REQUEST_ID, "the refusal carries GitHub's own request id"
+    assert RATE_LIMIT_MESSAGE in out.line() and REQUEST_ID in out.line()
+    assert t.seen == [["--method", "POST", CARD_MOVE_ROUTE, "-f", f"query={CARD_MOVE}"]], (
+        "the move reaches the transport as the method, the route and the fields -- not as a route alone"
+    )
+
+
+def test_a_refused_close_is_reported_and_never_counted_done():
+    t = write_stub(1, REFUSAL_BODY)
+    out = ghread.write("repos/o/r/issues/3", method="PATCH", fields={"state": "closed"}, transport=t)
+    assert out.kind == "refused"
+    assert out.is_done is False, "a refused close must never be counted as a close"
+    argv = t.seen[0]
+    assert argv[:2] == ["--method", "PATCH"], f"the close is a PATCH; the transport saw {argv!r}"
+    assert "repos/o/r/issues/3" in argv and "state=closed" in argv, f"the close reached the transport as {argv!r}"
+    assert RATE_LIMIT_MESSAGE in out.line() and REQUEST_ID in out.line()
+
+
+def test_a_write_github_accepted_is_done():
+    t = write_stub(0, '{"id": 7, "state": "closed"}')
+    out = ghread.write("repos/o/r/issues/3", method="PATCH", fields={"state": "closed"}, transport=t)
+    assert out.kind == "done"
+    assert out.is_done is True
+    assert out.answer == {"id": 7, "state": "closed"}
+    assert out.message == "", "a write GitHub accepted carries no refusal message"
+
+
+def test_a_write_github_answered_with_no_body_is_still_done():
+    """`204 No Content` is a verdict: the write happened. It is not the third outcome."""
+    out = ghread.write("repos/o/r/issues/3/comments", fields={"body": "hi"}, transport=write_stub(0, ""))
+    assert out.kind == "done"
+    assert out.is_done is True
+
+
+def test_a_write_that_never_reached_github_is_the_third_outcome():
+    out = ghread.write(
+        "repos/o/r/issues/3", method="PATCH", fields={"state": "closed"}, transport=write_stub(1, "", "gh: command not found")
+    )
+    assert out.kind == "failed"
+    assert out.is_done is False
+    assert out.message == "", "a pre-verdict failure carries no message from GitHub"
+    assert "gh: command not found" in out.line()
+
+
+def test_a_403_write_body_is_a_refusal_even_when_the_transport_reports_success():
+    """GitHub's own error shape decides, not the exit code alone -- the same rule the reads live by."""
+    out = ghread.write("repos/o/r/issues/3", method="PATCH", fields={"state": "closed"}, transport=write_stub(0, REFUSAL_BODY))
+    assert out.kind == "refused"
+    assert out.is_done is False
+    assert out.message == RATE_LIMIT_MESSAGE
+
+
+def test_the_three_write_outcomes_are_distinguishable_from_one_another():
+    kinds = {
+        ghread.write("repos/o/r/issues/3", transport=write_stub(0, '{"id": 7}')).kind,
+        ghread.write("repos/o/r/issues/3", transport=write_stub(1, REFUSAL_BODY)).kind,
+        ghread.write("repos/o/r/issues/3", transport=write_stub(1, "", "boom")).kind,
+    }
+    assert kinds == {"done", "refused", "failed"}
+
+
+def test_a_refused_write_is_never_counted_as_a_move_the_loop_made():
+    """The count the loop keeps: 16 cards moved that afternoon, and a 403 must not be one of them."""
+    outcomes = [
+        ghread.write("repos/o/r/issues/3", transport=write_stub(0, '{"id": 7}')),
+        ghread.write("repos/o/r/issues/3", transport=write_stub(1, REFUSAL_BODY)),
+        ghread.write("repos/o/r/issues/3", transport=write_stub(1, "", "boom")),
+    ]
+    assert [o.is_done for o in outcomes] == [True, False, False]
+    assert sum(1 for o in outcomes if o.is_done) == 1
+
+
+# --- the write contract as a process, which is how a shell script reaches it ------------------------------------------
+
+
+def _gh_recorder(tmp_path: Path, body: str, rc: int):
+    """Put a stub `gh` on PATH that records its own argv, and hand back the env to run the module with. No network."""
+    b = tmp_path / "bin"
+    b.mkdir(exist_ok=True)
+    rec = tmp_path / "gh.argv"
+    gh = b / "gh"
+    gh.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> {rec}\nprintf %s {json.dumps(body)}\nexit {rc}\n')
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+    return dict(os.environ, PATH=f"{b}:{os.environ['PATH']}"), rec
+
+
+def test_the_cli_moves_a_card_and_exits_zero_when_github_accepts(tmp_path):
+    env, rec = _gh_recorder(tmp_path, '{"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "x"}}}}', 0)
+    r = subprocess.run(
+        [sys.executable, str(MODULE), "--method", "POST", CARD_MOVE_ROUTE, "-f", f"query={CARD_MOVE}"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert r.returncode == 0, f"a done write exits 0: {r.stdout!r} {r.stderr!r}"
+    assert "updateProjectV2ItemFieldValue" in r.stdout, "the answer is on stdout for the caller's jq"
+    assert "POST" in rec.read_text() and CARD_MOVE in rec.read_text(), f"the move reached gh as {rec.read_text()!r}"
+
+
+def test_the_cli_reports_a_refused_write_and_never_exits_zero(tmp_path):
+    env, rec = _gh_recorder(tmp_path, REFUSAL_BODY, 1)
+    r = subprocess.run(
+        [sys.executable, str(MODULE), "--method", "PATCH", "repos/o/r/issues/3", "-f", "state=closed"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert r.returncode == 2, f"a refusal has its own exit code, never 0: {r.stdout!r}"
+    assert RATE_LIMIT_MESSAGE in r.stdout and REQUEST_ID in r.stdout, f"the refusal names GitHub's words: {r.stdout!r}"
+    assert "state=closed" in rec.read_text(), "the refused close still reached gh as the write it was"
