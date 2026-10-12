@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 PIP_FROM = "// ---- the pip over the maximized board (#1782)"
 PIP_TO = "// ---- the pip ends here"
+PANES_JS = ROOT / "contrib/squad-goal/scripts/panes.js"
 
 
 @pytest.fixture(scope="module")
@@ -63,7 +64,7 @@ def test_the_window_sits_above_the_headers_and_below_the_filter_popover(hub):
 
 def test_it_belongs_to_the_maximize_mode_so_nobody_closes_it_twice(hub):
     css = _css(hub, "body:not(.dockb.max) #pip")
-    assert "visibility:hidden" in css and "display:none" not in css     # gone from the split, and its frame is never detached
+    assert "visibility:hidden" in css and "display:none" not in css     # gone from the split, and its frame is detached by the panes rule, not by the CSS
 
 
 def test_the_window_sits_between_the_header_and_the_columns_so_the_keyboard_reaches_it_in_that_order(hub):
@@ -75,7 +76,7 @@ def test_the_window_sits_between_the_header_and_the_columns_so_the_keyboard_reac
 
 def test_the_collapsed_window_is_a_header_bar_that_keeps_its_place(hub):
     css = _css(hub, "#pip.off #pipb")
-    assert "height:0" in css and "visibility:hidden" in css             # the header alone; the frame stays mounted
+    assert "height:0" in css and "visibility:hidden" in css             # the header alone
     assert "position" not in css                                        # no snapping back
 
 
@@ -102,7 +103,7 @@ def test_the_card_is_the_dashboards_own_single_card_mode_not_a_second_rendering(
 
 
 def test_the_window_follows_the_run_the_left_bar_has_selected(hub):
-    assert "slots[0]" in _pip_slice(hub)                                # the run the panel is showing is the run the window shows
+    assert "paneFocus(slots,focus)" in _pip_slice(hub)                  # the run the panel follows is the run the window shows
 
 
 def test_a_dashboard_without_the_mode_degrades_to_a_message_never_an_empty_frame(hub):
@@ -117,9 +118,10 @@ def test_the_run_less_hub_shows_the_hubs_own_message_in_the_window(hub):
 
 def test_the_frame_is_sourced_once_per_run_switch_and_never_by_a_repaint(hub):
     slice_ = _pip_slice(hub)
-    assert slice_.count(".src=") == 1                                   # one place sets the URL
+    assert slice_.count(".src=url") == 1                                # one place sets the URL (the other write detaches the frame)
     assert re.search(r"if\(url!==pipSrc\)", slice_)                     # and only when the selected run changed
-    assert "pipDraw()" in hub.PAGE[hub.PAGE.index("function refresh"):hub.PAGE.index("function applyFilter")]   # the run switch repaints it
+    assert "liveSync()" in hub.PAGE[hub.PAGE.index("function refresh"):hub.PAGE.index("function applyFilter")]   # the run switch repaints it...
+    assert "pipDraw()" in hub.PAGE[hub.PAGE.index("function liveSync"):hub.PAGE.index("function refresh")]       # ...through the one sync that repaints the panes and the window
 
 
 # ---------------------------------------------------------------- the window's own geometry and gestures
@@ -208,7 +210,7 @@ console.log("RESULT"+JSON.stringify(steps));
 def _pip_states(hub):
     if shutil.which("node") is None:
         pytest.skip("node is required")
-    script = _NODE_PRE + _pip_slice(hub) + _NODE_POST
+    script = _NODE_PRE + PANES_JS.read_text() + "let focus=null;" + _pip_slice(hub) + _NODE_POST
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.split("RESULT")[-1])
@@ -252,8 +254,8 @@ def test_escape_collapses_the_window_and_a_second_one_hands_the_focus_back(hub):
 def test_collapsing_never_reconnects_the_stream_and_never_rebuilds_the_frame(hub):
     st = _pip_states(hub)
     assert st["init"]["frames"] == 0                                    # the frame is the page's own element, never created here
-    assert st["init"]["writes"] == 1
-    assert st["maximized"]["writes"] == 1                               # maximizing does not touch the URL
+    assert st["init"]["writes"] == 0                                    # in the split the window follows nothing: its frame holds no source
+    assert st["maximized"]["writes"] == 1                               # maximizing sources it once, for the focused run
     assert st["collapsed"]["writes"] == 1 and st["expanded"]["writes"] == 1
     assert (st["collapsed"]["h"], st["expanded"]["h"]) == (34, 300)
     assert st["switched"]["writes"] == 2                                # one new source when the left bar moves to another run

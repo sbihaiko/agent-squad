@@ -17,7 +17,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
 PANES_JS = ROOT / "contrib/squad-goal/scripts/panes.js"
-PANES_FROM = 'let built="";'
+PANES_FROM = "let built="
 PANES_TO = "function refresh("
 
 
