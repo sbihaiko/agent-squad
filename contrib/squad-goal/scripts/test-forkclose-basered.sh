@@ -2,14 +2,14 @@
 # Regression test for forkclose.sh's base-red park: one escalation card per base sha, one solo retry past the budget (green lifts, red keeps).
 # usage: bash test-forkclose-basered.sh [path/to/forkclose.sh]
 src=${1:-$(dirname "$0")/forkclose.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
 printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"; printf '#!/bin/bash\necho t-1\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD='"'"'echo run >> %s/runs; [ -e %s/green ]'"'"'\n' "$T/st" "$T/fork" "$T/co" "$T" "$T" > "$T/s/env.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
 g checkout -q -b gui/1 local/next; echo 1 > "$T/fork/f1"; g add .; g commit -q -m "work 1"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"issues/1/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";; esac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"issues/1/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 bs=$(g rev-parse --short=9 local/next); A="$T/st/auto"
 printf 'FAIL test-pilot-script.sh: case home-06\n--- fork gate: GUI suite FAILED (exit 1)\n' > "$T/st/basetest-$bs.log"
 run() { bash "$T/s/forkclose.sh" 2>&1; }; cards() { ls "$T/st/cq" | wc -l | tr -d ' '; }
