@@ -8,6 +8,8 @@ P=$(mktemp -d); G=/usr/bin/git; pg() { $G -C "$P" -c user.email=a@b -c user.name
 pg checkout -q -b gui/7 local/next; echo 7 > "$P/g"; pg add g; pg commit -q -m w; pg checkout -q local/next; touch -t 202001010000 "$P/g"
 export SG_FORK_DIR="$P" SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORK_ORPHAN_MINUTES=0
 unset "${!SG_@}"; export HOME="$T/home"   # hermetic: whatever the caller exports (the live loop's SG_*) stops here
+# #17: the default regex matches the live loop on this machine (and a fork of it that is a root for a moment); every pass reads only the fakes
+export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
 mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"
 printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7\n' "$T/st" "$T/co" > "$T/s/env.sh"; printf '#!/bin/bash\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"; export HEALTH_NOTIFY="$T/notify"
@@ -80,5 +82,25 @@ printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & w1=$!
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one loop alerted: $o" || ok "one watch.sh is not a duplication"
 bash "$T/s/watch.sh" & w2=$!; sleep 1; o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH loops-duplicated: 2 watch.sh process(es) alive' && ok "a second watch.sh alerts (it doubles every GitHub read)" || ko "duplicate: $o"
+# #17: the cause names the pids it counted, so an operator can compare them with the loop watchd started
+wps=$(printf '%s\n' $w1 $w2 | sort -n | tr '\n' ' '); wps=${wps% }
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH loops-duplicated: 2 watch.sh process(es) alive (pids $wps;" && ok "the duplicate names both pids" || ko "pids not named ($w1 $w2): $o"
 kill $w1 $w2 2>/dev/null; wait $w1 $w2 2>/dev/null
+# #17: the cause also names the pid the supervisor holds for its watch.sh, so the stray one is the pid that is not named there
+rm -f "$T/st/auto/health-loops-duplicated"
+mkdir -p "$T/sup"; printf '#!/bin/bash\nbash "'"$T"'/s/watch.sh" &\necho $! > "'"$T"'/held.pid"\nwait\n' > "$T/sup/watchd.sh"; printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"
+bash "$T/sup/watchd.sh" run & sp=$!; bash "$T/s/watch.sh" & w3=$!; sleep 1; hp=$(cat "$T/held.pid"); echo "$sp" > "$T/st/watchd.pid"
+o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "watchd pid $sp holds $hp" && ok "the duplicate names the pid the supervisor holds" || ko "supervisor pid not named (watchd $sp holds $hp, stray $w3): $o"
+kill $sp $hp $w3 2>/dev/null; wait $sp $hp $w3 2>/dev/null; rm -f "$T/st/watchd.pid"
+# #17: pgrep -f matches the command line, and a forked subshell (pipeline, $(...), a background group) inherits its parent's argv.
+# One healthy loop that forks must not read as two; the fake loop keeps a pipeline and a nested $(...) alive for the whole check.
+rm -f "$T/st/auto/health-loops-duplicated"
+# a detached step, `( cmd & )`, is a fork whose parent exited: parent pid 1, the loop's argv, the loop's process group (watch.sh runs forkclose so)
+printf '#!/bin/bash\n{ x=$(sleep 20; true); } &\n( { sleep 20; true; } & )\ntrue | { sleep 20; true; } | cat > /dev/null\nwait\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & wf=$!; sleep 1
+/bin/ps -axo ppid=,command= | /usr/bin/grep -v grep | /usr/bin/grep -q "^ *1 bash $T/s/watch\.sh\$" && ok "the fake loop leaves a detached fork (parent pid 1)" || ko "no orphaned fork in the fake loop: the next check proves less"
+nf=$(/usr/bin/pgrep -f "$T/s/watch\.sh$" | wc -l | tr -d ' ')
+[ "$nf" -gt 1 ] && ok "the fake loop is forking ($nf pgrep matches for one loop)" || ko "the fake loop does not fork: $nf match(es), the next check proves nothing"
+o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one forking loop alerted: $o" || ok "one watch.sh that forks is not a duplication"
+kill $wf 2>/dev/null; pkill -P $wf 2>/dev/null; wait $wf 2>/dev/null
 kill $wp $fp 2>/dev/null; rm -rf "$T" "$P"; exit $fail
