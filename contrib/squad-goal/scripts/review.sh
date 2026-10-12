@@ -21,6 +21,9 @@ if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/revi
   delta=$(gh api -H "Accept: application/vnd.github.diff" repos/$repo/compare/$(cat "$last")...$head 2>/dev/null)
   [ "$(printf '%s\n' "$delta" | wc -l)" -le "$(jq -r '.review_delta_max_lines // 3000' "$cfg")" ] && cp "$SG_STATE/review-$pr.md" "$prevmd" || delta=""
 fi
+# the mode the answer was asked for: a fix round answers its previous findings, and may do it in a '## Resolved'
+# section of their own (#1834) -- a full review may not write that heading, so revformat.py is told which one this is.
+fr=""; [ -n "$delta" ] && fr=--fix-round
 SEV="Severity: the section a finding sits in is its severity, nothing else. BLOCKING is a closed list: a divergence from an accepted ADR; a regression of behaviour main already had; a change to a wire protocol or a persisted format; a test that passes while lying. Anything else real is DEBT. DEBT is not a dropped finding: it costs a filed task, so say it concretely enough to file."
 # #1777: the length cap is a named constant in the config, never a magic number in the prompt, and the
 # checklist shape below is the same block in both prompt modes: revformat.py checks the answer against it.
@@ -31,7 +34,8 @@ $SHAPE
 No preamble, no restating the diff or the issue body, no closing summary: a review of a small diff fits on one screen."
 FMTFIX="Output — the same short checklist, and nothing else, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE
-APPROVE only when every Blocking previous finding is fixed and the delta adds none. Each previous finding keeps the severity it was raised with, and its bullet repeats its file:line and its defect: - <file>:<line> — <defect> — fixed|not fixed: <one-line reason> — <the check that proves it>. The marker is what the loop reads (#1832): a bullet answered 'fixed: <reason>' is the fix, not a finding, so it contradicts no APPROVE; a bullet saying 'not fixed: <reason>' keeps the severity it was raised with and is what a CHANGES rests on.
+A fix round answers its previous findings in a '## Resolved' section of their own, after '## Blocking' and '## Debt': an answered finding moves there with the same bullet — - <file>:<line> — <defect> — fixed: <one-line reason> — <the check that proves it> — so the answer stays auditable. A previous finding that is NOT fixed keeps the severity it was raised with and its bullet stays in '## Blocking' or '## Debt' as - <file>:<line> — <defect> — not fixed: <one-line reason>: that is what a CHANGES rests on and what still blocks the merge. A finding is never written under '## Resolved'. New findings the delta raises go under '## Blocking' or '## Debt' as usual.
+APPROVE only when every previous Blocking finding is under '## Resolved' (or answered 'fixed' where it sits) and the delta adds none.
 No preamble, no restating the delta, no closing summary."
 if [ -n "$delta" ]; then
 { echo "You are a code reviewer. Read-only: do not edit, create or delete files. Answer in English.
@@ -154,7 +158,7 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       # ... and the answer itself must BE the checklist: a reviewer that narrates before it rules, restates the diff or
       # closes with a summary is a FORMAT failure of this try (#1777) -- the chain moves on and the issue says so,
       # instead of the prose passing silently as a review.
-      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" "$out" 2>/dev/null); then
+      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out" 2>/dev/null); then
         printf "MODEL_FORMAT review %s on PR #%s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$pr" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$SG_STATE/cq/$iss-mformat$$.md"
         fmt=1; rc=1; break
       fi
