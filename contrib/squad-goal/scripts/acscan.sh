@@ -3,12 +3,13 @@
 # Writes a read-only brief to $SG_STATE/acscan-<ts>.md: issue bodies + cited ADR files + instructions
 # to list AC conflicts. Prints the brief path.
 . "$(dirname "$0")/env.sh"
+. "$(dirname "$0")/ghcall.sh"
 [ $# -gt 0 ] || { echo "usage: acscan.sh <issue...>" >&2; exit 2; }
 out="$SG_STATE/acscan-$(date +%Y%m%d-%H%M%S).md"; adrs=""
 {
   echo "# Pre-dispatch spec-conflict scan"; echo
   for n in "$@"; do
-    body=$(gh api "repos/$SG_REPO/issues/$n" -q '"## Issue #"+(.number|tostring)+": "+.title+"\n\n"+(.body//"")') || { echo "cannot read issue #$n" >&2; exit 1; }
+    body=$(gh_api "repos/$SG_REPO/issues/$n" -q '"## Issue #"+(.number|tostring)+": "+.title+"\n\n"+(.body//"")') || { echo "cannot read issue #$n" >&2; exit 1; }
     echo "$body"; echo
     for a in $(printf '%s' "$body" | grep -oE 'ADR-[0-9]{4}' | sort -u); do
       case " $adrs " in *" $a "*) ;; *) adrs="$adrs $a";; esac; done
