@@ -150,4 +150,37 @@ $G -q "AUTOBUG would dispatch" <<<"$r" && ko "6c words from a zero-exit line wer
 $G -q "not a decimal issue number" "$T/err2" && ok "6c the dropped line is logged" || ko "6c the dropped line was not logged: '$(cat "$T/err2")'"
 m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "6c no marker for a word" || ko "6c a word became a marker: ${m[0]##*/}"
 
+# 7) (#1858) an issue the loop already marked not startable is not dispatched again. The health pass writes
+# `SQUAD-NOT-STARTABLE:` on an issue whose runs keep ending failed with the same reason; every dispatch path reads that
+# line first, so the loop cannot hand itself the same input twice. The marker is read only after the cheap filters, and a
+# refused comments read is not a marker (no answer at all), so a throttle never turns into a silent skip.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
+echo '{"max_parallel": 1}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+cp "$d/autobug.sh" "$T/s/"
+printf '#!/bin/bash\n[ -n "\${AB_DRY:-}" ] && exit 0\ntouch %s/launched\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
+held() {   # $1: the body of the issue's comments, one line each
+  cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) printf '%s' "$1" ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z"}\n' ;;
+  *) echo "" ;;
+esac
+J
+  chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+}
+held 'SQUAD-NOT-STARTABLE: 3 run(s) ended failed with the same reason `scope`; a person is needed.\n'
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "7 a held issue was dispatched anyway: '$r'" || ok "7 a held issue is not dispatched"
+# ... and the identical fixture with no marker does dispatch, so the assertion above is about the marker and not the fixture
+held ''
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+$G -q "AUTOBUG would dispatch.*\[1228\]" <<<"$r" && ok "7 the same candidate dispatches once the marker is gone" || ko "7 the fixture dispatches nothing even unmarked: '$r'"
+
 rm -rf "$T"; exit $fail

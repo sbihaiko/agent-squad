@@ -29,7 +29,7 @@ case "$a" in
   *"issues/$n -q .state"*) echo open;;
   *"issues/$n -q .body"*) ;;
   *"issues/$n -q"*) printf '"t%s"\n' "$n";;
-  *"issues/$n"*) printf '{"number":%s,"state":"open","title":"t","labels":[{"name":"gui"},{"name":"fork-only"}],"body":"plain body"}\n' "$n";;
+  *"issues/$n"*) printf '{"number":%s,"state":"open","title":"t","labels":[{"name":"gui"},{"name":"squad-only"}],"body":"plain body"}\n' "$n";;
 esac
 GH
 chmod +x "$T/bin/gh"

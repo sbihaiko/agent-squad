@@ -82,7 +82,7 @@
   #zoom { min-width:44px; text-align:center; color:var(--mute); font:12px var(--mono); }
   /* #replay is #footer's own transport row (#1813): the panel's bottom edge carries it, flat and hairline-thin, so the
      map keeps the room a floating pill used to reserve. It sits after #hint and never shrinks the hint off the row. */
-  #replay { display:none; align-items:center; gap:4px; flex:0 1 auto; min-width:0; margin-left:auto; padding:2px 0 0; border-top:1px solid var(--line); pointer-events:auto; }
+  #replay { display:none; align-items:center; gap:4px; flex:0 1 auto; min-width:0; grid-column:2; justify-self:center; padding:2px 0 0; border-top:1px solid var(--line); pointer-events:auto; }
   #replay input[type=range] { flex:0 1 150px; width:150px; min-width:24px; accent-color:var(--acc); }
   #replay button { flex:none; height:20px; padding:0 3px; background:none; border:0; border-radius:3px; color:var(--mute); font:12px var(--mono); cursor:pointer; }
   #replay button:hover:not(:disabled) { background:#2e3846; color:var(--fg); }
@@ -90,9 +90,15 @@
   #replay button, #r-pos { white-space:nowrap; }
   #r-pos { flex:none; color:var(--mute); font:11px var(--mono); text-align:right; }
   #r-pos.past { color:var(--warn); }
-  /* #footer holds #hint and #replay as a flex row, so neither can draw on top of the other: the row grows the box, not the overlap. */
-  #footer { position:absolute; left:12px; right:12px; bottom:10px; display:flex; justify-content:space-between; align-items:flex-end; gap:12px; pointer-events:none; }
-  #hint { color:var(--mute); font-size:11px; white-space:nowrap; flex:0 0 auto; }
+  /* #footer holds #hint and #replay as one row of three columns (#1861): the hint opens it, the transport takes the middle column
+     and is centred in it, and the third column is the empty mirror of the first -- so the bar lands on the middle of the row's own
+     width, whatever that width is, with no placement of its own. It stays in the flow: bottomReserve() and the legend's floor both
+     measure the row's top, and a bar lifted out of the flow would collapse the row to the hint's height. */
+  #footer { position:absolute; left:12px; right:12px; bottom:10px; display:grid; grid-template-columns:1fr auto 1fr; align-items:end; gap:12px; pointer-events:none; }
+  /* The row stops where the drawer begins, exactly as #view does: the transport rides the map's visible width, so an open panel
+     slides the bar left instead of drawing it under the drawer. */
+  body:not(.noside) #footer { right:calc(var(--side-w) + 12px); }
+  #hint { grid-column:1; justify-self:start; color:var(--mute); font-size:11px; white-space:nowrap; flex:0 0 auto; }
   .card { cursor:move; }
   .card rect { fill:var(--panel); stroke:#3a4250; stroke-width:1.2; }
   .card:hover rect { stroke:var(--acc); }
@@ -257,7 +263,7 @@
   #left::before { top:auto; bottom:var(--side-w,52vh); left:0; right:0; width:auto; height:8px; cursor:row-resize; }
   body:not(.noside) #mapbox { padding-bottom:52vh; }
   body:not(.noside) #view { right:12px; }
-  body:not(.noside) #footer { bottom:calc(var(--side-w,52vh) + 10px); }   /* the whole row clears the sheet: the bar rides in it */
+  body:not(.noside) #footer { bottom:calc(var(--side-w,52vh) + 10px); right:12px; }   /* the whole row clears the sheet: the bar rides in it, and the sheet takes no width off the row */
 }
 
 /* The single-card mode (#1782): `?card=<name>` paints ONE card of the panel and nothing else, for the second view the

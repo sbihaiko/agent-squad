@@ -96,6 +96,64 @@ if [ "$nboard" -ge 0 ] 2>/dev/null; then
     [ -n "${HEALTH_DRY:-}" ] || rm -f "$A/drift-prev"   # a drift that clears before the second pass leaves no stale count behind
   fi
 fi
+# A failure that repeats unchanged is a defect in the loop, not bad luck (#1858): the same thing is being fed in, or the same
+# thing is being read wrong, and nothing inside the loop could see it. Group the runs that ended failed inside the window by the
+# machine reason of their verdict (reasons[0] -- the free text around it rewords itself, the machine reason does not) and report
+# a group that reaches SG_HEALTH_REPEAT_COUNT. The report is posted ON the issues those runs were on, so the next dispatch reads
+# it before it starts (the SQUAD-NOT-STARTABLE line) and the loop stops re-feeding itself the same input.
+rr=$(python3 -I - "$SG_CHECKOUT/runs" "$now" "$(( ${SG_HEALTH_REPEAT_MINUTES:-120} * 60 ))" "$(( ${SG_HEALTH_REPEAT_COUNT:-3} ))" <<'PY'
+import json, os, sys
+runs, now, win, need = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+groups = {}
+try: dirs = os.listdir(runs)
+except OSError: dirs = []
+for d in dirs:
+    p = os.path.join(runs, d, "record.jsonl")
+    last = None
+    try:
+        if now - os.stat(p).st_mtime > win: continue
+        for l in open(p, errors="ignore"):
+            try: o = json.loads(l)
+            except Exception: continue
+            if o.get("event") == "verdict": last = o
+    except OSError: continue
+    if not last or last.get("verdict") != "failed": continue
+    rs = last.get("reasons") or []
+    # the issues the run was on, from the same shape autofrontier reads: the spawn_accepted lines name them
+    iss = []
+    try:
+        for l in open(p, errors="ignore"):
+            if '"spawn_accepted"' in l:
+                import re
+                iss += re.findall(r"GitHub issue #(\d+)|issue #(\d+)", l) and [m for t in re.findall(r"GitHub issue #(\d+)|issue #(\d+)", l) for m in t if m]
+    except OSError: pass
+    k = (rs[0] if rs else "?")[:60]
+    g = groups.setdefault(k, {"n": 0, "iss": [], "why": (rs[1] if len(rs) > 1 else "")})
+    g["n"] += 1
+    for i in iss:
+        if i not in g["iss"]: g["iss"].append(i)
+    g["why"] = g["why"] or (rs[1] if len(rs) > 1 else "")
+for k, g in sorted(groups.items(), key=lambda kv: -kv[1]["n"]):
+    if g["n"] >= need:
+        print("%d\t%s\t%s\t%s" % (g["n"], k, ",".join(g["iss"]) or "-", g["why"][:220].replace("\t", " ")))
+PY
+)
+if [ -n "$rr" ]; then
+  nrr=${rr%%$'\t'*}; rest=${rr#*$'\t'}; rkey=${rest%%$'\t'*}; rest=${rest#*$'\t'}; riss=${rest%%$'\t'*}; rwhy=${rest#*$'\t'}
+  add runs-repeating-failure "$nrr run(s) ended failed with the same reason '$rkey' in the last ${SG_HEALTH_REPEAT_MINUTES:-120} min: $rwhy"
+  # write it where the next dispatch will read it (once per reason and issue: the marker is the memory)
+  [ -n "${HEALTH_DRY:-}" ] || for n in ${riss//,/ }; do
+    cm="$A/notstartable-$n-$rkey"; [ -e "$cm" ] && continue
+    printf 'SQUAD-NOT-STARTABLE: %s run(s) ended failed with the same reason `%s` in the last %s min.\n\n%s\n\nA dispatch on this issue reads this line before it starts and starts nothing while it is here. Remove this comment (or fix the cause) to re-arm it.\n' \
+      "$nrr" "$rkey" "${SG_HEALTH_REPEAT_MINUTES:-120}" "$rwhy" > "$A/.cm$$"
+    gh api --method POST "repos/$SG_REPO/issues/$n/comments" -F body=@"$A/.cm$$" >/dev/null 2>&1 && touch "$cm"
+    rm -f "$A/.cm$$"; done
+fi
+# Two loops are not twice the loop (#1858): a second watch.sh doubles every GitHub read the loop makes -- which is what the API's
+# abuse limit costs -- and a second loop is invisible from inside the first. watchd runs exactly one; anything else is an orphan.
+wr=${SG_WATCH_CMD_RE:-'squad-goal/scripts/watch\.sh$'}
+nw=$(/usr/bin/pgrep -f "$wr" 2>/dev/null | wc -l | tr -d ' ')
+[ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive: watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
 { printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf ']}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"

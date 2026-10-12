@@ -88,6 +88,10 @@ for sel in "$lab" debt; do
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
+    # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
+    # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
+    # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.
+    sg_not_startable "$n" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
     cand+=("$n")
   done <<<"$list"
 done

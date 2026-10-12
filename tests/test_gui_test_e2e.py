@@ -3512,8 +3512,8 @@ def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
         f'LOG="{log}"; touch "$LOG"\n'
         'case "$*" in\n'
         '  *"/labels/debt"*) echo "{}" ;;\n'
-        '  *"--method POST"*"/issues"*) cat >> "$LOG"; echo >> "$LOG"; echo \'{"html_url":"https://x/1"}\' ;;\n'
-        '  *"--paginate"*) cat "$LOG" ;;\n'
+        '  *"--method POST"*"/issues"*) cat >> "$LOG"; echo >> "$LOG"; echo \'{"number":1,"html_url":"https://x/1"}\' ;;\n'
+        '  *"--paginate"*) awk \'BEGIN{printf "["; q=sprintf("%c",34)} length($0)>0 {k++; printf "%s{%snumber%s:%d,%s", (k>1?",":""), q, q, k, substr($0,2)} END{printf "]"}\' "$LOG" ;;\n'
         'esac\n')
     gh.chmod(0o755)
     review = tmp_path / "review.md"

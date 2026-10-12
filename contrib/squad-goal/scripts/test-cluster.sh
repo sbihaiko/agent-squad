@@ -37,9 +37,9 @@ r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"[1301 1302]"*) ca
 # One fork-only slice that shares a file with another fork-only pick is ONE child / ONE branch, exactly as the base-branch
 # picks above (#1521): gui/1497, gui/1498 and gui/1502 each landed their own branch on contrib/squad-goal/scripts/hub.py,
 # and the three of them stopped the merge until a hand resolved them.
-FK='[{"number":1500,"title":"Hub: cost panel","body":"contrib/squad-goal/scripts/hub.py in the spend header","labels":[{"name":"fork-only"}],"created_at":"2026-10-11T09:00:00Z"},
-{"number":1501,"title":"Hub: run badge","body":"also contrib/squad-goal/scripts/hub.py, the badge","labels":[{"name":"fork-only"}],"created_at":"2026-10-11T09:01:00Z"},
-{"number":1502,"title":"Hub: another panel","body":"nothing to do with the others","labels":[{"name":"fork-only"}],"created_at":"2026-10-11T09:02:00Z"}]'
+FK='[{"number":1500,"title":"Hub: cost panel","body":"contrib/squad-goal/scripts/hub.py in the spend header","labels":[{"name":"squad-only"}],"created_at":"2026-10-11T09:00:00Z"},
+{"number":1501,"title":"Hub: run badge","body":"also contrib/squad-goal/scripts/hub.py, the badge","labels":[{"name":"squad-only"}],"created_at":"2026-10-11T09:01:00Z"},
+{"number":1502,"title":"Hub: another panel","body":"nothing to do with the others","labels":[{"name":"squad-only"}],"created_at":"2026-10-11T09:02:00Z"}]'
 printf '%s' "$FK" > "$T/issues.json"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *"[1500 1501]"*) ok "frontier: fork-only issues naming one file share one child";; *) ko "fork-only cluster: '$r'";; esac

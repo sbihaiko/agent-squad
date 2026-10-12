@@ -123,7 +123,7 @@ r=$(run); skipped "$r" && ok "never starts two hunts at once" || ko "started a s
 # 13) hunt request names sources, filing rules, carve-outs
 scene req; r=$(run); body=$(cat "$SG_STATE/req/"*.body "$SG_STATE/req/"*.txt 2>/dev/null)
 for w in "shell suites" "Python suites" "git log" "needs-human" "recent bugs" \
-         "at most 3" "duplicate" "label \`bug\`" "Fork-only work" \
+         "at most 3" "duplicate" "label \`bug\`" "Squad-only work" \
          "GUI scenario" "credentials" "permanent deletion" "architecture"; do
   printf '%s' "$body" | $G -qi -- "$w" || { ko "request lacks '$w'"; w=; }
 done

@@ -5,13 +5,28 @@
 # phrase is not a marker: matching it anywhere sent work that belonged to MesenAI down the fork route, where no PR is opened.
 # Every request builder (autobug, autofrontier, autofix, forkclose's fix/conflict builders, mkreq)
 # asks this rule, so a fork-only issue never gets the MesenAI preamble (base origin/<base>, fix/<N>, open the PR, prepush.sh).
-sg_fork_only() { gh api "repos/$SG_REPO/issues/$1" 2>/dev/null | jq -e '([.labels[]?.name]|index("fork-only") != null) or ((.body // "")|test("(?m)^[[:space:]>*+-]*\\**[Ff]ork-only work"))' >/dev/null 2>&1; }
+# The label is `squad-only` (renamed from `fork-only` on 2026-10-12, when the work stopped being local-only): the old
+# spelling still reads, so an issue filed before the rename keeps the route it was filed with instead of silently
+# defaulting to a MesenAI PR. The body line reads both spellings for the same reason.
+sg_fork_only() { gh api "repos/$SG_REPO/issues/$1" 2>/dev/null | jq -e '([.labels[]?.name]|(index("squad-only") != null) or (index("fork-only") != null)) or ((.body // "")|test("(?m)^[[:space:]>*+-]*\\**([Ff]ork-only|[Ss]quad-only) work"))' >/dev/null 2>&1; }
 # The branch a fork-only child commits on: ONE setting, SG_FORK_BRANCH (%n = the issue, #1836). sg_fork_branch <N> prints the
 # branch the land resolves -- forkclose.sh merges exactly this ref -- and the request builders, stack.sh and the preamble all
 # name it through this function, so the name a child is given and the name the close pass looks for cannot come from two
 # sources. The default lives here and nowhere else: with the setting unset, both sides read gui/<N> instead of the child
 # creating gui/<N> while the land resolves an empty ref no pass ever merges.
 sg_fork_branch() { local br=${SG_FORK_BRANCH:-gui/%n}; echo "${br//%n/$1}"; }
+# An issue the loop itself has marked not startable (#1858): a run that ended failed on it SG_HEALTH_REPEAT_COUNT times running
+# leaves a `SQUAD-NOT-STARTABLE:` line among its comments, and every dispatch path reads that line before it starts -- so the loop
+# cannot feed itself the same input again. health.sh writes it; autobug.sh and autofrontier.sh read it, once per candidate that got
+# past their cheap filters. Absent the marker, a comments read costs one request and changes nothing.
+sg_not_startable() {
+  local out rc
+  out=$(gh api "repos/$SG_REPO/issues/$1/comments?per_page=100" -q '.[].body' 2>/dev/null); rc=$?
+  # A refused read is not "no marker": it is no answer at all, and the caller's own guards still apply (#1855). Reading the
+  # refusal as a negative here would be the same defect the wrapper in autobug.sh exists to stop.
+  [ "$rc" -eq 0 ] || return 1
+  printf '%s\n' "$out" | /usr/bin/grep -q '^SQUAD-NOT-STARTABLE:'
+}
 sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
 # The file paths a fork-only commit may touch, ONE source for the passes that read a branch's diff (forkrescue, forkstrand;
 # #1837). A trailing / is a directory prefix, anything else is that exact root file. Prints one per line.

@@ -1,15 +1,15 @@
 #!/bin/bash
-# Regression test for the fork-only request rule (#1411): the `fork-only` label (or a "Fork-only work" body line) makes every
+# Regression test for the squad-only request rule (#1411): the `squad-only` label (or a "Squad-only work" body line) makes every
 # request builder carry ONLY the fork preamble, and forkrescue.py re-points a stray fix/<N>-x commit to gui/<N>.
 # Offline: stub gh/board/launch over throwaway repos, HOME and state. usage: bash test-forkonly.sh
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/grep; mkdir -p "$T/bin"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
-# issue 1: fork-only by label; 2: fork-only by the plain body marker; 3: plain MesenAI issue;
+# issue 1: squad-only by label; 2: squad-only by the plain body marker; 3: plain MesenAI issue; 10: the OLD label spelling
 # 4-6: the marker bulleted, bolded, quoted; 7/9: the phrase only inside a sentence; 8: the marker on a later line
 a="$*"; n=$(printf '%s' "$a" | grep -oE 'issues/[0-9]+' | head -1 | tr -dc 0-9)
-lab() { case $1 in 1) echo '{"name":"bug"},{"name":"fork-only"}';; *) echo '{"name":"bug"}';; esac; }
+lab() { case $1 in 1) echo '{"name":"bug"},{"name":"squad-only"}';; 10) echo '{"name":"bug"},{"name":"fork-only"}';; *) echo '{"name":"bug"}';; esac; }
 body() { case $1 in
   2) printf 'Fork-only work: no PR.\\nfix it';;
   4) printf 'Fix it.\\n- Fork-only work: no PR.';;
@@ -63,7 +63,8 @@ for m in m1 m2; do f=$HOME/.cache/squad-goal/req/$m.txt
   $G -q 'cd <fork worktree>' "$f" && ok "mkreq $m: fork DONE CHECK" || ko "mkreq $m: no fork DONE CHECK"; done
 $G -q 'gh api --method POST' "$HOME/.cache/squad-goal/req/m3.txt" && ok "mkreq plain keeps the PR checklist" || ko "mkreq plain lost the PR checklist"
 # 7: forkonly.sh rule: the label, or a marker LINE (plain / bulleted / bolded / quoted), never the phrase inside a sentence
-for p in "1:yes" "2:yes" "3:no" "4:yes" "5:yes" "6:yes" "7:no" "8:yes" "9:no"; do (. "$S/forkonly.sh"; sg_fork_only "${p%%:*}") && v=yes || v=no; [ "$v" = "${p#*:}" ] && ok "rule #${p%%:*} = $v" || ko "rule #${p%%:*} = $v"; done
+# 10 is the old label spelling: it still reads, so an issue filed before the 2026-10-12 rename keeps its route (#1411).
+for p in "1:yes" "2:yes" "3:no" "4:yes" "5:yes" "6:yes" "7:no" "8:yes" "9:no" "10:yes"; do (. "$S/forkonly.sh"; sg_fork_only "${p%%:*}") && v=yes || v=no; [ "$v" = "${p#*:}" ] && ok "rule #${p%%:*} = $v" || ko "rule #${p%%:*} = $v"; done
 # 8: forkrescue.py re-points a stray fix/<N>-x commit to gui/<N>, moves the card, leaves a note.
 # The branch decides, not only the brand (#1831): #1 is fork-only by label and carries a fork path, #3 carries a MesenAI path.
 # Both cards are parked at the landing stage in the hub's board cache, which is what the rescue reads (no gh call).

@@ -112,7 +112,7 @@ name="hunt-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
   echo "(b) read code merged in the last 24h (git log) for defects;"
   echo "(c) open-question / needs-human notes of recent verdicts;"
   echo "(d) areas recent bugs came from."
-  echo "May file: only a real defect with a reproduction, ideally a failing test whose output is in the issue. Search open and closed issues first; never file a duplicate; at most 3 bugs per hunt; no style opinions / architecture trade-offs (those go /adr). Each issue gets label \`bug\` and nothing else; body says Fork-only work: ... when the defect is in the agent-squad fork. File with: bash $here/autohunt.sh --file \"<title>\" <body-file>. If nothing qualifies: bash $here/autohunt.sh --none."
+  echo "May file: only a real defect with a reproduction, ideally a failing test whose output is in the issue. Search open and closed issues first; never file a duplicate; at most 3 bugs per hunt; no style opinions / architecture trade-offs (those go /adr). Each issue gets label \`bug\` and nothing else; body says Squad-only work: ... when the defect is in the agent-squad fork. File with: bash $here/autohunt.sh --file \"<title>\" <body-file>. If nothing qualifies: bash $here/autohunt.sh --none."
   echo "Never: run a GUI scenario, write-back or migration against a scenario's parent issue, delete anything (permanent deletion), spend money, touch credentials, or publish externally."
   echo
   echo "CHILD — read-only hunt (first source: open debt; then $src_name): look for real, reproducible defects and file each as a bug."

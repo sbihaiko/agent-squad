@@ -241,6 +241,19 @@ def test_the_replay_bar_no_longer_floats_over_the_map():
     assert _computed("#footer")["pointer-events"] == "none"                 # the row itself never eats a drag on the map
 
 
+def test_the_replay_bar_is_centred_on_the_width_the_map_shows():
+    """The bar takes the middle of the row (#1813), and the row stops where the drawer begins -- so an open panel slides the
+    bar onto the middle of the map the owner can see, instead of drawing it under the drawer, and it stays fully visible."""
+    footer = _computed("#footer")
+    assert footer["display"] == "grid" and footer["grid-template-columns"] == "1fr auto 1fr"
+    assert _computed("#hint")["grid-column"] == "1" and _computed("#replay")["grid-column"] == "2"
+    assert _computed("#replay")["justify-self"] == "center"
+    assert _computed("body:not(.noside) #footer")["right"] == "calc(var(--side-w) + 12px)"
+    # The bottom sheet under 900px takes height off the map, never width: the row spans the map again, so the middle of the
+    # row is the middle of the screen and the side offset would be a lie there.
+    assert _computed("body:not(.noside) #footer", media="max-width: 900px")["right"] == "12px"
+
+
 def test_the_replay_bar_is_thinner_and_quieter_than_the_pill_it_replaces():
     css = _computed("#replay")
     assert css["border-top"] == "1px solid var(--line)" and "border-radius" not in css

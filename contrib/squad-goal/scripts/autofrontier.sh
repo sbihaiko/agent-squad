@@ -59,6 +59,7 @@ pick=(); notes=()
 while IFS=$'\x1f' read -r w n labels; do
   [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*|*,debt,*) continue;; esac
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+  sg_not_startable "$n" && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
   d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
   fk=""; case "$d" in *" FORK "*) fk="; OPTIMISTIC ON CODE COMPLETE: create your fork branch from $SG_FORK_BASE and first \`git merge --no-ff\` the blocker's unmerged fork branch(es) ${d##* FORK } into it, then build on top";; esac
   case "$d" in READY*|STACK\ *) if sg_fork_only "$n"; then notes+=("FORK-ONLY, one local commit on $(sg_fork_branch "$n")$fk"); pick+=("$n"); [ ${#pick[@]} -ge "$free" ] && break; continue; fi;; esac   # fork-only: never a base origin/<base> or a stacked PR
