@@ -38,7 +38,7 @@ def _revformat():
     if "m" not in _REVFORMAT:
         try:
             _REVFORMAT["m"] = importlib.import_module("revformat")
-        except Exception:
+        except ImportError:
             path = pathlib.Path(__file__).resolve().parents[1] / "contrib" / "squad-goal" / "scripts" / "revformat.py"
             spec = importlib.util.spec_from_file_location("revformat", path)
             m = importlib.util.module_from_spec(spec)
