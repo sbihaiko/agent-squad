@@ -20,11 +20,14 @@ if not fork or not pathlib.Path(fork).is_dir(): sys.exit(0)
 def git(*a): return subprocess.run(["/usr/bin/git", "-C", fork, *a], capture_output=True, text=True)
 def ahead(b): return git("rev-list", "-1", f"{base}..{b}").stdout.strip() != ""
 def is_fork_only(n): return subprocess.run(["bash", forkonly, str(n)], capture_output=True).returncode == 0
-FORK_PATHS = ("contrib/squad-goal/", ".claude-plugin/")   # the paths a fork-only commit may touch; CHANGELOG.md is the root file of the same set
+def fork_paths():   # forkonly.sh owns the set (sg_fork_paths, #1837); the literal here is the fallback when it cannot be asked
+    r = subprocess.run(["bash", "-c", f'. "{forkonly}"; sg_fork_paths'], capture_output=True, text=True)
+    return [p for p in r.stdout.split("\n") if p.strip()] or ["contrib/squad-goal/", ".claude-plugin/", "CHANGELOG.md"]
+FORK_PATHS = fork_paths()   # a trailing / is a directory prefix; anything else is that exact root file (CHANGELOG.md)
 def fork_paths_only(b):   # every file b changed since it left the base is fork tooling, and there is at least one: the branch itself says it is fork work
     mb = git("merge-base", base, b).stdout.strip()
     files = [p for p in git("diff", "--name-only", mb, b).stdout.split("\n") if p] if mb else []
-    return bool(files) and all(p == "CHANGELOG.md" or p.startswith(FORK_PATHS) for p in files)
+    return bool(files) and all(any(p == x or (x.endswith("/") and p.startswith(x)) for x in FORK_PATHS) for p in files)
 def ready_cards():   # the loop's own card source (hub.py's board cache): what is parked at the landing stage. No gh call, no budget.
     try: items = json.loads(pathlib.Path(os.environ.get("SG_HUB_DIR", os.path.join(os.environ.get("SG_CHECKOUT", ""), "runs/.hub")) + "/hub-board.json").read_text()).get("items") or []
     except Exception: return set()
@@ -63,6 +66,9 @@ for r in (st / "active-runs.txt").read_text().split():
         dst = pat.replace("%n", str(n))
         stray = [b for b in git("for-each-ref", "--format=%(refname:short)", f"refs/heads/*/{n}-*", f"refs/heads/{n}-*").stdout.split() if b != dst and ahead(b)]
         if not stray: continue
+        if len(stray) > 1:   # two branches answering one issue number: which is the work is a guess, and a wrong merge is not reversible by name (#1837)
+            print(f"FORKRESCUE #{n}: {len(stray)} branches answer #{n} ({', '.join(sorted(stray))}) and none of them is the ref the land reads ({dst}); the pass refuses to pick one")
+            continue
         src = stray[0]; forkwork = fork_paths_only(src)
         if not forkwork and not is_fork_only(n): continue   # not fork work by its paths and not branded: not ours to move
         if n not in ready and not (forkwork and outcome != "pass"): continue   # a card still In Progress belongs to a live run; a child that ended without a pass has no other process that would ever re-point it
