@@ -17,8 +17,9 @@
 # Nothing here names a host's path or type: the two reaches that are not a host's to define - reading a file and opening a
 # client - are generic and always on. A host that declares no domain gets exactly those two, and no guess about the rest.
 #
-# Run it as a gate, not as advice: wire it beside the host's own rule-layer firewall in make/CI, and put the same command in
-# the host profile's $SG_PREPUSH_CHECKS so the loop runs it in the tree before every push. Exit 0 when clean, 1 on any offence.
+# Run it as a gate, not as advice. In the host, it sits beside the host's own rule-layer firewall (the host-free compile of
+# the rule layer, ADR-0123) in the same make target and the same CI job, and the same command goes in the host profile's
+# $SG_PREPUSH_CHECKS so the loop runs it in the tree before every push. Exit 0 when clean, 1 on any offence.
 set -uo pipefail
 root=${1:-.}
 if [ ! -d "$root" ]; then

@@ -9,8 +9,8 @@
 : "${SG_E2E_DIR:=$HOME/wt-e2e}"         # detached worktree on the base branch for post-merge e2e
 : "${SG_E2E_CMD:=make test}"
 : "${SG_E2E_PASS_REGEX:=passed}"
-: "${SG_REVIEW_RULES:=the repo's AGENTS.md/CLAUDE.md rules}"
-: "${SG_CODING_RULES:=follow AGENTS.md; bug fixes in TDD with the RED output in the PR body}"
+: "${SG_REVIEW_RULES:=the repo's AGENTS.md/CLAUDE.md rules; a view constructs, binds and delegates - it never reaches a file, a client, application state or a domain service, and each rule lives where no host is needed to test it (ADR-0137)}"
+: "${SG_CODING_RULES:=follow AGENTS.md; bug fixes in TDD with the RED output in the PR body; a view constructs, binds and delegates - keep the rule in the layer the host-free test project compiles, never read a file, open a client, mutate application state or instantiate a domain service from a view (ADR-0137)}"
 : "${SG_ROOT_NAME:=repo}"
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
 : "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)

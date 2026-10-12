@@ -2,4 +2,4 @@ PRE-PUSH CHECKLIST (verify each before every push): (1) when an ADR is amended, 
 
 Refs #<N>
 
-A PR whose title and body have no `Refs #N` cannot be mapped to an issue, so the autopilot never reviews, fixes or merges it (#1507). The loop can derive the issue from the branch (`gui/<N>`) or from the dispatching run and write the line itself: do not make it guess.
+A PR whose title and body have no `Refs #N` cannot be mapped to an issue, so the autopilot never reviews, fixes or merges it (#1507). The loop can derive the issue from the branch (`gui/<N>`) or from the dispatching run and write the line itself: do not make it guess. (11) a view (its code-behind included) constructs, binds and delegates: run the host's view-domain firewall (verify-view-domain-firewall.sh, wired beside the host's rule-layer firewall in make/CI) and answer for every offence it names - a view never reads a file, opens a client, mutates application state or instantiates a domain service, because the rule lives where no host is needed to test it (ADR-0137).
