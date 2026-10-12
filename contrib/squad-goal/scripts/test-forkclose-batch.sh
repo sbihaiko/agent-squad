@@ -49,6 +49,8 @@ rm -rf "$T"
 setup 4 5; r=$(pass)
 case "$r" in *"BATCH RED"*) ok "the red batch says so";; *) ko "no BATCH RED: $r";; esac
 case "$r" in *"RED #4"*) ok "one-by-one names the culprit";; *) ko "culprit not named: $r";; esac
+case "$r" in *"BATCH FALLBACK"*) ok "#13: the red the batch cannot attribute says so";; *) ko "#13: no FALLBACK line: $r";; esac
+case "$r" in *"without naming a failing test"*) ok "#13: the fallback names why it could not attribute the red";; *) ko "#13: the fallback gives no reason: $r";; esac
 case "$r" in *"RED #5"*) ko "the good branch was blamed: $r";; *"FORKCLOSE #5 closed"*) ok "the good branch lands on its own";; *) ko "#5 did not land: $r";; esac
 [ ! -e "$T/fork/bad" ] && [ -e "$T/fork/f5" ] && ok "the base holds the good work only" || ko "base content wrong"
 rm -rf "$T"
