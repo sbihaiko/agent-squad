@@ -3,12 +3,17 @@
 The review is the checklist of `contrib/squad-goal/scripts/revformat.py` (#1777): the section a finding sits in is
 its severity, and a bullet reads `- <file>:<line> — <defect> — <concrete failure> — <fix>`, at most two lines.
 BLOCKING findings block the merge and are never filed; the acceptance criterion of a filed task is that fix.
+The filer asks revformat.py what a finding is (`is_finding`), the same predicate the severity counts and the
+`--summary` line `autopilot.sh` reads ask (#1834), so a bullet that answers a previous finding -- under a fix
+round's `## Resolved`, or marked `fixed:` where it sits -- is filed by nobody.
 A review saved before the checklist (an inline DEBT tag, no sections) is still read the old way.
 GitHub goes through REST only (`gh api`), never GraphQL.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -16,39 +21,36 @@ import sys
 LABELS = ("debt",)
 FINDING = re.compile(r"^\W*DEBT\W+(?P<loc>\S+?:\d+)\s*[—–:-]+\s*(?P<defect>.*?)\s*(?:Acceptance:\s*(?P<ac>.*))?$",
                      re.IGNORECASE)   # the shape of a review saved before #1777: an inline DEBT tag on the line
-SECTION = re.compile(r"^##\s*(Blocking|Debt)\s*$", re.IGNORECASE)
-BULLET = re.compile(r"^\s*[-*]\s+(?P<text>\S.*)$")
 SEP = re.compile(r"\s+[—–-]\s+")
 LOC = re.compile(r"^[^\s:]+:\d+$")
 MARK = "debt-key:"
+_REVFORMAT = {}
 
 
 def _sh(args, input=None):
     return subprocess.run(args, input=input, capture_output=True, text=True, check=True).stdout
 
 
-def _bullets(review):
-    """(section, text) for every bullet of the checklist, the one extra line joined onto the finding above it."""
-    out, section = [], None
-    for line in review.splitlines():
-        text = line.strip()
-        m = SECTION.match(text)
-        if m:
-            section = m.group(1).capitalize()
-            continue
-        if not text or text.startswith("#"):
-            continue
-        found = BULLET.match(line)
-        if found and section:
-            out.append([section, found["text"]])
-        elif section and out:
-            out[-1][1] += " " + text
-    return out
+def _revformat():
+    """revformat.py, the module that reads the shape of a review and tells a finding from a fix round's answer
+    (#1777, #1832, #1834). It is loaded from the checkout, next to review.sh: the filer runs as `squad.debt_filing`,
+    so the skill's scripts directory is not on the path."""
+    if "m" not in _REVFORMAT:
+        try:
+            _REVFORMAT["m"] = importlib.import_module("revformat")
+        except ImportError:
+            path = pathlib.Path(__file__).resolve().parents[1] / "contrib" / "squad-goal" / "scripts" / "revformat.py"
+            spec = importlib.util.spec_from_file_location("revformat", path)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            _REVFORMAT["m"] = m
+    return _REVFORMAT["m"]
 
 
 def parse(review):
     """The DEBT findings of `review` as dicts of loc, defect and acceptance."""
-    if not any(SECTION.match(line.strip()) for line in review.splitlines()):
+    rv = _revformat()
+    if not any(rv.SECTION.match(line.strip()) for line in review.splitlines()):
         out = []   # a review saved before the checklist shape: an inline DEBT tag on the line
         for line in review.splitlines():
             m = FINDING.match(line.strip())
@@ -56,8 +58,8 @@ def parse(review):
                 out.append({"loc": m["loc"], "defect": m["defect"].rstrip(" ."), "ac": (m["ac"] or "").strip()})
         return out
     out = []
-    for section, text in _bullets(review):
-        if section != "Debt":
+    for section, text in rv.bullets(review):
+        if section != "Debt" or not rv.is_finding(section, text):
             continue
         fields = [f.strip() for f in SEP.split(text)]
         at = next((i for i, f in enumerate(fields[:2]) if LOC.match(f)), 0)
