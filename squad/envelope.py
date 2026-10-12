@@ -10,9 +10,8 @@ IDENTITY_FIELDS = {"id", "key", "child", "name", "request_key", "parent", "depth
 
 
 def normalize_request(dispatch, raw, vendor=skills.VENDOR):
-    """Fill the optional fields from the envelope. Return (request, errors)."""
+    """Fill the optional fields from the envelope. Return (request, errors). A key outside REQUEST_FIELDS is ignored: it narrows nothing, and one model's extra word must not cost the run its dispatch."""
     errs = [f"model_supplied_identity:{k}" for k in raw if k in IDENTITY_FIELDS]
-    errs += [f"unknown_field:{k}" for k in raw if k not in REQUEST_FIELDS and k not in IDENTITY_FIELDS]
     if not isinstance(raw.get("prompt"), str) or not raw.get("prompt"):
         errs.append("missing_prompt")
     skill = raw.get("skill")

@@ -556,9 +556,9 @@ async def test_a_dispatch_with_no_accepted_child_names_why_each_request_was_refu
     v = await eng.run()
     d = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
     assert d["reasons"][0] == "no_dispatch" and v.verdict == "failed"
-    assert {"spawn_rejected:model_supplied_identity:name", "spawn_rejected:unknown_field:skills", "spawn_rejected:unknown_field:budget",
-            "spawn_rejected:unknown_field:acceptance_commands", "spawn_rejected:missing_skill"} <= set(d["reasons"])
-    assert v.reasons[0] == "no_dispatch" and "spawn_rejected:unknown_field:budget" in v.reasons       # the verdict line carries them too
+    assert {"spawn_rejected:model_supplied_identity:name", "spawn_rejected:missing_skill"} <= set(d["reasons"])
+    assert not [r for r in d["reasons"] if "unknown_field" in r]
+    assert v.reasons[0] == "no_dispatch" and "spawn_rejected:missing_skill" in v.reasons       # the verdict line carries them too
 
 
 def test_the_router_prompt_documents_every_request_field_and_one_example():
@@ -621,3 +621,12 @@ def test_a_child_with_no_artifact_records_how_its_session_ended():
         result = "x" * 900
         is_error = False
     assert ended_of(R(), "success") == {"subtype": "success", "is_error": False, "last": "x" * 500}
+
+
+@pytest.mark.anyio
+async def test_a_request_naming_a_field_outside_the_envelope_still_dispatches(tmp_path):
+    eng = make(tmp_path, {"router": routed(req(turns=3)), "route.router.1": CHILD})
+    await eng.run()
+    d = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
+    assert "no_dispatch" not in d["reasons"] and not [r for r in d["reasons"] if r.startswith("spawn_rejected")]
+    assert "route.router.1" in child_outs(tmp_path)
