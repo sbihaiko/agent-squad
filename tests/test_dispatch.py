@@ -621,3 +621,12 @@ def test_a_child_with_no_artifact_records_how_its_session_ended():
         result = "x" * 900
         is_error = False
     assert ended_of(R(), "success") == {"subtype": "success", "is_error": False, "last": "x" * 500}
+
+
+@pytest.mark.anyio
+async def test_a_request_naming_a_field_outside_the_envelope_still_dispatches(tmp_path):
+    eng = make(tmp_path, {"router": routed(req(turns=3)), "route.router.1": CHILD})
+    await eng.run()
+    d = [e for e in ev(tmp_path, "outcome") if e["node"] == "route"][0]
+    assert "no_dispatch" not in d["reasons"] and not [r for r in d["reasons"] if r.startswith("spawn_rejected")]
+    assert "route.router.1" in child_outs(tmp_path)
