@@ -22,6 +22,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import types
 
 LABELS = ("debt",)
 BOARD_STATUS = "Todo"   # where a filed task waits: the frontier and autobug read that column
@@ -30,7 +31,7 @@ FINDING = re.compile(r"^\W*DEBT\W+(?P<loc>\S+?:\d+)\s*[—–:-]+\s*(?P<defect>.
 SEP = re.compile(r"\s+[—–-]\s+")
 LOC = re.compile(r"^[^\s:]+:\d+$")
 MARK = "debt-key:"
-_REVFORMAT = {}
+_REVFORMAT: dict[str, types.ModuleType] = {}
 
 
 def _sh(args, input=None):

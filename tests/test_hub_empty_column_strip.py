@@ -71,10 +71,9 @@ def _run_derivation(hub, *, kept=(), hidden=(), filled=(), bottom=True):
     """The page's own derivation, run by node over a stubbed board: every column `filled` does not name holds nothing."""
     names = ["Todo", "Doing", "Testing", "Closed Issues"]
     assert set(filled) <= set(names)
-    stub = ("const bo=%s,hid=new Set(%s),bottom=%s,all=%s,fits=%s;\n" % (
-        json.dumps({"kept": list(kept)}), json.dumps(list(hidden)), json.dumps(bottom),
-        json.dumps([{"name": n} for n in names]),
-        json.dumps({n: ([{"n": 1}] if n in filled else []) for n in names})))
+    stub = (f"const bo={json.dumps({'kept': list(kept)})},hid=new Set({json.dumps(list(hidden))}),"
+            f"bottom={json.dumps(bottom)},all={json.dumps([{'name': n} for n in names])},"
+            f"fits={json.dumps({n: ([{'n': 1}] if n in filled else []) for n in names})};\n")
     script = stub + _derivation(hub) + "\nconsole.log(JSON.stringify({vis:vis.map(g=>g.name),autos:autos.map(g=>g.name)}))"
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
