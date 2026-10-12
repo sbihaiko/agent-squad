@@ -10,6 +10,7 @@ import anyio
 
 from squad import actions, git, session
 from squad.adapter import CallRequest, new_session_id
+from squad.caps import CeilingWaitExpired
 from squad.engine_errors import Frontier
 from squad.gates import GateInput, run_check
 from squad.graph import WRITE_TOOLS
@@ -113,7 +114,7 @@ class Children:
                     done = self.outcome(name, "fail", ["after_failed", *blocked], None, {})
                 else:
                     async with ctx.limiter:
-                        done = await self.session(ctx, name)
+                        done = await self.admitted(ctx, name)
             except anyio.get_cancelled_exc_class():
                 if (name, 1, None) not in e.done:
                     with anyio.CancelScope(shield=True):
@@ -124,6 +125,23 @@ class Children:
         ctx.waits.setdefault(name, anyio.Event()).set()
         ctx.results.append((name, done["outcome"], done["reasons"]))
         await self.run_all(ctx, e.dispatch.accepted(name, 1))
+
+    async def admitted(self, ctx, name):
+        """One child inside one slot of the machine-wide child ceiling, keyed on its `spawn_accepted` name. A full ceiling waits,
+        bounded by the child's call deadline; a wait that expires fails the child by name. The slot returns when the child ends."""
+        e = self.e
+        if not e.ceiling:
+            return await self.session(ctx, name)
+        d = e.dispatch.children[name]["definition"]
+        bound = anyio.current_time() + max(0.0, min(d["deadline"] * e.scale, ctx.dl_at - e.clock()))
+        try:
+            lease = await e.ceiling.take("children", f"{e.run_id}:{name}", bound, on_wait=lambda w: e.record.append("ceiling_wait", **w))
+        except CeilingWaitExpired as x:
+            return self.outcome(name, "fail", [f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"], None, {})
+        try:
+            return await self.session(ctx, name)
+        finally:
+            e.ceiling.release(lease)
 
     async def wait_after(self, ctx, name):
         """Wait for the children this one runs after. Return the names that did not pass: this child then fails unrun.

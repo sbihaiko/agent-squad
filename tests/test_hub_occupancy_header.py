@@ -27,15 +27,8 @@ def hub():
     return mod
 
 
-def _graph(checkout, run, nodes=()):
-    p = Path(checkout) / "docs/squad/workflows/dynamic.graph.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"schema_version": 1, "name": "dynamic", "run": run, "nodes": list(nodes)}))
-    return p
-
-
 def _with_checkout(checkout):
-    """Point the hub's graph lookup at `checkout` for one test, and give the environment back untouched."""
+    """Point the hub's caps lookup at `checkout` for one test, and give the environment back untouched."""
     class _Ctx:
         def __enter__(self):
             self.old = os.environ.get("SG_CHECKOUT")
@@ -50,14 +43,14 @@ def _with_checkout(checkout):
 
 def test_running_group_header_shows_occupancy_not_spend(hub):
     rows = [{"state": "running", "live": True, "spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
-    h = hub.group_header("running", rows, {"max_parallel": 10, "max_children": 20})
-    assert h["text"] == "3/10 runs · 9/20 agents"
+    h = hub.group_header("running", rows, {"runs": 10, "children": 20})
+    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
     assert h["title"] == "$6.60"   # the spend the header no longer prints
 
 
 def test_finished_group_header_keeps_count_and_cost(hub):
     rows = [{"state": "verified", "live": False, "spend": 35.72, "agents": 0}] + [{"spend": 0.0, "agents": 0}] * 16
-    h = hub.group_header("1h", rows, {"max_parallel": 10, "max_children": 20})
+    h = hub.group_header("1h", rows, {"runs": 10, "children": 20})
     assert h["text"] == "17 · $35.72"
     assert h["title"] == "$35.72"
 
@@ -70,21 +63,36 @@ def test_running_header_falls_back_to_plain_counts_when_the_graph_is_unreadable(
     assert h["title"] == "$3.00"
 
 
-def test_loop_caps_reads_max_parallel_from_run_and_max_children_from_the_dispatch_node(hub):
-    co = tempfile.mkdtemp()
-    _graph(co, {"max_parallel": 10, "spend_cap": 168}, [{"name": "route", "kind": "dispatch", "max_children": 20}])
-    with _with_checkout(co):
-        assert hub.loop_caps() == {"max_parallel": 10, "max_children": 20}
+def _project(checkout, **pair):
+    p = Path(checkout) / "docs/squad/defaults.yaml"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("caps:\n" + "".join(f"  {k}: {v}\n" for k, v in pair.items()))
 
 
-def test_loop_caps_is_none_when_the_graph_cannot_be_read(hub):
+def test_loop_caps_is_the_one_resolution_the_engine_enforces(hub):
+    from squad import caps
     co = tempfile.mkdtemp()
+    _project(co, runs=2, children=5)
     with _with_checkout(co):
-        assert hub.loop_caps() is None          # no graph file at all
-    _graph(co, {"max_parallel": 10}, [{"name": "route", "kind": "dispatch", "max_children": 20}])
-    Path(co, "docs/squad/workflows/dynamic.graph.json").write_text("{not json")
+        got = hub.loop_caps()
+    enforced = caps.ceiling(co)
+    assert {k: got[k] for k in ("runs", "children")} == {k: enforced.caps[k] for k in ("runs", "children")} == {"runs": 2, "children": 5}
+    assert got["waiting"] == enforced.waiting() == []
+
+
+def test_loop_caps_is_none_when_the_resolution_fails(hub):
+    co = tempfile.mkdtemp()
+    _project(co, runs=11)                       # a project may only lower the machine-wide pair
     with _with_checkout(co):
-        assert hub.loop_caps() is None          # an unparsable graph shows no cap either
+        assert hub.loop_caps() is None
+
+
+def test_the_header_prints_runs_then_agents_over_the_ceiling_and_names_what_waits(hub):
+    rows = [{"spend": 1.0, "agents": a} for a in (2, 3)]
+    caps = {"runs": 10, "children": 20, "waiting": [{"ceiling": "caps.children", "holder": "run-x:route.router.4"}]}
+    h = hub.group_header("running", rows, caps)
+    assert h["text"] == "RUNS 2/10 · AGENTS 5/20 · waiting: run-x:route.router.4 (caps.children)"
+    assert _render_in_the_browser(hub, caps, rows)["text"] == h["text"]     # the page paints the same line
 
 
 def test_scan_counts_the_children_still_working(hub):
@@ -100,7 +108,7 @@ def test_scan_counts_the_children_still_working(hub):
 def test_the_page_binds_the_header_tooltip_to_the_group_spend():
     src = HUB_PY.read_text()
     assert "const CAPS=__CAPS__;" in src                                        # the caps reach the page
-    assert '.replace("__CAPS__", json.dumps(loop_caps()))' in src               # ... from the graph
+    assert '.replace("__CAPS__", json.dumps(loop_caps()))' in src               # ... from the caps resolution
     assert 'title="${esc(h.title)}">${h.text}' in src                           # spend in the tooltip, occupancy as the text
 
 
@@ -117,8 +125,8 @@ def _render_in_the_browser(hub, caps, rows):
 
 def test_the_page_renders_the_occupancy_header_with_the_graphs_caps(hub):
     rows = [{"spend": s, "agents": 3} for s in (1.1, 2.2, 3.3)]
-    h = _render_in_the_browser(hub, {"max_parallel": 10, "max_children": 20}, rows)
-    assert h["text"] == "3/10 runs · 9/20 agents"
+    h = _render_in_the_browser(hub, {"runs": 10, "children": 20}, rows)
+    assert h["text"] == "RUNS 3/10 · AGENTS 9/20"
     assert h["title"] == "$6.60"
 
 

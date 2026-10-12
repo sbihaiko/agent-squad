@@ -199,21 +199,22 @@ def group_of(r):
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
 
 def loop_caps():
-    """Occupancy denominators from the live workflow graph. max_parallel is run.max_parallel; max_children is run.max_children or a dispatch node's. None when the graph cannot be read."""
-    p = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "docs/squad/workflows/dynamic.graph.json"
+    """The machine-wide ceiling (squad/caps.py), from the one resolution the engine and the loop enforce: {runs, children, waiting}.
+    `waiting` lists each live wait as {ceiling, holder}. The project file of SG_CHECKOUT may lower the pair. None when the
+    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling."""
+    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
     try:
-        d = json.loads(p.read_text())
-        run = d.get("run") if isinstance(d.get("run"), dict) else {}
-        mp, mc = run.get("max_parallel"), run.get("max_children")
-        if not isinstance(mc, int):
-            for n in d.get("nodes") or []:
-                if isinstance(n, dict) and isinstance(n.get("max_children"), int):
-                    mc = n["max_children"]; break
-        if isinstance(mp, int) and mp > 0 and isinstance(mc, int) and mc > 0:
-            return {"max_parallel": mp, "max_children": mc}
+        if root not in sys.path: sys.path.insert(0, root)
+        from squad import caps as C
+        c = C.ceiling(os.environ.get("SG_CHECKOUT") or os.getcwd())
+        return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting()}
     except Exception:
-        pass
-    return None
+        return None
+
+def waiting_txt(caps):
+    """What waits for a slot, named: ` · waiting: <holder> (caps.runs)`. Empty when nothing waits."""
+    w = (caps or {}).get("waiting") or []
+    return " · waiting: " + ", ".join(f"{x['holder']} ({x['ceiling']})" for x in w) if w else ""
 
 def usd_txt(v):
     if v is None: return "—"
@@ -221,14 +222,15 @@ def usd_txt(v):
     return f"${v:.2f}"
 
 def group_header(kind, rows, caps):
-    """RUNNING shows occupancy (live runs and live children over the caps); other groups keep count · cost. Spend is the tooltip."""
+    """RUNNING shows occupancy against the machine-wide ceiling, runs then agents, and names what waits; other groups keep
+    count · cost. Spend is the tooltip."""
     n = len(rows)
     spend = sum((r.get("spend") or 0) for r in rows)
     agents = sum((r.get("agents") or 0) for r in rows)
     title = usd_txt(spend)
     if kind == "running":
-        if caps and isinstance(caps.get("max_parallel"), int) and isinstance(caps.get("max_children"), int):
-            return {"text": f"{n}/{caps['max_parallel']} runs · {agents}/{caps['max_children']} agents", "title": title}
+        if caps and isinstance(caps.get("runs"), int) and isinstance(caps.get("children"), int):
+            return {"text": f"RUNS {n}/{caps['runs']} · AGENTS {agents}/{caps['children']}{waiting_txt(caps)}", "title": title}
         return {"text": f"{n} · {agents}", "title": title}
     return {"text": f"{n} · {title}", "title": title}
 def run_rank(st, live=True):
@@ -550,10 +552,10 @@ def _progress_fact(ts, now):
     return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
 
 def _occ_fact(occ, caps):
-    """`4/10 runs 7/20 agents` against the caps the live graph carries, never a hard-coded pair. With no graph there is
-    no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
+    """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
+    resolution there is no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
     if not isinstance(occ, dict) or not isinstance(caps, dict): return "?"
-    mp, mc = caps.get("max_parallel"), caps.get("max_children")
+    mp, mc = caps.get("runs"), caps.get("children")
     if not isinstance(mp, int) or not isinstance(mc, int): return "?"
     return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
 
@@ -1581,7 +1583,7 @@ function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
  if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
-function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.max_parallel&&CAPS.max_children)?`${n}/${CAPS.max_parallel} runs · ${agents}/${CAPS.max_children} agents`:`${n} · ${agents}`;return {text,title}}
+function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
 // run appearing, ending or moving to another age bucket can never move what the user opened.

@@ -30,6 +30,12 @@ def _own_memory_dir(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("SQUAD_MEMORY_DIR", str(tmp_path_factory.mktemp("memory")))
 
 
+@pytest.fixture(autouse=True)
+def _own_caps_dir(monkeypatch, tmp_path_factory):
+    """The machine-wide run and child leases (`squad/caps.py`): no test takes a slot of the Owner's real ceiling."""
+    monkeypatch.setenv("SQUAD_CAPS_DIR", str(tmp_path_factory.mktemp("caps")))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _stop_test_dashboard_servers():
     """A run a test starts may leave a dashboard server on its tmp folder; stop those when the session ends."""

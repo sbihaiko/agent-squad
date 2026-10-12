@@ -2,11 +2,13 @@
 # Regression test for autobug ranking (bug first, then debt) and autofrontier skipping debt (Refs #1494).
 # Offline: stub gh. usage: bash test-autobug.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The free slots come from the machine-wide caps (squad/caps.py) of this checkout, with leases in the sandbox, never the real ones.
+export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
 cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/forkonly.sh" "$T/s/"
 : > "$T/st/active-runs.txt"
-echo '{"max_parallel": 1}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 # exported, as the real env.sh does: the stub mkreq.sh below is a child shell and must still see SG_STATE
 printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
 # 1228 is a bug; 1400 is debt (and still carries ready-for-agent, the old filer). 1401 is a frontier-only slice.
@@ -46,13 +48,13 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[1228]"*) case "$r" in *"[1400]"*) ko "1 bug+debt one slot still dispatched debt: '$r'";; *) ok "1 bug+debt one slot: bug first, debt held";; esac;; *) ko "1 bug not dispatched: '$r'";; esac
 
 # 2) two free slots and a startable bug: still no debt (debt only when no bug is startable)
-echo '{"max_parallel": 2}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
+printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[1400]"*) ko "2 extra slot dispatched debt while a bug is startable: '$r'";; *"[1228]"*) ok "2 extra slot: bug only, debt held";; *) ko "2 bug not dispatched: '$r'";; esac
 
 # 3) no startable bug: debt is dispatched
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"]!=1228], open(p,"w"))' "$T/issues.json"
-echo '{"max_parallel": 1}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[1400]"*) ok "3 no startable bug: debt dispatched";; *) ko "3 debt ignored when no bug: '$r'";; esac
 
@@ -155,7 +157,7 @@ m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "6c
 # line first, so the loop cannot hand itself the same input twice. The marker is read only after the cheap filters, and a
 # refused comments read is not a marker (no answer at all), so a throttle never turns into a silent skip.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
-echo '{"max_parallel": 1}' > "$T/co/docs/squad/workflows/dynamic.graph.json"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
 JSON

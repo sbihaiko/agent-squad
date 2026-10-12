@@ -65,11 +65,11 @@ class Outcomes:
             self.facts.produce(f"outcome:{ev['node']}", ev["outcome"], self._source(ev["pos"]), item=item)
             self.refresh(item)
 
-    def defect(self, root, defect):
-        """The fallback when the walk raises a defect: the root fails.
+    def defect(self, root, defect, reasons=None):
+        """The fallback when the walk raises a defect, or never starts (`reasons` name why): the root fails.
         Its entry is one past the last recorded entry of the root. A run and a resume use the same rule."""
         entry = max((e for (n, e, it) in self.done if n == root and it is None), default=0) + 1
-        ev = self.record.append("outcome", node=root, entry=entry, outcome="fail", reasons=[f"defect:{defect}"], artifact=None,
+        ev = self.record.append("outcome", node=root, entry=entry, outcome="fail", reasons=reasons or [f"defect:{defect}"], artifact=None,
                                 spend=None, turns=None, cap=None, elapsed=None)
         self._keep(ev, None)
         return ev

@@ -1,7 +1,7 @@
 """The project settings file: `docs/squad/defaults.yaml` under the target overlays the plugin defaults.
 
 Precedence, lowest first: plugin defaults, this file, `roles`, the graph `run` block, the node. A graph or a node may only narrow a cap.
-This file is the one layer that may raise a plugin default. It holds only the keys the owner changed, with the key names of the plugin defaults.
+This file is the one layer that may raise a plugin default, except the machine-wide `caps` pair, which it may only lower (`squad/caps.py`). It holds only the keys the owner changed, with the key names of the plugin defaults.
 The catalog below names every key the file may set. A key outside it, and any credential key, is refused with a message that names the key.
 
 `squad config set|reset|init` write the file: each write is checked by `validate`, and a second `set` of the same value changes nothing.
@@ -40,6 +40,8 @@ CATALOG = {
     "run.spend_cap": ("num", 0.01, 1000000, "USD", "spend of the run"),
     "dispatch.max_depth": ("int", 1, 20, "levels", "dispatch depth"),
     "dispatch.max_concurrency": ("int", 1, 1000, "children", "parallel dispatch children"),
+    "caps.runs": ("int", 1, 1000, "runs", "live runs on this machine; a project may only lower the plugin value"),
+    "caps.children": ("int", 1, 1000, "children", "live dispatch children on this machine; a project may only lower the plugin value"),
     "claude_md.max_line_width": ("int", 40, 10000, "characters", "width of one CLAUDE.md line before `squad setup --check` flags it"),
     "claude_md.max_section_lines": ("int", 5, 10000, "lines", "length of one CLAUDE.md section before `squad setup --check` flags it"),
 }
