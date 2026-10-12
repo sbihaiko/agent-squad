@@ -2,13 +2,13 @@
 # Regression test for sync-to-fork.sh / refresh-from-fork.sh (throwaway skill dir + fork repo, no network). usage: bash test-sync-refresh.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; c() { $G -c user.email=a@b -c user.name=t commit -q "$@"; }
-L="$T/live"; F="$T/fork"; export SG_STATE="$T/st" SG_SQUAD_FORK="$F" SG_FORK_BRANCH=local/next; mkdir -p "$L/scripts/profiles" "$SG_STATE" "$F/contrib/squad-goal/scripts/profiles"
+L="$T/live"; F="$T/fork"; export SG_STATE="$T/st" SG_SQUAD_FORK="$F" SG_FORK_BRANCH=main; mkdir -p "$L/scripts/profiles" "$SG_STATE" "$F/contrib/squad-goal/scripts/profiles"
 echo 'zzzz-never' > "$SG_STATE/sync-deny"
 cp "$d/sync-to-fork.sh" "$L/scripts/"; [ -f "$d/refresh-from-fork.sh" ] && cp "$d/refresh-from-fork.sh" "$L/scripts/"
 echo skill > "$L/SKILL.md"; echo 'echo a' > "$L/scripts/a.sh"; echo '{"mine":1}' > "$L/scripts/models.json"; echo 'export X=1' > "$L/scripts/profiles/example.sh"; echo 'export PRIVATE=1' > "$L/scripts/profiles/mine.sh"
 ss() { bash "$L/scripts/sync-to-fork.sh" 2>&1; }; rf() { bash "$L/scripts/refresh-from-fork.sh" "$@" 2>&1; }
 r=$(ss) && ok "first sync into an empty fork" || ko "first sync failed: $r"
-cd "$F"; $G init -q -b local/next .; $G add -A; c -m base
+cd "$F"; $G init -q -b main .; $G add -A; c -m base
 echo 'echo b' > "$L/scripts/b.sh"; r=$(ss) && ok "live-only edits sync" || ko "live-ahead sync refused: $r"
 $G add -A; c -m live
 # fork-ahead: a child lands a new file and an edit on local/next
@@ -43,4 +43,14 @@ r=$(rf --check) && ok "check stays clean after a second refresh" || ko "second c
 # the fork still owns what it ships: a file only the fork carries is named by --check
 echo 'echo gate' > "$F/contrib/squad-goal/scripts/new-gate.sh"; $G add -A; c -m newgate
 r=$(rf --check) && ko "check passed while the fork ships a file live lacks" || case "$r" in *new-gate.sh*) ok "check still names a fork-only file";; *) ko "fork-only file not named: $r";; esac
+# The executable bit is part of what the fork ships. A live file whose BYTES already match is never copied, so before this a
+# mode-only divergence survived every refresh: autobug.sh, autofrontier.sh, autohunt.sh and five others sat 644 in the live
+# skill while the fork had them 755, and each pass the loop ran by name printed `Permission denied` into watch.log while the
+# cycle kept going -- the frontier just read as idle. Bytes alone are not the shipped content.
+r=$(rf) >/dev/null; chmod +x "$F/contrib/squad-goal/scripts/new-gate.sh"; $G add -A; c -m exec
+chmod -x "$L/scripts/new-gate.sh"
+r=$(rf --check) && ko "check passed while the executable bit differs" || case "$r" in *new-gate.sh*) ok "check names a mode-only divergence";; *) ko "mode divergence not named: $r";; esac
+r=$(rf) && [ -x "$L/scripts/new-gate.sh" ] && ok "refresh restores the executable bit" || ko "refresh left the script unrunnable: $r"
+r=$(rf --check) && ok "check clean once the mode matches" || ko "check dirty after the mode fix: $r"
+
 rm -rf "$T"; exit $fail

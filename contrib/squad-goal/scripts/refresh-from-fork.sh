@@ -12,8 +12,13 @@ git -C "$F" archive "$br" contrib/squad-goal | tar -x -C "$tmp"; fk="$tmp/contri
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 shipped() { ( cd "$1" && find . -type f ! -name .DS_Store ! -name '*.pyc' ! -name '*.bak*' ! -path '*/__pycache__/*' | sed 's|^\./||' | { grep -vE '^scripts/models\.json$|^scripts/profiles/' || true; } ; echo scripts/profiles/example.sh ) | sort -u; }
 base() { [ -f "$st/fork-base" ] && awk -v p="$1" '$2==p{print $1}' "$st/fork-base" || true; }
+# A file diverges on its bytes OR on its executable bit: `cp -p` carries the mode, but a live file whose bytes already match
+# is never copied, so a script the loop runs by name stayed 644 while the fork had it 755 -- and every pass it runs printed
+# `Permission denied` into the log while the cycle kept going. The mode is part of what the fork ships.
 diverged=$( shipped "$fk" | while read -r f; do
-  [ -f "$live/$f" ] && cmp -s "$live/$f" "$fk/$f" || echo "$f"; done )   # only what $br ships can be current or stale; a live-only file is neither
+  [ -f "$live/$f" ] || { echo "$f"; continue; }   # only what $br ships can be current or stale; a live-only file is neither
+  cmp -s "$live/$f" "$fk/$f" || { echo "$f"; continue; }
+  if [ -x "$fk/$f" ] && [ ! -x "$live/$f" ]; then echo "$f"; fi; done )
 if [ "${1:-}" = "--check" ]; then
   [ -z "$diverged" ] && { echo "live skill matches $br"; exit 0; }
   echo "live skill and $br disagree on:"; echo "$diverged"; exit 1
