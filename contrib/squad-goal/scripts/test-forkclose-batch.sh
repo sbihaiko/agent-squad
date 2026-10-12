@@ -6,8 +6,17 @@ G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 runs() { [ -f "$T/gui.log" ] && wc -l < "$T/gui.log" | tr -d ' ' || echo 0; }
 setup() {   # setup <issue>...: a fork whose base has hub.py (10 lines) and one branch per issue; 1 edits line 1, 2 edits line 10, 3 edits line 1 too (conflicts with 1), 4 adds the file "bad" (the gate goes red on it), others add their own file
   T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
+  export HOME="$T/home"; mkdir -p "$HOME"   # serial.sh's durable GUI kill switch is $HOME/.squad-gui-tests-off, so a private home is what keeps THIS fixture's gate decision observable instead of letting the machine's switch answer for it (the command the gate runs is the stub in SG_FORK_TEST_CMD, so no emulator can start either way)
   cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"
-  printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"
+  # test.sh's stub models the seam the landing reads its failures from: the real test.sh writes the gate's whole output to
+  # $SG_STATE/tests/<TEST_ID>.log, which is what the batch pass reads a red batch's failing test out of (#13).
+  cat > "$T/s/test.sh" <<'EOS'
+#!/bin/bash
+iss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift
+o=$("$@" 2>&1); rc=$?
+mkdir -p "$SG_STATE/tests"; [ -n "$TEST_ID" ] && printf '%s\n' "$o" > "$SG_STATE/tests/$TEST_ID.log"
+printf '%s\n' "$o" | tail -3; echo "TEST #$iss x test-$iss-x"; exit $rc
+EOS
   printf '#!/bin/bash\necho %s/req.txt\n' "$T" > "$T/s/mkreq.sh"; printf 'open(__import__("sys").argv[1]+".launched","w")\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log; [ ! -e bad ]"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
   g init -q -b local/next; seq 1 10 > "$T/fork/hub.py"; g add .; g commit -q -m init
@@ -49,4 +58,38 @@ setup 1 2 3; r=$(pass)
 case "$r" in *"CONFLICT #3"*) ok "the conflicting later branch is sent back";; *) ko "no CONFLICT #3: $r";; esac
 case "$r" in *"CONFLICT #1"*|*"CONFLICT #2"*) ko "an earlier branch was sent back: $r";; *) ok "the earlier branches are not";; esac
 [ "$(g log --merges --reverse --format=%s | tr '\n' '|')" = "Merge gui/1 (Refs #1)|Merge gui/2 (Refs #2)|" ] && ok "the earlier branches landed" || ko "merges: $(g log --merges --format=%s | tr '\n' '|')"
+rm -rf "$T"
+
+# 5. a red batch it CAN attribute names the culprit instead of serializing every candidate (#13). The gate log names the
+# failing test, the pass reads it off the candidate tree to the commit that added it and to the branch that commit belongs
+# to, drops that branch and re-gates the rest in the same pass. Measured 2026-10-12: the batch printed "nothing landed,
+# falling back to one branch at a time so the culprit is named" and named nothing, while the cause was five ruff errors in
+# one file of one branch -- six branches lost their parallelism against max_parallel=10.
+setup 5 6 7
+g checkout -q gui/7; mkdir -p "$T/fork/tests"; echo x > "$T/fork/tests/test_tooling_x.py"; g add .; g commit -q -m "the spec whose ruff errors red the batch"; g checkout -q local/next
+printf "export SG_FORK_PY_CMD='[ -e tests/test_tooling_x.py ] && { echo \"FAILED tests/test_tooling_x.py::test_ruff_check_is_clean - Found 5 errors. No fixes available\"; exit 1; }; true'\n" >> "$T/s/env.sh"
+r=$(pass)
+cl=$(printf '%s\n' "$r" | grep 'BATCH CULPRIT' | head -1)
+case "$cl" in *"tests/test_tooling_x.py"*) ok "#13: the red batch names the failing test";; *) ko "#13: the failing test is not named: $cl";; esac
+case "$cl" in *"gui/7"*) ok "#13: the red batch names the branch the failing test belongs to";; *) ko "#13: no branch named in the culprit line: $cl";; esac
+case "$cl" in *"the spec whose ruff errors red the batch"*) ok "#13: the red batch names the commit that added the failing test (git log -1 --format=%s -- <test file>)";; *) ko "#13: no commit named in the culprit line: $cl";; esac
+case "$r" in *"BATCH RED (5 6 7"*) ok "#13: the batch it could attribute is still reported red";; *) ko "#13: no BATCH RED for the batch it could attribute: $r";; esac
+case "$r" in *"FORKCLOSE BATCH landed 5 6"*) ok "#13: the rest is re-gated in the same pass and lands as its own candidate";; *) ko "#13: the rest was serialized instead of re-gated: $r";; esac
+[ ! -e "$T/fork/tests/test_tooling_x.py" ] && [ -e "$T/fork/f5" ] && [ -e "$T/fork/f6" ] && ok "#13: the base holds the two good branches and not the culprit's file" || ko "#13: base content wrong (f5:$( [ -e "$T/fork/f5" ] && echo y || echo n) f6:$( [ -e "$T/fork/f6" ] && echo y || echo n) spec:$( [ -e "$T/fork/tests/test_tooling_x.py" ] && echo present || echo absent))"
+rm -rf "$T"
+
+# 6. the dropped branch is the only one left (#13): the pass reports the rest as parked and does not retry the same batch
+#    -- a candidate is built from at least two branches, so re-gating one buys nothing and retrying the set would spend the
+#    same red gate pass on every later pass. The one-at-a-time loop below still names the culprit.
+setup 8 7
+g checkout -q gui/7; mkdir -p "$T/fork/tests"; echo x > "$T/fork/tests/test_tooling_x.py"; g add .; g commit -q -m "the spec whose ruff errors red the batch"; g checkout -q local/next
+printf "export SG_FORK_PY_CMD='[ -e tests/test_tooling_x.py ] && { echo \"FAILED tests/test_tooling_x.py::test_ruff_check_is_clean - Found 5 errors\"; exit 1; }; true'\n" >> "$T/s/env.sh"
+r=$(pass)
+case "$r" in *"BATCH PARKED"*) ok "#13: a batch with one candidate left after the drop is reported parked";; *) ko "#13: no BATCH PARKED: $r";; esac
+case "$r" in *"RED #7"*) ok "#13: the one-at-a-time loop still names the culprit";; *) ko "#13: culprit not named: $r";; esac
+[ -e "$T/fork/f8" ] && [ ! -e "$T/fork/tests/test_tooling_x.py" ] && ok "#13: the good branch lands, the culprit's file does not" || ko "#13: base content wrong"
+n=$(ls "$T/st/auto"/nobatch-* 2>/dev/null | wc -l | tr -d ' ')
+[ "$n" -ge 1 ] && ok "#13: the batch that could not be re-gated is memoized, so it is not retried unchanged" || ko "#13: the set is not memoized: nothing under nobatch-*"
+r2=$(pass)
+case "$r2" in *"BATCH RED"*) ko "#13: the same batch was retried on the next pass: $r2";; *) ok "#13: the next pass does not retry the parked batch";; esac
 rm -rf "$T"; exit $fail
