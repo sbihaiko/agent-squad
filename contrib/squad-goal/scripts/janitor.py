@@ -13,9 +13,9 @@
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
  K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
     after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
- O  a run that ended with a `failed` verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): every issue it was dispatched for goes back to the column the dispatch found it in --
-    auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- and the marker is dropped, so autofrontier/autobug dispatch it again.
-    Only the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board) is left, so a card another step moved past it is never downgraded; a run that landed work, an issue a live run works, and an issue an open or merged PR names keep their card and their marker. Once per run; the comment carries the run id and the verdict's reasons.
+ O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
+    A run that landed a change, an issue a live run works, and an issue an open or merged PR names keep their marker. The card goes back to the column the dispatch found it in --
+    auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- but only from the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
  M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
  P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
@@ -122,7 +122,7 @@ def read(f):
         if '"spawn_accepted"' in l:
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: acc.add(m.group(1))
-    return {"verdict": v, "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
+    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 live = {}; keep = []
@@ -204,9 +204,9 @@ def card_status(p, n):   # the card's Status on project p, "" when unreadable (c
     return sh("gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
               f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")').strip()
 if owner and proj and repo0:
-    for r in names:   # O: a failed run that landed nothing releases its issues: card back where the dispatch found it, marker dropped
+    for r in names:   # O: a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
-        if not (i and i["failed"] and not i["landed"] and i["idle"] > 180): continue   # a run that landed work keeps its card
+        if not (i and i["verdict"] and not i["landed"] and i["idle"] > 180): continue   # a run that landed work, or one still moving, keeps its marker
         req = f / "request.txt"
         nums = issues_named(req.read_text()) if req.exists() else set()
         marks = {n: [k for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()] for n in nums}
@@ -219,17 +219,18 @@ if owner and proj and repo0:
         for n in sorted(marks, key=int):
             if n in byissue: continue   # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
-            if card_status(proj, n) != "In Progress": continue   # only the column the dispatch set: never downgrade a card another step moved past it
             if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch; -f alone would POST and the API answers that with Not Found, which reads as a PR forever
-            moves = [[proj, os.environ.get("SG_TODO", "Todo")]]
+            moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if card_status(proj, n) == "In Progress" else []   # only the column the dispatch set: never downgrade a card another step moved past it (the marker is dropped either way: nothing must hold a finished run's issue back)
             if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
-            say(f"DISPATCH-FAILED #{n}: run {f.name} ended failed ({why}), nothing landed; card -> {', '.join(s for _, s in moves)}, {'+'.join(marks[n])} marker dropped so it dispatches again")
+            mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
+            where = f"its card is back in {moves[-1][1]} and" if moves else "its card keeps its column and"
+            say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again")
             if not dry:
                 for p, s in moves:
                     subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{n}-dispatchfail-{os.getpid()}.md").write_text(
-                    f"Run {f.name} ended without a landed change (verdict failed: {why}). Its card is back in {moves[-1][1]} and its {' and '.join('auto/' + k + '-' + n for k in marks[n])} marker is dropped, so the next cycle dispatches the issue again.\n")
+                    f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
