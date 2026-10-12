@@ -128,8 +128,12 @@ tail -30 ~/.cache/squad-goal/tests/test-1872-20261012-123039.log               #
 
 ## See also
 
-- `agent-squad#9` — the proposals that follow (rebase before gate; batch attribution; a
-  resolution audit; a revert that takes its spec; `bdiff()` answering about the landing).
+- `agent-squad#9` — the register: the measurements, and the proposals that follow.
+- `agent-squad#11` — a candidate lands on the current base, not on the one it forked from.
+- `agent-squad#12` / `#14` — `merge-audit.sh`, and the conflict path that runs it.
+- `agent-squad#13` — a red landing batch names its culprit instead of serializing every candidate.
+- `agent-squad#15` — `bdiff` answers about the landing, not about the fork point.
+- `agent-squad#16` — a revert of a merge takes the spec that merge brought.
 - `agent-squad#3`–`#8` — the GitHub access interface, whose landing pass is the loop's
   heaviest reader and the one that goes quiet when the quota is gone.
 - `MesenAI#1885` — one contested ticket must not refuse a whole frontier batch: the same
