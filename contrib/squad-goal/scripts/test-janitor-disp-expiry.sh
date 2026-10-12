@@ -16,7 +16,8 @@ cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 n=$(printf '%s' "$*" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')
 case "$*" in
-  *search/issues*) case "$*" in *"Refs #904"*) echo 1;; *) echo 0;; esac;;
+  # the live API answers a POST to /search/issues with Not Found and a non-zero body, which a caller reading `.total_count` sees as "a PR exists" (#1981): the stub refuses it the same way
+  *search/issues*) case "$*" in *"-X GET"*|*"--method GET"*) case "$*" in *"Refs #904"*|*"Refs #908"*) echo 1;; *) echo 0;; esac;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) case "$n" in 901|902|903|904) echo "In Progress";; esac;;
@@ -43,6 +44,15 @@ mk run-pr 904
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #904 on fix/904-x"}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["label_missing"], "exit_code": 0}\n' > "$T/co/runs/run-pr/record.jsonl"
 echo run-pr > "$T/st/auto/disp-904"
 touch -t 202001010000 "$T/co/runs/run-ended/record.jsonl" "$T/co/runs/run-landed/record.jsonl" "$T/co/runs/run-pr/record.jsonl"
+# E (#1981): the marker names the REQUEST that dispatched the issue (frontier-<id>), and rule E drops it when that
+# request's own log says `verdict failed`, the issue is open and no PR names it. The PR check is what broke: a bare
+# `gh api search/issues -f ...` POSTs, the API answers Not Found, and a non-zero body read as "a PR exists" forever --
+# so the marker outlived every failed dispatch and autofrontier.sh skipped the issue for good.
+printf 'verdict failed (exit 1)\nreasons: blocked_by_11\n' > "$T/st/frontier-old.log"
+printf 'verdict pass (exit 0)\n' > "$T/st/frontier-ok.log"
+echo frontier-old > "$T/st/auto/disp-906"; touch -t 202001010000 "$T/st/auto/disp-906" "$T/st/frontier-old.log"
+echo frontier-ok > "$T/st/auto/disp-907"; touch -t 202001010000 "$T/st/auto/disp-907" "$T/st/frontier-ok.log"
+echo frontier-old > "$T/st/auto/disp-908"; touch -t 202001010000 "$T/st/auto/disp-908"
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_TESTING=Testing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run)
 [ ! -e "$T/st/auto/disp-901" ] && ok "O: an ended run with no landed change drops its disp marker" || ko "O disp-901 kept (the frontier starves on it): $o"
@@ -53,6 +63,10 @@ o=$(run)
 [ -e "$T/st/auto/disp-902" ] && ! /usr/bin/grep -q ' 902$' "$T/board.calls" 2>/dev/null && ok "O: a run that landed keeps its card and marker" || ko "O #902 touched: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-903" ] && ! /usr/bin/grep -q ' 903$' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker of its issue" || ko "O #903 touched: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-904" ] && ! /usr/bin/grep -q ' 904$' "$T/board.calls" 2>/dev/null && ok "O: an open PR naming the issue keeps its marker" || ko "O #904 touched: $(cat "$T/board.calls" 2>/dev/null)"
+[ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"
+/usr/bin/grep -q 'stale disp-906' "$T/st/cycle.log" 2>/dev/null && ok "E: the drop is announced with the request that failed" || ko "E announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"
+[ -e "$T/st/auto/disp-908" ] && ok "E: an open PR naming the issue keeps its marker" || ko "E disp-908 dropped although a PR names it"
 run >/dev/null   # the announcement is once per run, not once per pass
 [ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && [ "$(/usr/bin/grep -c '^o 4 Todo 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
 rm -rf "$T"; exit $fail
