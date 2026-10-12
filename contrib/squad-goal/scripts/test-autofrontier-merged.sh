@@ -32,7 +32,7 @@ GH
 chmod +x "$T/bin/gh"
 export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"
-printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\n' > "$T/scripts/forkonly.sh"
+printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%n"; }\n' > "$T/scripts/forkonly.sh"
 chmod +x "$T/scripts/stack.sh"
 cp "$src" "$T/scripts/autofrontier.sh"
 scene() { # <name>: fresh temp state, its own env.sh, empty gh log
