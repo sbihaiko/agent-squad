@@ -35,6 +35,8 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0129](0129-skill-found-by-name.md) | A borrowed skill is found by name, and a run records the hash of every skill it can load |
 | [0133](0133-a-defect-an-agent-finds-is-its-own.md) | A defect an agent finds is its own from that moment, whoever caused it and whenever it began |
 | [0134](0134-stall-cap-counts-failures-without-evolution.md) | A cap counts failed attempts with an unchanged failure, never totals: a call's turns, a loop's entries |
+| [0136](0136-a-defect-is-fixed-test-first.md) | A defect is fixed test-first, and the red run kept |
+| [0137](0137-a-gui-keeps-its-rules-out-of-the-view.md) | A GUI keeps its rules out of the view |
 
 ## Adding an ADR
 

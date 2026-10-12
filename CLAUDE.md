@@ -83,6 +83,11 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **The subject answer key asserts what its issue text states** ([ADR-0119](docs/adr/0119-subject-answer-key.md)). Guard: `tests/test_subject_key.py`.
 - **A borrowed skill is found by name; a run records every skill hash** ([ADR-0129](docs/adr/0129-skill-found-by-name.md)). Guard: `tests/test_skillpath.py`, `tests/test_agent_doors.py`, `tests/test_skills.py`.
 
+### Work in a host project
+
+- **A defect is fixed test-first, and the red run kept** ([ADR-0136](docs/adr/0136-a-defect-is-fixed-test-first.md)). Guard: `scripts/check-tdd-red.sh` in the host project, from `$SG_PREPUSH_CHECKS`; none yet.
+- **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: the host-free compile of the rule layer, plus a check on the code-behind; the second is none yet.
+
 ## Where decisions go
 
 - A durable engineering decision: an ADR in `docs/adr/`.
