@@ -86,9 +86,14 @@ issues ──► frontier (stack.sh) ──► squad run: router ──► child
 - **`autofix.sh`** charges fix rounds (capped; past the cap **`autopanel.sh`** puts one read-only Opus panel in the challenger stance on the PR and the issue).
 - **`autopilot.sh`** owns the PR: it re-runs CI, dispatches the fix rounds, merges when the review approves and CI is green, and keeps the card in step (`Testing` → `Done`). **`prepush.sh`** checks the pushed head before CI is asked; **`revci.sh`** watches CI and reports the review's notice.
 - **`autobug.sh`** fixes bugs and debt without being asked: every open `bug` issue with no PR naming it, clustered by root cause, one child and one PR per cluster. **`autohunt.sh`** runs when the loop has been idle: one read-only hunt that files reproducible defects (the `bug` label only) instead of waiting for a person to find them.
-- **`check-tdd-red.sh`** refuses a bug fix whose PR does not carry the red test; **`acscan.sh`** writes
-  a read-only brief for listing the acceptance criteria an issue's citations conflict over; **`acpr.sh`** runs a
-  run's acceptance command against the pushed PR branch, in a throwaway worktree.
+- **`check-tdd-red.sh`** refuses a bug fix whose PR does not carry the red test; **`check-gh-interface.sh`** refuses a
+  loop script that reaches GitHub with a call site of its own, naming the script and the route — a write as well as a
+  read, because a refused read looks like an answer and a refused write looks like success (ADR-0277). Every script
+  reaches GitHub through the door instead: `. "$(dirname "$0")/ghcall.sh"`, then `gh_api` for a read, `gh_get` for a
+  read GitHub answers with another representation, `gh_send` for a write. The call sites that have not moved yet are
+  the shrinking budget in `gh-direct-calls.txt`, and a script that file does not name may not reach GitHub at all;
+  **`acscan.sh`** writes a read-only brief for listing the acceptance criteria an issue's citations conflict over;
+  **`acpr.sh`** runs a run's acceptance command against the pushed PR branch, in a throwaway worktree.
 - **`forkclose.sh`** lands the work of the loop's own repository, which has no PR ([The fork workflow](#the-fork-workflow)); **`fork-gate.sh`** is the gate that pass runs, and **`gate-suites.sh`** decides which suite set a diff needs (`full` boots the emulator, `offline`, `shell`, `python`).
 
 ### Keeping the loop honest
