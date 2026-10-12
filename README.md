@@ -85,8 +85,10 @@ issues ──► frontier (stack.sh) ──► squad run: router ──► child
 - **`review.sh`** walks the review chain of [`models.json`](contrib/squad-goal/scripts/models.json) — a model that fails for infrastructure reasons is skipped, and the answer must be the checklist shape [`revformat.py`](contrib/squad-goal/scripts/revformat.py) enforces. Fix rounds review the delta over the previous finding set, not the whole diff again.
 - **`autofix.sh`** charges fix rounds (capped; past the cap **`autopanel.sh`** puts one read-only Opus panel in the challenger stance on the PR and the issue).
 - **`autopilot.sh`** owns the PR: it re-runs CI, dispatches the fix rounds, merges when the review approves and CI is green, and keeps the card in step (`Testing` → `Done`). **`prepush.sh`** checks the pushed head before CI is asked; **`revci.sh`** watches CI and reports the review's notice.
-- **`autobug.sh`** fixes bugs and debt without being asked: every open `bug` issue with no PR naming it, clustered by root cause, one child and one PR per cluster. **`autohunt.sh`** does the same for work that is open, unblocked and untouched.
-- **`check-tdd-red.sh`** refuses a bug fix whose PR does not carry the red test; **`acscan.sh`** / **`acpr.sh`** run a run's acceptance command against a PR branch.
+- **`autobug.sh`** fixes bugs and debt without being asked: every open `bug` issue with no PR naming it, clustered by root cause, one child and one PR per cluster. **`autohunt.sh`** runs when the loop has been idle: one read-only hunt that files reproducible defects (the `bug` label only) instead of waiting for a person to find them.
+- **`check-tdd-red.sh`** refuses a bug fix whose PR does not carry the red test; **`acscan.sh`** writes
+  a read-only brief for listing the acceptance criteria an issue's citations conflict over; **`acpr.sh`** runs a
+  run's acceptance command against the pushed PR branch, in a throwaway worktree.
 - **`forkclose.sh`** lands the work of the loop's own repository, which has no PR ([The fork workflow](#the-fork-workflow)); **`fork-gate.sh`** is the gate that pass runs, and **`gate-suites.sh`** decides which suite set a diff needs (`full` boots the emulator, `offline`, `shell`, `python`).
 
 ### Keeping the loop honest
