@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """Squad hub for every repository: one process on one loopback port, one path per repository (#20).
 usage: hubmux.py [port]   default 7700. `/<profile>` is that profile's hub page (hub.py, loaded once per profile with the
-profile's own context from repoctx.sh); `/` lists the known repositories and their live workers; a path no profile owns
+profile's own context from the seam, address.sh); `/` lists the known repositories and their live workers; a path no profile owns
 answers 404 with that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other
 listener. Read-only, as hub.py is: it starts no run."""
 import html, importlib.util, io, json, os, pathlib, shlex, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = pathlib.Path(__file__).resolve().parent
-CTX = HERE / "repoctx.sh"
+CTX = HERE / "address.sh"
 
 
 def _ctx(arg):
-    """The repository context repoctx.sh resolves for one input, as a dict; empty when it refuses."""
+    """The repository context the seam resolves for one input, as a dict; empty when it refuses."""
     p = subprocess.run(["bash", str(CTX), arg], capture_output=True, text=True, timeout=30)
     return {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
 
@@ -26,7 +26,7 @@ def load_apps():
         c = _ctx(slug)
         app = {"repo": c.get("SG_REPO", ""), "state": c.get("SG_STATE", "")}
         if not c:
-            apps[slug] = {**app, "err": "repoctx.sh refuses this profile"}
+            apps[slug] = {**app, "err": "address.sh refuses this profile"}
             continue
         pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
                   "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": ""}

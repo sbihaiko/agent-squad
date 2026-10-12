@@ -2,7 +2,10 @@
 # Table test for the address seam (address.sh): ONE function, sg_resolve_repo, turns each spelling of "which repository"
 # into one `owner/name` -- an address `owner/repo#N`, a bare `N`, a profile name and a checkout -- and sg_same_repo calls
 # two names one repository only when owner AND name match. A short name with no owner is resolved against the repositories
-# the profile works, or refused by name. Offline: throwaway profiles and checkouts, no gh. usage: bash test-address.sh
+# the profile works, or refused by name. The same seam turns a profile, a checkout, an address or a bare number into one
+# repository context (sg_repo_ctx, and `bash address.sh <input>`), refuses an unknown repository by name with the known
+# list, and is what every script and the hub read: a stub gh records every call, and a script that reaches it before a
+# repository is resolved fails here. Offline: throwaway profiles and checkouts, a stub gh. usage: bash test-address.sh
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/profiles" "$T/co"
 printf ': "${SG_REPO:=acme/emu}"\n' > "$T/profiles/emu.sh"
@@ -35,5 +38,98 @@ sg_same_repo acme/tool acme/emu && ko "same: acme/emu equals acme/tool" || ok "s
 sg_same_repo tool acme/tool && ok "same: the short name resolves to its one match" || ko "same: short 'tool' did not resolve to acme/tool"
 SG_REPOS="acme/tool x/tool" sg_same_repo tool acme/tool 2>/dev/null && ko "same: an ambiguous short name was taken as acme/tool" || ok "same: an ambiguous short name is refused"
 sg_same_repo "" "" && ko "same: two empty names are one repository" || ok "same: an empty name is no repository"
+# --- The context: every input shape crossed with the context it must produce. Two fixture profiles, run as the CLI.
+src=$d/address.sh; P=$T/cprofiles; B=$T/state; mkdir -p "$P" "$T/co-alpha" "$T/co-beta" "$T/plain"
+cat > "$P/alpha.sh" <<EOF
+: "\${SG_REPO:=x/alpha}"; : "\${SG_OWNER:=x}"; : "\${SG_PROJECT:=4}"; : "\${SG_CHECKOUT:=$T/co-alpha}"; : "\${SG_BASE:=main}"
+: "\${SG_FORK_DIR:=$T/fork-alpha}"
+EOF
+cat > "$P/Beta.sh" <<EOF
+: "\${SG_REPO:=Y/Beta}"; : "\${SG_OWNER:=Y}"; : "\${SG_PROJECT:=9}"; : "\${SG_CHECKOUT:=$T/co-beta}"; : "\${SG_BASE:=develop}"
+EOF
+printf ': "${SG_REPO:=owner/repo}"\n' > "$P/example.sh"
+printf ': "${SG_REPO:=x/legacy}"; SG_TOOLING_REPO=x/tool\n' > "$P/legacy.sh"   # names the retired second repository
+git init -q "$T/clone" && git -C "$T/clone" remote add origin git@github.com:Y/Beta.git
+cli() { (cd "${CWD:-$T/plain}" && env -u SG_REPO -u SG_REPOS -u SG_CHECKOUT -u SG_STATE SG_PROFILES_DIR="$P" SG_STATE_BASE="$B" \
+  SG_PROFILE="${PROF:-}" bash "$src" "$@" 2>&1); }
+# ctx <field=value ...> -- <input> [profile in force]: every named field of the printed context must match
+ctx() { local want=() a out rc; while [ "$1" != -- ]; do want+=("$1"); shift; done; shift
+  out=$(PROF=${2:-} cli "$1"); rc=$?
+  [ $rc = 0 ] || { ko "context: '$1' (profile '${2:-}') was refused: $out"; return; }
+  for a in "${want[@]}"; do printf '%s\n' "$out" | /usr/bin/grep -qxF "$(printf '%s=%q' "${a%%=*}" "${a#*=}")" \
+    || { ko "context: '$1' (profile '${2:-}'): want ${a}, got: $(echo $out)"; return; }; done
+  ok "context: '$1' (profile '${2:-}') -> ${want[*]}"; }
+refused() { local out rc; out=$(PROF=${3:-} cli "$1"); rc=$?
+  [ $rc = 2 ] && printf '%s' "$out" | /usr/bin/grep -qF -- "$2" && ok "refusal: '$1' is refused, naming $2" || ko "refusal: '$1' was not refused by name (rc $rc): $out"; }
+all="SG_PROFILE=alpha SG_REPO=x/alpha SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT=$T/co-alpha SG_BASE=main SG_FORK_DIR=$T/fork-alpha SG_STATE=$B/alpha SG_HUB_PATH=/alpha"
+ctx $all SG_ISSUE= -- alpha                                        # a profile name
+ctx $all SG_ISSUE=12 -- 'x/alpha#12'                               # an issue address
+ctx $all SG_ISSUE= -- 'x/alpha'                                    # an address with no issue
+ctx SG_PROFILE=alpha SG_ISSUE=12 -- 'X/Alpha#12'                   # an address, owner and name in another case
+ctx $all SG_ISSUE= -- "$T/co-alpha"                                # a checkout a profile names
+ctx SG_PROFILE=Beta SG_REPO=Y/Beta SG_OWNER=Y SG_PROJECT=9 SG_CHECKOUT=$T/co-beta SG_BASE=develop SG_FORK_DIR= \
+    SG_STATE=$B/Beta SG_HUB_PATH=/Beta SG_ISSUE= -- "$T/clone"     # a checkout whose origin a profile matches
+ctx $all SG_ISSUE=12 -- 12 alpha                                   # a bare number: the profile in force
+ctx SG_PROFILE=Beta SG_REPO=Y/Beta SG_ISSUE=12 -- '#12' Beta       # a bare #number: the profile in force
+# a bare number is the profile in force and nothing else: never the profile the cwd's origin happens to match
+out=$(CWD=$T/clone cli 7); rc=$?
+[ $rc = 2 ] && printf '%s' "$out" | /usr/bin/grep -qF 'no profile in force' \
+  && ok "bare number: with no profile in force it is refused, not read from the cwd" || ko "bare number with no profile in force, in a matched checkout (rc $rc): $out"
+out=$(CWD=$T/clone PROF=alpha cli 7 | sed -n 's/^SG_REPO=//p')
+[ "$out" = x/alpha ] && ok "bare number: the profile in force wins over the cwd's checkout" || ko "bare number in Beta's checkout with alpha in force: '$out'"
+# --- The refusal: an unknown repository is refused by name, with the list of known ones; nothing falls back.
+for u in 'z/gone#3' z/gone; do out=$(PROF=alpha cli "$u"); rc=$?
+  { [ $rc = 2 ] && printf '%s' "$out" | /usr/bin/grep -qF z/gone && printf '%s' "$out" | /usr/bin/grep -qF 'known: Y/Beta x/alpha' \
+    && ! printf '%s' "$out" | /usr/bin/grep -q '^SG_'; } \
+    && ok "refusal: '$u' is refused by name, listing the known repositories" || ko "refusal: '$u' (rc $rc): $out"; done
+refused nope nope; refused example example; refused 12 'no profile in force'; refused 12 gone gone; refused "$T/plain" "$T/plain"
+refused legacy SG_TOOLING_REPO
+out=$(cli --list); [ "$out" = "$(printf 'Beta\tY/Beta\nalpha\tx/alpha\nlegacy\t')" ] \
+  && ok "list: --list names every known profile and its repository, the example excluded" || ko "--list: $out"
+out=$(cd "$T/plain" && SG_PROFILES_DIR=$P SG_STATE_BASE=$B bash -c '. "$1"; sg_repo_ctx "y/beta#5" && echo "$SG_REPO $SG_ISSUE $SG_STATE"' _ "$src")
+[ "$out" = "Y/Beta 5 $B/Beta" ] && ok "sourced: sg_repo_ctx sets the context in the caller" || ko "sourced form: '$out'"
+# the identity resolver and the context read ONE profile reader: a profile name resolves to the repository it names
+out=$(SG_PROFILES_DIR=$P bash -c '. "$1"; sg_resolve_repo Beta' _ "$src"); [ "$out" = Y/Beta ] && ok "one reader: sg_resolve_repo Beta -> Y/Beta" || ko "sg_resolve_repo Beta: '$out'"
+# --- The guard: nothing reaches GitHub before a repository is resolved. A stub gh records every call.
+mkdir -p "$T/bin"; printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' "$T/ghcalls" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+for c in claude codex curl; do printf '#!/bin/bash\nexit 0\n' > "$T/bin/$c"; chmod +x "$T/bin/$c"; done
+guard() { (cd "$T/plain" && env -u SG_REPO -u SG_REPOS -u SG_CHECKOUT -u SG_STATE PATH="$T/bin:$PATH" HOME="$T/home" \
+  SG_PROFILES_DIR="$P" SG_STATE_BASE="$B" SG_SQUAD=/dev/null perl -e 'alarm 20; exec @ARGV' "$@" </dev/null 2>&1); }
+: > "$T/ghcalls"; out=$(SG_PROFILE=nope guard bash -c '. "$1/env.sh"; gh api "repos/$SG_REPO/issues"; echo reached' _ "$d"); rc=$?
+envok=0; { [ $rc != 0 ] && [ ! -s "$T/ghcalls" ] && printf '%s' "$out" | /usr/bin/grep -qF nope; } && envok=1 \
+  && ok "guard: env.sh stops on an unknown profile, naming it, before gh" || ko "guard: env.sh let an unknown profile through to gh (rc $rc, gh: $(cat "$T/ghcalls")): $out"
+: > "$T/ghcalls"; out=$(SG_PROFILE= guard bash -c '. "$1/env.sh"; gh api "repos/$SG_REPO/issues"; echo reached' _ "$d"); rc=$?
+[ $rc != 0 ] && [ ! -s "$T/ghcalls" ] && ok "guard: env.sh stops with no profile in force and no profile's checkout, before gh" || ko "guard: no profile reached gh (rc $rc): $out"
+# every script that calls gh resolves its repository first: its first command sources env.sh, and with an unknown
+# profile it stops there with no call recorded. Run only once env.sh is shown to stop, so no script runs unresolved.
+for s in "$d"/*.sh; do b=$(basename "$s")
+  # gh wrappers take the repository as an argument; forkonly.sh is a library; cqflush.sh and mkreq.sh resolve per
+  # address and run below
+  case "$b" in test-*|env.sh|address.sh|ghcall.sh|check-gh-interface.sh|forkonly.sh|cqflush.sh|mkreq.sh) continue;; esac
+  /usr/bin/grep -qE '(^|[^a-z_-])gh (api|issue|pr|repo|project|run|label)' "$s" || continue
+  first=$(/usr/bin/grep -nvE '^[[:space:]]*(#|$)' "$s" | head -1); e=$(/usr/bin/grep -n 'env\.sh"' "$s" | head -1 | cut -d: -f1)
+  [ "${first%%:*}" = "$e" ] || { ko "guard: $b calls gh but does not resolve its repository first (first command: ${first#*:})"; continue; }
+  [ $envok = 1 ] || continue
+  : > "$T/ghcalls"; out=$(SG_PROFILE=nope guard bash "$s"); rc=$?
+  [ $rc != 0 ] && [ ! -s "$T/ghcalls" ] && ok "guard: $b stops before gh on an unknown profile" || ko "guard: $b reached gh unresolved (rc $rc, gh: $(head -3 "$T/ghcalls")): $(echo $out | cut -c1-200)"
+done
+# the request builder reads the open pull requests of a resolved repository only: with an unknown profile it reads none
+printf 'IMPORTANT: your first and only action\n' > "$T/body"; : > "$T/ghcalls"
+out=$(SG_PROFILE=nope guard bash "$d/mkreq.sh" g24 "$T/body"); [ ! -s "$T/ghcalls" ] \
+  && ok "guard: mkreq.sh reaches no gh on an unknown profile" || ko "guard: mkreq.sh reached gh unresolved (gh: $(head -3 "$T/ghcalls"))"
+# the retired two-repository key stops env.sh, naming it
+out=$(SG_PROFILE=legacy guard bash -c '. "$1/env.sh"; echo reached' _ "$d"); rc=$?
+[ $rc != 0 ] && printf '%s' "$out" | /usr/bin/grep -q SG_TOOLING_REPO && ! printf '%s' "$out" | /usr/bin/grep -q reached \
+  && ok "guard: env.sh stops on a profile that sets SG_TOOLING_REPO, naming it" || ko "env.sh with SG_TOOLING_REPO set (rc $rc): $out"
+# the queue flusher resolves each comment's repository from the state directory it sits in: one no profile owns is set
+# aside unposted, never posted to a repository it was not filed for
+mkdir -p "$B/nope/cq"; echo hi > "$B/nope/cq/12-x.md"; touch -t 202001010000 "$B/nope/cq/12-x.md"; : > "$T/ghcalls"
+out=$(guard bash "$d/cqflush.sh" --once); [ ! -s "$T/ghcalls" ] && [ -e "$B/nope/cq/12-x.md.dead" ] \
+  && ok "guard: cqflush.sh sets aside a queue no profile owns, before gh" || ko "guard: cqflush.sh with an unowned queue (gh: $(cat "$T/ghcalls")): $out"
+# --- The readers: the loop, the hub and the flusher read this seam, and no second copy of the rule exists.
+[ ! -e "$d/repoctx.sh" ] && ok "readers: no second resolver beside the seam" || ko "readers: repoctx.sh still holds a second copy of the rule"
+for r in env.sh hubctl.sh cqflush.sh hub.py hubmux.py; do
+  /usr/bin/grep -q 'address\.sh' "$d/$r" && ! /usr/bin/grep -q 'repoctx\.sh' "$d/$r" && ok "readers: $r reads the seam" || ko "readers: $r does not read address.sh alone"; done
+! /usr/bin/grep -q 'getcwd' "$d/hub.py" && ok "readers: hub.py never takes its checkout from its own working directory" || ko "readers: hub.py falls back to os.getcwd()"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

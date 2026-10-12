@@ -56,6 +56,25 @@ be adding a profile, not adding a special case.
    seam never routes on it. A route comes from the fork checkout, not from a
    key that names the tooling repository.
 
+6. **The same seam gives the context of a repository.** `sg_repo_ctx`
+   (and `bash address.sh <input>`) takes a profile name, a checkout, an
+   address or a bare number. It gives the owner, the repository, the project,
+   the checkout, the base branch, the fork directory, the state directory and
+   the hub path. A bare number is the profile in force (`SG_PROFILE`), never
+   the profile that the origin of the working directory matches. A repository
+   that no profile names is refused by name, with the list of known
+   repositories. Nothing falls back to another repository.
+7. **Nothing reaches GitHub before a repository is resolved.** `env.sh` asks
+   the seam first and stops on a profile that the seam refuses, so no script
+   runs a command with no repository. No probe stays: no script reads GitHub
+   to find which repository an issue lives in.
+8. **Every script and the hub read the seam.** `env.sh` (the loop),
+   `hub.py`, `hubmux.py`, `hubctl.sh` and `cqflush.sh` read it. No script and
+   no hub keeps a copy of the rule. A script that starts with no profile in
+   force gives its start directory to the seam as a checkout. It does not read
+   that checkout's origin itself. The hub takes its checkout from the context,
+   never from its working directory.
+
 ## Consequences
 
 - Each caller that must know a repository asks `address.sh`. A stage that
@@ -69,6 +88,8 @@ be adding a profile, not adding a special case.
 ## Guard
 
 `contrib/squad-goal/scripts/test-address.sh` (the resolver table, the
-owner-and-name equality, the refusal of a short name) and
+owner-and-name equality, the refusal of a short name, the context table, the
+refusal of an unknown repository with its known list, a stub `gh` that fails a
+script which reaches GitHub before it resolves a repository, and the readers) and
 `contrib/squad-goal/scripts/test-land-target.sh` (one case per route, and the
 refusal).
