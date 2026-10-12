@@ -13,19 +13,20 @@
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
-read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
-import json, re, sys, pathlib
-def find(o):
-    if isinstance(o, dict):
-        if isinstance(o.get("max_parallel"), int): return o["max_parallel"]
-        o = list(o.values())
-    if isinstance(o, list):
-        for v in o:
-            r = find(v)
-            if r: return r
-g = pathlib.Path(f"docs/squad/workflows/{sys.argv[1]}.graph.json")
-cap = (find(json.loads(g.read_text())) if g.exists() else None) or 10; live = 0; busy = set()
-for r in open(sys.argv[2]).read().split():
+read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
+import os, re, sys, pathlib
+# The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
+# by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
+# every repository. A missing caps block is a named failure: the pass stops and says so, never a default.
+sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
+from squad import caps as C
+try:
+    ceil = C.ceiling(".")
+except Exception as e:
+    print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
+cap, held = ceil.caps["runs"], ceil.occupancy()["runs"]
+live = 0; busy = set()
+for r in open(sys.argv[1]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not f.exists(): continue
     t = f.read_text()
@@ -35,10 +36,11 @@ for r in open(sys.argv[2]).read().split():
         if '"spawn_accepted"' in l:
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: busy.add(m.group(1))
-print(max(cap - live, 0), ",".join(sorted(busy)) or "-")
+print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-")
 PY
 )
-[ "${free:-0}" -gt 0 ] || exit 0
+[ -n "${free:-}" ] || { echo "autofrontier: no free-slot count; see the squad.caps line above" >&2; exit 1; }
+[ "$free" -gt 0 ] || exit 0
 refs=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
 # A MERGED PR that names the issue already delivered it (#1808), and janitor.py reports FIXED-NOT-CLOSED without closing:
 # closing needs evidence, so it is never the janitor's call. The issue therefore keeps looking untouched here, gets picked

@@ -5,6 +5,7 @@ SG_STATE, so nothing here touches the network, a model or the live loop.
 """
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -69,13 +70,15 @@ def _state(tmp_path, script):
     (tmp_path / "checkout").mkdir()
     labels = "wave:01" if script == "autofrontier.sh" else "bug,wave:01"
     return {
-        "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin:/usr/sbin:/sbin",
+        # the python3 of this suite first: the dispatchers read the free slots through squad/caps.py, which needs PyYAML
+        "PATH": f"{tmp_path / 'bin'}:{Path(sys.executable).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
         "HOME": str(tmp_path / "home"),
         "SG_STATE": str(st),
         "SG_CHECKOUT": str(tmp_path / "checkout"),
         "SG_REPO": "o/n", "SG_OWNER": "o", "SG_PROJECT": "1", "SG_BUG_PROJECT": "",
         "SG_BASE": "main", "SG_BUG_LABEL": "bug", "SG_FRONTIER_LABEL": "ready-for-agent",
         "SG_FRONTIER_PREAMBLE": "", "BOARD": "true", "LABELS": labels,
+        "SG_SQUAD": str(SCRIPTS.parents[2]), "SQUAD_CAPS_DIR": str(tmp_path / "caps"),   # the free slots come from squad/caps.py
     }
 
 

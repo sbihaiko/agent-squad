@@ -19,6 +19,7 @@ from squad import verdict as V
 from squad.adapt import Effective
 from squad.artifacts import ArtifactStore
 from squad.budget import Budget
+from squad.caps import CeilingWaitExpired
 from squad.control import Control
 from squad.engine_errors import Defect as Defect
 from squad.engine_errors import Frontier as Frontier
@@ -38,7 +39,7 @@ from squad.runners.types import Scope as Scope
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
-                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None):
+                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None):
         self.shadow = shadow     # advisory observer: its output is recorded as `diagnostic` and read by nothing
         self.graph_path = graph_path
         self.g, self.adapter, self.run_dir = graph, adapter, Path(run_dir)
@@ -71,6 +72,7 @@ class Engine:
         self.entry_of = {n["entry"]: n["name"] for n in self.nodes.values() if n["kind"] == "dispatch"}
         self.wt_lock = anyio.Lock()
         self.vendor = Path(vendor) if vendor else skills.VENDOR   # where VERSIONS.json lives
+        self.ceiling = ceiling         # squad.caps.Ceiling: the machine-wide run and child slots; None admits without one
         self.defaults = defaults       # {path, sha256, engine}: the per-invocation engine-level defaults, recorded in run_start and resume
         if hasattr(adapter, "bind"):
             adapter.bind(lambda kind, **f: self.record.append(kind, **f))
@@ -234,6 +236,7 @@ class Engine:
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
+                           **({"caps": self.ceiling.caps} if self.ceiling else {}),
                            skills=skills.snapshot(self.g.doc, self.vendor), skills_commit=skills.commit(self.vendor))
 
     def _seed_facts(self):
@@ -270,11 +273,28 @@ class Engine:
         self.record.append("resume", **self.replay.resume_fields(frontier, pre, answer, from_node))
         if pre["status"] != "ok":
             return self._conclude()
+        await self._admitted_walk()
+        return self._conclude()
+
+    async def _admitted_walk(self):
+        """Walk the graph inside one slot of the machine-wide run ceiling. A full ceiling waits, bounded by the run deadline;
+        a wait that expires fails the root by name. The slot returns when the walk ends."""
+        lease = None
+        if self.ceiling:
+            dl = self.run_cfg["deadline"]
+            try:
+                lease = await self.ceiling.take("runs", self.run_id, None if dl is None else anyio.current_time() + dl * self.scale,
+                                                on_wait=lambda w: self.record.append("ceiling_wait", **w))
+            except CeilingWaitExpired as x:
+                self.outcomes.defect(self.g.root, x, reasons=[f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"])
+                return
         try:
             await self._walk()
         except Defect as d:
             self.outcomes.defect(self.g.root, d)
-        return self._conclude()
+        finally:
+            if self.ceiling:
+                self.ceiling.release(lease)
 
     async def _dry_walk(self):
         """Walk the graph without calls up to the first node that has not run. Return that frontier."""
@@ -305,8 +325,5 @@ class Engine:
         if self.preflight["status"] != "ok":
             return self._conclude()
         self._seed_facts()
-        try:
-            await self._walk()
-        except Defect as d:
-            self.outcomes.defect(self.g.root, d)
+        await self._admitted_walk()
         return self._conclude()

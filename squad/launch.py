@@ -11,8 +11,8 @@ import os
 import sys
 from pathlib import Path
 
+from squad import caps, git, record, workflows
 from squad import defaults as D
-from squad import git, record, workflows
 from squad import project_settings as P
 from squad.engine import Engine
 from squad.options import OptionError
@@ -49,6 +49,11 @@ def _lowered(options, data, graph):
         if v is not None and k not in out and (cur is None or v < cur):
             out[k] = v
     return out
+
+
+def launch_ceiling(target, defaults_path):
+    """The machine-wide ceiling of a run: the one resolution of `caps` (squad/caps.py) from the defaults file and the project file."""
+    return caps.ceiling(target, defaults_path)
 
 
 def headless():
@@ -136,8 +141,10 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
         run_id = record.new_run_id()
         run_dir = Path(run_dir) if run_dir else Path(runs_dir) / run_id
     copy = run_dir / "graph.json"
+    ceiling = launch_ceiling(target, rec["path"]) if rec else None   # a missing caps block refuses the run by name, before a folder exists
     eng = Engine(graph, adapter, run_dir, options=_lowered(options, data, graph), target=target, run_id=run_id, invoker=invoker,
-                 graph_path=Path(graph_path).resolve() if graph_path else copy, defaults=rec, shadow=shadow, project={"record": prec, "limits": limits}, autonomy=autonomy)   # a bad option raises here, before a folder exists
+                 graph_path=Path(graph_path).resolve() if graph_path else copy, defaults=rec, shadow=shadow, project={"record": prec, "limits": limits}, autonomy=autonomy,
+                 ceiling=ceiling)   # a bad option raises here, before a folder exists
     run_dir.mkdir(parents=True, exist_ok=True)
     if target:
         keep_runs_out_of_the_target(target, run_dir)
@@ -172,7 +179,7 @@ def resume_engine(graph, run_dir, *, adapter=None, defaults=None, target=None, o
     data, prec, limits = project_settings(target)
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)
     eng = Engine(graph, adapter, Path(run_dir), options=_lowered(options, data, graph), target=target, invoker="cli", defaults=rec,
-                 project={"record": prec, "limits": limits}, autonomy=autonomy)
+                 project={"record": prec, "limits": limits}, autonomy=autonomy, ceiling=launch_ceiling(target, rec["path"]) if rec else None)
     if rec and rec["watch"]["dashboard"]:
         _watch_page(opener, Path(run_dir), rec, resume=True)
     if rec and rec["watch"].get("monitor"):
