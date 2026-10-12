@@ -5,7 +5,7 @@
 # into a dependency cycle in which neither is ever dispatched, and health.sh never reports the stall.
 # usage: bash test-stack.sh [path/to/stack.sh]
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"
+mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"   # stack.sh reads the fork branch through it (#1836)
 printf 'export SG_REPO=x/y SG_CHECKOUT=%s SG_HUB_DIR=%s SG_BASE=main\n' "$T/co" "$T/co/runs/.hub" > "$T/s/env.sh"
 echo '{"items":[]}' > "$T/co/runs/.hub/hub-board.json"
 # #1792 and #1793 are each blocked only by #1791 (closed); each one's trailing prose names the other one.

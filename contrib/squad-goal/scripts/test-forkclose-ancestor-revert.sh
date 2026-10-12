@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for forkclose.sh: a branch merged into the base, the merge reverted (red), then a fix commit added on the branch. The next landing must bring back the branch's original change as well as the fix, not only the commits made after the revert. Stub gh/test.sh, throwaway repo.
 src=${1:-$(dirname "$0")/forkclose.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf "exit 0\n" > "$T/s/shell-suites.sh"   # the gate runs the squad suites too; this test is about the landing, not them
+mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf "exit 0\n" > "$T/s/shell-suites.sh"   # the gate runs the squad suites too; this test is about the landing, not them
 printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }

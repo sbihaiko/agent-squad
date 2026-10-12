@@ -103,4 +103,75 @@ printf 'VERDICT: APPROVE\n## Blocking\n- src/a.py:12 — null deref — fixed: t
 printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n- src/b.py:42 — the handle leaks — not fixed: still open on the error path\n## Debt\n- src/c.py:7 — the retry loop has no backoff — fixed: it backs off now — tests/test_c.py\n' > "$T/r.md"
 [ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=0" ] && ok "--summary counts only the unfixed bullets" || ko "--summary mixed round: '$(python3 "$src" --summary "$T/r.md")'"
 
+# 11) #1834: a fix round answers its previous findings in a '## Resolved' section of their own, accepted only in
+# fix-round mode (--fix-round). The answered finding moves there with the same bullet, so it stays auditable; the
+# section is an answer, not a severity, so neither the check nor --summary counts it. A full review (no --fix-round)
+# has findings, not answers: the heading is rejected there, named as such, and the verdict stays unusable.
+acc='VERDICT: APPROVE\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] now — tests/test_a.py::empty_list\n- src/b.py:42 — the handle leaks — fixed: it is closed on every path — tests/test_b.py::leaks\n## Debt\n- src/c.py:7 — the retry loop has no backoff — not fixed: it still hammers a 500\n'
+fxr() { printf '%b' "$1" > "$T/r.md"; python3 "$src" --fix-round --max-lines 60 "$T/r.md"; }
+out=$(fxr "$acc")
+[ $? = 0 ] && ok "a fix round whose every Blocking finding sits under '## Resolved' may APPROVE (#1834)" || ko "APPROVE with '## Resolved' rejected: '$out'"
+printf '%b' "$acc" > "$T/r.md"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=0 debt=1" ] && ok "--summary reads blocking=0 for it and counts the Debt bullet" || ko "--summary resolved: '$(python3 "$src" --summary "$T/r.md")'"
+printf '%b' "$acc" > "$T/r.md"
+out=$(python3 "$src" --max-lines 60 "$T/r.md"); rc=$?
+[ $rc = 1 ] && case "$out" in *Resolved*fix*) ok "a full review may not write '## Resolved', and the reason names it as a fix round's";; *) ko "the reason does not name '## Resolved' as a fix round's: '$out'";; esac || ko "'## Resolved' accepted outside a fix round (rc=$rc)"
+printf 'VERDICT: APPROVE\n## Blocking\n- src/b.py:42 — the handle leaks — not fixed: still open on the error path\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Debt\n- src/c.py:7 — the retry loop has no backoff — not fixed: it still hammers a 500\n' > "$T/r.md"
+out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md"); rc=$?
+[ $rc = 1 ] && ok "a 'not fixed' finding stays under '## Blocking' and still blocks the APPROVE" || ko "APPROVE + 'not fixed' Blocking accepted with Resolved (rc=$rc)"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=1" ] && ok "--summary counts the 'not fixed' Blocking finding and the Debt bullet, never a resolved one" || ko "--summary fix round: '$(python3 "$src" --summary "$T/r.md")'"
+printf 'VERDICT: CHANGES\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Blocking\n- src/b.py:42 — the handle leaks — it is open on every error path — close it there\n' > "$T/r.md"
+out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md")
+[ $? = 0 ] && ok "the delta may still add a new Blocking finding beside the resolved ones" || ko "new Blocking finding beside '## Resolved' rejected: '$out'"
+printf 'VERDICT: CHANGES\n## Resolved\n- src/a.py:12 — null deref — fixed: the guard returns [] — tests/test_a.py\n## Resolved\n- src/b.py:42 — the handle leaks — fixed: it is closed\n' > "$T/r.md"
+out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md")
+[ $? = 1 ] && case "$out" in *twice*) ok "'## Resolved' may not appear twice";; *) ko "the duplicate reason is not the shape's: '$out'";; esac || ko "two '## Resolved' sections accepted"
+
+# 12) #1835: revformat.py is the single source of the answer shape -- it can print it (--shape, and --fix-round for
+# the mode that has an answer section), and review.sh embeds exactly that printed text in the prompt of both review
+# modes, so a wording the check cannot read is a red test here instead of a review round lost in the loop. The
+# contract is checked next to the validator's other cases, with stubbed gh/claude: no network, no model.
+shape() { python3 "$src" --shape "$@"; }
+sh_full=$(shape); sh_fix=$(shape --fix-round)
+# the shape is a template: its placeholders are the verdict and the file:line of the bullet. Filling them gives the
+# smallest answer the prompt asks for, and that answer is what the check has to accept.
+fill() { sed -e 's/<APPROVE or CHANGES>/CHANGES/' -e 's/file:line/path\/to\/file.ext:12/g'; }
+printf '%s\n' "$sh_full" | fill > "$T/shape.md"; out=$(python3 "$src" "$T/shape.md" 2>&1); rc=$?
+[ $rc = 0 ] && ok "the printed full-review shape is an answer the check accepts (#1835)" || ko "the printed full shape is not a review: rc=$rc '$out'"
+printf '%s\n' "$sh_fix" | fill > "$T/shape.md"; out=$(python3 "$src" --fix-round "$T/shape.md" 2>&1); rc=$?
+[ $rc = 0 ] && ok "the printed fix-round shape is an answer the check accepts (#1835)" || ko "the printed fix shape is not a review: rc=$rc '$out'"
+case "$sh_fix" in *'## Resolved'*) ok "the fix-round shape prints the '## Resolved' section (#1834)";; *) ko "the fix shape does not print '## Resolved'";; esac
+case "$sh_full" in *'## Resolved'*) ko "the full-review shape prints '## Resolved' (that mode has no answers)";; *) ok "the full-review shape leaves out '## Resolved'";; esac
+# the prompt each mode sends, captured from a stubbed run of review.sh (its two halves meet here)
+prompt_of() { local W; W=$(mktemp -d); mkdir -p "$W/bin" "$W/st/cq"
+  cp "$(dirname "$src")/review.sh" "$W/review.sh"; cp "$src" "$W/revformat.py"; : > "$W/codex-reset.py"
+  printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"review_max_lines":60,"anthropic_models":[]}' > "$W/models.json"
+  printf 'SG_REPO=x/y; SG_STATE=%s/st; SG_BASE=main; SG_CHECKOUT=%s; SG_REVIEW_RULES=CLAUDE.md\n' "$W" "$W" > "$W/env.sh"
+  cat > "$W/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in
+  *'.head.sha+" "+.base.ref'*) echo "aaa111 main";;
+  *compare*.status*) echo ahead;;
+  *compare*) printf 'diff --git a/f b/f\n+x\n';;
+  *pulls/7/files*) echo UI/a.cs;;
+  *'.head.sha'*) echo aaa111;;
+  *) echo stub;;
+esac
+J
+  cat > "$W/bin/claude" <<'J'
+#!/bin/bash
+cat > "$CLAUDE_PROMPT"; echo "VERDICT: APPROVE"
+J
+  chmod +x "$W/bin/gh" "$W/bin/claude"
+  [ "$1" = fix ] && { echo ccc333 > "$W/st/review-7.sha"; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$W/st/review-7.md"; }
+  PATH="$W/bin:$PATH" CLAUDE_PROMPT="$W/prompt" bash "$W/review.sh" 7 8 >/dev/null 2>&1
+  cat "$W/prompt" 2>/dev/null; rm -rf "$W"; }
+for mode in full fix; do
+  want=$sh_full; [ $mode = fix ] && want=$sh_fix
+  if [ -z "$want" ]; then ko "$mode: revformat.py --shape printed nothing"; continue; fi
+  p=$(prompt_of $mode)
+  case "$p" in *"$want"*) ok "$mode: the prompt embeds the shape revformat.py printed, verbatim (#1835)";; *) ko "$mode: the prompt does not embed the printed shape (a hand-written copy is back)";; esac
+  case "$p" in *'Unrecognized arguments'*|*'unrecognized arguments'*) ko "$mode: the prompt carries an argparse error instead of the shape";; *) : ;; esac
+done
+
 rm -rf "$T"; exit $fail

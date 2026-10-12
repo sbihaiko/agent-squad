@@ -10,7 +10,7 @@ src=${1:-$(dirname "$0")/forkclose.sh}; here=$(cd "$(dirname "$src")" && pwd); o
 unset SG_E2E_DIR SG_E2E_BUILD_DIR
 # mkfix <dir>: a fork repo with one branch, gui/1, ahead of local/next, and a fork gate that goes red on it.
 mkfix() { T=$1; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"
   printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"
   cat > "$T/s/test.sh" <<'J'
 #!/bin/bash

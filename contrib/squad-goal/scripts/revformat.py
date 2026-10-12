@@ -11,21 +11,32 @@ Nothing else: no preamble, no restating the diff, no closing summary.
 of that try (the chain moves on and says so), never a silent pass. `autopilot.sh` asks for the
 bullets per section with --summary instead of grepping a tag on the line (ADR-0273 Decision 3/5).
 
-A fix round repeats each previous finding with the answer to it, `fixed|not fixed: <reason>`
-(review.sh's FMTFIX). A bullet that answers `fixed` is the answer to a finding, not a finding
-(#1832): it is counted by neither the check nor --summary, so APPROVE with every previous Blocking
-finding fixed is the shape and the debt-only path sees blocking=0 (ADR-0273 Decision 3/5). A bullet
-saying `not fixed`, and one carrying no marker at all (a full review), keeps its severity (#1777).
+A fix round answers its previous findings in a `## Resolved` section of their own, accepted only
+with --fix-round (#1834). An answered finding moves there with the same bullet,
+`<file>:<line> — <defect> — fixed: <reason> — <check>`, so it stays auditable; the section is the
+answer, not a severity, and it is counted by neither the check nor --summary. `## Blocking` and
+`## Debt` keep meaning what they mean (#1777): a previous finding that is `not fixed` stays where
+it was raised and still blocks, and the delta may add a new finding to either.
 
-usage: revformat.py [--max-lines N] <review>   exit 0 = the shape holds; 1 = one reason on stdout
-       revformat.py --summary <review>         prints "blocking=N debt=N" (0 when the shape is broken)
+A bullet that answers `fixed` is the answer to a finding, not a finding (#1832): it is counted by
+neither the check nor --summary, so APPROVE with every previous Blocking finding fixed or resolved
+is the shape and the debt-only path sees blocking=0 (ADR-0273 Decision 3/5). A bullet saying
+`not fixed`, and one carrying no marker at all (a full review), keeps its severity (#1777).
+
+`is_finding` is the one predicate that tells a finding from an answer: the severity counts, the
+--summary line `autopilot.sh` reads and the debt filer ask it, so no two readers can disagree.
+
+usage: revformat.py [--max-lines N] [--fix-round] <review>
+                                           exit 0 = the shape holds; 1 = one reason on stdout
+       revformat.py --summary <review>     prints "blocking=N debt=N" (0 when the shape is broken)
+       revformat.py --shape [--fix-round]  prints the answer shape of that mode, and checks nothing (#1835)
 """
 import argparse
 import re
 import sys
 
 VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES)$")
-SECTION = re.compile(r"^##\s*(Blocking|Debt)\s*$", re.IGNORECASE)
+SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
 THEME = re.compile(r"^#{3,}\s*(\S.*?)\s*$")
 BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 LOC = re.compile(r"^[^\s:]+:\d+")            # path:line, the first field of a bullet (or the second)
@@ -34,7 +45,8 @@ SEP = re.compile(r"\s+[—–-]\s+")             # the " — " between the field
 # or "fixed — <check>". "not fixed: <reason>" is not the answer, and neither is prose that merely opens with the word
 # ("fixed-size buffer"), which is why the separator after it has to be a colon, nothing or a dash.
 FIXED = re.compile(r"^fixed(?:\s*:|\s*$|\s+[—–-]\s+)", re.IGNORECASE)
-SECTIONS = ("Blocking", "Debt")
+SECTIONS = ("Blocking", "Debt")      # the severity sections: the section a finding sits in is its severity (#1777)
+ANSWER = "Resolved"                  # the fix round's section for answered findings: an answer, not a severity (#1834)
 
 
 def answered_fixed(text):
@@ -46,6 +58,18 @@ def answered_fixed(text):
     shape check already rejects a bullet of fewer than three fields, so that field exists on every bullet it counts.
     """
     return any(FIXED.match(f.strip()) for f in SEP.split(text)[2:])
+
+
+def is_finding(section, text):
+    """True when a bullet is a finding: it sits in a severity section (#1777) and is not a fix round's answer to a
+    previous finding (#1832, #1834). `section` is where it sits; `text` is the bullet's text, its two lines joined.
+
+    One predicate for every reader -- the severity counts behind the check and --summary, and the debt filer
+    (`squad/debt_filing.py` asks this module) -- so none of them can call a different bullet a finding. An unmarked
+    bullet (a full review) and one that answers `not fixed` are findings; an answered `fixed` one and one under
+    `## Resolved` are answers, wherever they sit.
+    """
+    return section in SECTIONS and not answered_fixed(text)
 
 
 def bullets(review):
@@ -73,18 +97,23 @@ def count(review):
 
     `autopilot.sh` asks this to tell a review that only raises DEBT from one that raises a Blocking finding, and
     `hub.py` asks it for the R cell: the two read one module so a debt-only CHANGES is not blocking on one surface and
-    merged on the other. A bullet that answers a previous finding `fixed` is not a finding (#1832), the same reading
-    `survey` makes -- so a fix round whose Blocking findings are all fixed reads `blocking=0`.
+    merged on the other. A bullet that answers a previous finding `fixed`, and one under `## Resolved`, is not a
+    finding (#1832, #1834), the same reading `survey` makes -- so a fix round whose Blocking findings are all fixed or
+    resolved reads `blocking=0`, and the debt filer files the bullets this counted and no other.
     """
     counts = {name: 0 for name in SECTIONS}
     for section, text in bullets(review):
-        if not answered_fixed(text):
+        if is_finding(section, text):
             counts[section] += 1
     return counts
 
 
-def survey(review, max_lines=0):
-    """The first violation of the shape as one sentence, or None when the review is the shape."""
+def survey(review, max_lines=0, fix_round=False):
+    """The first violation of the shape as one sentence, or None when the review is the shape.
+
+    `fix_round` is the mode the answer was asked for: only there is `## Resolved` part of the grammar (#1834). Both
+    modes are checked against the same severity rule (#1777) and the same notion of a finding (`is_finding`).
+    """
     lines = [l.rstrip() for l in review.replace("\r\n", "\n").split("\n")]
     while lines and not lines[-1].strip():
         lines.pop()
@@ -106,7 +135,7 @@ def survey(review, max_lines=0):
                     " (three fields at least)")
         if not any(LOC.match(f.strip()) for f in fields[:2]):
             return f"line {n}: the bullet names no file:line ({fields[0].strip()[:30]!r})"
-        if not answered_fixed(joined):             # a bullet that answers a previous finding 'fixed' is not a finding
+        if is_finding(section, joined):            # a bullet that answers a previous finding is not a finding
             counts[section] += 1
         return None
     for n, line in enumerate(lines[1:], start=2):
@@ -122,15 +151,20 @@ def survey(review, max_lines=0):
                 return bad
             bullet = None
             name = m.group(1).capitalize()
+            if name == ANSWER and not fix_round:
+                return (f"line {n}: '## {ANSWER}' is a fix round's answer to its previous findings, and this is not a"
+                        " fix round: a full review has '## Blocking' and/or '## Debt' (the #1777 severity of each"
+                        " finding), and nothing else")
             if name in seen:
                 return f"line {n}: the {name} section appears twice"
-            if name == "Blocking" and seen:
+            if name == "Blocking" and any(s in seen for s in SECTIONS):
                 return f"line {n}: Blocking comes after Debt; the sections go most severe first"
             seen.append(name); section = name
             continue
         if text.startswith("#"):
             if not THEME.match(text):
-                return f"line {n}: {text[:40]!r} is not '## Blocking', '## Debt' or a '### <theme>' heading"
+                known = "'## Blocking', '## Debt'" + (f", '## {ANSWER}'" if fix_round else "")
+                return f"line {n}: {text[:40]!r} is not {known} or a '### <theme>' heading"
             if section is None:
                 return f"line {n}: a theme heading with no '## Blocking' / '## Debt' section above it"
             if (bad := close()):
@@ -162,6 +196,36 @@ def survey(review, max_lines=0):
     return None
 
 
+def shape(fix_round=False):
+    """The answer shape of a review mode, as the smallest answer that mode accepts (#1835).
+
+    `review.sh` does not describe the shape in words: it embeds this text, verbatim, in the prompt it sends -- so the
+    prompt and the check that reads the answer cannot drift apart, and a wording the check cannot parse is a red test
+    (`test-revformat.sh`) instead of a review round lost in the loop.
+
+    It is a template, not a sample: `file:line` and every `<...>` field are the placeholders the model fills with the
+    real path and line, the defect, the failure it causes and the fix. Filling them yields a review this module
+    accepts, which is what the contract test asserts. The sections are printed from SECTIONS and the answer section
+    from ANSWER, so a rename here reprints itself; `## Resolved` is printed only in the fix-round mode, the one mode
+    whose grammar has it (#1834).
+    """
+    blocking, debt = SECTIONS
+    finding = "- file:line — <defect> — <concrete failure> — <fix>"
+    lines = ["VERDICT: <APPROVE or CHANGES>",
+             f"## {blocking}",
+             "### <theme, most severe first; a lone finding needs no heading>",
+             finding,
+             f"## {debt}",
+             finding]
+    if fix_round:
+        # a previous finding that is not fixed keeps the section it was raised in; the one that is fixed moves to the
+        # answer section. Both are printed, since a fix round has to tell them apart (#1832, #1834).
+        lines[3] = "- file:line — <defect> — not fixed: <one-line reason> — <the failure it still causes>"
+        lines += [f"## {ANSWER}",
+                  "- file:line — <defect> — fixed: <one-line reason> — <the check that proves it>"]
+    return "\n".join(lines)
+
+
 def normalize(review):
     """The review with its verdict as line 1 in the exact form the loop parses.
 
@@ -187,14 +251,24 @@ def normalize(review):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Check the shape of a squad review (a short checklist).")
-    p.add_argument("review", help="the review to check, or - for stdin")
+    p.add_argument("review", nargs="?", help="the review to check, or - for stdin (not needed with --shape)")
     p.add_argument("--max-lines", type=int, default=0,
                    help="line cap for the whole review (review_max_lines in models.json; 0 = no cap)")
+    p.add_argument("--fix-round", action="store_true", help="the answer to a previous review of the same PR: it may"
+                   " answer its previous findings in a '## Resolved' section, which a full review may not write")
     p.add_argument("--summary", action="store_true", help="print 'blocking=N debt=N' instead of checking"
                    " (a bullet answered 'fixed' is not a finding, #1832)")
     p.add_argument("--normalize", action="store_true",
                    help="print the review with its verdict canonical on line 1, and check nothing")
+    p.add_argument("--shape", action="store_true",
+                   help="print the answer shape of this mode (with --fix-round, the fix round's), and check nothing:"
+                   " what review.sh embeds in the prompt, verbatim (#1835)")
     a = p.parse_args(argv)
+    if a.shape:
+        print(shape(a.fix_round))
+        return 0
+    if not a.review:
+        p.error("a review is required (or - for stdin), unless --shape is asked for")
     text = sys.stdin.read() if a.review == "-" else open(a.review, encoding="utf-8", errors="replace").read()
     if a.normalize:
         print(normalize(text), end="" if text.endswith("\n") else "\n")
@@ -203,7 +277,7 @@ def main(argv=None):
         found = count(text)
         print(" ".join(f"{name.lower()}={found[name]}" for name in SECTIONS))
         return 0
-    reason = survey(text, a.max_lines)
+    reason = survey(text, a.max_lines, a.fix_round)
     if reason:
         print(reason)
         return 1

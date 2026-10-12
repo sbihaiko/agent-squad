@@ -15,6 +15,14 @@ REVIEW = """VERDICT: CHANGES
   — dead flag `legacy` — the flag has no reader — the flag and its branches are gone
 """
 
+FIX_ROUND = """VERDICT: APPROVE
+## Resolved
+- src/a.py:10 — null deref on empty input — fixed: the input is validated now — tests/a.py::empty
+## Debt
+- src/b.py:42 — retry loop has no backoff — it hammers the API after a 500 — retries wait with exponential backoff, covered by a test
+- src/c.py:7 — dead flag `legacy` — fixed: the flag and its branches are gone — tests/c.py::dead
+"""
+
 LEGACY = """Review of PR #77
 - BLOCKING src/a.py:10 — null deref on empty input. Acceptance: empty input returns [].
 - DEBT src/b.py:42 — retry loop has no backoff. Acceptance: retries wait with exponential backoff, covered by a test.
@@ -78,6 +86,17 @@ def test_a_bullet_written_over_two_lines_is_one_finding():
     bare = [i for i in gh.issues if "src/c.py:7" in i["body"]]
     assert len(bare) == 1
     assert "dead flag `legacy`" in bare[0]["body"] and "the flag has no reader" in bare[0]["body"]
+
+
+def test_a_resolved_or_answered_finding_is_never_filed():
+    """#1834: the filer asks revformat.py what a finding is, the same predicate the severity counts and the
+    `--summary` line read. A bullet under `## Resolved` and one answered `fixed:` are answers, so neither is
+    filed; the Debt bullet that is not fixed still is."""
+    gh = StubGh()
+    filed = file_debt("o/r", 77, 70, FIX_ROUND, "abc123", runner=gh)
+    assert len(filed) == 1 and len(gh.issues) == 1
+    assert "retry loop has no backoff" in gh.issues[0]["body"]
+    assert not any("dead flag" in i["body"] for i in gh.issues)
 
 
 def test_a_review_saved_before_the_checklist_shape_still_files():

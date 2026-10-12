@@ -25,7 +25,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 out=$(bash "$T/s/review.sh" 7 8); rc=$?
@@ -70,9 +70,22 @@ for mode in full fix; do
   bash "$T/s/review.sh" 7 8 >/dev/null 2>&1
   [ $mode = fix ] && { /usr/bin/grep -q 'FIX ROUND' "$T/prompt" && ok "fix mode really ran" || ko "fix mode did not run"; }
   [ "$(head -1 "$T/st/review-7.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^## Blocking' "$T/st/review-7.md" && /usr/bin/grep -q '^## Debt' "$T/st/review-7.md" && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-7.md" && ok "$mode: both sections survive into the saved review" || ko "$mode saved review: $(cat "$T/st/review-7.md")"
-  miss=""; for needle in '## Blocking' '## Debt' 'file:line' 'at most two lines' 'most severe first' 'no closing summary'; do
+  # #1834: the fix round answers its previous findings in a '## Resolved' section, so only that mode's prompt asks
+  # for it -- a full review has findings, not answers, and its prompt must not name the heading.
+  case "$mode" in
+    fix) /usr/bin/grep -qF '## Resolved' "$T/prompt" && ok "fix prompt asks for the '## Resolved' answers (#1834)" || ko "fix prompt does not name '## Resolved'";;
+    full) /usr/bin/grep -qF '## Resolved' "$T/prompt" && ko "full prompt names '## Resolved' (a full review has no answers)" || ok "full prompt does not name '## Resolved'";;
+  esac
+  miss=""; for needle in '## Blocking' '## Debt' 'file:line' 'most severe first' 'APPROVE or CHANGES'; do
     /usr/bin/grep -qF "$needle" "$T/prompt" || miss="$miss '$needle'"; done
   [ -z "$miss" ] && ok "$mode prompt carries the checklist format" || ko "$mode prompt lacks$miss"
+  # #1835: the shape in the prompt is the text revformat.py printed, verbatim -- review.sh keeps no copy of its own to
+  # drift from, so a wording the check cannot parse is a red test here rather than a review round lost in the loop.
+  extra=""; [ $mode = fix ] && extra=--fix-round
+  want=$(python3 "$T/s/revformat.py" --shape $extra 2>/dev/null)
+  if [ -z "$want" ]; then ko "$mode prompt: revformat.py --shape printed nothing"; else
+    case "$(cat "$T/prompt")" in *"$want"*) ok "$mode prompt carries the shape revformat.py printed (#1835)";; *) ko "$mode prompt does not carry the printed shape";; esac
+  fi
   /usr/bin/grep -qF 'at most 21 lines' "$T/prompt" && ok "$mode prompt carries the format 21-line cap from review_max_lines" || ko "$mode prompt cap: $(/usr/bin/grep -i 'lines' "$T/prompt" | head -1)"
   /usr/bin/grep -q 'divergence from an accepted ADR' "$T/prompt" && /usr/bin/grep -q 'regression of behaviour' "$T/prompt" && /usr/bin/grep -q 'wire protocol or a persisted format' "$T/prompt" && /usr/bin/grep -q 'passes while lying' "$T/prompt" && ok "$mode prompt lists the closed blocking set" || ko "$mode prompt lacks the blocking list"
   /usr/bin/grep -qi 'filed task' "$T/prompt" && ok "$mode prompt states what DEBT costs" || ko "$mode prompt lacks the DEBT cost"
@@ -83,6 +96,16 @@ printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_sec
 rm -f "$T/st/review-7".*; bash "$T/s/review.sh" 7 8 >/dev/null 2>&1
 /usr/bin/grep -qF 'at most 33 lines' "$T/prompt" && ok "the cap follows review_max_lines (33)" || ko "the cap is hardcoded: $(/usr/bin/grep -i 'lines' "$T/prompt" | head -1)"
 unset CLAUDE_TAGGED CLAUDE_PROMPT
+# 6b) #1834 end to end: a fix round whose previous Blocking finding is answered under '## Resolved' is accepted and
+# saved. review.sh asks revformat.py for the mode it is in, so the section a fix round needs is not the format failure
+# it is in the full-review mode, and --summary reads blocking=0 for the saved answer (the debt-only path of ADR-0273).
+printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"review_max_lines":33,"anthropic_models":[]}' > "$T/s/models.json"
+printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n' > "$T/st/review-7.md"; echo ccc333 > "$T/st/review-7.sha"; rm -f "$T/st/cq/"*mformat*
+export CLAUDE_RESOLVED=1
+out=$(bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-7.md")" = "VERDICT: APPROVE" ] && ok "a fix round that resolves its previous Blocking finding under '## Resolved' is accepted (#1834)" || ko "fix round with '## Resolved': rc=$rc '$(head -1 "$T/st/review-7.md")' $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
+[ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-7.md")" = "blocking=0 debt=1" ] && ok "the saved fix round reads blocking=0 and its Debt bullet" || ko "the saved fix round reads: '$(python3 "$T/s/revformat.py" --summary "$T/st/review-7.md")'"
+unset CLAUDE_RESOLVED
 # 7) #1501: the aging leash must not kill the only reachable model. Gemini is agy-limited, Opus is
 # outside its hours window and behind quota-guard; the survivor's own timeout (8 s) is longer than
 # the leash (2 s). A 4 s answer must be accepted, not killed at the leash.

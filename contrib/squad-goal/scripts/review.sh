@@ -8,7 +8,8 @@
 # A model try is killed after review_timeout_seconds and the chain moves on (no retry of a timed-out model).
 # The saved review is the checklist shape of revformat.py (#1777), capped at review_max_lines of models.json:
 # an answer outside it (prose, a verdict off line 1, a bullet over two lines) is a MODEL_FORMAT failure of that
-# try and the chain moves on, never a silent pass.
+# try and the chain moves on, never a silent pass. That shape is not described here (#1835): revformat.py prints
+# it and the prompt embeds the printed text, so the prompt cannot ask for a shape the check rejects.
 # Fix rounds are reviewed incrementally: when the last review of this PR asked for CHANGES and the new head
 # descends from the reviewed sha (compare status "ahead") with a delta under review_delta_max_lines, the reviewer
 # gets the previous findings plus that delta only; otherwise (first review, rebase, big delta) a full review.
@@ -21,18 +22,22 @@ if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/revi
   delta=$(gh api -H "Accept: application/vnd.github.diff" repos/$repo/compare/$(cat "$last")...$head 2>/dev/null)
   [ "$(printf '%s\n' "$delta" | wc -l)" -le "$(jq -r '.review_delta_max_lines // 3000' "$cfg")" ] && cp "$SG_STATE/review-$pr.md" "$prevmd" || delta=""
 fi
+# the mode the answer was asked for: a fix round answers its previous findings, and may do it in a '## Resolved'
+# section of their own (#1834) -- a full review may not write that heading, so revformat.py is told which one this is.
+fr=""; [ -n "$delta" ] && fr=--fix-round
 SEV="Severity: the section a finding sits in is its severity, nothing else. BLOCKING is a closed list: a divergence from an accepted ADR; a regression of behaviour main already had; a change to a wire protocol or a persisted format; a test that passes while lying. Anything else real is DEBT. DEBT is not a dropped finding: it costs a filed task, so say it concretely enough to file."
-# #1777: the length cap is a named constant in the config, never a magic number in the prompt, and the
-# checklist shape below is the same block in both prompt modes: revformat.py checks the answer against it.
+# #1777: the length cap is a named constant in the config, never a magic number in the prompt.
+# #1835: the checklist shape is not written here either. revformat.py prints it (--shape, and --fix-round for the mode
+# that has an answer section) and the prompt embeds that printed text verbatim, so the prompt and the check that reads
+# the answer are two halves of one contract: a wording the check cannot parse turns a test red (test-revformat.sh)
+# instead of costing a review round in the loop.
 cap=$(jq -r '.review_max_lines // 60' "$cfg")
-SHAPE="line 1: VERDICT: APPROVE or VERDICT: CHANGES; then a '## Blocking' section and/or a '## Debt' section, whichever is non-empty, Blocking first; under a section one bullet per finding, at most two lines, of the form file:line — defect — concrete failure — fix (the real path and line, where the placeholder says file:line); findings that share a theme sit under a '### <theme>' heading named for the theme, most severe first, and a lone finding needs no heading."
-FMT="Output — a short, topic-grouped checklist, and nothing else, at most $cap lines in all (the cap is review_max_lines in models.json):
-$SHAPE
-No preamble, no restating the diff or the issue body, no closing summary: a review of a small diff fits on one screen."
-FMTFIX="Output — the same short checklist, and nothing else, at most $cap lines in all (the cap is review_max_lines in models.json):
-$SHAPE
-APPROVE only when every Blocking previous finding is fixed and the delta adds none. Each previous finding keeps the severity it was raised with, and its bullet repeats its file:line and its defect: - <file>:<line> — <defect> — fixed|not fixed: <one-line reason> — <the check that proves it>. The marker is what the loop reads (#1832): a bullet answered 'fixed: <reason>' is the fix, not a finding, so it contradicts no APPROVE; a bullet saying 'not fixed: <reason>' keeps the severity it was raised with and is what a CHANGES rests on.
-No preamble, no restating the delta, no closing summary."
+SHAPE_FULL="$(python3 "$(dirname "$0")/revformat.py" --shape)"
+SHAPE_FIX="$(python3 "$(dirname "$0")/revformat.py" --shape --fix-round)"
+FMT="Output — a short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json). Answer with exactly that and nothing else; the fields in angle brackets are the ones you fill in with the real path and line, the defect the code has, the failure it causes and the fix:
+$SHAPE_FULL"
+FMTFIX="Output — the same short checklist, at most $cap lines in all (the cap is review_max_lines in models.json). Answer with exactly that and nothing else; the fields in angle brackets are the ones you fill in with the real path and line, the defect the code has, the failure it causes and the fix:
+$SHAPE_FIX"
 if [ -n "$delta" ]; then
 { echo "You are a code reviewer. Read-only: do not edit, create or delete files. Answer in English.
 This is a FIX ROUND of PR #$pr of repo $repo (issue #$iss). The previous review of commit ${last:+$(cut -c1-9 "$last")} asked for changes; its findings and the delta since that commit are below.
@@ -154,7 +159,7 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       # ... and the answer itself must BE the checklist: a reviewer that narrates before it rules, restates the diff or
       # closes with a summary is a FORMAT failure of this try (#1777) -- the chain moves on and the issue says so,
       # instead of the prose passing silently as a review.
-      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" "$out" 2>/dev/null); then
+      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out" 2>/dev/null); then
         printf "MODEL_FORMAT review %s on PR #%s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$pr" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$SG_STATE/cq/$iss-mformat$$.md"
         fmt=1; rc=1; break
       fi

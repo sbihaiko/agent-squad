@@ -15,7 +15,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER
 # is a boundary whose parent Y is absent from the machine. gui/1 is C + the legacy lineage + one commit, which is what the
 # conflict pass (base merged into the branch) leaves behind for a branch born before the migration.
 mkfix() { T=$1; export FCT=$T PATH="$T/bin:$PATH"; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/up" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"
   printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"
   cat > "$T/s/test.sh" <<'J'
 #!/bin/bash
