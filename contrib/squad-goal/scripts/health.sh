@@ -152,8 +152,20 @@ fi
 # Two loops are not twice the loop (#1858): a second watch.sh doubles every GitHub read the loop makes -- which is what the API's
 # abuse limit costs -- and a second loop is invisible from inside the first. watchd runs exactly one; anything else is an orphan.
 wr=${SG_WATCH_CMD_RE:-'squad-goal/scripts/watch\.sh$'}
-nw=$(/usr/bin/pgrep -f "$wr" 2>/dev/null | wc -l | tr -d ' ')
-[ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive: watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
+# A match on the command line also hits a forked subshell (pipeline, $(...), background group): it inherits its parent's argv (#17).
+# A match whose parent is also a match is the same loop. A detached step, `( cmd & )`, outlives its parent: parent pid 1, but it keeps the
+# loop's process group, so a match with parent pid 1 that shares a group with another match is a fork too. Two loops started by two
+# watchd runs sit in two groups and both count. One ps snapshot gives pid, parent, group and command together; the regex goes in the
+# environment, never in awk's argv.
+wl=$(/bin/ps -axo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/awk -v me=$$ '{ pp[$1]=$2; pg[$1]=$3; c=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); if ($1 != me && c ~ ENVIRON["WR"]) m[$1]=1 }
+  END { for (p in m) { if (pp[p] in m) continue
+    if (pp[p] == 1) { f = 0; for (q in m) if (q != p && pg[q] == pg[p]) f = 1; if (f) continue }
+    print p } }' | sort -n | tr '\n' ' '); wl=${wl% }
+nw=$(printf '%s\n' $wl | grep -c .)
+# The pid watchd holds for its watch.sh is the watch.sh child of the pid in watchd.pid; any other counted pid is the stray. Read-only: nothing here kills.
+wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
+[ -n "$wd" ] && for p in $wl; do [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
+[ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
 { printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf ']}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"
