@@ -32,4 +32,15 @@ echo x > "$L/scripts/__pycache__/a.cpython-314.pyc"; echo y > "$L/scripts/models
 echo p > "$F/contrib/squad-goal/scripts/__pycache__/b.cpython-314.pyc"; echo q > "$F/contrib/squad-goal/scripts/stale.pyc"; echo r > "$F/contrib/squad-goal/scripts/b.sh.bak-2"; $G add -Af; c -m junk
 r=$(rf --check) && ok "check ignores __pycache__, *.pyc, *.bak*" || ko "check counts generated/backup files: $r"
 r=$(rf) && [ ! -e "$L/scripts/stale.pyc" ] && [ ! -e "$L/scripts/b.sh.bak-2" ] && [ ! -e "$L/scripts/__pycache__/b.cpython-314.pyc" ] && ok "copy skips generated/backup files" || ko "copy brought generated/backup files: $r"
+# files the fork does not ship are out of scope: --check answers "is the live skill current with local/next?", and
+# a live-only file (docs/, patches/) is not an answer to that - it is never copied, so it can never converge (#1841)
+mkdir -p "$L/docs" "$L/patches"
+echo plan > "$L/docs/hub-cost-speed-plan.md"; echo readme > "$L/patches/README.md"
+r=$(rf --check) && ok "check ignores files the fork does not ship" || ko "check flags live-only files: $r"
+r=$(rf); case "$r" in *"already current"*) ok "refresh reports already current with live-only files present";; *) ko "refresh not idempotent: $r";; esac
+[ "$(cat "$L/docs/hub-cost-speed-plan.md")" = plan ] && [ "$(cat "$L/patches/README.md")" = readme ] && ok "live-only files untouched by the refresh" || ko "refresh damaged a live-only file"
+r=$(rf --check) && ok "check stays clean after a second refresh" || ko "second check dirty: $r"
+# the fork still owns what it ships: a file only the fork carries is named by --check
+echo 'echo gate' > "$F/contrib/squad-goal/scripts/new-gate.sh"; $G add -A; c -m newgate
+r=$(rf --check) && ko "check passed while the fork ships a file live lacks" || case "$r" in *new-gate.sh*) ok "check still names a fork-only file";; *) ko "fork-only file not named: $r";; esac
 rm -rf "$T"; exit $fail
