@@ -111,14 +111,15 @@ brof() { sg_fork_branch "$1"; }   # the land and the request name the branch fro
 # GUI suite and the pytest suite again for nothing (#1844). No anchor (no base has been recorded green yet), a path the table does
 # not know, two suites in the diff, or no diff at all: the full gate, exactly as before -- gate-suites.sh's own any-doubt rule, with
 # no second copy of it here.
+suiteset() { if [ -f "$here/gate-suites.sh" ]; then bash "$here/gate-suites.sh"; else cat >/dev/null; echo full; fi; }   # the one table's answer for the file names on stdin; a tree without the table is any doubt: the full gate
 basesuites() { local a c
   a=$(for f in "$A"/basetest-*; do s=${f##*/basetest-}   # the marker holds the log path; its name is the base that was tested (a short sha, so nothing but hex survives this)
       [ -n "$s" ] && [ -z "${s//[0-9a-f]/}" ] || continue
       $G merge-base --is-ancestor "$s" "$1" 2>/dev/null || continue   # a base that is not an ancestor of this one says nothing about its diff
       c=$($G rev-list --count "$s..$1" 2>/dev/null) || continue; [ -n "$c" ] || continue
       printf '%s %s\n' "$c" "$s"; done | sort -n | head -1 | cut -d' ' -f2 -s)   # the closest ancestor: the fewest commits between it and the base
-  [ -n "$a" ] && [ -f "$here/gate-suites.sh" ] || { echo full; return; }
-  $G diff --name-only "$a" "$1" 2>/dev/null | bash "$here/gate-suites.sh"; }
+  [ -n "$a" ] || { echo full; return; }
+  $G diff --name-only "$a" "$1" 2>/dev/null | suiteset; }
 # a red base reds every branch at once: test it once per base head, before merging anything. 0 = the base is green (or already known green), 1 = wait
 basegate() { local l=$1 bt bgs
   bgs=$(basesuites "$bs")   # the park and its solo retry reuse the candidate gate's selection, so the base is never parked by a suite its diff cannot affect
@@ -199,7 +200,7 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
     if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; $G reset -q --hard HEAD; fi; done
   if [ "$(wc -w <<<"$merged")" -lt 2 ]; then $G checkout -q "$SG_FORK_BASE"; $G branch -q -D fc-batch; return 0; fi
   files=$(ldiff "$b0b" HEAD)   # the candidate's own change to the base, the same rule the single landing uses (#15): what the merges did, never what each branch did at its own fork point
-  suites=$(printf '%s\n' $files | bash "$here/gate-suites.sh"); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
+  suites=$(printf '%s\n' $files | suiteset); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
   id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
   out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
   at=""; [ $rc = 0 ] || at=$(batchculprit "$id" "${merged# }")   # read off the candidate, which is still checked out here
@@ -314,7 +315,7 @@ for n in $cc; do
   basegate "#$n" || continue
   # The fork-point rule, kept for the conflict request and as the answer when this pass makes no landing diff of its own; the landing
   # itself is judged by its own change to the base, printed below with which rule answered (#15). late/reland: doubt, full.
-  fs=full; fsf=full; [ -z "$late$reland" ] && fsf=$(bdiff "$SG_FORK_BASE" "$br" | bash "$here/gate-suites.sh"); fs=$fsf
+  fs=full; fsf=full; [ -z "$late$reland" ] && fsf=$(bdiff "$SG_FORK_BASE" "$br" | suiteset); fs=$fsf
   [ -z "$late" ] && touch "$mk"
   if [ -z "$late" ] && ! { if [ -n "$reland" ]; then relandbr; else mergebr; fi; }; then
     $G merge --abort 2>/dev/null
@@ -329,6 +330,9 @@ for n in $cc; do
     printf "Fork-only close: merging %s (%s) into %s conflicts (%s). A conflict-fix squad run (%s) merges the base into the branch keeping both sides; the loop retries the close when the branch head moves.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "$files" "$nm" > "$SG_STATE/cq/$n-forkconflict$$.md"
     echo "FORKCLOSE CONFLICT #$n $br into $SG_FORK_BASE ($files) -> fix run $nm"; continue; fi
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
+  if [ -z "$late" ]; then   # the landing is gated by its OWN change to the base (#15); a reland stays any-doubt, as it always was
+    fs=full; [ -z "$reland" ] && fs=$(ldiff "$b0" HEAD | suiteset)
+    echo "FORKCLOSE SUITES #$n: $fs by the landing rule (the landing's own change to $SG_FORK_BASE), the branch's fork-point diff answered $fsf"; fi
   if [ -n "$late" ] && [ -e "$A/basetest-$bs" ]; then   # the base that holds the branch is already tested green (a batch that just landed it, or the base test above): no second run
     rc=0; id=base-$bs; lg=$(cat "$A/basetest-$bs"); tl=$(tail -3 "${lg:-/dev/null}" 2>/dev/null)
   else e2eprep "#$n"

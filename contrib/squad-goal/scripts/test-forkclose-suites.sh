@@ -50,10 +50,11 @@ cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-sui
 printf 'echo shell >> %s/shell.log; exit 0\n' "$T" > "$T/s/shell-suites.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log"\nexport SG_FORK_PY_CMD="echo py >> %s/py.log"\n' "$T/st" "$T/fork" "$T/co" "$T" "$T" > "$T/s/env.sh"
-g init -q -b local/next; mkdir -p "$T/fork/contrib/squad-goal" "$T/fork/tests"; echo 0 > "$T/fork/contrib/squad-goal/f"; echo 0 > "$T/fork/tests/test_spec.py"; g add .; g commit -q -m init
-g checkout -q -b gui/1 local/next; echo 1 >> "$T/fork/contrib/squad-goal/f"; g commit -qam "squad-goal only"; g checkout -q local/next   # forked HERE, before the base loses the spec, so the spec is a file its own diff never names
-g checkout -q -b gui/9 local/next; echo 9 > "$T/fork/nine"; g add .; g commit -qam "the merge that brings a spec"; g checkout -q local/next
-g merge -q --no-ff -m "Merge gui/9 (Refs #9)" gui/9; rv=$(g rev-parse HEAD); g revert -m 1 --no-edit "$rv" >/dev/null   # the base lost tests/test_spec.py to that revert; gui/1 still carries it
+g init -q -b local/next; mkdir -p "$T/fork/contrib/squad-goal" "$T/fork/tests"; echo 0 > "$T/fork/contrib/squad-goal/f"; g add .; g commit -q -m init
+g checkout -q -b gui/9 local/next; echo 0 > "$T/fork/tests/test_spec.py"; g add .; g commit -qam "the merge that brings a spec"; g checkout -q local/next
+g merge -q --no-ff -m "Merge gui/9 (Refs #9)" gui/9; rv=$(g rev-parse HEAD)
+g checkout -q -b gui/1 local/next; echo 1 >> "$T/fork/contrib/squad-goal/f"; g commit -qam "squad-goal only"; g checkout -q local/next   # forked HERE, while the base still holds the spec: its own diff is squad-goal only
+g revert -m 1 --no-edit "$rv" >/dev/null   # the base lost tests/test_spec.py to that revert; gui/1 still carries it, so a landing restores a file the branch's own diff never named
 touch "$T/st/auto/basetest-$(g rev-parse --short=9 local/next)"   # a base recorded green there: the base test answers from the base's OWN diff since it
 printf 'base\n' > "$T/fork/contrib/squad-goal/g"; g add .; g commit -q -m "a base-only squad-goal change"   # so the base's own answer is shell, not full
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
