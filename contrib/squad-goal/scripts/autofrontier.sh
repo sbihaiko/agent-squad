@@ -5,8 +5,8 @@
 # which stack.sh says READY or STACK, all in ONE squad start within the free run slots, wave label first; READY issues naming a common file share one child
 # and one PR (cluster.py). The profile's
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
-# to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends with a failed
-# verdict and nothing landed (janitor rule O, which also puts the card back to Todo). Empty SG_FRONTIER_LABEL turns it off.
+# to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
+# landing anything, whatever its verdict (janitor rule O, which also puts the card back to Todo). Empty SG_FRONTIER_LABEL turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the

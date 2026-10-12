@@ -43,7 +43,7 @@ mk run-pr 904
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #904 on fix/904-x"}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["label_missing"], "exit_code": 0}\n' > "$T/co/runs/run-pr/record.jsonl"
 echo run-pr > "$T/st/auto/disp-904"
 touch -t 202001010000 "$T/co/runs/run-ended/record.jsonl" "$T/co/runs/run-landed/record.jsonl" "$T/co/runs/run-pr/record.jsonl"
-run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_TESTING=Testing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run)
 [ ! -e "$T/st/auto/disp-901" ] && ok "O: an ended run with no landed change drops its disp marker" || ko "O disp-901 kept (the frontier starves on it): $o"
 /usr/bin/grep -q '^o 4 Todo 901$' "$T/board.calls" 2>/dev/null && ok "O: ended run -> card back to Todo" || ko "O #901 not demoted: $(cat "$T/board.calls" 2>/dev/null)"
