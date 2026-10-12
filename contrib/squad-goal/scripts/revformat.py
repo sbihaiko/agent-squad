@@ -29,6 +29,7 @@ is the shape and the debt-only path sees blocking=0 (ADR-0273 Decision 3/5). A b
 usage: revformat.py [--max-lines N] [--fix-round] <review>
                                            exit 0 = the shape holds; 1 = one reason on stdout
        revformat.py --summary <review>     prints "blocking=N debt=N" (0 when the shape is broken)
+       revformat.py --shape [--fix-round]  prints the answer shape of that mode, and checks nothing (#1835)
 """
 import argparse
 import re
@@ -195,6 +196,36 @@ def survey(review, max_lines=0, fix_round=False):
     return None
 
 
+def shape(fix_round=False):
+    """The answer shape of a review mode, as the smallest answer that mode accepts (#1835).
+
+    `review.sh` does not describe the shape in words: it embeds this text, verbatim, in the prompt it sends -- so the
+    prompt and the check that reads the answer cannot drift apart, and a wording the check cannot parse is a red test
+    (`test-revformat.sh`) instead of a review round lost in the loop.
+
+    It is a template, not a sample: `file:line` and every `<...>` field are the placeholders the model fills with the
+    real path and line, the defect, the failure it causes and the fix. Filling them yields a review this module
+    accepts, which is what the contract test asserts. The sections are printed from SECTIONS and the answer section
+    from ANSWER, so a rename here reprints itself; `## Resolved` is printed only in the fix-round mode, the one mode
+    whose grammar has it (#1834).
+    """
+    blocking, debt = SECTIONS
+    finding = "- file:line — <defect> — <concrete failure> — <fix>"
+    lines = ["VERDICT: <APPROVE or CHANGES>",
+             f"## {blocking}",
+             "### <theme, most severe first; a lone finding needs no heading>",
+             finding,
+             f"## {debt}",
+             finding]
+    if fix_round:
+        # a previous finding that is not fixed keeps the section it was raised in; the one that is fixed moves to the
+        # answer section. Both are printed, since a fix round has to tell them apart (#1832, #1834).
+        lines[3] = "- file:line — <defect> — not fixed: <one-line reason> — <the failure it still causes>"
+        lines += [f"## {ANSWER}",
+                  "- file:line — <defect> — fixed: <one-line reason> — <the check that proves it>"]
+    return "\n".join(lines)
+
+
 def normalize(review):
     """The review with its verdict as line 1 in the exact form the loop parses.
 
@@ -220,7 +251,7 @@ def normalize(review):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description="Check the shape of a squad review (a short checklist).")
-    p.add_argument("review", help="the review to check, or - for stdin")
+    p.add_argument("review", nargs="?", help="the review to check, or - for stdin (not needed with --shape)")
     p.add_argument("--max-lines", type=int, default=0,
                    help="line cap for the whole review (review_max_lines in models.json; 0 = no cap)")
     p.add_argument("--fix-round", action="store_true", help="the answer to a previous review of the same PR: it may"
@@ -229,7 +260,15 @@ def main(argv=None):
                    " (a bullet answered 'fixed' is not a finding, #1832)")
     p.add_argument("--normalize", action="store_true",
                    help="print the review with its verdict canonical on line 1, and check nothing")
+    p.add_argument("--shape", action="store_true",
+                   help="print the answer shape of this mode (with --fix-round, the fix round's), and check nothing:"
+                   " what review.sh embeds in the prompt, verbatim (#1835)")
     a = p.parse_args(argv)
+    if a.shape:
+        print(shape(a.fix_round))
+        return 0
+    if not a.review:
+        p.error("a review is required (or - for stdin), unless --shape is asked for")
     text = sys.stdin.read() if a.review == "-" else open(a.review, encoding="utf-8", errors="replace").read()
     if a.normalize:
         print(normalize(text), end="" if text.endswith("\n") else "\n")

@@ -76,9 +76,16 @@ for mode in full fix; do
     fix) /usr/bin/grep -qF '## Resolved' "$T/prompt" && ok "fix prompt asks for the '## Resolved' answers (#1834)" || ko "fix prompt does not name '## Resolved'";;
     full) /usr/bin/grep -qF '## Resolved' "$T/prompt" && ko "full prompt names '## Resolved' (a full review has no answers)" || ok "full prompt does not name '## Resolved'";;
   esac
-  miss=""; for needle in '## Blocking' '## Debt' 'file:line' 'at most two lines' 'most severe first' 'no closing summary'; do
+  miss=""; for needle in '## Blocking' '## Debt' 'file:line' 'most severe first' 'APPROVE or CHANGES'; do
     /usr/bin/grep -qF "$needle" "$T/prompt" || miss="$miss '$needle'"; done
   [ -z "$miss" ] && ok "$mode prompt carries the checklist format" || ko "$mode prompt lacks$miss"
+  # #1835: the shape in the prompt is the text revformat.py printed, verbatim -- review.sh keeps no copy of its own to
+  # drift from, so a wording the check cannot parse is a red test here rather than a review round lost in the loop.
+  extra=""; [ $mode = fix ] && extra=--fix-round
+  want=$(python3 "$T/s/revformat.py" --shape $extra 2>/dev/null)
+  if [ -z "$want" ]; then ko "$mode prompt: revformat.py --shape printed nothing"; else
+    case "$(cat "$T/prompt")" in *"$want"*) ok "$mode prompt carries the shape revformat.py printed (#1835)";; *) ko "$mode prompt does not carry the printed shape";; esac
+  fi
   /usr/bin/grep -qF 'at most 21 lines' "$T/prompt" && ok "$mode prompt carries the format 21-line cap from review_max_lines" || ko "$mode prompt cap: $(/usr/bin/grep -i 'lines' "$T/prompt" | head -1)"
   /usr/bin/grep -q 'divergence from an accepted ADR' "$T/prompt" && /usr/bin/grep -q 'regression of behaviour' "$T/prompt" && /usr/bin/grep -q 'wire protocol or a persisted format' "$T/prompt" && /usr/bin/grep -q 'passes while lying' "$T/prompt" && ok "$mode prompt lists the closed blocking set" || ko "$mode prompt lacks the blocking list"
   /usr/bin/grep -qi 'filed task' "$T/prompt" && ok "$mode prompt states what DEBT costs" || ko "$mode prompt lacks the DEBT cost"

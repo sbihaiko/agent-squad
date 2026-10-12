@@ -127,4 +127,51 @@ printf 'VERDICT: CHANGES\n## Resolved\n- src/a.py:12 — null deref — fixed: t
 out=$(python3 "$src" --fix-round --max-lines 60 "$T/r.md")
 [ $? = 1 ] && case "$out" in *twice*) ok "'## Resolved' may not appear twice";; *) ko "the duplicate reason is not the shape's: '$out'";; esac || ko "two '## Resolved' sections accepted"
 
+# 12) #1835: revformat.py is the single source of the answer shape -- it can print it (--shape, and --fix-round for
+# the mode that has an answer section), and review.sh embeds exactly that printed text in the prompt of both review
+# modes, so a wording the check cannot read is a red test here instead of a review round lost in the loop. The
+# contract is checked next to the validator's other cases, with stubbed gh/claude: no network, no model.
+shape() { python3 "$src" --shape "$@"; }
+sh_full=$(shape); sh_fix=$(shape --fix-round)
+# the shape is a template: its placeholders are the verdict and the file:line of the bullet. Filling them gives the
+# smallest answer the prompt asks for, and that answer is what the check has to accept.
+fill() { sed -e 's/<APPROVE or CHANGES>/CHANGES/' -e 's/file:line/path\/to\/file.ext:12/g'; }
+printf '%s\n' "$sh_full" | fill > "$T/shape.md"; out=$(python3 "$src" "$T/shape.md" 2>&1); rc=$?
+[ $rc = 0 ] && ok "the printed full-review shape is an answer the check accepts (#1835)" || ko "the printed full shape is not a review: rc=$rc '$out'"
+printf '%s\n' "$sh_fix" | fill > "$T/shape.md"; out=$(python3 "$src" --fix-round "$T/shape.md" 2>&1); rc=$?
+[ $rc = 0 ] && ok "the printed fix-round shape is an answer the check accepts (#1835)" || ko "the printed fix shape is not a review: rc=$rc '$out'"
+case "$sh_fix" in *'## Resolved'*) ok "the fix-round shape prints the '## Resolved' section (#1834)";; *) ko "the fix shape does not print '## Resolved'";; esac
+case "$sh_full" in *'## Resolved'*) ko "the full-review shape prints '## Resolved' (that mode has no answers)";; *) ok "the full-review shape leaves out '## Resolved'";; esac
+# the prompt each mode sends, captured from a stubbed run of review.sh (its two halves meet here)
+prompt_of() { local W; W=$(mktemp -d); mkdir -p "$W/bin" "$W/st/cq"
+  cp "$(dirname "$src")/review.sh" "$W/review.sh"; cp "$src" "$W/revformat.py"; : > "$W/codex-reset.py"
+  printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"review_max_lines":60,"anthropic_models":[]}' > "$W/models.json"
+  printf 'SG_REPO=x/y; SG_STATE=%s/st; SG_BASE=main; SG_CHECKOUT=%s; SG_REVIEW_RULES=CLAUDE.md\n' "$W" "$W" > "$W/env.sh"
+  cat > "$W/bin/gh" <<'J'
+#!/bin/bash
+case "$*" in
+  *'.head.sha+" "+.base.ref'*) echo "aaa111 main";;
+  *compare*.status*) echo ahead;;
+  *compare*) printf 'diff --git a/f b/f\n+x\n';;
+  *pulls/7/files*) echo UI/a.cs;;
+  *'.head.sha'*) echo aaa111;;
+  *) echo stub;;
+esac
+J
+  cat > "$W/bin/claude" <<'J'
+#!/bin/bash
+cat > "$CLAUDE_PROMPT"; echo "VERDICT: APPROVE"
+J
+  chmod +x "$W/bin/gh" "$W/bin/claude"
+  [ "$1" = fix ] && { echo ccc333 > "$W/st/review-7.sha"; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$W/st/review-7.md"; }
+  PATH="$W/bin:$PATH" CLAUDE_PROMPT="$W/prompt" bash "$W/review.sh" 7 8 >/dev/null 2>&1
+  cat "$W/prompt" 2>/dev/null; rm -rf "$W"; }
+for mode in full fix; do
+  want=$sh_full; [ $mode = fix ] && want=$sh_fix
+  if [ -z "$want" ]; then ko "$mode: revformat.py --shape printed nothing"; continue; fi
+  p=$(prompt_of $mode)
+  case "$p" in *"$want"*) ok "$mode: the prompt embeds the shape revformat.py printed, verbatim (#1835)";; *) ko "$mode: the prompt does not embed the printed shape (a hand-written copy is back)";; esac
+  case "$p" in *'Unrecognized arguments'*|*'unrecognized arguments'*) ko "$mode: the prompt carries an argparse error instead of the shape";; *) : ;; esac
+done
+
 rm -rf "$T"; exit $fail
