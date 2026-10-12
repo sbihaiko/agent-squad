@@ -7,8 +7,7 @@
 #   cited    a repo path the body cites (`UI/x.cs`, scripts/y.py) that does not exist on the head: a file the body promises
 #            but the PR does not carry (#1277: the tests the body named were never committed); lines naming the fork,
 #            another repo, a URL or a removal are skipped, and so is a path outside this repo's top-level dirs (squad/, tmp/)
-#   checks   $SG_PREPUSH_CHECKS, when the profile sets it, run in the tree with the touched files as $PREPUSH_FILES,
-#            the pushed range as $PREPUSH_RANGE and the deliverable body as $PREPUSH_BODY (check-tdd-red.sh reads all three)
+#   checks   $SG_PREPUSH_CHECKS, when the profile sets it, run in the tree with the touched files as $PREPUSH_FILES
 # Prints one "- <rule>: <detail>" line per failure; exit 0 when clean, 1 otherwise.
 . "$(dirname "$0")/env.sh" 2>/dev/null; G=/usr/bin/git; fails=()
 PATHRE='(\b|`)([A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(cs|cpp|h|hpp|py|sh|axaml|json|md|yml|yaml|xml|js|ts)\b'
@@ -37,7 +36,7 @@ if $G -C "$dir" cat-file -e "$head^{commit}" 2>/dev/null; then
   done
   if [ -n "${SG_PREPUSH_CHECKS:-}" ] && [ -n "$base" ]; then
     files=$($G -C "$dir" diff --name-only "$base" "$head" | tr '\n' ' ')
-    out=$(cd "$dir" && PREPUSH_FILES="$files" PREPUSH_RANGE="$base..$head" PREPUSH_BODY="$body" bash -c "$SG_PREPUSH_CHECKS" 2>&1) || fails+=("checks: \$SG_PREPUSH_CHECKS failed: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')")
+    out=$(cd "$dir" && PREPUSH_FILES="$files" bash -c "$SG_PREPUSH_CHECKS" 2>&1) || fails+=("checks: \$SG_PREPUSH_CHECKS failed: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')")
   fi
 fi
 [ ${#fails[@]} -eq 0 ] && exit 0

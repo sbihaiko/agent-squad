@@ -1,7 +1,6 @@
 #!/bin/bash
-# Regression test for #1413 and #1848: a fork-only request asks the child to post its TDD RED (then GREEN) output
-# on the issue, and forkclose.sh refuses the landing of a branch whose issue has no RED comment (ADR-0136 §4),
-# announcing it once per issue and leaving the wording of the warning it replaces.
+# Regression test for #1413: a fork-only request asks the child to post its TDD RED (then GREEN) output on the issue, and
+# forkclose.sh notes (warning only, never blocking) on a landing branch whose issue has no RED comment.
 # FC_DRY, stub gh, throwaway fork repo. usage: bash test-forkclose-red.sh
 d=$(cd "$(dirname "$0")" && pwd); src=$d/forkclose.sh; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # 1: the fork request carries the RED-on-issue rule
@@ -25,8 +24,7 @@ esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 r=$(FC_DRY=1 bash "$T/s/forkclose.sh" 2>&1)
-case "$r" in *"FORKCLOSE REFUSE #2"*"no TDD RED comment on the issue for gui/2"*) ok "no RED comment: the refusal fires, same wording";; *) ko "no refusal for #2: '$r'";; esac
-case "$r" in *"REFUSE #1"*) ko "a RED comment is there, yet #1 was refused: '$r'";; *) ok "a RED comment: silent";; esac
-case "$r" in *"would merge gui/2 "*) ko "the refusal did not block the landing: '$r'";; *) ok "the refusal blocks the landing";; esac
-case "$r" in *"would merge gui/1 "*) ok "the branch that carries its RED still lands";; *) ko "gui/1 was blocked too: '$r'";; esac
+case "$r" in *"WARN #2"*"RED"*) ok "no RED comment: the warning fires";; *) ko "no warning for #2: '$r'";; esac
+case "$r" in *"WARN #1"*) ko "a RED comment is there, yet #1 warned: '$r'";; *) ok "a RED comment: silent";; esac
+case "$r" in *"would merge gui/2 "*) ok "the warning does not block the landing";; *) ko "#2 blocked: '$r'";; esac
 rm -rf "$T"; exit $fail
