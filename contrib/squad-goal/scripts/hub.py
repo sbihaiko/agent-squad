@@ -178,7 +178,7 @@ def handled_of(st, r, checkout=None):
     head = r.get("head")
     if not head: return st
     root = pathlib.Path(checkout) if checkout else pathlib.Path(PROF.get("SG_CHECKOUT") or os.getcwd())
-    p = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", str(head), "local/next"], capture_output=True)
+    p = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", str(head), "main"], capture_output=True)
     return "handled" if p.returncode == 0 else st
 def badge_of(st, r=None):
     """Hub run-list badge: a needs-human run never prints `exit N`; that lives on the tooltip."""
@@ -743,6 +743,11 @@ def load_sampler():
 # rewritten and the loop's own readers keep reading it as it is -- this is the hub's display bound, not a claim the test failed.
 TEST_LOST_SECS = 4 * 3600
 LOST_NOTE = "lost: no state written for over 4 h"
+# A lost pass stays visible -- it is the one reading that says a pass died and nobody retried it -- but not forever: past a day
+# the ghost of a pass nobody will retry outlives its message, and the left pane fills with entries that are older than the work
+# around them. A day is past any pass a reader would still act on, and it is the same drop the finished ones get, so the list
+# converges on what is current instead of growing by one row per killed pass.
+TEST_LOST_DROP_SECS = 24 * 3600
 
 def runs():
     _titles()
@@ -775,6 +780,7 @@ def runs():
         age = time.time() - f.stat().st_mtime
         raw = d.get("state") or "running"
         lost = raw == "running" and age > TEST_LOST_SECS   # the pass died before it could write its terminal state (#1783)
+        if lost and age > TEST_LOST_DROP_SECS: continue    # a ghost nobody will retry stops being listed at all
         if raw != "running" and age > 4 * 3600: continue
         rec = {"head": d.get("head"), "merged": d.get("merged"), "exit_code": d.get("rc")}
         st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)

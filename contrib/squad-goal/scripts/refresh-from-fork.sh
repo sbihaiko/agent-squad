@@ -6,7 +6,7 @@
 # Never touched: scripts/models.json, per-repo profiles (only profiles/example.sh ships) and $SG_STATE (sync-deny, fork-base).
 # Refused (SG_REFRESH_FORCE=1 overrides) when live carries edits neither synced to the fork nor on local/next, which the copy would erase.
 set -euo pipefail
-live="$(cd "$(dirname "$0")/.." && pwd)"; F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-local/next}; st=${SG_STATE:-$HOME/.cache/squad-goal}
+live="$(cd "$(dirname "$0")/.." && pwd)"; F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-main}; st=${SG_STATE:-$HOME/.cache/squad-goal}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 git -C "$F" archive "$br" contrib/squad-goal | tar -x -C "$tmp"; fk="$tmp/contrib/squad-goal"
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }

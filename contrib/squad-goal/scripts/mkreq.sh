@@ -71,7 +71,7 @@ slice_guard() {
   id=$(grep -m1 -E '^PANEL: *[^ ]+' "$2" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true; id=${id:-${SG_PANEL:-}}
   # env.sh refuses to load without a matching profile, and a launch exports the SG_* values it would have set, so take them from
   # the environment first and ask env.sh only for what is missing.
-  local repo=${SG_REPO:-} fdir=${SG_FORK_DIR:-} fbase=${SG_FORK_BASE:-local/next} co=${SG_CHECKOUT:-} ev=""
+  local repo=${SG_REPO:-} fdir=${SG_FORK_DIR:-} fbase=${SG_FORK_BASE:-main} co=${SG_CHECKOUT:-} ev=""
   if [ -z "$repo" ] || [ -z "$fdir" ] || [ -z "$co" ]; then
     ev=$( ( . "$(cd "$(dirname "$0")" && pwd)/env.sh" >/dev/null 2>&1; printf '%s\n%s\n%s\n%s\n' "${SG_REPO:-}" "${SG_FORK_DIR:-}" "${SG_FORK_BASE:-}" "${SG_CHECKOUT:-}" ) 2>/dev/null ) || true
     [ -n "$repo" ] || repo=$(printf '%s\n' "$ev" | sed -n 1p)

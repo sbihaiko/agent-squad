@@ -11,7 +11,7 @@ branches answering one issue number are refused, both named, neither moved. Noth
 here -- the report is the whole deliverable, and a pass over a head it already named says nothing new."""
 import json, os, pathlib, re, subprocess, sys
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
-fork, base = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "local/next")
+fork, base = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main")
 if not fork or not pathlib.Path(fork).is_dir(): sys.exit(0)
 here = pathlib.Path(__file__).resolve().parent; forkonly = os.environ.get("SG_FORKONLY", str(here / "forkonly.sh"))
 def git(*a): return subprocess.run(["/usr/bin/git", "-C", fork, *a], capture_output=True, text=True)

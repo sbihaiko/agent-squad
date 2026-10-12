@@ -83,6 +83,15 @@ def test_a_running_pass_just_past_the_bound_is_lost(hub):
     assert row["state"] != "running" and row["live"] is False
 
 
+def test_a_lost_pass_is_dropped_past_a_day(hub):
+    """Visible while it still means something, gone when it is only a ghost: one row per killed pass does not accumulate."""
+    f = _pass_file(hub, "test-1568-ancient", "running", 25 * 3600, issue=1568)
+    assert not [r for r in _test_rows(hub) if r["id"] == f.stem], "a pass nobody retried in a day leaves the list"
+    g = _pass_file(hub, "test-1565-14h", "running", 14 * 3600)
+    row = next(r for r in _test_rows(hub) if r["id"] == g.stem)
+    assert "lost" in row["badge"].lower(), "a pass from the same night is still shown, marked lost"
+
+
 def test_an_old_finished_pass_is_still_dropped(hub):
     f = _pass_file(hub, "test-1566-old-done", "completed", 5 * 3600, issue=1566)
     assert not [r for r in _test_rows(hub) if r["id"] == f.stem], "the bound on finished passes is unchanged"

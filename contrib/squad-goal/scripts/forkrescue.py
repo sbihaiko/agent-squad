@@ -13,7 +13,7 @@ from under it. Once per child (marker auto/rescue-<run>-<child>)."""
 import json, os, pathlib, re, subprocess, sys
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
-fork, base, pat = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "local/next"), os.environ.get("SG_FORK_BRANCH", "gui/%n")
+fork, base, pat = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main"), os.environ.get("SG_FORK_BRANCH", "gui/%n")
 here = pathlib.Path(__file__).resolve().parent
 forkonly = os.environ.get("SG_FORKONLY", str(here / "forkonly.sh")); board = os.environ.get("SG_BOARD", str(here / "board.sh"))
 if not fork or not pathlib.Path(fork).is_dir(): sys.exit(0)
