@@ -34,7 +34,9 @@ REQUEST_ID = "06F8:34CAED:22CD6B6:3FC4397:6ACC6C2A"
 
 STUB_GH = """#!/bin/bash
 # The one place a read reaches "GitHub" here: it records the route it was asked for and answers it.
-printf '%s\\n' "$*" >> "{log}"
+# ONE line per request: since #5 asks for a fact in one GraphQL request, the query spans many argv lines, and counting
+# lines would count one request as twenty-five.
+printf '%s\\n' "${{*//$'\\n'/ }}" >> "{log}"
 case "$*" in
   *"pulls?state=open"*) printf '%s' '[{{"number":7,"title":"Refs #99","body":""}}]';;
   *issues/*) printf '%s' '{{"state":"open","body":"no blockers here"}}';;
@@ -126,13 +128,16 @@ def test_the_collection_passes_burst_is_the_burst_the_throttle_documents(tmp_pat
     t = _fixture(tmp_path, candidates=(1, 2))
     out, routes, collected = _collect(t)
     assert collected == ["1", "2"], f"the collection read nothing: {out}"
-    assert len(routes) == ghthrottle.landing_pass_burst(len(collected)), (
-        f"the pass asked GitHub for {len(routes)} routes, the throttle sizes its budget for {ghthrottle.landing_pass_burst(2)}: {routes}"
+    # The budget is sized for the pass's worst case, `landing_pass_burst(n) = 1 + 2n`: the open-PR read once, then two
+    # reads per candidate. Since #5 the collection asks for the repository's open PRs and its open issues as one
+    # aggregate request each, so the pass stays UNDER that bound -- and the bound is what the bucket must cover, the
+    # pass's real count is what it spends. (Against a real GitHub the aggregate issue list also answers the per-candidate
+    # read this stub cannot shape, so what is measured here is the pass's worst case, not its best.)
+    assert len(routes) <= ghthrottle.landing_pass_burst(len(collected)), (
+        f"the pass asked GitHub for {len(routes)} requests, the throttle sizes its budget for {ghthrottle.landing_pass_burst(2)}: {routes}"
     )
-    assert routes[0].endswith("repos/x/y/pulls?state=open&per_page=100"), f"the open-PR read comes first: {routes}"
-    assert routes[1:] == ["repos/x/y/issues/1", "repos/x/y/issues/1", "repos/x/y/issues/2", "repos/x/y/issues/2"], (
-        f"two routes per candidate: its state and its Blocked by body: {routes}"
-    )
+    assert "pullRequests(states: OPEN" in routes[0], f"the open-PR fact is the first read, in one request: {routes}"
+    assert "issues(states: OPEN" in routes[1], f"the candidates' facts come from one list, not one read each: {routes}"
 
 
 def test_the_collection_sends_nothing_at_all_while_the_cooldown_holds(tmp_path):
@@ -152,7 +157,7 @@ def test_the_cooldown_the_pass_writes_is_the_one_the_next_pass_reads(tmp_path):
     t = _fixture(tmp_path, candidates=(1,))
     stub = t / "bin" / "gh"
     stub.write_text(
-        f'#!/bin/bash\nprintf \'%s\\n\' "$*" >> "{t}/gh.log"\nprintf \'%s\' \'{{"message":"{RATE_LIMIT_MESSAGE}","status":"403"}}\'\nexit 1\n'
+        f'#!/bin/bash\nprintf \'%s\\n\' "${{*//$\'\\n\'/ }}" >> "{t}/gh.log"\nprintf \'%s\' \'{{"message":"{RATE_LIMIT_MESSAGE}","status":"403"}}\'\nexit 1\n'
     )
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
     out, routes, collected = _collect(t)

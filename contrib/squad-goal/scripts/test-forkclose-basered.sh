@@ -2,7 +2,7 @@
 # Regression test for forkclose.sh's base-red park: one escalation card per base sha, one solo retry past the budget (green lifts, red keeps).
 # usage: bash test-forkclose-basered.sh [path/to/forkclose.sh]
 src=${1:-$(dirname "$0")/forkclose.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
 printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"; printf '#!/bin/bash\necho t-1\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD='"'"'echo run >> %s/runs; [ -e %s/green ]'"'"'\n' "$T/st" "$T/fork" "$T/co" "$T" "$T" > "$T/s/env.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }

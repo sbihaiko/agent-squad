@@ -4,7 +4,7 @@
 # a second kill on the same head escalates to NEEDS OWNER. Stub test.sh kills itself with SIGTERM, stub gh/mkreq.sh, throwaway fork repo.
 # usage: bash test-forkclose-envkill.sh [path/to/forkclose.sh]
 src=${1:-$(dirname "$0")/forkclose.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-unset SG_E2E_DIR SG_E2E_BUILD_DIR; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/gate-suites.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"
+unset SG_E2E_DIR SG_E2E_BUILD_DIR; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$(dirname "$src")/gate-suites.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"
 printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"
 printf '#!/bin/bash\nkill -TERM $$\n' > "$T/s/test.sh"   # killed before it prints its id or finalizes a result JSON
 printf '#!/bin/bash\necho x >> %s/fixruns; echo "$2"\n' "$T" > "$T/s/mkreq.sh"; printf 'import sys\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"

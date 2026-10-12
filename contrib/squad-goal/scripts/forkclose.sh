@@ -18,16 +18,19 @@
 # at a time, so a culprit is still named. A branch that conflicts with an earlier one stays out of the batch and gets its conflict-fix run as usual.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
-# The collection's reads go through ONE reader (#5, #1893, ADR-0277). ghread.py answers an aggregate route with one
-# request and hands back the fact, and the projection stays here -- `gh_api <route> -q <jq>`, the shape watch.sh reads
-# with. The caller never names the protocol: `repos/<r>/issues?state=open` is one GraphQL request and every other route
-# is REST. The outcome is read from the module's exit code, never from the body: `gh api` writes the error body to
-# stdout and exits non-zero, and it does not honour -q on a failed request, so a refusal used to arrive here as data.
+# The collection's reads go through ONE reader (#5, #1893, ADR-0277), and that reader is the throttled one (#4): this is
+# the loop's heaviest reader and the pass the bucket is sized for, so it hands every route to ghthrottle.py, which
+# spends a token from the bucket every process of the loop shares, answers a refusal without touching the network while
+# a cooldown holds, and delegates the route itself to ghread.py -- an aggregate route stays one GraphQL request, and a
+# cooldown held by another reader holds here too. The projection stays here -- `gh_api <route> -q <jq>`, the shape
+# watch.sh reads with. The outcome is read from the module's exit code, never from the body: `gh api` writes the error
+# body to stdout and exits non-zero, and it does not honour -q on a failed request, so a refusal used to arrive here as
+# data -- and a quota-exhausted pass used to read as "no eligible branches", silently.
 gh_api() {
   local route=$1; shift
   local q=""; [ "${1:-}" = "-q" ] && q=${2:-}
   local o rc
-  o=$(python3 "$here/ghread.py" "$route"); rc=$?
+  o=$(python3 "$here/ghthrottle.py" "$route"); rc=$?
   if [ "$rc" -eq 0 ]; then
     if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi
     return 0
