@@ -25,7 +25,7 @@ gate full "$wait4"; (cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=full SG_FORK_PY_CMD
 rm -f "$T/shell.started"; printf 'exit 1\n' > "$T/g/contrib/squad-goal/scripts/shell-suites.sh"
 (cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=full SG_FORK_PY_CMD=true bash contrib/squad-goal/scripts/fork-gate.sh "exit 3" >/dev/null 2>&1) && ko "a red gate exited 0" || ok "a red suite still fails the gate"
 # forkclose.sh picks the suites from the branch's diff
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; cp $here/ghread.py "$T/s/"
 printf 'echo shell >> %s/shell.log; exit 0\n' "$T" > "$T/s/shell-suites.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
@@ -33,7 +33,7 @@ G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 g init -q -b local/next; mkdir -p "$T/fork/contrib/squad-goal" "$T/fork/dashboard"; echo 0 > "$T/fork/contrib/squad-goal/f"; echo 0 > "$T/fork/dashboard/d"; g add .; g commit -q -m init
 g checkout -q -b gui/1 local/next; echo 1 >> "$T/fork/contrib/squad-goal/f"; g commit -qam "squad-goal only"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-printf '#!/bin/bash\ncase "$*" in\n  *"issues/"*" -q .state"*) echo open;;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\ncase "$*" in\n  *"issues/"*" -q .state"*) echo open;;\n\n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 FC_NOBATCH=1 bash "$T/s/forkclose.sh" >/dev/null 2>&1
 [ "$(wc -l < "$T/gui.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "squad-goal-only branch: the GUI suite ran once (the base test), not for the branch" || ko "gui runs: $(cat "$T/gui.log" 2>/dev/null | wc -l)"
 [ "$(wc -l < "$T/shell.log" 2>/dev/null | tr -d ' ')" = 2 ] && ok "squad-goal-only branch: the shell suites ran for the base and for the branch" || ko "shell runs: $(cat "$T/shell.log" 2>/dev/null | wc -l)"

@@ -18,23 +18,40 @@
 # at a time, so a culprit is still named. A branch that conflicts with an earlier one stays out of the batch and gets its conflict-fix run as usual.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+# The collection's reads go through ONE reader (#5, #1893, ADR-0277). ghread.py answers an aggregate route with one
+# request and hands back the fact, and the projection stays here -- `gh_api <route> -q <jq>`, the shape watch.sh reads
+# with. The caller never names the protocol: `repos/<r>/issues?state=open` is one GraphQL request and every other route
+# is REST. The outcome is read from the module's exit code, never from the body: `gh api` writes the error body to
+# stdout and exits non-zero, and it does not honour -q on a failed request, so a refusal used to arrive here as data.
+gh_api() {
+  local route=$1; shift
+  local q=""; [ "${1:-}" = "-q" ] && q=${2:-}
+  local o rc
+  o=$(python3 "$here/ghread.py" "$route"); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi
+    return 0
+  fi
+  printf '%s' "$o"   # the refusal/failure line: stdout is the only channel a subshell has
+  return "$rc"
+}
+# The repository's open issues, labels and blocking edges together: ONE request per pass (#5), read here in the parent
+# shell -- a read inside `$( )` is a subshell, and its cache would not survive the candidate it was made for. This is the
+# fan-out the pass used to pay per branch: a state read and a body read for every candidate.
+oissues=""; oissues_ok=""
+# The one issue's own facts -- its state and its blocking edges -- from the aggregate answer when it carries the issue,
+# else from that one issue's read through the same reader: a candidate the answer does not carry is not an open issue of
+# this repository (closed, or an issue the query did not cover), and that is one read, not one per fact. Prints the
+# issue's object; prints the read's own line and fails when nothing answered.
+issue_object() { local n=$1 a
+  if [ -n "$oissues_ok" ]; then
+    a=$(printf '%s' "$oissues" | jq -c --argjson n "$n" '.[]?|select(.number==$n)' 2>/dev/null)
+    [ -n "$a" ] && { printf '%s' "$a"; return 0; }
+  fi
+  a=$(gh_api "repos/$SG_REPO/issues/$n") || { printf '%s' "$a"; return 1; }
+  printf '%s' "$a"; }
 [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ] || exit 0; [ -e "$A/off" ] && exit 0
 L="$A/forkclose.lock"   # a test pass is still running; a lock whose pid is gone (loop restarted mid-pass) is stale
-# ONE throttled reader owns the GitHub reads of the eligible-branch collection (#4, ADR-0277): ghthrottle.py spends a token
-# from the bucket every process of the loop shares ($SG_STATE/gh-budget.json) and, while the cooldown written by the first
-# self-attributed 403/429 holds ($SG_STATE/gh-cooldown.json), answers `refused` without touching the network. The bucket is
-# what stops a second reader beside this pass from doubling the rate, and the cooldown is what makes a quota-exhausted pass
-# LOUD: on 2026-10-12 the collection read against an exhausted REST quota, collected zero eligible branches and said
-# nothing, because "quiet because there is no work" and "quiet because there is no quota" read identically in the log.
-# The outcome travels in ghread's exit code (0 answer, 2 refusal, 1 failure) and the refusal line goes to stderr, because
-# every call site below reads stdout inside `$( )` while the log is the other channel. This pass's own burst is what the
-# budget is sized for: the open-PR list once, then the state and the `Blocked by` body of each candidate (ghthrottle.py's
-# landing_pass_burst). Writes below are not reads and stay on `gh api`: the throttle bounds a rate, it does not queue a
-# mutation.
-gh_read() { local route=$1; shift; local q=""; [ "${1:-}" = "-q" ] && q=${2:-}
-  local o rc; o=$(python3 "$here/ghthrottle.py" "$route"); rc=$?
-  [ "$rc" -eq 0 ] || { printf 'FORKCLOSE READ %s: %s\n' "$route" "$o" >&2; return "$rc"; }
-  if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi; }
 if [ -z "${FC_COLLECT:-}" ]; then   # the batch pre-pass runs this script again under the lock its parent holds, only to list the candidates
   if ! mkdir "$L" 2>/dev/null; then kill -0 "$(cat "$L/pid" 2>/dev/null)" 2>/dev/null && exit 0; rm -rf "$L"; mkdir "$L" || exit 0; fi
   echo $$ > "$L/pid"
@@ -219,11 +236,21 @@ if ob=$($G rev-parse -q --verify "refs/remotes/origin/$SG_FORK_BASE" 2>/dev/null
   fi
 fi
 [ -n "$cc" ] || exit 0
-refs=" $(gh_read "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
+# The open PRs of the repository are ONE request (#5), and the projection is the same caller's jq it always was. A list
+# that did not answer stops the pass instead of reading as "no open PRs": landing a branch whose PR is open is the merge
+# this check exists to prevent, and a refusal is not an empty list (#1893).
+if prs=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))'); then
+  refs=" $(printf '%s\n' "$prs" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')"
+else echo "FORKCLOSE NO-PR-LIST: the open-PR list is not readable, so nothing is landed this pass (a branch whose PR is open would land behind it): $prs"; exit 0; fi
+if oissues=$(gh_api "repos/$SG_REPO/issues?state=open"); then oissues_ok=1
+else echo "FORKCLOSE NO-ISSUE-LIST: the repository's open issues are not readable in one request, so each candidate below pays its own read (or waits, if that read is refused too): $oissues"; fi
 [ -n "${FC_DRY:-}${FC_NOBATCH:-}${FC_COLLECT:-}" ] || [ "$(wc -w <<<"$cc")" -lt 2 ] || batchpass
 for n in $cc; do
   case "$refs" in *" $n "*) continue;; esac   # an open MesenAI PR: its fork half waits for that merge (the fork suite runs against main's build)
-  st=$(gh_read repos/$SG_REPO/issues/$n -q .state) || continue
+  # The issue's own facts, once per candidate (#5): from the pass's aggregate read, else from that issue's read. `st` is
+  # what the PR-half decision below reads; the blocking edges come from the same object further down.
+  ifact=$(issue_object "$n") || continue
+  st=$(printf '%s' "$ifact" | jq -r .state 2>/dev/null); [ -n "$st" ] || continue
   br=$(sg_fork_branch "$n"); $G rev-parse -q --verify "refs/heads/$br" >/dev/null || continue
   # A branch that carries a shallow boundary is refused before anything else touches the base or the card: merging it is what
   # produces a $SG_FORK_BASE that cannot be pushed (#1823), and no later pass can undo that without rewriting history.
@@ -255,7 +282,11 @@ for n in $cc; do
   else lf=$(lost "$br")
     if [ -n "$lf" ]; then reland=1; else late=$($G log --format=%h -1 --grep="Merge $br" "$SG_FORK_BASE" 2>/dev/null); [ -n "$late" ] || continue; fi; fi
   [ -n "$late" ] && [ "$st" = closed ] && continue   # landed and the issue is already closed: the close is not late, it happened
-  wait=""; for d in $(gh_read repos/$SG_REPO/issues/$n -q .body | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '#[0-9]+' | tr -d '#'); do   # the section is a LIST: it ends at the first line that is neither blank nor a bullet, so a trailing prose line naming another issue is not an edge (#1803)   # a blocker whose fork half is not in the base yet: merging this one now only goes red (it imports the blocker's files)
+  # The blocking edges are a fact of the same object: `blocked_by` is derived by the reader from the body, with the parse
+  # the awk here used to carry -- the section is a LIST, it ends at the first line that is neither blank nor a bullet, so
+  # a trailing prose line naming another issue is not an edge (#1803).
+  blk=$(printf '%s' "$ifact" | jq -r '.blocked_by|tostring' 2>/dev/null)
+  wait=""; for d in $(printf '%s' "$blk" | tr -d '[]' | tr ',' ' '); do   # a blocker whose fork half is not in the base yet: merging this one now only goes red (it imports the blocker's files)
     bb=$(sg_fork_branch "$d"); $G rev-parse -q --verify "refs/heads/$bb" >/dev/null && { [ "$($G rev-list --count "$SG_FORK_BASE..$bb")" -gt 0 ] || [ -n "$(lost "$bb")" ]; } && wait="$wait #$d"; done
   [ -z "$wait" ] || { wm="$A/forkwait-$n${wait// /-}"; [ -e "$wm" ] || { touch "$wm"; echo "FORKCLOSE WAIT #$n: the fork half of$wait is not in $SG_FORK_BASE yet (Blocked by)"; }; continue; }
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"
