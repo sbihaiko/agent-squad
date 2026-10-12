@@ -47,6 +47,18 @@ def test_the_fixture_reaps_an_app_the_case_itself_left_running(tmp_path):
     assert next(second, None) is None
 
 
+def test_a_narrow_terminal_width_does_not_hide_the_hook_flag(tmp_path, monkeypatch):
+    """procps `ps` cuts the command column at $COLUMNS; importing readline (pytest does) exports COLUMNS=80 to every child."""
+    monkeypatch.setenv("COLUMNS", "80")
+    p = _leftover_app(tmp_path / ("long-directory-name-" * 5))   # the command line is over 80 characters, the flag is its last word
+    try:
+        time.sleep(0.3)
+        assert p.pid in [a["pid"] for a in guard.live_apps()]
+    finally:
+        p.kill()
+        p.wait()
+
+
 def _results(batch_verdict, output=""):
     return {"batches": [{"id": "launch", "verdict": batch_verdict, "output": output}],
             "steps": [{"id": "a", "verdict": "skipped (batch failed)"}, {"id": "b", "verdict": "skipped (batch failed)"}],
