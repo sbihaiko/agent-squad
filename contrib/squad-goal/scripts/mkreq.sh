@@ -63,57 +63,6 @@ slice_paths() {
 # that rule, and an overlapping pair of that panel still says so; or an unmerged gui/* branch in the fork checkout, which is the
 # only place a fork-only child's slice is visible at all, since it never opens a PR. SG_SLICE_FORCE=1 is the documented way past
 # it: a deliberate overlap stays possible, but it has to be asked for and it is announced on stderr.
-# (#1885) A bundled request loses the offending ticket, not the whole batch. autofrontier.sh bundles every ready ticket into ONE
-# request: on 2026-10-12 07:27 request frontier-20261012-072841 held #1883 and #1884, only #1884's own text named
-# contrib/squad-goal/scripts/test-repokeys.sh -- held by the fork-only child's unmerged branch gui/1882 -- and the guard refused
-# the WHOLE request. #1883, whose work touches nothing contested, was never dispatched: eight run slots sat free against
-# max_parallel=10 and HEALTH reported ten ready tickets with no run. The unit to drop is the CHILD block, and the instructions
-# above the first CHILD (the panel line, the Repo address, the shared frontier preamble) belong to EVERY ticket -- a held path
-# there contests the whole batch, which is what a refusal keeps doing. A body with no CHILD blocks (autobug's shape, a fix run, a
-# hand-written request) has no ticket to drop and is refused exactly as before, and so is a batch whose every ticket is contested:
-# there would be nothing left to dispatch.
-# The dropped ticket's auto/disp-<n> is freed with it. autofrontier.sh wrote those markers BEFORE it called this script, and
-# janitor.py frees a marker only through the run it dispatched -- this ticket has no run, so the marker would keep the next pass
-# from picking it up again and the deferral would be permanent. Freeing it makes the drop a deferral: the next pass retries the
-# ticket and defers it again until that slice lands, which is what the operator sees instead of a silent idle frontier.
-slice_prune() {   # <name> <body> <taken>: prints the path of the pruned body, nothing when the whole request must be refused
-  local name=$1 body=$2 taken=$3 t n j f h keep nb pr nums dtxt dfil dhol
-  nb=$(/usr/bin/grep -cE '^CHILD' "$body" 2>/dev/null || true); [ "${nb:-0}" -ge 2 ] || return 0
-  t=$(mktemp -d) || return 0
-  /usr/bin/awk -v d="$t" '/^CHILD/ {i++; f=d "/blk" i} {if (i) print > f; else print > (d "/top")}' "$body"
-  n=$(ls "$t"/blk* 2>/dev/null | wc -l | tr -d ' '); [ "${n:-0}" -ge 2 ] || { rm -rf "$t"; return 0; }
-  dtxt=(); dfil=(); dhol=(); keep=""
-  j=0
-  while [ "$j" -lt "$n" ]; do
-    j=$((j+1))
-    # The shared instructions count for every ticket, exactly as they do for the whole body: a held path above the first CHILD
-    # is in every ticket's region, so no ticket can be kept and the caller refuses the batch.
-    cat "$t/top" "$t/blk$j" > "$t/reg"
-    h=""
-    for f in $(slice_paths "$t/reg"); do
-      h=$(printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
-      [ -n "$h" ] || continue
-      break
-    done
-    if [ -n "$h" ]; then dfil+=("$f"); dhol+=("$h"); dtxt+=("$(head -1 "$t/blk$j")")
-    else keep="$keep $j"; fi
-  done
-  [ -n "$keep" ] || { rm -rf "$t"; return 0; }
-  pr=0; for j in $keep; do pr=$((pr+1)); done
-  # The request states the child count it is about to dispatch: leaving the old count would tell the run to spawn a child the
-  # request no longer carries.
-  sed -E "s/for the [0-9]+ child\(ren\) below/for the $pr child(ren) below/" "$t/top" > "$t/req"
-  for j in $keep; do cat "$t/blk$j" >> "$t/req"; done
-  j=0
-  while [ "$j" -lt "${#dfil[@]}" ]; do
-    nums=$(printf '%s\n' "${dtxt[$j]}" | sed -E 's/.*issue\(s\) *//; s/[^0-9, ].*$//' | tr ',' ' ' | sed -E 's/ +$//')
-    echo "slice guard: holding back issue(s) $nums from request $name: ${dfil[$j]} is in flight (${dhol[$j]}), so this ticket's slice is not free to write. Its dispatch marker is freed and the next pass retries it once that slice lands -- set SG_SLICE_FORCE=1 to dispatch it anyway." >&2
-    for f in $nums; do rm -f "${SG_STATE:-$HOME/.cache/squad-goal}/auto/disp-$f"; done
-    j=$((j+1))
-  done
-  echo "slice guard: request $name dispatched without ${#dfil[@]} of $n ticket(s), held back above; the rest of the batch is dispatched normally (#1885)" >&2
-  printf '%s\n' "$t/req"
-}
 slice_guard() {
   [ -n "$(slice_paths "$2")" ] || return 0
   local paths id taken f holder rid hpanel force=0
@@ -210,12 +159,6 @@ slice_guard() {
     done
   fi
   [ -n "$taken" ] || return 0
-  # (#1885) Before the whole request is refused, ask whether it is a BUNDLE of tickets and only some of them are contested.
-  # A forced overlap keeps its current meaning -- everything is dispatched, nothing is dropped -- so the prune is not even asked.
-  if [ "$force" = 0 ]; then
-    local pruned; pruned=$(slice_prune "$1" "$2" "$taken" || true)
-    [ -z "$pruned" ] || { SLICE_BODY=$pruned; return 0; }
-  fi
   for f in $paths; do
     holder=$(printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
     [ -n "$holder" ] || continue
@@ -262,10 +205,6 @@ slice_guard() {
   done
 }
 slice_guard "$1" "$2" || exit 1
-# (#1885) The guard may have dropped the contested ticket(s) of a bundled request: everything below reads the body it settled
-# on -- the fork-only decision, the landing-branch check and the checklist -- and the request is written from that body.
-body=${SLICE_BODY:-$2}
-if [ -n "${SLICE_BODY:-}" ]; then trap 'rm -rf "${SLICE_BODY%/*}"' EXIT; fi
 # (#1836) The branch a fork-only child commits on has ONE source: $SG_FORK_BRANCH (%n = the issue), the setting
 # forkclose.sh substitutes into the ref it merges (sg_fork_branch, forkonly.sh). Two builders used to carry their own
 # literal beside it -- autofrontier and autobug each wrote `gui/<N>` while the land resolved whatever the profile said --
@@ -301,9 +240,9 @@ fork_landing_refusal() {   # <body> : the reason this fork-only request could ne
 # Fork-only (#1411, the rule of forkonly.sh): the builders write a `FORK-ONLY: all` line when every child is fork-only; a hand-written body
 # with no CHILD blocks is fork-only when it carries the "Fork-only work" line. A fork-only request gets the fork DONE CHECK and checklist:
 # nothing in it names a PR, a push or prepush.sh.
-fork=0; if grep -qE '^FORK-ONLY: all' "$body"; then fork=1; elif ! grep -qE '^CHILD' "$body" && grep -q 'Fork-only work' "$body"; then fork=1; fi
+fork=0; if grep -qE '^FORK-ONLY: all' "$2"; then fork=1; elif ! grep -qE '^CHILD' "$2" && grep -q 'Fork-only work' "$2"; then fork=1; fi
 if [ $fork = 1 ]; then
-  rea=$(fork_landing_refusal "$body"); [ -z "$rea" ] || { echo "refusing: request $1 $rea" >&2; exit 1; }
-  mkdir -p "$(dirname "$out")"; { cat "$body"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence, each as \"cd <fork worktree> && <command>\" (the gate runs in the fork worktree you committed in). Use the targeted commands (the touched test files, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in your result notes, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for your result notes, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; ck=$(cat "$here/req-checklist-fork.txt"); ck=${ck//gui\/<N>/$(sg_fork_branch '<N>')}; echo "$ck"; } > "$out"; echo "$out"; exit 0
+  rea=$(fork_landing_refusal "$2"); [ -z "$rea" ] || { echo "refusing: request $1 $rea" >&2; exit 1; }
+  mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence, each as \"cd <fork worktree> && <command>\" (the gate runs in the fork worktree you committed in). Use the targeted commands (the touched test files, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in your result notes, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for your result notes, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; ck=$(cat "$here/req-checklist-fork.txt"); ck=${ck//gui\/<N>/$(sg_fork_branch '<N>')}; echo "$ck"; } > "$out"; echo "$out"; exit 0
 fi
-mkdir -p "$(dirname "$out")"; { cat "$body"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a PR branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in the PR body, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for the PR body, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; echo "$out"
+mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a PR branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in the PR body, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for the PR body, not a gate input (#1799)."; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; echo "$out"

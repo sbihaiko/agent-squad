@@ -158,8 +158,7 @@ e2eprep() {   # $1 = label; the e2e checkouts the real-app cases drive, at the b
 }
 bdiff() { $G diff --name-only "$($G merge-base "$1" "$2" 2>/dev/null)" "$2" 2>/dev/null; }   # what branch $2 changed since it left $1 (empty on any doubt: the full gate)
 batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
-  if [ -n "${FC_SET:-}" ]; then bl="$FC_SET"; else   # a re-gate after a blamed red names its own set (below); the top-level pass asks the loop for the eligible set, whose notices (WAIT, ORPHAN) print here
-    cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"; fi
+  cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"   # the loop's own eligibility rules; its notices (WAIT, ORPHAN) print here
   [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
   needbase "batch" || return 0   # a checkout left on a branch is returned to the base here, so the batch is not skipped for a pass (the loop below says WAIT when it cannot be)
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); basegate "batch" || exit 0
@@ -175,46 +174,8 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id
   if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
     echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
     echo "FORKCLOSE BATCH landed ${merged# } ($suites suites, $id green); each issue closes below"
-  else $G branch -q -D fc-batch
-    echo "FORKCLOSE BATCH RED (${merged# }; $id exit $rc): nothing landed"
-    # A red batch loses the offending MEMBER, not the batch. The candidate gate merges every code-complete branch into one
-    # tree and gates it once; on a red, the log names the failing test and the file it failed in, the member whose own commits
-    # in this batch last changed that file is the one that added the failure, and it is dropped while the OTHER members are
-    # re-gated as one candidate of their own -- so the batch keeps the parallelism it exists for. What this replaces,
-    # measured 2026-10-12: one ruff error in one file of one branch, read as a single `BATCH RED` line naming nothing, handed
-    # the whole set to the one-at-a-time loop -- six branches serialized against max_parallel=10, and ten branches that had to
-    # be landed by hand cost 9 minutes of merges plus 53 minutes of making the merged tree green (agent-squad#9). A red that
-    # cannot be attributed -- a log naming no test, or no member's commit touching the file it names, which is what a base
-    # already red looks like -- blames nobody and keeps the one-at-a-time fallback below, which still names the culprit.
-    local bb bc bf bt rest
-    # The default IFS splits these fields: the failing line is last, so its own spaces stay in $bt. An `IFS=$'\t'` prefix
-    # here handed `read` nothing at all and the attribution silently read as "nothing to blame" -- the fallback stayed and
-    # one bad member kept serializing the set, which is the defect this line exists to remove.
-    read -r bb bc bf bt <<<"$(blame "${merged# }" "$id")"
-    if [ -n "$bb" ]; then
-      rest=""; for nn in ${merged# }; do [ "$nn" = "$bb" ] || rest="$rest $nn"; done
-      echo "FORKCLOSE BATCH BLAME (${merged# }; $id exit $rc): $bt names $bf, whose last change in this batch is $bc on $(brof "$bb") (#$bb); dropping that branch and re-gating the other $(wc -w <<<"$rest") as one candidate"
-      if [ "$(wc -w <<<"$rest")" -ge 2 ]; then FC_SET="${rest# }" batchpass
-      else echo "FORKCLOSE BATCH BLAME-DROP ($(brof "$bb") is out, $(wc -w <<<"$rest") member(s) left): a candidate is built from at least two branches, so the rest is left to the one-at-a-time loop below, which lands it"; fi
-    else touch "$A/nobatch-$key"
-      echo "FORKCLOSE BATCH FALLBACK (${merged# }; $suites gate, $id red): falling back to one branch at a time so the culprit is named"; fi; fi; }
-# Which member of a red batch the failure belongs to. The gate log is the only witness: it names the failing test and the file
-# that failed (pytest's `FAILED tests/x.py::case`, ruff's `path/x.py:12:1: UP031`, a shell suite's `not ok 1 - x`), and the
-# member whose own commits in the batch last changed that file is the one that added the failure. Prints
-# "<issue>\t<commit>\t<file>\t<failing line>"; prints nothing when no line names a file a member touched, and the caller then
-# keeps the fallback -- an unattributable red is not blamed on a branch. The last matches are read first: a gate reports the
-# failure it failed on at the end, and the test lines it prints on the way are not failures.
-blame() {   # <merged issues> <test id>
-  local ms=$1 lg="$SG_STATE/tests/$2.log" l f b c
-  [ -f "$lg" ] || return 0
-  while IFS= read -r l; do
-    for f in $(printf '%s\n' "$l" | /usr/bin/grep -aoE '[A-Za-z0-9_][A-Za-z0-9_./-]*\.(py|sh|cpp|h|cs|json|xml|md)' | sort -u); do
-      for b in $ms; do
-        c=$($G log --format=%h -1 "$SG_FORK_BASE..$(brof "$b")" -- "$f" 2>/dev/null)
-        [ -n "$c" ] || continue
-        printf '%s\t%s\t%s\t%s\n' "$b" "$c" "$f" "$l"; return 0; done; done
-  done < <(/usr/bin/grep -aE 'FAIL|not ok|error|Error|[A-Za-z0-9_./-]+\.(py|sh|cpp|h|cs|json|xml|md):[0-9]+' "$lg" 2>/dev/null | /usr/bin/grep -v 'fork gate' | tail -25)
-  return 0; }
+  else $G branch -q -D fc-batch; touch "$A/nobatch-$key"
+    echo "FORKCLOSE BATCH RED (${merged# }; $id exit $rc): nothing landed, falling back to one branch at a time so the culprit is named"; fi; }
 # Dispatch the fix request this pass just wrote. forkclose is the sole owner of the branch that request repairs (forkred-<n>-<sha>
 # for a red gate, forkrebase-<n>-<sha> for a conflict), so the request is ABOUT that branch and must go past mkreq.sh's slice guard:
 # the branch it has to fix, gui/<n>, is itself unmerged and touches exactly the files the fix edits, so the guard refuses it and
