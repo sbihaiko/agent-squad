@@ -3518,7 +3518,11 @@ def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
     gh.chmod(0o755)
     review = tmp_path / "review.md"
     review.write_text("- BLOCKING a.py:1 — bad. Acceptance: fixed.\n- DEBT b.py:2 — no backoff. Acceptance: backs off.\n")
-    env = {**os.environ, "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}"}
+    # The environment is pinned, not inherited: `--owner`/`--project` default to $SG_OWNER/$SG_PROJECT, and the fork gate
+    # exports both. With them set the filer also reads the project board (`gh api users/<owner>`), which this stub does not
+    # answer, so the run died in `_base()` with a JSONDecodeError -- red in the gate, green from a bare shell, with nothing
+    # in the failure about the filer. Same trap as FG_SUITES/SG_STATE in a fixture that runs the gate.
+    env = {**os.environ, "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}", "SG_OWNER": "", "SG_PROJECT": ""}
     cmd = ["python", "-m", "squad.debt_filing", "--repo", "o/r", "--pr", "5", "--issue", "4", "--head", "abc",
            "--review", str(review)]
     first = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
