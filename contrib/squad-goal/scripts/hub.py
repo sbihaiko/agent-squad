@@ -5,6 +5,10 @@ import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statis
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+# A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
+# hardcoded path turns a missing tool into a failed pass. env.sh resolves it into SG_LSOF; the last entry keeps a tool
+# outside both paths reachable.
+LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
@@ -208,7 +212,7 @@ def project_dirs():
     ds = {pathlib.Path(CHECKOUT) / "runs"}
     for x in os.environ.get("SG_PROJECTS", "").split(":"):
         if x: ds.add(pathlib.Path(x) / "runs")
-    for l in sh("/bin/ps", "-axo", "command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
         if m: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
@@ -577,7 +581,7 @@ def proc_snapshot():
         if out: return out
     except Exception: pass
     out = {}
-    for l in sh("/bin/ps", "-axo", "pid=,ppid=,time=,command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "pid=,ppid=,time=,command=").splitlines():
         f = l.split(None, 3)
         if len(f) < 4 or not f[0].isdigit(): continue
         out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
@@ -633,9 +637,11 @@ def load_tick(sample=None):
 # subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
 # SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
-# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · #73 2h 14m ago`,
-# the newest `auto/fork-<n>-<sha9>` marker the close pass touches when it merges that commit — its name is the issue, its
-# mtime the age. The marker is the pass's own claim of a landing, so no log line is parsed and no GitHub call is made.
+# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · PR #73 2h 14m ago`,
+# the newest merged pull request the board pass has read — its number is the landing and its merge time the age. Delivery
+# is a pull request (#75), so the merge is the landing; it reads the rows the board pass already holds, so no log line is
+# parsed and no GitHub call is made. The `auto/fork-<n>-<sha9>` marker is NOT read: a marker outlives the landing it named,
+# and a bar that reports it names a landing nothing made.
 # The quota pair (`codex ok · agy reset 14:20`) left the line for the opposite reason (#87): each marker names a CLI whose
 # subscription the subs block already carries as a token, so the purple block repeated the green one. `MARKER_SUB` keeps
 # the pairing, and a marker returns the day its subscription leaves SUBS: a fact is never lost, only never said twice.
@@ -678,13 +684,15 @@ def _rel_span(x):
     return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
 
 def _landing_parts(ld, now):
-    """`last landing` and `#73 2h 14m ago`: the issue the newest fork marker names and the age of the marker itself.
-    No marker, or one whose issue or age cannot be read, is `?` in the neutral tone — never a landing that did not happen."""
+    """`last landing` and `PR #73 2h 14m ago`: the number of the newest merged pull request and the age of its merge.
+    No merge, or one whose number or time cannot be read, is `?` in the neutral tone — never a landing that did not happen.
+    The number is named as a pull request, because the row it comes from is one: a bare `#73` reads as an issue, and the
+    issue is not what landed."""
     if not isinstance(ld, dict): return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
     n, ts = ld.get("issue"), ld.get("ts")
     if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
-    return [{"text": "last landing", "tone": ""}, {"text": f"#{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+    return [{"text": "last landing", "tone": ""}, {"text": f"PR #{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
 
 def _occ_fact(occ, caps):
     """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
@@ -847,17 +855,18 @@ def _json(p):
     except Exception: return None
 
 def _last_landing():
-    """The newest `auto/fork-<n>-<sha9>` marker: `{"issue", "ts"}`, or None with no marker the hub can read. One directory
-    listing on the sampler thread; a marker that vanished between the listing and its stat is not a landing."""
+    """The newest merged pull request the board pass has read: `{"issue", "ts"}`, naming the PR, or None.
+
+    Delivery is a pull request (#75): the merge is the landing, and the board pass already holds every closed PR of every
+    configured repository with its merge time and whether it merged. A closed pull request that was NOT merged is not a
+    landing, and a row whose time the hub cannot read is skipped rather than counted as now.
+    """
     best = None
-    try: names = list((STATE / "auto").iterdir())
-    except OSError: return None
-    for m in names:
-        mo = FORK_MARKER.fullmatch(m.name)
-        if not mo: continue
-        try: ts = m.stat().st_mtime
-        except OSError: continue
-        if best is None or ts > best["ts"]: best = {"issue": int(mo.group(1)), "ts": ts}
+    for p in board_cache.get("prev") or []:
+        if not p.get("m"): continue
+        try: ts = dt.datetime.fromisoformat(str(p.get("c") or "").replace("Z", "+00:00")).timestamp()
+        except ValueError: continue
+        if best is None or ts > best["ts"]: best = {"issue": p.get("n"), "ts": ts}
     return best
 
 def _newest_mtime(*paths):
@@ -925,12 +934,12 @@ TEST_LOST_DROP_SECS = 24 * 3600
 def runs():
     _titles()
     out = []; load_rows = []
-    ps_lines = sh("/bin/ps", "-axo", "pid=,command=").splitlines()
+    ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
     for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
         pid, d = m.group(1), m.group(2)
-        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh("/usr/sbin/lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
+        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         p = pathlib.Path(d) / "record.jsonl"
         if not pathlib.Path(d).exists(): continue
@@ -1069,7 +1078,7 @@ def refresh_board():
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
             except OSError: pass
-ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
+ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Open Specs", "Blocked", "No status", "Done"]
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -2157,10 +2166,10 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
 // the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
 // (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
-const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
+const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","Open Specs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
