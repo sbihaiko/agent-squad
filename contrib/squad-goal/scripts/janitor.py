@@ -31,7 +31,8 @@
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
-    a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect."""
+    a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
+    Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -243,6 +244,18 @@ def issue_read(x):   # one read answers every fact the passes ask of an issue: i
 def issue_info(x):
     return issue_read(x)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
+_open = None
+def open_issues():   # every open issue of the repository, ONE read per pass through the door's aggregate route (#92): (answered, {number: labels}). answered is False when the list did not answer (a refusal, a deadline miss, no door beside this module), and then no card is added on a guess. No call per issue: the one list carries every issue's number and labels.
+    global _open
+    if _open is None:
+        r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_aggregate", f"repos/{repo0}/issues?state=open"])   # the read goes through ghcall.sh (gh_aggregate, the throttle), never a call site of this module's (ADR-0277)
+        try: items = json.loads(out) if r == 0 else None
+        except ValueError: items = None
+        m = {}
+        for i in items if isinstance(items, list) else []:
+            if isinstance(i, dict) and isinstance(i.get("number"), int): m[str(i["number"])] = set(l.get("name") for l in i.get("labels") or [] if isinstance(l, dict))
+        _open = (isinstance(items, list), m)
+    return _open
 for n, i in live.items():
     mk = st / "auto" / f"janitor-closedrun-{n[-6:]}"
     if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
@@ -352,6 +365,13 @@ def reconcile_board():
             board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
         elif have == "In Progress":
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left In Progress for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
+    oans, olabels = open_issues()   # every open issue the repository has, ONE read per pass (#92): an issue no run, marker or release names is still the owner's to see
+    if oans:
+        for n in sorted(olabels, key=int):
+            if n in expected or n in have_all: continue   # a run, a marker or a release already ranks the card, or the board carries it
+            want = "Blocked" if olabels[n] & {"needs-owner", "needs-ratification"} else os.environ.get("SG_TODO", "Todo")
+            why = f"open issue, no card ({', '.join(sorted(olabels[n])) or 'no label'})"
+            if board_write(["--add", owner, str(proj), want, n], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
 reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
