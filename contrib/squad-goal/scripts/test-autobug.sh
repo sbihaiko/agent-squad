@@ -10,7 +10,7 @@ cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/start
 : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 # exported, as the real env.sh does: the stub mkreq.sh below is a child shell and must still see SG_STATE
-printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
+printf 'export SG_REPO=x/y SG_OWNER=o SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
 # 1228 is a bug; 1400 is debt (and still carries ready-for-agent, the old filer). 1401 is a frontier-only slice.
 cat > "$T/issues.json" <<'JSON'
 [
@@ -218,6 +218,7 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 export BOARD="$T/s/board.sh"
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "8 the pass that hit the refusal finishes" || ko "8 the pass exited $rc: '$r'"
+$G -q '^--add o 4 In Progress 1228$' "$T/board.calls" && ok "8 the dispatch adds a missing card before moving it" || ko "8 board call does not add the card: $(cat "$T/board.calls" 2>/dev/null)"
 case "$r" in *"AUTOBUG dispatched"*) ok "8 the dispatch still happens" ;; *) ko "8 no dispatch: '$r'";; esac
 filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 1 ] && ok "8 a refused write opens exactly one bug" || ko "8 a refused write opened $filed issue(s): $(cat "$T/filed")"
