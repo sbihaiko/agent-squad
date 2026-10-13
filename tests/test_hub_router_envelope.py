@@ -11,7 +11,6 @@ starts the hub: its module body needs a profile, and a test that needs one canno
 """
 import ast
 import json
-import os
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
