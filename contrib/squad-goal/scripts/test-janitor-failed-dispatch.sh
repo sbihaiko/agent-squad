@@ -8,13 +8,12 @@ printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
-n=$(printf '%s' "$*" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')
 case "$*" in
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) case "$n" in 701|702|703|704) echo "In Progress";; esac;;
-  *projectsV2/1/items*) case "$n" in 703) echo "Doing";; esac;;
+  *projectsV2/4/items*) for n in 701 702 703 704; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/1/items*) for n in 703; do printf '%s\tDoing\n' "$n"; done;;
   *issues/70*) echo open;;
 esac
 J
