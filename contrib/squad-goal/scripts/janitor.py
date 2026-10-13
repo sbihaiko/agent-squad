@@ -24,7 +24,11 @@
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
-    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
+    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open.
+ R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
+    A live run holds the issue (dispatch marker or accepted child) -> In Progress; a run that landed (a `land` pass, or a `fork-<n>-<sha9>` marker the close pass left) or an issue that is closed or carries a merged PR naming it -> Done;
+    a completed run whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); an issue labelled needs-owner or needs-ratification -> Blocked.
+    Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed."""
 import json, os, pathlib, re, signal, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 acts = []
@@ -112,27 +116,24 @@ def kill(pidv, why):
             except OSError: pass
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
-    v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False
+    v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
     if not t.exists(): return None
     for l in t.read_text().splitlines():
-        if '"verdict"' in l and '"event": "verdict"' in l:
-            v = True
-            try:   # the fold takes the last verdict event of a resumed record (ADR-0105)
-                d = json.loads(l); ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
-            except ValueError: ver = None; rs = []
-        if '"land"' in l:   # only the landing stage's own event counts, and its name is in the JSON, never guessed
-            try:
-                d = json.loads(l)   # a node that merely asked for children (the router's `routed: continue`) is not a landing
-                landed = landed or (d.get("event") == "land" and d.get("outcome") == "pass")
-            except ValueError: pass
-        if '"event": "call_start"' in l:
-            try:
-                d = json.loads(l); pidc = d.get("pid") or pidc; started_at = d.get("started_at") or started_at
-            except ValueError: pass
-        if '"spawn_accepted"' in l:
+        try: d = json.loads(l)
+        except ValueError: d = {}
+        ev = d.get("event")
+        if ev == "run_start":
+            rid = str(d.get("run_id") or rid); rts = str(d.get("ts") or d.get("started_at") or rts)
+        if ev == "verdict":
+            v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
+        if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing
+            landed = landed or d.get("outcome") == "pass"
+        if ev == "call_start":
+            pidc = d.get("pid") or pidc; started_at = d.get("started_at") or started_at
+        if ev == "spawn_accepted" or '"spawn_accepted"' in l:
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: acc.add(m.group(1))
-    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
+    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
         return pidc in procs
@@ -140,7 +141,7 @@ def same_process(pidc, started_at):
     return started is None or started <= started_at
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
-live = {}; keep = []; held = set(); landed_n = set()   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 def free_reaped(f, i):
     marks = [st / "auto" / f"disp-{n}" for n in req_issues(f) | i["acc"]]
@@ -153,7 +154,11 @@ def free_reaped(f, i):
             if lease.get("holder") == holder or str(lease.get("holder", "")).startswith(holder + ":"): leases.append(p)
     if marks or leases: say(f"zombie run {f.name} releases {sum(p.exists() for p in marks)} dispatch markers and {len(leases)} leases")
     if not dry:
-        for p in marks + leases: p.unlink(missing_ok=True)
+        for p in marks:
+            if p.exists() and p.name.startswith("disp-"):
+                freed_markers.setdefault(p.name[5:], {})["disp"] = None
+            p.unlink(missing_ok=True)
+        for p in leases: p.unlink(missing_ok=True)
 for r in names:
     f = folder(r); i = read(f)
     if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
@@ -196,11 +201,14 @@ for x, rs in byissue.items():
         if not dry: mk.touch()
 repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 _is = {}
-def issue_info(x):
+def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title and its labels
     if x not in _is:
-        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title] | @tsv').strip().split("\t")
-        _is[x] = (o + ["", "", ""])[:3]
+        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(","))] | @tsv').strip().split("\t")
+        _is[x] = (o + ["", "", "", ""])[:4]
     return _is[x]
+def issue_info(x):
+    return issue_read(x)[:3]
+def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
 for n, i in live.items():
     mk = st / "auto" / f"janitor-closedrun-{n[-6:]}"
     if mk.exists() or not i["acc"] or i["idle"] > 3600: continue
@@ -218,8 +226,79 @@ for n, i in live.items():
     else:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()
+owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
+def card_status(p, n):   # the card's Status on project p, "" when unreadable (childcc.py reads it the same way)
+    if not p: return ""
+    f = sh("gh", "api", f"/users/{owner}/projectsV2/{p}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id').strip()
+    return sh("gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
+              f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")').strip()
 def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's own text: a refusal is not a digit string. -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip()
+def pr_merged_count(n):
+    return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged \"Refs #{n}\"", "-q", ".total_count").strip()
+fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
+def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
+    if not (fd and fb): return "unknown"
+    if subprocess.run(["git", "-C", fd, "cat-file", "-e", sha], capture_output=True).returncode: return "unknown"   # the fork does not hold the commit: nothing to test the claim against
+    if subprocess.run(["git", "-C", fd, "merge-base", "--is-ancestor", sha, fb], capture_output=True).returncode == 0: return "landed"
+    br = (os.environ.get("SG_FORK_BRANCH") or "issue/%n").replace("%n", n)
+    if subprocess.run(["git", "-C", fd, "rev-parse", "-q", "--verify", "refs/heads/" + br], capture_output=True).returncode == 0 and sh("git", "-C", fd, "rev-list", "--count", f"{fb}..{br}").strip() not in ("", "0"): return "ahead"
+    files = sh("git", "-C", fd, "show", "--pretty=format:", "--name-only", sha).split()
+    if not files or subprocess.run(["git", "-C", fd, "diff", "--quiet", sha, fb, "--", *files], capture_output=True).returncode == 0: return "landed"   # the base holds the change itself: a rebased head, nothing was unwound
+    return "unwound"
+def board_write(args, n, why):
+    r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)
+    if r.returncode:
+        msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
+        say(f"BOARD-WRITE-FAILED #{n}: {why}: {msg[0] if msg else 'no output'}")
+        return False
+    return True
+def reconcile_board():
+    if not (owner and proj and repo0): return
+    expected = {}
+    def set_expected(n, status, why, run_id="", run_ts="", rank=0):
+        old = expected.get(n)
+        if old and old[0] >= rank: return
+        expected[n] = (rank, status, why, run_id, run_ts)
+    for r in keep:
+        f = folder(r); i = read(f); nums = req_issues(f)
+        if i: nums |= i["acc"]
+        for n in nums:
+            if i is None:
+                set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
+            elif not i["verdict"]:
+                set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
+            elif i["landed"]:
+                set_expected(n, "Done", f"run {i['run_id']} landed work", i["run_id"], i["run_ts"], 70)
+            elif i["failed"]:
+                why = "; ".join(i["reasons"]) or "nothing landed"
+                set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} failed with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
+            else:
+                set_expected(n, "Code Complete", f"run {i['run_id']} completed but nothing landed", i["run_id"], i["run_ts"], 40)
+    for m in sorted((st / "auto").glob("disp-*")):
+        n = m.name[5:]; holder = m.read_text().strip()
+        if n.isdigit() and holder in keep: set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder or n, "", 30)
+    for m in sorted((st / "auto").glob("fork-*")):   # the close pass leaves this marker when it merged that commit: the branch landed, unless the base says otherwise (rule P owns what it unwound, and a branch still ahead is work to come)
+        mo = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", m.name)
+        if mo and fork_verdict(mo.group(1), mo.group(2)) in ("landed", "unknown"): set_expected(mo.group(1), "Done", f"{m.name} marks a landed branch", "", "", 70)
+    for n in sorted(list(expected), key=int):
+        state, _, _ = issue_info(n)
+        if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
+        labels = issue_labels(n)
+        if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
+        pc = pr_count(n)
+        if pc.isdigit() and pc != "0": set_expected(n, "Code Complete", "PR names the issue and has not landed", "", "", 50)
+        mc = pr_merged_count(n)
+        if mc.isdigit() and mc != "0": set_expected(n, "Done", "merged PR names the issue", "", "", 80)
+    for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
+        have = card_status(proj, n)
+        if not have: continue   # no answer from the board: nothing is moved on a guess
+        if have != want and board_write([owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
+        if want == "In Progress":
+            board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
+        elif have == "In Progress":
+            board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left In Progress for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
+reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
     n = d.name[5:]; lt = lg.read_text() if lg.exists() else ""
@@ -230,11 +309,6 @@ for d in (st / "auto").glob("disp-*"):
     if pr_count(n) != "0": continue   # a PR exists (open or merged)
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
-owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
-def card_status(p, n):   # the card's Status on project p, "" when unreadable (childcc.py reads it the same way)
-    f = sh("gh", "api", f"/users/{owner}/projectsV2/{p}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id').strip()
-    return sh("gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
-              f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")').strip()
 if owner and proj and repo0:
     for r in names:   # O: a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
@@ -269,8 +343,10 @@ if owner and proj and repo0:
     for k in ("disp", "bug"):
         for m in (st / "auto").glob(k + "-*"):
             if m.name[len(k) + 1:].isdigit(): qm.setdefault(m.name[len(k) + 1:], {})[k] = m
+    for n, ms0 in freed_markers.items():
+        qm.setdefault(n, {}).update(ms0)
     for n, ms in sorted(qm.items(), key=lambda kv: int(kv[0])):
-        if n in held or n in landed_n or any(now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
+        if n in held or n in landed_n or any(m is not None and now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
         seen = st / "auto" / f"janitor-q-seen-{n}"
         if seen.exists() and now - seen.stat().st_mtime < 600: continue
         def no():   # a definite answer that says "not ours": remember it
@@ -290,10 +366,10 @@ if owner and proj and repo0:
         say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no PR names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
         if not dry:
             for p, s in moves: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
-            for m in ms.values(): m.unlink()
+            for m in ms.values():
+                if m is not None: m.unlink()
             (st / "cq" / f"{n}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
-fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     for l in sh("git", "-C", fd, "log", "-n", "200", "--format=%h %ct %s", fb).splitlines():
@@ -312,17 +388,13 @@ if fd and fb:
     # either: that pass merges a branch ahead of the base, and here there is nothing left to merge. So the issue goes
     # back to the column the dispatch reads and its markers are dropped (#1830).
     if owner and proj and repo0:
-        def gitrc(*a): return subprocess.run(["git", "-C", fd, *a], capture_output=True, text=True).returncode
         for mk in sorted((st / "auto").glob("fork-*")):
             m = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", mk.name)
             if not m: continue
             n, sha = m.group(1), m.group(2)
-            if gitrc("merge-base", "--is-ancestor", sha, fb) == 0: continue   # the base holds the commit: the marker is honest
+            if fork_verdict(n, sha) != "unwound": continue   # honest (the base holds the commit, or its change), ahead (a fix commit is coming and the close retries on the head), or unreadable: not ours
             br = (os.environ.get("SG_FORK_BRANCH") or "issue/%n").replace("%n", n)
-            if gitrc("rev-parse", "-q", "--verify", "refs/heads/" + br) == 0 and sh("git", "-C", fd, "rev-list", "--count", f"{fb}..{br}").strip() not in ("", "0"): continue   # ahead: a fix commit is coming and the close retries on the head
-            files = sh("git", "-C", fd, "show", "--pretty=format:", "--name-only", sha).split()
-            if not files or gitrc("diff", "--quiet", sha, fb, "--", *files) == 0: continue   # the base holds the change itself: the head moved, nothing was unwound
-            if n in byissue: continue                                                        # a live run works it: not ours to release
+            if n in byissue: continue                        # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
             if card_status(proj, n) not in ("In Progress", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
@@ -341,7 +413,12 @@ if fd and fb:
                 (st / "cq" / f"{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 base = os.environ.get("SG_BASE", "main"); repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
-for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref)"').splitlines():
+_opr = None
+def open_pulls():   # rule G reads a PR's head and rule M its head branch and age: one read of the route answers both
+    global _opr
+    if _opr is None: _opr = sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)"').splitlines()
+    return _opr
+for l in open_pulls():
     pr, sha, pb = (l.split() + ["", "", ""])[:3]; o = st / f"revci-{pr}.out"; mg = st / "auto" / f"merged-{pr}"
     if not (pr.isdigit() and pb == base and o.exists() and not mg.exists()): continue
     last = [x for x in o.read_text().splitlines() if x.startswith(f"#{pr} {sha[:9]} ")][-1:]
@@ -357,7 +434,7 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
         if not dry: k2.touch()
 liveq = " ".join((folder(r) / "request.txt").read_text() for r in keep if (folder(r) / "request.txt").exists() and folder(r).name in live)
-for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)"').splitlines():   # M
+for l in open_pulls():   # M
     pr, sha, pb, hr, ua = (l.split() + ["", "", "", "", ""])[:5]
     if not (pr.isdigit() and pb == base and ua): continue
     try: upd = time.mktime(time.strptime(ua, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone

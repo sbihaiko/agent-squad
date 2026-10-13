@@ -3,9 +3,9 @@
 # only way a run ends. A run that recorded any other verdict (`needs-human`, `pass`) and landed nothing left its
 # auto/disp-<n> behind, autofrontier.sh skips any issue holding that marker, and the frontier starved on a finished run.
 #  (A) ended-nothing (verdict `needs-human`, no land event, no PR): marker dropped, card back to Todo, announced once;
-#  (B) a run that landed (a `land` event with outcome pass) keeps its marker and its card;
-#  (C) a live run (no verdict yet) keeps the marker of the issue it works;
-#  (D) an open PR naming the issue keeps the marker.
+#  (B) a run that landed (a `land` event with outcome pass) keeps its marker and reconciles its card to Done;
+#  (C) a live run (no verdict yet) keeps the marker of the issue it works and writes Run fields;
+#  (D) an open PR naming the issue keeps the marker and moves the card to Code Complete.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-disp-expiry.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -17,7 +17,7 @@ cat > "$T/bin/gh" <<'J'
 n=$(printf '%s' "$*" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')
 case "$*" in
   # the live API answers a POST to /search/issues with Not Found and a non-zero body, which a caller reading `.total_count` sees as "a PR exists" (#1981): the stub refuses it the same way
-  *search/issues*) case "$*" in *"-X GET"*|*"--method GET"*) case "$*" in *"Refs #904"*|*"Refs #908"*) echo 1;; *) echo 0;; esac;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac;;
+  *search/issues*) case "$*" in *"-X GET"*|*"--method GET"*) case "$*" in *"is:merged"*) echo 0;; *"Refs #904"*|*"Refs #908"*) echo 1;; *) echo 0;; esac;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) case "$n" in 901|902|903|904) echo "In Progress";; esac;;
@@ -60,9 +60,9 @@ o=$(run)
 /usr/bin/grep -q 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null && ok "O: the drop is announced" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q 'needs-human' "$T/st/cycle.log" 2>/dev/null && ok "O: the announcement names the verdict it ended on" || ko "O announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'owner_decision' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q 'run-ended' "$T/st/cq/"*901* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-[ -e "$T/st/auto/disp-902" ] && ! /usr/bin/grep -q ' 902$' "$T/board.calls" 2>/dev/null && ok "O: a run that landed keeps its card and marker" || ko "O #902 touched: $(cat "$T/board.calls" 2>/dev/null)"
-[ -e "$T/st/auto/disp-903" ] && ! /usr/bin/grep -q ' 903$' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker of its issue" || ko "O #903 touched: $(cat "$T/board.calls" 2>/dev/null)"
-[ -e "$T/st/auto/disp-904" ] && ! /usr/bin/grep -q ' 904$' "$T/board.calls" 2>/dev/null && ok "O: an open PR naming the issue keeps its marker" || ko "O #904 touched: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Done 902$' "$T/board.calls" 2>/dev/null && ok "O: a run that landed moves to Done and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q -- '^--run-fields o 4 903 run-live ' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker and writes Run fields" || ko "O #903 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Code Complete 904$' "$T/board.calls" 2>/dev/null && ok "O: an open PR naming the issue moves to Code Complete and keeps its marker" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"
 /usr/bin/grep -q 'stale disp-906' "$T/st/cycle.log" 2>/dev/null && ok "E: the drop is announced with the request that failed" || ko "E announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"

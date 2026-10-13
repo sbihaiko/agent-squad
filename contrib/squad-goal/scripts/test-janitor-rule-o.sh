@@ -21,7 +21,7 @@ case "$a" in
       *) printf '{\n  "message": "Not Found",\n  "documentation_url": "https://docs.github.com/rest"\n}\n'; exit 1;;
     esac
     echo "$a" >> "TMPDIR/search.calls"
-    case "$a" in *"Refs #803"*) echo 1;; *) echo 0;; esac;;
+    case "$a" in *"is:merged"*) echo 0;; *"Refs #803"*) echo 1;; *) echo 0;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) case "$(printf '%s' "$a" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')" in 801|802|803) echo "In Progress";; esac;;
@@ -49,7 +49,7 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 [ ! -e "$T/st/auto/disp-801" ] && ok "O: failed run whose only pass is the router's -> marker dropped" || ko "O disp-801 kept: $o"
 /usr/bin/grep -q 'DISPATCH-FAILED #801' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'no_landed_change' "$T/st/cq/"*801* >/dev/null 2>&1 && /usr/bin/grep -q 'run-router' "$T/st/cq/"*801* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-[ -e "$T/st/auto/disp-802" ] && ! /usr/bin/grep -q ' 802$' "$T/board.calls" 2>/dev/null && ok "O: a run that landed keeps its card and marker" || ko "O #802 touched: $(cat "$T/board.calls" 2>/dev/null)"
-[ -e "$T/st/auto/disp-803" ] && ! /usr/bin/grep -q ' 803$' "$T/board.calls" 2>/dev/null && ok "O: an issue an open PR names keeps its card and marker" || ko "O #803 touched: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Done 802$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed is reconciled to Done and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Code Complete 803$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: an issue an open PR names moves to Code Complete and keeps its marker" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q 'Refs #803' "$T/search.calls" 2>/dev/null && ok "O: the PR lookup reached the API (GET, not a rejected POST)" || ko "O: no PR lookup answered: $(cat "$T/search.calls" 2>/dev/null)"
 rm -rf "$T"; exit $fail
