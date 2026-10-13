@@ -207,10 +207,12 @@ class Engine:
         return {"name": logical, "path": str(p), "head": git.head(p), "state": git.state(p)} if p.exists() else None
 
     def _recorded_head(self, logical, item):
-        """The HEAD that the last outcome event of a worktree_create or commit in this workspace recorded."""
+        """The HEAD that the last worktree_create or commit outcome in this workspace recorded, never a node's own
+        snapshot: the engine commits a passing node's workspace (#84), so a node's snapshot is the work itself, not
+        the state the run made the workspace in. A revert undoes the work, so it needs the latter."""
         for e in reversed(self.record.events):
             w = e.get("workspace") if e["event"] == "outcome" else None
-            if w and w["name"] == logical and e.get("item") == item:
+            if w and w["name"] == logical and e.get("item") == item and (e.get("effect") or {}).get("name") in ("worktree_create", "commit"):
                 return w["head"]
         return None
 

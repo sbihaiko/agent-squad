@@ -10,8 +10,10 @@ from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
 from tests.flows import agent, doc
-from tests.gitrepo import make_repo, sh
+from tests.gitrepo import make_repo, sh, sibling_repo
+from tests.helpers import router
 from tests.test_actions import GIT_FACT, act, outs, write_file
+from tests.test_dispatch import req
 
 pytestmark = pytest.mark.anyio
 
@@ -51,6 +53,27 @@ async def test_a_passing_node_with_a_dirty_workspace_is_committed_and_the_tip_is
     msg = sh(wt, "git", "log", "-1", "--format=%B").splitlines()
     assert "a" in msg[0] and "#73" in msg[0] and msg[1] == "" and "pass" in "\n".join(msg[2:]) and msg[-1] == "Refs #73"
     assert sh(wt, "git", "log", "-1", "--format=%an") == "agent-squad"     # the engine's commit, never the model's
+
+
+async def test_a_passing_dispatch_childs_own_worktree_is_committed_too(tmp_path):
+    """#84: the measured case: a child ended with a tip equal to an ancestor of main while its worktree held the work."""
+    repo = sibling_repo(tmp_path)
+    d = router()
+    d["run"]["deadline"] = 7200
+    script = {"router": {"output": {"spawns": [req()]}, "spend": 0.1},
+              "route.router.1": {"output": {"diff": {"files": [{"path": "made.txt"}]}, "ac_commands": ["true"]}, "spend": 0.2, "turns": 3,
+                                 "effect": write_file("made.txt", "work\n")}}
+    eng = Engine(from_doc(d), ScriptedAdapter(script), tmp_path / "run", target=repo, run_id="r1")
+    eng.dispatch.prune = lambda: None      # the test reads the child's worktree after the run
+    v = await eng.run()
+    run, out = tmp_path / "run", [e for e in record.read(tmp_path / "run" / "record.jsonl")
+                                  if e["event"] == "outcome" and e["node"] == "route.router.1"][0]
+    wt = Path(out["workspace"]["path"])
+    assert v.verdict == "completed" and out["outcome"] == "pass"
+    assert git.dirty(wt) == [] and git.head(wt) != git.head(repo) and out["workspace"]["head"] == git.head(wt)
+    assert [(e["node"], e["entry"], e["status"], e["workspace"]) for e in events(run, "workspace_commit")] == \
+           [("route.router.1", 1, "committed", "worktrees/child")]
+    assert sh(wt, "git", "log", "-1", "--format=%s").startswith("squad: route.router.1 passed")
 
 
 async def test_a_passing_node_with_a_clean_workspace_writes_no_commit(tmp_path):
