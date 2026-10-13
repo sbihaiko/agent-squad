@@ -1181,7 +1181,7 @@ OPEN_PR_QUERY = """query{repository(owner:"%s",name:"%s"){pullRequests(first:100
 number title isDraft updatedAt createdAt headRefOid baseRefName mergeStateStatus
 labels(first:30){nodes{name}}
 reviewThreads(first:100){totalCount nodes{isResolved}}
-commits(last:1){nodes{commit{committedDate statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
+commits(last:1){nodes{commit{committedDate statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{databaseId conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
 
 LIVE_BAD = ("failure", "timed_out", "action_required", "startup_failure", "cancelled", "error")
 LIVE_WAIT = ("queued", "in_progress", "pending", "waiting", "requested", "expected", "completed")
@@ -1218,7 +1218,9 @@ def prs_from_graphql(payload, repo=None):
     rows = []
     for nd in nodes:
         commit = ((nd.get("commits") or {}).get("nodes") or [{}])[-1].get("commit") or {}
+        contexts = ((commit.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes") or []
         states = _live_states(commit.get("statusCheckRollup"))
+        checks = [{"id": c.get("databaseId"), "status": c.get("status"), "conclusion": c.get("conclusion")} for c in contexts if c.get("__typename") == "CheckRun"]
         th = nd.get("reviewThreads")
         threads = None if th is None or (th.get("totalCount") or 0) > len(th.get("nodes") or []) \
             else sum(1 for t in (th.get("nodes") or []) if not t.get("isResolved"))
@@ -1227,7 +1229,7 @@ def prs_from_graphql(payload, repo=None):
         base = nd.get("baseRefName") or None
         rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
                      "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
-                     "th": threads, "ci": states, "hc": commit.get("committedDate") or None, "rollup": _live_rollup(states), "r": repo,
+                     "th": threads, "ci": states, "checks": checks, "hc": commit.get("committedDate") or None, "rollup": _live_rollup(states), "r": repo,
                      "facts": not (states is None or threads is None or labels is None or not ms or not base)})
     return rows
 
@@ -1389,6 +1391,27 @@ def gate_strip(x, t=None, now=None):
                       {"k": "B", "v": bv[0], "tip": bv[1]}, {"k": "H", "v": hv[0], "tip": hv[1]}],
             "age": age, "old": age > STRIP_MAX_AGE}
 
+_CI_STATE = {}
+def _ci_state_module():
+    """The no-step rule shared with the landing gate."""
+    if "m" not in _CI_STATE:
+        spec = importlib.util.spec_from_file_location("ci_state", pathlib.Path(__file__).resolve().parent / "ci_state.py")
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); _CI_STATE["m"] = module
+    return _CI_STATE["m"]
+
+def ci_cannot_run(x):
+    """The platform stop of a failed check, with its own annotation where GitHub supplied one."""
+    repo = x.get("r") or REPO
+    for check in x.get("checks") or []:
+        ident = check.get("id")
+        if not ident or check.get("conclusion") not in ("failure", "startup_failure"): continue
+        try:
+            job = gh_json(f"repos/{repo}/actions/jobs/{ident}")
+            detail = gh_json(f"repos/{repo}/check-runs/{ident}")
+            if _ci_state_module().cannot_run(job, detail): return _ci_state_module().reason(detail)
+        except Exception: continue
+    return None
+
 def _head_pushed_age(x):
     """The seconds since the head commit was pushed, from GitHub's own `committedDate` on the row; None when the query
     did not return it. A fact nobody has is unknown, so it never carries a stop (ADR-0018)."""
@@ -1415,6 +1438,8 @@ def pr_state(x):
     if x.get("facts") is False: return ["idle", "facts unknown",
         "the batched open-PR query did not return this PR, so its CI, merge state and threads are unknown -- not passing"]
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
+    cannot = ci_cannot_run(x)
+    if cannot is not None: return ["changes", "CI cannot run: account", cannot or "GitHub reported that the job never started"]
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
     line = (summary_lines(n, sha9) or [""])[-1]   # a notice (NOTICE #<pr> <sha9> ...) is not a result: see summary_lines
     if "CHANGES" in line:
