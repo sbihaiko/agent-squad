@@ -23,7 +23,7 @@ done
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
-  */issues?state=open*)   f=$GH_ISSUES;;
+  */issues?state=open*)   f=$GH_ISSUES; [ -n "$GH_FRONTIER_ONLY" ] && [[ "$p" == *"labels=frontier"* ]] && f=$GH_FRONTIER;;
   */issues/*)             f=$GH_ISSUE1; [ -f "$GH_ISSUEDIR/${p##*/}.json" ] && f=$GH_ISSUEDIR/${p##*/}.json;;   # one fixture per issue when a case wrote it
   *) exit 1;;
 esac
@@ -52,7 +52,8 @@ E
     printf '{"run":%s,"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":%s,"max_parallel":2}]}]}' "$rb" "$2" > "$d/co/docs/squad/workflows/dynamic.graph.json"
   fi
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
-  export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
+  export GH_ISSUES=$d/issues.json GH_FRONTIER=$d/frontier.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
+  printf '[]' > "$GH_FRONTIER"
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
 }
@@ -97,6 +98,15 @@ r=$(run)
 [ "$(ls "$d/st/cq" | $G -c -- '^o__r#[0-9]*-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
 case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request";; *) ko "a marker names the request";; esac
 moved 21 22 23 && ok "every dispatched issue gets its own card move" || ko "every dispatched issue gets its own card move: '$(cat "$BOARDLOG")'"
+
+# 1a) A ticket whose blockers have all closed may carry only its wave label. The wave orders the
+#     frontier; it does not grant permission to start. A label-gated read leaves it invisible.
+scene wave-only
+export GH_FRONTIER_ONLY=1
+issues '[{"number":24,"title":"a","body":"b","labels":[{"name":"wave:02"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 1 ] && [ "$(marked 24)" = 1 ] && ok "an unblocked wave-only issue joins the frontier" || ko "an unblocked wave-only issue stayed invisible: '$r'"
+unset GH_FRONTIER_ONLY
 
 # 1b) #33: a child with SEVERAL issues is one slice, one request line and one PR, and each of its issues still holds its marker,
 #     its own comment and its own card move -- the claim the comment above makes for one-issue children, asserted for the bundle
