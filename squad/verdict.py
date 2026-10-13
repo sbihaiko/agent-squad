@@ -29,6 +29,11 @@ def exit_code(verdict):
     return EXIT[verdict]
 
 
+def killed(reason):
+    """The verdict of a run whose process is gone: it never reached its own fold, so the record names why it ended."""
+    return Verdict("failed", EXIT["failed"], [reason])
+
+
 def join(outcomes, rule="all"):
     """Join item or child outcomes. `all`: worst-of. `first_failure`: the first non-pass, in completion order."""
     if rule == "first_failure":

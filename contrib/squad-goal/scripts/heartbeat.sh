@@ -18,8 +18,14 @@ echo "HUNG TEST pid=$pid cpu=${s}s flat for ${flat}m, killed: $(echo "$cmd" | cu
   else echo "$s $now" > "$f"; fi
 done < <(/bin/ps -axo pid=,time=,command=)
 for f in "$st"/*; do [ -e "$f" ] || continue; case "$live" in *" $(basename "$f") "*) ;; *) rm -f "$f";; esac; done
-# runs that never reached a verdict while no squad process is alive were killed (session restart, crash)
-alive=$(/bin/ps -axo command= | grep -c "[s]quad start --target")
-open=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do case "$r" in /*) rf=$r;; *) rf=runs/$r;; esac; grep -q '"event": *"verdict"' "$rf/record.jsonl" 2>/dev/null || open=$((open+1)); done
-[ "$alive" -eq 0 ] && [ "$open" -gt 0 ] && { [ -e "$st/.dead" ] || { echo "DEAD RUN: $open run(s) without a verdict and no live squad process"; touch "$st/.dead"; }; } || rm -f "$st/.dead"
+# runs that never reached a verdict while no squad process is alive were killed (session restart, crash): each gets a killed verdict
+# in its own record (squad.killed, the one writer), so the hub shows it as ended and the footer stops counting it live.
+# A record that moved in the last HB_DEAD_IDLE_MIN minutes (default 1) is a launch window, not a death. SG_RUN_CMD_RE is the squad process pattern.
+alive=$(/bin/ps -axo command= | grep -cE "${SG_RUN_CMD_RE:-[s]quad start( |\$)}")
+open=0; marked=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do case "$r" in /*) rf=$r;; *) rf=${SG_CHECKOUT:-.}/runs/$r;; esac
+  grep -q '"event": *"verdict"' "$rf/record.jsonl" 2>/dev/null && continue
+  open=$((open+1))
+  [ "$alive" -eq 0 ] && [ -n "$(find "$rf/record.jsonl" -mmin +"${HB_DEAD_IDLE_MIN:-1}" 2>/dev/null)" ] && PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.killed "$rf" >/dev/null 2>&1 && marked=$((marked+1))
+done
+[ "$alive" -eq 0 ] && [ "$open" -gt 0 ] && { [ -e "$st/.dead" ] || { echo "DEAD RUN: $open run(s) without a verdict and no live squad process; $marked marked killed in their record"; touch "$st/.dead"; }; } || rm -f "$st/.dead"
 exit 0

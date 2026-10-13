@@ -2,7 +2,7 @@
 """Janitor: one conservative cleanup pass per watch cycle (JANITOR_DRY=1 prints and acts on nothing). Every action goes to stdout and $SG_STATE/cycle.log.
  A  finished run (has a verdict, 3 min old): kill every process whose cwd is inside its run folder (leftover claude/dotnet/test hosts), as a tree.
  B  finished run (1 h old): kill its idle dashboard_server.
- C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt.
+ C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt and write the killed verdict into its record (squad.killed).
  D  two live runs that accepted the same issue: report once (never kills).
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
@@ -126,6 +126,10 @@ def read(f):
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: acc.add(m.group(1))
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
+def mark_killed(f):
+    """C: the zombie gets the killed verdict in its own record (squad.killed, the one writer), so the hub shows it ended. A record it cannot write stays as it is."""
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
+    subprocess.run(["python3", "-m", "squad.killed", str(f)], capture_output=True, text=True, env=env)
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 live = {}; keep = []; held = set(); landed_n = set()   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
@@ -156,6 +160,7 @@ for r in names:
     alive = bool(inside(f))
     if not alive and i["idle"] > 1200 and not (i["pid"] and i["pid"] in procs):
         say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
+        if not dry: mark_killed(f)
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
         continue

@@ -156,7 +156,7 @@ def scan(p):
 
 def state_of(r, age):
     ver, reasons = r["verdict"], r["reasons"]
-    if ver is None: return "running" if age < 1800 else "stalled"
+    if ver is None: return "running" if age < STALL_SECS else "stalled"
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     return ver
 
@@ -218,6 +218,32 @@ def group_of(r):
     if r.get("live", True) and r.get("state") in LIVE_STATES: return "running"
     h = (r.get("age") or 0) / 3600
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
+
+STALL_SECS = 1800   # state_of: a run with no verdict and no event for this long reads `stalled`
+SQUAD_START = re.compile(r"squad start(?: |$)")
+def run_gone(r, age, ps_lines, folder, request=None):
+    """True when a run with no verdict has been silent past the stall limit and no process of its own is left: it was killed
+    (a restart, a crash) and will never write a verdict, so it is not live however old its record. A process is the run's own when
+    its argv names the run folder or a worktree the record named, or when it is a `squad start` that carries the run's request (its
+    first line; a run with no request.txt cannot be told apart, so any `squad start` keeps it). The run's dashboard server never counts.
+    Rule layer: no hub state, no I/O."""
+    if r["verdict"] is not None or age < STALL_SECS: return False
+    paths = [x for x in [str(folder), *(r.get("wts") or [])] if x]
+    first = next((l.strip() for l in (request or "").splitlines() if l.strip()), "")[:80]
+    for l in ps_lines:
+        if "dashboard_server" in l: continue
+        if any(x in l for x in paths): return False
+        if SQUAD_START.search(l) and (not first or first in l): return False
+    return True
+
+def gone_badge(b):
+    """The badge of a run that is gone: the state stays (`stalled`), the text says why it is not live."""
+    return {**b, "text": b["text"] + " · no process"}
+
+def foot_occupancy(rows):
+    """The footer's occupancy (#1797): the runs and the agents of the rows the left pane groups as running."""
+    live = [r for r in rows if group_of(r) == "running"]
+    return len(live), sum(r.get("agents") or 0 for r in live)
 
 def squad_roots(sg_squad, sg_checkout, checkout, here):
     """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
@@ -803,7 +829,8 @@ TEST_LOST_DROP_SECS = 24 * 3600
 def runs():
     _titles()
     out = []; load_rows = []
-    for l in sh("/bin/ps", "-axo", "pid=,command=").splitlines():
+    ps_lines = sh("/bin/ps", "-axo", "pid=,command=").splitlines()
+    for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
         pid, d = m.group(1), m.group(2)
@@ -817,13 +844,17 @@ def runs():
             b = badge_of("starting")
             out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "badge": b["text"], "tip": b["title"], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
+        try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
+        except OSError: request = None
+        gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
         st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
         merged = {p["n"] for p in board_cache.get("prev", []) if p.get("m")}
         st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
         b = badge_of(st, r)
-        rank = run_rank(st, live=True)
+        if gone: b = gone_badge(b)
+        rank = run_rank(st, live=not gone)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": True, "agents": r.get("agents") or 0})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0})
         load_rows.append({"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []})   # what the load attribution needs, and nothing else
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
@@ -839,8 +870,8 @@ def runs():
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
         out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
-    _live = [r for r in out if group_of(r) == "running"]   # the footer's occupancy (#1797): the same rows the left pane groups
-    FOOT_ROWS.update(live=len(_live), agents=sum(r.get("agents") or 0 for r in _live), asof=time.time())
+    n_live, n_agents = foot_occupancy(out)   # the same rows the left pane groups
+    FOOT_ROWS.update(live=n_live, agents=n_agents, asof=time.time())
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
