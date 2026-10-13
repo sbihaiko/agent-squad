@@ -146,8 +146,9 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 # The decision, not a starting point: the seven Project statuses and the two PR columns, each with the
 # one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "No status": "#f5b041", "Todo": "#c9d1d9", "In Progress": "#e8d44d", "Code Complete": "#b087f9",
-    "Testing": "#2dd4bf", "Blocked": "#ff6b6b", "Done": "#3ecf8e", "Open PRs": "#5aa9ff", "Closed PRs": "#8b9bb3",
+    "No status": "#f5b041", "Todo": "#c9d1d9", "Open Specs": "#f78fb3", "In Progress": "#e8d44d",
+    "Code Complete": "#b087f9", "Testing": "#2dd4bf", "Blocked": "#ff6b6b", "Done": "#3ecf8e",
+    "Open PRs": "#5aa9ff", "Closed PRs": "#8b9bb3",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
@@ -228,7 +229,7 @@ def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
 
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
     got = _col(hub, "Object.fromEntries(Object.keys(COLORS).map(n=>[n,colOf(n,[])]))")
-    assert got == NAMED, "the nine named columns carry colours the table does not"
+    assert got == NAMED, "the ten named columns carry colours the table does not"
     assert got["Open PRs"] != got["Closed PRs"], "the archive must not look like the live queue"
     assert _mute(hub) not in (got["Open PRs"], got["Closed PRs"]), "a muted PR column is a caption, not a column"
 

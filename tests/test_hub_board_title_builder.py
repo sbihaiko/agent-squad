@@ -120,8 +120,9 @@ def test_the_column_names_are_unchanged(hub):
     m = re.search(r"const COLORS=\{(.*?)\};", hub.PAGE)
     assert m, "COLORS missing"
     assert m.group(1) == (
-        '"No status":"#f5b041",Todo:"#c9d1d9","In Progress":"#e8d44d","Code Complete":"#b087f9",'
-        'Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"'
+        '"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d",'
+        '"Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff",'
+        '"Closed PRs":"#8b9bb3"'
     )
 
 
