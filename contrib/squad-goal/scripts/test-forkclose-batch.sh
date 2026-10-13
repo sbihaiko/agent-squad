@@ -50,7 +50,7 @@ setup 4 5; r=$(pass)
 case "$r" in *"BATCH RED"*) ok "the red batch says so";; *) ko "no BATCH RED: $r";; esac
 case "$r" in *"RED #4"*) ok "one-by-one names the culprit";; *) ko "culprit not named: $r";; esac
 case "$r" in *"BATCH FALLBACK"*) ok "#13: the red the batch cannot attribute says so";; *) ko "#13: no FALLBACK line: $r";; esac
-case "$r" in *"without naming a failing test"*) ok "#13: the fallback names why it could not attribute the red";; *) ko "#13: the fallback gives no reason: $r";; esac
+case "$r" in *"the gate log names no test file"*) ok "#13: the fallback names why it could not attribute the red";; *) ko "#13: the fallback gives no reason: $r";; esac
 case "$r" in *"RED #5"*) ko "the good branch was blamed: $r";; *"FORKCLOSE #5 closed"*) ok "the good branch lands on its own";; *) ko "#5 did not land: $r";; esac
 [ ! -e "$T/fork/bad" ] && [ -e "$T/fork/f5" ] && ok "the base holds the good work only" || ko "base content wrong"
 rm -rf "$T"
@@ -94,4 +94,17 @@ n=$(ls "$T/st/auto"/nobatch-* 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -ge 1 ] && ok "#13: the batch that could not be re-gated is memoized, so it is not retried unchanged" || ko "#13: the set is not memoized: nothing under nobatch-*"
 r2=$(pass)
 case "$r2" in *"BATCH RED"*) ko "#13: the same batch was retried on the next pass: $r2";; *) ok "#13: the next pass does not retry the parked batch";; esac
+rm -rf "$T"
+
+# 7. a red the batch cannot attribute still serializes (#13): the failing test belongs to the base, not to any branch of the batch --
+#    the shape of a base that was already red, or of an interaction between members. No branch is blamed and no member is dropped
+#    on a guess: the pass says why it cannot attribute, memoizes the set, and the one-at-a-time loop lands each branch itself.
+setup 5 6
+g checkout -q local/next; mkdir -p "$T/fork/tests"; echo x > "$T/fork/tests/test_old.py"; g add .; g commit -q -m "a spec the base already carried"
+printf "export SG_FORK_PY_CMD='[ -e f5 ] && [ -e f6 ] && { echo \"FAILED tests/test_old.py::test_pair - the two members together\"; exit 1; }; true'\n" >> "$T/s/env.sh"
+r=$(pass)
+case "$r" in *"BATCH CULPRIT"*) ko "#13: a red whose test the base carried blamed a branch: $r";; *) ok "#13: a red whose test the base carried blames no branch";; esac
+case "$r" in *"BATCH FALLBACK"*"is in no branch of the batch"*) ok "#13: the fallback says the failing test was added by no branch of the batch";; *) ko "#13: no FALLBACK naming the unattributable commit: $r";; esac
+case "$r" in *"FORKCLOSE #5 closed"*"FORKCLOSE #6 closed"*|*"FORKCLOSE #6 closed"*"FORKCLOSE #5 closed"*) ko "#13: both members landed although their pair is red: $r";; *) ok "#13: the pair is not landed as a batch";; esac
+[ -n "$(ls "$T/st/auto"/nobatch-* 2>/dev/null)" ] && ok "#13: the unattributable set is memoized, so it is not retried unchanged" || ko "#13: the unattributable set is not memoized"
 rm -rf "$T"; exit $fail

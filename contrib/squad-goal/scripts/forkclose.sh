@@ -335,7 +335,9 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
   suites=$(printf '%s\n' $files | suiteset); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
   id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
   out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
-  at=""; [ $rc = 0 ] || at=$(batchculprit "$id" "${merged# }")   # read off the candidate, which is still checked out here
+  # read off the candidate, which is still checked out here. Not `at=$(batchculprit ...)`: that runs in a subshell and takes the
+  # brwhy it sets with it, so the fallback below would always print its default reason instead of the one this red has.
+  at=""; brwhy=""; if [ $rc != 0 ]; then batchculprit "$id" "${merged# }" > "$A/batchculprit.txt" || true; at=$(cat "$A/batchculprit.txt"); fi
   $G checkout -q "$SG_FORK_BASE"
   if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
     echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
