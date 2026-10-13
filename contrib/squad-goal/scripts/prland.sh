@@ -10,8 +10,8 @@
 #
 # A PR is merged when, and only when: it is open, not a draft, on $SG_BASE, and names its issue (fix/<n>-… or Refs #n);
 # no live run names its head branch and no worktree holds that branch with uncommitted changes (the pass does: active-runs.txt, the recent run records, `git worktree list`); its check run finished; every failed test is in
-# the baseline; GitHub reports it mergeable. Then: `gh pr merge --squash --delete-branch`, one comment on the issue naming
-# the merge sha, and the issue closed. Anything else is one `PRLAND WAIT #<n>` (it may resolve on its own) or one
+# the baseline; GitHub reports it mergeable. Then: `gh pr merge --squash --delete-branch`, the issue closed, and one closing comment that names
+# the pull request and merge sha. Anything else is one `PRLAND WAIT #<n>` (it may resolve on its own) or one
 # `PRLAND REFUSE #<n>` (a person decides) per head and reason, kept as a marker under $SG_STATE/auto so it is never
 # repeated for the same head (a per-head marker pattern).
 #
@@ -72,11 +72,18 @@ for n in $(printf '%s' "$pl" | jq -r '.[].number'); do
   for j in $(printf '%s' "$cr" | jq -r '.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")|"\(.id):\(.conclusion):\(.name|gsub(" ";"_"))"'); do
     id=${j%%:*}; rest=${j#*:}; con=${rest%%:*}; name=${rest#*:}
     [ "$con" = failure ] || { bad="check $name ended $con"; break; }
+    job=$(gh_api "repos/$SG_REPO/actions/jobs/$id") || { bad="the job details of check $name are not readable: $job"; break; }
+    detail=$(gh_api "repos/$SG_REPO/check-runs/$id") || { bad="the check details of check $name are not readable: $detail"; break; }
+    stop=$(printf '%s\n%s\n' "$job" "$detail" | jq -sc '.[0:2]' | python3 "$here/ci_state.py")
+    case "$stop" in
+      cannot-run$'\t'*) say wait "$n" "$sha" cannot-run "CI cannot run: ${stop#*$'\t'}"; bad=cannot-run; break;;
+    esac
     log=$(gh_get "repos/$SG_REPO/actions/jobs/$id/logs") || { bad="the log of check $name is not readable: $log"; break; }
     ft=$(printf '%s' "$log" | failed_tests)
     [ -n "$ft" ] || { bad="check $name failed and its log names no failed test (ruff, mypy or an error before the suite)"; break; }
     for t in $ft; do case "$baseline" in *" $t "*) ;; *) outside="$outside $t";; esac; done
   done
+  [ "$bad" = cannot-run ] && continue
   [ -z "$bad" ] || { say refuse "$n" "$sha" check "$bad"; continue; }
   [ -z "$outside" ] || { say refuse "$n" "$sha" red "failed outside the baseline:$outside"; continue; }
   # the facts that gate the write, read live, one request: still open, still not a draft, and mergeable
@@ -87,10 +94,10 @@ for n in $(printf '%s' "$pl" | jq -r '.[].number'); do
   out=$(gh pr merge "$n" --repo "$SG_REPO" --squash --delete-branch 2>&1) || { say refuse "$n" "$sha" merged "GitHub did not merge it: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; continue; }
   ms=$(gh_api "repos/$SG_REPO/pulls/$n" -q '.merge_commit_sha // ""') || ms=""
   rm -f "$A"/prland-*-"$n"-*
+  gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || { echo "PRLAND: #$i did not close after the merge of #$n"; continue; }
   gh_send -X POST "repos/$SG_REPO/issues/$i/comments" -F body=@- >/dev/null <<EOT
-PR #$n merged into ${SG_BASE:-main} as ${ms:-(sha not readable)} (squash, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
+Closed #$i after merging PR #$n into ${SG_BASE:-main} as ${ms:-(sha not readable)} (squash, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
 EOT
-  gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || echo "PRLAND: #$i did not close after the merge of #$n"
   echo "PRLAND MERGED #$n as ${ms:-?} into ${SG_BASE:-main}, closed #$i"
 done
 exit 0

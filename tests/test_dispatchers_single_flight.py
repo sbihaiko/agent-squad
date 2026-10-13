@@ -15,10 +15,11 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "s
 
 GH = """#!/bin/bash
 # A stub gh: one open issue (#42), no open PR. autobug reads `<number><US>labels>`; autofrontier sorts on
-# `<wave><US><number><US><labels>`, so the two queries answer in their own shape.
+# `<wave><US><number><US><labels>`, so the two queries answer in their own shape. autobug asks by label;
+# autofrontier reads every open issue and lets stack.sh's blocker gate decide, so a label only orders a candidate.
 case "$*" in *"pulls?state=open"*) exit 0;; esac
-case "$*" in *"labels=ready-for-agent"*) printf 'wave:01\\03742\\037%s\\n' "$LABELS"; exit 0;; esac
-case "$*" in *"issues?state=open"*) printf '42\\037%s\\n' "$LABELS"; exit 0;; esac
+case "$*" in *"issues?state=open&labels="*) printf '42\\037%s\\n' "$LABELS"; exit 0;; esac
+case "$*" in *"issues?state=open"*) printf 'wave:01\\03742\\037%s\\n' "$LABELS"; exit 0;; esac
 case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","created_at":"2026-10-11T00:00:00Z"}\\n'; exit 0;; esac
 exit 0
 """

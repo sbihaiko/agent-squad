@@ -12,6 +12,7 @@
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
 here="$(cd "$(dirname "$src")" && pwd)"; cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
+cp "$here/refusal.sh" "$here/address.sh" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141)
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -102,6 +103,7 @@ rec run-nostatus '{"event":"run_start","run_id":"run-nostatus","ts":"2026-10-13T
 mk run-stacked-pr 2018   # its PR names the issue, but it was merged into the parent branch, not the base
 rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10-13T08:12:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2001$' "$T/board.calls" 2>/dev/null && ok "dispatch marker: live run card moves to In Progress" || ko "#2001 status not reconciled: $(bc) $o"
@@ -121,6 +123,13 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 ! /usr/bin/grep -q '^STATUS .* 2008$' "$T/board.calls" 2>/dev/null && ok "card already in the expected status is not written again" || ko "#2008 status was rewritten: $(bc)"
 /usr/bin/grep -q '^CLEAR o 4 2005$' "$T/board.calls" 2>/dev/null && ok "leaving In Progress clears Run fields" || ko "#2005 Run fields not cleared: $(bc)"
 /usr/bin/grep -q 'BOARD-WRITE-FAILED #2009' "$T/st/cycle.log" 2>/dev/null && ok "failed board write is named in cycle.log" || ko "board failure not logged: $(cat "$T/st/cycle.log" 2>/dev/null) $o"
+# The same refusal is a comment on the issue the write was about (#141): the card says why it did not move, through the
+# queue whose one flusher posts it, and the comment carries the refusal's name and GitHub's error.
+cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
+[ -f "$cq" ] && ok "a refused card write queues one comment on that issue" || ko "no refusal comment: $(ls "$T/st/cq" 2>/dev/null) $o"
+/usr/bin/grep -qF 'BOARD-WRITE-FAILED #2009' "$cq" 2>/dev/null && /usr/bin/grep -qF 'board refused #2009' "$cq" 2>/dev/null \
+  && ok "the comment carries the refusal's name and its error" || ko "comment body: $(cat "$cq" 2>/dev/null)"
+[ "$(ls "$T/st/cq" | /usr/bin/grep -c 'refusal')" = 1 ] && ok "one refused write is one comment" || ko "refusal comments: $(ls "$T/st/cq")"
 /usr/bin/grep -q '^STATUS o 4 Done 2010$' "$T/board.calls" 2>/dev/null && ok "closed issue: card moves to Done" || ko "#2010 not Done: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Done 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker: card moves to Done" || ko "#2011 not Done: $(bc)"
 /usr/bin/grep -q '^ADD o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the item is created with its expected status in one write" || ko "#2013 not added: $(bc) $o"
@@ -132,6 +141,7 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 # An open issue with no live run, marker, PR, or owner label returns to the loop floor; Blocked only expresses a current human action.
 /usr/bin/grep -q '^STATUS o 4 Todo 2015$' "$T/board.calls" 2>/dev/null && ok "an unclaimed open issue leaves stale Blocked for the dispatch column" || ko "#2015 did not leave stale Blocked: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2015: card -> Todo' "$T/st/cycle.log" 2>/dev/null && ok "the stale Blocked reconciliation is named in cycle.log" || ko "#2015 reconciliation not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open; repaired to Todo' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported and repaired" || ko "#2015 Done regression not repaired: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"

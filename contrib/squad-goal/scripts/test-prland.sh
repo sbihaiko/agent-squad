@@ -4,7 +4,7 @@
 # usage: bash test-prland.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/prland.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/prland.sh" "$d/ci_state.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_CHECKOUT=%s SG_CI_BASELINE=%s/baseline.txt\n' "$T/st" "$T/co" "$T" > "$T/s/env.sh"
 printf 'tests/test_e2e.py::test_a  # needs MESENAI_REPO\ntests/test_e2e.py::test_b  # needs MESENAI_REPO\ntests/test_guard.py::test_reap  # macOS only\n' > "$T/baseline.txt"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q fix/7-x)
@@ -14,11 +14,13 @@ cat > "$T/bin/gh" <<J
 echo "\$*" >> "$T/gh.log"
 case "\$*" in
   *"pulls?per_page"*) echo "[{\"number\":41,\"draft\":\${DRAFT:-false},\"head\":{\"ref\":\"fix/7-x\",\"sha\":\"\${SHA:-1111111111111111111111111111111111111111}\"},\"base\":{\"ref\":\"main\"},\"body\":\"Work.\\\\n\\\\nRefs #7\"}]";;
+  *"check-runs/10"*) echo "\$CHECK_DETAIL";;
   *"check-runs"*) echo "\${CHECKS:-{\"check_runs\":[]\}}";;
   *"actions/jobs/"*"/logs"*) printf '%b' "\${LOG:-}";;
+  *"actions/jobs/10"*) echo "\$JOB";;
   *"pulls/41/merge"*) echo '{"merged":true,"sha":"abcdef1234567890"}';;
   *"pulls/41"*) echo "{\"number\":41,\"state\":\"\${STATE:-open}\",\"draft\":\${DRAFT:-false},\"mergeable_state\":\"\${MS:-clean}\",\"merge_commit_sha\":\"abcdef1234567890\"}";;
-  *"issues/7/comments"*) cat >/dev/null; echo '{"id":1}';;
+  *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
   "pr merge 41"*) echo "merged";;
 esac
@@ -26,7 +28,13 @@ J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 GREEN='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
 RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
+NEVER_STARTED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
+NEVER_STARTED_JOB='{"status":"completed","steps":[]}'
+NEVER_STARTED_DETAIL='{"status":"completed","conclusion":"failure","output":{"title":"The job was not started because recent account payments have failed","summary":"Please check Billing & plans."}}'
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
+JOB='{"status":"completed","steps":[{"name":"test"}]}'
+CHECK_DETAIL='{"output":{}}'
+export JOB CHECK_DETAIL
 BASE_LOG='2026-10-13T11:44:53.4Z FAILED tests/test_e2e.py::test_a - AssertionError: set MESENAI_REPO\n2026-10-13T11:44:53.5Z FAILED tests/test_e2e.py::test_b - AssertionError\n'
 pl() { bash "$T/s/prland.sh" 2>&1; }
 merged() { /usr/bin/grep -q "^pr merge 41 " "$T/gh.log" 2>/dev/null; }
@@ -36,11 +44,14 @@ r=$(CHECKS="$GREEN" pl); merged && ok "green: merged" || ko "green not merged: '
 case "$r" in *"PRLAND MERGED #41"*abcdef123*"#7"*) ok "the merge line names the PR, the sha and the issue";; *) ko "no merge line: '$r'";; esac
 /usr/bin/grep -q "pr merge 41 --repo x/y --squash --delete-branch" "$T/gh.log" && ok "squash merge, branch deleted" || ko "merge flags: $(cat "$T/gh.log")"
 /usr/bin/grep -q "issues/7/comments" "$T/gh.log" && /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "the issue got its comment and closed" || ko "no comment/close: $(cat "$T/gh.log")"
+close_line=$(/usr/bin/grep -n "issues/7 -f state=closed" "$T/gh.log" | cut -d: -f1); comment_line=$(/usr/bin/grep -n "issues/7/comments" "$T/gh.log" | cut -d: -f1)
+[ "$close_line" -lt "$comment_line" ] && /usr/bin/grep -q "Closed #7 after merging PR #41" "$T/comment.body" && ok "the closing comment names the merged PR" || ko "the close did not precede a PR-naming closing comment: $(cat "$T/comment.body" 2>/dev/null)"
 reset; r=$(CHECKS="$RED" LOG="$BASE_LOG" pl); merged && ok "red on the baseline only: merged" || ko "baseline red not merged: '$r'"
 reset; r=$(CHECKS="$RED" LOG="${BASE_LOG}2026-10-13T11:44:53.6Z FAILED tests/test_new.py::test_c - boom\n" pl)
 merged && ko "a failure outside the baseline was merged" || ok "a failure outside the baseline is not merged"
 case "$r" in *"PRLAND REFUSE #41"*"tests/test_new.py::test_c"*) ok "the refusal names the failure";; *) ko "refusal silent on the failure: '$r'";; esac
 reset; r=$(CHECKS="$RED" LOG="" pl); merged && ko "a red check naming no test was merged" || { case "$r" in *"PRLAND REFUSE #41"*) ok "a red check naming no test is refused";; *) ko "no refusal: '$r'";; esac; }
+reset; r=$(CHECKS="$NEVER_STARTED" JOB="$NEVER_STARTED_JOB" CHECK_DETAIL="$NEVER_STARTED_DETAIL" pl); merged && ko "a job GitHub never started was merged" || { case "$r" in *"PRLAND WAIT #41"*"CI cannot run"*"account payments"*) ok "a job with no steps waits and names the account";; *) ko "a never-started job reads as code failure: '$r'";; esac; }
 reset; r=$(CHECKS="$RUNNING" pl); merged && ko "merged while the check runs" || { case "$r" in *"PRLAND WAIT #41"*) ok "a running check waits";; *) ko "no wait: '$r'";; esac; }
 r=$(CHECKS="$RUNNING" pl); case "$r" in *"PRLAND WAIT #41"*) ko "WAIT repeated for the same head: '$r'";; *) ok "one WAIT per head";; esac
 r=$(SHA=2222222222222222222222222222222222222222 CHECKS="$RUNNING" pl); case "$r" in *"PRLAND WAIT #41"*) ok "a new head gets its own WAIT";; *) ko "new head silent: '$r'";; esac

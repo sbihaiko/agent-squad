@@ -102,15 +102,15 @@ def test_the_shell_suites_take_no_gate_lock_and_run_beside_a_holder(tmp_path):
 
 
 def test_the_gate_of_a_landing_is_the_ci_check_job_and_its_queue_is_capped():
-    """#81 where the gate runs now: CI runs the suite once per ref and cancels a superseded pull-request run, so two
-    full gates never run side by side there either."""
+    """#81 where the gate runs now: CI runs the suite once for the branch a push and its pull request share (#149) and
+    cancels a superseded pull-request run, so two full gates never run side by side there either."""
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     runs = [step["run"] for job in wf["jobs"].values() for step in job["steps"] if "run" in step]
     assert any("pytest" in r for r in runs), runs
     con = wf["concurrency"]
-    assert con["group"] == "ci-${{ github.ref }}", con
+    assert "github.head_ref" in con["group"] and "github.ref_name" in con["group"], con
     assert con.get("cancel-in-progress"), "a superseded run must be cancelled, or two full gates queue up"
 
 

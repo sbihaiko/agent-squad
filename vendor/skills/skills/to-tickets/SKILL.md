@@ -47,7 +47,7 @@ Give each ticket its **labels**: the triage label (`ready-for-agent` unless inst
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
-- **Title**: short descriptive name
+- **Title**: short descriptive name. A child of a spec carries the spec's number as the first words of its title, written `[SPEC <n>] <title>` (for example `[SPEC 117] Every refusal has one shape: a closed set in code`). The prefix is a reading aid: it never replaces the parent relation, and the sub-issue link stays the fact. A child whose parent is not a spec (a plan, a conversation) carries no prefix, and a prefix names the spec's number only, never a wave, a kind or a column.
 - **Blocked by**: which other tickets (if any) must complete first
 - **Wave** and **labels**: `wave:NN` and the labels it will be published with
 - **What it delivers**: the end-to-end behaviour this ticket makes work
@@ -66,8 +66,16 @@ Iterate until the user approves the breakdown.
 Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock-skills` configured; the tickets are the same either way, only the shape of the blocking edges changes:
 
 - **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
-- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the `ready-for-agent` triage label unless instructed otherwise; the tickets are agent-grabbable by construction.
+- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. **Attach every ticket to the parent issue as the platform's own relationship**, so the parent shows its tasks without anyone reading a body: on GitHub that is the sub-issue relation, and it is the first thing the parent must carry.
+  ```sh
+  id=$(gh api "repos/$OWNER/$REPO/issues/$TICKET" --jq .id)   # the numeric database id, NOT `gh issue view --json id`, which answers the GraphQL node id and the endpoint rejects it
+  gh api "repos/$OWNER/$REPO/issues/$PARENT/sub_issues" -F sub_issue_id="$id"   # -F, so the value is sent as an integer
+  ```
+  Verify the relation landed (read the parent's sub-issue list back) before moving on. Where the tracker has no such relation, set each ticket's "Blocked by" to the blocking issues and name the parent in the body.
+  Write every blocking edge as the platform's own dependency too, so the relation is visible where a reader looks for it and not only in the body: on GitHub, `POST /repos/$OWNER/$REPO/issues/$TICKET/dependencies/blocked_by` with `-F issue_id=<the blocker's numeric id>` says "this ticket is blocked by that one", and the blocker's own panel then answers it as blocking. Read every edge back before moving on. Both relations carry their own weight: the parent link puts the tasks under the parent issue, and the dependencies are what the issue's Relationships panel shows.
+  Publish no `relates_to` edge of the parent to its own tickets, and none between tickets on a guess. The parent link already lists them under the parent, with progress; a second copy can only disagree with it. A `relates_to` edge (on GitHub: `POST /repos/$OWNER/$REPO/issues/$TICKET/relates_to` with `-F issue_id=<the numeric id>`) is earned when two tickets touch the same place and neither blocks the other — and only once the reason is known and written in a comment, because the edge itself carries no direction and no proof. Where the repository already defers a startable ticket whose file another holds, that guard is the operational half and no edge replaces it.
   Apply every ticket's labels when it is created: the triage label, its `wave:NN` label and any type label. Before the first issue, make sure each `wave:NN` label you need exists (on GitHub: `gh label create "wave:NN" --color <hex> --description "Wave NN: startable once waves before it are done" --force`, one color per wave or one shared color). If a later edge change moves a ticket to another wave, move its label too: a ticket carries exactly one `wave:` label.
+  Where the dispatch reads the triage label as its go signal, a ticket that is not grabbable yet must not wear it: create it with its `wave:NN` label alone and add the triage label when every blocker of it is closed. The wave labels stay on all of them, so the order is readable and the edges are the same thing the dispatch sorts by.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
@@ -76,6 +84,8 @@ Do NOT close or modify any parent issue.
 <local-ticket-template>
 
 # <NN>: <Ticket title>
+
+A child of a spec issue starts its title with the spec's number, `[SPEC <n>] <title>`; a child of anything else carries no prefix.
 
 **What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.
 
@@ -93,6 +103,8 @@ Do NOT close or modify any parent issue.
 </local-ticket-template>
 
 <issue-template>
+
+**Title:** a child of a spec issue carries the spec's number first, `[SPEC <n>] <title>`; any other ticket carries the plain title, with no prefix.
 
 ## Parent
 

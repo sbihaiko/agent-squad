@@ -5,6 +5,10 @@ import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statis
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+# A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
+# hardcoded path turns a missing tool into a failed pass. env.sh resolves it into SG_LSOF; the last entry keeps a tool
+# outside both paths reachable.
+LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
@@ -208,7 +212,7 @@ def project_dirs():
     ds = {pathlib.Path(CHECKOUT) / "runs"}
     for x in os.environ.get("SG_PROJECTS", "").split(":"):
         if x: ds.add(pathlib.Path(x) / "runs")
-    for l in sh("/bin/ps", "-axo", "command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
         if m: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
@@ -577,7 +581,7 @@ def proc_snapshot():
         if out: return out
     except Exception: pass
     out = {}
-    for l in sh("/bin/ps", "-axo", "pid=,ppid=,time=,command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "pid=,ppid=,time=,command=").splitlines():
         f = l.split(None, 3)
         if len(f) < 4 or not f[0].isdigit(): continue
         out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
@@ -633,9 +637,11 @@ def load_tick(sample=None):
 # subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
 # SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
-# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · #73 2h 14m ago`,
-# the newest `auto/fork-<n>-<sha9>` marker the close pass touches when it merges that commit — its name is the issue, its
-# mtime the age. The marker is the pass's own claim of a landing, so no log line is parsed and no GitHub call is made.
+# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · PR #73 2h 14m ago`,
+# the newest merged pull request the board pass has read — its number is the landing and its merge time the age. Delivery
+# is a pull request (#75), so the merge is the landing; it reads the rows the board pass already holds, so no log line is
+# parsed and no GitHub call is made. The `auto/fork-<n>-<sha9>` marker is NOT read: a marker outlives the landing it named,
+# and a bar that reports it names a landing nothing made.
 # The quota pair (`codex ok · agy reset 14:20`) left the line for the opposite reason (#87): each marker names a CLI whose
 # subscription the subs block already carries as a token, so the purple block repeated the green one. `MARKER_SUB` keeps
 # the pairing, and a marker returns the day its subscription leaves SUBS: a fact is never lost, only never said twice.
@@ -678,13 +684,15 @@ def _rel_span(x):
     return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
 
 def _landing_parts(ld, now):
-    """`last landing` and `#73 2h 14m ago`: the issue the newest fork marker names and the age of the marker itself.
-    No marker, or one whose issue or age cannot be read, is `?` in the neutral tone — never a landing that did not happen."""
+    """`last landing` and `PR #73 2h 14m ago`: the number of the newest merged pull request and the age of its merge.
+    No merge, or one whose number or time cannot be read, is `?` in the neutral tone — never a landing that did not happen.
+    The number is named as a pull request, because the row it comes from is one: a bare `#73` reads as an issue, and the
+    issue is not what landed."""
     if not isinstance(ld, dict): return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
     n, ts = ld.get("issue"), ld.get("ts")
     if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
-    return [{"text": "last landing", "tone": ""}, {"text": f"#{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+    return [{"text": "last landing", "tone": ""}, {"text": f"PR #{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
 
 def _occ_fact(occ, caps):
     """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
@@ -847,17 +855,18 @@ def _json(p):
     except Exception: return None
 
 def _last_landing():
-    """The newest `auto/fork-<n>-<sha9>` marker: `{"issue", "ts"}`, or None with no marker the hub can read. One directory
-    listing on the sampler thread; a marker that vanished between the listing and its stat is not a landing."""
+    """The newest merged pull request the board pass has read: `{"issue", "ts"}`, naming the PR, or None.
+
+    Delivery is a pull request (#75): the merge is the landing, and the board pass already holds every closed PR of every
+    configured repository with its merge time and whether it merged. A closed pull request that was NOT merged is not a
+    landing, and a row whose time the hub cannot read is skipped rather than counted as now.
+    """
     best = None
-    try: names = list((STATE / "auto").iterdir())
-    except OSError: return None
-    for m in names:
-        mo = FORK_MARKER.fullmatch(m.name)
-        if not mo: continue
-        try: ts = m.stat().st_mtime
-        except OSError: continue
-        if best is None or ts > best["ts"]: best = {"issue": int(mo.group(1)), "ts": ts}
+    for p in board_cache.get("prev") or []:
+        if not p.get("m"): continue
+        try: ts = dt.datetime.fromisoformat(str(p.get("c") or "").replace("Z", "+00:00")).timestamp()
+        except ValueError: continue
+        if best is None or ts > best["ts"]: best = {"issue": p.get("n"), "ts": ts}
     return best
 
 def _newest_mtime(*paths):
@@ -925,12 +934,12 @@ TEST_LOST_DROP_SECS = 24 * 3600
 def runs():
     _titles()
     out = []; load_rows = []
-    ps_lines = sh("/bin/ps", "-axo", "pid=,command=").splitlines()
+    ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
     for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
         pid, d = m.group(1), m.group(2)
-        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh("/usr/sbin/lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
+        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         p = pathlib.Path(d) / "record.jsonl"
         if not pathlib.Path(d).exists(): continue
@@ -1019,15 +1028,6 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
-def task_count(i):
-    """How far the card's own work got, `completed` over `total`, out of the sub-issue summary the board's own items
-    read carries (#153). Nothing when the issue has no tasks, and nothing when the summary is missing or the read
-    that was supposed to give it failed: a card never wears an invented `0/0`. The count is the card's, not a column
-    of its own -- it is computed here so the page renders a value and holds no rule (ADR-0137)."""
-    s = i.get("si") or {}
-    t, c = s.get("total"), s.get("completed")
-    if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
-    return f"{c}/{t}" if t > 0 else None
 _board_sf = ""   # the Status field's REST id: read once per process, not once per pass
 def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open and closed PRs of
@@ -1042,11 +1042,11 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
     try:
             _board_sf = _board_sf or status_field()
             out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={_board_sf}", "--jq",
-                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}'],
+                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
-                '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name],si:{total:.sub_issues_summary.total,completed:.sub_issues_summary.completed}}'], capture_output=True, text=True, timeout=120).stdout
+                '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name]}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
             items += [i for i in (json.loads(l) for l in oi.splitlines() if l.strip()) if i["n"] not in have]
             own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
@@ -1190,10 +1190,13 @@ OPEN_PR_QUERY = """query{repository(owner:"%s",name:"%s"){pullRequests(first:100
 number title isDraft updatedAt createdAt headRefOid baseRefName mergeStateStatus
 labels(first:30){nodes{name}}
 reviewThreads(first:100){totalCount nodes{isResolved}}
-commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
+commits(last:1){nodes{commit{committedDate statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{databaseId conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
 
 LIVE_BAD = ("failure", "timed_out", "action_required", "startup_failure", "cancelled", "error")
 LIVE_WAIT = ("queued", "in_progress", "pending", "waiting", "requested", "expected", "completed")
+CI_WAIT = ("queued", "in_progress", "pending", "waiting", "requested")   # a check GitHub reports as unfinished
+CI_QUEUED = ("queued",)          # ... and that no runner has picked up: a queue is not a run (#149)
+CI_QUEUE_MAX = 20 * 60.0         # the timeout `.github/workflows/ci.yml` gives its job: still queued past it, no run started
 
 def _live_states(rollup):
     """The states of the live rollup's contexts: a CheckRun reports its conclusion once it has one and its status before
@@ -1224,7 +1227,9 @@ def prs_from_graphql(payload, repo=None):
     rows = []
     for nd in nodes:
         commit = ((nd.get("commits") or {}).get("nodes") or [{}])[-1].get("commit") or {}
+        contexts = ((commit.get("statusCheckRollup") or {}).get("contexts") or {}).get("nodes") or []
         states = _live_states(commit.get("statusCheckRollup"))
+        checks = [{"id": c.get("databaseId"), "status": c.get("status"), "conclusion": c.get("conclusion")} for c in contexts if c.get("__typename") == "CheckRun"]
         th = nd.get("reviewThreads")
         threads = None if th is None or (th.get("totalCount") or 0) > len(th.get("nodes") or []) \
             else sum(1 for t in (th.get("nodes") or []) if not t.get("isResolved"))
@@ -1233,7 +1238,7 @@ def prs_from_graphql(payload, repo=None):
         base = nd.get("baseRefName") or None
         rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
                      "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
-                     "th": threads, "ci": states, "rollup": _live_rollup(states), "r": repo,
+                     "th": threads, "ci": states, "checks": checks, "hc": commit.get("committedDate") or None, "rollup": _live_rollup(states), "r": repo,
                      "facts": not (states is None or threads is None or labels is None or not ms or not base)})
     return rows
 
@@ -1395,12 +1400,46 @@ def gate_strip(x, t=None, now=None):
                       {"k": "B", "v": bv[0], "tip": bv[1]}, {"k": "H", "v": hv[0], "tip": hv[1]}],
             "age": age, "old": age > STRIP_MAX_AGE}
 
+_CI_STATE = {}
+def _ci_state_module():
+    """The no-step rule shared with the landing gate."""
+    if "m" not in _CI_STATE:
+        spec = importlib.util.spec_from_file_location("ci_state", pathlib.Path(__file__).resolve().parent / "ci_state.py")
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); _CI_STATE["m"] = module
+    return _CI_STATE["m"]
+
+def ci_cannot_run(x):
+    """The platform stop of a failed check, with its own annotation where GitHub supplied one."""
+    repo = x.get("r") or REPO
+    for check in x.get("checks") or []:
+        ident = check.get("id")
+        if not ident or check.get("conclusion") not in ("failure", "startup_failure"): continue
+        try:
+            job = gh_json(f"repos/{repo}/actions/jobs/{ident}")
+            detail = gh_json(f"repos/{repo}/check-runs/{ident}")
+            if _ci_state_module().cannot_run(job, detail): return _ci_state_module().reason(detail)
+        except Exception: continue
+    return None
+
+def _head_pushed_age(x):
+    """The seconds since the head commit was pushed, from GitHub's own `committedDate` on the row; None when the query
+    did not return it. A fact nobody has is unknown, so it never carries a stop (ADR-0018)."""
+    at = x.get("hc")
+    if not at: return None
+    try: return time.time() - dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+    except ValueError: return None
+
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
-    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review.
+    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-cannot-run, ci-waiting, reviewing, ready,
+    merged-soon, awaiting-review.
     Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771).
     A row the batched query did not fill in says so instead of falling through to a passing word (#1772), and a debt-only
-    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed."""
+    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed.
+    The CI chip reads the word GitHub reports (#149): a check that is `queued` says queued, never that a run is in
+    progress -- `queued` and `in_progress` are two different words, and only a runner that picked the check up makes one
+    of them a run. A head whose unfinished checks are all still queued past the timeout the ci job gives itself cannot
+    be answered at all, and the chip says that instead of implying progress."""
     n = x["n"]; sha9 = (x.get("h") or "")[:9]
     if (STATE / "auto" / "off").exists(): return gate_state(n, sha9)   # the loop is off: no card reports a verdict of its own
     if x.get("d"): return ["draft", "draft"]
@@ -1408,6 +1447,8 @@ def pr_state(x):
     if x.get("facts") is False: return ["idle", "facts unknown",
         "the batched open-PR query did not return this PR, so its CI, merge state and threads are unknown -- not passing"]
     if x.get("ms") == "dirty": return ["conflict", "merge conflict"]
+    cannot = ci_cannot_run(x)
+    if cannot is not None: return ["changes", "CI cannot run: account", cannot or "GitHub reported that the job never started"]
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
     line = (summary_lines(n, sha9) or [""])[-1]   # a notice (NOTICE #<pr> <sha9> ...) is not a result: see summary_lines
     if "CHANGES" in line:
@@ -1416,7 +1457,14 @@ def pr_state(x):
     rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
     if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
     if "BLOCKED" in line: return ["broke", "review blocked"]
-    if any(c in ("queued", "in_progress", "pending", "waiting", "requested") for c in ci): return ["running", "CI running"]
+    wait = [c for c in ci if c in CI_WAIT]   # the checks GitHub reports as unfinished
+    if wait:
+        if all(c in CI_QUEUED for c in wait):   # not one runner has picked a check up: a queue, not a run
+            age = _head_pushed_age(x)
+            if age is not None and age > CI_QUEUE_MAX:
+                return ["broke", "CI cannot run", f"the head {sha9} was pushed {_ago(age)} ago and every unfinished check on it is still queued, past the {int(CI_QUEUE_MAX / 60)} min the job gives itself: no run ever started, so this head answers nothing"]
+            return ["running", "CI queued", f"every unfinished check on {sha9} reads queued, not a run in progress: no runner has picked one up" + (f" (head pushed {_ago(age)} ago)" if age is not None else " (the query returned no head date)")]
+        return ["running", "CI running"]
     if not line and (STATE / "auto" / f"launched-{n}-{sha9}").exists(): return ["running", "reviewing"]
     if "APPROVE" in line: return gate_state(n, sha9)   # a green review line is not the loop's verdict: the gate file is
     return ["idle", "awaiting review"]
@@ -1426,8 +1474,6 @@ def board():
         st = "Done" if i["s"] == "closed" else (i["st"] or "No status")   # a closed issue is Done whatever the card still says
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if i.get("b"): row["b"] = i["b"]
-        sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
-        if sc: row["sc"] = sc
         by.setdefault(st, []).append(row)
     names = [n for n in ORDER if n in by or n != "No status"] + sorted(n for n in by if n not in ORDER)   # the working states always show, even at 0
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
@@ -1609,7 +1655,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .it:hover{background:var(--bgh,#232b37);border-color:#3a4352}
 #bbody .it .id{display:inline-block;background:#12161c;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-bottom:4px;font-size:11px;color:var(--pin);text-decoration:none;font-weight:700}
 #lf{display:inline-block;position:relative;font-size:11px;font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
-#lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}#bbody .it .lbs span.tsk{color:var(--mute)}
+#lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{border-color:var(--pin)}#bbody .it .tt{display:block}
 #bbody .it .prr{display:block;margin-top:2px;font-size:10.5px;color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--pin);text-decoration:none}
@@ -2113,16 +2159,15 @@ document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
-// hidden: strip's number all call colOf(name, columnNames). The ten named columns are the board's own — the eight
-// Project statuses plus the two PR columns — and the flow reads left to right: pink for the spec that is written and
-// not scheduled, grey (not started), yellow (being coded), violet (built), teal (verified), green (finished), amber
-// for the pile nobody has triaged, red for the one colour that means look here, blue for a PR in review, and the same
-// blue with its chroma spent for the PR that is retired. Any other name is a Status option the Project gained later —
-// a user column — and takes the next colour of the reserved ring, by its alphabetical position among those user
-// columns. The name always stands beside the colour (column header, chip label), so the colour is a second cue and
-// never the only one — which is what lets the ring cycle.
+// hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the seven
+// Project statuses plus the two PR columns — and the flow reads left to right: grey (not started), yellow (being
+// coded), violet (built), teal (verified), green (finished), amber for the pile nobody has triaged, red for the one
+// colour that means look here, blue for a PR in review, and the same blue with its chroma spent for the PR that is
+// retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
+// the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
+// (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
 const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
-const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the ten
+const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","Open Specs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
@@ -2145,7 +2190,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${((x.l||[]).length||x.sc)?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}${x.sc?`<span class=tsk title="this card's own tasks: ${esc(x.sc)} closed">${esc(x.sc)}</span>`:""}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never

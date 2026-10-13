@@ -5,6 +5,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Title a spec's child**: a child of a spec carries the spec's number as the first words of its title — `[SPEC <n>] <title>`. The sub-issue link is the relation; the prefix is what a person reads where relations are not drawn (the issue list, a search result, a board card). `/to-tickets` applies it to every child it publishes, and a ticket whose parent is not a spec carries no prefix.
 - **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`

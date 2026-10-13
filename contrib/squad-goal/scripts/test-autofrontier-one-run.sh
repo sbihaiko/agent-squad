@@ -23,7 +23,7 @@ done
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
-  */issues?state=open*)   f=$GH_ISSUES;;
+  */issues?state=open*)   f=$GH_ISSUES; [ -n "$GH_FRONTIER_ONLY" ] && [[ "$p" == *"labels=frontier"* ]] && f=$GH_FRONTIER;;
   */issues/*)             f=$GH_ISSUE1; [ -f "$GH_ISSUEDIR/${p##*/}.json" ] && f=$GH_ISSUEDIR/${p##*/}.json;;   # one fixture per issue when a case wrote it
   *) exit 1;;
 esac
@@ -44,7 +44,7 @@ scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
   cat > "$T/scripts/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BASE=main
-SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=$T/board.sh
+SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_FRONTIER_SKIP_LABELS=spec,needs-owner,needs-ratification,wontfix,needs-info; SG_CODING_RULES=rules; BOARD=$T/board.sh
 . "$(dirname "$src")/address.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
 E
   if [ -n "$2" ]; then   # the author's graph: a root loop that holds one dispatch node, and a run block
@@ -52,7 +52,8 @@ E
     printf '{"run":%s,"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":%s,"max_parallel":2}]}]}' "$rb" "$2" > "$d/co/docs/squad/workflows/dynamic.graph.json"
   fi
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
-  export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
+  export GH_ISSUES=$d/issues.json GH_FRONTIER=$d/frontier.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
+  printf '[]' > "$GH_FRONTIER"
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
 }
@@ -64,7 +65,8 @@ run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sl
 lines() { local c; c=$($G -c . "$1" 2>/dev/null); echo "${c:-0}"; }
 marked() { local n c=0; for n in "$@"; do [ -e "$SG_STATE/auto/disp-$n" ] && c=$((c+1)); done; echo $c; }
 asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
-moved() { local n; for n in "$@"; do $G -qE "^o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
+moved() { local n; for n in "$@"; do $G -qE "^(--add )?o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
+added() { $G -qE '^--add o 1 In Progress( [0-9]+)*$' "$BOARDLOG"; }   # a dispatch adds a missing board card before its status is written
 seedmax() { python3 - "$repo" <<'PY'
 import json, pathlib, sys
 d = json.loads((pathlib.Path(sys.argv[1]) / "docs/design/router.graph.json").read_text())
@@ -97,6 +99,16 @@ r=$(run)
 [ "$(ls "$d/st/cq" | $G -c -- '^o__r#[0-9]*-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
 case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request";; *) ko "a marker names the request";; esac
 moved 21 22 23 && ok "every dispatched issue gets its own card move" || ko "every dispatched issue gets its own card move: '$(cat "$BOARDLOG")'"
+added && ok "a dispatch adds each missing board card before its move" || ko "a dispatch does not add missing board cards: '$(cat "$BOARDLOG")'"
+
+# 1a) A ticket whose blockers have all closed may carry only its wave label. The wave orders the
+#     frontier; it does not grant permission to start. A label-gated read leaves it invisible.
+scene wave-only
+export GH_FRONTIER_ONLY=1
+issues '[{"number":24,"title":"a","body":"b","labels":[{"name":"wave:02"}]}]'
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 1 ] && [ "$(marked 24)" = 1 ] && ok "an unblocked wave-only issue joins the frontier" || ko "an unblocked wave-only issue stayed invisible: '$r'"
+unset GH_FRONTIER_ONLY
 
 # 1b) #33: a child with SEVERAL issues is one slice, one request line and one PR, and each of its issues still holds its marker,
 #     its own comment and its own card move -- the claim the comment above makes for one-issue children, asserted for the bundle
@@ -154,6 +166,17 @@ case "$r" in *"refused slice"*) ok "the pass says a slice was refused";; *) ko "
 scene nograph
 five; r=$(run); sm=$(seedmax)
 [ "$(asked)" = "$sm" ] && ok "no graph of its own: the request fits the seed's envelope" || ko "no graph of its own: asked for '$(asked)' against the seed's '$sm': '$r'"
+
+# 7) #208: a spec is a document until its owner starts it, and an issue that waits on him is not a unit of work either. The
+#    pass reads every open issue, so the labels SG_FRONTIER_SKIP_LABELS names -- the spec, beside the bug label autobug.sh
+#    already owns -- never become a child: a run that implemented one would commit a decision the owner has not made.
+scene skip 24
+issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"spec"},{"name":"wave:01"}]},{"number":40,"title":"a","body":"b","labels":[{"name":"needs-owner"},{"name":"wave:01"}]},{"number":42,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 42)" = 1 ] && ok "the startable ticket beside them goes out" || ko "the ticket beside a spec did not go out: '$r'"
+[ "$(marked 41)" = 0 ] && ok "a spec the owner has not started is left alone" || ko "the pass dispatched a spec: $(marked 41) marker(s)"
+[ "$(marked 40)" = 0 ] && ok "an issue that waits on the owner is left alone" || ko "the pass dispatched an issue waiting on the owner: $(marked 40) marker(s)"
+[ "$(childblocks)" = 1 ] && ok "the request asks for the one ticket alone" || ko "the request asks for $(childblocks) children: '$($G '^CHILD' "$MKLOG.body")'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
