@@ -16,7 +16,12 @@ for m in $(jq -r '.coding_models[]' "$mjson"); do mayrun "$m" || continue
 [ -n "$cm" ] || cm=$(jq -r '.coding_models[0] // empty' "$mjson")   # every entry off or out of window: name [0], launch.py refuses loudly
 [ -n "$fb" ] || fb=$(jq -r --arg c "$cm" 'first(.coding_models[]|select(.!=$c)) // empty' "$mjson")
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
-here="$(cd "$(dirname "$0")" && pwd)"; out="$SG_STATE/req/$1.txt"
+here="$(cd "$(dirname "$0")" && pwd)"
+# The request lands in the state directory of the repository it is for (#25); every request builder sources env.sh, which
+# resolves it from the seam and exports it. Run with no SG_STATE the path would have been `/req/<name>.txt` -- the
+# filesystem root -- so the script refuses by name instead, the way gui-tests.sh does: the seam owns the path, and a
+# script that is handed none says so rather than writing outside its own state.
+out="${SG_STATE:?mkreq.sh: no state directory; source env.sh for this repository, or set SG_STATE}/req/$1.txt"
 . "$here/forkonly.sh"   # sg_fork_branch: the one source of the branch a fork-only child commits on (#1836)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
@@ -138,7 +143,7 @@ slice_guard() {
   # seconds, 30 min), which is all that mkreq.sh -> launch.py ever takes: an abandoned request must not hold a file forever.
   local now ttl d deadl="" livel="" deadh=" " liveh=" " hit h q qp
   now=$(date +%s); ttl=${SG_SLICE_REQ_TTL:-1800}
-  for d in $(cat "${SG_STATE:-$SG_STATE}/active-runs.txt" 2>/dev/null || true); do
+  for d in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null || true); do
     case "$d" in /*) ;; *) d="${co:+$co/}runs/$d";; esac
     [ -f "$d/request.txt" ] && [ -f "$d/record.jsonl" ] || continue
     if /usr/bin/grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null; then deadl="$deadl$d/request.txt

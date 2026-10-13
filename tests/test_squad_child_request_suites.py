@@ -5,8 +5,9 @@ pass runs, and the two gates take the machine between them. So the request every
 which suites the child runs -- the one beside the script it touched, and the targeted test cases -- and says that the
 machine's full gate belongs to the loop, once per landing.
 
-Host-free: the real mkreq.sh runs in a throwaway tree with a throwaway HOME, so nothing here touches the live loop's
-request folder or the network.
+Host-free: the real mkreq.sh runs in a throwaway tree with a throwaway HOME and a throwaway SG_STATE, so nothing here
+touches the live loop's request folder or the network. The state directory is handed in, never spelled: the seam owns it
+(#25), and mkreq.sh names the absence instead of building a path under the filesystem root.
 """
 import os
 import shutil
@@ -44,10 +45,11 @@ def _mkreq(tmp_path, name, body):
     src.write_text(body)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "FG_"))}
     env["HOME"] = str(tmp_path / "home")
+    env["SG_STATE"] = str(tmp_path / "st")   # the repository's state directory, the seam's one answer (#25)
     env["PATH"] = "/usr/bin:/bin"
     r = subprocess.run(["bash", str(d / "mkreq.sh"), name, str(src)], capture_output=True, text=True, env=env, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
-    return (tmp_path / "home" / ".cache" / "squad-goal" / "req" / f"{name}.txt").read_text()
+    return (tmp_path / "st" / "req" / f"{name}.txt").read_text()
 
 
 def test_a_child_request_names_the_suites_it_runs_and_the_full_gate_as_the_loops(tmp_path):
