@@ -593,11 +593,17 @@ def load_tick(sample=None):
 # subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
 # SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
+# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · #73 2h 14m ago`,
+# the newest `auto/fork-<n>-<sha9>` marker the close pass touches when it merges that commit — its name is the issue, its
+# mtime the age. The marker is the pass's own claim of a landing, so no log line is parsed and no GitHub call is made.
+# The quota pair (`codex ok · agy reset 14:20`) left the line for the opposite reason (#87): each marker names a CLI whose
+# subscription the subs block already carries as a token, so the purple block repeated the green one. `MARKER_SUB` keeps
+# the pairing, and a marker returns the day its subscription leaves SUBS: a fact is never lost, only never said twice.
 # Every value comes from a source this hub already refreshes — no new polling and no new query. The subscription tokens
 # cost none either: they read `quota_row()`, the cached probe the subscriptions panel already renders, inside the pass
 # this sampler already makes. A value the hub cannot verify is `?`, never a stale or invented number, and a fact that
 # goes unreadable takes its own `?` with it while the rest of the line stands. The line is one row: on a window too
-# narrow for it, the trailing facts drop (6 -> 5 -> 4 -> 3) — nothing wraps, and no number is ever cut into a different one.
+# narrow for it, the trailing facts drop one whole block at a time — nothing wraps, and no number is ever cut into a different one.
 FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
 FOOT_SEP = " · "
 # Every block of the line reads in its own palette colour, so six facts are told apart at a glance without a character
@@ -606,8 +612,11 @@ FOOT_SEP = " · "
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "occ": "mute", "quota": "none",
+FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "landing": "wait", "occ": "mute", "quota": "none",
                      "subs": "run"}  # subs last, and teal again: it shares with health, which is not its neighbour
+# A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
+MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
+FORK_MARKER = re.compile(r"fork-(\d+)-([0-9a-f]{7,40})")   # the close pass's marker, the name janitor.py's rule P reads
 
 def foot_age(secs):
     """An age as the line reads it — one token, the shape the page's own `age()` paints: `45s`, `4m`, `2h`."""
@@ -641,6 +650,20 @@ def _progress_fact(ts, now):
     """The age of the newest transition the loop owns — a verdict, a land, a dispatch or a board move."""
     return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
 
+def _rel_span(x):
+    """A span in the page's own `rel()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth."""
+    d, h, m = int(x // 86400), int(x % 86400 // 3600), int(x % 3600 // 60)
+    return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
+
+def _landing_parts(ld, now):
+    """`last landing` and `#73 2h 14m ago`: the issue the newest fork marker names and the age of the marker itself.
+    No marker, or one whose issue or age cannot be read, is `?` in the neutral tone — never a landing that did not happen."""
+    if not isinstance(ld, dict): return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
+    n, ts = ld.get("issue"), ld.get("ts")
+    if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
+    return [{"text": "last landing", "tone": ""}, {"text": f"#{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+
 def _occ_fact(occ, caps):
     """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
     resolution there is no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
@@ -649,11 +672,15 @@ def _occ_fact(occ, caps):
     if not isinstance(mp, int) or not isinstance(mc, int): return "?"
     return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
 
-def _quota_fact(q, now):
+def _quota_fact(q, now, subs=None):
     """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
-    reset time it names. A limited model is what the operator acts on; one that is back reads `ok`."""
+    reset time it names. A limited model is what the operator acts on; one that is back reads `ok`. A marker whose
+    subscription the subs block carries (`MARKER_SUB`, against SUBS) is not named twice (#87): with both carried, the
+    block is empty and `foot_items` drops it."""
     out = []
+    subs = SUBS if subs is None else subs
     for name in ("codex", "agy"):
+        if MARKER_SUB.get(name) in subs: continue
         v = (q or {}).get(name)
         if v == "?": out.append(f"{name} ?")
         elif isinstance(v, (int, float)): out.append(name + " reset " + time.strftime("%H:%M", time.localtime(v)))
@@ -670,8 +697,7 @@ def _subs_reset(resets, now):
     if isinstance(resets, bool) or not isinstance(resets, (int, float)): return "?"
     x = resets - now
     if x <= 0: return "now"
-    d, h, m = int(x // 86400), int(x % 86400 // 3600), int(x % 3600 // 60)
-    return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
+    return _rel_span(x)
 
 def consumption_tone(pct):
     """The tone one consumption reading earns (#1843), on the ladder the load strip already draws (#1816): green under
@@ -713,20 +739,23 @@ def _fact(key, text, bad=False, parts=None):
             "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
 def foot_items(src, caps=None, now=None):
-    """The six facts, in the order the line reads them, each carrying whether its value is the bad one (`bad` is what
+    """The facts, in the order the line reads them, each carrying whether its value is the bad one (`bad` is what
     the page paints amber, and only `last progress` has one — a stall between the loop's own two thresholds), the
     palette colour of its block, and the parts it paints: a subscription token carries the tone its own consumption
     earns, so the block is never painted as one value (#1843)."""
     now = time.time() if now is None else now
     src = src or {}
     prog = src.get("progress")
-    return [_fact("health", _health_fact(src.get("health"), now)),
-            _fact("progress", _progress_fact(prog, now),
-                  bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
-            _fact("occ", _occ_fact(src.get("occ"), caps)),
-            _fact("quota", _quota_fact(src.get("quota"), now)),
-            # subs last, so a narrow window drops the block whole
-            _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
+    land = _landing_parts(src.get("landing"), now)
+    items = [_fact("health", _health_fact(src.get("health"), now)),
+             _fact("progress", _progress_fact(prog, now),
+                   bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
+             _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
+             _fact("occ", _occ_fact(src.get("occ"), caps)),
+             _fact("quota", _quota_fact(src.get("quota"), now)),
+             # subs last, so a narrow window drops the block whole
+             _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
+    return [i for i in items if i["text"]]   # a block with nothing to say draws no lone `·`
 
 def foot_line(items):
     """The facts as the line reads them, one `·` between each: the page appends this after the three load cells."""
@@ -745,6 +774,20 @@ def _read(p):
 def _json(p):
     try: return json.loads(pathlib.Path(p).read_text())
     except Exception: return None
+
+def _last_landing():
+    """The newest `auto/fork-<n>-<sha9>` marker: `{"issue", "ts"}`, or None with no marker the hub can read. One directory
+    listing on the sampler thread; a marker that vanished between the listing and its stat is not a landing."""
+    best = None
+    try: names = list((STATE / "auto").iterdir())
+    except OSError: return None
+    for m in names:
+        mo = FORK_MARKER.fullmatch(m.name)
+        if not mo: continue
+        try: ts = m.stat().st_mtime
+        except OSError: continue
+        if best is None or ts > best["ts"]: best = {"issue": int(mo.group(1)), "ts": ts}
+    return best
 
 def _newest_mtime(*paths):
     ts = []
@@ -771,7 +814,7 @@ def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"health": None, "progress": None, "occ": None,
+    out = {"health": None, "progress": None, "landing": _last_landing(), "occ": None,
            "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
                      "agy": limited_until(_read(STATE / "agy-limited"), now)}}
     h = _json(STATE / "health.json")
