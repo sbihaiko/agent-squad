@@ -7,7 +7,7 @@ usage: codex-reset.py [--hit] [--sync <marker>]
   refreshed every 20 min, has been read again and shows no full window. Without this a marker written once for a window that
   has since reset outlives the limit it records: every codex model stays skipped until its timestamp passes (#1525)."""
 import json, os, pathlib, sys, time
-hub = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "runs" / ".hub")
+hub = pathlib.Path(os.environ.get("SG_SHARED") or os.environ.get("SG_HUB_DIR") or pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "runs" / ".hub")
 try: q = json.loads((hub / "hub-quota.json").read_text()).get("gpt") or {}
 except Exception: q = {}
 now = time.time()

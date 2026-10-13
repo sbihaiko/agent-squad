@@ -1,8 +1,8 @@
 #!/bin/bash
 # usage: health-install.sh [uninstall]   Installs/removes the launchd agent that runs health.sh every 2 min (outside watchd, which cannot notice its own death).
-# Run from the target checkout (or with SG_PROFILE set). Removal: this script with `uninstall`, or `launchctl bootout gui/$(id -u)/com.squad-goal.health`.
-. "$(dirname "$0")/env.sh"; L=com.squad-goal.health; P="$HOME/Library/LaunchAgents/$L.plist"; me="$(cd "$(dirname "$0")" && pwd)/health.sh"
-if [ "${1:-}" = uninstall ]; then launchctl bootout "gui/$(id -u)/$L" 2>/dev/null; rm -f "$P"; echo "health agent removed"; exit 0; fi
+# One agent per repository, so each supervisor is watched and removing one leaves the others.
+. "$(dirname "$0")/env.sh"; L=$(sg_health_label "$SG_PROFILE"); P="$HOME/Library/LaunchAgents/$L.plist"; me="$(cd "$(dirname "$0")" && pwd)/health.sh"
+if [ "${1:-}" = uninstall ]; then launchctl bootout "gui/$(id -u)/$L" 2>/dev/null; rm -f "$P"; echo "health agent $L removed"; exit 0; fi
 mkdir -p "$(dirname "$P")"
 cat > "$P" <<P2
 <?xml version="1.0" encoding="UTF-8"?>

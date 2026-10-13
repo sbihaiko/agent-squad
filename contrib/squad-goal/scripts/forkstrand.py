@@ -10,7 +10,7 @@ posted by cqflush.sh) and in the loop's log, naming the branch, the commit and t
 branches answering one issue number are refused, both named, neither moved. Nothing is moved, renamed, re-pointed or closed
 here -- the report is the whole deliverable, and a pass over a head it already named says nothing new."""
 import json, os, pathlib, re, subprocess, sys
-st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
+st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 fork, base = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main")
 if not fork or not pathlib.Path(fork).is_dir(): sys.exit(0)

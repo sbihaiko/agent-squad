@@ -4,14 +4,9 @@
 . "$(dirname "$0")/env.sh"
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
-type sg_state_base >/dev/null 2>&1 || . "$(dirname "$0")/repoctx.sh"   # the one place the machine-wide state base is spelled
-# One watch.sh per checkout, whoever started it (#1872). The lock is keyed on this script's resolved path, NOT on
-# $SG_STATE: `watchd.sh start` under a temp SG_STATE walks past watchd's own pidfile guard and would otherwise spawn a
-# second watch.sh on the live path, which polls the real repository beside the supervised one and doubles every read.
-# Same shape as single.sh: a directory holding the holder's pid, stale when the pid is gone. Taken before the first gh
-# call, so a refused process never reads GitHub at all.
+# One watch.sh per repository. Its lock lives in that repository's own state directory, so one supervisor never pauses another.
 wme="$(cd "$(dirname "$0")" && pwd -P)/watch.sh"
-wlock="$SG_STATE_BASE/watch-locks/$(printf '%s' "$wme" | tr -c 'A-Za-z0-9' '_')"   # the seam, never the path: the lock is keyed on this script, not on $SG_STATE -- a second start under a temp SG_STATE would otherwise walk past the holder and poll the same repository beside it
+wlock="$SG_STATE/locks/watch"
 mkdir -p "$(dirname "$wlock")"
 if ! mkdir "$wlock" 2>/dev/null; then
   wh=$(cat "$wlock/pid" 2>/dev/null)
