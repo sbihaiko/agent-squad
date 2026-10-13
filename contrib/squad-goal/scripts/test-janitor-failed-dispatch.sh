@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regression test for janitor rule O (#1513): a run that ended with a failed verdict and landed nothing releases its issues --
-# the card goes back to Todo (loop board) / To triage (bug board) and its dispatch marker is dropped, so the next cycle
+# rule R writes the loop-board card (Todo), rule O moves the bug card (To triage) and drops the dispatch marker, so the next cycle
 # re-dispatches it. A run that landed work moves to Done and keeps its marker; a live run writes Run fields. Stubbed gh/board. usage: bash test-janitor-failed-dispatch.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
