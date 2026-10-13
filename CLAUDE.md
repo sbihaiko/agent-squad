@@ -54,6 +54,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A gate is a stop condition, never a target** ([ADR-0012](docs/adr/0012-gate-is-a-stop-condition.md)). Guard: none yet; a draft.
 - **A failing gate is a defect; expectations are re-anchored, never retuned** ([ADR-0018](docs/adr/0018-failing-gate-is-a-defect.md)). Guard: The full suite, run in both modes.
 - **A red test is fixed, whoever broke it** ([ADR-0062](docs/adr/0062-red-test-is-fixed.md)). Guard: The full suite, run in both modes (ADR-0018).
+- **A test whose fixture repository the runner does not own is deselected there, never skipped** ([ADR-0139](docs/adr/0139-a-test-without-its-fixture-repo-is-deselected.md)). Guard: `tests/test_tooling.py`.
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and merges to main; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
 
