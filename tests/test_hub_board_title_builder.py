@@ -1,4 +1,4 @@
-"""Hub chrome text (#1818): the board pane's title reads BUILDER and the run list's first group reads WORKERS.
+"""Hub chrome text (#1818): the board pane's title reads TASKS and the run list's first group reads WORKERS.
 
 Two labels are renamed and nothing else moves. These pin the new text where it is drawn, and pin the
 neighbours the rename must leave alone: the group key `running`, the running header's occupancy text and its
@@ -50,15 +50,15 @@ def _groups(hub):
 # --- the board pane's title ---
 
 
-def test_board_header_docked_reads_builder(hub):
-    """The `<b>` of `#bhead` — what the docked header prints — reads BUILDER, and it is the only title there."""
+def test_board_header_docked_reads_tasks(hub):
+    """The `<b>` of `#bhead` — what the docked header prints — reads TASKS, and it is the only title there."""
     head = _bhead(hub)
     bs = re.findall(r"<b>(.*?)</b>", head, re.S)
     assert len(bs) == 1, "the board header carries more than one bold element: the title is no longer one label"
-    assert re.sub(r"<[^>]*>", "", bs[0]).strip() == "BUILDER"
+    assert re.sub(r"<[^>]*>", "", bs[0]).strip() == "TASKS"
 
 
-def test_board_header_collapsed_reads_the_same_builder(hub):
+def test_board_header_collapsed_reads_the_same_tasks(hub):
     """The collapsed header draws that same `<b>`: `#board.off` hides it and a docked collapse reveals it again."""
     assert "display:none" in _css(hub, "#board.off #bhead b")
     assert "display:inline" in _css(hub, "body.dockb #board.off #bhead b")
