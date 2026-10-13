@@ -42,13 +42,17 @@ be adding a profile, not adding a special case.
    other.** `sg_land_target` prints the checkout, the base, the branch and the
    route of an addressed issue:
    - `local`: the repository that the fork checkout (`SG_FORK_DIR`) resolves
-     to. Its branch merges into `SG_FORK_BASE` in that checkout. A bare
-     number is a legacy address and uses this row, because the fork branch
-     carries the bare number.
+     to. Its branch merges into `SG_FORK_BASE` in that checkout.
    - `pr`: the profile's repository. Its land is the merge of the pull request
      into `SG_BASE`, so no branch is named.
    - Any other repository: refused, with the address named on stderr.
      `sg_land_base` reads the same table.
+   - A bare number names no repository. One that came with a board row is a
+     legacy row and keeps the route it had, `local`, because the fork branch
+     carries the bare number; a line on stderr names the row. One that came
+     with no board row is the profile in force and lands by `pr`, and a line
+     says so. A legacy row with no local land to keep is refused, never
+     turned into a pull request in the profile's repository.
 5. **Retired setting names.** `SG_TOOLING_REPO` is retired: its repository is
    one more entry of `SG_REPOS`. The `SG_TOOLING_REPO:SG_FORK_DIR` entry of
    `SG_REQUIRED_SETTINGS` retires with it. The seam reads a profile that
@@ -91,5 +95,5 @@ be adding a profile, not adding a special case.
 owner-and-name equality, the refusal of a short name, the context table, the
 refusal of an unknown repository with its known list, a stub `gh` that fails a
 script which reaches GitHub before it resolves a repository, and the readers) and
-`contrib/squad-goal/scripts/test-land-target.sh` (one case per route, and the
-refusal).
+`contrib/squad-goal/scripts/test-land-target.sh` (one case per route, a bare number with a board
+row and one with none, the log line of each, and the refusal).
