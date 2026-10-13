@@ -1019,6 +1019,15 @@ def apply_open_blockers(items, nodes):
         if open_ns: i["b"] = open_ns
         else: i.pop("b", None)
     return items
+def task_count(i):
+    """How far the card's own work got, `completed` over `total`, out of the sub-issue summary the board's own items
+    read carries (#153). Nothing when the issue has no tasks, and nothing when the summary is missing or the read
+    that was supposed to give it failed: a card never wears an invented `0/0`. The count is the card's, not a column
+    of its own -- it is computed here so the page renders a value and holds no rule (ADR-0137)."""
+    s = i.get("si") or {}
+    t, c = s.get("total"), s.get("completed")
+    if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
+    return f"{c}/{t}" if t > 0 else None
 _board_sf = ""   # the Status field's REST id: read once per process, not once per pass
 def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open and closed PRs of
@@ -1033,11 +1042,11 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
     try:
             _board_sf = _board_sf or status_field()
             out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={_board_sf}", "--jq",
-                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name]}'],
+                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}'],
                 capture_output=True, text=True, timeout=120).stdout
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
-                '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name]}'], capture_output=True, text=True, timeout=120).stdout
+                '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name],si:{total:.sub_issues_summary.total,completed:.sub_issues_summary.completed}}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
             items += [i for i in (json.loads(l) for l in oi.splitlines() if l.strip()) if i["n"] not in have]
             own, name = REPO.split("/", 1)   # one GraphQL page of open issues; not one REST call per card
@@ -1417,6 +1426,8 @@ def board():
         st = "Done" if i["s"] == "closed" else (i["st"] or "No status")   # a closed issue is Done whatever the card still says
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if i.get("b"): row["b"] = i["b"]
+        sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
+        if sc: row["sc"] = sc
         by.setdefault(st, []).append(row)
     names = [n for n in ORDER if n in by or n != "No status"] + sorted(n for n in by if n not in ORDER)   # the working states always show, even at 0
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
@@ -1598,7 +1609,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .it:hover{background:var(--bgh,#232b37);border-color:#3a4352}
 #bbody .it .id{display:inline-block;background:#12161c;border:1px solid var(--line);border-radius:4px;padding:0 6px;margin-bottom:4px;font-size:11px;color:var(--pin);text-decoration:none;font-weight:700}
 #lf{display:inline-block;position:relative;font-size:11px;font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
-#lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
+#lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}#bbody .it .lbs span.tsk{color:var(--mute)}
 #bbody .it .id:hover{border-color:var(--pin)}#bbody .it .tt{display:block}
 #bbody .it .prr{display:block;margin-top:2px;font-size:10.5px;color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--pin);text-decoration:none}
@@ -2133,7 +2144,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>`<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${isPR(g.name)?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${isPR(g.name)?"pull":"issues"}/${x.n}">${isPR(g.name)?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${((x.l||[]).length||x.sc)?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}${x.sc?`<span class=tsk title="this card's own tasks: ${esc(x.sc)} closed">${esc(x.sc)}</span>`:""}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.o?`<div class=ft><span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span></div>`:""}</div>`).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
