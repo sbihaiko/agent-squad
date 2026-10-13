@@ -113,7 +113,7 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
                 queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
                 alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
 procs = {}
-for l in sh("/bin/ps", "-axo", "pid=,ppid=,command=").splitlines():
+for l in sh("/bin/ps", "-ww", "-axo", "pid=,ppid=,command=").splitlines():
     p = l.split(None, 2)
     if len(p) == 3 and p[0].isdigit(): procs[int(p[0])] = (int(p[1]), p[2])
 starts = {}

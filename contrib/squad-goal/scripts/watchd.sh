@@ -3,7 +3,7 @@
 # Keeps watch.sh (the 90 s cycle) and fastloop.sh (childcc + autopilot every 30 s) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
-alive() { [ -s "$P" ] && pid=$(cat "$P") && /bin/ps -p "$pid" -o command= 2>/dev/null | grep -qF "$me run"; }
+alive() { [ -s "$P" ] && pid=$(cat "$P") && /bin/ps -ww -p "$pid" -o command= 2>/dev/null | grep -qF "$me run"; }
 case "${1:-status}" in
   start) alive && { echo "watchd already running pid=$pid"; exit 0; }
     [ -f "$L" ] && [ "$(wc -c < "$L")" -gt 5000000 ] && mv "$L" "$L.old"

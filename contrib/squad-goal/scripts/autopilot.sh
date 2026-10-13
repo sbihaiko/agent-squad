@@ -134,7 +134,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   # queued for a review again (#1767).
   line=$(grep -E "^#$pr $s9 .*CI=" "$out" 2>/dev/null | tail -1)
   if [ -z "$line" ]; then
-    /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && { gate reviewing "a review of this head is already in flight (revci.sh $pr)"; continue; }
+    /bin/ps -ww -axo command= | grep -Eq "revci\.sh $pr( |\$)" && { gate reviewing "a review of this head is already in flight (revci.sh $pr)"; continue; }
     # The marker means "a review of this head is in flight", and it holds only while that review is: it carries the pid
     # of the revci.sh it started, so a review that is still running keeps the head from being reviewed twice. A revci
     # killed before it appended its summary (a restart, the janitor, the shell) used to leave the marker behind with no
@@ -198,7 +198,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     rf="$A/rereview-$pr-$s9"
     [ -e "$rf" ] && [ $(( $(date +%s) - $(mtime "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] \
       && { gate reviewing "every review model failed (BLOCKED) and the re-review is not due yet"; continue; }
-    /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && { gate reviewing "a review of this head is already in flight (revci.sh $pr)"; continue; }   # two would race on review-<pr>.md
+    /bin/ps -ww -axo command= | grep -Eq "revci\.sh $pr( |\$)" && { gate reviewing "a review of this head is already in flight (revci.sh $pr)"; continue; }   # two would race on review-<pr>.md
     aenv=""; [ -n "$aging" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=${SG_REVIEW_TIMEOUT:-120}"
     # #1501: a BLOCKED that is only the leash timeout must not be re-queued with that same leash — the
     # next pass would kill the only reachable model again. Drop the timeout clamp; keep depth 1 / 1 try.
