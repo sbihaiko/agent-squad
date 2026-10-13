@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from squad import defaults
+from squad import defaults, skillpath
 
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("build_vendor_skills", ROOT / "scripts" / "build_vendor_skills.py")
@@ -68,6 +68,20 @@ def test_check_reports_a_source_that_changed_and_a_copy_edited_by_hand(tmp_path)
     B.build(cfg, out)
     (out / "skills" / "demo" / "SKILL.md").write_text("edited by hand")
     assert any("differs from its source" in p for p in B.build(cfg, out, check=True)[0])
+
+
+def test_the_to_tickets_skill_states_the_spec_prefix_rule():
+    """A child of a spec carries the spec's number first in its title, and the vendored copy carries the same lines."""
+    markers = ("[SPEC <n>] <title>", "the first words of its title",
+               "never replaces the parent relation", "carries no prefix")
+    vendored = (VENDOR / "skills" / "to-tickets" / "SKILL.md").read_text()
+    for m in markers:
+        assert m in vendored, f"the vendored to-tickets skill does not state: {m}"
+    personal = next((h for h in skillpath.resolve_all("to-tickets") if h.kind == "personal"), None)
+    if personal:                                   # the source copy, when this machine has one
+        source = personal.path.read_text()
+        for m in markers:
+            assert m in source, f"the personal to-tickets skill does not state: {m}"
 
 
 def test_a_source_with_no_skill_file_is_a_problem(tmp_path):
