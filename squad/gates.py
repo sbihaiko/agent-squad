@@ -27,6 +27,7 @@ class GateResult:
     ok: bool
     findings: list = field(default_factory=list)
     evidence: dict = field(default_factory=dict)    # finding -> the output that explains it; the record keeps it, no prompt reads it
+    counts: dict = field(default_factory=dict)      # command -> the counts of the last pytest summary it printed (#80); a reading, never a threshold
 
 
 @dataclass
@@ -98,7 +99,9 @@ def ac_verify(params, inp):
     """Run the acceptance commands that the named artifact lists, in the workspace. A command is code, not a model.
 
     The evidence of a failure is whatever `workcmd.run` kept, so this gate and the landing check record the same thing
-    for the same command (ADR-0100 rule 10).
+    for the same command (ADR-0100 rule 10). A command that printed a pytest summary reports its counts beside the
+    outcome (#80): the share of the suite that passed is progress a reader can see while the gate is still red. The
+    counts never enter the verdict -- the exit code alone decides that (ADR-0019).
     """
     src = params["commands_from"]
     cmds = []
@@ -108,14 +111,16 @@ def ac_verify(params, inp):
             break
     if not cmds:
         return GateResult(False, ["no_ac_commands"])
-    findings, evidence = [], {}
+    findings, evidence, counts = [], {}, {}
     for c in cmds:
         r = workcmd.run(c, inp.cwd)
+        if r.counts:
+            counts[c] = r.counts
         if not r.ok:
             kind = "malformed" if r.malformed else "ac_failed"     # prose in a command is a bad check, not a failed one
             findings.append(f"{kind}:{c}")
             evidence[f"{kind}:{c}"] = r.evidence
-    return GateResult(not findings, findings, evidence)
+    return GateResult(not findings, findings, evidence, counts)
 
 
 def visual_guard(_params, inp):

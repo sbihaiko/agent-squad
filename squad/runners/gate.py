@@ -10,4 +10,6 @@ class GateRunner:
         r = run_check(node["check"], node["params"], inp)
         rel = ctx.artifacts.put(node["name"], sc.item, entry, {"ok": r.ok, "findings": r.findings})
         extra = {"evidence": {f"{node['check']}:{k}": v for k, v in r.evidence.items()}} if r.evidence else {}
+        if r.counts:     # the share of the suite each counting command printed (#80): the record holds it, no verdict reads it
+            extra["counts"] = r.counts
         return ctx.finish(node, entry, sc, "pass" if r.ok else "fail", [] if r.ok else [f"{node['check']}:{f}" for f in r.findings] or [f"{node['check']}:fail"], rel, elapsed=ctx.clock() - t0, **extra)

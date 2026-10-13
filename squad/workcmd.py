@@ -24,6 +24,42 @@ EVIDENCE_TAIL = 1500      # the most characters of a failed command's output kep
 EVIDENCE_SIGNAL = re.compile(r"^(_{5,}|E   |FAILED|ERROR)")
 MORE_ELIDED = "[... more failing lines elided]"
 
+# The share of a suite that passes is a fact of the output, and one bit is not progress: 16 of 24 reads as work done
+# while the gate is red (#80). pytest prints one summary line, whatever the spelling -- `1 failed, 24 passed in 3.1s`,
+# `2100 passed, 21 skipped in 103.09s (0:01:43)`, `= 4 passed in 2.20s =`. The counts are parsed from the LAST such line
+# the output carries (a wrapper that runs pytest twice ends in the state it ended in) and reported beside the exit code,
+# never instead of it: the exit code stays the only pass/fail rule (ADR-0019). `no tests ran` is not a share of
+# anything, so it reports nothing; a command that never ran pytest reports nothing either, and no path reports a zero
+# for it -- a drawn 0% would read as "nothing passes".
+SUMMARY = re.compile(r"\bin [0-9.]+s(?:\s*\([0-9:]+\))?\s*=?\s*$")
+COUNT = re.compile(r"(\d+) (passed|failed|error|errors|skipped|xfailed|xpassed|deselected|warning|warnings)\b")
+COUNT_KEYS = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed", "deselected")
+
+
+def counts_of(output):
+    """The counts of the last pytest summary line in `output`, or None when the output carries none.
+
+    `passed`, `failed` and `errors` are the tests that ran to a verdict, and their sum is `total`: that is the share
+    the panel draws. `skipped`, `deselected`, `xfailed`, `xpassed` and `warnings` are reported as they stand and never
+    enter `total` -- a deselected test was not run, and counting it would move the percentage up by doing less.
+    """
+    text = output.decode("utf-8", "replace") if isinstance(output, bytes) else output
+    line = None
+    for ln in (text or "").splitlines():
+        if SUMMARY.search(ln.rstrip()) and ("passed" in ln or "failed" in ln or "error" in ln or "no tests ran" in ln):
+            line = ln
+    if line is None:
+        return None
+    got = {}
+    for n, what in COUNT.findall(line):
+        key = "errors" if what in ("error", "errors") else ("warnings" if what == "warning" else what)
+        if key in COUNT_KEYS:
+            got[key] = got.get(key, 0) + int(n)
+    total = sum(got.get(k, 0) for k in ("passed", "failed", "errors"))
+    if total == 0:
+        return None      # `no tests ran`, or a line whose only counts are skips: nothing was measured, so nothing is claimed
+    return {**got, "total": total}
+
 
 def evidence_of(output):
     """The evidence kept from the output of a failed command: its failing lines, then the end of the output.
@@ -86,12 +122,15 @@ class CmdResult:
     ok: bool
     evidence: str = ""     # empty on success; the output tail on a failure; "timeout after N s" on a timeout
     malformed: bool = False     # the shell cannot parse the command (prose in it); the command never ran
+    counts: dict = None    # the counts of the output's last pytest summary, or None: how much of the suite passed (#80)
 
 
 def run(cmd, cwd, timeout=None):
     """Run a shell command in `cwd`. Exit code 0 is ok; any other exit or a timeout is a failure with evidence.
     A command the shell cannot parse is `malformed`, not a failed check: nothing ran, so nothing was proved false.
-    `timeout` None takes the cap of `ac_timeout()` at call time, so `SG_AC_TIMEOUT` reaches the gate and the landing check."""
+    `timeout` None takes the cap of `ac_timeout()` at call time, so `SG_AC_TIMEOUT` reaches the gate and the landing check.
+    The counts of the output's last pytest summary are reported beside the exit code, on a green command and a red one
+    alike (#80). A timeout and a command the shell cannot parse report none: nothing was measured."""
     timeout = ac_timeout() if timeout is None else timeout
     syntax = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, cwd=cwd)
     if syntax.returncode != 0:
@@ -101,5 +140,5 @@ def run(cmd, cwd, timeout=None):
     except subprocess.TimeoutExpired:
         return CmdResult(False, f"timeout after {timeout:g} s")
     if r.returncode == 0:
-        return CmdResult(True)
-    return CmdResult(False, evidence_of(r.stdout + r.stderr))
+        return CmdResult(True, counts=counts_of(r.stdout + r.stderr))
+    return CmdResult(False, evidence_of(r.stdout + r.stderr), counts=counts_of(r.stdout + r.stderr))
