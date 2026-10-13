@@ -210,22 +210,53 @@ def group_of(r):
     h = (r.get("age") or 0) / 3600
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
 
+def squad_roots(sg_squad, sg_checkout, checkout, here):
+    """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
+    hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
+    Rule layer: no hub state, no I/O."""
+    out = []
+    for r in (sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
+        if r and r not in out: out.append(r)
+    return out
+
+def load_squad(roots):
+    """`squad.caps` and `squad.run_caps` from the first root that holds the package. A root that fails leaves nothing behind (not on
+    sys.path, not in sys.modules), so the next one imports clean. Raises the last failure, which names what was missing."""
+    err = ModuleNotFoundError("no squad package in: " + ", ".join(roots))
+    for root in roots:
+        added = root not in sys.path
+        if added: sys.path.insert(0, root)
+        try:
+            from squad import caps, run_caps
+            return caps, run_caps
+        except Exception as e:
+            err = e
+            for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
+            if added: sys.path.remove(root)
+    raise err
+
+CAPS_LOGGED = set()
+def log_once(line, seen=CAPS_LOGGED, out=None):
+    """One stderr line per distinct text per process: a failure that repeats every poll is named once, never silenced and never a flood."""
+    if line in seen: return
+    seen.add(line); print(line, file=out or sys.stderr, flush=True)
+
 def loop_caps():
     """The machine-wide ceiling (squad/caps.py), from the one resolution the engine and the loop enforce: {runs, children, waiting}.
     `waiting` lists each live wait as {ceiling, holder}. The project file of SG_CHECKOUT may lower the pair. None when the
-    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling.
+    resolution fails (no squad package in any root, no caps block, a project that raises it): the failure is logged once and the panel
+    then shows plain counts, never a guessed ceiling.
     `per_run` is the other pair, read by squad/run_caps.py from the graph the engine resolves (or the newest live run's own);
     it is named in the tooltip and never merged into the machine-wide pair. None when no graph reads."""
-    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
-        if root not in sys.path: sys.path.insert(0, root)
-        from squad import caps as C
+        C, RC = load_squad(roots)
         co = os.environ.get("SG_CHECKOUT") or CHECKOUT   # the profile's checkout is the fallback, never the process cwd
         c = C.ceiling(co)
-        from squad import run_caps as RC
         per_run = RC.read(co, [r.get("dir") for r in list(LOAD_RUNS) if r.get("dir")])
         return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting(), "per_run": per_run}
-    except Exception:
+    except Exception as e:
+        log_once(f"hub: loop_caps unavailable, the footer shows plain counts: {type(e).__name__}: {' '.join(str(e).split())} (roots tried: {', '.join(roots)})")
         return None
 
 def waiting_txt(caps):
