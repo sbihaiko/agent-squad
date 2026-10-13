@@ -2,6 +2,11 @@
 """Janitor: one conservative cleanup pass per watch cycle (JANITOR_DRY=1 prints and acts on nothing). Every action goes to stdout and $SG_STATE/cycle.log.
  A  finished run (has a verdict, 3 min old): kill every process whose cwd is inside its run folder (leftover claude/dotnet/test hosts), as a tree.
  B  finished run (1 h old): kill its idle dashboard_server.
+ S  a counted ceiling on this loop's dashboards (JANITOR_DASHBOARD_MAX, default 8; 0 turns it off). B, J and C reap the dashboard of the one
+    run the pass knows about, so a run that left active-runs.txt, or a record the pass cannot read, leaves its dashboard behind and the count
+    grows with nothing bounding it (41 were alive after the freeze of 2026-10-13). S counts every dashboard this loop started, whatever the
+    dashboard serves, and kills the oldest one the pass cannot tie to a live run, down to the ceiling. A live run's own dashboard is never a
+    victim, a dashboard another project started is not this pass's to count, and JANITOR_DRY=1 reports without killing.
  C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt, write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
  D  two live runs that accepted the same issue: report once (never kills).
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
@@ -226,6 +231,33 @@ for r in names:
         continue
     held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i
 if not dry and keep != names: act.write_text("\n".join(keep) + "\n")
+# S: the counted ceiling beside the per-run reap. B, J and C each kill the dashboard of one run the pass knows about, so when any of
+# them stops working for any other reason -- a run that left active-runs.txt, a record the pass cannot read -- nothing bounds the
+# count and the dashboards of finished runs accumulate (the freeze of 2026-10-13 left 41 alive). This reads the process table the
+# pass already holds (one ps and one lsof through _run, ADR-0051), counts this loop's own dashboards whatever run they serve, and
+# kills the oldest no live run owns, down to the ceiling. It does not read active-runs.txt to find them: that is what makes it
+# independent of the per-run reap.
+DASH_MAX = int(os.environ.get("JANITOR_DASHBOARD_MAX", "8") or 0)   # 0 turns the ceiling off, as JANITOR_CALL_TIMEOUT=0 does for a hand run
+runsd = co / "runs"
+def ours(p):   # a dashboard of this loop serves a run folder under this checkout's runs; one another project started is not ours
+    try: q = pathlib.Path(p).resolve()
+    except OSError: return False
+    return q != runsd and runsd in q.parents
+def live_run(f):   # a run still going owns its dashboard; a run with no record yet is in its launch window and owns it too
+    i = read(f)
+    if i is not None: return not i["verdict"]
+    req = f / "request.txt"
+    return req.exists() and now - req.stat().st_mtime <= 300
+if DASH_MAX:
+    dash = {}
+    for q, (_, c) in procs.items():
+        dm = re.search(r"squad\.dashboard_server\s+(\S+)", c)
+        if dm and ours(dm.group(1)): dash[q] = dm.group(1)
+    orphans = sorted((q for q, d in dash.items() if not live_run(folder(d))), key=lambda q: (starts.get(q) or now, q))
+    victims = orphans[:max(0, len(dash) - DASH_MAX)]
+    if victims:
+        say(f"DASHBOARD-CEILING: {len(dash)} dashboards of this loop over the ceiling of {DASH_MAX}; killing {len(victims)} no live run owns (oldest first)")
+        for q in victims: kill(q, f"dashboard over the ceiling ({len(dash)} > {DASH_MAX})")
 byissue = {}
 for n, i in live.items():
     for x in i["acc"]: byissue.setdefault(x, []).append(n)
