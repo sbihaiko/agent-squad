@@ -18,7 +18,7 @@ case "\$*" in
   *"actions/jobs/"*"/logs"*) printf '%b' "\${LOG:-}";;
   *"pulls/41/merge"*) echo '{"merged":true,"sha":"abcdef1234567890"}';;
   *"pulls/41"*) echo "{\"number\":41,\"state\":\"\${STATE:-open}\",\"draft\":\${DRAFT:-false},\"mergeable_state\":\"\${MS:-clean}\",\"merge_commit_sha\":\"abcdef1234567890\"}";;
-  *"issues/7/comments"*) cat >/dev/null; echo '{"id":1}';;
+  *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
   "pr merge 41"*) echo "merged";;
 esac
@@ -36,6 +36,8 @@ r=$(CHECKS="$GREEN" pl); merged && ok "green: merged" || ko "green not merged: '
 case "$r" in *"PRLAND MERGED #41"*abcdef123*"#7"*) ok "the merge line names the PR, the sha and the issue";; *) ko "no merge line: '$r'";; esac
 /usr/bin/grep -q "pr merge 41 --repo x/y --squash --delete-branch" "$T/gh.log" && ok "squash merge, branch deleted" || ko "merge flags: $(cat "$T/gh.log")"
 /usr/bin/grep -q "issues/7/comments" "$T/gh.log" && /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "the issue got its comment and closed" || ko "no comment/close: $(cat "$T/gh.log")"
+close_line=$(/usr/bin/grep -n "issues/7 -f state=closed" "$T/gh.log" | cut -d: -f1); comment_line=$(/usr/bin/grep -n "issues/7/comments" "$T/gh.log" | cut -d: -f1)
+[ "$close_line" -lt "$comment_line" ] && /usr/bin/grep -q "Closed #7 after merging PR #41" "$T/comment.body" && ok "the closing comment names the merged PR" || ko "the close did not precede a PR-naming closing comment: $(cat "$T/comment.body" 2>/dev/null)"
 reset; r=$(CHECKS="$RED" LOG="$BASE_LOG" pl); merged && ok "red on the baseline only: merged" || ko "baseline red not merged: '$r'"
 reset; r=$(CHECKS="$RED" LOG="${BASE_LOG}2026-10-13T11:44:53.6Z FAILED tests/test_new.py::test_c - boom\n" pl)
 merged && ko "a failure outside the baseline was merged" || ok "a failure outside the baseline is not merged"
