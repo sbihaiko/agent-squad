@@ -27,7 +27,7 @@ def inside_workspace(w, roots):
     return False
 
 
-def normalize_request(dispatch, raw, vendor=skills.VENDOR):
+def normalize_request(dispatch, raw, vendor=skills.VENDOR, default_effort=None):
     """Fill the optional fields from the envelope. Return (request, errors). A key outside REQUEST_FIELDS is ignored: it narrows nothing, and one model's extra word must not cost the run its dispatch."""
     errs = [f"model_supplied_identity:{k}" for k in raw if k in IDENTITY_FIELDS]
     if not isinstance(raw.get("prompt"), str) or not raw.get("prompt"):
@@ -46,9 +46,12 @@ def normalize_request(dispatch, raw, vendor=skills.VENDOR):
         errs.append("after_malformed")
         after = []
     a, b = dispatch["allow"], dispatch["budget"]
+    # An omitted effort is the engine's default, never the allow list's first entry: the list is an order, and its first
+    # entry is the weakest level as often as it is the strongest. A default the envelope does not allow narrows nothing.
+    eff = raw.get("effort") or (default_effort if default_effort in a["efforts"] else None) or a["efforts"][0]
     req = {
         "prompt": raw.get("prompt", ""), "skill": {"name": skill["name"], "version": skill.get("version", "")},
-        "model": raw.get("model", a["models"][0]), "effort": raw.get("effort", a["efforts"][0]),
+        "model": raw.get("model", a["models"][0]), "effort": eff,
         "tools": list(raw.get("tools", a["tools"])), "stalls": raw.get("stalls", b["stalls"]["max"]),
         "spend": raw.get("spend", b["spend"]["max"]), "deadline": raw.get("deadline", dispatch["deadline"]),
         "workspace": raw.get("workspace", a["workspaces"][0]), "inputs": list(raw.get("inputs", [])),
@@ -94,7 +97,8 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
     return e
 
 
-def validate_request(disp, raw, depth, parent_tools, parent_spend_left, parent_time_left=None, vendor=skills.VENDOR):
-    """Return (normalized request, errors). `vendor` is the engine's vendor/skills."""
-    req, errs = normalize_request(disp, raw, vendor)
+def validate_request(disp, raw, depth, parent_tools, parent_spend_left, parent_time_left=None, vendor=skills.VENDOR, default_effort=None):
+    """Return (normalized request, errors). `vendor` is the engine's vendor/skills; `default_effort` is the engine's own
+    default effort, what a request that names none runs at."""
+    req, errs = normalize_request(disp, raw, vendor, default_effort)
     return req, errs + limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_left, vendor)

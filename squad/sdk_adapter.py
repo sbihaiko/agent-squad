@@ -198,9 +198,9 @@ class SdkAdapter:
         kw: dict[str, object] = dict(cwd=req.workspace, model=req.model, tools=list(req.tools),
                                      max_budget_usd=req.max_spend, permission_mode="bypassPermissions",
                                      setting_sources=self.setting_sources)
+        kw.update(self.extra_options)   # the engine's defaults land first: the node's own pick has the last word
         if req.effort:
             kw["effort"] = req.effort
-        kw.update(self.extra_options)
         for name, var in (("max_output_tokens", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"), ("context_tokens", "CLAUDE_CODE_AUTO_COMPACT_WINDOW")):
             if getattr(req, name, None):    # the project settings file reaches the call
                 kw["env"] = {**kw.get("env", {}), var: str(getattr(req, name))}

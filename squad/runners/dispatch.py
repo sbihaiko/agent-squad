@@ -64,7 +64,10 @@ class Dispatch:
             return self.e.record.append("spawn_rejected", **base, reason="request_malformed")
         if len(self.accepted(parent, pentry)) >= disp["max_children"]:
             return self.e.record.append("spawn_rejected", **base, reason="max_children_over")
-        req, errs = envelope.validate_request(disp, raw, depth, parent_tools, min(spend_left, self.e.budget.available()), time_left, self.e.vendor)
+        # The engine's own default effort (the configuration's `options.effort`) is what a child that names none runs at:
+        # an adapter with no such option leaves the allow list's first entry to lead, as before.
+        req, errs = envelope.validate_request(disp, raw, depth, parent_tools, min(spend_left, self.e.budget.available()), time_left, self.e.vendor,
+                                            default_effort=getattr(self.e.adapter, "extra_options", {}).get("effort"))
         if not errs:
             errs += self.resolve_after(req, parent, pentry, req_ev)
         res = None if errs else self.e.budget.hold(req["spend"])

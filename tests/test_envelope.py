@@ -20,6 +20,19 @@ def test_a_task_key_is_optional_and_none_when_absent():
     assert errs == [] and req["task"] is None
 
 
+def test_a_request_with_no_effort_takes_the_engine_default_not_the_first_allowed():
+    """The allow list is an order, never a default. Its first entry here is `low`, so a router that left `effort` out
+    got the weakest level while the engine's own default is medium (the owner's ruling)."""
+    req, errs = validate_request(disp(), {"prompt": "go", "skill": "tdd"}, 1, None, 10.0, default_effort="medium")
+    assert errs == [] and req["effort"] == "medium"
+
+
+def test_the_first_allowed_entry_leads_when_the_default_is_not_allowed():
+    """A default the envelope does not allow narrows nothing: the list's first entry still leads."""
+    req, errs = validate_request(disp(), {"prompt": "go", "skill": "tdd"}, 1, None, 10.0, default_effort="max")
+    assert errs == [] and req["effort"] == "low"
+
+
 def test_a_task_key_carries_no_limit_rule_of_its_own():
     # a task key narrows nothing, so a request is never rejected for the field itself, whatever its value
     for task in ("14", "issues/14-slug.md", "a" * 200):

@@ -67,6 +67,19 @@ def adapter(messages, seen=None):
     return SdkAdapter(query=stub(messages, seen), options_cls=Options)
 
 
+def test_a_node_with_no_effort_takes_the_engine_default():
+    """The owner's ruling: medium is the default effort. A node that names none sent none, and the model's own default
+    applied instead (Sonnet 5.5 answers high): the run spent an effort the configuration never asked for."""
+    a = SdkAdapter(query=object(), options_cls=Options, extra_options={"effort": "medium"})
+    assert a.options(request(effort=None)).kw["effort"] == "medium"
+
+
+def test_a_node_that_names_its_own_effort_keeps_it():
+    """The engine default is a floor, never an override: an author's `effort: high` reaches the call."""
+    a = SdkAdapter(query=object(), options_cls=Options, extra_options={"effort": "medium"})
+    assert a.options(request(effort="high")).kw["effort"] == "high"
+
+
 async def test_a_result_yields_output_spend_turns_and_session():
     out = json.dumps({"status": "pass", "diff": {"files": []}})
     r = await adapter([ResultMessage(result=f"done\n```json\n{out}\n```")]).call(request())

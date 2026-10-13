@@ -128,6 +128,8 @@ def sdk_kwargs(cfg, root=ROOT):
     kw["system_prompt"] = sp
     kw.update({k: True for k in FLAGS if o.get(k)})
     kw.update({k: o[k] for k in ("fallback_model", "thinking") if o.get(k) is not None})
+    if o.get("effort"):     # the engine's default effort: a node that names none runs at this level, never at the model's own default
+        kw["effort"] = o["effort"]
     if o.get("verbatim_prompts"):
         kw["verbatim_prompts"] = True
     return kw
