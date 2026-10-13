@@ -300,6 +300,11 @@ def branch_ahead(n):   # the run's own branch for this issue is still ahead of t
     br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(n))
     if subprocess.run(["git", "-C", fd, "rev-parse", "-q", "--verify", "refs/heads/" + br], capture_output=True).returncode: return False
     return sh("git", "-C", fd, "rev-list", "--count", f"{fb}..{br}").strip() not in ("", "0")
+def landing_reverted(n):   # the base carries a commit that takes the branch's own merge back, so the branch is not the base's landing even though every one of its commits is an ancestor of the base (#100). Ancestry cannot see a revert: the merge commit stays in the history, so `branch_ahead` answers no and the base's tree no longer holds the change. Measured 2026-10-13: #72 sat in Done while `Revert "Merge gui/72 (Refs #72)"` stood above `Merge gui/72`, and the work was on no branch at all. The subject is the one forkclose.sh writes when it takes a merge back; a different wording makes this answer no and the guard test fail, which is what the guard is for.
+    if not (fd and fb) or not str(n).isdigit(): return False
+    br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(n))
+    if subprocess.run(["git", "-C", fd, "rev-parse", "-q", "--verify", "refs/heads/" + br], capture_output=True).returncode: return False
+    return bool(sh("git", "-C", fd, "log", "-F", "--format=%s", "-n1", "--grep=" + f'Revert "Merge {br}', fb).strip())
 def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
     if not (fd and fb): return "unknown"
     if subprocess.run(["git", "-C", fd, "cat-file", "-e", sha], capture_output=True).returncode: return "unknown"   # the fork does not hold the commit: nothing to test the claim against
@@ -333,7 +338,7 @@ def reconcile_board():
                 set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
-            elif i["landed"] and not branch_ahead(n):
+            elif i["landed"] and not branch_ahead(n) and not landing_reverted(n):
                 set_expected(n, "Done", f"run {i['run_id']} landed work", i["run_id"], i["run_ts"], 70)
             elif i["landed"]:   # the run finished, but its branch is not on the base: the close pass lands it, and Done before
                                 # that is a false delivery -- a card in Done over a branch the base never took (#97)
@@ -352,7 +357,7 @@ def reconcile_board():
             set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder or n, "", 30)
     for m in sorted((st / "auto").glob("fork-*")):   # the close pass leaves this marker when it merged that commit: the branch landed, unless the base says otherwise (rule P owns what it unwound, and a branch still ahead is work to come)
         mo = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", m.name)
-        if mo and fork_verdict(mo.group(1), mo.group(2)) in ("landed", "unknown"): set_expected(mo.group(1), "Done", f"{m.name} marks a landed branch", "", "", 70)
+        if mo and not landing_reverted(mo.group(1)) and fork_verdict(mo.group(1), mo.group(2)) in ("landed", "unknown"): set_expected(mo.group(1), "Done", f"{m.name} marks a landed branch", "", "", 70)
     for n in sorted(list(expected), key=int):
         state, _, _ = issue_info(n)
         if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
