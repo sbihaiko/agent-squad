@@ -93,6 +93,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A GUI keeps its rules out of the view** ([ADR-0137](docs/adr/0137-a-gui-keeps-its-rules-out-of-the-view.md)). Guard: the host-free compile of the rule layer, plus `contrib/squad-goal/scripts/verify-view-domain-firewall.sh` beside it in the host's make/CI.
 - **A profile works a list of repositories, and one seam resolves every address** ([ADR-0138](docs/adr/0138-a-profile-works-a-list-of-repositories.md)). Guard: `contrib/squad-goal/scripts/test-address.sh`, `contrib/squad-goal/scripts/test-land-target.sh`.
 - **The live copy follows the repository copy in the cycle, and the difference is read** ([ADR-0140](docs/adr/0140-the-live-copy-follows-in-the-cycle.md)). Guard: `contrib/squad-goal/scripts/test-live-guard.sh`, `contrib/squad-goal/scripts/test-watch-cycle.sh`.
+- **The board is a shipped definition, applied by one command; the definition names the vocabulary and the repository binds it to a carrier** ([ADR-0141](docs/adr/0141-the-board-is-a-shipped-definition.md)). Guard: none yet; a draft.
 
 ## Where decisions go
 
