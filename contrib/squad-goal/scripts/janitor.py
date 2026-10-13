@@ -2,7 +2,7 @@
 """Janitor: one conservative cleanup pass per watch cycle (JANITOR_DRY=1 prints and acts on nothing). Every action goes to stdout and $SG_STATE/cycle.log.
  A  finished run (has a verdict, 3 min old): kill every process whose cwd is inside its run folder (leftover claude/dotnet/test hosts), as a tree.
  B  finished run (1 h old): kill its idle dashboard_server.
- C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt and write the killed verdict into its record (squad.killed).
+ C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt, write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
  D  two live runs that accepted the same issue: report once (never kills).
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
  F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
@@ -85,6 +85,12 @@ procs = {}
 for l in sh("/bin/ps", "-axo", "pid=,ppid=,command=").splitlines():
     p = l.split(None, 2)
     if len(p) == 3 and p[0].isdigit(): procs[int(p[0])] = (int(p[1]), p[2])
+starts = {}
+for l in sh("/bin/ps", "-axo", "pid=,lstart=").splitlines():
+    p = l.split(None, 5)
+    if len(p) == 6 and p[0].isdigit():
+        try: starts[int(p[0])] = time.mktime(time.strptime(" ".join(p[1:]).strip(), "%a %b %d %H:%M:%S %Y"))
+        except ValueError: pass
 cwd = {}; pid = None
 for l in sh("/usr/sbin/lsof", "-d", "cwd", "-Fpn").splitlines():
     if l.startswith("p"): pid = int(l[1:])
@@ -106,7 +112,7 @@ def kill(pidv, why):
             except OSError: pass
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
-    v = False; pidc = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False
+    v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False
     if not t.exists(): return None
     for l in t.read_text().splitlines():
         if '"verdict"' in l and '"event": "verdict"' in l:
@@ -120,12 +126,18 @@ def read(f):
                 landed = landed or (d.get("event") == "land" and d.get("outcome") == "pass")
             except ValueError: pass
         if '"event": "call_start"' in l:
-            try: pidc = json.loads(l).get("pid") or pidc
+            try:
+                d = json.loads(l); pidc = d.get("pid") or pidc; started_at = d.get("started_at") or started_at
             except ValueError: pass
         if '"spawn_accepted"' in l:
             m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
             if m: acc.add(m.group(1))
-    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
+    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
+def same_process(pidc, started_at):
+    if pidc not in procs or not isinstance(started_at, (int, float)):
+        return pidc in procs
+    started = starts.get(pidc)
+    return started is None or started <= started_at
 def mark_killed(f):
     """C: the zombie gets the killed verdict in its own record (squad.killed, the one writer), so the hub shows it ended. A record it cannot write stays as it is."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
@@ -134,6 +146,18 @@ def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 live = {}; keep = []; held = set(); landed_n = set()   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
+def free_reaped(f, i):
+    marks = [st / "auto" / f"disp-{n}" for n in req_issues(f) | i["acc"]]
+    holder = f.name; leases = []
+    caps = pathlib.Path(os.environ.get("SQUAD_CAPS_DIR") or pathlib.Path.home() / ".cache" / "agent-squad" / "caps")
+    for kind in ("runs", "children"):
+        for p in (caps / kind).glob("*.json"):
+            try: lease = json.loads(p.read_text())
+            except (OSError, ValueError): continue
+            if lease.get("holder") == holder or str(lease.get("holder", "")).startswith(holder + ":"): leases.append(p)
+    if marks or leases: say(f"zombie run {f.name} releases {sum(p.exists() for p in marks)} dispatch markers and {len(leases)} leases")
+    if not dry:
+        for p in marks + leases: p.unlink(missing_ok=True)
 for r in names:
     f = folder(r); i = read(f)
     if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
@@ -158,9 +182,10 @@ for r in names:
         if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
     alive = bool(inside(f))
-    if not alive and i["idle"] > 1200 and not (i["pid"] and i["pid"] in procs):
+    if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
         say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
         if not dry: mark_killed(f)
+        free_reaped(f, i)
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
         continue
@@ -194,7 +219,7 @@ for n, i in live.items():
             mk.touch(); f = folder(n if n.startswith("/") else str(co / "runs" / n))
             for q in inside(f):
                 if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} works only closed duplicate issues")
-            if i["pid"] and i["pid"] in procs: kill(i["pid"], f"last call of run {n}")
+            if i["pid"] and same_process(i["pid"], i["started_at"]): kill(i["pid"], f"last call of run {n}")
     else:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()

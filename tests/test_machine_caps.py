@@ -3,6 +3,7 @@
 This pair is not the per-run pair (`run.max_parallel`, dispatch `max_children`). Filling the ceiling queues; a wait whose bound
 expires fails by name. A lease whose holder is dead is reclaimed when the slots are counted.
 """
+import json
 import os
 import subprocess
 
@@ -89,6 +90,15 @@ def test_a_lease_whose_holder_is_dead_is_reclaimed_and_the_ceiling_recovers(tmp_
     c = caps.Ceiling({"runs": 1, "children": 20}, tmp_path / "leases")
     assert c.try_take("runs", "killed-run", pid=dead_pid())
     assert c.occupancy()["runs"] == 0                    # one count reclaims it
+    assert c.try_take("runs", "next-run") is not None
+
+
+def test_a_lease_of_a_reused_pid_is_reclaimed_and_the_ceiling_recovers(tmp_path):
+    c = caps.Ceiling({"runs": 1, "children": 20}, tmp_path / "leases")
+    lease = c.try_take("runs", "dead-run", pid=os.getpid())
+    data = json.loads(lease.read_text())
+    lease.write_text(json.dumps({**data, "since": 1.0}))
+    assert c.occupancy()["runs"] == 0                    # this process started after the dead run's lease
     assert c.try_take("runs", "next-run") is not None
 
 
