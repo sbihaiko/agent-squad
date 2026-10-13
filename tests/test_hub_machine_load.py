@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import types
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -455,10 +456,10 @@ def test_escape_restores_the_split(hub):
 # ---------------------------------------------------------------- the line's facts (#1797)
 # The strip answered "is this machine saturated?". These pin the facts that answer the other half — whether the squad is
 # working or merely looks busy — and nothing else: the order they are read in, the `?` for a source that went unreadable,
-# `ok` for an empty health pass, the drift the health block already carries as a cause and the bar never repeats, the caps
-# the graph carries, the quota markers the review chain skips models over, the amber past the quarter hour, the drop on a
-# window too narrow for the row, and the
-# one token per subscription (#1839) the line carries last — the acronym, the quota and the time to its reset.
+# the caps the graph carries, the quota markers the review chain skips models over, the drop on a window too narrow for
+# the row, and the one token per subscription (#1839) the line carries last — the acronym, the quota and the time to its
+# reset. The loop's own health and its last progress were dropped from the line by the owner: both said as much about the
+# loop's mood as about the machine, and the line is a machine reading.
 
 NOW = 1_000_000.0
 CAPS = {"runs": 10, "children": 20}
@@ -466,9 +467,8 @@ CAPS = {"runs": 10, "children": 20}
 
 def _src(**over):
     """One reading of every source, all readable, so a test can break exactly one of them."""
-    base = {"health": {"causes": [], "armed": {}, "ts": NOW},
-            "progress": NOW - 240, "landing": {"issue": 73, "ts": NOW - (2 * 3600 + 14 * 60)},
-            "occ": {"live": 4, "agents": 7}, "drift": {"runs": 2, "inprogress": 2}, "quota": {"codex": None, "agy": None}}
+    base = {"landing": {"issue": 73, "ts": NOW - (2 * 3600 + 14 * 60)},
+            "occ": {"live": 4, "agents": 7}, "quota": {"codex": None, "agy": None}}
     return {**base, **over}
 
 
@@ -476,53 +476,29 @@ def _facts(hub, src=None, caps=CAPS):
     return [i["text"] for i in hub.foot_items(src or _src(), caps, NOW)]
 
 
-def test_the_five_facts_follow_the_load_cells_in_this_order(hub):
+def test_the_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names: the subs block carries it
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
-    assert [i["key"] for i in items] == ["health", "progress", "landing", "occ", "subs"]
-    assert hub.foot_line(items) == ("health ok · last progress 4m · last landing · #73 2h 14m ago · "
+    assert [i["key"] for i in items] == ["landing", "occ", "subs"]
+    assert hub.foot_line(items) == ("last landing · #73 2h 14m ago · "
                                     "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
-    assert [i["bad"] for i in items] == [False] * 5
-
-
-def test_health_names_the_most_recent_still_armed_cause_with_its_age(hub):
-    armed = {"watch-stalled": NOW - 540, "fork-parked": NOW - 3600}
-    assert _facts(hub, _src(health={"causes": ["watch-stalled", "fork-parked"], "armed": armed, "ts": NOW}))[0] \
-        == "health: watch-stalled 9m"                                        # named, with its age — never a bare count
-    assert _facts(hub, _src(health={"causes": ["watch-stalled"], "armed": {}, "ts": NOW - 540}))[0] \
-        == "health: watch-stalled 9m"                                        # nothing in alerts.log: the pass that saw it ages it
-
-
-def test_health_is_ok_when_the_pass_found_no_cause_and_never_a_count(hub):
-    assert _facts(hub, _src(health={"causes": [], "armed": {}, "ts": NOW}))[0] == "health ok"
-    text = _facts(hub, _src(health={"causes": ["a", "b", "c"], "armed": {"a": NOW - 600}, "ts": NOW}))[0]
-    assert text == "health: a 10m" and "3" not in text
-
-
-def test_progress_is_the_newest_transition_the_loop_owns_and_turns_bad_past_the_quarter_hour(hub):
-    assert hub.FOOT_PROGRESS_WARN_SECS == 15 * 60
-    assert _facts(hub, _src(progress=NOW - 900))[1] == "last progress 15m"
-    assert [i["key"] for i in hub.foot_items(_src(progress=NOW - 901), CAPS, NOW) if i["bad"]] == ["progress"]
-    assert hub.foot_items(_src(progress=NOW - 900), CAPS, NOW)[1]["bad"] is False
-    assert _facts(hub, _src(progress=NOW - 2400))[1] == "last progress 40m"
+    assert [i["bad"] for i in items] == [False] * 3
 
 
 def test_occupancy_reads_the_resolved_ceiling_and_never_a_hard_coded_pair(hub):
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"runs": 3, "children": 40})[3] \
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"runs": 3, "children": 40})[1] \
         == "4/3 runs 7/40 agents"                                            # the ceiling comes from the caps resolution, not from 10/20
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[3] == "?"
-    assert _facts(hub, _src(occ=None))[3] == "?"
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[1] == "?"
+    assert _facts(hub, _src(occ=None))[1] == "?"
 
 
 def test_the_bar_carries_no_drift_fact(hub):
-    """The bar shows what an operator acts on: health, progress, occupancy, quotas. The board-versus-runs drift was a
-    sixth fact whose reading the health block already carries as the `runs-board-drift` cause, so it left the bar (#48)."""
-    srcs = [_src(drift={"runs": 2, "inprogress": 5}), _src(drift={"runs": 2, "inprogress": 2}), _src(drift=None),
-            _src(occ={"live": 9, "agents": 1}, drift={"runs": 2, "inprogress": 2})]
-    for s in srcs:
+    """The bar shows what an operator acts on: the last landing, the occupancy and the quotas. The board-versus-runs drift
+    is a cause of the loop's own health pass, never a fact of the bar (#48)."""
+    for s in [_src(occ={"live": 9, "agents": 1})]:
         line = hub.foot_line(hub.foot_items(s, CAPS, NOW))
         assert "drift" not in line, line
-    assert [i["key"] for i in hub.foot_items(_src(), CAPS, NOW)] == ["health", "progress", "landing", "occ", "subs"]
+    assert [i["key"] for i in hub.foot_items(_src(), CAPS, NOW)] == ["landing", "occ", "subs"]
 
 
 def test_only_the_limited_quota_markers_are_named_each_with_its_reset(hub):
@@ -556,34 +532,27 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
-    line = hub.foot_line(hub.foot_items(_src(progress=None), CAPS, NOW))
-    assert line == ("health ok · last progress ? · last landing · #73 2h 14m ago · 4/10 runs 7/20 agents · "
+    line = hub.foot_line(hub.foot_items(_src(occ=None), CAPS, NOW))
+    assert line == ("last landing · #73 2h 14m ago · ? · "
                     "CL ? · GK ? · GPT ? · GEM ?")
     # The worktree count was never read here, so its block draws nothing (only `foot_sources` reads it).
-    assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None,
-                                        "quota": {"codex": "?", "agy": None}}, None, NOW)) \
-        == "health ? · last progress ? · last landing ? · ? · CL ? · GK ? · GPT ? · GEM ?"
+    assert hub.foot_line(hub.foot_items({"occ": None, "quota": {"codex": "?", "agy": None}}, None, NOW)) \
+        == "last landing ? · ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
     now = time.time()
     st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
-    (st / "health.json").write_text(json.dumps({"ts": now, "ok": False, "runs": 2, "inprogress": 5, "causes": ["watch-stalled"]}))
-    armed = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - 540))
-    (st / "alerts.log").write_text(f"{armed} HEALTH watch-stalled: no cycle for 6 min\n")
-    (st / "cycle.log").write_text("16:19:46 autobug.sh 31s\n")
     (st / "agy-limited").write_text(str(int(now + 3600)))
     monkeypatch.setattr(hub, "STATE", st)
     src = hub.foot_sources(now)
-    assert src["health"]["causes"] == ["watch-stalled"]
-    assert abs(src["health"]["armed"]["watch-stalled"] - (now - 540)) < 2
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
     facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
-    assert "health: watch-stalled 9m" in facts and "drift" not in facts and "agy" not in facts
+    assert "drift" not in facts and "agy" not in facts
     assert "last landing ?" in facts                                           # no fork marker: no landing to name
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
-        == "health ? · last progress ? · last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
+        == "last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def _mark(st, name, age, now):
@@ -638,7 +607,7 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
                            "facts": hub.foot_items(_src(), CAPS, NOW)})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
-    assert p["facts"][0]["text"] == "health ok" and len(p["facts"]) == 5
+    assert p["facts"][0]["text"] == "last landing · #73 2h 14m ago" and len(p["facts"]) == 3
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
@@ -673,11 +642,80 @@ def test_the_line_drops_trailing_facts_on_a_narrow_window_and_never_truncates_on
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
     texts = [i["text"] for i in items]
     full = " · ".join(texts)
-    assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all five, in order
-    four = " · ".join(texts[:4])
-    assert _foot_text(hub, items, len(four)) == four                           # 5 -> 4: the subs block drops first
-    assert _foot_text(hub, items, len(four) - 1) == " · ".join(texts[:3])      # 4 -> 3, still whole items
+    assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all three, in order
+    two = " · ".join(texts[:2])
+    assert _foot_text(hub, items, len(two)) == two                             # 3 -> 2: the subs block drops first
+    assert _foot_text(hub, items, len(two) - 1) == texts[0]                    # 2 -> 1, still whole items
     assert _foot_text(hub, items, 0) == ""                                     # nothing fits: no number is cut into another
+
+
+# ---------------------------------------------------------------- the worktree block and its one press
+# The footer counted the child trees (`worktrees/child/*`) and the cleaner only ever looked at `runs/*/ws/*`: two sets, so
+# the number a reader saw was not the set a pass could free (measured 2026-10-13: 21 trees in the first set, none of them
+# ever examined). The pass now counts and clears that set, writes the tally, and the block reads it: `wt 10/21` — 10 of the
+# 21 the pass saw. The block answers one press, and the press runs the loop's own pass rather than a second rule of the page's.
+
+def test_the_block_reads_the_tally_the_pass_wrote(hub, tmp_path, monkeypatch):
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    (tmp_path / "wt.json").write_text(json.dumps({"total": 21, "cleanable": 10, "ts": time.time()}))
+    assert hub._wt_plan() == {"total": 21, "cleanable": 10, "ts": pytest.approx(time.time(), abs=5)}
+    assert hub._wt_fact(hub._wt_plan() or hub._wt_count()) == "wt 10/21"
+
+
+def test_a_stale_or_unreadable_tally_falls_back_to_the_plain_count(hub, tmp_path, monkeypatch):
+    """The pass runs every third cycle (~4.5 min): an older reading describes a machine that has moved on."""
+    monkeypatch.setattr(hub, "STATE", tmp_path)
+    (tmp_path / "wt.json").write_text(json.dumps({"total": 21, "cleanable": 10, "ts": time.time() - hub.WT_PLAN_SECS - 1}))
+    assert hub._wt_plan() is None
+    (tmp_path / "wt.json").write_text("{not json")
+    assert hub._wt_plan() is None
+    (tmp_path / "wt.json").write_text(json.dumps({"total": 21}))
+    assert hub._wt_plan() is None                                            # a half reading is no reading
+    assert hub._wt_fact(hub._wt_count()) == "wt 0"                           # and the block says the count alone
+
+
+def test_the_block_draws_nothing_when_neither_reading_exists(hub):
+    assert hub._wt_fact(None) == ""
+    assert [i for i in hub.foot_items(_src(), CAPS, NOW) if i["key"] == "wt"] == []   # a block with nothing to say draws no lone `·`
+
+
+def test_the_press_runs_the_loops_own_pass_and_never_a_second_rule(hub, monkeypatch):
+    """The page adds no rule of its own: the script holds them, so the press frees exactly what the block counted."""
+    seen = {}
+    def run(cmd, **kw):
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "WT CLEAN child gui-27 gui/27 abc123456\nWT KEPT pr-merged gui/x\n", "")
+    monkeypatch.setattr(hub, "subprocess", types.SimpleNamespace(run=run))
+    out = hub.wt_clean()
+    assert seen["cmd"][0] == "bash" and seen["cmd"][1].endswith("wtclean.sh")
+    assert out["cleaned"] == ["WT CLEAN child gui-27 gui/27 abc123456"]
+    assert out["held"] == ["WT KEPT pr-merged gui/x"] and out["err"] is None and out["rc"] == 0
+
+
+def test_a_pass_that_never_returns_is_reported_and_never_an_empty_success(hub, monkeypatch):
+    def slow(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, hub.WT_CLEAN_SECS)
+    monkeypatch.setattr(hub, "subprocess", types.SimpleNamespace(run=slow, TimeoutExpired=subprocess.TimeoutExpired))
+    assert "longer than" in hub.wt_clean()["err"]
+
+
+def test_a_pass_that_cannot_start_is_reported_too(hub, monkeypatch):
+    def nope(cmd, **kw):
+        raise OSError("no such file")
+    monkeypatch.setattr(hub, "subprocess", types.SimpleNamespace(run=nope, TimeoutExpired=subprocess.TimeoutExpired))
+    assert "did not start" in hub.wt_clean()["err"]
+
+
+def test_the_cleanup_route_is_a_guarded_write_like_the_others(hub):
+    src = HUB_PY.read_text()
+    assert '"/api/wtclean"' in src and '"/api/models", "/api/plans", "/api/wtclean"' in src   # the same origin-and-JSON guard
+    assert "data-act=" in hub.PAGE and "wtClean(" in hub.PAGE                                 # the block carries the press the page wires
+
+
+def test_the_block_is_a_keyboard_stop_and_says_what_it_will_do(hub):
+    line = hub.PAGE[hub.PAGE.index("function footItem(i)"):]
+    line = line[:line.index("\n")]
+    assert 'role=button tabindex=0' in line and "wtclean.sh holds the rules" in line
 
 
 # ---------------------------------------------------------------- the colour of each fact (#1843)
@@ -762,7 +800,7 @@ def test_an_unverifiable_subscription_reads_a_question_mark_and_stays_neutral(hu
 def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
     items = hub.foot_items(_src(), CAPS, NOW)
     order = [i["color"] for i in items]
-    assert [i["key"] for i in items] == ["health", "progress", "landing", "occ", "subs"]
+    assert [i["key"] for i in items] == ["landing", "occ", "subs"]
     root = re.search(r"^:root\{([^}]*)\}", hub.PAGE, re.M).group(1)
     palette = set(re.findall(r"--([a-z-]+):", root))
     assert all(c in palette for c in order), order                             # a colour the hub already has, not a new one
@@ -772,10 +810,11 @@ def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
 
 
 def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
-    items = hub.foot_items(_src(progress=NOW - 901), CAPS, NOW)
-    prog = [i for i in items if i["key"] == "progress"][0]
-    assert prog["bad"] is True and prog["color"]
-    assert _foot_paint(hub, [prog]) == "<span class=bad>last progress 15m</span>", _foot_paint(hub, [prog])
+    """No fact of the line turns amber since health and progress left it (#1843's rule still stands for the day one returns)."""
+    items = hub.foot_items(_src(), CAPS, NOW)
+    assert not [i for i in items if i["bad"]]
+    bad = {"key": "landing", "color": "wait", "bad": True, "text": "last landing ?", "parts": [{"text": "last landing ?", "tone": ""}]}
+    assert _foot_paint(hub, [bad]) == "<span class=bad>last landing ?</span>", _foot_paint(hub, [bad])
     subs = [i for i in items if i["key"] == "subs"][0]
     out = _foot_paint(hub, [subs])
     assert f"var(--{subs['color']})" in out                                    # the block wears its own colour...
@@ -787,7 +826,7 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
-    assert hub.foot_line(items) == ("health ok · last progress 4m · last landing · #73 2h 14m ago · "
+    assert hub.foot_line(items) == ("last landing · #73 2h 14m ago · "
                                     "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
     painted = re.sub(r"<[^>]+>", "", _foot_paint(hub, items))

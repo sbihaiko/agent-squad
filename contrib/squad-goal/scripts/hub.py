@@ -604,24 +604,24 @@ def load_tick(sample=None):
 # this sampler already makes. A value the hub cannot verify is `?`, never a stale or invented number, and a fact that
 # goes unreadable takes its own `?` with it while the rest of the line stands. The line is one row: on a window too
 # narrow for it, the trailing facts drop one whole block at a time — nothing wraps, and no number is ever cut into a different one.
-FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
 FOOT_SEP = " · "
+# How long the cleanup pass's own tally (`wt 10/21`) still describes now: the pass runs every third cycle (~4.5 min), so a
+# reading older than three cycles is a claim about a machine that has moved on, and the block falls back to the plain count.
+WT_PLAN_SECS = 15 * 60
+# A cleanup pass asked for by hand: the same pass the loop makes every third cycle takes ~17 s, so a minute is generous and
+# an answer that never comes is reported as no answer rather than held open by the page.
+WT_CLEAN_SECS = 60
 # Every block of the line reads in its own palette colour, so six facts are told apart at a glance without a character
 # more on the row (#1843). The five colours that are not a state signal are the hub's own variables, and six blocks
 # means the two ends share one — neighbours are what must never collide. The tone a value earns is NOT a block colour:
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "landing": "wait", "wt": "mute", "occ": "mute",
-                     "quota": "none", "subs": "run"}  # subs last, and teal again: it shares with health, which is not its neighbour
+FOOT_BLOCK_COLORS = {"landing": "wait", "wt": "mute", "occ": "mute",
+                     "quota": "none", "subs": "run"}  # subs last, and teal again: it shares with landing, which is not its neighbour
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
 FORK_MARKER = re.compile(r"fork-(\d+)-([0-9a-f]{7,40})")   # the close pass's marker, the name janitor.py's rule P reads
-
-def foot_age(secs):
-    """An age as the line reads it — one token, the shape the page's own `age()` paints: `45s`, `4m`, `2h`."""
-    s = max(float(secs), 0.0)
-    return f"{int(s)}s" if s < 90 else (f"{int(round(s / 60))}m" if s < 5400 else f"{int(round(s / 3600))}h")
 
 def limited_until(txt, now=None):
     """The epoch a quota marker names while it skips a model; None when there is no marker or its window has passed (the
@@ -631,24 +631,6 @@ def limited_until(txt, now=None):
     try: t = float(s)
     except ValueError: return "?"
     return t if t > (time.time() if now is None else now) else None
-
-def _health_fact(h, now):
-    """`health ok`, or `health: <cause> <age>` for the most recent cause still armed. Named, never a count: `3 alerts`
-    would hide the one cause that says the loop is dead, which is the only thing this fact is on the page to say."""
-    if not isinstance(h, dict): return "health ?"
-    causes = [c for c in (h.get("causes") or []) if c]
-    if not causes: return "health ok"
-    armed = h.get("armed") or {}
-    ts = {c: armed[c] for c in causes if isinstance(armed.get(c), (int, float))}
-    if ts: c, t = max(ts.items(), key=lambda kv: kv[1])          # the newest alert still standing: the newest cause
-    elif isinstance(h.get("ts"), (int, float)): c, t = causes[0], h["ts"]   # no alert line left for it: the pass that saw it ages it
-    else: return f"health: {causes[0]} ?"    # the cause is armed but its age cannot be read: named, then `?`
-    brief = (h.get("briefs") or {}).get(c)    # a cause that carries one says more than its name: the cooldown's expiry and owner
-    return f"health: {c} {foot_age(now - t)}" + (f" ({brief})" if isinstance(brief, str) and brief else "")
-
-def _progress_fact(ts, now):
-    """The age of the newest transition the loop owns — a verdict, a land, a dispatch or a board move."""
-    return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
 
 def _rel_span(x):
     """A span in the page's own `rel()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth."""
@@ -730,12 +712,12 @@ def _subs_fact(subs, now):
     """The subs block as one string: its parts in the order they are read, which is the text the line carries."""
     return FOOT_SEP.join(p["text"] for p in _subs_parts(subs, now))
 
-def _fact(key, text, bad=False, parts=None):
+def _fact(key, text, bad=False, parts=None, act=None):
     """One block of the line (#1843): its text, its own palette colour, and the parts it paints. A block with no parts
     of its own is the single part its text already is, with no tone — so the block's colour stands for the whole value.
     A part whose own reading earns a tone keeps it on top of that colour, which is how the block still says WHICH fact
-    it is while the value says whether it is the bad one."""
-    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key],
+    it is while the value says whether it is the bad one. `act` names the one press the block answers to, or None."""
+    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "act": act,
             "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
 # --- the worktrees the loop holds open: what its child checkouts cost, at a glance, without a git call.
@@ -753,25 +735,53 @@ def _wt_count():
     return n
 
 
+def _wt_plan():
+    """What the last cleanup pass found in the child directories: `{"total", "cleanable", "ts"}` from `wtclean.sh`, or None
+    when no pass wrote it or the writing is older than WT_PLAN_SECS. The pass runs every third cycle, so a stale reading no
+    longer describes now and the block falls back to the plain count."""
+    d = _json(STATE / "wt.json")
+    if not isinstance(d, dict): return None
+    total, free, ts = d.get("total"), d.get("cleanable"), d.get("ts")
+    if not (isinstance(total, int) and isinstance(free, int) and isinstance(ts, (int, float))): return None
+    if time.time() - ts > WT_PLAN_SECS: return None
+    return d
+
+
 def _wt_fact(n):
-    """`wt 3` — the count of open child worktrees, or nothing when the count was never read (the block draws nothing)."""
-    return "" if not isinstance(n, int) else f"wt {n}"
+    """`wt 3` — the count of open child worktrees; `wt 10/21` — of the 21 the last pass saw, the 10 it freed. The block
+    draws nothing when neither reading exists."""
+    if isinstance(n, int): return f"wt {n}"
+    if isinstance(n, dict): return f"wt {n['cleanable']}/{n['total']}"
+    return ""
+
+
+def wt_clean():
+    """One cleanup pass, asked for by hand from the footer's `wt` block. It runs the loop's own `wtclean.sh`, which holds
+    the rules, so the press frees exactly what the block counted and the page adds no second rule of its own. A pass the
+    script refuses, or one that runs past the deadline, is reported as it stands and never as an empty success."""
+    try:
+        r = subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "wtclean.sh")],
+                           capture_output=True, text=True, timeout=WT_CLEAN_SECS)
+    except subprocess.TimeoutExpired:
+        return {"err": f"the pass ran longer than {WT_CLEAN_SECS}s"}
+    except OSError as e:
+        return {"err": f"the pass did not start: {e}"}
+    lines = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
+    return {"cleaned": [l for l in lines if l.startswith("WT CLEAN")],
+            "held": [l for l in lines if l.startswith(("WT UNPUSHED", "WT KEPT", "WT LOOSE"))],
+            "rc": r.returncode, "err": None if lines or not r.returncode else (r.stderr or "").strip()[-200:]}
 
 
 def foot_items(src, caps=None, now=None):
-    """The facts, in the order the line reads them, each carrying whether its value is the bad one (`bad` is what
-    the page paints amber, and only `last progress` has one — a stall between the loop's own two thresholds), the
-    palette colour of its block, and the parts it paints: a subscription token carries the tone its own consumption
-    earns, so the block is never painted as one value (#1843)."""
+    """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a
+    subscription token carries the tone its own consumption earns, so the block is never painted as one value (#1843).
+    The loop's own health and its last progress were dropped from the line by the owner: the line is a machine reading,
+    and both said as much about the loop's mood as about the machine."""
     now = time.time() if now is None else now
     src = src or {}
-    prog = src.get("progress")
     land = _landing_parts(src.get("landing"), now)
-    items = [_fact("health", _health_fact(src.get("health"), now)),
-             _fact("progress", _progress_fact(prog, now),
-                   bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
-             _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
-             _fact("wt", _wt_fact(src.get("wt"))),
+    items = [_fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
+             _fact("wt", _wt_fact(src.get("wt")), act="wtclean" if src.get("wt") is not None else None),
              _fact("occ", _occ_fact(src.get("occ"), caps)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
              # subs last, so a narrow window drops the block whole
@@ -817,42 +827,17 @@ def _newest_mtime(*paths):
         except OSError: pass
     return max(ts) if ts else None
 
-def _armed_from_alerts(text, causes):
-    """cause -> when its alert last reached alerts.log, i.e. when the health pass armed it. The pass writes one line when
-    a cause appears and re-arms it after it clears, so the newest line for a cause still armed is its age."""
-    out = {}
-    for l in (text or "").splitlines():
-        if " HEALTH " not in l: continue
-        head, _, rest = l.partition(" HEALTH ")
-        cause = rest.split(":", 1)[0].strip()
-        if cause not in causes: continue
-        try: t = time.mktime(time.strptime(head.strip(), "%Y-%m-%d %H:%M:%S"))
-        except ValueError: continue
-        out[cause] = max(t, out.get(cause, 0.0))
-    return out
-
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"health": None, "progress": None, "landing": _last_landing(), "wt": _wt_count(), "occ": None,
+    out = {"landing": _last_landing(), "wt": _wt_plan() or _wt_count(), "occ": None,
            "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
                      "agy": limited_until(_read(STATE / "agy-limited"), now)}}
-    h = _json(STATE / "health.json")
-    if isinstance(h, dict):
-        causes = [c for c in (h.get("causes") or []) if c]
-        out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts"),
-                         "briefs": h.get("briefs") if isinstance(h.get("briefs"), dict) else {}}
-        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
-    stamps = [_newest_mtime(STATE / "cycle.log", STATE / "auto", STATE / "board-dirty")]
-    for r in list(LOAD_RUNS):   # the live runs' own records: what the loop's children wrote as they moved
-        stamps.append(_newest_mtime(pathlib.Path(r.get("dir") or "") / "record.jsonl"))
-    stamps = [s for s in stamps if s]
-    out["progress"] = max(stamps) if stamps else None
     return out
 
 def foot_refresh(now=None):
@@ -1736,12 +1721,27 @@ function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" �
 // serves already carries it. The tone is decided where the number is — the hub serves it — never here:
 const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
 function footParts(i){return (i.parts||[{text:i.text}]).map(p=>FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text)).join(" · ")}
-function footItem(i){const t=footParts(i);return i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`}
+function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`;return i.act?`<span class="fac${wtBusy?" busy":""}" data-act="${esc(i.act)}" role=button tabindex=0 title="Run one cleanup pass now: the loop's own wtclean.sh holds the rules, so the press frees exactly what this block counted">${s}</span>`:s}
+// The `wt` block answers one press. The press runs the loop's own pass and never a second rule of the page's, so what it
+// frees is what the block counted. The block says it is busy while it runs; the pass's own lines are reported beside it.
+let wtBusy=false,wtTimer=null;
+function wtSay(txt,bad){const f=$("#foot");if(!f)return;let e=$("#wtmsg");
+ if(!e){e=document.createElement("span");e.id="wtmsg";f.appendChild(e)}
+ e.textContent=" "+txt;e.style.color=bad?"var(--err)":"var(--mute)"}
+async function wtClean(el){if(wtBusy)return;wtBusy=true;if(el)el.classList.add("busy");
+ try{const d=await (await fetch("/api/wtclean",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+  if(d.err)wtSay("cleanup refused: "+d.err,true);
+  else wtSay(d.cleaned.length?"cleanup freed "+d.cleaned.length+": "+d.cleaned.map(l=>l.replace(/^WT CLEAN \S+ /,"")).join(", "):"cleanup freed nothing");
+  await loadPoll()}
+ catch(e){wtSay("cleanup did not answer: "+e.message,true)}
+ finally{wtBusy=false;const b=document.querySelector("[data-act=wtclean]");if(b)b.classList.remove("busy");
+  clearTimeout(wtTimer);wtTimer=setTimeout(()=>{const m=$("#wtmsg");if(m)m.remove()},20000)}}
 function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
  const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
  return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
 function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
- if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
+ if(f){f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")
+  f.querySelectorAll("[data-act]").forEach(e=>{e.onclick=()=>wtClean(e);e.onkeydown=ev=>{if(ev.key===" "||ev.key==="Enter"){ev.preventDefault();wtClean(e)}}})}}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
@@ -2648,8 +2648,11 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         # loopback only, and a cross-site page must not be able to write: require our own origin and a JSON body
         host = (self.headers.get("Host") or "").split(":")[0]; org = self.headers.get("Origin") or ""
-        ok = self.path in ("/api/models", "/api/plans") and host in ("127.0.0.1", "localhost") and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
-        try: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")) if ok else {"err": "forbidden"}
+        ok = self.path in ("/api/models", "/api/plans", "/api/wtclean") and host in ("127.0.0.1", "localhost") and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
+        try:
+            if not ok: out = {"err": "forbidden"}
+            elif self.path == "/api/wtclean": out = wt_clean()
+            else: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}"))
         except Exception as e: out = {"err": "bad request"}
         body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 

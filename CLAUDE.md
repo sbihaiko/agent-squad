@@ -147,7 +147,7 @@ Guard: `tests/test_runs.py`, `tests/test_dashboard_server.py`, `tests/test_dashb
 
 ### Issue tracker
 
-Issues live in GitHub Issues for `mmctech-ai/agent-squad`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues for `sbihaiko/agent-squad` (private; the plugin's repository moved here), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

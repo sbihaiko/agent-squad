@@ -264,29 +264,3 @@ def hub():
     return mod
 
 
-def _footer(hub, health: dict) -> str:
-    src = {"health": health, "progress": T0, "occ": None, "drift": None, "quota": {"codex": None, "agy": None}, "subs": None}
-    return hub.foot_items(src, None, T0 + 120)[0]["text"]
-
-
-def test_the_hub_footer_carries_the_cooldown_with_its_expiry_and_owner(hub):
-    health = {"causes": ["gh-cooldown"], "armed": {"gh-cooldown": T0}, "ts": T0,
-              "briefs": {"gh-cooldown": "until 09:08:20Z, owned by landing"}}
-    assert _footer(hub, health) == "health: gh-cooldown 2m (until 09:08:20Z, owned by landing)"
-
-
-def test_the_hub_footer_carries_the_miss_rate(hub):
-    health = {"causes": ["gh-miss-rate"], "armed": {"gh-miss-rate": T0}, "ts": T0,
-              "briefs": {"gh-miss-rate": "100% of 30 reads missed"}}
-    assert _footer(hub, health) == "health: gh-miss-rate 2m (100% of 30 reads missed)"
-
-
-def test_a_cause_with_no_brief_reads_as_it_did_before(hub):
-    assert _footer(hub, {"causes": ["watch-stalled"], "armed": {"watch-stalled": T0}, "ts": T0}) == "health: watch-stalled 2m"
-
-
-def test_the_hub_reads_the_briefs_health_json_carries(hub, tmp_path, monkeypatch):
-    (tmp_path / "health.json").write_text(json.dumps(
-        {"ts": T0, "ok": False, "runs": 0, "inprogress": 0, "causes": ["gh-cooldown"], "briefs": {"gh-cooldown": "until 09:08:20Z, owned by landing"}}))
-    monkeypatch.setattr(hub, "STATE", tmp_path)
-    assert hub.foot_sources(T0)["health"]["briefs"] == {"gh-cooldown": "until 09:08:20Z, owned by landing"}

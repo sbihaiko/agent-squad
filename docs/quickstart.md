@@ -5,9 +5,22 @@ Run agent-squad on your own repository. You need `git`, [`uv`](https://docs.astr
 ## Install
 
 ```bash
-claude plugin marketplace add mmctech-ai/agent-squad
+claude plugin marketplace add sbihaiko/agent-squad
 claude plugin install agent-squad@agent-squad --scope user
 ```
+
+The repository is private. Ask the owner for access first.
+**The plugin repository moved** from `mmctech-ai/agent-squad`, which no longer exists. A machine that still names it installs nothing; uninstall, drop the old marketplace and add this one:
+
+```bash
+claude plugin uninstall agent-squad@agent-squad
+claude plugin marketplace remove agent-squad
+claude plugin marketplace add sbihaiko/agent-squad
+claude plugin install agent-squad@agent-squad --scope user
+```
+
+`claude plugin marketplace list` must then show `agent-squad` with source `GitHub (sbihaiko/agent-squad)`.
+
 
 Without the plugin, clone the repository and use `uv run --extra sdk squad <command>` in place of `squad`. A plain `pip install` needs the `sdk` extra: `pip install 'agent-squad[sdk]'`.
 
