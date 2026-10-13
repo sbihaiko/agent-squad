@@ -545,7 +545,7 @@ FOOT_SEP = " · "
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "occ": "mute", "drift": "wait", "quota": "none",
+FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "occ": "mute", "quota": "none",
                      "subs": "run"}  # subs last, and teal again: it shares with health, which is not its neighbour
 
 def foot_age(secs):
@@ -586,14 +586,6 @@ def _occ_fact(occ, caps):
     mp, mc = caps.get("runs"), caps.get("children")
     if not isinstance(mp, int) or not isinstance(mc, int): return "?"
     return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
-
-def _drift_fact(d):
-    """The pair #1795 writes (`runs` and `inprogress` in health.json) and never a second count computed here: a board the
-    health pass could not read reports -1, which is not a drift — it is a `?`."""
-    if not isinstance(d, dict): return "drift ?"
-    runs, ip = d.get("runs"), d.get("inprogress")
-    if not isinstance(runs, int) or not isinstance(ip, int) or runs < 0 or ip < 0: return "drift ?"
-    return f"drift {abs(runs - ip)}"
 
 def _quota_fact(q, now):
     """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
@@ -670,7 +662,6 @@ def foot_items(src, caps=None, now=None):
             _fact("progress", _progress_fact(prog, now),
                   bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
             _fact("occ", _occ_fact(src.get("occ"), caps)),
-            _fact("drift", _drift_fact(src.get("drift"))),
             _fact("quota", _quota_fact(src.get("quota"), now)),
             # subs last, so a narrow window drops the block whole
             _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
@@ -718,14 +709,13 @@ def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"health": None, "progress": None, "occ": None, "drift": None,
+    out = {"health": None, "progress": None, "occ": None,
            "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
                      "agy": limited_until(_read(STATE / "agy-limited"), now)}}
     h = _json(STATE / "health.json")
     if isinstance(h, dict):
         causes = [c for c in (h.get("causes") or []) if c]
         out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts")}
-        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
@@ -1547,7 +1537,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=pop><div id=pbox></div></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>BUILDER <span id=bt class=m></span></b><button id=br title="re-read the board now: the Project statuses, the blockers and the open PRs" aria-label="refresh the board now" aria-busy=false><span>&#8635;</span></button><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
-<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
+<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
