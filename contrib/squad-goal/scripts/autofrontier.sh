@@ -16,13 +16,14 @@
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
-read -r free busy room < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
+read -r free busy room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
 # every repository. A missing caps block is a named failure: the pass stops and says so, never a default.
 sys.path.insert(0, os.environ.get("SG_SQUAD") or ".")
 from squad import caps as C
+from squad import workflows as W
 try:
     ceil = C.ceiling(".")
 except Exception as e:
@@ -36,8 +37,16 @@ def find(o):
         for v in o:
             r = find(v)
             if r: return r
-g = pathlib.Path(f"docs/squad/workflows/{sys.argv[1]}.graph.json")
-doc = json.loads(g.read_text()) if g.exists() else None
+# The graph this pass reads is the file the ENGINE will run, resolved by id the way squad/workflows.py resolves it (the
+# project's docs/squad/workflows/<id>.graph.json, else the owner's default, else the seed). A hand-built path name read the
+# seed directory, held no file, and left every bound unknown (#57).
+try:
+    g = W.resolve(sys.argv[1] or None)
+except Exception as e:
+    print(f"squad.workflows: {e}", file=sys.stderr); sys.exit(2)
+if not g.is_file():
+    print(f"autofrontier: no workflow graph to read the run's envelope from ({g})", file=sys.stderr); sys.exit(2)
+doc = json.loads(g.read_text())
 def envelope(o):   # the first dispatch node's max_children: the author's envelope for one run
     if isinstance(o, dict):
         if o.get("kind") == "dispatch" and isinstance(o.get("max_children"), int): return o["max_children"]
@@ -47,7 +56,19 @@ def envelope(o):   # the first dispatch node's max_children: the author's envelo
             r = envelope(v)
             if r is not None: return r
     return None
+def budget_spend(o):   # the budget.spend.max of the first dispatch node: what ONE child of this run may ask for, and not a penny more
+    if isinstance(o, dict):
+        if o.get("kind") == "dispatch" and isinstance(o.get("budget"), dict):
+            s = o["budget"].get("spend")
+            if isinstance(s, dict) and isinstance(s.get("max"), (int, float)): return s["max"]
+        o = list(o.values())
+    if isinstance(o, list):
+        for v in o:
+            r = budget_spend(v)
+            if r is not None: return r
+    return None
 env = envelope(doc) if doc else None
+spend = budget_spend(doc) if doc else None
 live = 0; busy = set()
 for r in open(sys.argv[2]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
@@ -66,10 +87,15 @@ for r in open(sys.argv[2]).read().split():
 run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
 limits = [x for x in (env, (gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
-print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-", min(limits) if limits else "-")
+print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-", min(limits) if limits else "-", spend if spend is not None else "-")
 PY
 )
 [ -n "${free:-}" ] || { echo "autofrontier: no free-slot count; see the squad.caps line above" >&2; exit 1; }
+# What the request tells the router to ask for per child: the dispatch node's own budget, and no number of our own when that
+# budget cannot be read. A hardcoded 8 against a node whose limit is 4 made the router read spend_outside_budget in its own
+# notes and improvise (#57); a number the run never set is worse than no number.
+case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allows (this pass could not read that budget: a request over it is rejected whole, spend_outside_budget)";;
+  *) spendarg="spend $spend (the dispatch node's budget: a request over it is rejected whole, spend_outside_budget)";; esac
 [ "$free" -gt 0 ] || exit 0
 cap=$free; case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac   # the children this run may take: the free run slots, and never more than the room the envelope and the child ceilings leave (the tighter of the two bounds wins, never the room alone)
 [ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
@@ -134,10 +160,10 @@ build_body() { local nfork=0 n c
   for n in "${live[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
   { echo "PANEL: $name"   # the launch's own id: mkreq.sh's slice_guard names it when it refuses a second child of THIS panel sharing a file (ADR-0274)
     if [ $nfork -eq ${#live[@]} ]; then   # every issue is fork-only: the fork preamble ONLY, nothing about origin/<base>, a PR or prepush.sh
-      echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one local commit each (a CHILD block with several issues is one slice: ONE local commit on ONE fork branch, with a \"Refs #N\" line per issue). en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+      echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one local commit each (a CHILD block with several issues is one slice: ONE local commit on ONE fork branch, with a \"Refs #N\" line per issue). en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
       echo "FORK-ONLY: all"; sg_fork_preamble
     else
-      echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with spend 8 (the router may not request more: spend_outside_budget). Repo $SG_REPO. One child per CHILD block, one PR each (a CHILD block marked FORK-ONLY: one local commit instead); a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+      echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one PR each (a CHILD block marked FORK-ONLY: one local commit instead); a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
       echo "Before every push and before opening the PR, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
       [ $nfork -gt 0 ] && sg_fork_preamble | sed 's/^/Every child marked FORK-ONLY, instead of the above: /'
       echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
