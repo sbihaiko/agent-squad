@@ -1,138 +1,62 @@
-"""Guards for #84: the engine commits a passing node's declared workspace, so a branch tip is the run's final state.
-
-Measured: two dispatch children ended with a tip equal to an ancestor of main while their worktrees held the work,
-so forkclose refused the branch as UNLANDED. One writer, the engine; the run record stays the single truth.
-"""
+"""Guards for #84 and #90: the engine commits a passing node's dirty workspace, or its target when that target is a worktree
+the run owns, so a branch tip always equals the run's final state."""
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from squad import actions, git, node_commit, record
+from squad import git, node_commit, record
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
-from squad.runners.types import Scope
 from tests.flows import agent, doc
 from tests.gitrepo import make_repo, sh, sibling_repo
 from tests.helpers import router
+from tests.test_actions import GIT_FACT, act, outs, write_file
+from tests.test_dispatch import req
 
 pytestmark = pytest.mark.anyio
 
 WS = "worktrees/w"
-PASS = {"output": {"x": 1}, "spend": 0.1}
-FAIL = {"output": {"status": "fail", "x": 1}, "spend": 0.1}
+PASS, FAIL = {"output": {"x": 1}, "spend": 0.1}, {"output": {"status": "fail", "x": 1}, "spend": 0.1}
 
 
-def req(skill="tdd", **kw):
-    """One dispatch request: the shape the router's envelope admits."""
-    return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": "sonnet", "effort": "medium", "tools": ["Read", "Edit"],
-            "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child", **kw}
+def flow(nodes, children):
+    return doc(nodes, children, facts=[GIT_FACT])
 
 
-def act(name, effect, ws=WS, **kw):
-    n = {"name": name, "kind": "action", "effect": effect, "workspace": ws, "deadline": 60}
-    n.update(kw)
-    return n
+def worker(**kw):
+    return agent("a", output_key="x", workspace=WS, tools=["Read", "Edit"], instructions="Build it.\n\nWork:\nClose #73 for good", **kw)
 
 
-def write_file(name, text):
-    def effect(req):
-        (Path(req.workspace) / name).write_text(text)
-    return effect
+def events(path, kind):
+    return [e for e in record.read(path / "record.jsonl") if e["event"] == kind]
 
 
-def outs(run_dir, node=None):
-    return [e for e in record.read(run_dir / "record.jsonl")
-            if e["event"] == "outcome" and (node is None or e["node"] == node)]
-
-
-def events(run_dir, kind):
-    return [e for e in record.read(run_dir / "record.jsonl") if e["event"] == kind]
-
-
-def engine(tmp_path, nodes, children, step=(), **kw):
-    """A repo, a run folder, and one agent node named `a` that writes `new.txt` in its workspace."""
+def engine(tmp_path, nodes, children, step, **kw):
     repo = make_repo(tmp_path / "repo")
-    ad = ScriptedAdapter({"a": {"effect": write_file("new.txt", "hi\n"), **PASS, **dict(step)}})
-    return repo, Engine(from_doc(doc(nodes, children)), ad, tmp_path / "run", target=repo, run_id="r1", **kw)
+    adapter = ScriptedAdapter({"a": {**step, "effect": write_file("new.txt", "hi\n")}})
+    return repo, Engine(from_doc(flow(nodes, children)), adapter, tmp_path / "run", target=repo, run_id="r1", **kw)
 
 
-async def test_a_passing_node_with_a_dirty_declared_workspace_leaves_a_commit(tmp_path):
-    repo, eng = engine(tmp_path, [act("wt", "worktree_create"), agent("a", output_key="x", workspace=WS, tools=["Read", "Edit"])], ["wt", "a"])
+async def test_a_passing_node_with_a_dirty_workspace_is_committed_and_the_tip_is_the_final_state(tmp_path):
+    repo, eng = engine(tmp_path, [act("wt", "worktree_create"), worker()], ["wt", "a"], PASS)
     v = await eng.run()
-    run, a = tmp_path / "run", outs(tmp_path / "run", "a")[0]
+    assert v.verdict == "completed"
+    a = outs(tmp_path / "run", "a")[0]
     wt = Path(a["workspace"]["path"])
-    assert v.verdict == "completed" and a["outcome"] == "pass"
-    assert git.dirty(wt) == [] and git.head(wt) != git.head(repo)
+    assert a["outcome"] == "pass" and git.dirty(wt) == [] and git.head(wt) != git.head(repo)
     assert a["workspace"]["head"] == git.head(wt)      # the snapshot a resume compares against is the committed state
-    ev = events(run, "workspace_commit")
+    ev = events(tmp_path / "run", "workspace_commit")
     assert [(e["node"], e["entry"], e["status"], e["head"]) for e in ev] == [("a", 1, "committed", git.head(wt))]
     assert ev[0]["workspace"] == WS and ev[0]["path"] == str(wt) and ev[0]["pos"] < a["pos"]
-    assert sh(wt, "git", "log", "-1", "--format=%s") == "squad: a passed (r1)"       # the engine's own line
-    assert sh(wt, "git", "log", "-1", "--format=%an") == "agent-squad"               # the engine's commit, never the model's
-    assert sh(repo, "git", "rev-parse", "squad/r1/worktrees-w") == git.head(wt)      # the branch tip is the run's final state
-
-
-async def test_a_passing_node_with_a_clean_workspace_writes_no_commit(tmp_path):
-    repo, eng = engine(tmp_path, [act("wt", "worktree_create"), agent("a", output_key="x", workspace=WS, tools=["Edit"])], ["wt", "a"], step={"effect": None})
-    v = await eng.run()
-    a = outs(tmp_path / "run", "a")[0]
-    assert v.verdict == "completed" and git.dirty(Path(a["workspace"]["path"])) == []
-    assert events(tmp_path / "run", "workspace_commit") == []
-    assert git.head(Path(a["workspace"]["path"])) == git.head(repo)
-
-
-async def test_a_failed_node_leaves_its_tree_untouched(tmp_path):
-    nodes = [act("wt", "worktree_create"), agent("a", output_key="x", workspace=WS, tools=["Read", "Edit"], next={"fail": "exit:fail"})]
-    repo, eng = engine(tmp_path, nodes, ["wt", "a"], step=FAIL)
-    v = await eng.run()
-    a = outs(tmp_path / "run", "a")[0]
-    wt = Path(a["workspace"]["path"])
-    assert (v.verdict, a["outcome"]) == ("failed", "fail")
-    assert (wt / "new.txt").exists() and git.head(wt) == git.head(repo)       # a person reads the tree it left
-    assert events(tmp_path / "run", "workspace_commit") == []
-
-
-async def test_a_node_with_no_declared_workspace_is_untouched(tmp_path):
-    repo, eng = engine(tmp_path, [agent("a", output_key="x", tools=["Read", "Edit"])], ["a"])
-    v = await eng.run()
-    assert v.verdict == "completed" and (repo / "new.txt").exists() and git.dirty(repo)   # the target is never committed
-    assert events(tmp_path / "run", "workspace_commit") == []
-
-
-async def test_a_workspace_outside_the_run_area_is_refused_with_one_event_naming_the_reason(tmp_path):
-    """The path builder keeps a graph's workspace inside the run folder, so the refusal is exercised at the seam
-    the two callers reach: a node's path and a dispatch child's own worktree path."""
-    repo, eng = engine(tmp_path, [agent("a", output_key="x", workspace=WS, tools=["Edit"])], ["a"])
-    (repo / "new.txt").write_text("hi\n")
-    ev = node_commit.commit_after(eng, node="a", entry=1, item=None, logical=WS, path=repo, outcome="pass")
-    assert (ev["event"], ev["status"], ev["reason"]) == ("workspace_commit", "refused", "outside_run_area")
-    assert ev["path"] == str(repo.resolve()) and ev["workspace"] == WS
-    assert git.dirty(repo) and len(events(tmp_path / "run", "workspace_commit")) == 1   # nothing was committed, one event
-
-
-async def test_the_git_call_keeps_a_deadline_and_a_timeout_commits_nothing_and_never_fails_the_node(tmp_path, monkeypatch):
-    seen = {}
-
-    def slow(path, message, timeout=None):
-        seen.update(path=str(path), message=message, timeout=timeout)
-        raise subprocess.TimeoutExpired("git commit", timeout)
-    monkeypatch.setattr(actions, "commit", slow)
-    nodes = [act("wt", "worktree_create"), agent("a", output_key="x", workspace=WS, tools=["Read", "Edit"])]
-    repo, eng = engine(tmp_path, nodes, ["wt", "a"])
-    v = await eng.run()
-    a = outs(tmp_path / "run", "a")[0]
-    wt = Path(a["workspace"]["path"])
-    assert seen["timeout"] == node_commit.COMMIT_DEADLINE_S and seen["timeout"]                       # a deadline, not a bare call
-    assert (v.verdict, a["outcome"]) == ("completed", "pass")                                          # the node never fails on it
-    assert git.dirty(wt) and git.head(wt) == git.head(repo)                                            # nothing was committed
-    assert [(e["status"], e["reason"]) for e in events(tmp_path / "run", "workspace_commit")] == [("refused", "timeout")]
+    msg = sh(wt, "git", "log", "-1", "--format=%B").splitlines()
+    assert "a" in msg[0] and "#73" in msg[0] and msg[1] == "" and "pass" in "\n".join(msg[2:]) and msg[-1] == "Refs #73"
+    assert sh(wt, "git", "log", "-1", "--format=%an") == "agent-squad"     # the engine's commit, never the model's
 
 
 async def test_a_passing_dispatch_childs_own_worktree_is_committed_too(tmp_path):
-    """The measured case: a child ended with a tip equal to an ancestor of main while its worktree held the work."""
+    """#84: the measured case: a child ended with a tip equal to an ancestor of main while its worktree held the work."""
     repo = sibling_repo(tmp_path)
     d = router()
     d["run"]["deadline"] = 7200
@@ -143,22 +67,184 @@ async def test_a_passing_dispatch_childs_own_worktree_is_committed_too(tmp_path)
     eng.dispatch.prune = lambda: None      # the test reads the child's worktree after the run
     v = await eng.run()
     run, out = tmp_path / "run", [e for e in record.read(tmp_path / "run" / "record.jsonl")
-                                 if e["event"] == "outcome" and e["node"] == "route.router.1"][0]
+                                  if e["event"] == "outcome" and e["node"] == "route.router.1"][0]
     wt = Path(out["workspace"]["path"])
     assert v.verdict == "completed" and out["outcome"] == "pass"
     assert git.dirty(wt) == [] and git.head(wt) != git.head(repo) and out["workspace"]["head"] == git.head(wt)
     assert [(e["node"], e["entry"], e["status"], e["workspace"]) for e in events(run, "workspace_commit")] == \
            [("route.router.1", 1, "committed", "worktrees/child")]
-    assert sh(wt, "git", "log", "-1", "--format=%s") == "squad: route.router.1 passed (r1)"
+    assert sh(wt, "git", "log", "-1", "--format=%s").startswith("squad: route.router.1 passed")
+
+
+async def test_a_passing_node_with_a_clean_workspace_writes_no_commit(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    eng = Engine(from_doc(flow([act("wt", "worktree_create"), worker()], ["wt", "a"])), ScriptedAdapter({"a": PASS}), tmp_path / "run", target=repo)
+    v = await eng.run()
+    a = outs(tmp_path / "run", "a")[0]
+    assert v.verdict == "completed" and a["workspace"]["head"] == git.head(repo)
+    assert events(tmp_path / "run", "workspace_commit") == []
+
+
+async def test_a_failing_node_leaves_its_tree_as_it_is(tmp_path):
+    repo, eng = engine(tmp_path, [act("wt", "worktree_create"), worker(next={"fail": "exit:fail"})], ["wt", "a"], FAIL)
+    v = await eng.run()
+    a = outs(tmp_path / "run", "a")[0]
+    wt = Path(a["workspace"]["path"])
+    assert v.verdict == "failed" and a["outcome"] == "fail"
+    assert git.dirty(wt) == ["?? new.txt"] and git.head(wt) == git.head(repo)
+    assert events(tmp_path / "run", "workspace_commit") == []
+
+
+async def test_a_node_with_no_declared_workspace_never_touches_the_owners_checkout(tmp_path):
+    repo, eng = engine(tmp_path, [agent("a", output_key="x", tools=["Read", "Edit"])], ["a"], PASS)
+    head = git.head(repo)
+    v = await eng.run()
+    assert v.verdict == "completed" and git.dirty(repo) == ["?? new.txt"] and git.head(repo) == head
+    ev = events(tmp_path / "run", "workspace_commit")
+    assert [(e["status"], e["reason"], e["workspace"], e["path"]) for e in ev] == [("refused", "owner_checkout", "target", str(repo.resolve()))]
+
+
+# #90: the loop starts a run with `--target <issue worktree>`, so its nodes declare no workspace: the target is the workspace.
+# A target that is a git worktree the run owns (the run folder lives inside it, and it is not the main checkout) is committed
+# the same way a declared workspace is. The owner's checkout and a worktree outside the run are refused as an event, never touched.
+
+TARGET_NODE = agent("a", output_key="x", tools=["Read", "Edit"], instructions="Build it.\n\nWork:\nClose #73 for good")
+
+
+def issue_worktree(tmp_path):
+    """The loop's shape: a worktree of the issue branch, next to the checkout, with the run folder inside it."""
+    repo = make_repo(tmp_path / "repo")
+    wt = tmp_path / "wt-as-73"
+    sh(repo, "git", "worktree", "add", "-q", "-b", "gui/73", str(wt))
+    return repo, wt
+
+
+def target_engine(tmp_path, step, *, node=TARGET_NODE, run_dir=None, target=None, **kw):
+    repo, wt = issue_worktree(tmp_path)
+    target = target or wt
+    adapter = ScriptedAdapter({"a": {**step, "effect": write_file("new.txt", "hi\n")}} if step else {})
+    return repo, wt, Engine(from_doc(flow([node], ["a"])), adapter, run_dir or target / "runs" / "r1", target=target, run_id="r1", **kw)
+
+
+async def test_a_passing_node_whose_target_is_a_run_owned_worktree_is_committed_and_the_branch_tip_is_the_final_state(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, PASS)
+    base = git.head(repo)
+    v = await eng.run()
+    a = outs(wt / "runs" / "r1", "a")[0]
+    assert v.verdict == "completed" and a["outcome"] == "pass"
+    assert git.dirty(wt, exclude="runs/r1") == [] and git.head(wt) != base
+    assert sh(repo, "git", "rev-parse", "gui/73") == git.head(wt)          # the branch tip is the run's final state
+    assert sh(wt, "git", "ls-files", "runs") == ""                           # the run's own folder is never part of the commit
+    ev = events(wt / "runs" / "r1", "workspace_commit")
+    assert [(e["node"], e["entry"], e["status"], e["head"], e["workspace"], e["path"]) for e in ev] == [("a", 1, "committed", git.head(wt), "target", str(wt.resolve()))]
+    assert ev[0]["pos"] < a["pos"]
+    msg = sh(wt, "git", "log", "-1", "--format=%B").splitlines()
+    assert "a" in msg[0] and "#73" in msg[0] and msg[1] == "" and "pass" in "\n".join(msg[2:]) and msg[-1] == "Refs #73"
+    assert sh(wt, "git", "log", "-1", "--format=%an") == "agent-squad"
+
+
+async def test_a_clean_target_commits_nothing(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, None)
+    eng.adapter = ScriptedAdapter({"a": PASS})
+    head = git.head(wt)
+    v = await eng.run()
+    assert v.verdict == "completed" and git.head(wt) == head
+    assert events(wt / "runs" / "r1", "workspace_commit") == []
+
+
+async def test_a_failed_node_leaves_the_target_as_it_is(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, FAIL, node={**TARGET_NODE, "next": {"fail": "exit:fail"}})
+    head = git.head(wt)
+    v = await eng.run()
+    assert v.verdict == "failed" and outs(wt / "runs" / "r1", "a")[0]["outcome"] == "fail"
+    assert git.dirty(wt, exclude="runs/r1") == ["?? new.txt"] and git.head(wt) == head
+    assert events(wt / "runs" / "r1", "workspace_commit") == []
+
+
+async def test_a_target_worktree_outside_the_run_is_refused_with_the_reason(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, PASS, run_dir=tmp_path / "run")   # the run folder is not inside the target
+    head = git.head(wt)
+    v = await eng.run()
+    a = outs(tmp_path / "run", "a")[0]
+    assert v.verdict == "completed" and a["outcome"] == "pass"                 # a refusal never fails the node
+    assert git.dirty(wt) == ["?? new.txt"] and git.head(wt) == head
+    ev = events(tmp_path / "run", "workspace_commit")
+    assert [(e["status"], e["reason"], e["path"]) for e in ev] == [("refused", "outside_run_area", str(wt.resolve()))]
+
+
+async def test_the_owners_checkout_is_refused_even_when_the_run_folder_is_inside_it(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, PASS, target=make_repo(tmp_path / "own"))
+    own = eng.target
+    head = git.head(own)
+    v = await eng.run()
+    assert v.verdict == "completed" and git.head(own) == head and "?? new.txt" in git.dirty(own)
+    ev = events(own / "runs" / "r1", "workspace_commit")
+    assert [(e["status"], e["reason"]) for e in ev] == [("refused", "owner_checkout")]
+
+
+async def test_a_git_that_times_out_on_the_target_commits_nothing(tmp_path, monkeypatch):
+    repo, wt, eng = target_engine(tmp_path, PASS)
+
+    def slow(path, message, timeout=None, exclude=None):
+        raise subprocess.TimeoutExpired("git", timeout or 0)
+    monkeypatch.setattr(node_commit.actions, "commit", slow)
+    head = git.head(wt)
+    v = await eng.run()
+    assert v.verdict == "completed" and outs(wt / "runs" / "r1", "a")[0]["outcome"] == "pass"
+    assert git.dirty(wt, exclude="runs/r1") == ["?? new.txt"] and git.head(wt) == head
+    ev = events(wt / "runs" / "r1", "workspace_commit")
+    assert [(e["status"], e["reason"]) for e in ev] == [("refused", "timeout")]
+
+
+async def test_a_dry_run_writes_nothing_to_the_target(tmp_path):
+    repo, wt, eng = target_engine(tmp_path, None)
+    (wt / "new.txt").write_text("hi\n")
+    head, eng.dry = git.head(wt), True
+    assert node_commit.commit_after(eng, node="a", entry=1, item=None, logical=None, path=wt, outcome="pass") is None
+    assert git.dirty(wt) == ["?? new.txt"] and git.head(wt) == head and eng.record.events == []
+
+
+async def test_a_workspace_outside_the_run_area_is_refused_with_a_record_event(tmp_path, monkeypatch):
+    repo, eng = engine(tmp_path, [worker()], ["a"], PASS)
+    other = make_repo(tmp_path / "other")
+    monkeypatch.setattr(eng, "workspace_path", lambda logical, item: other if logical == WS else eng.target)
+    head = git.head(other)
+    v = await eng.run()
+    a = outs(tmp_path / "run", "a")[0]
+    assert v.verdict == "completed" and a["outcome"] == "pass"       # a refusal never fails the node
+    assert git.dirty(other) == ["?? new.txt"] and git.head(other) == head
+    ev = events(tmp_path / "run", "workspace_commit")
+    assert len(ev) == 1 and ev[0]["status"] == "refused" and ev[0]["reason"] == "outside_run_area" and ev[0]["path"] == str(other.resolve())
+
+
+async def test_a_git_that_times_out_commits_nothing_and_does_not_fail_the_node(tmp_path, monkeypatch):
+    repo, eng = engine(tmp_path, [act("wt", "worktree_create"), worker()], ["wt", "a"], PASS)
+
+    def slow(path, message, timeout=None, exclude=None):
+        raise subprocess.TimeoutExpired("git", timeout or 0)
+    monkeypatch.setattr(node_commit.actions, "commit", slow)
+    v = await eng.run()
+    a = outs(tmp_path / "run", "a")[0]
+    wt = Path(a["workspace"]["path"])
+    assert v.verdict == "completed" and a["outcome"] == "pass"
+    assert git.dirty(wt) == ["?? new.txt"] and git.head(wt) == git.head(repo)
+    ev = events(tmp_path / "run", "workspace_commit")
+    assert len(ev) == 1 and ev[0]["status"] == "refused" and ev[0]["reason"] == "timeout"
 
 
 async def test_a_dry_run_writes_nothing(tmp_path):
-    """The frontier walk of a resume runs before any node: it commits nothing."""
-    repo, eng = engine(tmp_path, [act("wt", "worktree_create"), agent("a", output_key="x", workspace=WS, tools=["Edit"])], ["wt", "a"])
-    wt = Path(eng.workspace_path(WS, None))
-    actions.worktree_create(repo, wt, "squad/r1/worktrees-w", 30)
-    write_file("new.txt", "hi\n")(SimpleNamespace(workspace=str(wt)))
-    eng.dry = True
-    assert eng.ctx.commit_workspace(eng.nodes["a"], 1, Scope(None, 0), "pass") is None
-    assert events(tmp_path / "run", "workspace_commit") == []
-    assert git.dirty(wt) and git.head(wt) == git.head(repo)
+    repo = make_repo(tmp_path / "repo")
+    eng = Engine(from_doc(flow([worker()], ["a"])), ScriptedAdapter(), tmp_path / "run", target=repo)
+    wt = eng.workspace_path(WS, None)
+    wt.parent.mkdir(parents=True)
+    sh(repo, "git", "worktree", "add", "-q", str(wt))
+    (wt / "new.txt").write_text("hi\n")
+    head, eng.dry = git.head(wt), True
+    assert node_commit.commit_after(eng, node="a", entry=1, item=None, logical=WS, path=wt, outcome="pass") is None
+    assert git.dirty(wt) == ["?? new.txt"] and git.head(wt) == head and eng.record.events == []
+
+
+def test_the_issue_a_run_names_is_read_from_the_request():
+    assert node_commit.issue_of({"nodes": [worker()]}) == 73
+    assert node_commit.issue_of({"nodes": [agent("a", instructions="Fix #12 now\n\nTask:\nno number")]}) is None
+    assert node_commit.issue_of({"nodes": [agent("a")]}) is None

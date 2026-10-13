@@ -467,8 +467,8 @@ CAPS = {"runs": 10, "children": 20}
 def _src(**over):
     """One reading of every source, all readable, so a test can break exactly one of them."""
     base = {"health": {"causes": [], "armed": {}, "ts": NOW},
-            "progress": NOW - 240, "occ": {"live": 4, "agents": 7},
-            "drift": {"runs": 2, "inprogress": 2}, "quota": {"codex": None, "agy": None}}
+            "progress": NOW - 240, "landing": {"issue": 73, "ts": NOW - (2 * 3600 + 14 * 60)},
+            "occ": {"live": 4, "agents": 7}, "drift": {"runs": 2, "inprogress": 2}, "quota": {"codex": None, "agy": None}}
     return {**base, **over}
 
 
@@ -477,11 +477,11 @@ def _facts(hub, src=None, caps=CAPS):
 
 
 def test_the_five_facts_follow_the_load_cells_in_this_order(hub):
-    reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names, read as a clock time
+    reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names: the subs block carries it
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
-    assert [i["key"] for i in items] == ["health", "progress", "occ", "quota", "subs"]
-    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · "
-                                    "codex ok · agy reset 14:20 · CL ? · GK ? · GPT ? · GEM ?")
+    assert [i["key"] for i in items] == ["health", "progress", "landing", "occ", "subs"]
+    assert hub.foot_line(items) == ("health ok · last progress 4m · last landing · #73 2h 14m ago · "
+                                    "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
     assert [i["bad"] for i in items] == [False] * 5
 
 
@@ -508,10 +508,10 @@ def test_progress_is_the_newest_transition_the_loop_owns_and_turns_bad_past_the_
 
 
 def test_occupancy_reads_the_resolved_ceiling_and_never_a_hard_coded_pair(hub):
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"runs": 3, "children": 40})[2] \
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"runs": 3, "children": 40})[3] \
         == "4/3 runs 7/40 agents"                                            # the ceiling comes from the caps resolution, not from 10/20
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[2] == "?"
-    assert _facts(hub, _src(occ=None))[2] == "?"
+    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[3] == "?"
+    assert _facts(hub, _src(occ=None))[3] == "?"
 
 
 def test_the_bar_carries_no_drift_fact(hub):
@@ -522,14 +522,30 @@ def test_the_bar_carries_no_drift_fact(hub):
     for s in srcs:
         line = hub.foot_line(hub.foot_items(s, CAPS, NOW))
         assert "drift" not in line, line
-    assert [i["key"] for i in hub.foot_items(_src(), CAPS, NOW)] == ["health", "progress", "occ", "quota", "subs"]
+    assert [i["key"] for i in hub.foot_items(_src(), CAPS, NOW)] == ["health", "progress", "landing", "occ", "subs"]
 
 
 def test_only_the_limited_quota_markers_are_named_each_with_its_reset(hub):
+    """The block's own text, read with no subscription in SUBS: the day a token leaves the subs block, its marker returns."""
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))
-    assert _facts(hub, _src(quota={"codex": reset, "agy": reset}))[3] == "codex reset 14:20 · agy reset 14:20"
-    assert _facts(hub, _src(quota={"codex": None, "agy": None}))[3] == "codex ok · agy ok"
-    assert _facts(hub, _src(quota={"codex": "?", "agy": None}))[3] == "codex ? · agy ok"   # one unreadable marker only
+    assert hub._quota_fact({"codex": reset, "agy": reset}, NOW, subs=()) == "codex reset 14:20 · agy reset 14:20"
+    assert hub._quota_fact({"codex": None, "agy": None}, NOW, subs=()) == "codex ok · agy ok"
+    assert hub._quota_fact({"codex": "?", "agy": None}, NOW, subs=()) == "codex ? · agy ok"   # one unreadable marker only
+
+
+def test_a_marker_the_subs_block_already_carries_is_not_named_twice(hub):
+    """`codex` and `GPT` are one subscription, `agy` and `GEM` another: the purple block repeated the green tokens (#87).
+    The pairing is one constant; a marker is skipped while its subscription is in SUBS and returns when it leaves."""
+    assert hub.MARKER_SUB == {"codex": "gpt", "agy": "gemini"}
+    assert all(v in hub.SUBS for v in hub.MARKER_SUB.values())
+    reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))
+    assert hub._quota_fact({"codex": reset, "agy": reset}, NOW) == ""
+    assert hub._quota_fact({"codex": reset, "agy": reset}, NOW, subs=("claude", "gpt")) == "agy reset 14:20"
+    assert hub._quota_fact({"codex": None, "agy": None}, NOW, subs=("gemini",)) == "codex ok"
+    items = hub.foot_items(_src(quota={"codex": reset, "agy": reset}), CAPS, NOW)
+    assert "quota" not in [i["key"] for i in items]                          # an empty block draws no lone `·`
+    assert " ·  · " not in hub.foot_line(items) and "codex" not in hub.foot_line(items)
+    assert "quota" in hub.FOOT_BLOCK_COLORS                                   # the colour waits for the day a marker returns
 
 
 def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
@@ -541,11 +557,12 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
     line = hub.foot_line(hub.foot_items(_src(progress=None), CAPS, NOW))
-    assert line == ("health ok · last progress ? · 4/10 runs 7/20 agents · codex ok · agy ok · "
+    assert line == ("health ok · last progress ? · last landing · #73 2h 14m ago · 4/10 runs 7/20 agents · "
                     "CL ? · GK ? · GPT ? · GEM ?")
+    # The worktree count was never read here, so its block draws nothing (only `foot_sources` reads it).
     assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None,
                                         "quota": {"codex": "?", "agy": None}}, None, NOW)) \
-        == "health ? · last progress ? · ? · codex ? · agy ok · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · last landing ? · ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
@@ -562,10 +579,55 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     assert abs(src["health"]["armed"]["watch-stalled"] - (now - 540)) < 2
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
     facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
-    assert "health: watch-stalled 9m" in facts and "drift" not in facts and "agy reset " in facts
+    assert "health: watch-stalled 9m" in facts and "drift" not in facts and "agy" not in facts
+    assert "last landing ?" in facts                                           # no fork marker: no landing to name
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
-        == "health ? · last progress ? · ? · codex ok · agy ok · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
+
+
+def _mark(st, name, age, now):
+    m = st / "auto" / name; m.write_text(""); os.utime(m, (now - age, now - age)); return m
+
+
+def test_the_last_landing_is_the_newest_fork_marker_the_close_pass_left(hub, tmp_path, monkeypatch):
+    """`forkclose.sh` touches `auto/fork-<n>-<sha9>` when it merged that commit: the pass's own claim of a landing.
+    The newest marker names the issue and its mtime the age; an older one still names its own age."""
+    now = time.time()
+    st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
+    monkeypatch.setattr(hub, "STATE", st)
+    _mark(st, "fork-42-0123456ab", 5 * 3600, now)
+    assert hub.foot_sources(now)["landing"] == {"issue": 42, "ts": pytest.approx(now - 5 * 3600, abs=2)}
+    assert "last landing · #42 5h 0m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    _mark(st, "fork-73-deadbeef9", 2 * 3600 + 14 * 60, now)                   # the newest marker wins
+    assert hub.foot_sources(now)["landing"]["issue"] == 73
+    assert "last landing · #73 2h 14m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+
+
+def test_a_marker_whose_name_does_not_parse_is_not_a_landing(hub, tmp_path, monkeypatch):
+    now = time.time()
+    st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
+    monkeypatch.setattr(hub, "STATE", st)
+    _mark(st, "fork-abc-0123456ab", 60, now)                                   # no issue number
+    _mark(st, "forkwait-12-#13", 60, now)                                      # a wait marker, not a landing
+    _mark(st, "launched-12-0123456ab", 60, now)                                # a PR marker, not a fork landing
+    assert hub.foot_sources(now)["landing"] is None
+    assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    _mark(st, "fork-9-0123456ab", 3 * 86400 + 2 * 3600, now)
+    assert "last landing · #9 3d 2h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+
+
+def test_no_marker_reads_a_question_mark_in_the_neutral_tone_never_a_landing(hub):
+    for src in (_src(landing=None), _src(landing={"issue": 73}), _src(landing={"issue": 73, "ts": "soon"}),
+                _src(landing={"ts": NOW - 60})):
+        item = [i for i in hub.foot_items(src, CAPS, NOW) if i["key"] == "landing"][0]
+        assert item["text"] == "last landing ?" and item["bad"] is False, src
+        assert [p["tone"] for p in item["parts"]] == [hub.FOOT_NEUTRAL]
+    item = [i for i in hub.foot_items(_src(), CAPS, NOW) if i["key"] == "landing"][0]
+    assert item["text"] == "last landing · #73 2h 14m ago" and item["bad"] is False
+    assert [p["text"] for p in item["parts"]] == ["last landing", "#73 2h 14m ago"]
+    assert [p["tone"] for p in item["parts"]] == ["", ""]                      # the block's colour stands for the value
+    assert hub.FOOT_BLOCK_COLORS["landing"] not in hub.FOOT_TONES
 
 
 def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub, monkeypatch):
@@ -613,7 +675,7 @@ def test_the_line_drops_trailing_facts_on_a_narrow_window_and_never_truncates_on
     full = " · ".join(texts)
     assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all five, in order
     four = " · ".join(texts[:4])
-    assert _foot_text(hub, items, len(four)) == four                           # 5 -> 4: the quota pair drops first
+    assert _foot_text(hub, items, len(four)) == four                           # 5 -> 4: the subs block drops first
     assert _foot_text(hub, items, len(four) - 1) == " · ".join(texts[:3])      # 4 -> 3, still whole items
     assert _foot_text(hub, items, 0) == ""                                     # nothing fits: no number is cut into another
 
@@ -700,7 +762,7 @@ def test_an_unverifiable_subscription_reads_a_question_mark_and_stays_neutral(hu
 def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
     items = hub.foot_items(_src(), CAPS, NOW)
     order = [i["color"] for i in items]
-    assert [i["key"] for i in items] == ["health", "progress", "occ", "quota", "subs"]
+    assert [i["key"] for i in items] == ["health", "progress", "landing", "occ", "subs"]
     root = re.search(r"^:root\{([^}]*)\}", hub.PAGE, re.M).group(1)
     palette = set(re.findall(r"--([a-z-]+):", root))
     assert all(c in palette for c in order), order                             # a colour the hub already has, not a new one
@@ -725,8 +787,8 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
-    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · "
-                                    "codex ok · agy ok · CL ? · GK ? · GPT ? · GEM ?")
+    assert hub.foot_line(items) == ("health ok · last progress 4m · last landing · #73 2h 14m ago · "
+                                    "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
     painted = re.sub(r"<[^>]+>", "", _foot_paint(hub, items))
     assert painted == hub.foot_line(items)                                     # one row, the same tokens, in the same order

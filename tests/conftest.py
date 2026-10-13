@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -92,18 +93,52 @@ def _real_git_first_on_path():
 def gui_tests_off():
     """True while the GUI test switch is off (scripts/gui-tests.sh off). The two markers are the switch's own: the one under
     $SG_STATE is the visible idiom, the home one survives a suite that inherits the machine's SG_STATE and cleans it."""
-    import os
     return (Path(os.environ.get("SG_STATE", Path.home() / ".cache" / "squad-goal")) / "auto" / "gui-tests-off").exists() \
         or (Path.home() / ".squad-gui-tests-off").exists()
+
+
+HOST_BOUND_MARKER = "host_bound"
+HOST_ROOTS = ("MESENAI_REPO", "MESENAI_ROOT")
+HOST_ABSENT_REASON = f"no MesenAI checkout on this runner: {' and '.join(HOST_ROOTS)} absent"
+
+
+def host_present():
+    """True when this runner holds the MesenAI checkout a host-bound test needs: `MESENAI_REPO` and `MESENAI_ROOT`,
+    each set to a directory that exists. A name that is set but absent on disk counts as absent (ADR-0139)."""
+    for name in HOST_ROOTS:
+        value = os.environ.get(name)
+        if not value or not Path(value).expanduser().is_dir():
+            return False
+    return True
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "host_bound: needs a MesenAI checkout this runner may not hold; deselected, never skipped, when it is absent (ADR-0139)")
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Name the deselection in the run's own summary, so a host-bound suite reads its removal instead of a bare count."""
+    n = len(getattr(config, "_host_bound_deselected", []))
+    if n:
+        terminalreporter.write_line(f"{n} host-bound test(s) deselected: {HOST_ABSENT_REASON}")
 
 
 def pytest_collection_modifyitems(config, items):
     # With the switch off, fork-gate.sh hands the GUI command to serial.sh, which deliberately does not run it -- so a test
     # asserting "the GUI suite the gate already ran must keep running" fails by construction, and the gate itself goes red on
     # it. Skipped, never weakened: with the switch on the test runs exactly as before.
-    if not gui_tests_off():
-        return
-    skip = pytest.mark.skip(reason="the GUI test switch is off (scripts/gui-tests.sh off): the gate does not run the GUI suite")
-    for it in items:
-        if it.name == "test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either":
-            it.add_marker(skip)
+    if gui_tests_off():
+        skip = pytest.mark.skip(reason="the GUI test switch is off (scripts/gui-tests.sh off): the gate does not run the GUI suite")
+        for it in items:
+            if it.name == "test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either":
+                it.add_marker(skip)
+    # A test whose fixture is a repository this runner does not own is deselected, never skipped: a skip would read green
+    # while proving nothing (ADR-0018 item 6; ADR-0062 items 2 and 3 refuse a skip). The deselection is reported by name.
+    if not host_present():
+        deselected = [it for it in items if it.get_closest_marker(HOST_BOUND_MARKER)]
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = [it for it in items if not it.get_closest_marker(HOST_BOUND_MARKER)]
+            config._host_bound_deselected = deselected

@@ -77,8 +77,8 @@ def test_two_full_gates_at_once_never_overlap_and_the_second_waits_once(tmp_path
                                     "B suite start", "B suite end", "B pytest start", "B pytest end"]), lines
     # The whole of one gate runs before any of the other: a full gate that started inside another one would interleave here.
     first, second = ("A", "B") if lines[0].startswith("A ") else ("B", "A")
-    assert max(i for i, l in enumerate(lines) if l.startswith(f"{first} ")) < \
-        min(i for i, l in enumerate(lines) if l.startswith(f"{second} ")), f"{first} ran beside {second}: {lines}"
+    assert max(i for i, ln in enumerate(lines) if ln.startswith(f"{first} ")) < \
+        min(i for i, ln in enumerate(lines) if ln.startswith(f"{second} ")), f"{first} ran beside {second}: {lines}"
     waiting = WAIT_LINE.findall("".join(outs))
     assert len(waiting) == 1, f"the second full gate prints one wait line; got {len(waiting)}"
 

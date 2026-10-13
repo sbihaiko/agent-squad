@@ -52,6 +52,7 @@ async def test_commit_records_a_new_head_and_nothing_to_commit_passes(tmp_path):
     """#84: a passing node's declared workspace is already committed by the engine, so this action commits what a
     node that failed left behind; the second commit finds nothing."""
     repo = make_repo(tmp_path / "repo")
+    # A failed agent leaves its tree dirty (#84: the engine commits only a passing node), so the commit action has work to commit.
     d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"], next={"fail": "continue"}),
               act("c", "commit"), act("c2", "commit")], ["wt", "a", "c", "c2"])
     adapter = ScriptedAdapter({"a": {"output": {"status": "fail", "x": 1}, "spend": 0.1, "effect": write_file("new.txt", "hi\n")}})
@@ -64,9 +65,10 @@ async def test_commit_records_a_new_head_and_nothing_to_commit_passes(tmp_path):
 
 async def test_worktree_revert_discards_the_work_back_to_the_recorded_head(tmp_path):
     repo = make_repo(tmp_path / "repo")
-    d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"]), act("rv", "worktree_revert")],
-             ["wt", "a", "rv"])
-    adapter = ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1, "effect": write_file("junk.txt", "x")}})
+    # A failed agent leaves its junk in the tree (#84); the revert the author declared discards it.
+    d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"], next={"fail": "continue"}),
+              act("rv", "worktree_revert")], ["wt", "a", "rv"])
+    adapter = ScriptedAdapter({"a": {"output": {"status": "fail", "x": 1}, "spend": 0.1, "effect": write_file("junk.txt", "x")}})
     eng = Engine(from_doc(d), adapter, tmp_path / "run", target=repo)
     await eng.run()
     wt = Path(outs(tmp_path / "run", "wt")[0]["workspace"]["path"])

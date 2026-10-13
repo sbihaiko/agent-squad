@@ -224,8 +224,8 @@ class Children:
             outcome, reasons = self.check(disp, r.output, ws, outcome, reasons, extra)
         if diag_cap:      # a cap that left a valid artifact: the child passes, and the cap rides in the record
             extra["diagnostic"] = {**extra.get("diagnostic", {}), "cap": diag_cap}
-        if self.isolated(d):      # #84: a child's own worktree is the engine's to commit, before the snapshot a resume compares against
-            node_commit.commit_after(e, node=name, entry=1, item=None, logical=d["workspace"], path=ws, outcome=outcome)
+        if self.isolated(d):    # #84: a child's own worktree is committed by the engine when the child passed, before its snapshot
+            node_commit.commit_after(e, node=name, entry=1, item=None, logical=d["workspace"] or "target", path=ws, outcome=outcome)
         snap = self.snapshot(name, d)
         if snap:
             extra["workspace"] = snap

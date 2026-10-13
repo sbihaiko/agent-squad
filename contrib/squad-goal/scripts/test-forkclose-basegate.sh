@@ -2,14 +2,16 @@
 # Regression test for the fork base gate's suite choice (#1844): the base gate asks the question the candidate gate already asks -- which
 # suites can this base's own diff affect -- and answers it from the one table (gate-suites.sh) over the base's diff since the last base
 # recorded green. The park and its solo retry reuse the same selection, so a red base is never parked by a suite its diff cannot affect.
-# Stub gate, stub gh, throwaway fork repo, no emulator.
+# Since #85 no gate runs before a merge: the base gate runs after a red landing on a base nobody recorded green, with the merge taken
+# back first. The stub gate here is red whenever the branch's file is in the tree, so every case drives the landing gate (red) and
+# then the base gate (the suite choice under test), in that order. Stub gate, stub gh, throwaway fork repo, no emulator.
 unset SG_E2E_DIR SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD   # the real e2e checkouts of the caller must never be touched by a stub run
 here="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; A="$T/st/auto"
 mkdir -p "$T/s" "$T/bin"
 cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/gate-suites.sh" "$T/s/"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py $here/ghcall.sh "$T/s/"
 # The gate stub records the FG_SUITES it was handed and runs the GUI command only for the full gate, like fork-gate.sh does.
-printf '#!/bin/bash\ns=${FG_SUITES:-full}; echo "$s" >> %s/suites.log\n[ "$s" = full ] && eval "$1"\n[ -e %s/red ] && exit 1\nexit 0\n' "$T" "$T" > "$T/s/fork-gate.sh"
+printf '#!/bin/bash\ns=${FG_SUITES:-full}; echo "$s" >> %s/suites.log\n[ "$s" = full ] && eval "$1"\n[ -e %s/red ] && exit 1\n[ -e contrib/squad-goal/h ] && exit 1\nexit 0\n' "$T" "$T" > "$T/s/fork-gate.sh"   # red with the branch's file in the tree: the landing goes red, and the base gate follows (#85)
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"/comments"*) echo "TDD RED (test-x.sh, line): FAIL y";; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
@@ -29,32 +31,32 @@ want() { [ "$(suites)" = "$1" ] && ok "$2" || ko "$2 -- suites: '$(suites)'"; }
 # a base whose own diff touched only contrib/squad-goal/ needs the shell suites, not the GUI suite (its diff cannot affect it)
 fresh; green; base contrib/squad-goal/g; br contrib/squad-goal/h
 pass
-want "shell shell " "a base diff confined to contrib/squad-goal/ runs the shell suites only, for the base gate and the branch gate"
+want "shell shell " "a base diff confined to contrib/squad-goal/ runs the shell suites only, for the branch gate and then the base gate"
 [ ! -e "$T/runs" ] && ok "that base never runs the GUI suite" || ko "the GUI suite ran for a shell-only base diff"
 [ -e "$A/basetest-$($G -C "$T/fork" rev-parse --short=9 HEAD)" ] && ok "the base that came out green is recorded as a tested base" || ko "the base green run was not recorded"
 
 # a base whose own diff touched tests/ needs the python suites, and the branch gate keeps its own answer
 fresh; green; base tests/test_x.py; br contrib/squad-goal/h
 pass
-want "python shell " "a base diff confined to tests/ runs the python suites only, while the branch's own diff still picks shell"
+want "shell python " "a base diff confined to tests/ runs the python suites only, while the branch's own diff still picks shell"
 
 # any doubt stays the full gate: an unknown path, two suites in one diff, and a base nobody has recorded green yet
 fresh; green; base README.md; br contrib/squad-goal/h
 pass
-want "full shell " "a base diff touching a path the table does not know stays full"
+want "shell full " "a base diff touching a path the table does not know stays full"
 [ -e "$T/runs" ] && ok "the full base gate runs the GUI suite" || ko "the full base gate skipped the GUI suite"
 
 fresh; green; base contrib/squad-goal/g tests/test_x.py; br contrib/squad-goal/h
 pass
-want "full shell " "a base diff touching two suites stays full"
+want "shell full " "a base diff touching two suites stays full"
 
 fresh; br contrib/squad-goal/h   # no base recorded green: nothing to read the base diff from
 pass
-want "full shell " "a base with no accepted basetest stays full"
+want "shell full " "a base with no accepted basetest stays full"
 
 fresh; green; g commit -q --allow-empty -m "no tree change"; br contrib/squad-goal/h
 pass
-want "full shell " "a base diff with no change at all stays full"
+want "shell full " "a base diff with no change at all stays full"
 
 # the park and its solo retry reuse the base gate's selection: a red base whose diff is shell-only is never parked by the GUI suite
 fresh; green; base contrib/squad-goal/g; br contrib/squad-goal/h

@@ -26,6 +26,6 @@ jobs:
       - run: mypy squad
       - run: python3 -m pytest -n auto
       - name: GUI test squad e2e suite
-        env:
-          MESENAI_REPO: ${{ github.workspace }}/../MesenAI
+        # No MesenAI checkout is on the runner: the host-bound tests are deselected (ADR-0139) and their removal is
+        # reported by name. The host-free tests in the file still run. The gate step above keeps its own command.
         run: python3 -m pytest tests/test_gui_test_e2e.py -q

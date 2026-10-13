@@ -17,7 +17,20 @@
 # and each issue then closes through the late-close path below with that run as its evidence; red drops the candidate and the loop lands them one
 # at a time, so a culprit is still named. A branch that conflicts with an earlier one stays out of the batch and gets its conflict-fix run as usual.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
+# Two phases per landing (#85). Phase one LANDS: the merge needs no suite lock, so an eligible branch is in the base before any
+# gate runs (FORKCLOSE LANDED #n), and its dependents (Blocked by) are released at once. Phase two GATES the landed head under
+# the machine-wide `gate` lock (serial.sh, the lock shell-suites.sh and the pytest gate hold): it never runs beside a child's
+# gate, it waits for it and says so once (FORKCLOSE WAIT-GATE, naming the holder serial.sh recorded) and once more when it has
+# the lock (FORKCLOSE GATE-LOCK). No gate runs before the merge any more: a base nobody recorded green is gated on its own only
+# after a red re-gate, with the merge taken back first, so a red base is never blamed on the branch and a parked base
+# (basered-<sha>) is still never merged into. A red re-gate keeps its rule: the failure is named, the issue stays open, the
+# merge is reverted and the fix run arms. A dirty path in the shared checkout holds only the merge that would touch it (git
+# itself refuses that merge), a staged change holds every merge (git refuses a dirty index), and the WAIT line names the paths
+# (five, then a count), so the operator reads who blocks the queue. Nothing here resets or checks out over someone's work.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
+exec 3>&1   # the pass's own stdout, for a line printed from inside a captured gate run (WAIT-GATE, GATE-LOCK)
 # The collection's reads go through the loop's one door (ghcall.sh, #5, #1893, ADR-0277), and the reader behind it is the
 # throttled one (#4): this is the loop's heaviest reader and the pass the bucket is sized for, so every route goes to
 # ghthrottle.py, which spends a token from the bucket every process of the loop shares, answers a refusal without touching
@@ -59,7 +72,7 @@ now=$(date +%s)
 # its record was touched inside the orphan window, and it names the branch it was launched for.
 livebrs=" $(for r in $(ls -t "$SG_CHECKOUT/runs" 2>/dev/null | head -60); do
   f="$SG_CHECKOUT/runs/$r/record.jsonl"; [ -f "$f" ] || continue
-  [ $(( now - $(stat -f %m "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+  [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
   grep -oE 'gui/[0-9]+' "$SG_CHECKOUT/runs/$r/request.txt" 2>/dev/null | sort -u | tr '\n' ' '
 done) "
 # A branch ahead of the base with nobody on it and no recent commit: the fix run meant to move it is gone. Without this its
@@ -84,12 +97,33 @@ held() { local w
 # one WAIT line per pass blocks every merge, forever, with nothing naming the cause (#1798). A clean tree nobody holds is the
 # loop's own to move back to the base; uncommitted work is never reset and a branch a live run names is never taken from under
 # it -- both are named instead, so the operator reads which of the two it is rather than the same silent WAIT.
-needbase() { local cb why
-  if [ -n "$($G status --porcelain --untracked-files=no)" ]; then
-    echo "FORKCLOSE WAIT $1: $SG_FORK_DIR has uncommitted changes; a merge pass needs a clean tree, and forkclose never resets or checks out over someone's work. Commit them, or move the checkout to $SG_FORK_BASE; the pass resumes on its own."
+# (#85) The shared checkout is the owner's working tree in the shipped profile ($SG_FORK_DIR = $SG_CHECKOUT), so "any uncommitted
+# file stops every merge" held the queue for half an hour on a file no branch touched. What git itself refuses is the rule: a
+# staged change blocks every merge (a dirty index), an unstaged change blocks the merge that would overwrite it; any other dirty
+# path rides beside the merge, the revert and the fast-forward untouched (a merge commits the index, never the worktree). The
+# WAIT line names the paths -- five, then a count -- so the operator reads who holds the queue, not only that it is held.
+dirtypaths() { $G status --porcelain --untracked-files=no 2>/dev/null | awk 'substr($0,2,1)!=" " {print substr($0,4)}'; }    # unstaged changes
+stagedpaths() { $G status --porcelain --untracked-files=no 2>/dev/null | awk 'substr($0,1,1)!=" " {print substr($0,4)}'; }   # index changes
+namelist() { local n; n=$(printf '%s\n' "$@" | grep -c .)   # the first five, then a count
+  printf '%s' "$(printf '%s\n' "$@" | grep . | head -5 | paste -sd, - | sed 's/,/, /g')"; [ "$n" -gt 5 ] && printf ' and %d more (%d paths)' $(( n - 5 )) "$n"; return 0; }
+touched() { { $G diff --name-only "$($G merge-base "$SG_FORK_BASE" "$1" 2>/dev/null)" "$1" 2>/dev/null; lost "$1"; } | sort -u; }   # the paths merging $1 would write
+overlap() { comm -12 <(dirtypaths | sort -u) <(touched "$1"); }   # the dirty paths merging $1 would write: what git refuses to merge over
+# needbase <label> [branch]: 0 = the checkout is on the base and the merge can land; 1 = nothing can land this pass (WAIT printed);
+# 2 = this branch cannot land over a dirty path it would write (WAIT printed, naming it), another branch may.
+needbase() { local cb why d s ov
+  s=$(stagedpaths); d=$(dirtypaths)
+  if [ -n "$s" ]; then
+    echo "FORKCLOSE WAIT $1: $SG_FORK_DIR has staged changes ($(namelist $s)); git refuses a merge over a dirty index, and forkclose never resets or checks out over someone's work. Commit them or unstage them; the pass resumes on its own."
     return 1; fi
   cb=$($G branch --show-current 2>/dev/null)
-  [ "$cb" = "$SG_FORK_BASE" ] && return 0
+  if [ "$cb" = "$SG_FORK_BASE" ]; then
+    [ -n "$2" ] && [ -n "$d" ] || return 0
+    ov=$(overlap "$2"); [ -n "$ov" ] || return 0
+    echo "FORKCLOSE WAIT $1: $SG_FORK_DIR has uncommitted changes in paths $2 would write ($(namelist $ov)); a merge never lands over someone's work, and forkclose never resets or checks out over it. Commit them or discard them; the pass resumes on its own. A dirty path the merge does not touch holds nothing."
+    return 2; fi
+  if [ -n "$d" ]; then
+    echo "FORKCLOSE WAIT $1: $SG_FORK_DIR is on $cb with uncommitted changes ($(namelist $d)); a merge pass needs the checkout on $SG_FORK_BASE, and forkclose never resets or checks out over someone's work. Commit them, or move the checkout to $SG_FORK_BASE; the pass resumes on its own."
+    return 1; fi
   why=$(held "$cb")
   if [ -n "$why" ]; then echo "FORKCLOSE WAIT $1: $SG_FORK_DIR is on $cb and $why; not moving a checkout in use. A fork-only child belongs in its own ~/wt-as-<N> worktree (forkonly.sh), never in the shared checkout."
     return 1; fi
@@ -129,11 +163,21 @@ dirtywt() { local w
 mergebr() { if $G merge --no-ff --no-commit -q "$br" >/dev/null 2>&1; then :; else [ -n "$lf" ] || return 1; fi   # ahead of the base AND files lost to a revert: the merge only brings the commits after the revert, so a modify/delete conflict on a lost file is expected and the branch's version of every lost file wins
   if [ -n "$lf" ]; then $G checkout -q "$br" -- $lf || return 1; [ -z "$($G diff --name-only --diff-filter=U)" ] || return 1; fi
   $G commit -q --no-edit -m "Merge $br (Refs #$n)" >/dev/null 2>&1 || [ -z "$($G rev-parse -q --verify MERGE_HEAD)" ] || return 1
-  auditmerge HEAD || { $G reset -q --hard HEAD^ 2>/dev/null; return 1; }; }   # (#14) the resolution this pass just made is audited before it becomes the base: a line both parents hold that the resolution dropped is refused, and the base is put back
-relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
-  t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") || { $G reset -q --hard HEAD; return 1; }
-  auditmerge "$c" || { $G reset -q --hard HEAD; return 1; }   # (#14) the same audit before the commit is moved onto the branch
-  $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
+  auditmerge HEAD || { $G reset -q --merge HEAD^ 2>/dev/null; return 1; }; }   # (#14) the resolution this pass just made is audited before it becomes the base: a line both parents hold that the resolution dropped is refused, and the base is put back (--merge, never --hard: a dirty path beside the merge is someone's work, #85)
+relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --merge HEAD; return 1; }   # the branch is an ancestor already (merging is a no-op): restore the lost files in a merge commit so the close and the revert (-m 1) work as usual
+  t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") || { $G reset -q --merge HEAD; return 1; }
+  auditmerge "$c" || { $G reset -q --merge HEAD; return 1; }   # (#14) the same audit before the commit is moved onto the branch
+  $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --merge HEAD; return 1; }; }
+# (#85) Phase two runs under the machine-wide gate lock: never beside a child's gate, after it. The wait is named once with the
+# holder serial.sh recorded (its lock holds the pid), and the take is named once; both go to the pass's own stdout (fd 3), so a
+# gate whose output is captured still says so in the loop's log. Re-entrant by serial.sh's rule; a tree with no serial.sh beside
+# this script runs the gate unwrapped and says so, as shell-suites.sh does: a missing lock never passes as a held one.
+gatelock() { local l=$1 h; shift
+  case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) "$@"; return;; esac
+  [ -f "$here/serial.sh" ] || { echo "FORKCLOSE GATE-NOLOCK: no serial.sh beside forkclose.sh; the gate for $l runs without the machine-wide gate lock" >&3; "$@"; return; }
+  h=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
+  [ -n "$h" ] && kill -0 "$h" 2>/dev/null && echo "FORKCLOSE WAIT-GATE: waiting for the gate lock (holder $h) before the gate for $l" >&3
+  FC_GATE_LABEL=$l bash "$here/serial.sh" gate bash -c 'echo "FORKCLOSE GATE-LOCK: took the gate lock for $FC_GATE_LABEL" >&3; exec "$@"' _ "$@"; }
 # The spawn `workspace` field is a logical workspace the graph allows, never the branch worktree (#55): the router read `worktree add ~/wt-fr-<n> gui/<n>` as the workspace, the envelope refused 'worktrees/child/gui-<n>' whole and the run ended no_dispatch.
 wsrule="In the spawn call, set the spawn \`workspace\` field to the allowed workspace \`${SG_CHILD_WORKSPACE:-worktrees/child}\` (the first workspace the dispatch envelope allows), never the branch worktree path: the branch worktree is a path in this text only."
 brof() { sg_fork_branch "$1"; }   # the land and the request name the branch from one setting (#1836)
@@ -217,13 +261,13 @@ basegate() { local l=$1 bt bgs rvt
       mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. This base's own diff is answered with the %s gate; past %s min it is retried once on its own, and a green retry lifts the park, a second red keeps it%s.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "$bgs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" "$rvt" > "$cqf"
     fi
     # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
-    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
-      if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN $l: $SG_FORK_BASE $bs passed the solo retry ($bgs gate) after the park; lifting it"; return 0
+    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(mtime "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
+      if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs gatelock "$l" bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN $l: $SG_FORK_BASE $bs passed the solo retry ($bgs gate) after the park; lifting it"; return 0
       else echo "FORKCLOSE BASE-RED $l: the solo retry of $SG_FORK_BASE $bs ($bgs gate) failed too (see $SG_STATE/basetest-$bs.log); the park stays"; return 1; fi
     else echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the $bgs gate on its own, so a red run here would not be the branch's fault$rvt; waiting for a green base"; return 1; fi
   fi
   [ -e "$A/basetest-$bs" ] && return 0
-  if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"; return 0; fi
+  if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs gatelock "$l" bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; rm -f "$A/basered-$bs.tries"; return 0; fi
   # one sample is not proof: the full suite flakes on the real emulator (a hold step loses the window to a suite running in
   # parallel), and a single red would park every branch on a flake. Two consecutive reds is the base, one is a retry.
   bt=$(( $(cat "$A/basered-$bs.tries" 2>/dev/null || echo 0) + 1 )); echo "$bt" > "$A/basered-$bs.tries"
@@ -272,11 +316,11 @@ unland() { local ms=$1 why=$2 start m u q="" subj body   # prints the QUARANTINE
   for m in $ms; do
     if ! $G revert -m 1 --no-edit "$m" >/dev/null 2>&1; then
       for u in $($G diff --name-only --diff-filter=U); do
-        isspec "$u" || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; echo "$u"; return 1; }
-        $G checkout -q HEAD -- "$u" 2>/dev/null || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; echo "$u"; return 1; }
+        isspec "$u" || { $G revert --abort >/dev/null 2>&1; $G reset -q --merge "$start"; echo "$u"; return 1; }
+        $G checkout -q HEAD -- "$u" 2>/dev/null || { $G revert --abort >/dev/null 2>&1; $G reset -q --merge "$start"; echo "$u"; return 1; }
         q="$q $u"; echo "FORKCLOSE QUARANTINE #$n: $u stays in $SG_FORK_BASE: a later commit changed it after ${m:0:9} brought it, so taking it back would drop that change (reverting the merge for a red gate: $why)"; done
-      if [ -n "$($G diff --cached --name-only)" ]; then $G -c core.editor=true revert --continue >/dev/null 2>&1 || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; return 1; }
-      else $G revert --skip >/dev/null 2>&1 || { $G revert --abort >/dev/null 2>&1; $G reset -q --hard "$start"; return 1; }; fi
+      if [ -n "$($G diff --cached --name-only)" ]; then $G -c core.editor=true revert --continue >/dev/null 2>&1 || { $G revert --abort >/dev/null 2>&1; $G reset -q --merge "$start"; return 1; }
+      else $G revert --skip >/dev/null 2>&1 || { $G revert --abort >/dev/null 2>&1; $G reset -q --merge "$start"; return 1; }; fi
     fi; done
   [ "$($G rev-parse HEAD)" != "$start" ] || return 1
   body=$(printf '%s\n\n%s\n\n' "Revert \"${subj}\"" "Taken back because the fork gate went red: $why. The change is not judged wrong here; a red gate is the reason, and a fix on the branch re-arms the close."
@@ -305,12 +349,13 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
   if [ -n "${FC_SET:-}" ]; then bl="$FC_SET"; else cf=$(mktemp); FC_COLLECT=$cf bash "$0"; bl=$(sort -un "$cf"); rm -f "$cf"; fi   # the re-gated remainder names its own set; otherwise the loop's own eligibility rules, whose notices (WAIT, ORPHAN) print here
   [ "$(wc -w <<<"$bl")" -ge 2 ] || return 0
   needbase "batch" || return 0   # a checkout left on a branch is returned to the base here, so the batch is not skipped for a pass (the loop below says WAIT when it cannot be)
-  bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); basegate "batch" || exit 0
+  bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); [ ! -e "$A/basered-$bs" ] || basegate "batch" || exit 0   # a parked base is never merged into (#85: no gate before a merge; the park's own retry runs under the gate lock)
   key=$(for nn in $bl; do $G rev-parse "$(brof $nn)"; done | cksum | cut -d' ' -f1); [ -e "$A/nobatch-$key" ] && return 0   # this exact set already went red as a batch
   b0b=$($G rev-parse "$SG_FORK_BASE")   # the base the candidate's own change is measured against (#15)
   $G checkout -q -b fc-batch "$SG_FORK_BASE" || return 0
   for nn in $bl; do b2=$(brof $nn)   # in order; a branch that conflicts with an earlier one stays out and gets its conflict fix from the loop below
-    if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; $G reset -q --hard HEAD; fi; done
+    [ -z "$(overlap "$b2")" ] || continue   # (#85) a member that would write a dirty path of the checkout stays out; the loop below names the path
+    if $G merge --no-ff -q -m "Merge $b2 (Refs #$nn)" "$b2" >/dev/null 2>&1; then merged="$merged $nn"; else $G merge --abort 2>/dev/null; [ -z "$($G diff --cached --name-only)" ] || $G reset -q --merge HEAD; fi; done
   # (#14) A merge git made without a conflict can still drop a line both of its parents hold (a rename/delete it settled on its
   # own). Each merge the candidate just made is audited here, and the member it came from is dropped by name like a culprit -- the
   # rest of the batch is re-gated in this same pass instead of the whole set paying for one member's fabricated merge.
@@ -330,7 +375,7 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
   files=$(ldiff "$b0b" HEAD)   # the candidate's own change to the base, the same rule the single landing uses (#15): what the merges did, never what each branch did at its own fork point
   suites=$(printf '%s\n' $files | suiteset); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
   id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
-  out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
+  out=$(TEST_ID=$id FG_SUITES=$suites gatelock "batch" "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
   # read off the candidate, which is still checked out here. Not `at=$(batchculprit ...)`: that runs in a subshell and takes the
   # brwhy it sets with it, so the fallback below would always print its default reason instead of the one this red has.
   at=""; brwhy=""; if [ $rc != 0 ]; then batchculprit "$id" "${merged# }" > "$A/batchculprit.txt" || true; at=$(cat "$A/batchculprit.txt"); fi
@@ -447,7 +492,7 @@ for n in $cc; do
   [ -z "$wait" ] || { wm="$A/forkwait-$n${wait// /-}"; [ -e "$wm" ] || { touch "$wm"; echo "FORKCLOSE WAIT #$n: the fork half of$wait is not in $SG_FORK_BASE yet (Blocked by)"; }; continue; }
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"
   if [ -e "$mk" ]; then   # "wait for a real fix commit" is a wait with no deadline unless the marker expires on its own
-    age=$(( now - $(stat -f %m "$mk") ))
+    age=$(( now - $(mtime "$mk") ))
     [ "$age" -lt $(( ${SG_FORK_MARKER_MINUTES:-45} * 60 )) ] && continue
     rm -f "$mk"; echo "FORKCLOSE RETRY #$n: the marker for ${head:0:9} waited $(( age / 60 )) min with no new commit on $br and no fix run alive; retrying"
   fi
@@ -481,9 +526,12 @@ for n in $cc; do
     [ -n "${FC_DRY:-}" ] || [ -e "$A/redwarn-$n" ] || { touch "$A/redwarn-$n"; printf "Fork-only close: %s is landing but this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; please post the RED and GREEN output here. The landing is not blocked.\n" "$br" > "$(sg_cq_file "$n-redwarn$$.md")"; }
   fi
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
-  needbase "#$n" || exit 0
+  needbase "#$n" "$br"; case $? in 1) exit 0;; 2) continue;; esac   # (#85) a dirty path holds only the merge that would write it
   bs=$($G rev-parse --short=9 "$SG_FORK_BASE"); b0=$($G rev-parse "$SG_FORK_BASE")   # b0: the base this landing is measured against (#15)
-  basegate "#$n" || continue
+  # (#85) Phase one lands with no gate before it. A parked base is still never merged into (basegate: the park's escalation and
+  # its solo retry, under the gate lock); whether b0 was ever recorded green decides, after a red re-gate, who is blamed.
+  b0ok=""; [ -e "$A/basetest-$bs" ] && b0ok=1
+  if [ -e "$A/basered-$bs" ]; then basegate "#$n" || continue; b0ok=1; fi
   # The fork-point rule, kept for the conflict request and as the answer when this pass makes no landing diff of its own; the landing
   # itself is judged by its own change to the base, printed below with which rule answered (#15). late/reland: doubt, full.
   fs=full; fsf=full; [ -z "$late$reland" ] && fsf=$(bdiff "$SG_FORK_BASE" "$br" | suiteset); fs=$fsf
@@ -515,13 +563,14 @@ for n in $cc; do
   if [ "$way" = rebase ]; then printf '%s\n' "$br" > "$A/landed-$($G rev-parse --short=9 HEAD)"; fi   # the fast-forward landing has no `Merge $br` subject: this record is what names the branch it came from (#11)
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
   if [ -z "$late" ]; then   # the landing is gated by its OWN change to the base (#15); a reland stays any-doubt, as it always was
+    dn=$(dirtypaths); echo "FORKCLOSE LANDED #$n: $br ${head:0:9} -> ${m:0:9} in $SG_FORK_BASE ($way); the gate runs next, under the gate lock${dn:+; uncommitted beside it, untouched: $(namelist $dn)}"   # (#85) phase one is done: dependents are released now
     fs=full; [ -z "$reland" ] && fs=$(ldiff "$b0" HEAD | suiteset)
     echo "FORKCLOSE SUITES #$n: $fs by the landing rule (the landing's own change to $SG_FORK_BASE), the branch's fork-point diff answered $fsf"; fi
   if [ -n "$late" ] && [ -e "$A/basetest-$bs" ]; then   # the base that holds the branch is already tested green (a batch that just landed it, or the base test above): no second run
     rc=0; id=base-$bs; lg=$(cat "$A/basetest-$bs"); tl=$(tail -3 "${lg:-/dev/null}" 2>/dev/null)
   else e2eprep "#$n"
     id=test-$n-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts: a gate killed by a signal never prints it (#1470)
-    out=$(TEST_ID=$id FG_SUITES=$fs "$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)
+    out=$(TEST_ID=$id FG_SUITES=$fs gatelock "#$n" "$here/test.sh" "$n" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?; tl=$(tail -3 "$SG_STATE/tests/$id.log" 2>/dev/null)   # phase two (#85)
     # the gate ran on the tree that is now the base head: record it as tested, so the next landing pays no second base test
     [ $rc = 0 ] && [ -z "$late" ] && [ "$($G rev-parse HEAD)" = "$m" ] && echo "$SG_STATE/tests/$id.log" > "$A/basetest-${m:0:9}"
   fi
@@ -558,6 +607,17 @@ EOT
     bw=$($G worktree list --porcelain | awk -v b="refs/heads/$br" '/^worktree /{w=$2} $0=="branch "b{print w}')
     [ -n "$bw" ] && /usr/bin/git -C "$bw" merge -q --no-edit "$SG_FORK_BASE" >/dev/null 2>&1 && /usr/bin/git -C "$bw" revert --no-edit "$rv" >/dev/null 2>&1 \
       && { [ -n "$ek" ] || touch "$A/fork-$n-$(/usr/bin/git -C "$bw" rev-parse HEAD | cut -c1-9)"; }   # same content that just failed: wait for a real fix commit (a killed gate is retried instead)
+    # (#85) The landing went first, so the base under it may never have been gated: before the branch is blamed, the base as it
+    # stands after the revert is gated on its own (the base test that used to run before every merge, now only after a red that
+    # could be its own). Green: the red was the branch's, and the fix run arms below. Red: the park takes over (BASE-RED, no fix
+    # run, the issue stays open), the branch keeps no wait marker, and it lands again when the park lifts.
+    if [ -z "$ek" ] && [ -z "$b0ok" ]; then
+      bs=$($G rev-parse --short=9 "$SG_FORK_BASE")
+      echo "FORKCLOSE RED-UNTESTED-BASE #$n ($id exit $rc): $SG_FORK_BASE under this landing was never recorded green, so the merge is taken back and the base ($bs) is gated on its own before $br is blamed"
+      if ! basegate "#$n"; then
+        nh=$($G rev-parse -q --verify "$br" 2>/dev/null); rm -f "$mk" "$A/fork-$n-${nh:0:9}"
+        echo "FORKCLOSE RED-NOT-BLAMED #$n ($id exit $rc, log $SG_STATE/tests/$id.log): $SG_FORK_BASE is red on its own, so $br is not blamed and no fix run is dispatched; the merge is reverted and the branch re-applied, and it lands again when the base is green"; continue; fi
+    fi
     if [ -n "$ek" ]; then   # no fix run: there is nothing to fix. One retry on the next cycle; a second kill on the same head goes to the owner
       rm -f "$mk"; nh=$($G rev-parse "$br"); kf="$A/envkill-$n"; kc=0; [ "$(cut -d' ' -f2 "$kf" 2>/dev/null)" = "$nh" ] && kc=$(cut -d' ' -f1 "$kf"); kc=$(( kc + 1 )); echo "$kc $nh" > "$kf"
       if [ "$kc" -ge 2 ]; then touch "$A/fork-$n-${nh:0:9}"   # parked until the head moves or the marker expires

@@ -22,9 +22,10 @@ Scripts and SDK runs work unattended, and other tools read their exit codes. An 
 5. **Every non-zero verdict names what remains, by step.** A reader can tell "never ran" from "failed" and see where to resume.
 6. **State the resume instruction in the message,** with the command verbatim.
 7. **A `10` has an owner and a deadline.** An unanswered question is not a pause. When the deadline expires, the caller applies the declared default and records that it did so.
+8. **On a board, a `needs-human` run that landed nothing puts its card in `Blocked`.** The operator reads the board to know what waits for him, and `needs-human` means he is the next actor. `Code Complete` claims work that does not exist; `Todo` tells him the loop has it. `Blocked` is the column the board already uses for an issue a person must unblock (the owner labels). One rule owns that write, the board reconciliation (`janitor.py` rule R): it derives the column from the run's own record, and no other rule writes a loop-board card a run names. The dispatch release (rule O) drops the marker and names the column R wrote in its comment; it writes none of its own. The card cache follows the pass's own writes, so a later rule reads the column the pass set, never a stale read.
 
 A new code needs an ADR that names the caller who scripts on it.
 
 ## Guard
 
-`tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`.
+`tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`; for the board column, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh` and `test-janitor-board-reconcile.sh`.

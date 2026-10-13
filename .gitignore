@@ -12,3 +12,7 @@ __pycache__/
 build/
 runs/
 scripts/archive/jev_data_real/
+
+# nested child worktrees are scratch: the loop creates one per child, and a gitlink for each dirtied the parent on every child checkout
+worktrees/
+.worktrees/
