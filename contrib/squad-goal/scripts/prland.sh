@@ -72,11 +72,18 @@ for n in $(printf '%s' "$pl" | jq -r '.[].number'); do
   for j in $(printf '%s' "$cr" | jq -r '.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")|"\(.id):\(.conclusion):\(.name|gsub(" ";"_"))"'); do
     id=${j%%:*}; rest=${j#*:}; con=${rest%%:*}; name=${rest#*:}
     [ "$con" = failure ] || { bad="check $name ended $con"; break; }
+    job=$(gh_api "repos/$SG_REPO/actions/jobs/$id") || { bad="the job details of check $name are not readable: $job"; break; }
+    detail=$(gh_api "repos/$SG_REPO/check-runs/$id") || { bad="the check details of check $name are not readable: $detail"; break; }
+    stop=$(printf '%s\n%s\n' "$job" "$detail" | jq -sc '.[0:2]' | python3 "$here/ci_state.py")
+    case "$stop" in
+      cannot-run$'\t'*) say wait "$n" "$sha" cannot-run "CI cannot run: ${stop#*$'\t'}"; bad=cannot-run; break;;
+    esac
     log=$(gh_get "repos/$SG_REPO/actions/jobs/$id/logs") || { bad="the log of check $name is not readable: $log"; break; }
     ft=$(printf '%s' "$log" | failed_tests)
     [ -n "$ft" ] || { bad="check $name failed and its log names no failed test (ruff, mypy or an error before the suite)"; break; }
     for t in $ft; do case "$baseline" in *" $t "*) ;; *) outside="$outside $t";; esac; done
   done
+  [ "$bad" = cannot-run ] && continue
   [ -z "$bad" ] || { say refuse "$n" "$sha" check "$bad"; continue; }
   [ -z "$outside" ] || { say refuse "$n" "$sha" red "failed outside the baseline:$outside"; continue; }
   # the facts that gate the write, read live, one request: still open, still not a draft, and mergeable
