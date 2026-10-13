@@ -10,6 +10,7 @@ cat > "$T/s/models.json" <<J
 J
 cat > "$T/s/env.sh" <<J
 SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md
+. "$(cd "$(dirname "$src")" && pwd)/address.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
 J
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -39,7 +40,7 @@ rm -f "$T/st/review-7.sha"; export GH_MOVE="$T/moved" CLAUDE_SLOW=1; t=$(date +%
 unset GH_MOVE CLAUDE_SLOW; export CLAUDE_NARRATE=1; rm -f "$T/st/review-7.sha" "$T/st/cq/"*mformat*
 out=$(bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 [ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && ok "a prose review is a format failure (BLOCKED, not saved)" || ko "prose review: rc=$rc '$(head -1 "$T/st/review-7.md")'"
-/usr/bin/grep -q 'line 2' "$T/st/cq/"*mformat* 2>/dev/null && ok "the format failure names the first line that is not the shape" || ko "no format reason: $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
+/usr/bin/grep -q 'line 2' "$T/st/cq/x__y#"*mformat* 2>/dev/null && ok "the format failure names the first line that is not the shape" || ko "no format reason: $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
 unset CLAUDE_NARRATE
 # 4) fast lane: a docs/tests-only PR goes to the fastest model by measured latency, at low effort. Product code is not a
 # fast lane -- it keeps its own effort -- but the order is the same measured one there too (#1846, block 10 below).
@@ -58,10 +59,10 @@ printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"r
 rm -f "$T/st/review-7.sha"; out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:fast*) ok "hours: a model outside its window is skipped ($wa)";; *) ko "hours skip: '$out'";; esac
 # and the default is all day: the same model with no window in the map runs (the config just wrote none for claude:fast)
-/usr/bin/grep -q 'claude:fast' "$T/st/cq/8-mhours"* 2>/dev/null && ko "hours: claude:fast was skipped with no window (default must be all day)" || ok "hours: no window = runs all day"
+/usr/bin/grep -q 'claude:fast' "$T/st/cq/"*"#8-mhours"* 2>/dev/null && ko "hours: claude:fast was skipped with no window (default must be all day)" || ok "hours: no window = runs all day"
 h2=$(( (h+23)%24 )); h3=$(( (h+1)%24 )); printf -v wb '%02d-%02d' $h2 $h3   # a window that does contain now (an hour either side)
 printf '{"review_models":["claude:slow"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[],"hours":{"review_models":{"claude:slow":"%s"}}}' "$wb" > "$T/s/models.json"
-rm -f "$T/st/review-7.sha" "$T/st/cq/8-mhours"*; out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
+rm -f "$T/st/review-7.sha" "$T/st/cq/"*"#8-mhours"*; out=$(bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "hours: inside the window the model runs ($wb)";; *) ko "hours inside: '$out'";; esac
 # 6) the severity split (#1393, unchanged by #1777): the section a finding sits in is its severity, both survive
 # into the saved review, on both prompt modes, and the prompt carries the checklist format with the cap from the config.
@@ -123,7 +124,7 @@ case "$out" in model=claude:claude-deepseek-v4-flash*) [ $rc = 0 ] && [ $el -ge 
 printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/agy-limited" "$T/st/quota-guard" "$T/st/review-7".* "$T/st/cq/"*
 out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
-[ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && /usr/bin/grep -q 'after 2s' "$T/st/cq/"*mtimeout* && ok "leash + several reachable models: still clamped" || ko "several reachable leash: rc=$rc '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
+[ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && /usr/bin/grep -q 'after 2s' "$T/st/cq/x__y#"*mtimeout* && ok "leash + several reachable models: still clamped" || ko "several reachable leash: rc=$rc '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null) cq=$(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 # 9) #1820: review.sh takes the PR's own repository as its first argument -- the squad works in two repositories now,
 # and a tooling PR is reviewed through the same chain. Every read of the PR (head, base, files, diff, the head that
 # supersedes it) goes to the repository it was given; with no argument it is the profile's repository, as before.

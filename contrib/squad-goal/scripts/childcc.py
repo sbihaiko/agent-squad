@@ -10,6 +10,7 @@ past it is left alone because the marker is written the first time the child is 
 import json, os, pathlib, re, subprocess, sys
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
+CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 board = str(pathlib.Path(__file__).resolve().parent / "board.sh")
 def card_status(n):   # REST, no GraphQL quota; "" when unreadable
     g = lambda *a: subprocess.run(["gh", *a], capture_output=True, text=True).stdout.strip()
@@ -45,7 +46,7 @@ for r in (st / "active-runs.txt").read_text().split():
         if s != "open": continue
         if finished and card_status(n) not in ("Todo", "In Progress", "Blocked"): continue   # backfill never moves a card past (or out of) its column
         subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)
-        (st / "cq" / f"{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {pathlib.Path(r).name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
+        (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {pathlib.Path(r).name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
         print(f"CODE COMPLETE #{n} ({pathlib.Path(r).name} {child})")
     for child in unmapped:
         mk = A / f"unmap-{pathlib.Path(r).name}-{child}"

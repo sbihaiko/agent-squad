@@ -13,5 +13,5 @@ w start "$iss" "$*" "$dir"
 $BOARD $SG_OWNER $SG_PROJECT Testing $iss >/dev/null 2>&1
 (cd "$dir" && "$@") > "$log" 2>&1; rc=$?
 [ $rc = 0 ] && st=completed || st=failed; w $st $rc
-printf "Test pass %s on #%s: %s (exit %s) in %s\n\`\`\`\n%s\n%s\n\`\`\`\n" "$id" "$iss" "$st" "$rc" "${dir/#$HOME/~}" "$*" "$(tail -5 "$log")" > "$SG_STATE/cq/$iss-$id.md"
+printf "Test pass %s on #%s: %s (exit %s) in %s\n\`\`\`\n%s\n%s\n\`\`\`\n" "$id" "$iss" "$st" "$rc" "${dir/#$HOME/~}" "$*" "$(tail -5 "$log")" > "$(sg_cq_file "$iss-$id.md")"
 echo "TEST #$iss $st (exit $rc) $id"; exit $rc

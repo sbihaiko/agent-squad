@@ -6,7 +6,7 @@
 read -r ref sha < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha'); s9=${sha:0:9}
 max=${AP_PANEL_MAX:-2}; used=$(grep -c . "$A/panel-$pr" 2>/dev/null | head -1); used=${used:-0}
 owner() { gh api -X POST repos/$SG_REPO/issues/$pr/labels -f "labels[]=needs-human" >/dev/null 2>&1
-  printf "Needs the owner — PR #%s @ %s: %s\nThe fix loop is paused on this PR (label needs-human). Reply /release as the whole comment to hand it back to the loop. Refs #%s\n" $pr $s9 "$1" $iss > "$SG_STATE/cq/$iss-owner$$.md"
+  printf "Needs the owner — PR #%s @ %s: %s\nThe fix loop is paused on this PR (label needs-human). Reply /release as the whole comment to hand it back to the loop. Refs #%s\n" $pr $s9 "$1" $iss > "$(sg_cq_file "$iss-owner$$.md")"
   echo "NEEDS OWNER #$pr issue #$iss: $1"; exit 0; }
 [ "$used" -ge "$max" ] && owner "fix rounds and $max panel extensions spent; the review still asks for changes."
 [ -e "$SG_STATE/quota-guard" ] && owner "round cap hit and the Anthropic quota guard is on, so no panel could rule."
@@ -30,5 +30,5 @@ print(last)" "$out")
 echo "$s9" >> "$A/panel-$pr"
 q=$(jq -r '.needs_owner//""' <<<"$j"); [ "$(jq -r .one_more_round <<<"$j")" = true ] && [ -z "$q" ] || owner "${q:-the panel declined another round.}"
 n=$(mktemp); jq -r .brief <<<"$j" > "$n"
-printf "Panel ruling (Opus, challenger) on PR #%s @ %s past the fix-round cap: one more round authorized, no owner question.\n\n%s\n\nRefs #%s\n" $pr $s9 "$(cat "$n")" $iss > "$SG_STATE/cq/$iss-panel$$.md"
+printf "Panel ruling (Opus, challenger) on PR #%s @ %s past the fix-round cap: one more round authorized, no owner question.\n\n%s\n\nRefs #%s\n" $pr $s9 "$(cat "$n")" $iss > "$(sg_cq_file "$iss-panel$$.md")"
 echo "AUTOPANEL #$pr issue #$iss: one more round"; bash "$(dirname "$0")/autofix.sh" $pr $iss "$n"; rm -f "$n"

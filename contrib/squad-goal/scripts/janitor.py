@@ -27,6 +27,7 @@
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
 import json, os, pathlib, re, signal, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
+CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
 def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets one summary line per pass
     acts.append(m)
@@ -53,7 +54,7 @@ def launch_tail(f, n=15):
     except OSError: return ""
 def queue_neverstart(n, body):
     (st / "cq").mkdir(exist_ok=True)
-    (st / "cq" / f"{n}-neverstart-{os.getpid()}.md").write_text(body)
+    (st / "cq" / f"{CQ}#{n}-neverstart-{os.getpid()}.md").write_text(body)
 def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issues the run was dispatched for, at most twice
     req = f / "request.txt"
     nums = issues_named(req.read_text()) if req.exists() else set()
@@ -274,7 +275,7 @@ if owner and proj and repo0:
                 for p, s in moves:
                     subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
-                (st / "cq" / f"{n}-dispatchfail-{os.getpid()}.md").write_text(
+                (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
     # Q: a marker and an In Progress card with no run behind them. Only a definite answer counts: a refused read (not "open", not a digit, no status)
     # touches nothing and leaves no once-only marker, so the next pass decides. A definite "no" is remembered for 10 min, so a landed issue's old marker is not re-read every pass.
@@ -304,7 +305,7 @@ if owner and proj and repo0:
         if not dry:
             for p, s in moves: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
             for m in ms.values(): m.unlink()
-            (st / "cq" / f"{n}-stalecard-{os.getpid()}.md").write_text(
+            (st / "cq" / f"{CQ}#{n}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
 # Q has read them: what Q left alone (no card, a card past In Progress, a definite no about the issue) is dropped now, so
 # autofrontier/autobug dispatch those issues again. The marker Q released is already gone, and its card is back.
@@ -358,7 +359,7 @@ if fd and fb:
                 for k in marks:
                     f2 = st / "auto" / k
                     if f2.exists(): f2.unlink()
-                (st / "cq" / f"{n}-unwound-{os.getpid()}.md").write_text(
+                (st / "cq" / f"{CQ}#{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 base = os.environ.get("SG_BASE", "main"); repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref)"').splitlines():

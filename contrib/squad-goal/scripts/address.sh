@@ -7,6 +7,16 @@
 # number -- and `sg_address_issue` prints the number.
 sg_address_repo() { case "${1:-}" in *'#'*) printf '%s\n' "${1%%#*}";; esac; }
 sg_address_issue() { printf '%s\n' "${1##*#}"; }
+# A queued comment carries the repository it is for: `<owner>__<repo>#<n>-<tag>.md` in <state>/cq/ (an owner holds no `_`, so the
+# first `__` ends it). `sg_cq_file <n>-<tag>.md` prints that path for the repository in force (SG_REPO) and the state directory
+# (SG_STATE); every writer of a comment names its file through it, and cqflush.sh reads the repository back from the name.
+# It refuses, printing nothing, when no repository is in force or the leaf does not start with an issue number.
+sg_cq_file() {
+  local leaf=${1:-}
+  case "$leaf" in [0-9]*-*) ;; *) echo "sg_cq_file: '$leaf' is not <issue>-<tag>.md" >&2; return 1;; esac
+  case "${SG_REPO:-}" in ?*/?*) ;; *) echo "sg_cq_file: no repository in force for $leaf" >&2; return 1;; esac
+  printf '%s/cq/%s#%s\n' "${SG_STATE:?sg_cq_file: no state directory}" "${SG_REPO/\//__}" "$leaf"
+}
 # The repositories the profile works, one per line, the primary first, each once. A profile names them in SG_REPOS. A
 # profile that still names the retired SG_TOOLING_REPO has that repository read as one more entry after SG_REPO.
 sg_repos() {

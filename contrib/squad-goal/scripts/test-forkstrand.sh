@@ -37,7 +37,7 @@ export SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_FORK_DIR=$F SG_FORK_BASE=local/nex
 h() { $git -C "$F" rev-parse --short=9 "$1"; }
 has() { local hay=$1; shift; local x; for x in "$@"; do case "$hay" in *"$x"*) ;; *) return 1;; esac; done; }
 run() { (cd "$T/co" && python3 "$S/forkstrand.py" >"$T/out" 2>&1); cat "$T/out" >> "$T/log"; }
-notes() { ls "$T/st/cq" 2>/dev/null | /usr/bin/grep -c "^$1-forkstrand" || true; }
+notes() { ls "$T/st/cq" 2>/dev/null | /usr/bin/grep -c "#$1-forkstrand" || true; }
 line() { /usr/bin/grep "^FORKSTRAND #$1" "$T/log"; }
 : > "$T/log"; run
 
@@ -47,7 +47,7 @@ for p in "21:fix/21-tooling" "22:gui/22-extra-suffix"; do n=${p%%:*}; b=${p#*:};
   if has "$l" "$b" "$head" "refs/heads/gui/$n"; then ok "stranded $b reported by branch, commit and the ref the land reads"
     else ko "no report naming $b, $head and refs/heads/gui/$n (got: '$l')"; fi
   [ "$(notes "$n")" = 1 ] && ok "one note on the issue for #$n" || ko "#$n: $(notes "$n") notes queued"
-  f=$(ls "$T/st/cq"/$n-forkstrand-* 2>/dev/null | head -1)
+  f=$(ls "$T/st/cq"/*#$n-forkstrand-* 2>/dev/null | head -1)
   if [ -n "$f" ] && has "$(cat "$f")" "$b" "refs/heads/gui/$n"; then ok "the note for #$n names the branch and the ref the land reads"
     else ko "the note for #$n does not name $b and refs/heads/gui/$n"; fi
 done

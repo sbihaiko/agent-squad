@@ -31,6 +31,7 @@ echo "$1" >> "$FCT/fixruns"; echo "$FCT/req/$1.txt"
 J
   printf 'import sys\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
+  echo ". \"$here/address.sh\"" >> "$T/s/env.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
   /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t init -q -b local/next
   echo 0 > "$T/fork/f"; /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t add f
   /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t commit -q -m init
@@ -56,6 +57,6 @@ r=$(bash "$T2/s/forkclose.sh" 2>&1)
 [ "$(nfix)" = 0 ] && ok "the refusing stub launches nothing" || ko "the stub was bypassed: $(nfix)"
 case "$r" in *"FORKCLOSE RED"*"#1 (test-1-"*"exit 1"*) ok "the red gate is still reported with its test pass and exit code";; *) ko "the red gate vanished from the report: '$r'";; esac
 case "$r" in *"fix run forkred-1-"*) ko "the log claims a fix run that never launched: '$r'";; *) ok "no 'fix run' line when mkreq.sh refused";; esac
-c=$(ls "$T2/st/cq/"*slicerefus* 2>/dev/null | head -1)
+c=$(ls "$T2/st/cq/x__y#"*slicerefus* 2>/dev/null | head -1)
 [ -n "$c" ] && grep -q "#1" "$c" && grep -q "refus" "$c" && ok "a cq/ card names the issue and the refusal reason" || ko "no cq/ card for the refused fix request: '$(cat "$c" 2>/dev/null)'"
 rm -rf "$T1" "$T2"; exit $fail

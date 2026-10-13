@@ -84,5 +84,5 @@ echo "$run" > "$A/runof-$pr-$s9"   # retryfix.sh re-arms this sha if the run fai
 [ -n "${AF_SOFT:-}" ] || echo "$s9" >> "$A/rounds-$pr"   # AF_SOFT: threads/conflict-only round, outside the review round cap
 git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place; the run already copied it
 # only a dispatch that started is announced: a failed one goes to stderr above, so no issue comment claims a fix run that never ran
-printf "Fix run dispatched automatically on PR #%s @ %s for:%s. Run: %s. Refs #%s\n" $pr $s9 "$probs" "$run" $iss > "$SG_STATE/cq/$iss-autofix$$.md"
+printf "Fix run dispatched automatically on PR #%s @ %s for:%s. Run: %s. Refs #%s\n" $pr $s9 "$probs" "$run" $iss > "$(sg_cq_file "$iss-autofix$$.md")"
 echo "AUTOFIX #$pr @ $s9 (issue #$iss):$probs -> $run"

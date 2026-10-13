@@ -166,7 +166,7 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
       printf '%s %s\n' "$day" "$((k+1))" > "$A/hunt-day"
     fi
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
-    else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$SG_STATE/cq/$n-autobug$$.md"; done; done
+    else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$(sg_cq_file "$n-autobug$$.md")"; done; done
 $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}" >/dev/null 2>&1
 [ -n "${SG_BUG_PROJECT:-}" ] && $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}" >/dev/null 2>&1
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"

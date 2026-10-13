@@ -16,6 +16,7 @@ scene() {  # $1 = scene name: builds $T/<name>/{s,st,co,bin}; leftovers reachabl
   mkdir -p "$S/s" "$S/st/auto" "$S/st/cq" "$S/bin" "$S/co/runs"
   cp "$src" "$S/s/autopilot.sh"
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_AUTO_MERGE=yes SG_MERGE_METHOD=squash SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT=%s BOARD=true\n' "$S/st" "$S/co" > "$S/s/env.sh"
+  echo ". \"$(dirname "$src")/address.sh\"" >> "$S/s/env.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
   printf '#!/bin/bash\nexit 0\n' > "$S/s/autofix.sh"
   printf '#!/bin/bash\nexit 0\n' > "$S/s/revci.sh"
   printf '#!/bin/bash\nexit 0\n' > "$S/s/prepush.sh"
@@ -60,10 +61,10 @@ skipped() { case "$1" in *"NOREFS #11"*) return 0;; *) return 1;; esac; }
 # --- #1499: no Refs #N and nothing derives the issue -> one skip comment per head, no body write
 scene skip; printf 'No issue pointer here.' > "$BODY11"; pr11 "fix/no-issue"
 r=$(run)
-if skipped "$r" && [ "$(ls "$SCENE/st/cq/"*norefs* 2>/dev/null | wc -l | tr -d ' ')" = 1 ]; then ok "underivable PR: skip comment + NOREFS line"; else ko "underivable PR not reported: out='$r'"; fi
+if skipped "$r" && [ "$(ls "$SCENE/st/cq/x__y#"*norefs* 2>/dev/null | wc -l | tr -d ' ')" = 1 ]; then ok "underivable PR: skip comment + NOREFS line"; else ko "underivable PR not reported: out='$r'"; fi
 [ ! -s "$PATCHLOG" ] && ok "underivable PR: no body PATCH" || ko "underivable PR was PATCHed: $(cat "$PATCHLOG")"
 [ "$(cat "$BODY11")" = "No issue pointer here." ] && ok "underivable PR body unchanged" || ko "underivable body became '$(cat "$BODY11")'"
-n1=$(ls "$SCENE/st/cq/"*norefs* 2>/dev/null | wc -l | tr -d ' '); r2=$(run); n2=$(ls "$SCENE/st/cq/"*norefs* 2>/dev/null | wc -l | tr -d ' ')
+n1=$(ls "$SCENE/st/cq/x__y#"*norefs* 2>/dev/null | wc -l | tr -d ' '); r2=$(run); n2=$(ls "$SCENE/st/cq/x__y#"*norefs* 2>/dev/null | wc -l | tr -d ' ')
 case "$r2" in *"NOREFS #11"*) ko "skip repeated for the same head: '$r2'";; *) ok "same head: skip stays once";; esac
 [ "$n1" = "$n2" ] && ok "skip comment once per head" || ko "skip comment posted again: $n1 -> $n2"
 
@@ -76,7 +77,7 @@ $G -q 'No issue pointer here.' "$BODY11" && $G -q '^Refs #1101$' "$BODY11" && ok
   || ko "body did not heal: '$(cat "$BODY11")' out='$r'"
 case "$r" in *"REFSADDED #11 #1101"*) ok "derived issue: REFSADDED #11 #1101";; *) ko "no REFSADDED line: '$r'";; esac
 case "$r" in *"NOREFS #11"*) ko "healed PR still logged NOREFS: '$r'";; *) ok "healed PR did not skip";; esac
-[ -z "$(ls "$SCENE/st/cq/"*norefs* 2>/dev/null)" ] && ok "healed PR: no skip comment" || ko "healed PR got a skip comment"
+[ -z "$(ls "$SCENE/st/cq/x__y#"*norefs* 2>/dev/null)" ] && ok "healed PR: no skip comment" || ko "healed PR got a skip comment"
 [ "$(printf '%s' "$(cat "$PATCHLOG")" | $G -c '^PATCH 11$')" = 1 ] && ok "healed PR: exactly one body PATCH" || ko "PATCH count=$(printf '%s' "$(cat "$PATCHLOG")" | $G -c '^PATCH 11$')"
 printf '%s' "$(cat "$PATCHLOG")" | $G -q 'body=Refs\|Refs #1101' && ok "the PATCH carries the Refs line" || ko "PATCH body lacks the line: $(cat "$PATCHLOG")"
 

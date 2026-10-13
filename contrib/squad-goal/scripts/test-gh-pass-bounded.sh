@@ -72,6 +72,7 @@ watch_pass() {
   mkdir -p "$S" "$ST/cq" "$B" "$t/co" "$t/fork" "$t/fix"
   for f in watch.sh single.sh models.json ghread.py ghthrottle.py ghcall.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$S/"; done
   printf 'export SG_STATE=%s SG_STATE_BASE=%s SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=%s SG_FORK_DIR=%s SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug\n' "$ST" "$t/cache" "$t/co" "$t/fork" > "$S/env.sh"
+  printf '. "%s/address.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it\n' "$d" >> "$S/env.sh"
   echo '{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$t/fix/pulls-first.json"
   jq -n --argjson n "$n" '{data:{repository:{pullRequests:{pageInfo:{hasNextPage:false},nodes:[range(0;$n)|{number:(100+.),title:"work \(.)",body:"Refs #\(500+.)",headRefName:"gui/\(500+.)",headRefOid:"a",isDraft:false}]}}}}' > "$t/fix/pulls.json"
   mkgh "$B"; printf '#!/bin/bash\necho "$@" >> "%s"\n[ "$1" -gt 100 ] 2>/dev/null && kill -TERM "$PPID"\nexit 0\n' "$t/sleeps" > "$B/sleep"; chmod +x "$B/sleep"

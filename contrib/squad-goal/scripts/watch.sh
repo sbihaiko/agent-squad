@@ -65,7 +65,7 @@ if v:
         case "$v" in failed*) "$(dirname "$0")/retryfix.sh" "$rd";; esac   # a failed autofix run re-arms its PR sha (max 2)
         case "$v" in failed*no_dispatch*) "$(dirname "$0")/consult.sh" "$rd" >> "$SG_STATE/consult.log" 2>&1 & ;; esac   # router hesitated: ask the coding model once (ADR-free loop rule)
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
-          printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$SG_STATE/cq/$n-run$$-${r##*-}.md"; done; }
+          printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$(sg_cq_file "$n-run$$-${r##*-}.md")"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
   # a refusal is not an open-PR list (#1870): the words of an error body are never PR numbers, the per-PR follow-up is
   # read only after the list answered, and a PR the follow-up could not read stays unannounced for the next cycle
@@ -74,7 +74,7 @@ if v:
       t=$(printf '%s' "$lj" | jq -r --argjson n "$n" '.[]|select(.number==$n)|.head.ref+" "+.title+"\t"+(.body//"")') \
         || { echo "WATCH: PR #$n is not readable: $t"; continue; }
       echo "NEW PR #$n ${t%%$'\t'*}"; prs="$prs$n "
-      for i in $(printf '%s' "$t" | grep -oE 'Refs #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do printf "PR #%s opened: %s. Refs #%s\n" $n "${t%%$'\t'*}" $i > "$SG_STATE/cq/$i-pr$n.md"; done;; esac; done
+      for i in $(printf '%s' "$t" | grep -oE 'Refs #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do printf "PR #%s opened: %s. Refs #%s\n" $n "${t%%$'\t'*}" $i > "$(sg_cq_file "$i-pr$n.md")"; done;; esac; done
   else echo "WATCH: the open-PR list is not readable, keeping the last known set: $lj"; fi
   for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rn"
   comm -13 "$SG_STATE/.rs" "$SG_STATE/.rn" | sed 's/^/REVIEW /'; cp "$SG_STATE/.rn" "$SG_STATE/.rs"

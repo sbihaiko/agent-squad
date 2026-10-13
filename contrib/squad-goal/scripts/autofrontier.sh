@@ -218,7 +218,7 @@ rm -f "$rep" "$kid"
 log="$SG_STATE/$name.log"
 (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$log")
 for n in "${live[@]}"; do
-  printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$SG_STATE/cq/$n-frontier$$.md"; done
+  printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$(sg_cq_file "$n-frontier$$.md")"; done
 $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${live[@]}" >/dev/null 2>&1
 echo "FRONTIER dispatched ${live[*]/#/#} in one run ($name)"
 [ -n "$full" ] && echo "FRONTIER envelope full: $name asks for $cap children, its limit; startable issues past them wait for the next run" || true
