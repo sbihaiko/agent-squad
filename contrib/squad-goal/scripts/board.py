@@ -3,10 +3,16 @@
        board.py --add <owner> <project> "<Status>" <issue#>...   add the issues to the board first (when missing); idempotent: a refused add is re-read once
        board.py --run-fields <owner> <project> <issue#> <run> <run-started>
        board.py --clear-run <owner> <project> <issue#>
-Field/option ids are cached a day and the issue -> item id map 10 min (refetched on a miss) under $SG_STATE; one PATCH per card.
+Field/option ids are cached a day and the issue -> item id map 10 min (refetched on a miss) under $SG_STATE; one PATCH per card,
+and every Status write is read back.
 A field is set by sending its value and cleared by sending null -- "To clear the field, set this to null" -- and an empty
 string is a value the field refuses, answered "Invalid field values" (HTTP 400) (#101): a clear, and a Run field with nothing
 to carry, are written as null, beside the field id they read.
+A Status write is proven by the card, never by the answer to its PATCH: a field write can be answered ok and never land, or be
+refused with HTTP 400 (#105). After the PATCH the card is read back, and the Status it carries must be the option written; a
+card whose Status is unset is NOT written. SG_BOARD_READ_ATTEMPTS and SG_BOARD_READ_BACKOFF bound the retries (a backoff of 0
+sleeps for no read), and a card no read then carries the Status is a READ FAILURE, named and exiting non-zero, never a card
+written and never left in the state cache as one.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import json, os, pathlib, subprocess, sys, time
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); st.mkdir(parents=True, exist_ok=True)
@@ -18,6 +24,11 @@ def api(*a, inp=None):
     r = subprocess.run(["gh", "api", *a], input=inp, capture_output=True, text=True)
     if r.returncode: raise RuntimeError(r.stderr.strip()[:200])
     return r.stdout
+def _num(name, default):   # a bad value in the environment must not kill a card move
+    try: return float(os.environ.get(name, default))
+    except ValueError: return float(default)
+ATTEMPTS = max(1, int(_num("SG_BOARD_READ_ATTEMPTS", "4")))   # bounded: the items route is eventually consistent
+BACKOFF = max(0.0, _num("SG_BOARD_READ_BACKOFF", "1"))        # the base delay, doubled per retry; 0 sleeps for no read
 def cached(name, ttl, fn):
     f = st / name
     try:
@@ -49,6 +60,14 @@ def item_id(n, add_missing=False):
             if str(n) not in M: raise
         (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))
     return M.get(str(n))
+def carried_status(n):
+    """The Status option id the board carries on the card for n, "" when the card carries none (or no read carried the
+    card). The read asks for the Status field by id: a single-select value is carried only when the field is asked for,
+    the way janitor.py reads it, and without `fields[]` the route answers the title alone, so a Status could never be
+    read back. This is the proof of a write (#105): the answer to a PATCH does not carry the field the board kept."""
+    out = api("--paginate", f"{base}/items?per_page=100&fields[]={F['id']}", "--jq",
+              '.[]|select(.content.number)|[.content.number,((.fields[]?|select(.name=="Status")|.value.id)//"")]|@json')
+    return {str(n): str(i) for n, i in (json.loads(l) for l in out.splitlines() if l.strip())}.get(str(n), "")
 if run_fields or clear_run:
     n = int(args[2]); iid = item_id(n)
     if not iid: print(f"#{n} not on the board", file=sys.stderr); sys.exit(1)
@@ -70,6 +89,16 @@ for n in nums:
     try: iid = item_id(n, add)
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the add GitHub refused twice, named: the caller logs it
     if not iid: print(f"#{n} not on the board", file=sys.stderr); rc = 1; continue
-    try: api("-X", "PATCH", f"{base}/items/{iid}", "--input", "-", inp=json.dumps({"fields": [{"id": F["id"], "value": F["opt"][status]}]})); print(f"#{n} -> {status}")
-    except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1
+    want, refused, written = F["opt"][status], "", False
+    for k in range(ATTEMPTS):   # the write is written again, then read back: a PATCH answered ok can be a write the card never carries (#105)
+        if k and BACKOFF: time.sleep(BACKOFF * (2 ** (k - 1)))
+        try: api("-X", "PATCH", f"{base}/items/{iid}", "--input", "-", inp=json.dumps({"fields": [{"id": F["id"], "value": want}]}))
+        except RuntimeError as e: refused = str(e)   # the refusal is kept, not raised: the read then confirms it or disproves it
+        if carried_status(n) == want: written = True; break
+    if written:
+        if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
+        print(f"#{n} -> {status}")
+    else:
+        M.pop(str(n), None); (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))   # a card whose write is unproven is never cached as written
+        print(f"#{n}: the board carries no {status!r} on it after {ATTEMPTS} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
 (st / "board-dirty").touch(); sys.exit(rc)
