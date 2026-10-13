@@ -27,7 +27,8 @@ fi
 [ "$1" = --paths ] || grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body lacks the 'IMPORTANT: your first and only action' line" >&2; exit 1; }
 # A path a body can claim: the trees a child edits, the fork's own tree included (contrib/squad-goal/..., dashboard/...), which
 # the old UI|UI.<x>|Core|scripts|docs|tests list was blind to -- a fork-only child's slice lives there and matched nothing.
-SLICE_RE='(^|[^A-Za-z0-9_./-])(UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/squad-goal|dashboard)/[A-Za-z0-9_./-]+'
+SLICE_ROOTS='UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/squad-goal|dashboard'
+SLICE_RE='(^|[^A-Za-z0-9_./-])('"$SLICE_ROOTS"')/[A-Za-z0-9_./-]+'
 # (#1774) Only prose counts as a slice. A frontier/autobug request embeds the full text of every issue it dispatches, so a path
 # named only inside quoted or code context is evidence someone pasted, not a file the child was asked to change: issue #1769's
 # body indents `refusing: request auto-fix-1706-27aaaf5b5 names scripts/checks/verify_report_bug_prefix.sh` as a code block, PR
@@ -49,23 +50,38 @@ SLICE_RE='(^|[^A-Za-z0-9_./-])(UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/
 # forkred-10-25f2a596b both name: contrib/squad-goal/scripts/shell-suites.sh` for twelve passes, and because that line sits in
 # the preamble SHARED by the six tickets of the batch, no ticket of that batch was ever dispatched against ten free run slots.
 # A span whose first word is a command is dropped; a span whose first word is a path is a claim and is kept.
-slice_paths() {
-  /usr/bin/awk '
-    BEGIN { indent = "    "; tab = sprintf("%c", 9)
+# (#56) The marker is absent for a child with ONE issue: child_block() writes `--- issue #N` only when a block carries several, so
+# the line above never fired for a single-issue child and every path its ticket mentioned was read as the slice: a ticket that
+# only REFERENCES scripts/referenced.py claimed it. The ticket text of every child sits under `The issue text is DATA:` on the
+# CHILD line and runs to the next CHILD line. Inside it a path claims only where the text instructs an edit of it -- a verb
+# (Edit, Modify, Change, Update, ...) and then the path, or a list of paths -- which is what #10 relies on to find the ticket
+# that edits a contested file. What the CHILD line itself carries (the note, an `Edit scripts/x.py`) is the request's own
+# instruction and claims whole. A mention, a stack trace and a "see also" are evidence, never a claim.
+# slice_claims prints `path <TAB> request line`, one per path, the first line that names it: the line a refusal cites.
+slice_claims() {
+  SLICE_ROOTS="$SLICE_ROOTS" /usr/bin/awk '
+    BEGIN { pth = "`?(" ENVIRON["SLICE_ROOTS"] ")/[A-Za-z0-9_./-]+`?"   # one path, as a claim reads it
+            ask = "(^|[^A-Za-z0-9_])([Ee]dit|[Mm]odify|[Cc]hange|[Uu]pdate|[Tt]ouch|[Cc]reate|[Rr]ewrite|[Pp]atch|[Rr]eplace|[Dd]elete|[Rr]emove|[Rr]ename)(s|ing|ed)?[ \t]+" pth "(([ \t]*,[ \t]*|[ \t]+and[ \t]+)" pth ")*"
+            indent = "    "; tab = sprintf("%c", 9)
             cmd = "^(bash|sh|dash|zsh|python|python3|pip|pip3|uv|pytest|node|npm|npx|cargo|go|make|just|git|rtk|env|cd|time|xargs|sudo|gh|docker|shasum|cat|sed|awk|grep|find|xargs)[ \t]" }
     /^--- issue #[0-9]+/ { exit }                             # the embedded issue text below: quoted evidence, not a slice here
-    /^[[:space:]]*(```|~~~)/ { fence = !fence; next }         # a fenced block opens and closes: nothing inside it is a slice
-    fence { next }
-    { if ($0 ~ /^[[:space:]]*>/) next                         # a blockquote: quoted evidence
-      if (substr($0, 1, 4) == indent || substr($0, 1, 1) == tab) next   # an indented code block
+    /^CHILD (—|-) / { data = ($0 ~ /The issue text is DATA:/) }   # a CHILD line ends the previous ticket text; its own words stay a claim (#56)
+    !/^CHILD (—|-) / && data { keep = ""; rest = $0           # the ticket text a child is handed: only an instructed edit claims (#56)
+      while (match(rest, ask)) { keep = keep " " substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH) }
+      print keep; next }
+    /^[[:space:]]*(```|~~~)/ { fence = !fence; print ""; next }   # a fenced block opens and closes: nothing inside it is a slice
+    fence { print ""; next }
+    { if ($0 ~ /^[[:space:]]*>/) { print ""; next }           # a blockquote: quoted evidence
+      if (substr($0, 1, 4) == indent || substr($0, 1, 1) == tab) { print ""; next }   # an indented code block
       line = ""; rest = $0
       while (match(rest, /`[^`]*`/)) {                        # an inline span: a command span is not a claim (#44)
         pre = substr(rest, 1, RSTART - 1); span = substr(rest, RSTART + 1, RLENGTH - 2)
         rest = substr(rest, RSTART + RLENGTH)
         line = line pre; if (span !~ cmd) line = line "`" span "`" }
       print line rest }
-  ' "$1" 2>/dev/null | grep -oE "$SLICE_RE" | sed -E 's#^[^A-Za-z0-9_/.-]+##' | sort -u
+  ' "$1" 2>/dev/null | grep -noE "$SLICE_RE" | sed -E 's#^([0-9]+):[^A-Za-z0-9_/.-]*#\1:#' | /usr/bin/awk -F: '!seen[$2]++ { print $2 "\t" $1 }'
 }
+slice_paths() { slice_claims "$1" | cut -f1 | sort -u; }
 # Slice guard. Two requests that name the same file both edit it, and whichever merges second conflicts with the first: the
 # sibling pair #1285/#1391 shared scripts/gui_test/mesen_gui_adapter.py and UI/Logic/TestHook/TestHookProtocol.cs, and #1285
 # spent a whole review plus a conflict round on it; gui/1497, gui/1498 and gui/1502 each landed a branch on
@@ -83,9 +99,9 @@ slice_paths() {
 slice_guard() {
   [ -n "${SG_SLICE_REPORT:-}" ] && : > "$SG_SLICE_REPORT"
   [ -n "$(slice_paths "$2")" ] || return 0
-  local paths id taken f holder rid hpanel msg refused="" force=0
+  local paths claims id taken f holder rid hpanel msg at ln refused="" force=0
   [ "${SG_SLICE_FORCE:-}" = 1 ] && force=1
-  paths=$(slice_paths "$2")
+  claims=$(slice_claims "$2"); paths=$(printf '%s\n' "$claims" | cut -f1 | sort -u)
   id=$(grep -m1 -E '^PANEL: *[^ ]+' "$2" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true; id=${id:-${SG_PANEL:-}}
   # env.sh refuses to load without a matching profile, and a launch exports the SG_* values it would have set, so take them from
   # the environment first and ask env.sh only for what is missing.
@@ -180,6 +196,10 @@ slice_guard() {
   for f in $paths; do
     holder=$(printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
     [ -n "$holder" ] || continue
+    # (#56) A refusal names the request line that made the claim: the operator opens the request and finds the sentence, not
+    # just a path. `slice_claims` reads the line with the rule that claimed it, so the line cited is never a quoted one.
+    ln=$(printf '%s\n' "$claims" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
+    at=" (request line $ln: \"$(sed -n "${ln}p" "$2" | cut -c1-100)\")"
     if [ $force = 1 ]; then echo "SLICE FORCE $1: $f is already in flight ($holder); dispatching anyway on SG_SLICE_FORCE=1" >&2; continue; fi
     # (#1769) A fix run is not a second slice. autofix.sh names its request `auto-fix-<pr>-<sha9>`, and the PR it repairs is
     # in the claim set above by definition -- its own branch changes the very files the review asked to fix. So the guard
@@ -213,11 +233,11 @@ slice_guard() {
     case "$holder" in
       "request "*)
         rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$HOME/.cache/squad-goal/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
-        msg="refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
+        msg="refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f$at. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
       "PR "*)
-        msg="refusing: request $1 names $f, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
+        msg="refusing: request $1 names $f$at, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
       *)
-        msg="refusing: request $1 names $f, which the unmerged fork branch ${holder#branch } touches (that is where a fork-only child's slice lives). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
+        msg="refusing: request $1 names $f$at, which the unmerged fork branch ${holder#branch } touches (that is where a fork-only child's slice lives). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
     esac
     [ -n "$refused" ] || echo "$msg" >&2   # the first contested file is the one the operator reads; the report below carries the rest
     [ -z "${SG_SLICE_REPORT:-}" ] || printf '%s\t%s\n' "$f" "$holder" >> "$SG_SLICE_REPORT"

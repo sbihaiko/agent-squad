@@ -43,19 +43,21 @@ FK=$T/fork; /usr/bin/git init -q -b main "$FK"; mkdir -p "$FK/contrib/squad-goal
 (cd "$FK" && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m base && /usr/bin/git checkout -q -b gui/9 && echo x >> contrib/squad-goal/scripts/hub.py && /usr/bin/git -c user.email=a@b -c user.name=n commit -qam hub && /usr/bin/git checkout -q main)
 printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
+# board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
+printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
 cp "$src" "$T/scripts/autofrontier.sh"
 scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh state, its own env.sh and workflow graph
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
-  : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"
+  : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
   cat > "$T/scripts/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BASE=main
-SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=true
+SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=$T/board.sh
 E
   if [ -n "$2" ]; then   # the author's graph: a root loop that holds one dispatch node, and a run block
     rb='{"max_parallel":20}'; [ -n "$3" ] && rb="{\"max_parallel\":20,\"max_children\":$3}"
     printf '{"run":%s,"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":%s,"max_parallel":2}]}]}' "$rb" "$2" > "$d/co/docs/squad/workflows/dynamic.graph.json"
   fi
-  export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log
+  export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
   export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
@@ -68,6 +70,7 @@ run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sl
 lines() { local c; c=$($G -c . "$1" 2>/dev/null); echo "${c:-0}"; }
 marked() { local n c=0; for n in "$@"; do [ -e "$SG_STATE/auto/disp-$n" ] && c=$((c+1)); done; echo $c; }
 asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
+moved() { local n; for n in "$@"; do $G -qE "^o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
 childblocks() { $G -c '^CHILD' "$MKLOG.body" 2>/dev/null; }
 
 # 1) AC1, AC2, AC3: three startable issues open ONE run; its request asks for three children, one issue each; every
@@ -82,6 +85,19 @@ r=$(run)
 [ "$(marked 21 22 23)" = 3 ] && ok "every dispatched issue holds its marker" || ko "every dispatched issue holds its marker: $(marked 21 22 23) of 3"
 [ "$(ls "$d/st/cq" | $G -c -- '-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
 case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request";; *) ko "a marker names the request";; esac
+moved 21 22 23 && ok "every dispatched issue gets its own card move" || ko "every dispatched issue gets its own card move: '$(cat "$BOARDLOG")'"
+
+# 1b) #33: a child with SEVERAL issues is one slice, one request line and one PR, and each of its issues still holds its marker,
+#     its own comment and its own card move -- the claim the comment above makes for one-issue children, asserted for the bundle
+scene bundle
+issues '[{"number":31,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":32,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":34,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+issuebody 31 "fix scripts/shared_fix.py"; issuebody 32 "also scripts/shared_fix.py"; issuebody 34 "unrelated"
+cp "$(dirname "$src")/cluster.py" "$T/scripts/"   # the real files rule bundles two tickets that name one file; the other cases leave it out, their issues share one fixture number
+r=$(run); rm -f "$T/scripts/cluster.py"
+[ "$(childblocks)" = 2 ] && $G -q '^CHILD — GitHub issue(s) 31, 32 ' "$MKLOG.body" && ok "two issues that name one file are ONE child; the third is its own" || ko "two issues that name one file are one child: '$($G '^CHILD' "$MKLOG.body")'"
+[ "$(marked 31 32 34)" = 3 ] && ok "every issue of the bundle holds its marker" || ko "every issue of the bundle holds its marker: $(marked 31 32 34) of 3"
+[ "$(ls "$d/st/cq" | $G -c -- '-frontier')" = 3 ] && ok "every issue of the bundle gets its own comment" || ko "every issue of the bundle gets its own comment: $(ls "$d/st/cq")"
+moved 31 32 34 && ok "every issue of a multi-issue child moves its own card" || ko "every issue of a multi-issue child moves its own card: '$(cat "$BOARDLOG")'"
 
 # 2) AC5: the envelope stays the author's. Five startable issues, a dispatch node that allows two children: the request asks
 #    for two, never five (the engine rejects a request over the limit whole), and the rest stay unmarked for the next run
