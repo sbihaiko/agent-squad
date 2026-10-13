@@ -115,24 +115,12 @@ if [ $(( $(date +%s) - mt )) -ge "$ttl" ]; then
   fi
 fi
 refs="$refs $(cat "$merged" 2>/dev/null) "
-pick=(); notes=(); full=""
-while IFS=$'\x1f' read -r w n labels; do
-  [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*|*,debt,*) continue;; esac
-  case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
-  sg_not_startable "$n" && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
-  d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
-  fk=""; case "$d" in *" FORK "*) fk="; OPTIMISTIC ON CODE COMPLETE: create your fork branch from $SG_FORK_BASE and first \`git merge --no-ff\` the blocker's unmerged fork branch(es) ${d##* FORK } into it, then build on top";; esac
-  case "$d" in READY*|STACK\ *) if sg_fork_only "$n"; then notes+=("FORK-ONLY, one local commit on $(sg_fork_branch "$n")$fk"); pick+=("$n"); [ ${#pick[@]} -ge "$cap" ] && { full=1; break; }; continue; fi;; esac   # fork-only: never a base origin/<base> or a stacked PR
-  case "$d" in READY*) notes+=("base origin/$SG_BASE$fk");; STACK\ *) set -- $d; notes+=("OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body$fk");; *) continue;; esac
-  pick+=("$n"); [ ${#pick[@]} -ge "$cap" ] && { full=1; break; }
-done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$SG_FRONTIER_LABEL&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
-[ ${#pick[@]} -gt 0 ] || exit 0
+pick=(); notes=(); ready=(); forkon=(); kids=(); full=""
 # Issues whose bodies name a common file go in ONE child (cluster.py CL_MODE=files): two children on one slice edit the same
 # files and conflict for whoever lands second. This holds for the fork-only picks too (#1521): gui/1497, gui/1498 and gui/1502
 # all named contrib/squad-goal/scripts/hub.py, three branches on one file, and the merge stopped until a hand merged them.
 # Stacked issues keep their own child (their base differs), and a fork-only issue never shares a child with a base-branch one
 # (they land differently: a local commit on the fork against a PR).
-noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
 cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
   local n lines=() cj cl
   for n in "$@"; do lines+=("$n"); done
@@ -141,8 +129,38 @@ cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone
   cl=$(CL_MODE=files python3 "$here/cluster.py" <<<"${cj%,}]" 2>/dev/null) || cl=$(printf '%s\n' "${lines[@]}")   # unreadable issues: no clustering
   printf '%s\n' "$cl" | grep .
 }
-ready=(); forkon=(); kids=()
-for n in "${pick[@]}"; do case "$(noteof $n)" in "base origin/$SG_BASE"*) ready+=("$n");; FORK-ONLY*) forkon+=("$n");; *) kids+=("$n");; esac; done
+joins() {   # one when issue $2 joins a child the picks of its own group already ask for. The envelope bounds the CHILDREN and
+            # cluster.py decides them, so an issue naming a file a taken issue already names costs no second child and is
+            # taken. Any other issue would need a child of its own, and that one waits for the next pass.
+  local g=$1 n=$2 before after
+  case "$g" in base) set -- "${ready[@]}";; fork) set -- "${forkon[@]}";; *) return 1;; esac
+  [ $# -gt 0 ] || return 1
+  before=$(cluster_of "$@" | grep -c .); after=$(cluster_of "$@" "$n" | grep -c .)
+  [ "$before" -gt 0 ] && [ "$after" -eq "$before" ]
+}
+# The walk reads the frontier once, then takes issues in wave and number order: the first $cap of them fill the envelope.
+# Past that only an issue that joins a child the picks already ask for is taken, and the walk ends at the first issue that
+# would need a child of its own -- that one, and every issue after it, wait for the next pass. The envelope therefore never
+# cuts a shared-file slice in two, which is what bounding the picks alone did (#1521, #57).
+cands=()
+while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$SG_FRONTIER_LABEL&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
+i=0
+while [ $i -lt ${#cands[@]} ]; do
+  IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
+  [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue; case ",$labels," in *",${SG_BUG_LABEL:-bug},"*|*,debt,*) continue;; esac
+  case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+  sg_not_startable "$n" && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+  d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
+  fk=""; case "$d" in *" FORK "*) fk="; OPTIMISTIC ON CODE COMPLETE: create your fork branch from $SG_FORK_BASE and first \`git merge --no-ff\` the blocker's unmerged fork branch(es) ${d##* FORK } into it, then build on top";; esac
+  g=; nt=
+  case "$d" in READY*|STACK\ *) if sg_fork_only "$n"; then g=fork; nt="FORK-ONLY, one local commit on $(sg_fork_branch "$n")$fk"; fi;; esac   # fork-only: never a base origin/<base> or a stacked PR
+  [ -n "$g" ] || case "$d" in READY*) g=base; nt="base origin/$SG_BASE$fk";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body$fk";; *) continue;; esac
+  [ -z "$full" ] || joins "$g" "$n" || break
+  pick+=("$n"); notes+=("$nt"); case "$g" in base) ready+=("$n");; fork) forkon+=("$n");; *) kids+=("$n");; esac
+  [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
+done
+[ ${#pick[@]} -gt 0 ] || exit 0
+noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
 while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${ready[@]}")
 while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${forkon[@]}")
 [ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#kids[@]} child(ren): $(printf '[%s] ' "${kids[@]}")($free free slots, room for $cap children)"; exit 0; }
