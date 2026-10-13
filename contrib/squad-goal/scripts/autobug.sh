@@ -7,7 +7,7 @@
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529): a dispatch that never
 # happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
 # ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
@@ -40,10 +40,13 @@ print(f"GitHub refused (HTTP {st}): {msg}" if (msg and st) else "no verdict: the
 # ONE helper names a refusal: sg_refusal_name builds the name AND its fingerprint from the evidence, and the issue title
 # and the cycle-log line are that same string. A refusal named by hand -- a title whose fingerprint the log does not
 # repeat -- is a defect that never reaches the filer.
+# The operation is a refusal NAME out of the closed set the helper beside this pass owns (refusal-names.sh, #142): every
+# writer below names its refusal through that set, and a name the set does not hold is refused by sg_refused -- logged by
+# name, filed under none -- so a spelling invented at a call site never becomes an issue.
 sg_refusal_fingerprint() {   # <operation> <address> <exit code> <error text>: the cause's key, never the occurrence
   printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" | python3 -c 'import hashlib,sys; print(hashlib.sha1(sys.stdin.buffer.read()).hexdigest()[:12])' 2>/dev/null
 }
-sg_refusal_name() {   # <operation> <address> <exit code> <error text>: the one name of a refusal
+sg_refusal_name() {   # <refusal name> <address> <exit code> <error text>: the one name of a refusal
   local fp
   fp=$(sg_refusal_fingerprint "$@")
   printf 'refused %s %s [%s]' "$1" "$2" "${fp:-000000000000}"
@@ -52,8 +55,13 @@ sg_refusal_body() {   # <operation> <address> <exit code> <error text> <concerns
   printf 'The loop could not prove a write: GitHub refused it, and the loop files that as a defect.\n\n```\noperation: %s\naddress: %s\nexit code: %s\nerror text (verbatim):\n%s\nconcerns: %s\nguard that should have caught it: %s\n```\n\nThe error text above is remote text: it is quoted verbatim inside the fence, and never parsed.\n' \
     "$1" "$2" "$3" "$4" "$5" "$6"
 }
-sg_refused() {   # <operation> <address> <exit code> <error text> <concerns> <guard>: name it, log it, file it
+sg_refused() {   # <refusal name> <address> <exit code> <error text> <concerns> <guard>: name it, log it, file it
   local name body filed fp
+  sg_refusal_named "$1" || {   # a name outside the closed set is refused: logged by name, filed under no guessed name
+    echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED-UNKNOWN $1: not a refusal name in the closed set ($(sg_refusal_names | tr '\n' ' ')), so nothing is filed" >> "$SG_STATE/cycle.log"
+    echo "AUTOBUG: '$1' is not a refusal name in the closed set; the refusal is filed under no guessed name" >&2
+    return 1
+  }
   name=$(sg_refusal_name "$1" "$2" "$3" "$4"); fp=$(sg_refusal_fingerprint "$1" "$2" "$3" "$4")
   echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED $name" >> "$SG_STATE/cycle.log"
   body=$(mktemp); sg_refusal_body "$@" > "$body"
@@ -63,12 +71,12 @@ sg_refused() {   # <operation> <address> <exit code> <error text> <concerns> <gu
   rm -f "$body"
   echo "AUTOBUG: the refused write is filed as a bug${filed:+ ($filed)}" >&2
 }
-sg_write() {   # <operation> <address> <concerns> <guard> -- <command…>: the one write door of this pass
-  local op=$1 addr=$2 concerns=$3 guard=$4; shift 4; [ "${1:-}" = "--" ] && shift
+sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: the one write door of this pass
+  local name=$1 addr=$2 concerns=$3 guard=$4; shift 4; [ "${1:-}" = "--" ] && shift
   local out rc
   out=$("$@" 2>&1); rc=$?
   [ "$rc" -eq 0 ] && return 0
-  sg_refused "$op" "$addr" "$rc" "$out" "$concerns" "$guard"
+  sg_refused "$name" "$addr" "$rc" "$out" "$concerns" "$guard"
   return "$rc"
 }
 # The candidate list is validated, never assumed (#1855): a decimal issue number AND an issue that is not a pull request.
@@ -208,11 +216,11 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
 # other board writer uses (board.py, janitor rule R, reconcile.py, the frontier dispatch): a card the board does not carry
 # is added with its status, and a card it already carries is answered "already exists" and moved.
 cards="$(printf '#%s ' "${pick[@]}")"
-sg_write "the card move of this dispatch" "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
+sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
   -- $BOARD --add $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
-[ -n "${SG_BUG_PROJECT:-}" ] && sg_write "the card move of this dispatch on the bug board" "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
+[ -n "${SG_BUG_PROJECT:-}" ] && sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
   -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"

@@ -12,7 +12,7 @@
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
 here="$(cd "$(dirname "$src")" && pwd)"; cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
-cp "$here/refusal.sh" "$here/address.sh" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141)
+cp "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141), and names it from the closed set (#142)
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -148,4 +148,9 @@ rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
 ! /usr/bin/grep -q 'BOARD-WRITE-FAILED' "$T/st/cycle.log" 2>/dev/null && ok "board down: nothing is reported as a defect" || ko "board down, reported: $(cat "$T/st/cycle.log")"
+# The reconciler names its refusal through the closed set (#142): BOARD-WRITE-FAILED is a member of the one set the
+# helper beside refusal.sh holds, and the name the queue entry carries is that member, not a spelling of its own.
+names=$(bash "$T/s/refusal-names.sh" 2>/dev/null)
+/usr/bin/grep -qxF BOARD-WRITE-FAILED <<< "$names" && ok "the reconciler's refusal name is a member of the closed set" || ko "the closed set does not hold the reconciler's name: '$names'"
+/usr/bin/grep -qxF 'Refused write: BOARD-WRITE-FAILED #2009' "$cq" 2>/dev/null && ok "the comment names the member of the set, not a spelling beside it" || ko "the comment's refusal name: $(/usr/bin/grep -m1 'Refused write' "$cq" 2>/dev/null)"
 rm -rf "$T"; exit $fail
