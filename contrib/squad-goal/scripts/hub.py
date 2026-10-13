@@ -5,6 +5,10 @@ import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statis
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+# A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
+# hardcoded path turns a missing tool into a failed pass. env.sh resolves it into SG_LSOF; the last entry keeps a tool
+# outside both paths reachable.
+LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
@@ -935,7 +939,7 @@ def runs():
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
         pid, d = m.group(1), m.group(2)
-        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh("/usr/sbin/lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
+        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         p = pathlib.Path(d) / "record.jsonl"
         if not pathlib.Path(d).exists(): continue

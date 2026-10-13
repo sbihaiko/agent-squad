@@ -47,6 +47,10 @@ def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets
     if dry: print("JANITOR " + m, flush=True)
     else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
 DEADLINE = float(os.environ.get("JANITOR_CALL_TIMEOUT", "60"))   # a call has a deadline (ADR-0051); 0 waits, and is only for a hand run
+# A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
+# hardcoded path turns a missing tool into a failed pass. The shell resolves it into SG_LSOF (env.sh); this is the same
+# one resolution for a run with no shell around it, and the last entry keeps a tool outside both paths reachable.
+LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
 def _run(a, cwd=None, env=None, timeout=None):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
     """Run one command and return (exit status, stdout), at most DEADLINE seconds. A pipe is never used: a command's
     grandchild that inherits stdout would hold the pipe past the child's exit, and the pass would wait for it for ever
@@ -123,7 +127,7 @@ for l in sh("/bin/ps", "-axo", "pid=,lstart=").splitlines():
         try: starts[int(p[0])] = time.mktime(time.strptime(" ".join(p[1:]).strip(), "%a %b %d %H:%M:%S %Y"))
         except ValueError: pass
 cwd = {}; pid = None
-for l in sh("/usr/sbin/lsof", "-d", "cwd", "-Fpn").splitlines():
+for l in sh(LSOF, "-d", "cwd", "-Fpn").splitlines():
     if l.startswith("p"): pid = int(l[1:])
     elif l.startswith("n") and pid: cwd[pid] = l[1:]
 me = set(); p = os.getpid()

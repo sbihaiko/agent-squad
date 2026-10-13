@@ -41,6 +41,20 @@ def test_ci_workflow_runs_ruff_mypy_and_pytest_in_order():
     assert idx == sorted(idx), "ci.yml must run ruff, mypy, pytest in that order"
 
 
+def test_no_script_invokes_lsof_by_a_platform_specific_path():
+    """A guard for the portability rule: `/usr/sbin/lsof` holds on macOS and is absent on the CI runner, where a
+    hardcoded path turns a missing tool into a failed pass (ADR-0018, ADR-0133). Every call site reads the one
+    resolution: `env.sh` exports `SG_LSOF`, and the two modules take it from there."""
+    offenders = []
+    for p in sorted((ROOT / "contrib" / "squad-goal" / "scripts").glob("*")):
+        if not p.is_file() or p.suffix not in (".sh", ".py"):
+            continue
+        for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            if "/usr/sbin/lsof" in line and "SG_LSOF" not in line and not line.lstrip().startswith("#"):
+                offenders.append(f"{p.relative_to(ROOT)}:{n}: {line.strip()}")
+    assert not offenders, "a call site hardcodes lsof's macOS path:\n" + "\n".join(offenders)
+
+
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
     """Guard for the CI rule: push to main, pull requests, Python 3.11 and 3.13 inside one job, read-only token."""
     import yaml
