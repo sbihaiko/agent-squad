@@ -16,15 +16,19 @@ ck="$d/req-checklist-fork.txt"
 case "$(tail -3 "$ck" | head -1)" in "REBASE COMMAND:"*) ok "the checklist ends with the rebase";; *) ko "the checklist's third-to-last line is '$(tail -3 "$ck" | head -1)'";; esac
 case "$(tail -2 "$ck" | head -1)" in "GATE LINT COMMAND: "*"ruff check squad tests") ok "the rebase is followed by the gate's ruff half";; *) ko "the lint line is '$(tail -2 "$ck" | head -1)'";; esac
 case "$(tail -1 "$ck")" in "GATE SUITE COMMAND: "*"pytest tests"*"--ignore-glob"*) ok "and by the gate's suite as its last line";; *) ko "the last line is '$(tail -1 "$ck")'";; esac
+origin() { rm -rf "$T/gh"; $G init -q --bare -b local/next "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next; }   # the land pushes and merges by PR (#32); a path ending in x/tool is the address the seam resolves
 mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each case builds the history it is about
   rm -rf "$T/s" "$T/st" "$T/co" "$T/bin" "$T/fork"; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,fork-gate.sh,serial.sh,gate-suites.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,prland.sh,address.sh,ghcall.sh,fork-gate.sh,serial.sh,gate-suites.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
   printf 'exit 0\n' > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 echo "$*" >> "$GHLOG"
 case "$*" in
+  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, the checks are green, GitHub merges it
+  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
+  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";;
   *" -q .body"*) ;;
@@ -36,7 +40,7 @@ J
   chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"; }
 board() { printf '{"items":[%s]}\n' "$1" > "$T/co/runs/.hub/hub-board.json"; }
 # The branch forks from the base and the base then moves on: that is the stale candidate the ticket is about.
-stale() { g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
+stale() { g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init; origin
   g checkout -q -b gui/1 local/next; echo one > "$T/fork/one.py"; g add .; g commit -q -m "work 1"
   g checkout -q local/next; echo moved > "$T/fork/base-moved.txt"; g add .; g commit -q -m "the base moved on after the branch forked"; }
 
@@ -65,7 +69,7 @@ r=$(bash "$T/s/forkclose.sh" 2>&1)
 case "$r" in *"REBASE #1"*) ok "and the rebase is reported there too";; *) ko "no REBASE line with a worktree: '$r'";; esac
 # A rebase that cannot be resolved still lands through the merge path, and says which way it went: nothing is rewritten and the
 # branch stays exactly as the child left it, ready for the conflict fix the merge path dispatches.
-mkfix; g init -q -b local/next; printf 'a\nb\nc\n' > "$T/fork/shared.sh"; g add .; g commit -q -m init
+mkfix; g init -q -b local/next; printf 'a\nb\nc\n' > "$T/fork/shared.sh"; g add .; g commit -q -m init; origin
 g checkout -q -b gui/1 local/next; printf 'a\nbranch\nc\n' > "$T/fork/shared.sh"; g add .; g commit -q -m "work 1"
 g checkout -q local/next; printf 'a\nbase\nc\n' > "$T/fork/shared.sh"; echo moved > "$T/fork/base-moved.txt"; g add .; g commit -q -m "the base moved on"
 board '{"n":1,"st":"Code Complete","s":"open"}'; before=$(g rev-parse gui/1)
