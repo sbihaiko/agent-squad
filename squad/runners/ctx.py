@@ -1,4 +1,5 @@
 """The context a runner sees: the run's record, budget, facts, artifacts, workspace paths, and two calls back into the engine."""
+from squad import node_commit
 
 
 class RunCtx:
@@ -58,6 +59,13 @@ class RunCtx:
 
     def ws_snapshot(self, node, sc):
         return self._e._ws_snapshot(node, sc)
+
+    def commit_workspace(self, node, entry, sc, outcome):
+        """The engine commits a passing node's dirty declared workspace. It runs before the snapshot below, so a
+        resume compares against the committed state (#84). Return the event written, or None."""
+        logical = node.get("workspace")
+        return node_commit.commit_after(self._e, node=node["name"], entry=entry, item=sc.item, logical=logical,
+                                        path=self._e.workspace_path(logical, sc.item), outcome=outcome)
 
     def recorded_head(self, logical, item):
         return self._e._recorded_head(logical, item)

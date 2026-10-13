@@ -49,10 +49,12 @@ async def test_worktree_create_makes_a_worktree_and_records_its_head(tmp_path):
 
 
 async def test_commit_records_a_new_head_and_nothing_to_commit_passes(tmp_path):
+    """#84: a passing node's declared workspace is already committed by the engine, so this action commits what a
+    node that failed left behind; the second commit finds nothing."""
     repo = make_repo(tmp_path / "repo")
-    d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"]),
+    d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"], next={"fail": "continue"}),
               act("c", "commit"), act("c2", "commit")], ["wt", "a", "c", "c2"])
-    adapter = ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1, "effect": write_file("new.txt", "hi\n")}})
+    adapter = ScriptedAdapter({"a": {"output": {"status": "fail", "x": 1}, "spend": 0.1, "effect": write_file("new.txt", "hi\n")}})
     eng = Engine(from_doc(d), adapter, tmp_path / "run", target=repo)
     v = await eng.run()
     c, c2 = outs(tmp_path / "run", "c")[0], outs(tmp_path / "run", "c2")[0]

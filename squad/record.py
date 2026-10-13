@@ -31,6 +31,7 @@ REQUIRED = {
     "autonomy_resume": ["count", "source"],   # ticket #182: one per automatic resume; `count` is its number, `source` who decided (the autonomy skill)
     "diagnostic": ["source", "node", "entry", "payload"],
     "ceiling_wait": ["ceiling", "cap", "live", "holder"],   # a run or a dispatch child waits for a slot of the machine-wide ceiling (squad/caps.py)
+    "workspace_commit": ["node", "entry", "workspace", "path", "status"],   # #84: the engine committed a passing node's declared workspace (`head`), or refused it (`reason`)
     "verdict": ["verdict", "exit_code", "reasons", "remains", "folded"],
 }
 OUTCOMES = {"pass", "fail", "deadline", "needs-human"}

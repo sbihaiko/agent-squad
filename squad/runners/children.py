@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import anyio
 
-from squad import actions, git, session
+from squad import actions, git, node_commit, session
 from squad.adapter import CallRequest, new_session_id
 from squad.caps import CeilingWaitExpired
 from squad.engine_errors import Frontier
@@ -224,6 +224,8 @@ class Children:
             outcome, reasons = self.check(disp, r.output, ws, outcome, reasons, extra)
         if diag_cap:      # a cap that left a valid artifact: the child passes, and the cap rides in the record
             extra["diagnostic"] = {**extra.get("diagnostic", {}), "cap": diag_cap}
+        if self.isolated(d):      # #84: a child's own worktree is the engine's to commit, before the snapshot a resume compares against
+            node_commit.commit_after(e, node=name, entry=1, item=None, logical=d["workspace"], path=ws, outcome=outcome)
         snap = self.snapshot(name, d)
         if snap:
             extra["workspace"] = snap
