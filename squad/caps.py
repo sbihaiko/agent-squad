@@ -12,10 +12,12 @@ bound, writes a waiting marker the panel names, then raises CeilingWaitExpired, 
 Guard: `tests/test_machine_caps.py`.
 """
 import contextlib
+import datetime
 import fcntl
 import json
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 
@@ -65,14 +67,26 @@ def folder():
     return Path(os.environ.get("SQUAD_CAPS_DIR") or Path.home() / ".cache" / "agent-squad" / "caps")
 
 
-def alive(pid):
+def process_started_at(pid):
+    """The wall time at which `pid` started, or None when the system cannot say."""
+    try:
+        out = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, check=False).stdout.strip()
+        return datetime.datetime.strptime(out, "%a %b %d %H:%M:%S %Y").timestamp()
+    except (OSError, ValueError):
+        return None
+
+
+def alive(pid, since=None):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    if not isinstance(since, (int, float)):
+        return True
+    started = process_started_at(pid)
+    return started is None or started <= since
 
 
 def _name(holder):
@@ -101,7 +115,7 @@ class Ceiling:
                 lease = json.loads(p.read_text())
             except (OSError, ValueError):
                 continue
-            if alive(lease.get("pid", -1)):
+            if alive(lease.get("pid", -1), lease.get("since")):
                 out.append(lease)
             else:
                 p.unlink(missing_ok=True)
