@@ -195,7 +195,7 @@ for d in (st / "auto").glob("disp-*"):
     if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
-    if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged): the issue is past dispatch
+    if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged). -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
 owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
@@ -241,7 +241,7 @@ if fd and fb:
         n = m.group(1); mk = st / "auto" / f"janitor-fixed-{n}-{h}"
         if mk.exists(): continue
         if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
-        if sh("gh", "api", "search/issues", "-f", f"q=repo:{repo} is:pr is:open \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue
+        if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:pr is:open \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # -X GET is load-bearing here too: a bare `-f` POSTs, and /search/issues answers Not Found (#1981)
         say(f"FIXED-NOT-CLOSED #{n}: fork commit {h} \"{subj[:60]}\" names it, the issue is still open")
         if not dry: mk.touch()
     # P: a `fork-<n>-<sha9>` marker is the close pass's claim that it merged that commit into the base. An unwound

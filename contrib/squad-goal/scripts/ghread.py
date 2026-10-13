@@ -184,6 +184,11 @@ def _split_headers(body: str) -> tuple[str, dict[str, str]]:
     return rest, headers
 
 
+def headers_of(body: str) -> dict[str, str]:
+    """The response headers `gh api --include` put in front of the body, names lowercased; `{}` when the body has none."""
+    return _split_headers(body)[1]
+
+
 def _decode(body: str) -> tuple[Any, bool]:
     """The parsed body and whether it parsed. An empty body is an answer too: GitHub answered with nothing."""
     if not body.strip():
@@ -477,6 +482,22 @@ def read(route: str, transport: TransportFn | None = None) -> Read:
         shaped = _issue(value)
         return Read(kind=ANSWER, answer=shaped, body=json.dumps(shaped))
     return Read(kind=kind, answer=value, body=raw, message=message, request_id=request_id, detail=detail)
+
+
+# A conditional read hands its transport the route and the ETag the caller already holds for it.
+RevalidateFn = Callable[[str, str], Transport]
+
+
+def gh_conditional_transport(route: str, etag: str) -> Transport:
+    """`gh api --include -H 'If-None-Match: <etag>' <route>`: GitHub answers 304 when the entity is the one the ETag names.
+
+    It is a read like any other (`--include` for the same reason, so the status is in front of the body), and a 304 is
+    how a caller learns that what it holds is still the answer without being handed -- or parsing -- the answer again.
+    """
+    p = subprocess.run(
+        ["gh", "api", "--include", "-H", f"If-None-Match: {etag}", route], capture_output=True, text=True, check=False
+    )
+    return Transport(rc=p.returncode, body=p.stdout, detail=(p.stderr or "").strip())
 
 
 def gh_write_transport(argv: list[str]) -> Transport:

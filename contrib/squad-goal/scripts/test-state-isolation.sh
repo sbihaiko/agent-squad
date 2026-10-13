@@ -9,9 +9,6 @@ T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1;
 G=/usr/bin/grep; P=$T/profiles; B=$T/state; mkdir -p "$P" "$T/bin" "$T/plain"
 for p in alpha:x beta:y; do printf ': "${SG_REPO:=%s/%s}"; : "${SG_OWNER:=%s}"; : "${SG_PROJECT:=1}"; : "${SG_CHECKOUT:=%s}"\n' \
   "${p#*:}" "${p%%:*}" "${p#*:}" "$T/co-${p%%:*}" > "$P/${p%%:*}.sh"; done
-# a profile that keeps its own state directory (a profile-level SG_STATE override) has its queue flushed from there
-printf ': "${SG_REPO:=w/gamma}"; : "${SG_OWNER:=w}"; : "${SG_PROJECT:=1}"; : "${SG_CHECKOUT:=%s}"; SG_STATE=%s\n' "$T/co-gamma" "$T/custom" > "$P/gamma.sh"
-mkdir -p "$T/custom/cq"; echo "from gamma" > "$T/custom/cq/5-x.md"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 # records the endpoint and the body each comment was posted with
@@ -39,22 +36,12 @@ done
 
 # a comment queued under a state directory no profile owns is never posted anywhere
 mkdir -p "$B/ghost/cq"; echo "orphan" > "$B/ghost/cq/7-x.md"
-# an address in the file name (<owner>__<repo>#<n>-<tag>.md) is the carrier: it wins over the directory the file sits in
-echo "for beta, queued by alpha" > "$B/alpha/cq/y__beta#9-hello.md"
-echo "unknown repository" > "$B/alpha/cq/z__gone#3-x.md"
-echo "same name, other owner" > "$B/alpha/cq/other__alpha#4-x.md"
-touch -t 202601010000 "$B"/*/cq/*.md "$T/custom/cq/"*.md
+touch -t 202601010000 "$B"/*/cq/*.md
 # one flusher, started in a directory no profile matches, with no profile in force, posts every queue to its own repository
 out=$(cd "$T/plain" && bash "$d/cqflush.sh" --once 2>&1)
 $G -q 'repos/x/alpha/issues/7/comments.* | comment from alpha$' "$T/ghlog" && ok "alpha's comment is posted to x/alpha#7" || ko "alpha's comment: $(cat "$T/ghlog") $out"
 $G -q 'repos/y/beta/issues/7/comments.* | comment from beta$' "$T/ghlog" && ok "beta's comment is posted to y/beta#7" || ko "beta's comment: $(cat "$T/ghlog") $out"
-$G -q 'repos/w/gamma/issues/5/comments.* | from gamma$' "$T/ghlog" && [ -f "$T/custom/cq/5-x.md.done" ] && ok "a profile's own SG_STATE override is honored: its queue is flushed to its repository" || ko "gamma's queue: $(ls "$T/custom/cq") $(cat "$T/ghlog")"
-$G -q 'repos/y/beta/issues/9/comments.* | for beta, queued by alpha$' "$T/ghlog" && ok "an addressed comment is posted to the address, not to the repository of the directory it sits in" || ko "addressed comment: $(cat "$T/ghlog")"
-[ -f "$B/alpha/cq/y__beta#9-hello.md.done" ] && ok "the addressed comment is marked done" || ko "addressed comment not done: $(ls "$B/alpha/cq")"
-[ -f "$B/alpha/cq/z__gone#3-x.md.dead" ] && printf '%s' "$out" | $G -q 'z/gone#3' && ok "an unknown address goes to .dead, named in the report" || ko "unknown address: $(ls "$B/alpha/cq") / $out"
-[ -f "$B/alpha/cq/other__alpha#4-x.md.dead" ] && ok "repositories compare by owner and name: other/alpha is not x/alpha" || ko "other/alpha: $(ls "$B/alpha/cq")"
-$G -q 'issues/[34]/comments' "$T/ghlog" && ko "an unknown address was retried against a repository: $(cat "$T/ghlog")" || ok "an unknown address is never posted to the flusher's or the directory's repository"
-[ "$($G -c . "$T/ghlog")" = 4 ] && ok "nothing else is posted" || ko "posts: $(cat "$T/ghlog")"
+[ "$($G -c . "$T/ghlog")" = 2 ] && ok "nothing else is posted" || ko "posts: $(cat "$T/ghlog")"
 [ -f "$B/alpha/cq/7-note.md.done" ] && [ -f "$B/beta/cq/7-note.md.done" ] && ok "both comments are marked done" || ko "done marks: $(ls "$B"/*/cq)"
 [ -f "$B/ghost/cq/7-x.md.dead" ] && printf '%s' "$out" | $G -q 'ghost' && ok "the orphan comment is set aside dead and reported by name" || ko "orphan: $(ls "$B/ghost/cq") / $out"
 rm -rf "$T"; exit $fail

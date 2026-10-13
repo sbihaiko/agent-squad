@@ -35,8 +35,7 @@ def status_field():
     """REST id of the board's Status field (the items endpoint needs it to return Status values)."""
     o = subprocess.run(["gh", "api", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id'], capture_output=True, text=True, timeout=60).stdout.split()
     return o[0] if o else ""
-HOME = pathlib.Path.home(); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import statedir   # the state-directory seam (#20)
-STATE = statedir.state(); SHARED = statedir.shared()   # SHARED: what is machine-wide (provider quota markers)
+HOME = pathlib.Path.home(); STATE = pathlib.Path(os.environ.get("SG_STATE", HOME / ".cache/squad-goal"))
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
 HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
 (HUBDIR / ".gitignore").write_text("*\n")   # keeps the folder untracked even where runs/ is not ignored
@@ -700,8 +699,8 @@ def foot_sources(now=None):
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
     out = {"health": None, "progress": None, "occ": None, "drift": None,
-           "quota": {"codex": limited_until(_read(SHARED / "codex-limited"), now),
-                     "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
+           "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
+                     "agy": limited_until(_read(STATE / "agy-limited"), now)}}
     h = _json(STATE / "health.json")
     if isinstance(h, dict):
         causes = [c for c in (h.get("causes") or []) if c]

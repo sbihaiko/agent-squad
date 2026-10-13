@@ -9,7 +9,7 @@ type sg_state_base >/dev/null 2>&1 || . "$(dirname "$0")/repoctx.sh"   # the one
 # Same shape as single.sh: a directory holding the holder's pid, stale when the pid is gone. Taken before the first gh
 # call, so a refused process never reads GitHub at all.
 wme="$(cd "$(dirname "$0")" && pwd -P)/watch.sh"
-wlock="$(sg_state_base)/watch-locks/$(printf '%s' "$wme" | tr -c 'A-Za-z0-9' '_')"
+wlock="$SG_STATE_BASE/watch-locks/$(printf '%s' "$wme" | tr -c 'A-Za-z0-9' '_')"   # the seam, never the path: the lock is keyed on this script, not on $SG_STATE -- a second start under a temp SG_STATE would otherwise walk past the holder and poll the same repository beside it
 mkdir -p "$(dirname "$wlock")"
 if ! mkdir "$wlock" 2>/dev/null; then
   wh=$(cat "$wlock/pid" 2>/dev/null)
