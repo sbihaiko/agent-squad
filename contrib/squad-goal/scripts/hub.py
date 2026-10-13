@@ -2422,7 +2422,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/board/refresh"):
             board_pass(); body, ct = json.dumps(board()).encode(), "application/json"   # the header's refresh button: one real pass, not another read of the cache (#1810)
         elif self.path.startswith("/api/board"): body, ct = json.dumps(board()).encode(), "application/json"
-        elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": LOADED}).encode(), "application/json"
+        elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
@@ -2439,6 +2439,7 @@ class H(BaseHTTPRequestHandler):
         body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 
 SELF = pathlib.Path(__file__).resolve(); LOADED = SELF.stat().st_mtime_ns
+BOOT = time.time_ns()   # the page's version is this process, not this file: a restart for a changed hubmux.py, panes.js or address.sh leaves hub.py's mtime alone, and the open page must still reload
 def watch_self():
     """Re-exec when this file changes on disk, so an edit goes live without anyone restarting the hub; open pages reload on the new /api/version."""
     while True:

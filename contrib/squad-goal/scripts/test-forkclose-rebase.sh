@@ -18,13 +18,16 @@ case "$(tail -2 "$ck" | head -1)" in "GATE LINT COMMAND: "*"ruff check squad tes
 case "$(tail -1 "$ck")" in "GATE SUITE COMMAND: "*"pytest tests"*"--ignore-glob"*) ok "and by the gate's suite as its last line";; *) ko "the last line is '$(tail -1 "$ck")'";; esac
 mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each case builds the history it is about
   rm -rf "$T/s" "$T/st" "$T/co" "$T/bin" "$T/fork"; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,fork-gate.sh,serial.sh,gate-suites.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,prland.sh,ghcall.sh,address.sh,fork-gate.sh,serial.sh,gate-suites.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
   printf 'exit 0\n' > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 echo "$*" >> "$GHLOG"
 case "$*" in
+  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, its checks are green, GitHub merges it
+  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
+  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";;
   *" -q .body"*) ;;
@@ -38,7 +41,8 @@ board() { printf '{"items":[%s]}\n' "$1" > "$T/co/runs/.hub/hub-board.json"; }
 # The branch forks from the base and the base then moves on: that is the stale candidate the ticket is about.
 stale() { g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
   g checkout -q -b gui/1 local/next; echo one > "$T/fork/one.py"; g add .; g commit -q -m "work 1"
-  g checkout -q local/next; echo moved > "$T/fork/base-moved.txt"; g add .; g commit -q -m "the base moved on after the branch forked"; }
+  g checkout -q local/next; echo moved > "$T/fork/base-moved.txt"; g add .; g commit -q -m "the base moved on after the branch forked"; rm -rf "$T/gh"; mkdir -p "$T/gh/x"; $G init -q --bare "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next   # the land pushes the branch and merges by PR (#32)
+}
 
 mkfix; stale; board '{"n":1,"st":"Code Complete","s":"open"}'
 [ "$(g rev-list --count local/next..gui/1)" = 0 ] || true

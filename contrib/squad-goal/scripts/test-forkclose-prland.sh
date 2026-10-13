@@ -6,7 +6,7 @@
 # the bare remote), throwaway repos. usage: bash test-forkclose-prland.sh [path/to/forkclose.sh]
 src=${1:-$(dirname "$0")/forkclose.sh}; d=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"
-for f in forkonly.sh address.sh prland.sh fork-gate.sh serial.sh ghread.py ghthrottle.py; do [ -f "$d/$f" ] && cp "$d/$f" "$T/s/"; done
+for f in forkonly.sh address.sh prland.sh ghcall.sh fork-gate.sh serial.sh ghread.py ghthrottle.py; do [ -f "$d/$f" ] && cp "$d/$f" "$T/s/"; done
 printf "exit 0\n" > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/emu SG_REPOS="x/emu x/tool" SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }

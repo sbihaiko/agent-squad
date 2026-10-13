@@ -8,8 +8,12 @@ import http.server
 import importlib.util
 import json
 import os
+import shutil
+import socket
 import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -44,7 +48,7 @@ def fleet(tmp_path_factory):
     spec.loader.exec_module(mux)
     srv = mux.server(0, mux.load_apps())
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield {"url": f"http://127.0.0.1:{srv.server_address[1]}", "port": srv.server_address[1], "env": env}
+    yield {"url": f"http://127.0.0.1:{srv.server_address[1]}", "port": srv.server_address[1], "env": env, "mux": mux}
     srv.shutdown()
     for k, v in before.items():
         if v is None:
@@ -118,3 +122,114 @@ def test_hubctl_refuses_a_port_held_by_something_else(fleet, tmp_path):
         other.shutdown()
     assert p.returncode != 0
     assert "not the squad hub" in p.stderr
+
+
+def test_a_restarted_hub_makes_an_open_page_reload(fleet):
+    """The page reloads itself when /api/version changes. A restart that served an unchanged hub.py (only hubmux.py, panes.js or
+    address.sh changed) must still change it, or the page keeps the panel built from the old code."""
+    before = json.loads(_get(fleet["url"] + "/alpha/api/version")[1])["v"]
+    time.sleep(0.01)
+    again = fleet["mux"].server(0, fleet["mux"].load_apps())
+    threading.Thread(target=again.serve_forever, daemon=True).start()
+    try:
+        after = json.loads(_get(f"http://127.0.0.1:{again.server_address[1]}/alpha/api/version")[1])["v"]
+    finally:
+        again.shutdown()
+    assert isinstance(after, int) and after != before
+
+
+FAKE_HUB = """
+import http.server, json, os, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        b = json.dumps({"hub": "squad-hub", "pid": os.getpid(), "repos": [{"slug": "beta", "repo": "y/beta", "path": "/beta", "live": []}]}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(b)
+http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+"""
+
+
+def _free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _hub_pid(port):
+    try:
+        return json.loads(_get(f"http://127.0.0.1:{port}/api/hub")[1])["pid"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+@pytest.fixture
+def fake_hub_dir(fleet, tmp_path):
+    """hubctl.sh and address.sh beside a hubmux.py that only answers /api/hub, so a restart is observable offline."""
+    d = tmp_path / "scripts"
+    d.mkdir()
+    for f in ("hubctl.sh", "address.sh"):
+        shutil.copy(SCRIPTS / f, d / f)
+    (d / "hubmux.py").write_text(FAKE_HUB)
+    started = []
+    yield d, started
+    for port in started:
+        pid = _hub_pid(port)
+        if pid:
+            os.kill(pid, 15)
+
+
+def _restart(d, port, env):
+    return subprocess.run(["bash", str(d / "hubctl.sh"), "--restart", str(port)], cwd=d, capture_output=True, text=True,
+                          timeout=60, env={**os.environ, **env, "SG_PROFILE": "beta"})
+
+
+def test_hubctl_restart_replaces_the_running_hub_and_prints_its_url(fleet, fake_hub_dir):
+    d, started = fake_hub_dir
+    port = _free_port()
+    started.append(port)
+    first = subprocess.run(["bash", str(d / "hubctl.sh"), str(port)], cwd=d, capture_output=True, text=True, timeout=60,
+                           env={**os.environ, **fleet["env"], "SG_PROFILE": "beta"})
+    assert first.returncode == 0, first.stderr
+    old = _hub_pid(port)
+    assert old
+    p = _restart(d, port, fleet["env"])
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == f"http://127.0.0.1:{port}/beta"
+    new = _hub_pid(port)
+    assert new and new != old
+    with pytest.raises(ProcessLookupError):
+        os.kill(old, 0)
+
+
+def test_hubctl_restart_starts_a_hub_when_none_runs(fleet, fake_hub_dir):
+    d, started = fake_hub_dir
+    port = _free_port()
+    started.append(port)
+    p = _restart(d, port, fleet["env"])
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == f"http://127.0.0.1:{port}/beta"
+    assert _hub_pid(port)
+
+
+def test_hubctl_restart_never_stops_something_that_is_not_the_squad_hub(fleet, fake_hub_dir):
+    d, _ = fake_hub_dir
+    port = _free_port()
+    other = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(50):
+            if _up(port):
+                break
+            time.sleep(0.1)
+        p = _restart(d, port, fleet["env"])
+        assert p.returncode != 0
+        assert "not the squad hub" in p.stderr
+        assert other.poll() is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def _up(port):
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
