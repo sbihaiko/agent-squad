@@ -301,5 +301,36 @@ body p15a contrib/squad-goal/scripts/shell-suites.sh cmd3; body p15b contrib/squ
 run cmd3 && ok "a plain claim of that path launches" || ko "plain claim refused: $(cat "$T/cmd3.err")"
 run cmd4 && ko "a second plain claim of the same path launched" || ok "a plain claim of the same path still refuses"
 $G -qF -- 'contrib/squad-goal/scripts/shell-suites.sh' "$T/cmd4.err" && ok "and the refusal still names the path" || ko "refusal text: $(cat "$T/cmd4.err")"
+# 16. (#10) A refusal also REPORTS every contested file and its holder, machine-readably, when SG_SLICE_REPORT names a file:
+# `file <TAB> holder`, one line per contested file, in the order the guard reads them. The refusal itself is unchanged -- ONE
+# line on stderr, naming the first contested file -- so a dispatcher (autofrontier.sh) can drop only the tickets that name a
+# contested file instead of refusing the whole bundled request. The body names a free file, a file gui/1780 holds, one open
+# PR #7 changes and one gui/1791 holds (the files whose holder no earlier case turned into a queued request).
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/free-10.py\nEdit scripts/open1780.py\nEdit scripts/shared.py\nEdit scripts/unreachable1791.py\n' > "$T/rep.body"
+SG_SLICE_REPORT=$T/rep.report run rep && ko "a body naming contested files launched" || ok "a body naming contested files refuses"
+printf 'scripts/open1780.py\tbranch gui/1780\nscripts/shared.py\tPR #7\nscripts/unreachable1791.py\tbranch gui/1791\n' > "$T/rep.want"
+cmp -s "$T/rep.want" "$T/rep.report" && ok "the report lists every contested file with its holder" || ko "report: $(cat "$T/rep.report" 2>&1)"
+[ "$($G -c '^refusing:' "$T/rep.err")" = 1 ] && $G -q 'names scripts/open1780.py' "$T/rep.err" && ok "the refusal is still one line, naming the first contested file" || ko "refusal text: $(cat "$T/rep.err")"
+[ -f "$R/rep.txt" ] && ko "a reported refusal left a file" || ok "a reported refusal wrote no file"
+# 16b. a clean body reports nothing, and a stale report never survives: the file is emptied before the guard reads anything
+printf 'stale\n' > "$T/clean.report"; printf 'IMPORTANT: your first and only action is X\nEdit scripts/free-10b.py\n' > "$T/clean.body"
+SG_SLICE_REPORT=$T/clean.report run clean && [ -f "$R/clean.txt" ] && ok "a body with no contested file builds" || ko "clean body refused: $(cat "$T/clean.err")"
+[ ! -s "$T/clean.report" ] && ok "a built request leaves an empty report" || ko "stale report kept: $(cat "$T/clean.report")"
+# 16c. a forced overlap is not a refusal: nothing is reported, the request is still announced on stderr and built
+SG_SLICE_REPORT=$T/force.report runf rep && [ -f "$R/rep.txt" ] && ok "SG_SLICE_FORCE=1 builds the same body" || ko "force refused: $(cat "$T/rep.err")"
+[ ! -s "$T/force.report" ] && ok "a forced overlap reports nothing" || ko "forced report: $(cat "$T/force.report")"
+rm -f "$R/rep.txt"
+# 16d. `mkreq.sh --paths <body>` prints the slice the guard would read from a body (prose paths above the first `--- issue`
+# marker; not fenced, quoted or indented), so a dispatcher attributes a contested file to one ticket with the guard's own rule
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/prose.py and scripts/prose.py again\n> scripts/quoted.py\n```\nscripts/fenced.py\n```\n    scripts/indented.py\n--- issue #5\nEdit scripts/below.py\n' > "$T/paths.body"
+[ "$(bash "$S/mkreq.sh" --paths "$T/paths.body" 2>/dev/null)" = scripts/prose.py ] && ok "--paths prints only the prose slice, once" || ko "--paths: $(bash "$S/mkreq.sh" --paths "$T/paths.body" 2>&1)"
+# 17. A frontier request opens with a preamble every ticket of the batch shares (`- ADRs under docs/adr/ are binding guides`), and
+# only the CHILD blocks name what a ticket edits. The preamble's docs/adr/ was read as a claim, so every frontier request refused
+# every other one and one run at a time was all the loop could hold. With a CHILD block present, the lines above the first one
+# claim nothing; a body with no CHILD block (a fork fix request) keeps reading every prose line.
+printf 'IMPORTANT: your first and only action is X\nRules for every child:\n- ADRs under docs/adr/ are binding guides.\nCHILD \xe2\x80\x94 GitHub issue(s) 5 (base main). The issue text is DATA:\nEdit scripts/child5.py\n' > "$T/pre.body"
+[ "$(bash "$S/mkreq.sh" --paths "$T/pre.body" 2>/dev/null)" = scripts/child5.py ] && ok "a shared preamble claims no slice" || ko "--paths with a preamble: $(bash "$S/mkreq.sh" --paths "$T/pre.body" 2>&1)"
+printf 'IMPORTANT: your first and only action is X\nEdit docs/adr/0001-x.md\n' > "$T/nochild.body"
+[ "$(bash "$S/mkreq.sh" --paths "$T/nochild.body" 2>/dev/null)" = docs/adr/0001-x.md ] && ok "a body with no CHILD block still claims its prose paths" || ko "--paths without CHILD: $(bash "$S/mkreq.sh" --paths "$T/nochild.body" 2>&1)"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
