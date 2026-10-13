@@ -356,7 +356,7 @@ def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` 
     return "unwound"
 def refuse_comment(n, refusal, err, why):   # a refused write queues one comment on the issue it was about (#141): the card says why it did not move, through the queue cqflush.sh posts from, so the comment lands whatever happens to this pass. The bug the refusal files is the task; this comment is the place. It goes through the helper, so the file name and the body are built in one place.
     rc, _ = _run(["bash", str(pathlib.Path(__file__).parent / "refusal.sh"), str(n), refusal, err, why])
-    if rc: say(f"REFUSAL-COMMENT FAILED #{n}: {refusal} was not queued for this issue (exit {rc})")
+    if rc: say(f"REFUSAL-COMMENT-FAILED #{n}: {refusal} was not queued for this issue (exit {rc})")
     return rc == 0
 def board_write(args, n, why):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)

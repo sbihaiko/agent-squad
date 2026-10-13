@@ -7,6 +7,10 @@
 # fingerprint is the cause: the operation, the address and the error's own FIRST line. The run id, the timestamp and
 # the cycle number are deliberately outside it, because they name the occurrence and an occurrence is not a defect.
 #
+# The operation is a refusal NAME, and the names are a closed set in one place (refusal-names.sh, #142): a name the set
+# does not hold is refused here, by name, and nothing is filed under it -- an unknown name has no shape, so the filer
+# guesses none. A new refusal is a deliberate act on the set's one line, never a spelling invented at a call site.
+#
 # The index is `$SG_STATE/auto/refusal-<fingerprint>`, one line, `<issue> <state>`: a fingerprint whose issue is OPEN
 # files nothing, and one whose issue is CLOSED files again, because a defect that came back is a defect. The state is
 # read live, through the door, so an issue a person closed since the loop filed it is seen as closed; a state the loop
@@ -19,7 +23,7 @@
 #
 # The caller -- the pass that hit the refusal, with the operation, the address and the guard that should have caught it
 # -- is #145's half and is not here: this is the filer, on the seam that exists.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; here="$(cd "$(dirname "$0")" && pwd)"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/refusal-names.sh"; here="$(cd "$(dirname "$0")" && pwd)"
 A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autorefuse   # the call log names the pass that spends the state read (ADR-0277)
 
@@ -86,9 +90,13 @@ file_refusal() {
   echo "REFUSE filed #$num $key $op $addr: $(first_line "$err")"
 }
 mode=${1:-}; [ $# -gt 0 ] && shift
+# not-named <name>: the refusal is refused. A name the closed set does not hold has no shape, so nothing is filed under
+# it and nothing is guessed (#142): the filer says the name and the set, and exits a usage error.
+not_named() { echo "REFUSE not-named $1: not a refusal name in the closed set ($(sg_refusal_names | tr '\n' ' ')); nothing is filed" >&2; exit 2; }
 case $mode in
   --refused)
     [ $# -ge 3 ] || { echo "usage: autorefuse.sh --refused <operation> <address> <error> [--exit <code>] [--context <run-or-card>]" >&2; exit 2; }
+    sg_refusal_named "$1" || not_named "$1"
     op=$1; addr=$2; err=$3; shift 3; code=-; ctx=-
     while [ $# -gt 0 ]; do
       case $1 in
@@ -100,6 +108,7 @@ case $mode in
     file_refusal "$op" "$addr" "$err" "$code" "$ctx"; exit $?;;
   --fingerprint)
     [ $# -eq 3 ] || { echo "usage: autorefuse.sh --fingerprint <operation> <address> <error>" >&2; exit 2; }
+    sg_refusal_named "$1" || not_named "$1"
     refusal_fingerprint "$1" "$2" "$3"; echo; exit 0;;
   *)
     echo "usage: autorefuse.sh --refused <operation> <address> <error> [--exit <code>] [--context <run-or-card>]" >&2

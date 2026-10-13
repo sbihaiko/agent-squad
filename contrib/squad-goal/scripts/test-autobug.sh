@@ -6,7 +6,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$T/s/"
 : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 # exported, as the real env.sh does: the stub mkreq.sh below is a child shell and must still see SG_STATE
@@ -294,6 +294,38 @@ filed=$($G -c '^title=' "$T/filed")
 # both writes reached the door through the add path: a bug board that does not carry the card is repaired the same way
 [ "$($G -c '^--add ' "$T/board.calls")" = 2 ] && ok "9 both card moves go through the add path" \
   || ko "9 the door was called: $(cat "$T/board.calls")"
+unset SG_BUG_PROJECT SG_BUG_DOING
+
+# 10) (#142) the refusal names are a closed set in code. Every writer this pass owns names its refusal through the one
+# write door, the name it gives is a member of the set the helper owns, and the cycle log repeats that same name. A
+# refusal named by hand -- a name the set does not hold -- is refused by the helper instead of filed under a guess.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+: > "$T/board.calls"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+: > "$T/filed"; : > "$T/st/cycle.log"
+export BOARD="$T/s/board.sh" SG_BUG_PROJECT=4 SG_BUG_DOING="In Progress"
+bash "$T/s/autobug.sh" >/dev/null 2>&1
+set=$(bash "$d/refusal-names.sh" 2>/dev/null)
+[ -n "$set" ] && ok "10 the helper prints the closed set in one place" || ko "10 nothing prints the set"
+filed=$($G -c '^title=' "$T/filed")
+[ "$filed" = 2 ] && ok "10 both writers of the pass name a refusal through the door" || ko "10 $filed bug(s), not the two cards: $(cat "$T/filed")"
+named=0; stray=""
+while read -r t; do
+  n=$($G -oE '[A-Z][A-Z0-9-]*-FAILED' <<< "$t" | head -1)
+  if [ -n "$n" ] && $G -qxF "$n" <<< "$set"; then named=$((named+1)); else stray="$stray $n"; fi
+done < <($G '^title=' "$T/filed")
+[ "$named" = 2 ] && ok "10 the name every writer gives is a member of the set" || ko "10 names outside the set:$stray / $(cat "$T/filed")"
+$G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused BOARD-WRITE-FAILED ' "$T/st/cycle.log" \
+  && [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 2 ] && ok "10 the cycle log repeats the same two names, in one shape" \
+  || ko "10 cycle.log: $(cat "$T/st/cycle.log")"
+[ "$($G -c '^--add o 4 In Progress 1228$' "$T/board.calls")" = 2 ] && ok "10 both refusals came from the pass's own card moves" || ko "10 board calls: $(cat "$T/board.calls")"
 unset SG_BUG_PROJECT SG_BUG_DOING
 
 rm -rf "$T"; exit $fail

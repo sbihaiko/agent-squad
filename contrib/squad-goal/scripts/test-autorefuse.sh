@@ -15,7 +15,7 @@ trap 'rm -rf "$T"' EXIT
 unset SG_STATE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_PROFILES_DIR SG_FILED_BY SG_FILED_LABELS SG_GH_PASS
 
 N=$T/loop; S=$N/scripts; mkdir -p "$S" "$N/st/auto" "$N/bin" "$N/co"
-for f in autorefuse.sh autohunt.sh ghcall.sh ghread.py; do [ -f "$d/$f" ] && cp "$d/$f" "$S/$f"; done
+for f in autorefuse.sh autohunt.sh ghcall.sh ghread.py refusal-names.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$S/$f"; done
 # the profile of the fixture: one repository, this state dir, the board stubbed (the card is not what this suite proves)
 cat > "$S/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$N/st; SG_CHECKOUT=$N/co; SG_BASE=main
@@ -103,7 +103,7 @@ rm -f "$GHREFUSE"
 
 # 8. the fingerprint is the cause: the operation, the address and the error's own first line, and nothing else
 a=$(fingerprint BOARD-WRITE-FAILED "$ADDR" "$E1"); b=$(fingerprint BOARD-WRITE-FAILED "$ADDR" "$E2")
-c=$(fingerprint BOARD-WRITE-FAILED "$ADDR" "$E3"); e=$(fingerprint CARD-WRITE-FAILED "$ADDR" "$E1")
+c=$(fingerprint BOARD-WRITE-FAILED "$ADDR" "$E3"); e=$(fingerprint DISPATCH-FAILED "$ADDR" "$E1")
 f=$(fingerprint BOARD-WRITE-FAILED repos/o/r/issues/78 "$E1")
 if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "the run id, the timestamp and the cycle number are outside the fingerprint"
 else ko "the occurrence entered the fingerprint: '$a' vs '$b'"; fi
@@ -118,6 +118,21 @@ else ko "the title does not name the cause: $(head -2 "$GHLOG")"; fi
 if $G -qF "refusal-$f1" "$GHBODIES" && $G -qF 'operation:   BOARD-WRITE-FAILED' "$GHBODIES"; then
   ok "the body the loop files carries the cause's fingerprint and its operation"
 else ko "the body does not carry the cause: $(head -3 "$GHBODIES")"; fi
+
+# 10. (#142) the refusal names are a closed set in code: the set is readable in one place, every filer call names a
+# member, and a name outside the set is refused by the filer -- never filed under a guessed name. CARD-WRITE-FAILED is
+# the drift spelling #117 warns about; it files nothing.
+set=$(bash "$S/refusal-names.sh" 2>/dev/null)
+for n in BOARD-WRITE-FAILED DISPATCH-FAILED REFUSAL-COMMENT-FAILED; do
+  if $G -qxF "$n" <<< "$set"; then ok "the closed set is readable in one place and holds $n"; else ko "the set does not hold $n: '$set'"; fi
+done
+before=$(posts); o=$(refuse CARD-WRITE-FAILED "$ADDR" "$E1" 2>&1); rc=$?
+if [ "$rc" -ne 0 ] && [ "$(posts)" = "$before" ]; then ok "a name outside the closed set is refused, and nothing is filed"
+else ko "a name outside the set filed $(( $(posts) - before )) issue(s) (rc $rc): '$o'"; fi
+if said "$o" CARD-WRITE-FAILED; then ok "the filer names the name it would not take"; else ko "the filer does not name it: '$o'"; fi
+um=""
+while read -r n; do [ -n "$n" ] && { fingerprint "$n" "$ADDR" "$E1" >/dev/null 2>&1 || um="$um $n"; }; done <<< "$set"
+[ -z "$um" ] && ok "every name in the set is a name the filer takes" || ko "the filer refused a member:$um"
 
 echo "--- shell suite: test-autorefuse.sh $([ "$fail" = 0 ] && echo green || echo RED)"
 exit $fail
