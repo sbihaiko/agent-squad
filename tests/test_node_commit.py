@@ -1,4 +1,5 @@
-"""Guards for #84: the engine commits a passing node's dirty workspace, so a branch tip always equals the run's final state."""
+"""Guards for #84 and #90: the engine commits a passing node's dirty workspace, or its target when that target is a worktree
+the run owns, so a branch tip always equals the run's final state."""
 import subprocess
 from pathlib import Path
 

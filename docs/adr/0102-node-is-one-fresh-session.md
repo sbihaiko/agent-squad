@@ -32,4 +32,4 @@ Rejected: resuming the prior session on a `repeat` or after a deadline (a resume
 
 ## Guard
 
-`tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`, `tests/test_deadlines.py`, `tests/test_each.py`, `tests/test_actions.py`. A change to this rule changes its tests in the same commit (ADR-0018).
+`tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`, `tests/test_deadlines.py`, `tests/test_each.py`, `tests/test_actions.py`, `tests/test_node_commit.py`. A change to this rule changes its tests in the same commit (ADR-0018).
