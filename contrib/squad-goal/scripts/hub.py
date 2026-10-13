@@ -1078,7 +1078,7 @@ def refresh_board():
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
             except OSError: pass
-ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
+ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Open Specs", "Blocked", "No status", "Done"]
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -2113,17 +2113,18 @@ document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
-// hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the seven
-// Project statuses plus the two PR columns — and the flow reads left to right: grey (not started), yellow (being
-// coded), violet (built), teal (verified), green (finished), amber for the pile nobody has triaged, red for the one
-// colour that means look here, blue for a PR in review, and the same blue with its chroma spent for the PR that is
-// retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
-// the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
-// (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
-const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
-const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
+// hidden: strip's number all call colOf(name, columnNames). The ten named columns are the board's own — the eight
+// Project statuses plus the two PR columns — and the flow reads left to right: pink for the spec that is written and
+// not scheduled, grey (not started), yellow (being coded), violet (built), teal (verified), green (finished), amber
+// for the pile nobody has triaged, red for the one colour that means look here, blue for a PR in review, and the same
+// blue with its chroma spent for the PR that is retired. Any other name is a Status option the Project gained later —
+// a user column — and takes the next colour of the reserved ring, by its alphabetical position among those user
+// columns. The name always stands beside the colour (column header, chip label), so the colour is a second cue and
+// never the only one — which is what lets the ring cycle.
+const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
+const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the ten
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","Open Specs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
