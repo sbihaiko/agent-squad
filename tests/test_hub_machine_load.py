@@ -516,7 +516,7 @@ def test_occupancy_reads_the_resolved_ceiling_and_never_a_hard_coded_pair(hub):
 
 def test_the_bar_carries_no_drift_fact(hub):
     """The bar shows what an operator acts on: health, progress, occupancy, quotas. The board-versus-runs drift was a
-    sixth fact whose reading the health block already carries as the `runs-board-drift` cause, so it left the bar (#59)."""
+    sixth fact whose reading the health block already carries as the `runs-board-drift` cause, so it left the bar (#48)."""
     srcs = [_src(drift={"runs": 2, "inprogress": 5}), _src(drift={"runs": 2, "inprogress": 2}), _src(drift=None),
             _src(occ={"live": 9, "agents": 1}, drift={"runs": 2, "inprogress": 2})]
     for s in srcs:
