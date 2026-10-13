@@ -250,6 +250,7 @@ This checkout is a **fork**: the engine tracks upstream (0.2.0, kept as `local/b
 
 ```bash
 contrib/squad-goal/scripts/publish-live.sh        # fork -> live skill, an explicit file list (--check compares, changes nothing)
+contrib/squad-goal/scripts/live-guard.sh          # the watch cycle's step: reads the live skill's drift, publishes it, names what it read
 contrib/squad-goal/scripts/export-agent-squad.sh  # the ZIP for upstream
 ```
 
