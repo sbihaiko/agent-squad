@@ -146,7 +146,11 @@ def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 live = {}; keep = []; held = set(); landed_n = set()   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
+pending = []   # markers of a reaped run, dropped after rule Q has read them
 def free_reaped(f, i):
+    """C: a reaped run frees its leases now, and its dispatch markers after rule Q. Rule Q reads a marker to find the card a
+    dead run left In Progress and puts that card back (#62): a marker dropped here, before the read, left the card In
+    Progress for ever with nothing to report, which is the drift rule Q exists to stop. Returns the marker paths."""
     marks = [st / "auto" / f"disp-{n}" for n in req_issues(f) | i["acc"]]
     holder = f.name; leases = []
     caps = pathlib.Path(os.environ.get("SQUAD_CAPS_DIR") or pathlib.Path.home() / ".cache" / "agent-squad" / "caps")
@@ -155,9 +159,10 @@ def free_reaped(f, i):
             try: lease = json.loads(p.read_text())
             except (OSError, ValueError): continue
             if lease.get("holder") == holder or str(lease.get("holder", "")).startswith(holder + ":"): leases.append(p)
-    if marks or leases: say(f"zombie run {f.name} releases {sum(p.exists() for p in marks)} dispatch markers and {len(leases)} leases")
+    if marks or leases: say(f"zombie run {f.name} releases {len(leases)} leases; its {sum(p.exists() for p in marks)} dispatch markers go after the card pass")
     if not dry:
-        for p in marks + leases: p.unlink(missing_ok=True)
+        for p in leases: p.unlink(missing_ok=True)
+    return marks
 for r in names:
     f = folder(r); i = read(f)
     if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
@@ -185,7 +190,7 @@ for r in names:
     if not alive and i["idle"] > 1200 and not (i["pid"] and same_process(i["pid"], i["started_at"])):
         say(f"zombie run {n} (no verdict, idle {int(i['idle'] // 60)} min, no process) dropped from active-runs")
         if not dry: mark_killed(f)
-        free_reaped(f, i)
+        pending += free_reaped(f, i)
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
         continue
@@ -298,6 +303,13 @@ if owner and proj and repo0:
             for m in ms.values(): m.unlink()
             (st / "cq" / f"{n}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
+# Q has read them: what Q left alone (no card, a card past In Progress, a definite no about the issue) is dropped now, so
+# autofrontier/autobug dispatch those issues again. The marker Q released is already gone, and its card is back.
+left = [p for p in pending if p.exists()]
+if left:
+    say("reaped runs: markers dropped after the card pass: " + " ".join(p.name for p in left))
+    if not dry:
+        for p in left: p.unlink(missing_ok=True)
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
