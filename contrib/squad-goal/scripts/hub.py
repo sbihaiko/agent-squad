@@ -9,11 +9,9 @@ def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
     seam, address.sh, for the profile in force (SG_PROFILE); never from the cwd. A profile the seam refuses gives
-    nothing. One profile is one repository: the retired SG_TOOLING_REPO is never read (#20).
-    SG_FORK_DIR rides the same seam -- the context it prints names it -- and SG_REPOS comes from the environment, since
-    the context does not print the profile's list: together they name every other repository a delivery opens a PR in (#32)."""
-    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT", "SG_FORK_DIR", "SG_REPOS"]
-    if all(os.environ.get(k) for k in keys[:4]): return {k: os.environ.get(k, "") for k in keys}
+    nothing. One profile is one repository: the retired SG_TOOLING_REPO is never read (#20)."""
+    keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT"]
+    if all(os.environ.get(k) for k in keys): return {k: os.environ.get(k, "") for k in keys}
     here = pathlib.Path(__file__).resolve().parent
     p = subprocess.run(["bash", str(here / "address.sh"), os.environ.get("SG_PROFILE", "")], capture_output=True, text=True, timeout=30)
     ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
@@ -24,24 +22,13 @@ CHECKOUT = PROF["SG_CHECKOUT"]
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
-    repository given after it, deduplicated in order (#1820): the SG_REPOS list and the fork checkout's repository (#32)."""
+    repository given after it, deduplicated in order (#1820). A profile gives none: one profile is one repository (#20)."""
     out = []
     for r in (primary,) + tuple(others):
         r = (r or "").strip()
         if r and r not in out: out.append(r)
     return out
-def fork_repo(checkout):
-    """The repository of the fork checkout's origin remote, through the address seam (address.sh sg_resolve_repo): its
-    branches land by pull request too (#32), so its PRs belong in the view. "" when there is no checkout or no answer."""
-    if not checkout: return ""
-    seam = pathlib.Path(__file__).resolve().parent / "address.sh"
-    try:
-        return subprocess.run(["bash", "-c", '. "$1"; sg_resolve_repo "$2"', "_", str(seam), checkout], capture_output=True, text=True, timeout=30).stdout.strip()
-    except Exception:
-        return ""
-# Every repository a delivery opens a PR in (#32): the profile's, the ones it lists in SG_REPOS, and the fork checkout's.
-# The retired SG_TOOLING_REPO is never read (#20).
-REPOS = repos_from(REPO, *(PROF.get("SG_REPOS") or "").split(), fork_repo(PROF.get("SG_FORK_DIR")))
+REPOS = repos_from(REPO)
 def repo_tag(repo, repos=None):
     """The short tag a card wears for its repository: the name after the owner when that name stands for exactly one
     repository the board reads, else the full owner/name -- the tag that does not fit (#1820)."""
@@ -226,13 +213,18 @@ def group_of(r):
 def loop_caps():
     """The machine-wide ceiling (squad/caps.py), from the one resolution the engine and the loop enforce: {runs, children, waiting}.
     `waiting` lists each live wait as {ceiling, holder}. The project file of SG_CHECKOUT may lower the pair. None when the
-    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling."""
+    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling.
+    `per_run` is the other pair, read by squad/run_caps.py from the graph the engine resolves (or the newest live run's own);
+    it is named in the tooltip and never merged into the machine-wide pair. None when no graph reads."""
     root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
     try:
         if root not in sys.path: sys.path.insert(0, root)
         from squad import caps as C
-        c = C.ceiling(os.environ.get("SG_CHECKOUT") or CHECKOUT)
-        return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting()}
+        co = os.environ.get("SG_CHECKOUT") or CHECKOUT   # the profile's checkout is the fallback, never the process cwd
+        c = C.ceiling(co)
+        from squad import run_caps as RC
+        per_run = RC.read(co, [r.get("dir") for r in list(LOAD_RUNS) if r.get("dir")])
+        return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting(), "per_run": per_run}
     except Exception:
         return None
 
@@ -254,6 +246,8 @@ def group_header(kind, rows, caps):
     agents = sum((r.get("agents") or 0) for r in rows)
     title = usd_txt(spend)
     if kind == "running":
+        per_run = ((caps or {}).get("per_run") or {}).get("label")
+        if per_run: title += " · " + per_run
         if caps and isinstance(caps.get("runs"), int) and isinstance(caps.get("children"), int):
             return {"text": f"RUNS {n}/{caps['runs']} · AGENTS {agents}/{caps['children']}{waiting_txt(caps)}", "title": title}
         return {"text": f"{n} · {agents}", "title": title}
@@ -1482,7 +1476,7 @@ body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{disp
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
-/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is out of sight, so its live dashboard is detached by liveSync (one live stream per page): it is hidden with `visibility` so the grid keeps its space, and the split comes back with the focused pane sourced again. The board is no longer a fixed-height row, so the grip has nothing to resize. */
+/* The board's maximize: the kanban takes the run pane's cell as well as its own, so it is read at full height. Only the two cells of the right column move — the left bar keeps its column and its rows. The run pane is a live, cross-origin dashboard: its frame is detached while the pane is out of sight (liveSync in the script), so it holds no stream, and `visibility` only hides the empty cells. The board is no longer a fixed-height row, so the grip has nothing to resize. */
 body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
 body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0;overflow:hidden}
 body.dockb.max #main{visibility:hidden}
@@ -1611,7 +1605,7 @@ function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
  if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
-function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0),title=usd(spend);let text=n+" · "+title;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
+function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
 // run appearing, ending or moving to another age bucket can never move what the user opened.
@@ -1631,41 +1625,34 @@ function drawList(){
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
   document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
-    if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id)}
+    if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id);focus=id}
     save();refresh(true)});
 }
-let built="";
-// ---- one live stream per page
-// A dashboard in a frame holds its own stream and its own timers on its run's server, so a frame per pane made the page's
-// cost grow with the runs it showed. The page lets ONE frame be live: the focused pane follows its run. Every other pane is
-// a card of the state this page already has, and a press on it moves the focus. A pane or window that is not shown holds no
-// frame at all — it is detached, never hidden — so it costs nothing. The budget with N runs is one stream and no timer of
-// the panes' own; the page's other timers are fixed and read no run's dashboard. It reads no cap: a missing file cannot raise it.
-let focus="";
-const focused=()=>slots.includes(focus)?focus:slots[0]||"";
-const liveAt=()=>bo.max?(pip().off?"":"pip"):"pane";   // the surface that holds the live frame: the maximized board's window takes it from the run pane
-const snapText=r=>r?`${name(r)} · ${r.state} · ${usd(r.spend)} · ${age(r.age)} ago`:"";
-const snaps=new Map();
-function drawMain(){
-  const [c,rw]=LAYOUTS[N],f0=liveAt()==="pane"?focused():"",key=N+":"+slots.join(",")+":"+f0;
+let built="",focus=null;
+/*PANES_JS*/
+// A pane is a cell: the focused run's pane holds the one live dashboard frame, every other pane shows the state this page already polled.
+// A frame is dropped from the DOM when its pane stops following (its stream closes with it); it is never hidden (#34).
+const snapText=r=>r.state+" · "+usd(r.spend)+" · "+age(r.age)+" ago · :"+r.port;
+const paintCell=(cell,r,id,live)=>{cell.head.innerHTML=`<span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}${id===live?" · live":""}</span>`;
+  if(cell.snap)cell.snap.textContent=snapText(r)};
+function drawMain(force){
+  const [c,rw]=LAYOUTS[N],live=embedPlan(slots,focus,!!bo.max).pane,key=N+":"+slots.join(",")+"|"+live;
   const main=$("#main");main.style.gridTemplateColumns=`repeat(${c},1fr)`;main.style.gridTemplateRows=`repeat(${rw},1fr)`;
   const byId=new Map(runs.map(r=>[r.id,r]));
-  if(key!==built){built=key;snaps.clear();
-    for(const id of [...frames.keys()])if(id!==f0||!slots.includes(id))frames.delete(id);   // a frame that leaves the page is dropped, so its stream closes
+  if(key!==built){built=key;
+    for(const id of [...frames.keys()])if(id!==live)frames.delete(id);
     main.innerHTML=slots.length?"":"<div class=m style=\"padding:20px\">"+PIP_NORUNS+"</div>";
-    slots.forEach(id=>{const r=byId.get(id),cell=document.createElement("div");cell.className="cell"+(id===f0?" live":"");cell.dataset.id=id;
-      cell.innerHTML=`<small><span>${name(r)} · ${r.state}</span><span>${pins.has(id)?"pinned":"auto"}</span></small>`;
-      if(id===f0){let f=frames.get(id);
+    slots.forEach(id=>{const r=byId.get(id);
+      const cell=document.createElement("div");cell.className="cell";cell.dataset.id=id;cell.head=document.createElement("small");cell.appendChild(cell.head);
+      if(id===live){let f=frames.get(id);
         if(!f||f.dataset.port!==(r.port||r.url)){f=document.createElement("iframe");f.src=r.url||"http://127.0.0.1:"+r.port+"/";f.dataset.port=r.port;frames.set(id,f)}
         cell.appendChild(f)}
-      else{const s=document.createElement("div");s.className="snap";s.dataset.snap=id;snaps.set(id,s);cell.appendChild(s);
-        if(f0){cell.title="press to follow this run live";cell.tabIndex=0;
-          const go=()=>{focus=id;liveSync()};cell.onclick=go;cell.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();go()}})}}
+      else if(live){cell.snap=document.createElement("div");cell.snap.className="snap";cell.snap.dataset.snap=id;cell.appendChild(cell.snap);
+        cell.onclick=()=>{focus=id;drawMain()}}   // pressing a pane moves the one live frame to it
       main.appendChild(cell)})}
-  snaps.forEach((el,id)=>{el.textContent=snapText(byId.get(id))});
+  for(const cell of main.children){const r=byId.get(cell.dataset.id);if(r)paintCell(cell,r,cell.dataset.id,live)}
 }
-function liveSync(){drawMain();pipDraw()}   // the one place the live frame moves: a press on a pane, the maximize toggle, the window's collapse
-// ---- the live panes end here
+function liveSync(){drawMain();pipDraw()}   // the run pane went out of sight or came back: the frame follows the plan
 function refresh(){plan();drawList();liveSync()}
 function applyFilter(){runs=allRuns}
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
@@ -1790,8 +1777,8 @@ bo.dock="bottom";   // the board always docks at the bottom
 if(bo.max)bo.off=false;else if(bo.off)bo.max=false;   // both controls live in one saved record, so a reload can never bring back a board that is maximized and collapsed at once
 const sizeBoard=()=>{$("#board").style.height=document.body.classList.contains("dockb")&&!bo.off&&!bo.max?(bo.h||320)+"px":""};
 // The board's maximize takes the run pane's cell as well as its own, so the kanban is read at full height. The run pane
-// is out of sight, so liveSync detaches its live dashboard and sources the pip's instead: one live stream per page. A CSS
-// class hides the pane with `visibility`, so the grid keeps its space; the split brings the focused pane's frame back.
+// is a live, cross-origin dashboard: while it is out of sight its frame is detached (liveSync), so it holds no stream and no
+// timer on its run's server, and it is built again when the split comes back.
 const MAXI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M4 9V4h5M20 15v5h-5M4 4l6 6M20 20l-6-6"/></svg>',
 MINI='<svg viewBox="0 0 24 24" width=13 height=13 fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round><path d="M9 4v5H4M15 20v-5h5M9 9L4 4M15 15l5 5"/></svg>';
 const paintBoard=()=>{document.body.classList.toggle("dockb",bo.dock==="bottom");document.body.classList.toggle("max",!!bo.max);
@@ -1860,10 +1847,11 @@ g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEve
 // window floats on the board and shows ONE card of the run's own dashboard — the card is the dashboard's single-card
 // mode, `?card=<name>`, documented in docs/design/README.md. The two pages are served on different ports, so there is no
 // DOM to reach into: the URL is the whole interface, and the hub never renders a second copy of the card, which would
-// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and it holds no dashboard there — so
-// nobody closes it twice. The frame is sourced only while the window is the live surface (maximized and expanded) and once
-// per run switch: dragging and resizing never touch it, so the second view is one connection per run switch and one replay of
-// that run's record, never per paint. Collapsing or leaving the maximize mode blanks it, so no stream stays open behind it. A dashboard too old to answer the mode says so inside the window
+// drift from the panel's. The window belongs to the maximize mode — CSS hides it in the split and never detaches it — so
+// nobody closes it twice. The frame is sourced once per run switch while maximized: collapsing the window, dragging and resizing never
+// touch it, so the second view is one connection per run switch and one replay of that run's record, paid when the left
+// bar moves to another run and never per paint. Outside the maximize mode the window is hidden and its frame holds no
+// source, so the page keeps one live embedded dashboard in all (panes.js). A dashboard too old to answer the mode says so inside the window
 // instead of leaving an empty frame.
 const PIP_NORUNS="No open runs. Click a finished run in the list to look at it; the next run that starts shows up here on its own.";
 const PIP={card:"groups",w:360,h:300,minW:240,minH:160,cw:240,ch:34,inset:12,step:16,run:64,wait:2500};
@@ -1879,7 +1867,7 @@ const pipSize=(box,off)=>off?{w:PIP.cw,h:PIP.ch}:{w:box.w<PIP.w?PIP.minW:PIP.w,h
 // A place is kept against the board's top-left and clamped: never left of the board, never above its header (measured, not assumed), never past its far edge.
 const pipPlace=(box,s,x,y)=>({x:pipClamp(Math.round(x),0,box.w-s.w),y:pipClamp(Math.round(y),box.head,box.h-s.h)});
 let pipSrc="",pipSeen="",pipDead="",pipTimer=0;
-const pipRun=()=>{const id=focused();return id?runs.find(r=>r.id===id)||null:null};   // the run the left bar selected is the run the window shows
+const pipRun=()=>{const id=paneFocus(slots,focus);return id?runs.find(r=>r.id===id)||null:null};   // the run the panel follows is the run the window shows
 const pipHead=r=>{const c=PIP_CARDS[pipCard(pip())]||pipCard(pip());return r?name(r)+" · "+r.state+" · "+c:c};
 const pipSet=o=>{Object.assign(pip(),o);saveB();pipDraw()};
 function pipDraw(){
@@ -1888,10 +1876,10 @@ function pipDraw(){
   el.style.left=at.x+"px";el.style.top=at.y+"px";el.style.width=s.w+"px";el.style.height=s.h+"px";
   el.classList.toggle("off",off);$("#pipx").innerHTML=off?"&#43;":"&#8211;";
   if(at.x!==p.x||at.y!==p.y){p.x=at.x;p.y=at.y;saveB()}   // a place remembered on a wider board is pulled back onto this one
-  const r=pipRun(),card=pipCard(p),url=liveAt()==="pip"?pipURL(r,card):"",f=$("#pipf");
-  if(url){if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
-    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}}   // an older dashboard never answers: say so, never an empty frame
-  else if(pipSrc){pipSrc="";pipSeen="";pipDead="";clearTimeout(pipTimer);f.src="about:blank"}   // not the live surface: the window holds no dashboard, so no stream
+  const r=pipRun(),card=pipCard(p),url=embedPlan(slots,focus,!!bo.max).pip?pipURL(r,card):"",f=$("#pipf");   // out of the maximize mode the window follows nothing: its frame holds no source (#34)
+  if(!url&&pipSrc){pipSrc="";f.src="about:blank";pipSeen="";pipDead="";clearTimeout(pipTimer)}
+  if(url)if(url!==pipSrc){pipSrc=url;f.src=url;pipSeen="";pipDead="";clearTimeout(pipTimer);
+    pipTimer=setTimeout(()=>{if(pipSrc&&pipSeen!==pipSrc){pipDead=pipSrc;pipDraw()}},PIP.wait)}   // an older dashboard never answers: say so, never an empty frame
   const miss=!!url&&pipSrc===pipDead&&pipSeen!==pipSrc;
   el.classList.toggle("noframe",!r||miss);
   $("#pipm").textContent=!r?PIP_NORUNS:miss?PIP_OLD:"";
@@ -1984,6 +1972,7 @@ $("#br").onclick=async()=>{const b=$("#br");if(b.disabled)return;b.disabled=true
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
+PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 

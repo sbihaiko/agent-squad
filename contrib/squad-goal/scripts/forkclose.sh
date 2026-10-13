@@ -3,10 +3,8 @@
 # Fork work merges itself: an issue that also has a MesenAI PR waits for it, then gets its fork half merged with no close.
 # Fork-only work closes itself: an open issue whose card is Code Complete, with no open PR naming it and a fork branch
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
-# Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh: the local gate, the fast path. Green: the land is
-# prland.sh (#32) -- the branch is pushed to the fork checkout's origin, its PR that names the issue is opened and merged on
-# a green check -- and only then the issue closes with the evidence and the card goes Done; a pending or red check closes
-# nothing (FORKCLOSE PR-WAIT) and the next pass asks again. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
+# Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
+# card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
 # conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); a fork checkout a child left on its own branch is put back on the base by the pass itself while the tree is clean and no live run names that branch (WAIT, naming the reason, when it is not).
 # A branch whose own worktree still holds uncommitted changes is not the run's final state: the pass refuses (FORKCLOSE UNLANDED, naming the branch) instead of merging a mid-work tip and closing the issue with the code absent from the base (#1821).
 # An issue whose `## Blocked by` names an issue with an unlanded fork branch waits for it (FORKCLOSE WAIT, once per set): its tests import the blocker's files.
@@ -337,7 +335,9 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
   suites=$(printf '%s\n' $files | suiteset); first=$(awk '{print $1}' <<<"$merged"); e2eprep "batch"
   id=test-$first-$(date +%Y%m%d-%H%M%S)   # fixed before the gate starts (#1470)
   out=$(TEST_ID=$id FG_SUITES=$suites "$here/test.sh" "$first" -C "$SG_FORK_DIR" -- bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD"); rc=$?
-  at=""; [ $rc = 0 ] || at=$(batchculprit "$id" "${merged# }")   # read off the candidate, which is still checked out here
+  # read off the candidate, which is still checked out here. Not `at=$(batchculprit ...)`: that runs in a subshell and takes the
+  # brwhy it sets with it, so the fallback below would always print its default reason instead of the one this red has.
+  at=""; brwhy=""; if [ $rc != 0 ]; then batchculprit "$id" "${merged# }" > "$A/batchculprit.txt" || true; at=$(cat "$A/batchculprit.txt"); fi
   $G checkout -q "$SG_FORK_BASE"
   if [ $rc = 0 ] && $G merge --ff-only -q fc-batch >/dev/null 2>&1; then   # the tree that was tested is the new base
     echo "$SG_STATE/tests/$id.log" > "$A/basetest-$($G rev-parse --short=9 HEAD)"; $G branch -q -D fc-batch
@@ -498,7 +498,7 @@ for n in $cc; do
     nm="forkrebase-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"
     { echo "FORK-ONLY: all"   # mkreq.sh: fork DONE CHECK and checklist, no PR text (#1411)
       echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a CONFLICT FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
-      echo "In $SG_FORK_DIR the branch $br (head ${head:0:9}) no longer merges into $SG_FORK_BASE: conflict in $files. Work in a worktree: \`git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br\` (or reuse the existing worktree of $br), then \`git merge $SG_FORK_BASE\` into $br and resolve every conflict KEEPING BOTH SIDES (sibling issues appended their own cases; never drop one). Run \`$SG_FORK_TEST_CMD\` there until it passes, commit the merge on $br, push it (\`git push origin $br\`, never a force push, never the base), keep the worktree. Do not change anything beyond the conflict resolution."
+      echo "In $SG_FORK_DIR the branch $br (head ${head:0:9}) no longer merges into $SG_FORK_BASE: conflict in $files. Work in a worktree: \`git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br\` (or reuse the existing worktree of $br), then \`git merge $SG_FORK_BASE\` into $br and resolve every conflict KEEPING BOTH SIDES (sibling issues appended their own cases; never drop one). Run \`$SG_FORK_TEST_CMD\` there until it passes, commit the merge on $br, NEVER push, keep the worktree. Do not change anything beyond the conflict resolution."
       echo "Before you commit that merge: for every file you resolved, WHILE the merge is in progress and before \`git add\`, run \`bash $here/merge-audit.sh <file>\`. A line both parents hold that your resolution drops is a fabrication, and the landing refuses the branch for it (#14); putting the line back is the fix."
       echo "GitHub issue #$n: the issue is already implemented; only the conflict is in scope."; } > "$body"
     if ! dispatch "$nm" "$n" conflict; then
@@ -518,27 +518,20 @@ for n in $cc; do
     # the gate ran on the tree that is now the base head: record it as tested, so the next landing pays no second base test
     [ $rc = 0 ] && [ -z "$late" ] && [ "$($G rev-parse HEAD)" = "$m" ] && echo "$SG_STATE/tests/$id.log" > "$A/basetest-${m:0:9}"
   fi
-  if [ $rc = 0 ]; then   # the local gate is the fast path; the land is the merge of the branch's PR on a green check (prland.sh, #32)
-    pl=$(bash "$here/prland.sh" "$n" "$br" 2>&1); prc=$?; [ -n "$pl" ] && printf '%s\n' "$pl"
-    if [ $prc != 0 ]; then rm -f "$mk"   # the next pass asks again: a pending check is a wait, not a 45 min marker
-      [ $prc = 1 ] && { [ -e "$A/prred-$n-${head:0:9}" ] || { touch "$A/prred-$n-${head:0:9}"; printf "Fork close: the local gate passed for %s at %s, but a check failed on its pull request, so it is not merged and the issue stays open.\n%s\n" "$br" "${head:0:9}" "${pl##*$'\n'}" > "$SG_STATE/cq/$n-prred$$.md"; }; }
-      echo "FORKCLOSE PR-WAIT #$n: $br is not landed until its PR merges on a green check (prland exit $prc)"; continue; fi
-    prl=${pl##*$'\n'}; fi
   if [ $rc = 0 ] && [ -n "$mixed" ]; then
-    printf "Fork half merged: %s at %s, fork suite green (test pass %s), landed by its pull request: %s. The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$id" "$prl" > "$SG_STATE/cq/$n-forkhalf$$.md"
+    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
     echo "FORKCLOSE #$n fork half merged ($br ${head:0:9} -> ${m:0:9}, $id green; PR still open)"
   elif [ $rc = 0 ]; then
     [ -n "$late" ] && landline="- $br was already in $SG_FORK_BASE as $late: the pass that merged it ended before its close step, and every later pass read the branch as landed and skipped it. The fork suite result below (a batch or base test that covers it) is the evidence that rule asks for." \
-                   || landline="- $br at ${head:0:9} passed the local gate on $SG_FORK_BASE as ${m:0:9}."
+                   || landline="- $br at ${head:0:9} merged into $SG_FORK_BASE as ${m:0:9}."
     gh api -X POST repos/$SG_REPO/issues/$n/comments -F body=@- >/dev/null <<EOT
-Done (fork-only work: the fork suite green on $SG_FORK_BASE, then the branch's pull request merged on a green check).
+Done (fork-only work; owner-approved rule: merged into the fork's $SG_FORK_BASE and the fork suite green there).
 $landline
-- $prl
 - Test pass $id: \`$SG_FORK_TEST_CMD\` → exit 0.
 \`\`\`
 $tl
 \`\`\`
-No MesenAI file changed.
+No MesenAI file changed, so no PR.
 EOT
     gh api -X PATCH repos/$SG_REPO/issues/$n -f state=closed -f state_reason=completed >/dev/null && $BOARD $SG_OWNER $SG_PROJECT Done $n >/dev/null
     [ -n "$late" ] && echo "FORKCLOSE #$n closed late ($br was already in $SG_FORK_BASE as $late; the close had been lost, $id green)" \
@@ -568,7 +561,7 @@ EOT
     nm="forkred-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"   # a fix run makes that commit
     { echo "FORK-ONLY: all"   # mkreq.sh: fork DONE CHECK and checklist, no PR text (#1411)
       echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). Spawn it with spend 8. en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
-      echo "In $SG_FORK_DIR the fork suite failed after merging $br into $SG_FORK_BASE (test pass $id, exit $rc); the merge was reverted and the branch re-applied. Work in the existing worktree of $br (${bw:-git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br}). Run \`$SG_FORK_TEST_CMD\` there, fix the root cause (never weaken or skip a test; a test that needs a missing environment variable is fixed in the environment only if the variable is documented, else report it), commit on $br, push it (\`git push origin $br\`, never a force push, never the base), keep the worktree. Log tail:"
+      echo "In $SG_FORK_DIR the fork suite failed after merging $br into $SG_FORK_BASE (test pass $id, exit $rc); the merge was reverted and the branch re-applied. Work in the existing worktree of $br (${bw:-git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br}). Run \`$SG_FORK_TEST_CMD\` there, fix the root cause (never weaken or skip a test; a test that needs a missing environment variable is fixed in the environment only if the variable is documented, else report it), commit on $br, NEVER push, keep the worktree. Log tail:"
       tail -40 "$SG_STATE/tests/$id.log"; echo "GitHub issue #$n: only the failing suite is in scope."; } > "$body"
     if dispatch "$nm" "$n" red; then
       [ -n "$mixed" ] || $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
