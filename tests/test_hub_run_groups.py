@@ -378,3 +378,28 @@ def test_no_poll_path_writes_the_open_state():
     for name, body in slices.items():
         for token in ("openGroup", "openAcc", "userPicked", "ls.acc"):
             assert token not in body, f"{name} writes {token}"
+
+
+def test_request_issues_reads_the_dispatch_form(hub):
+    """A frontier child's request names its slice as `GitHub issue(s) 10, 12`: both issues, on a `CHILD` line or not (#47)."""
+    assert hub.request_issues("Work GitHub issue(s) 10, 12 (base origin/main) as one slice.") == {"10", "12"}
+    assert hub.request_issues("  - CHILD — GitHub issue(s) 21 (base origin/main): fix it.") == {"21"}
+    assert hub.request_issues("CHILD — GitHub issue(s) 33, 56 (bug slice).\nsee issue #900\n") == {"33", "56"}
+
+
+def test_run_label_leads_with_the_action_then_the_issues(hub):
+    """The card's name is computed here, not in the page: the action the run takes, then every issue it works (#47)."""
+    assert hub.run_label({"id": "run-20261013-000010-444444", "issues": ["10", "12"], "kind": "code"}) == "implement #10, #12"
+    assert hub.run_label({"id": "run-20261013-000011-555555", "issues": ["5"], "kind": "code", "bug": True}) == "fix #5"
+    assert hub.run_label({"id": "run-20261013-000012-666666", "issues": ["7"], "kind": "code", "fix": 12}) == "fix PR #12 · #7"
+    assert hub.run_label({"id": "run-20261013-000013-777777", "issues": [], "kind": "code"}) == "run 777777"
+
+
+def test_the_list_renders_the_label_the_hub_computed():
+    """The page renders the label it is given; it never rebuilds one from the issues or the kind (ADR-0137)."""
+    row = _run_row("1", 0, 10, id="run-20261013-000010-444444", label="dispatch #31, #25", issues=["31", "25"], kind="code")
+    out = _run(_js([row], """
+      const a = boot(); a.runs(R); a.draw();
+      return { html: a.listHtml() };
+    """))
+    assert "dispatch #31, #25" in out["html"]

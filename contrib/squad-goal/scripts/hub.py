@@ -77,32 +77,56 @@ def priced(d):
 
 # A run's issue is named by its own request (runs/<run>/request.txt, written before the run starts). The forms are
 # owner/repo#N, "issue #N" and "Refs #N", with any run of digits: this repository's issues start at one digit.
-ISSUE_REF = re.compile(r"(?:\b[\w.-]+/[\w.-]+#|\b(?:issue|Refs) #)(\d+)", re.I)
+# The fourth form is the dispatch one, `GitHub issue(s) 10, 12`, which names every issue of one slice in a single go: it
+# carries several numbers, it does not always sit at the start of a line, and a sliced child's own request names its
+# issues only that way, so without it the card fell through to "no issue: the request names no issue" (#47).
+ISSUE_REF = re.compile(r"(?:\b[\w.-]+/[\w.-]+#|\b(?:issue|Refs) #|\bissues?\s*(?:\(s\))?\s+)(\d+(?:\s*,\s*\d+)*)", re.I)
 # A dispatch request (autofrontier, autobug) names its children with a `PANEL:` line and one `CHILD — GitHub issue(s) 33, 56 (...)`
 # line per child, and pastes each ticket's text under it. The CHILD lines are the issues the run dispatched; a number the pasted
 # text quotes ("issue #900") is not, so when a request has CHILD lines they alone name the run's issues (#33).
 CHILD_ISSUES = re.compile(r"^CHILD\s+[\u2014-]\s+GitHub\s+issues?(?:\(s\))?\s+([#\d][^()\n:]*)", re.M)
 
+def ref_issues(text):
+    """Every issue one reference names: the number after `#N`, or the whole comma list of the dispatch form."""
+    return {n for g in ISSUE_REF.findall(text) for n in re.findall(r"\d+", g)}
+
 def request_issues(text):
     """The issues a request names: every number on its CHILD lines when it has any, else every reference in its text."""
     kids = [n for g in CHILD_ISSUES.findall(text) for n in re.findall(r"\d+", g)]
-    return set(kids) if kids else set(ISSUE_REF.findall(text))
+    return set(kids) if kids else ref_issues(text)
+
+def run_action(r):
+    """What a run does, in one word: its node kind (`code` runs implement) and then its own flags."""
+    if r.get("kind") == "test": return "test"
+    if r.get("merge"): return "merge"
+    if r.get("bug"): return "fix"
+    return "dispatch" if r.get("kind") == "dispatch" else "implement"
+
+def run_label(r):
+    """A run card's name, computed here and rendered as given (ADR-0137): the action, every issue it works, else `run <id>`.
+    A fix run is named by its PR, and the issue it fixes stays out of the list: that PR is already the name."""
+    is_ = ", ".join("#" + i for i in r.get("issues") or [] if int(i) != r.get("fix"))
+    if r.get("kind") == "test" or r.get("url"): return "test " + is_
+    if r.get("fix"): return f"fix PR #{r['fix']}" + (f" · {is_}" if is_ else "")
+    if is_: return run_action(r) + " " + is_ + (f" · on PR #{r['stack']}" if r.get("stack") else "")
+    return "run " + str(r.get("id") or "")[-6:]
 
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v13" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted
+    if p in hist and "v14" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines; v13 reads the test share a gate counted; v14 reads the card's label from the dispatch form too
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None; share = None
+    rid = pathlib.Path(p).parent.name   # the run folder, read before the loop: the share below rebinds a local of its own, never `p`
     accepted, done_kids, wts = set(), set(), set()
     try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
     except OSError: req_issues = set(); has_req = False
     with open(p) as f:
         for i, l in enumerate(f):
-            if i < 200: issues.update(ISSUE_REF.findall(l))   # the fallback when request.txt is missing: a reference quoted in the transcript is not the run's own issue
+            if i < 200: issues.update(ref_issues(l))   # the fallback when request.txt is missing: a reference quoted in the transcript is not the run's own issue
             if i < 200 and fix is None:
                 fm = re.search(r"FIX RUN[^#]{0,120}?PR #(\d+)", l)
                 if fm: fix = int(fm.group(1))
@@ -136,9 +160,9 @@ def scan(p):
                 w = d.get("workspace") if isinstance(d.get("workspace"), dict) else None   # the worktrees this run works in: how a load is traced back to it (see attribute)
                 if w and w.get("path") and w.get("name") not in (None, "."): wts.add(w["path"])
                 if isinstance(d.get("counts"), dict) and d["counts"]:   # the share of the suite the gate counted (#80): the newest one the record carries wins, so a red gate shows the work it got to
-                    p = sum(x.get("passed", 0) for x in d["counts"].values() if isinstance(x, dict))
+                    np = sum(x.get("passed", 0) for x in d["counts"].values() if isinstance(x, dict))
                     n = sum(x.get("total", 0) for x in d["counts"].values() if isinstance(x, dict))
-                    if n: share = {"passed": p, "total": n, "pct": round(100 * p / n)}
+                    if n: share = {"passed": np, "total": n, "pct": round(100 * np / n)}
             elif e == "run_start":
                 k = d.get("kind") or (d.get("engine_options") or {}).get("kind") or (d.get("defaults") or {}).get("kind")   # absent today: every run is code
                 if k in ("test", "gui-test"): kind = "test"
@@ -149,7 +173,9 @@ def scan(p):
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "v13": 1, "v14": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts), "share": share}
+    r["id"] = rid   # the run folder: the label a run with no issue falls back on
+    r["label"] = run_label(r)               # the card's name is computed here, so the page renders a value and holds no rule (ADR-0137)
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -913,7 +939,7 @@ def runs():
         r = scan(p)
         if r is None:
             b = badge_of("starting")
-            out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "badge": b["text"], "tip": b["title"], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}); continue
+            out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": "starting", "badge": b["text"], "tip": b["title"], "label": "run " + os.path.basename(d)[-6:], "issues": [], "age": 0, "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": 0, "spend": 0, "dur": 0, "kind": "code", "live": True, "agents": 0}); continue
         age = time.time() - p.stat().st_mtime; st = state_of(r, age)
         try: request = (pathlib.Path(d) / "request.txt").read_text(errors="replace")
         except OSError: request = None
@@ -925,7 +951,7 @@ def runs():
         if gone: b = gone_badge(b)
         rank = run_rank(st, live=not gone)
         t1 = r["t1"] or time.time()
-        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")})
+        out.append({"id": os.path.basename(d), "port": port.group(1) or port.group(2), "state": st, "badge": b["text"], "tip": b["title"], "label": r.get("label"), "issues": r["issues"], "issue_src": r.get("issue_src"), "issue_why": r.get("issue_why"), "age": int(age), "project": os.path.basename(os.path.dirname(os.path.dirname(d))), "rank": rank, "spend": r["spend"], "dur": round((t1 - (r["t0"] or t1)) / 60, 1), "kind": r.get("kind", "code"), "fix": r.get("fix"), "stack": r.get("stack"), "bug": r.get("bug"), "merge": r.get("merge"), "titles": {i: TITLE.get(int(i), "") for i in r["issues"]}, "live": not gone, "agents": 0 if gone else r.get("agents") or 0, "share": r.get("share")})
         load_rows.append({"id": os.path.basename(d), "dir": d, "wts": r.get("wts") or []})   # what the load attribution needs, and nothing else
     for f in sorted((STATE / "tests").glob("test-*.json")):   # coordinator test passes (test.sh)
         try: d = json.loads(f.read_text())
@@ -939,7 +965,7 @@ def runs():
         st = handled_of("stalled" if lost else raw, rec); t1 = d.get("t1") or time.time(); b = badge_of(st, rec)
         tip = LOST_NOTE if lost else b["title"]
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
-        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
+        out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
     n_live, n_agents = foot_occupancy(out)   # the same rows the left pane groups
     FOOT_ROWS.update(live=n_live, agents=n_agents, asof=time.time())
@@ -1686,10 +1712,9 @@ const save=()=>localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,src})
 const usd=v=>v==null?"—":v>=100?"$"+Math.round(v):"$"+v.toFixed(2);
 const usdc=v=>v==null?"—":"$"+(+v).toFixed(2);   // plan prices carry cents, so a month's cash total keeps them: usd would round $282.23 to $282
 const age=s=>s<90?s+"s":s<5400?Math.round(s/60)+"m":Math.round(s/3600)+"h";
-// a run's name says what it is for: "fix PR #1202 · #1178", "panel · #1179 #1182", "#1183"; the run id moves to the detail line
-const label=r=>{const is=(r.issues||[]).filter(i=>+i!==r.fix).map(i=>"#"+i).join(" ");
-  if(r.url)return "test "+is;
-  return r.fix?`fix PR #${r.fix}`+(is?" · "+is:""):is?(r.merge?"merge ":r.bug?"fix ":"build ")+is+(r.stack?` · on PR #${r.stack}`:""):"run "+r.id.slice(-6)};   // a run is named by what it does: fix a PR, or build issues (stacked on a parent PR); "test" is kept for test-only runs
+// a run's name says what it is for: "fix PR #1202 · #1178", "implement #1179, #1182", "dispatch #31, #25"; the hub computes
+// that string (hub.run_label) and the run id moves to the detail line -- the page renders the value, it holds no rule of its own
+const label=r=>r.label||("run "+String(r.id||"").slice(-6));
 // where the label's issue came from, or why the run has none: the request names it; the transcript is only the fallback when the request is missing
 const labelTip=r=>{if((r.issues||[]).length)return r.issue_src==="transcript"?"issue read from the transcript: request.txt is missing":"issue named by the run's request";
   return r.issue_why==="request-missing"?"no issue: the request is missing (no request.txt in the run folder)":r.issue_why==="request-no-issue"?"no issue: the request names no issue":""};
