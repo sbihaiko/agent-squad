@@ -2,6 +2,8 @@
 # Monitor stream: one line per run verdict, new PR, or review+CI summary. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
 . "$(dirname "$0")/env.sh"
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 type sg_state_base >/dev/null 2>&1 || . "$(dirname "$0")/repoctx.sh"   # the one place the machine-wide state base is spelled
 # One watch.sh per checkout, whoever started it (#1872). The lock is keyed on this script's resolved path, NOT on
 # $SG_STATE: `watchd.sh start` under a temp SG_STATE walks past watchd's own pidfile guard and would otherwise spawn a
@@ -14,7 +16,7 @@ mkdir -p "$(dirname "$wlock")"
 if ! mkdir "$wlock" 2>/dev/null; then
   wh=$(cat "$wlock/pid" 2>/dev/null)
   if [ -n "$wh" ] && ! kill -0 "$wh" 2>/dev/null; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # stale: take over
-  elif [ -z "$wh" ] && [ $(( $(date +%s) - $(stat -f %m "$wlock" 2>/dev/null || stat -c %Y "$wlock" 2>/dev/null || echo 0) )) -gt 10 ]; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
+  elif [ -z "$wh" ] && [ $(( $(date +%s) - $(mtime "$wlock") )) -gt 10 ]; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
   else echo "watch.sh already running pid=$wh for $wme"; exit 0; fi
 fi
 echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit 0' INT TERM   # a TERM'd loop stops, it does not keep polling without its lock

@@ -1,4 +1,6 @@
 #!/bin/bash
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # usage: publish-landing.sh   A green landing that changed what the loop runs publishes it in one step (#31): the live skill follows the
 # fork (refresh-from-fork.sh), and the view restarts (hubctl.sh --restart, which prints its URL; an open page reloads on the new
 # /api/version) only when a file it serves changed: scripts/hub.py, hubmux.py, panes.js, address.sh. Run by watch.sh after forkclose.sh.
@@ -24,7 +26,7 @@ case $rc in 0) diverged="";; 1) diverged=$(printf '%s\n' "$out" | sed 1d);; *) e
 L="$A/forkclose.lock"   # the landing pass's lock: held by a live pid, a pass is mid-flight; held by the step, no pass can start
 if ! mkdir "$L" 2>/dev/null; then
   p=$(cat "$L/pid" 2>/dev/null)
-  if { [ -n "$p" ] && kill -0 "$p" 2>/dev/null; } || { [ -z "$p" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || stat -c %Y "$L" 2>/dev/null || echo 0) )) -le 10 ]; }; then
+  if { [ -n "$p" ] && kill -0 "$p" 2>/dev/null; } || { [ -z "$p" ] && [ $(( $(date +%s) - $(mtime "$L") )) -le 10 ]; }; then
     once midflight "a landing pass is mid-flight (pid ${p:-unknown}); nothing is published until it ends"; exit 0; fi
   rm -rf "$L"; mkdir "$L" 2>/dev/null || { once midflight "a landing pass started; nothing is published until it ends"; exit 0; }
 fi

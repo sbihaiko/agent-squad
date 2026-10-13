@@ -18,6 +18,8 @@ for m in $(jq -r '.coding_models[]' "$mjson"); do mayrun "$m" || continue
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"; out="$HOME/.cache/squad-goal/req/$1.txt"
 . "$here/forkonly.sh"   # sg_fork_branch: the one source of the branch a fork-only child commits on (#1836)
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # The setting behind it is read from the environment first -- every request builder sources env.sh and exports it -- and
 # from env.sh itself otherwise, exactly as the slice guard below resolves SG_FORK_BASE. forkonly.sh owns the only default.
 if [ -z "${SG_FORK_BRANCH:-}" ]; then
@@ -150,7 +152,7 @@ slice_guard() {
     h=$(shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1)
     case "$liveh" in *" $h "*) return 0;; esac          # a run without a verdict carries it: still in flight
     case "$deadh" in *" $h "*) return 1;; esac          # its run recorded a verdict: history, however young the file is
-    [ $(( now - $(/usr/bin/stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0) )) -lt "$ttl" ]   # no run carries it: the launch window
+    [ $(( now - $(mtime "$1") )) -lt "$ttl" ]   # no run carries it: the launch window
   }
   for q in "$HOME/.cache/squad-goal/req"/*.txt; do
     [ -e "$q" ] || continue; [ "$q" = "$out" ] && continue

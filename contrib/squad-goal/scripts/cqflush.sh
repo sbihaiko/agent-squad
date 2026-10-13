@@ -1,4 +1,6 @@
 #!/bin/bash
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # usage: cqflush.sh [--once]   Loop: post <SG_STATE_BASE>/<profile>/cq/<owner>__<repo>#<issue>-<tag>.md as issue comments, retrying (the API answers 500 at times).
 # A comment carries its own address (#20): the name says the repository and the issue, and the comment is posted there whatever
 # directory it sits in -- the queue directory gives isolation, never the write target. The repository is resolved from that
@@ -12,7 +14,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"
 base=${SG_STATE_BASE:-$HOME/.cache/squad-goal}
 while :; do left=0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue
-    [ $(( $(date +%s) - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt 5 ] && { left=1; continue; }
+    [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }
     b=$(basename "$f"); slug=$(basename "$(dirname "$(dirname "$f")")")
     case "$b" in
       *__*"#"*) r=${b#*__}; want="${b%%__*}/${r%%#*}"; n=${r#*#}; n=${n%%-*}

@@ -22,6 +22,8 @@
 # (`gh pr merge`, counted in gh-direct-calls.txt); it runs from $SG_STATE, never from a checkout, so `--delete-branch`
 # touches the remote branch only. watch.sh runs this under single.sh, so two passes never overlap.
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=prland
 SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"
@@ -36,7 +38,7 @@ runs=$( { cat "$SG_STATE/active-runs.txt" 2>/dev/null; ls -t "$SG_CHECKOUT/runs"
 livebrs=" $(for r in $runs; do
   d=$r; [ "${r#/}" = "$r" ] && d=$SG_CHECKOUT/runs/$r   # no `case` here: bash 3.2 cannot parse one inside $( )
   f="$d/record.jsonl"; [ -f "$f" ] || continue
-  grep -qx "$r" "$SG_STATE/active-runs.txt" 2>/dev/null || [ $(( now - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+  grep -qx "$r" "$SG_STATE/active-runs.txt" 2>/dev/null || [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
   grep -oE '(fix|gui)/[0-9]+[A-Za-z0-9._-]*' "$d/request.txt" 2>/dev/null | sort -u | tr '\n' ' '
 done) "
 # What holds a branch: a live run that names it, or a worktree that has it checked out with uncommitted tracked changes.

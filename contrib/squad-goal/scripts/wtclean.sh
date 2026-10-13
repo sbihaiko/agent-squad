@@ -4,6 +4,8 @@
 # whose HEAD is on no remote branch (a fix run that landed without pushing) is pushed to its open PR's branch when that is a
 # fast-forward (WT PUSHED), else its fix is re-armed via retryfix.sh (autofix runs) or it is kept and reported once as WT UNPUSHED.
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
 cd "$SG_CHECKOUT" || exit 0
 cwds=$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')   # every live process's cwd, for the zombie test
@@ -62,7 +64,7 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
       f="$r/record.jsonl"; [ -f "$f" ] || continue
       grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue   # a run that has ended owns nothing
-      [ $(( now - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+      [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
       grep -qE "(^|[^0-9])gui/$n([^0-9]|$)|wt-(as|fr)-$n([^0-9]|$)" "$f" "$r/request.txt" 2>/dev/null && { live=1; break; }
     done; fi
     [ $live = 0 ] || continue

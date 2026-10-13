@@ -28,6 +28,8 @@
 # itself refuses that merge), a staged change holds every merge (git refuses a dirty index), and the WAIT line names the paths
 # (five, then a count), so the operator reads who blocks the queue. Nothing here resets or checks out over someone's work.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 exec 3>&1   # the pass's own stdout, for a line printed from inside a captured gate run (WAIT-GATE, GATE-LOCK)
 # The collection's reads go through the loop's one door (ghcall.sh, #5, #1893, ADR-0277), and the reader behind it is the
 # throttled one (#4): this is the loop's heaviest reader and the pass the bucket is sized for, so every route goes to
@@ -70,7 +72,7 @@ now=$(date +%s)
 # its record was touched inside the orphan window, and it names the branch it was launched for.
 livebrs=" $(for r in $(ls -t "$SG_CHECKOUT/runs" 2>/dev/null | head -60); do
   f="$SG_CHECKOUT/runs/$r/record.jsonl"; [ -f "$f" ] || continue
-  [ $(( now - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+  [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
   grep -oE 'gui/[0-9]+' "$SG_CHECKOUT/runs/$r/request.txt" 2>/dev/null | sort -u | tr '\n' ' '
 done) "
 # A branch ahead of the base with nobody on it and no recent commit: the fix run meant to move it is gone. Without this its
@@ -259,7 +261,7 @@ basegate() { local l=$1 bt bgs rvt
       mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. This base's own diff is answered with the %s gate; past %s min it is retried once on its own, and a green retry lifts the park, a second red keeps it%s.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "$bgs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" "$rvt" > "$cqf"
     fi
     # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
-    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs" 2>/dev/null || stat -c %Y "$A/basered-$bs" 2>/dev/null || echo 0) )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
+    if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(mtime "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
       if ( cd "$SG_FORK_DIR" && FG_SUITES=$bgs gatelock "$l" bash "$here/fork-gate.sh" "$SG_FORK_TEST_CMD" ) > "$SG_STATE/basetest-$bs.log" 2>&1; then rm -f "$A/basered-$bs" "$A/basered-$bs.tries"; echo "$SG_STATE/basetest-$bs.log" > "$A/basetest-$bs"; echo "FORKCLOSE BASE-GREEN $l: $SG_FORK_BASE $bs passed the solo retry ($bgs gate) after the park; lifting it"; return 0
       else echo "FORKCLOSE BASE-RED $l: the solo retry of $SG_FORK_BASE $bs ($bgs gate) failed too (see $SG_STATE/basetest-$bs.log); the park stays"; return 1; fi
     else echo "FORKCLOSE BASE-RED $l: $SG_FORK_BASE $bs fails the $bgs gate on its own, so a red run here would not be the branch's fault$rvt; waiting for a green base"; return 1; fi
@@ -490,7 +492,7 @@ for n in $cc; do
   [ -z "$wait" ] || { wm="$A/forkwait-$n${wait// /-}"; [ -e "$wm" ] || { touch "$wm"; echo "FORKCLOSE WAIT #$n: the fork half of$wait is not in $SG_FORK_BASE yet (Blocked by)"; }; continue; }
   head=$($G rev-parse "$br"); mk="$A/fork-$n-${head:0:9}"
   if [ -e "$mk" ]; then   # "wait for a real fix commit" is a wait with no deadline unless the marker expires on its own
-    age=$(( now - $(stat -f %m "$mk" 2>/dev/null || stat -c %Y "$mk" 2>/dev/null || echo 0) ))
+    age=$(( now - $(mtime "$mk") ))
     [ "$age" -lt $(( ${SG_FORK_MARKER_MINUTES:-45} * 60 )) ] && continue
     rm -f "$mk"; echo "FORKCLOSE RETRY #$n: the marker for ${head:0:9} waited $(( age / 60 )) min with no new commit on $br and no fix run alive; retrying"
   fi
