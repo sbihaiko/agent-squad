@@ -91,6 +91,9 @@ if v:
   [ $((tick % 8)) -eq 1 ] && ( bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log" & ) 2>/dev/null   # card Status from GitHub facts, every ~12 min (GraphQL budget)
   # fork-only Code Complete: merge into the fork base, fork suite, close. In the background under single.sh: the fork suite waits for the GUI lock for minutes and must not hold the cycle (#1239)
   [ -n "${SG_FORKCLOSE_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" forkclose "$(dirname "$0")/forkclose.sh" 2>&1 & ) 2>/dev/null
+  # a pull request the loop opened whose check is red for a constant reason is closed by the loop, on the named baseline (#83), never left
+  # for a person. In the background under single.sh: it reads a job log per failed check, and a head nobody moves must not hold the cycle
+  ( tm bash "$(dirname "$0")/single.sh" prland "$(dirname "$0")/prland.sh" 2>&1 & ) 2>/dev/null
   tm bash "$(dirname "$0")/single.sh" publish "$(dirname "$0")/publish-landing.sh" 2>&1   # a green landing that changed the loop's own tooling reaches the live skill, and the view restarts when it serves a changed file (#31); waits while forkclose.sh holds its lock
   tm python3 "$(dirname "$0")/forkrescue.py" 2>&1   # a fork-only run that ended needs-human/fail with its commit off gui/<N>: re-point it, Code Complete (#1411)
   tm python3 "$(dirname "$0")/forkstrand.py" 2>&1   # after the rescue: a fork commit on a branch no landing path reads, for a card at the landing stage, is reported once per head (#1837)

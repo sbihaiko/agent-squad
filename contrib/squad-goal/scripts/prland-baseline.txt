@@ -1,0 +1,31 @@
+# The failing tests the closer merges on (#83). One test a line, in the pipeline's own `FAILED <nodeid>` spelling;
+# `#` starts a comment and blank lines are ignored. A head whose failing tests are exactly this set is merged by
+# prland.sh; a head naming a failure this file does not hold is refused, and the failure is named.
+#
+# These tests need what the CI runner does not have -- a MesenAI checkout beside the workspace -- so they fail on every
+# head that is red for no other reason, and a gate that waits for green on such a head waits forever (#36). Keep the list
+# equal to what the check actually reports: a test the runner can run and that still fails is a defect, not a baseline.
+tests/test_gui_test_e2e.py::test_1200_the_pilot_dialogs_no_trap_sweep_is_one_nav_sweep_step
+tests/test_gui_test_e2e.py::test_1222_a_batch_with_no_setup_keeps_the_session_of_the_batch_before_it
+tests/test_gui_test_e2e.py::test_1222_the_pilot_home_batch_runs_through_the_command_against_the_native_core
+tests/test_gui_test_e2e.py::test_1223_publishing_the_pilot_twice_updates_and_never_duplicates_a_case
+tests/test_gui_test_e2e.py::test_1223_the_plan_covers_every_committed_pilot_step_and_labels_none_of_them_ready_for_agent
+tests/test_gui_test_e2e.py::test_1225_an_interrupted_pilot_publish_resumes_from_the_map_and_a_second_publish_updates
+tests/test_gui_test_e2e.py::test_1225_the_committed_pilot_publishes_its_parent_and_links_every_case_natively
+tests/test_gui_test_e2e.py::test_1227_the_pilot_publishes_per_batch_and_per_case_as_a_tree_within_the_sub_issue_cap
+tests/test_gui_test_e2e.py::test_1242_a_script_with_its_content_hashes_stripped_is_refused_as_stale_not_for_gaps
+tests/test_gui_test_e2e.py::test_1242_the_pilot_script_narrows_to_what_the_pad_adapter_accepts_without_losing_a_step
+tests/test_gui_test_e2e.py::test_1286_a_case_names_the_case_that_blocks_it
+tests/test_gui_test_e2e.py::test_1286_every_batch_of_the_committed_pilot_is_wired_to_an_adapter
+tests/test_gui_test_e2e.py::test_1286_every_case_of_the_committed_pilot_gets_a_verdict_and_the_automated_ones_pass
+tests/test_gui_test_e2e.py::test_1286_the_committed_home_batch_runs_end_to_end_on_the_roster
+tests/test_gui_test_e2e.py::test_1286_the_expected_automated_ids_follow_the_script_not_a_frozen_list
+tests/test_gui_test_e2e.py::test_1286_the_home_keeps_its_ring_on_a_fresh_profile_so_the_hold_cases_run
+tests/test_gui_test_e2e.py::test_a_missing_rom_fixture_or_a_wrong_sha1_fails_clearly
+tests/test_gui_test_e2e.py::test_hook_e2e_case_of_1182_drives_the_home_over_the_socket
+tests/test_gui_test_e2e.py::test_pilot_script_opens_as_a_diagram_and_every_node_shows_its_text
+tests/test_gui_test_e2e.py::test_reverse_drift_committed_markdown_equals_live_render
+tests/test_gui_test_e2e.py::test_reverse_drift_vendored_renderer_equals_fork_file_at_pinned_commit
+tests/test_gui_test_e2e.py::test_the_hook_e2e_case_passes_exactly_one_and_skips_none
+tests/test_gui_test_e2e.py::test_three_pilot_steps_are_executed_through_the_mesenai_adapter_with_a_capture_each
+tests/test_gui_test_e2e.py::test_three_pilot_steps_run_on_the_real_emulator_with_no_pad_attached
