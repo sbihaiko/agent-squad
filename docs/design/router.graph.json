@@ -66,9 +66,10 @@
       "join": "all",
       "allow": {
         "models": [
-          "opus",
+          "claude-gpt-5.6-terra",
+          "claude-deepseek-v4-flash",
           "sonnet",
-          "haiku"
+          "opus"
         ],
         "efforts": [
           "low",
@@ -116,7 +117,7 @@
     {
       "name": "router",
       "kind": "agent",
-      "model": "opus",
+      "model": "claude-gpt-5.6-terra",
       "tools": [
         "Read",
         "Grep",
