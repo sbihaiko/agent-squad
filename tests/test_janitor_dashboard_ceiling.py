@@ -30,7 +30,7 @@ def _env(root, tmp_path, dash_max):
     e = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "FG_"))}
     e.update({"PATH": str(gh) + ":/usr/bin:/bin", "HOME": str(tmp_path / "home"),
               "SG_STATE": str(root / "st"), "SG_CHECKOUT": str(root / "co"), "SG_REPO": "x/y", "SG_BASE": "main",
-              "JANITOR_DRY": "1", "JANITOR_DASHBOARD_MAX": str(dash_max), "JANITOR_NOTIFY": "/bin/true"})
+              "JANITOR_DRY": "1", "JANITOR_DIAG": "1", "JANITOR_DASHBOARD_MAX": str(dash_max), "JANITOR_NOTIFY": "/bin/true"})
     return e
 
 

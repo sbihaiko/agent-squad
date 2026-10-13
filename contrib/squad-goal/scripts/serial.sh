@@ -22,7 +22,7 @@ case "$n" in gui-suite)
 case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mkdir -p "$st/locks"; w=${SERIAL_WAIT_SECONDS:-1800}; t0=$(date +%s); said=0
 hold=${SERIAL_HOLD_SECONDS:-${SG_CALL_DEADLINE_SECONDS:-1800}}; cmdn=$(basename "${1:-command}")
 ppid_of() { /bin/ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
-runs_as() { /bin/ps -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
+runs_as() { /bin/ps -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 until mkdir "$L" 2>/dev/null; do
   h=$(cat "$L/pid" 2>/dev/null)
   if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; continue; fi
