@@ -31,7 +31,14 @@ a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in
   *search/issues*)
     case "$a" in *"-X GET"*|*"--method GET"*) ;; *) echo '{"message":"Not Found"}'; exit 1;; esac
-    case "$a" in *"is:merged"*"Refs #2004"*) echo 1;; *) echo 0;; esac;;
+    # A merge is delivery only when it landed on the base (#127). #2004's merge is on the base; #2018's names the issue but
+    # went into its parent branch, so the query scoped to the base answers 0 and the unscoped one answers 1.
+    case "$a" in
+      *"base:"*"Refs #2018"*) echo 0;;
+      *"is:merged"*"Refs #2018"*) echo 1;;
+      *"is:merged"*"Refs #2004"*) echo 1;;
+      *"Refs #2018"*) echo 1;;
+      *) echo 0;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
@@ -42,7 +49,7 @@ case "$a" in
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2018; do
       case $n in 2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';; 2012) labs='{"nodes":[{"name":"needs-ratification"}]}';; *) labs='{"nodes":[]}';; esac
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
     printf ']}}}}';;
@@ -92,6 +99,9 @@ mk run-nocard 2013   # created while the loop runs: no card on the board yet
 rec run-nocard '{"event":"run_start","run_id":"run-nocard","ts":"2026-10-13T08:10:00Z"}'
 mk run-nostatus 2014   # on the board, with no Status
 rec run-nostatus '{"event":"run_start","run_id":"run-nostatus","ts":"2026-10-13T08:11:00Z"}'
+mk run-stacked-pr 2018   # its PR names the issue, but it was merged into the parent branch, not the base
+rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10-13T08:12:00Z"}
+{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2001$' "$T/board.calls" 2>/dev/null && ok "dispatch marker: live run card moves to In Progress" || ko "#2001 status not reconciled: $(bc) $o"
@@ -99,6 +109,10 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^RUN o 4 2002 run-accepted 2026-10-13T08:00:00Z$' "$T/board.calls" 2>/dev/null && ok "accepted child: Run fields carry run id and start time" || ko "#2002 Run fields wrong: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Done 2003$' "$T/board.calls" 2>/dev/null && ok "land event: card moves to Done" || ko "#2003 not Done: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "merged PR: card moves to Done" || ko "#2004 not Done: $(bc)"
+# #127: a PR that names the issue but was merged into its parent branch carries the work nowhere, so the card stops at
+# Code Complete -- Done over a merge the base never took is the false delivery #125 showed.
+/usr/bin/grep -q '^ADD o 4 Code Complete 2018$' "$T/board.calls" 2>/dev/null && ok "a merge into a parent branch leaves the card at Code Complete" || ko "#2018 left the dispatch column: $(bc)"
+! /usr/bin/grep -q 'Done 2018' "$T/board.calls" 2>/dev/null && ok "a merge the base never carried is not Done" || ko "#2018 read Done over work main does not carry: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Code Complete 2005$' "$T/board.calls" 2>/dev/null && ok "completed unlanded run: card moves to Code Complete" || ko "#2005 not Code Complete: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2006$' "$T/board.calls" 2>/dev/null && ok "failed unlanded run: card moves to Todo" || ko "#2006 not Todo: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2007$' "$T/board.calls" 2>/dev/null && ok "owner label: card moves to Blocked" || ko "#2007 not Blocked: $(bc)"

@@ -31,7 +31,7 @@
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open.
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
-    A live run holds the issue (dispatch marker or accepted child) -> In Progress; a run that landed (a `land` pass, or a `fork-<n>-<sha9>` marker the close pass left) or an issue that is closed or carries a merged PR naming it -> Done;
+    A live run holds the issue (dispatch marker or accepted child) -> In Progress; a run that landed (a `land` pass, or a `fork-<n>-<sha9>` marker the close pass left) or an issue that is closed or carries a merged PR into $SG_BASE naming it -> Done, so a PR merged into a parent branch (#127) and a merge naming an issue never delivered to the base are not Done;
     a completed run whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
@@ -267,6 +267,7 @@ for x, rs in byissue.items():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
         if not dry: mk.touch()
 repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to count as delivery (#127)
 _is = {}
 def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title and its labels
     if x not in _is:
@@ -323,8 +324,8 @@ def card_status(p, n):   # the card's Status on project p, "" when unreadable or
     return cards(p)[1].get(str(n), "")
 def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's own text: a refusal is not a digit string. -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip()
-def pr_merged_count(n):
-    return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged \"Refs #{n}\"", "-q", ".total_count").strip()
+def pr_merged_count(n):   # a merge is delivery only when it landed on the base (#127): a PR merged into its own parent branch carries the work nowhere, and a card in Done over it claims a change the base does not have (#125)
+    return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged base:{base} \"Refs #{n}\"", "-q", ".total_count").strip()
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 def branch_ahead(n):   # the run's own branch for this issue is still ahead of the fork base: the close pass has to merge it,
                        # so the run's own `land` pass is not the base's landing and the card is never Done (#97)
@@ -548,7 +549,7 @@ if fd and fb:
                     if f2.exists(): f2.unlink()
                 (st / "cq" / f"{CQ}#{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
-base = os.environ.get("SG_BASE", "main"); repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 _opr = None
 def open_pulls():   # rule G reads a PR's head and rule M its head branch and age: one read of the route answers both
     global _opr
