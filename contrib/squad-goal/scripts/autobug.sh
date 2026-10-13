@@ -197,9 +197,9 @@ cards="$(printf '#%s ' "${pick[@]}")"
 sg_write "the card move of this dispatch" "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
 [ -n "${SG_BUG_PROJECT:-}" ] && sg_write "the card move of this dispatch on the bug board" "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"
