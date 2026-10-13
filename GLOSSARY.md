@@ -198,10 +198,6 @@ _Avoid_: context, input list, allowlist
 The dashboard page and the monitor that start with a run. The page shows the run; the monitor writes each stuck, abandoned or deadline-missed call once to `monitor.log` in the run folder.
 _Avoid_: tail, observer
 
-**Heartbeat watchdog**:
-The pass that kills a run whose heart has stopped: the CPU time of its process tree has not moved for `HB_FLAT_MIN` minutes and its record has taken no new event for `HB_RECORD_MIN` minutes, both required, so a long Bash call with a still record is left alone. It prints one line per kill, the killed verdict carries the reason `killed: heartbeat_stale`, and the run's branch and worktree are left as they are.
-_Avoid_: stall detector, hang monitor
-
 **Engine option**:
 An invocation setting that changes how one run executes the same graph: where it stops, its run directory, a lower cap. It is logged in the `run_start` event and changes no node. It may name nodes, and it never overrides a node's model or budget.
 _Avoid_: flag, config key, run mode

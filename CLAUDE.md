@@ -75,7 +75,6 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **Run spend is a measured fact; a cap never starts an entry it cannot fund** ([ADR-0108](docs/adr/0108-run-spend-and-caps.md)). Guard: `tests/test_spend.py`, `tests/test_graph.py`, `tests/test_each.py`.
 - **An adaptation is a read-only report; round one has no cross-run input** ([ADR-0109](docs/adr/0109-adaptation-report-no-cross-run.md)). Guard: `tests/test_graph.py`, `tests/test_report.py`.
 - **A dispatch node requests children inside an author-fixed envelope** ([ADR-0113](docs/adr/0113-dispatch-envelope.md)). Guard: `tests/test_dispatch.py`, `tests/test_waves.py`, `tests/test_graph.py`.
-- **A run whose heart stops is killed, never merely logged: a flat process tree and a still record together** ([ADR-0140](docs/adr/0140-run-heartbeat-watchdog.md)). Guard: `tests/test_heartbeat.py`, `contrib/squad-goal/scripts/test-heartbeat.sh`.
 
 ### Dashboard, editor and repository
 

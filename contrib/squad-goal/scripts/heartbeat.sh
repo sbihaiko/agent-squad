@@ -3,8 +3,6 @@
 # (a headless case at 0% CPU; record.jsonl cannot see it, the agent sits inside one long Bash call).
 # Kills it so the agent's `dotnet test` reports a failure, and prints one line per kill. Judges only the leaf
 # test host (testhost / `dotnet exec --runtimeconfig ... UI*Tests`), never the idle `dotnet test`/vstest parents.
-# A run whose whole process tree is flat AND whose record has stopped is wedged, not idle: the last step of this pass
-# kills it (squad.heartbeat). A run whose process is gone is the dead-run pass's, below.
 . "$(dirname "$0")/env.sh"
 flat=${HB_FLAT_MIN:-5}; st="$SG_STATE/hb"; mkdir -p "$st"; now=$(date +%s); live=" "
 while read -r pid t cmd; do
@@ -30,11 +28,4 @@ open=0; marked=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do ca
   [ "$alive" -eq 0 ] && [ -n "$(find "$rf/record.jsonl" -mmin +"${HB_DEAD_IDLE_MIN:-1}" 2>/dev/null)" ] && PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.killed "$rf" >/dev/null 2>&1 && marked=$((marked+1))
 done
 [ "$alive" -eq 0 ] && [ "$open" -gt 0 ] && { [ -e "$st/.dead" ] || { echo "DEAD RUN: $open run(s) without a verdict and no live squad process; $marked marked killed in their record"; touch "$st/.dead"; }; } || rm -f "$st/.dead"
-# The run-level heartbeat watchdog: a live run whose call process tree has not moved a CPU second for HB_FLAT_MIN minutes
-# (default 5) AND whose record has taken no new event for HB_RECORD_MIN minutes (default 5) is wedged, not idle -- it holds
-# its slot until its own deadline, and a loop that has stopped looks exactly like a loop with nothing to do. Both signals
-# are required: a long Bash call (a full test suite, a build) writes no record event for minutes while its process works.
-# One line per kill, the killed verdict comes from squad.killed (its one writer), and the run's branch and worktree are
-# left exactly as they are -- the run's work belongs to the landing pass. Stamps live in $SG_STATE/hbwatch, one per run.
-PYTHONPATH="${SG_SQUAD:-.}${PYTHONPATH:+:$PYTHONPATH}" python3 -m squad.heartbeat "$SG_STATE/active-runs.txt" "${SG_CHECKOUT:-.}" "$SG_STATE/hbwatch"
 exit 0
