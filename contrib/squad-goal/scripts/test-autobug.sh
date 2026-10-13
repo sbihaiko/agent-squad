@@ -244,6 +244,15 @@ $G -qi 'never parsed' "$T/filed" && ok "8 the body says the remote text is quote
 $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" && ok "8 the cycle-log line keeps its one shape" || ko "8 cycle.log line: $(cat "$T/st/cycle.log" 2>/dev/null)"
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
+# 8b) (#140) the pass that filed it is named, and the issue it filed is one line of THAT pass's ledger under the
+# cause's fingerprint -- so a storm of distinct refusals stops at the filer's ceiling, and the ceiling counts causes,
+# never occurrences.
+led=$(ls "$T/st/auto"/filed-autobug-* 2>/dev/null | head -1)
+if [ -n "$led" ]; then
+  [ "$(wc -l < "$led" | tr -d ' ')" = 1 ] && ok "8b the pass's ledger holds the one issue it filed" || ko "8b ledger lines: $(cat "$led")"
+  fpbare=${FP#[}; fpbare=${fpbare%]}
+  $G -qF "$fpbare" "$led" && ok "8b the ledger counts the cause's fingerprint, from the one helper" || ko "8b ledger lacks '$fpbare': $(cat "$led")"
+else ko "8b the refused write left no ledger for the pass: $(ls "$T/st/auto" 2>/dev/null | tr '\n' ' ')"; fi
 
 # 9) (#188) the dispatch moves the cards of the issues it just requested, and an issue the loop filed itself carries no
 # card until the board pass adds one. A plain move for a card the board does not carry is refused ("#N not on the
