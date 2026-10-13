@@ -27,9 +27,9 @@
  M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
  P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
- H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
+ H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
-    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open.
+    STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open; R repairs a Done card to the supported column.
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
     A live run holds the issue (dispatch marker or accepted child) -> In Progress; a run that landed (a `land` pass, or a `fork-<n>-<sha9>` marker the close pass left) or an issue that is closed or carries a merged PR into $SG_BASE naming it -> Done, so a PR merged into a parent branch (#127) and a merge naming an issue never delivered to the base are not Done;
     a completed run whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
@@ -601,10 +601,13 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
         n = it.get("n"); stt = it.get("st"); op = it.get("s") == "open"
         if not (isinstance(n, int) and n >= 1102): continue
         if stt == "Done" and op:
-            mk = st / "auto" / f"janitor-regress-{n}-done-open"
-            if not mk.exists():
-                say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open")
-                if not dry: mk.touch()
+            want = expected.get(str(n), (0, "", "", "", ""))[1]
+            if want != "Done":
+                mk = st / "auto" / f"janitor-regress-{n}-done-open"
+                if not mk.exists():
+                    repair = f"; repaired to {want}" if want else ""
+                    say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open{repair}")
+                    if not dry: mk.touch()
             continue
         if not (op and stt in ("Todo", "Blocked", "In Progress", "Code Complete")): continue
         cm = [x.split("\t", 1) for x in sh("gh", "api", f"repos/{repo}/issues/{n}/comments?per_page=100", "--paginate", "--jq", r'.[]|[.created_at,(.body|gsub("\n";" "))]|join("\t")').splitlines() if "\t" in x]
