@@ -57,6 +57,13 @@ echo "$o" | /usr/bin/grep -q 'runs-board-drift' && ko "a run in its launch windo
 /usr/bin/grep -q '"runs":1,"inprogress":1' "$T/st/health.json" && ok "the launch window still reports the pair" || ko "pair: $(cat "$T/st/health.json")"
 touch -t 202001010000 "$T/co/runs/run-y/request.txt"; bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
 printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH runs-board-drift: 0 live run(s), 1 card(s) In Progress; cards with no live run: #10; live runs with no In Progress card: -' && ok "a card with nobody on it is named" || ko "dead run: $o"
+# a card In Progress that still holds its dispatch marker, with no run on it (a run that stopped without a verdict): the cause names that
+# subset, so the reader sees which cards the janitor releases (rule Q) and which need a person
+reset; bd; printf '10\tIn Progress\n25\tIn Progress\n26\tIn Progress\n' > "$T/board.tsv"; liverun run-a 10; echo run-gone > "$T/st/auto/disp-25"
+bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF 'cards with no live run: #25 #26; live runs with no In Progress card: -; holding a dispatch marker with no live run (the janitor releases them): #25' && ok "a stale card behind its dispatch marker is named apart" || ko "stale marker card: $o"
+rm -f "$T/st/auto/disp-25"; rm -f "$T/st/auto/health-runs-board-drift" "$T/st/auto/drift-prev"; bash "$T/s/health.sh" >/dev/null; o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF 'holding a dispatch marker' && ko "no marker, yet the cause names one: $o" || ok "cards with no marker add no marker clause"
 reset; bd; printf '10\tIn Progress\n1783\tIn Progress\n1792\tIn Progress\n' > "$T/board.tsv"; liverun run-a 10; liverun run-b 1768
 bash "$T/s/health.sh" >/dev/null; nb=$(notif); al=$(alerts); cp "$T/st/auto/drift-prev" "$T/prev.bak" 2>/dev/null
 o=$(HEALTH_DRY=1 bash "$T/s/health.sh")

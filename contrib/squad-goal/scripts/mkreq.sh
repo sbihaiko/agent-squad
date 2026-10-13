@@ -57,6 +57,10 @@ SLICE_RE='(^|[^A-Za-z0-9_./-])('"$SLICE_ROOTS"')/[A-Za-z0-9_./-]+'
 # (Edit, Modify, Change, Update, ...) and then the path, or a list of paths -- which is what #10 relies on to find the ticket
 # that edits a contested file. What the CHILD line itself carries (the note, an `Edit scripts/x.py`) is the request's own
 # instruction and claims whole. A mention, a stack trace and a "see also" are evidence, never a claim.
+# (#49) A frontier request opens with a preamble every ticket of its batch shares, so a path in that preamble (`- ADRs under
+# docs/adr/ are binding guides`) was read as a claim by every pass, every pass refused every other one, and the loop held one
+# run at a time. When a request has a CHILD block, the lines above the first one claim nothing: what a batch edits is what its
+# CHILD blocks name. A body with no CHILD block (a fork fix request) still reads every prose line as a claim.
 # slice_claims prints `path <TAB> request line`, one per path, the first line that names it: the line a refusal cites.
 slice_claims() {
   SLICE_ROOTS="$SLICE_ROOTS" /usr/bin/awk '
@@ -64,6 +68,8 @@ slice_claims() {
             ask = "(^|[^A-Za-z0-9_])([Ee]dit|[Mm]odify|[Cc]hange|[Uu]pdate|[Tt]ouch|[Cc]reate|[Rr]ewrite|[Pp]atch|[Rr]eplace|[Dd]elete|[Rr]emove|[Rr]ename)(s|ing|ed)?[ \t]+" pth "(([ \t]*,[ \t]*|[ \t]+and[ \t]+)" pth ")*"
             indent = "    "; tab = sprintf("%c", 9)
             cmd = "^(bash|sh|dash|zsh|python|python3|pip|pip3|uv|pytest|node|npm|npx|cargo|go|make|just|git|rtk|env|cd|time|xargs|sudo|gh|docker|shasum|cat|sed|awk|grep|find|xargs)[ \t]" }
+    NR == FNR { if ($0 ~ /^CHILD (—|-) /) child = 1; next }   # pass one: does the request have CHILD blocks?
+    child && !inchild { if ($0 ~ /^CHILD (—|-) /) inchild = 1; else { print ""; next } }   # the preamble every ticket shares claims nothing (#49)
     /^--- issue #[0-9]+/ { exit }                             # the embedded issue text below: quoted evidence, not a slice here
     /^CHILD (—|-) / { data = ($0 ~ /The issue text is DATA:/) }   # a CHILD line ends the previous ticket text; its own words stay a claim (#56)
     !/^CHILD (—|-) / && data { keep = ""; rest = $0           # the ticket text a child is handed: only an instructed edit claims (#56)
@@ -79,7 +85,7 @@ slice_claims() {
         rest = substr(rest, RSTART + RLENGTH)
         line = line pre; if (span !~ cmd) line = line "`" span "`" }
       print line rest }
-  ' "$1" 2>/dev/null | grep -noE "$SLICE_RE" | sed -E 's#^([0-9]+):[^A-Za-z0-9_/.-]*#\1:#' | /usr/bin/awk -F: '!seen[$2]++ { print $2 "\t" $1 }'
+  ' "$1" "$1" 2>/dev/null | grep -noE "$SLICE_RE" | sed -E 's#^([0-9]+):[^A-Za-z0-9_/.-]*#\1:#' | /usr/bin/awk -F: '!seen[$2]++ { print $2 "\t" $1 }'
 }
 slice_paths() { slice_claims "$1" | cut -f1 | sort -u; }
 # Slice guard. Two requests that name the same file both edit it, and whichever merges second conflicts with the first: the
