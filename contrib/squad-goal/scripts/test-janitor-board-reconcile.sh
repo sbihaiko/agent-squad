@@ -103,6 +103,7 @@ rec run-nostatus '{"event":"run_start","run_id":"run-nostatus","ts":"2026-10-13T
 mk run-stacked-pr 2018   # its PR names the issue, but it was merged into the parent branch, not the base
 rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10-13T08:12:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2001$' "$T/board.calls" 2>/dev/null && ok "dispatch marker: live run card moves to In Progress" || ko "#2001 status not reconciled: $(bc) $o"
@@ -140,6 +141,7 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 # An open issue with no live run, marker, PR, or owner label returns to the loop floor; Blocked only expresses a current human action.
 /usr/bin/grep -q '^STATUS o 4 Todo 2015$' "$T/board.calls" 2>/dev/null && ok "an unclaimed open issue leaves stale Blocked for the dispatch column" || ko "#2015 did not leave stale Blocked: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2015: card -> Todo' "$T/st/cycle.log" 2>/dev/null && ok "the stale Blocked reconciliation is named in cycle.log" || ko "#2015 reconciliation not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open; repaired to Todo' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported and repaired" || ko "#2015 Done regression not repaired: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"

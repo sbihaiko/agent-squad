@@ -239,6 +239,7 @@ done
 [ -n "$f" ] && ok "8 the fence names the operation, the address, the exit code, the subject and the guard"
 $G -qF 'GitHub refused the card write (HTTP 403)' "$T/filed" && ok "8 the error text is in the body verbatim" || ko "8 error text not verbatim: $(cat "$T/filed")"
 $G -qi 'never parsed' "$T/filed" && ok "8 the body says the remote text is quoted, never parsed" || ko "8 the body does not say how it treats remote text"
+[ "$(grep -c '^--add sbihaiko 4 In Progress 1228$' "$T/board.calls")" = 1 ] && ok "8 the dispatch adds its selected card before moving it" || ko "8 card move does not add the selected card: $(cat "$T/board.calls" 2>/dev/null)"
 [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 1 ] && ok "8 the refusal is named once in the cycle log" || ko "8 cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" && ok "8 the cycle-log line keeps its one shape" || ko "8 cycle.log line: $(cat "$T/st/cycle.log" 2>/dev/null)"
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
