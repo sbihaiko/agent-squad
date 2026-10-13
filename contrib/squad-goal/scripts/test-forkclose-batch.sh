@@ -30,15 +30,15 @@ pass() { bash "$T/s/forkclose.sh" 2>&1; }
 # 1. one branch, one pass: the merge was tested on the exact tree that becomes the base, so that sha is a tested base
 setup 5; r=$(pass); h=$(g rev-parse --short=9 HEAD)
 [ -e "$T/st/auto/basetest-$h" ] && ok "the tested merge is recorded as a tested base" || ko "no basetest-$h: $r"
-[ "$(runs)" = 2 ] && ok "the first pass ran the gate twice (base test, branch test)" || ko "gui runs: $(runs)"
+[ "$(runs)" = 1 ] && ok "the first pass ran the gate once, on the landed head (no base test before a merge since #85)" || ko "gui runs: $(runs)"
 g checkout -q -b gui/6 local/next; echo 6 > "$T/fork/f6"; g add .; g commit -q -m "work 6"; g checkout -q local/next
 echo '{"items":[{"n":6,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"; pass >/dev/null
-[ "$(runs)" = 3 ] && ok "the next landing paid for its own test only: no second base test" || ko "gui runs after the second landing: $(runs)"
+[ "$(runs)" = 2 ] && ok "the next landing paid for its own test only: no second base test" || ko "gui runs after the second landing: $(runs)"
 rm -rf "$T"
 
 # 2. two code-complete branches editing hub.py: one candidate, one gate run, both land in order
 setup 1 2; r=$(pass)
-[ "$(runs)" = 2 ] && ok "batch of two: base test once, one gate run for the candidate" || ko "gui runs: $(runs); $r"
+[ "$(runs)" = 1 ] && ok "batch of two: one gate run, for the candidate (no base test before a merge since #85)" || ko "gui runs: $(runs); $r"
 [ "$(g log --merges --reverse --format=%s | tr '\n' '|')" = "Merge gui/1 (Refs #1)|Merge gui/2 (Refs #2)|" ] && ok "both branches landed, in order" || ko "merges: $(g log --merges --reverse --format=%s | tr '\n' '|')"
 [ "$(wc -l < "$T/closed.log" 2>/dev/null | tr -d ' ')" = 2 ] && ok "both issues closed" || ko "closes: $(cat "$T/closed.log" 2>/dev/null)"
 [ -z "$(g branch --list 'fc-batch*')" ] && [ -z "$(g status --porcelain)" ] && [ "$(g branch --show-current)" = local/next ] && ok "no candidate branch left, checkout clean on the base" || ko "leftovers: $(g branch | tr '\n' ' ')"
