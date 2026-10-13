@@ -24,7 +24,9 @@ def hub():
     os.environ.setdefault("SG_REPO", "x/y")
     os.environ.setdefault("SG_OWNER", "x")
     os.environ.setdefault("SG_PROJECT", "4")
-    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
+    # the checkout is this test's own, never the one the runner was started in: `_wt_count()` counts the child worktrees
+    # under it, and a runner whose checkout holds one would read a reading of this machine, not of the fixture (#151)
+    os.environ["SG_CHECKOUT"] = tempfile.mkdtemp()
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
     spec = importlib.util.spec_from_file_location("hub_machine_load", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
@@ -543,14 +545,17 @@ def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
     now = time.time()
     st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
-    (st / "agy-limited").write_text(str(int(now + 3600)))
+    shared = tmp_path / "shared"; shared.mkdir()   # the provider limit markers: the one shared directory, not the repository's
+    (shared / "agy-limited").write_text(str(int(now + 3600)))
     monkeypatch.setattr(hub, "STATE", st)
+    monkeypatch.setattr(hub, "SHARED", shared)
     src = hub.foot_sources(now)
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
     facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
     assert "drift" not in facts and "agy" not in facts
     assert "last landing ?" in facts                                # no merged PR read: no landing to name
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
+    monkeypatch.setattr(hub, "SHARED", tmp_path / "nothing-here")              # and a shared dir with no limit marker
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
         == "last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
 
