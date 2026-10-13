@@ -38,7 +38,8 @@ case "$a" in
     for n in 2002 2005 2006 2009; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2001 2007 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2003 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
-    printf '2014\t\thttps://api.github.com/repos/x/y\n';;   # on the board, no Status yet
+    printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
+    printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016; do
@@ -114,9 +115,9 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2014$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'ADD .* 2014$' "$T/board.calls" && ok "a card with no Status is written, not added again" || ko "#2014: $(bc)"
 ! /usr/bin/grep -q 'ADD .* 2001$' "$T/board.calls" 2>/dev/null && ok "a card that exists is never added again" || ko "#2001 added: $(bc)"
 [ "$(/usr/bin/grep -c 'projectsV2/4/items' "$T/gh.calls")" = 1 ] && ok "the items are read once per pass" || ko "items read $(/usr/bin/grep -c 'projectsV2/4/items' "$T/gh.calls") times"
-# #92: an issue no run names, with no marker and no card, still carries one -- the open-issue list is ONE read
-/usr/bin/grep -q '^ADD o 4 Todo 2015$' "$T/board.calls" 2>/dev/null && ok "an open issue no run names gets a card in the dispatch column" || ko "#2015 not added: $(bc) $o"
-/usr/bin/grep -q 'BOARD-RECONCILE #2015: card added -> Todo' "$T/st/cycle.log" 2>/dev/null && ok "the add of an unclaimed issue is named in cycle.log" || ko "#2015 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# An open issue with no live run, marker, PR, or owner label returns to the loop floor; Blocked only expresses a current human action.
+/usr/bin/grep -q '^STATUS o 4 Todo 2015$' "$T/board.calls" 2>/dev/null && ok "an unclaimed open issue leaves stale Blocked for the dispatch column" || ko "#2015 did not leave stale Blocked: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2015: card -> Todo' "$T/st/cycle.log" 2>/dev/null && ok "the stale Blocked reconciliation is named in cycle.log" || ko "#2015 reconciliation not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
