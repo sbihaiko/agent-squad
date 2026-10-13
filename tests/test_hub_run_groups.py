@@ -42,9 +42,37 @@ def test_live_running_starting_stalled_are_in_running(hub):
 
 
 def test_ended_run_lands_in_the_age_bucket(hub):
-    assert hub.group_of({"state": "needs-human", "age": 100, "live": False}) == "1h"
-    assert hub.group_of({"state": "failed", "age": 4000, "live": False}) == "2h"
-    assert hub.group_of({"state": "completed", "age": 100, "live": False}) == "1h"
+    cases = [
+        (0, "1h"),
+        (3600, "1h"),
+        (3600 + 1, "2h"),
+        (7200, "2h"),
+        (7200 + 1, "4h"),
+        (14400, "4h"),
+        (14400 + 1, "8h"),
+        (5 * 3600, "8h"),
+        (28800, "8h"),
+        (28800 + 1, "24h"),
+        (12 * 3600, "24h"),
+        (86400, "24h"),
+        (86400 + 1, "d"),
+        (30 * 3600, "d"),
+    ]
+    for age, key in cases:
+        assert hub.group_of({"state": "completed", "age": age, "live": False}) == key
+
+
+def test_run_list_age_ladder_has_six_bands(hub):
+    m = re.search(r"const GROUPS=\[(.*?)\];", hub.PAGE)
+    assert m, "GROUPS missing"
+    assert re.findall(r'\["([^"]*)","([^"]*)"\]', m.group(1))[1:] == [
+        ("1h", "≤ 1 h"),
+        ("2h", "1–2 h"),
+        ("4h", "2–4 h"),
+        ("8h", "4–8 h"),
+        ("24h", "8–24 h"),
+        ("d", "24 h+ (days)"),
+    ]
 
 
 def test_run_list_group_header_reads_workers_not_open(hub):
@@ -162,6 +190,7 @@ function boot(){
     click: (k) => { const g = GHS.find((x) => x.k === k); if (!g) throw new Error("no group header " + k); g.onclick(); },
     openGroups: () => GHS.filter((g) => g.op).map((g) => g.k),
     groupRows: () => { const o = {}; GHS.forEach((g) => (o[g.k] = g.rows)); return o; },
+    listHtml: () => $("#list").innerHTML,
     clickAcc: (id) => { const e = $("#" + id); e.open = !e.open; drain(); },
     accOpen: () => ["plans", "stats", "mdl"].filter((i) => $("#" + i).open),
     calls: () => CALLS,
@@ -194,6 +223,47 @@ FRESH = _run_row("4", 0, 2)             # a run that just appeared
 
 def _js(rows, body):
     return f"const R={json.dumps(rows)};" + body
+
+
+def test_page_group_rule_matches_python_edges():
+    rows = [
+        _run_row("a", 1, 3600, id="edge-1h", spend=0.01),
+        _run_row("b", 1, 3601, id="edge-2h", spend=0.02),
+        _run_row("c", 1, 7200, id="edge-2h-top", spend=0.03),
+        _run_row("d", 1, 7201, id="edge-4h", spend=0.04),
+        _run_row("e", 1, 14400, id="edge-4h-top", spend=0.05),
+        _run_row("f", 1, 14401, id="edge-8h", spend=0.06),
+        _run_row("g", 1, 5 * 3600, id="edge-5h", spend=0.07),
+        _run_row("h", 1, 28800, id="edge-8h-top", spend=0.08),
+        _run_row("i", 1, 28801, id="edge-24h", spend=0.09),
+        _run_row("j", 1, 12 * 3600, id="edge-12h", spend=0.10),
+        _run_row("k", 1, 86400, id="edge-24h-top", spend=0.11),
+        _run_row("l", 1, 86401, id="edge-days", spend=0.12),
+        _run_row("m", 1, 30 * 3600, id="edge-30h", spend=0.13),
+    ]
+    out = _run(_js(rows, """
+      const a = boot(); a.runs(R); a.draw();
+      for (const k of ["2h", "4h", "8h", "24h", "d"]) a.click(k);
+      return { rows: a.groupRows() };
+    """))
+    assert {k: out["rows"][k] for k in ["1h", "2h", "4h", "8h", "24h", "d"]} == {"1h": 1, "2h": 2, "4h": 2, "8h": 3, "24h": 3, "d": 2}
+
+
+def test_empty_age_bands_render_with_zero_spend():
+    out = _run(_js([HOUR_1], """
+      const a = boot(); a.runs(R); a.draw();
+      return { rows: a.groupRows(), html: a.listHtml() };
+    """))
+    assert list(out["rows"]) == ["running", "1h", "2h", "4h", "8h", "24h", "d"]
+    assert out["html"].count('0 · $0.00') == 5
+
+
+def test_first_filled_age_band_opens_when_nothing_is_stored():
+    out = _run(_js([HOUR_2], """
+      const a = boot(); a.runs(R); a.draw();
+      return { open: a.openGroups() };
+    """))
+    assert out["open"] == ["2h"]
 
 
 def test_a_group_header_click_toggles_it_both_ways():

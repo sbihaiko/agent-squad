@@ -7,6 +7,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 pytest_plugins = ["tests.slowcap", "tests.real_app_guard_plugin"]
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _hub_seam_defaults(tmp_path_factory):
+    """Give module-scoped hub fixtures the checkout their profile context requires."""
+    import os
+    old = os.environ.get("SG_CHECKOUT")
+    if not old:
+        os.environ["SG_CHECKOUT"] = str(tmp_path_factory.mktemp("checkout"))
+    yield
+    if old is None:
+        os.environ.pop("SG_CHECKOUT", None)
+    else:
+        os.environ["SG_CHECKOUT"] = old
+
+
 DESIGN = Path(__file__).resolve().parent.parent / "docs" / "design"
 
 
