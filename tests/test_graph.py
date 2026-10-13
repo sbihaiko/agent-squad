@@ -270,7 +270,7 @@ def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
     cases = [({"model": "gpt"}, "model_outside_allow:gpt"), ({"tools": ["WebFetch"]}, "tool_outside_allow:WebFetch"),
              ({"skill": {"name": "tdd", "version": "2"}}, "skill_pin_mismatch:tdd"), ({"stalls": 999}, "stalls_outside_budget"),
              ({"spend": 99.0}, "spend_outside_budget"), ({"deadline": 99999}, "deadline_over_dispatch"),
-             ({"workspace": "/etc"}, "workspace_outside_allow"), ({"effort": "extreme"}, "effort_outside_allow")]
+             ({"workspace": "/etc"}, "workspace_outside_allow:requested '/etc', allowed ['worktrees/child']"), ({"effort": "extreme"}, "effort_outside_allow")]
     for patch, rule in cases:
         _, errs = validate_request(disp, {**ok, **patch}, 1, None, 10.0)
         assert rule in errs, (patch, errs)

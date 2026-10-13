@@ -78,7 +78,7 @@ BAD = [
     (dict(model="gpt"), "model_outside_allow:gpt"), (dict(effort="max"), "effort_outside_allow"),
     (dict(tools=["Read", "WebFetch"]), "tool_outside_allow:WebFetch"), (dict(skill="evil"), "skill_outside_allow"),
     (dict(stalls=999), "stalls_outside_budget"), (dict(stalls=1), "stalls_outside_budget"), (dict(spend=50.0), "spend_outside_budget"),
-    (dict(deadline=99999), "deadline_over_dispatch"), (dict(workspace="elsewhere"), "workspace_outside_allow"),
+    (dict(deadline=99999), "deadline_over_dispatch"), (dict(workspace="elsewhere"), "workspace_outside_allow:requested 'elsewhere', allowed ['worktrees/child']"),
 ]
 
 
