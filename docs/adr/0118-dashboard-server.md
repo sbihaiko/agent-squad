@@ -21,7 +21,7 @@ A page from `file://` cannot read a folder that a person did not choose in the b
 ### Push
 
 8. **A live run is followed by push: Server-Sent Events over chunked HTTP/1.1.** The traffic is one way, so the server keeps its standard-library handler, its allowlist, its Host check, and no new dependency. Rejected: WebSocket and long poll.
-9. **One watcher serves every open stream.** It stats the record path every `dashboard.watch_seconds` and reads the file only when its size or modification time changed. It holds no descriptor, because every append replaces the whole file (ADR-0030).
+9. **One watcher serves every open stream.** It stats the record path every `dashboard.watch_seconds` and reads the file only when its size or modification time changed. It holds no descriptor, because every append replaces the whole file (ADR-0030). It runs only while a stream is open: the last stream to close stops it, and the next stream starts it again, so a page that is not following a run costs that run's server nothing. A server finds a client that left within one heartbeat.
 10. **Each event carries one record line unchanged**, with its position as the event id. A reconnect sends `Last-Event-ID` and receives the later events.
 11. **A position that skips one ends the stream with the reason `gap`.** The stream never paints a gap.
 12. **The stream ends when the verdict is on the wire, and says why.** The page then closes it, so `EventSource` does not reconnect in a loop.
