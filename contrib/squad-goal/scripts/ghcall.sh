@@ -18,11 +18,18 @@
 # bucket and the cooldown are a separate clause of ADR-0277 (#4) -- it is the outcome contract, which is what a caller
 # can be wrong about.
 #
+# A read that may be answered from the snapshot (#6) has its own door, `gh_snapshot`, beside `gh_api` and never instead of
+# it: `gh_api` is always live, and it is what a read that decides a write calls -- is the branch still eligible, is the base
+# red, is the PR still open. `gh_snapshot` goes through ghthrottle.py, which answers a repeated read inside
+# `SG_GH_CACHE_WINDOW` seconds from `$SG_STATE/gh-cache` with no request, and which reads live every route that is not one
+# of the few it classifies as cheap or keyed -- so a gating route handed to `gh_snapshot` by mistake is still live.
+#
 # `-q`/`--jq` is the caller's projection and is applied HERE, on the answer, with `jq -r`, so the transport always
 # speaks raw JSON: a filtering transport cannot tell a refusal apart from an answer, and `gh` cannot either.
 
 ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${SG_GHREAD:=python3 $ghcall_here/ghread.py}"   # the interface module: one place to point at another build of it
+: "${SG_GHSNAP:=python3 $ghcall_here/ghthrottle.py}"   # the throttled, snapshotting reader behind gh_snapshot
 
 # _gh_refused <body>: 0 when the body is GitHub's own refusal shape (a message beside a status). Any body that is not
 # JSON, or is JSON without that shape, is not a refusal -- `jq -e` exits non-zero for both.
@@ -38,10 +45,22 @@ _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub'
 # answer; a failure is exit 1. A caller that only ever learns from an answer keeps what it already knew.
 gh_api() {
   local route=${1:?gh_api: a route is required}; shift || true
+  _gh_read "$SG_GHREAD" "$route" "$@"
+}
+
+# gh_snapshot <route> [-q <jq filter>]   A read that may repeat: the same three outcomes as gh_api, and a repeat inside
+# the window is answered from the snapshot. Never for a read that decides a write (see above).
+gh_snapshot() {
+  local route=${1:?gh_snapshot: a route is required}; shift || true
+  _gh_read "$SG_GHSNAP" "$route" "$@"
+}
+
+_gh_read() {   # _gh_read <reader command> <route> [-q <jq filter>]
+  local reader=$1 route=$2; shift 2
   local q=""
   [ "${1:-}" = "-q" ] && q=${2:-}
   local o rc
-  o=$($SG_GHREAD "$route"); rc=$?
+  o=$($reader "$route"); rc=$?
   if [ "$rc" -eq 0 ]; then
     if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi
     return 0

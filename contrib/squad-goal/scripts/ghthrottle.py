@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One shared throttle in front of the one GitHub reader (#4, ADR-0277).
+"""One shared throttle, and one shared snapshot, in front of the one GitHub reader (#4, #6, ADR-0277).
 
 `ghread.py` owns the outcome contract -- an answer, a refusal, or a failure before GitHub reached a verdict. This module
 owns the RATE, and it owns it for every process at once:
@@ -19,6 +19,7 @@ Documented defaults (every one of them overridable per loop, never edited at run
     SG_GH_WINDOW              60   seconds in a window
     SG_GH_COOLDOWN           900   seconds the first self-attributed 403/429 holds every reader back
     SG_GH_COOLDOWN_JITTER     60   seconds of jitter added to that cooldown, drawn per writer
+    SG_GH_CACHE_WINDOW        60   seconds a read is answered from the snapshot; 0 turns the snapshot off
 
 Why 300/60 s: the landing pass is the loop's heaviest reader and it reads in bursts, not in a stream. Its eligible-branch
 collection reads the open-PR list once and then two routes per candidate (the issue's state and its `Blocked by` body) --
@@ -30,9 +31,29 @@ can spend the bucket twice as fast and then it waits, which is the whole point -
 The transport stays invisible to callers: a caller hands over a route and reads back a `ghread.Read`, and the fact that
 REST is the transport behind it is not part of what it is handed. A sibling slice adds GraphQL behind the same interface.
 
+The snapshot (#6). A read repeated inside its window is answered from `$SG_STATE/gh-cache` and spends no request and no
+token, and the kind of fact decides what keeps an entry:
+
+* a **cheap** fact (`TTL`: the repository, its labels, its milestones) lives for `SG_GH_CACHE_WINDOW` seconds;
+* an **expensive** fact (`KEYED`: a PR's files, a PR's commits) carries a key. A caller that holds the PR's head SHA passes
+  it (`read(route, key=sha)`): an unchanged head is the same fact however old the entry is, a changed head throws the entry
+  away and the next read is live. Without a caller's key the ETag GitHub answered with is the key: once the window has
+  passed the entry is revalidated with one conditional request, a `304` refreshes the entry without reading or parsing the
+  fact again, and any other answer means the next read is live;
+* a corrupt, truncated, foreign or absent entry is a miss, never an error, and an unwritable state dir costs the snapshot
+  and not the read. Only an answer is kept: a refusal or a failure never becomes a snapshot.
+
+The liveness rule: **every fact that gates a write is read live**. A merge, a close and a card move each rest on a read --
+is the branch still eligible, is the base red, is the PR still open, is the issue still open and what blocks it -- and a
+stale answer there is a merge onto a base another pass already moved, a class of red the loop cannot attribute. So the
+snapshot is an allowlist, not a denylist: `fact_class(route)` names the few routes that may be snapshotted, and every other
+route -- the open-PR and open-issue lists, a single issue, a single PR and its merge, a commit's status and checks, a
+branch, a ref, a compare, a workflow run, a comment, a board item, and any route nobody classified -- is `LIVE` and is
+neither looked up in the cache nor stored in it. Writes never reach the cache at all.
+
 This module is reached from a shell script the same way `ghread.py` is -- `python3 ghthrottle.py <route>` -- with the same
 exit codes (0 the answer on stdout, 2 a refusal, 1 a failure before a verdict), so a caller reads one contract whether the
-read was throttled or not. It does not own the per-resource cache, the api.log/health surface or the direct-read check.
+read was throttled or not. It does not own the api.log/health surface or the direct-read check.
 
 Nothing here reaches the network on its own account, and nothing here logs to `$SG_STATE`: a caller that only ever
 replaces its knowledge from an answer keeps what it had, and the refusal line is what tells the operator why the loop is
@@ -43,6 +64,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import random
@@ -60,11 +82,13 @@ WINDOW_ENV = "SG_GH_WINDOW"
 COOLDOWN_ENV = "SG_GH_COOLDOWN"
 JITTER_ENV = "SG_GH_COOLDOWN_JITTER"
 STATE_ENV = "SG_STATE"
+CACHE_WINDOW_ENV = "SG_GH_CACHE_WINDOW"
 
 DEFAULT_BUDGET = 300  # requests per window, shared by every process
 DEFAULT_WINDOW = 60.0  # seconds in a window
 DEFAULT_COOLDOWN = 900.0  # the first self-attributed 403/429 holds every reader back for this long
 DEFAULT_JITTER = 60.0  # seconds of jitter added to it, drawn per writer, so two wake-ups do not collide
+DEFAULT_CACHE_WINDOW = 60.0  # seconds a snapshot answers a repeated read; one bucket window, so a beat-by-beat loop repeats at most once
 
 # The landing pass's own burst (forkclose.sh's eligible-branch collection): the open-PR list once, then the state and
 # the `Blocked by` body of each candidate. Measured against the pass, and asserted against it in tests/test_gh_throttle.
@@ -73,6 +97,15 @@ LANDING_PASS_READS_PER_CANDIDATE = 2
 
 BUCKET_FILE = "gh-budget.json"
 COOLDOWN_FILE = "gh-cooldown.json"
+CACHE_DIR = "gh-cache"
+
+# What a route's fact may be answered from. LIVE is the default, and the only way out of it is to be named below.
+LIVE = "live"  # gates a write, or nobody classified it: read from GitHub every time, never looked up, never stored
+TTL = "ttl"  # cheap to re-read: kept for the window
+KEYED = "keyed"  # expensive to re-derive: kept while its head SHA or its ETag is the one GitHub still has
+_REPO = r"^repos/[^/?]+/[^/?]+"
+_CHEAP = re.compile(_REPO + r"(?:/(?:labels|milestones|collaborators|releases|topics|languages))?(?:\?.*)?$")
+_EXPENSIVE = re.compile(_REPO + r"/pulls/\d+/(?:files|commits)(?:\?.*)?$")
 
 # GitHub's own words for a refusal it attributes to how fast we asked: the rate limit itself, a secondary limit, or abuse
 # detection. A 403 about permissions ("Resource not accessible by integration") is not one of these, and cooling the whole
@@ -100,6 +133,16 @@ def _number(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _cache_window() -> float:
+    """The snapshot window: the documented default, or what the environment names. Zero is a value (the snapshot is off);
+    a bad or negative one is not, and never stops a read."""
+    try:
+        value = float(os.environ.get(CACHE_WINDOW_ENV, DEFAULT_CACHE_WINDOW))
+    except ValueError:
+        return DEFAULT_CACHE_WINDOW
+    return value if value >= 0 else DEFAULT_CACHE_WINDOW
 
 
 def default_state_dir() -> Path:
@@ -146,6 +189,105 @@ def _self_attributed(out: ghread.Read, status: int | None) -> bool:
     return status == 429 or bool(_SELF_ATTRIBUTED.search(out.message))
 
 
+def fact_class(route: str) -> str:
+    """`TTL` or `KEYED` for the few facts that may be snapshotted, `LIVE` for every other route (the liveness rule)."""
+    if _EXPENSIVE.match(route):
+        return KEYED
+    return TTL if _CHEAP.match(route) else LIVE
+
+
+class Cache:
+    """The snapshot of the reads that may be repeated. One file per route in `$SG_STATE/gh-cache`, shared by every process."""
+
+    def __init__(
+        self, state_dir: Path | str | None = None, window: float | None = None, clock: Callable[[], float] = time.time
+    ):
+        self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
+        self.window = float(window) if window is not None else _cache_window()
+        self.clock = clock
+
+    def entry_path(self, route: str) -> Path:
+        return self.state_dir / CACHE_DIR / f"{hashlib.sha256(route.encode()).hexdigest()[:40]}.json"
+
+    def _load(self, route: str) -> dict[str, Any] | None:
+        """The entry for this route, or None for anything that is not one: absent, unreadable, truncated, not an object,
+        another route's, stamped in the future, or carrying a body that is not JSON. A miss, never an error."""
+        entry = _read_json(self.entry_path(route))
+        at, body = entry.get("at"), entry.get("body")
+        if entry.get("route") != route or not isinstance(body, str):
+            return None
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or at > self.clock():
+            return None
+        if body.strip():
+            try:
+                json.loads(body)
+            except ValueError:
+                return None
+        return {"route": route, "at": float(at), "key": str(entry.get("key") or ""), "etag": str(entry.get("etag") or ""), "body": body}
+
+    def store(self, route: str, out: ghread.Read, key: str = "", etag: str = "") -> None:
+        """Keep an answer. A refusal, a failure or a partial answer is not a snapshot of anything and is not kept."""
+        if not out.is_answer or out.partial:
+            return
+        _write_json(
+            self.entry_path(route),
+            {"route": route, "at": self.clock(), "key": key, "etag": etag, "body": out.body},
+        )
+
+    def _refresh(self, entry: dict[str, Any]) -> ghread.Read:
+        """An unchanged key keeps the entry for another window and hands it back as it was stored, not re-derived."""
+        _write_json(self.entry_path(entry["route"]), {**entry, "at": self.clock()})
+        body = entry["body"]
+        return ghread.Read(kind=ghread.ANSWER, answer=json.loads(body) if body.strip() else None, body=body)
+
+    def read(
+        self,
+        route: str,
+        live: Callable[[str, ghread.TransportFn | None], ghread.Read],
+        transport: ghread.TransportFn | None = None,
+        key: str | None = None,
+        revalidate: ghread.RevalidateFn | None = None,
+    ) -> ghread.Read:
+        """Answer from the snapshot when the fact may be and the entry still holds; otherwise `live(route, transport)`.
+
+        `key` is the head SHA the caller holds for a keyed fact. `revalidate(route, etag)` is the conditional request.
+        """
+        kind = fact_class(route)
+        if kind == LIVE or self.window <= 0:
+            return live(route, transport)
+        entry = self._load(route)
+        if entry is not None:
+            if key is not None:
+                if entry["key"] == key:
+                    return self._refresh(entry)
+            elif self.clock() - entry["at"] < self.window:
+                return ghread.Read(
+                    kind=ghread.ANSWER, answer=json.loads(entry["body"]) if entry["body"].strip() else None, body=entry["body"]
+                )
+            elif entry["etag"] and revalidate is not None and self._unchanged(route, entry["etag"], revalidate):
+                return self._refresh(entry)
+        seen = {"etag": ""}
+        inner = transport or ghread.gh_transport
+
+        def tap(r: str) -> ghread.Transport:
+            res = inner(r)
+            seen["etag"] = ghread.headers_of(res.body).get("etag", "")
+            return res
+
+        out = live(route, tap)
+        self.store(route, out, key=key or "", etag=seen["etag"] if kind == KEYED else "")
+        return out
+
+    @staticmethod
+    def _unchanged(route: str, etag: str, revalidate: ghread.RevalidateFn) -> bool:
+        """Did GitHub answer 304 to the entry's ETag? Anything else -- a new entity, a refusal, no answer -- is no."""
+        try:
+            res = revalidate(route, etag)
+        except OSError:
+            return False
+        return res is not None and _http_status(res.body) == 304
+
+
 class Throttle:
     """The shared bucket and the shared cooldown. One instance per process; both files are what makes it shared."""
 
@@ -159,6 +301,7 @@ class Throttle:
         clock: Callable[[], float] = time.time,
         sleeper: Callable[[float], None] = time.sleep,
         rand: Callable[[], float] = random.random,
+        cache: Cache | None = None,
     ):
         self.state_dir = Path(state_dir) if state_dir is not None else default_state_dir()
         self.budget = float(budget) if budget is not None else _number(BUDGET_ENV, DEFAULT_BUDGET)
@@ -168,6 +311,7 @@ class Throttle:
         self.clock = clock
         self.sleeper = sleeper
         self.rand = rand
+        self.cache = cache if cache is not None else Cache(state_dir=self.state_dir, clock=clock)
 
     @property
     def rate(self) -> float:
@@ -236,7 +380,36 @@ class Throttle:
             },
         )
 
-    def read(self, route: str, transport: ghread.TransportFn | None = None) -> ghread.Read:
+    def read(
+        self,
+        route: str,
+        transport: ghread.TransportFn | None = None,
+        key: str | None = None,
+        revalidate: ghread.RevalidateFn | None = None,
+    ) -> ghread.Read:
+        """Read one route: from the snapshot when the fact may be and the entry holds -- no token, no request -- and
+        through the throttle otherwise. A fact that gates a write is never answered from the snapshot (`fact_class`).
+
+        `key` is the head SHA the caller holds for the fact. The conditional request that checks an ETag is a read too: it
+        waits for the cooldown and spends a token, and where no transport was injected it is `gh api` itself.
+        """
+        if revalidate is None and transport is None:
+            revalidate = ghread.gh_conditional_transport
+        return self.cache.read(route, self._live, transport=transport, key=key, revalidate=self._paced(revalidate))
+
+    def _paced(self, revalidate: ghread.RevalidateFn | None) -> ghread.RevalidateFn | None:
+        if revalidate is None:
+            return None
+
+        def checked(route: str, etag: str) -> ghread.Transport:
+            if self.holding():
+                return ghread.Transport(rc=1, detail="cooling down: the entry is not revalidated")
+            self.spend()
+            return revalidate(route, etag)
+
+        return checked
+
+    def _live(self, route: str, transport: ghread.TransportFn | None = None) -> ghread.Read:
         """Read one route through the throttle: refused while a cooldown holds, bounded by the bucket otherwise."""
         held = self.holding()
         if held:
