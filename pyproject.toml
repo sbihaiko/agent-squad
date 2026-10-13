@@ -25,6 +25,7 @@ packages = ["squad"]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider --durations=15"
 slow_cap_seconds = "20"
+test_deadline_seconds = "60"
 
 [tool.mypy]
 files = ["squad"]
