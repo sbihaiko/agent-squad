@@ -339,10 +339,10 @@ def test_the_maximized_board_claims_both_cells_of_the_right_column(hub):
     assert "grid-template-rows:minmax(0,1fr) 0" in _css(hub, "body.dockb.max #win")   # the run pane's row has nothing left to give
 
 
-def test_the_run_pane_is_hidden_with_visibility_so_the_grid_keeps_its_space(hub):
+def test_the_run_pane_is_hidden_with_visibility_so_its_iframe_is_never_detached(hub):
     css = _css(hub, "body.dockb.max #main")
     assert "visibility:hidden" in css
-    assert "display:none" not in css               # its space is what the board takes; its live frame is detached by liveSync, not by CSS
+    assert "display:none" not in css               # its space is what the board takes; the element is untouched
     assert not re.search(r"#main[^\n{]*\{[^}]*display:none", hub.PAGE)
 
 
@@ -377,7 +377,6 @@ globalThis.document={body:__body,createElement:t=>{__made.push(t);return __mk(t)
 globalThis.localStorage={hub:__STORED__};
 const ls=JSON.parse(localStorage.hub||"{}");
 const pins=new Set(),q="",per="day";
-let __sync=0;const liveSync=()=>{__sync++};   /* the page's one place that moves the live frame */
 """
 
 _NODE_POST = r"""
@@ -391,7 +390,7 @@ $("#bz").onclick();steps.maxOff=snap();
 $("#bz").onclick();$("#bx").onclick();steps.collapseWhileMaximized=snap();
 $("#bz").onclick();steps.maximizeWhileCollapsed=snap();
 escBoard();steps.afterEsc=snap();
-steps.seenAfter=[...new Set(__seen)];steps.madeAfter=[...__made];steps.sync=__sync;
+steps.seenAfter=[...new Set(__seen)];steps.madeAfter=[...__made];
 console.log("RESULT"+JSON.stringify(steps));
 """
 
@@ -416,11 +415,10 @@ def test_the_choice_is_saved_with_the_boards_other_options(hub):
     assert st["maxOff"]["body"] == ["dockb"] and st["maxOff"]["saved"]["max"] is False
 
 
-def test_the_toggle_leaves_the_run_panes_to_the_one_live_stream_rule(hub):
+def test_the_toggle_never_removes_recreates_or_re_srcs_the_run_panes_iframe(hub):
     st = _board_steps(hub, {})
-    assert "#main" not in st["seen"] and "#main" not in st["seenAfter"]   # the pane is not even looked up here
-    assert st["made"] == [] and st["madeAfter"] == []                     # nothing is built by the toggle itself
-    assert st["sync"] == 6                                                # every toggle asks the live-frame rule once: max on, off, on, collapse, max, escape
+    assert "#main" not in st["seen"] and "#main" not in st["seenAfter"]   # the pane is not even looked up
+    assert st["made"] == [] and st["madeAfter"] == []                     # nothing detached, nothing re-created
     assert "drawMain" not in _board_slice(hub) and "frames" not in _board_slice(hub)
 
 

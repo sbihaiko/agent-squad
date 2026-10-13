@@ -47,11 +47,6 @@ def _pip_slice(hub):
     return hub.PAGE[hub.PAGE.index(PIP_FROM):hub.PAGE.index(PIP_TO)]
 
 
-def _live_rules(hub):
-    """The page's own rule for which surface holds the one live frame: the harness runs it, never a copy of it."""
-    return hub.PAGE[hub.PAGE.index("let focus="):hub.PAGE.index("const snapText=")]
-
-
 # ---------------------------------------------------------------- it is the board's own floating window
 
 def test_the_window_is_a_floating_card_of_the_board(hub):
@@ -106,8 +101,8 @@ def test_the_card_is_the_dashboards_own_single_card_mode_not_a_second_rendering(
     assert "createElement" not in slice_                                # the frame is the page's own, built in the markup
 
 
-def test_the_window_follows_the_run_the_panel_has_focused(hub):
-    assert "focused()" in _pip_slice(hub)                               # the pane that follows its run is the run the window shows
+def test_the_window_follows_the_run_the_left_bar_has_selected(hub):
+    assert "slots[0]" in _pip_slice(hub)                                # the run the panel is showing is the run the window shows
 
 
 def test_a_dashboard_without_the_mode_degrades_to_a_message_never_an_empty_frame(hub):
@@ -122,11 +117,9 @@ def test_the_run_less_hub_shows_the_hubs_own_message_in_the_window(hub):
 
 def test_the_frame_is_sourced_once_per_run_switch_and_never_by_a_repaint(hub):
     slice_ = _pip_slice(hub)
-    assert slice_.count(".src=url") == 1                                # one place sets the URL
-    assert slice_.count('.src="about:blank"') == 1                      # and one place lets it go
+    assert slice_.count(".src=") == 1                                   # one place sets the URL
     assert re.search(r"if\(url!==pipSrc\)", slice_)                     # and only when the selected run changed
-    assert "liveSync()" in hub.PAGE[hub.PAGE.index("function refresh"):hub.PAGE.index("function applyFilter")]   # the run switch repaints it
-    assert "pipDraw()" in hub.PAGE[hub.PAGE.index("function liveSync"):hub.PAGE.index("// ---- the live panes end here")]   # through the one place that moves the live frame
+    assert "pipDraw()" in hub.PAGE[hub.PAGE.index("function refresh"):hub.PAGE.index("function applyFilter")]   # the run switch repaints it
 
 
 # ---------------------------------------------------------------- the window's own geometry and gestures
@@ -153,7 +146,7 @@ const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[
 const name=r=>r.name||("run "+String(r.id).slice(-6));
 const bo={},saveB=()=>{};
 let runs=[{id:"run-1",port:"9001",state:"running",name:"build #11"}],slots=["run-1"];
-Object.defineProperty($("#pipf"),"src",{get:()=>__srcLog[__srcLog.length-1]||"",set:v=>{__srcLog.push(v);if(v&&v!=="about:blank")__srcWrites++}});
+Object.defineProperty($("#pipf"),"src",{get:()=>__srcLog[__srcLog.length-1]||"",set:v=>{__srcLog.push(v);if(v)__srcWrites++}});
 """
 
 _NODE_POST = r"""
@@ -215,7 +208,7 @@ console.log("RESULT"+JSON.stringify(steps));
 def _pip_states(hub):
     if shutil.which("node") is None:
         pytest.skip("node is required")
-    script = _NODE_PRE + _live_rules(hub) + _pip_slice(hub) + _NODE_POST
+    script = _NODE_PRE + _pip_slice(hub) + _NODE_POST
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.split("RESULT")[-1])
@@ -256,17 +249,16 @@ def test_escape_collapses_the_window_and_a_second_one_hands_the_focus_back(hub):
     assert st["escFocus"] == ["#bz"]                                    # the maximize control, never a restore of the split from inside
 
 
-def test_the_window_holds_a_dashboard_only_while_it_is_the_live_surface(hub):
+def test_collapsing_never_reconnects_the_stream_and_never_rebuilds_the_frame(hub):
     st = _pip_states(hub)
     assert st["init"]["frames"] == 0                                    # the frame is the page's own element, never created here
-    assert st["init"]["writes"] == 0 and st["init"]["src"] == ""        # in the split the run pane is live: the window opens no stream
-    assert st["maximized"]["writes"] == 1                               # maximizing sources it once
-    assert st["collapsed"]["writes"] == 1 and st["collapsed"]["src"] == "about:blank"   # a collapsed window holds no dashboard
-    assert st["expanded"]["writes"] == 2                                # expanding connects again
+    assert st["init"]["writes"] == 1
+    assert st["maximized"]["writes"] == 1                               # maximizing does not touch the URL
+    assert st["collapsed"]["writes"] == 1 and st["expanded"]["writes"] == 1
     assert (st["collapsed"]["h"], st["expanded"]["h"]) == (34, 300)
-    assert st["switched"]["writes"] == 4                                # the Escape collapse and its expand cost one more connection, then one new source for the next run
-    assert st["repainted"]["writes"] == 4                               # a repaint of the same run never re-sources it
-    assert st["small"]["writes"] == 4 and st["back"]["writes"] == 4
+    assert st["switched"]["writes"] == 2                                # one new source when the left bar moves to another run
+    assert st["repainted"]["writes"] == 2                               # a repaint of the same run never re-sources it
+    assert st["small"]["writes"] == 2 and st["back"]["writes"] == 2
 
 
 def test_the_window_reads_the_run_and_the_card_it_shows(hub):
