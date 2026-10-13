@@ -53,6 +53,8 @@ slice_paths() {
   /usr/bin/awk '
     BEGIN { indent = "    "; tab = sprintf("%c", 9)
             cmd = "^(bash|sh|dash|zsh|python|python3|pip|pip3|uv|pytest|node|npm|npx|cargo|go|make|just|git|rtk|env|cd|time|xargs|sudo|gh|docker|shasum|cat|sed|awk|grep|find|xargs)[ \t]" }
+    NR == FNR { if ($0 ~ /^CHILD (—|-) /) child = 1; next }   # pass one: does the request have CHILD blocks?
+    child && !inchild { if ($0 ~ /^CHILD (—|-) /) inchild = 1; else next }   # the preamble every ticket shares claims nothing (#49)
     /^--- issue #[0-9]+/ { exit }                             # the embedded issue text below: quoted evidence, not a slice here
     /^[[:space:]]*(```|~~~)/ { fence = !fence; next }         # a fenced block opens and closes: nothing inside it is a slice
     fence { next }
@@ -64,7 +66,7 @@ slice_paths() {
         rest = substr(rest, RSTART + RLENGTH)
         line = line pre; if (span !~ cmd) line = line "`" span "`" }
       print line rest }
-  ' "$1" 2>/dev/null | grep -oE "$SLICE_RE" | sed -E 's#^[^A-Za-z0-9_/.-]+##' | sort -u
+  ' "$1" "$1" 2>/dev/null | grep -oE "$SLICE_RE" | sed -E 's#^[^A-Za-z0-9_/.-]+##' | sort -u
 }
 # Slice guard. Two requests that name the same file both edit it, and whichever merges second conflicts with the first: the
 # sibling pair #1285/#1391 shared scripts/gui_test/mesen_gui_adapter.py and UI/Logic/TestHook/TestHookProtocol.cs, and #1285
