@@ -38,6 +38,15 @@ def node(g, name):
     return next(n for n in g["nodes"] if n["name"] == name)
 
 
+def test_the_seed_tells_the_router_that_medium_is_the_default_effort():
+    """The owner's ruling: medium is the default effort. `allow.efforts` is an order, so a child request that names no
+    effort would otherwise take its first entry, and a router that names `high` on every child spends a level the
+    configuration never asked for. The instruction is the guard: the engine default applies only to a request that
+    leaves the field out (squad/envelope.py)."""
+    text = node(seed(), "router")["instructions"]
+    assert "leave it out unless the work needs more" in text and "`medium`" in text
+
+
 def test_the_harness_instructions_keep_the_stopping_rule_of_the_seed():
     g = seed()
     assert "## Stopping rule" in node(g, "router")["instructions"]
