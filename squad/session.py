@@ -24,12 +24,20 @@ CAP_REASON ={"stall_cap": "node_stall_cap", "spend_cap": "node_spend_cap", "outp
 # answer, so a number that happens to sit in a message about something else does not read as a provider failure.
 PROVIDER_STATUS = re.compile(r"\b[45]\d\d\b")
 PROVIDER_MARKERS = ("API Error", "upstream", '"status"')
+# Some providers refuse in a sentence that carries no status at all: the subscription answers `session limit`, a spent
+# pool answers `usage limit`, a provider answers `rate limit`. The CLI prints the first one when its login is exhausted,
+# and it is the provider refusing to serve like any 429: on 2026-10-13 the router node died on that sentence 116 times
+# while the next entry of its chain answered at once.
+PROVIDER_REFUSAL = ("session limit", "usage limit", "rate limit")
 CHAIN_LINE = 200     # characters of one entry's error kept in the single message an exhausted chain reports
 
 
 def provider_error(err):
-    """True when an adapter error names an upstream HTTP status. "socket closed" and a malformed result are not."""
+    """True when an adapter error names an upstream HTTP status, or a refusal the provider states in words. "socket
+    closed" and a malformed result are not: neither is the provider saying anything."""
     text = str(err)
+    if any(m in text for m in PROVIDER_REFUSAL):
+        return True
     return bool(PROVIDER_STATUS.search(text)) and any(m in text for m in PROVIDER_MARKERS)
 
 

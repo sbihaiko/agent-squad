@@ -25,6 +25,12 @@ PROVIDER_ERROR = ("ResultError: Claude Code returned an error result: "
                   "API Error: 402 Grok upstream rejected the request (exit code: 1)")
 # the same failure as Grok's own CLI reports it, without the CLI's wrapper
 PROVIDER_JSON = '{"error": "Grok Build usage balance exhausted", "status": 402}'
+# The subscription's own refusal, as the CLI prints it: no HTTP status anywhere in the sentence. The router node died on
+# this text on 2026-10-13, 116 times, while the second entry of its chain answered at once.
+SESSION_LIMIT = ("ResultError: Claude Code returned an error result: "
+                 "You've hit your session limit · resets 7:27am (America/Sao_Paulo) (exit code: 1)")
+# a pool's refusal, and a provider's, in the same shape
+USAGE_LIMIT = "ResultError: Claude Code returned an error result: API Error: The usage limit has been reached (exit code: 1)"
 
 REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": "sonnet", "effort": "medium",
            "tools": ["Read", "Edit"], "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child"}
@@ -61,6 +67,23 @@ async def test_a_provider_error_named_by_a_status_without_the_api_error_prefix_f
     eng = engine(tmp_path, {"router": [{"error": PROVIDER_JSON}, SPAWNS], "route.router.1": CHILD})
     await eng.run()
     assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.6-terra", "claude-deepseek-v4-flash"]
+
+
+async def test_the_subscriptions_own_refusal_falls_through_to_the_next_model(tmp_path):
+    """The refusal the CLI prints for an exhausted subscription names no HTTP status, and it is still the provider
+    refusing to serve: before this case the run died on its first call (116 runs on 2026-10-13)."""
+    eng = engine(tmp_path, {"router": [{"error": SESSION_LIMIT}, SPAWNS], "route.router.1": CHILD})
+    v = await eng.run()
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.6-terra", "claude-deepseek-v4-flash"]
+    assert v.verdict == "completed" and outcomes(tmp_path, "router")[0]["outcome"] == "pass"
+
+
+async def test_a_pools_usage_limit_falls_through_to_the_next_model(tmp_path):
+    """The gateway answers a spent pool with `The usage limit has been reached`: the same refusal from another speaker."""
+    eng = engine(tmp_path, {"router": [{"error": USAGE_LIMIT}, SPAWNS], "route.router.1": CHILD})
+    v = await eng.run()
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.6-terra", "claude-deepseek-v4-flash"]
+    assert v.verdict == "completed"
 
 
 async def test_a_chain_whose_every_entry_is_exhausted_fails_naming_each_entry(tmp_path):
