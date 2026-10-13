@@ -1,19 +1,24 @@
 #!/bin/bash
 # usage: autohunt.sh   (watch.sh, every cycle after autobug.sh; AH_DRY=1 prints what it would dispatch)
 # When the loop has been idle, start one read-only bug hunt that files reproducible defects (label bug only).
-# --file <title> <body-file>   opens the issue with only the bug label and logs HUNT filed #N
+# --file <title> <body-file>   opens the issue through the loop's ONE bug contract -- the [SQUAD] title prefix, the
+#                              "Filed by" line and the labels -- and logs HUNT filed #N. The hunt files with the bug
+#                              kind alone; a caller that is not the hunt names itself in SG_FILED_BY and asks for the
+#                              startable label beside the bug kind in SG_FILED_LABELS (a refused write, #145).
 # --none                       logs HUNT none (a hunt that found nothing)
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
 file_issue() {
-  local title=$1 body=$2 resp num tagged
+  local title=$1 body=$2 resp num tagged by=${SG_FILED_BY:-autohunt} l
+  local -a labs=(-f "labels[]=${SG_BUG_LABEL:-bug}")   # the bug kind, so the loop's own dispatcher picks the issue up
+  for l in ${SG_FILED_LABELS//,/ }; do [ -n "$l" ] && labs+=(-f "labels[]=$l"); done   # and the label that makes it startable beside it
   case $title in \[*) ;; *) title="[SQUAD] $title";; esac   # every issue the loop files about its own tooling carries the prefix
   tagged=$(mktemp)
   cat "$body" > "$tagged"
-  grep -qF "Filed by autohunt" "$tagged" || echo "Filed by autohunt" >> "$tagged"
-  resp=$(gh api --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" -f 'labels[]=bug' 2>/dev/null)
+  grep -qF "Filed by $by" "$tagged" || echo "Filed by $by" >> "$tagged"
+  resp=$(gh api --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" "${labs[@]}" 2>/dev/null)
   rm -f "$tagged"
   num=$(printf '%s' "$resp" | python3 -c 'import sys,json,re
 t=sys.stdin.read().strip()
