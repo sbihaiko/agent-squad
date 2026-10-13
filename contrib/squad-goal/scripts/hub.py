@@ -5,6 +5,10 @@ import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statis
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+# A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
+# hardcoded path turns a missing tool into a failed pass. env.sh resolves it into SG_LSOF; the last entry keeps a tool
+# outside both paths reachable.
+LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
@@ -208,7 +212,7 @@ def project_dirs():
     ds = {pathlib.Path(CHECKOUT) / "runs"}
     for x in os.environ.get("SG_PROJECTS", "").split(":"):
         if x: ds.add(pathlib.Path(x) / "runs")
-    for l in sh("/bin/ps", "-axo", "command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
         if m: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
@@ -577,7 +581,7 @@ def proc_snapshot():
         if out: return out
     except Exception: pass
     out = {}
-    for l in sh("/bin/ps", "-axo", "pid=,ppid=,time=,command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "pid=,ppid=,time=,command=").splitlines():
         f = l.split(None, 3)
         if len(f) < 4 or not f[0].isdigit(): continue
         out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
@@ -633,9 +637,11 @@ def load_tick(sample=None):
 # subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
 # SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
-# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · #73 2h 14m ago`,
-# the newest `auto/fork-<n>-<sha9>` marker the close pass touches when it merges that commit — its name is the issue, its
-# mtime the age. The marker is the pass's own claim of a landing, so no log line is parsed and no GitHub call is made.
+# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · PR #73 2h 14m ago`,
+# the newest merged pull request the board pass has read — its number is the landing and its merge time the age. Delivery
+# is a pull request (#75), so the merge is the landing; it reads the rows the board pass already holds, so no log line is
+# parsed and no GitHub call is made. The `auto/fork-<n>-<sha9>` marker is NOT read: a marker outlives the landing it named,
+# and a bar that reports it names a landing nothing made.
 # The quota pair (`codex ok · agy reset 14:20`) left the line for the opposite reason (#87): each marker names a CLI whose
 # subscription the subs block already carries as a token, so the purple block repeated the green one. `MARKER_SUB` keeps
 # the pairing, and a marker returns the day its subscription leaves SUBS: a fact is never lost, only never said twice.
@@ -678,13 +684,15 @@ def _rel_span(x):
     return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
 
 def _landing_parts(ld, now):
-    """`last landing` and `#73 2h 14m ago`: the issue the newest fork marker names and the age of the marker itself.
-    No marker, or one whose issue or age cannot be read, is `?` in the neutral tone — never a landing that did not happen."""
+    """`last landing` and `PR #73 2h 14m ago`: the number of the newest merged pull request and the age of its merge.
+    No merge, or one whose number or time cannot be read, is `?` in the neutral tone — never a landing that did not happen.
+    The number is named as a pull request, because the row it comes from is one: a bare `#73` reads as an issue, and the
+    issue is not what landed."""
     if not isinstance(ld, dict): return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
     n, ts = ld.get("issue"), ld.get("ts")
     if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
-    return [{"text": "last landing", "tone": ""}, {"text": f"#{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+    return [{"text": "last landing", "tone": ""}, {"text": f"PR #{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
 
 def _occ_fact(occ, caps):
     """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
@@ -847,17 +855,18 @@ def _json(p):
     except Exception: return None
 
 def _last_landing():
-    """The newest `auto/fork-<n>-<sha9>` marker: `{"issue", "ts"}`, or None with no marker the hub can read. One directory
-    listing on the sampler thread; a marker that vanished between the listing and its stat is not a landing."""
+    """The newest merged pull request the board pass has read: `{"issue", "ts"}`, naming the PR, or None.
+
+    Delivery is a pull request (#75): the merge is the landing, and the board pass already holds every closed PR of every
+    configured repository with its merge time and whether it merged. A closed pull request that was NOT merged is not a
+    landing, and a row whose time the hub cannot read is skipped rather than counted as now.
+    """
     best = None
-    try: names = list((STATE / "auto").iterdir())
-    except OSError: return None
-    for m in names:
-        mo = FORK_MARKER.fullmatch(m.name)
-        if not mo: continue
-        try: ts = m.stat().st_mtime
-        except OSError: continue
-        if best is None or ts > best["ts"]: best = {"issue": int(mo.group(1)), "ts": ts}
+    for p in board_cache.get("prev") or []:
+        if not p.get("m"): continue
+        try: ts = dt.datetime.fromisoformat(str(p.get("c") or "").replace("Z", "+00:00")).timestamp()
+        except ValueError: continue
+        if best is None or ts > best["ts"]: best = {"issue": p.get("n"), "ts": ts}
     return best
 
 def _newest_mtime(*paths):
@@ -925,12 +934,12 @@ TEST_LOST_DROP_SECS = 24 * 3600
 def runs():
     _titles()
     out = []; load_rows = []
-    ps_lines = sh("/bin/ps", "-axo", "pid=,command=").splitlines()
+    ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
     for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
         pid, d = m.group(1), m.group(2)
-        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh("/usr/sbin/lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
+        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         p = pathlib.Path(d) / "record.jsonl"
         if not pathlib.Path(d).exists(): continue
@@ -1069,7 +1078,7 @@ def refresh_board():
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
             except OSError: pass
-ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Blocked", "No status", "Done"]
+ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Open Specs", "Blocked", "No status", "Done"]
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -1181,10 +1190,13 @@ OPEN_PR_QUERY = """query{repository(owner:"%s",name:"%s"){pullRequests(first:100
 number title isDraft updatedAt createdAt headRefOid baseRefName mergeStateStatus
 labels(first:30){nodes{name}}
 reviewThreads(first:100){totalCount nodes{isResolved}}
-commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
+commits(last:1){nodes{commit{committedDate statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
 
 LIVE_BAD = ("failure", "timed_out", "action_required", "startup_failure", "cancelled", "error")
 LIVE_WAIT = ("queued", "in_progress", "pending", "waiting", "requested", "expected", "completed")
+CI_WAIT = ("queued", "in_progress", "pending", "waiting", "requested")   # a check GitHub reports as unfinished
+CI_QUEUED = ("queued",)          # ... and that no runner has picked up: a queue is not a run (#149)
+CI_QUEUE_MAX = 20 * 60.0         # the timeout `.github/workflows/ci.yml` gives its job: still queued past it, no run started
 
 def _live_states(rollup):
     """The states of the live rollup's contexts: a CheckRun reports its conclusion once it has one and its status before
@@ -1224,7 +1236,7 @@ def prs_from_graphql(payload, repo=None):
         base = nd.get("baseRefName") or None
         rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
                      "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
-                     "th": threads, "ci": states, "rollup": _live_rollup(states), "r": repo,
+                     "th": threads, "ci": states, "hc": commit.get("committedDate") or None, "rollup": _live_rollup(states), "r": repo,
                      "facts": not (states is None or threads is None or labels is None or not ms or not base)})
     return rows
 
@@ -1386,12 +1398,25 @@ def gate_strip(x, t=None, now=None):
                       {"k": "B", "v": bv[0], "tip": bv[1]}, {"k": "H", "v": hv[0], "tip": hv[1]}],
             "age": age, "old": age > STRIP_MAX_AGE}
 
+def _head_pushed_age(x):
+    """The seconds since the head commit was pushed, from GitHub's own `committedDate` on the row; None when the query
+    did not return it. A fact nobody has is unknown, so it never carries a stop (ADR-0018)."""
+    at = x.get("hc")
+    if not at: return None
+    try: return time.time() - dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+    except ValueError: return None
+
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
-    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review.
+    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-cannot-run, ci-waiting, reviewing, ready,
+    merged-soon, awaiting-review.
     Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771).
     A row the batched query did not fill in says so instead of falling through to a passing word (#1772), and a debt-only
-    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed."""
+    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed.
+    The CI chip reads the word GitHub reports (#149): a check that is `queued` says queued, never that a run is in
+    progress -- `queued` and `in_progress` are two different words, and only a runner that picked the check up makes one
+    of them a run. A head whose unfinished checks are all still queued past the timeout the ci job gives itself cannot
+    be answered at all, and the chip says that instead of implying progress."""
     n = x["n"]; sha9 = (x.get("h") or "")[:9]
     if (STATE / "auto" / "off").exists(): return gate_state(n, sha9)   # the loop is off: no card reports a verdict of its own
     if x.get("d"): return ["draft", "draft"]
@@ -1407,7 +1432,14 @@ def pr_state(x):
     rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
     if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
     if "BLOCKED" in line: return ["broke", "review blocked"]
-    if any(c in ("queued", "in_progress", "pending", "waiting", "requested") for c in ci): return ["running", "CI running"]
+    wait = [c for c in ci if c in CI_WAIT]   # the checks GitHub reports as unfinished
+    if wait:
+        if all(c in CI_QUEUED for c in wait):   # not one runner has picked a check up: a queue, not a run
+            age = _head_pushed_age(x)
+            if age is not None and age > CI_QUEUE_MAX:
+                return ["broke", "CI cannot run", f"the head {sha9} was pushed {_ago(age)} ago and every unfinished check on it is still queued, past the {int(CI_QUEUE_MAX / 60)} min the job gives itself: no run ever started, so this head answers nothing"]
+            return ["running", "CI queued", f"every unfinished check on {sha9} reads queued, not a run in progress: no runner has picked one up" + (f" (head pushed {_ago(age)} ago)" if age is not None else " (the query returned no head date)")]
+        return ["running", "CI running"]
     if not line and (STATE / "auto" / f"launched-{n}-{sha9}").exists(): return ["running", "reviewing"]
     if "APPROVE" in line: return gate_state(n, sha9)   # a green review line is not the loop's verdict: the gate file is
     return ["idle", "awaiting review"]
@@ -2109,10 +2141,10 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
 // the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
 // (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
-const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
+const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","Open Specs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own

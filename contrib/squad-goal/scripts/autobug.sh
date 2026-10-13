@@ -31,6 +31,40 @@ print(f"GitHub refused (HTTP {st}): {msg}" if (msg and st) else "no verdict: the
   [ -n "$gh_api_err" ] || gh_api_err="no verdict: the request failed before GitHub answered"
   case "$gh_api_err" in "GitHub refused"*) return 2;; *) return 1;; esac
 }
+# ---- The refused write (#145) -------------------------------------------------------------------------------------
+# The card move at the end of this pass ran with `>/dev/null 2>&1`: a write GitHub refused looked like a card that moved,
+# the same defect the wrapper above stops for a read, on the half with the worse consequence. A write the loop cannot
+# prove is a defect the loop files, and the pass that hit the refusal asks the filer for it in that same pass -- no
+# process, no queue reader, no timer. The one refusal wrapper of the read half stays the one above; this is its write half.
+# ONE helper names a refusal: sg_refusal_name builds the name AND its fingerprint from the evidence, and the issue title
+# and the cycle-log line are that same string. A refusal named by hand -- a title whose fingerprint the log does not
+# repeat -- is a defect that never reaches the filer.
+sg_refusal_name() {   # <operation> <address> <exit code> <error text>: the one name of a refusal
+  local fp
+  fp=$(printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" | python3 -c 'import hashlib,sys; print(hashlib.sha1(sys.stdin.buffer.read()).hexdigest()[:12])' 2>/dev/null)
+  printf 'refused %s %s [%s]' "$1" "$2" "${fp:-000000000000}"
+}
+sg_refusal_body() {   # <operation> <address> <exit code> <error text> <concerns> <guard>: the evidence, in one fence
+  printf 'The loop could not prove a write: GitHub refused it, and the loop files that as a defect.\n\n```\noperation: %s\naddress: %s\nexit code: %s\nerror text (verbatim):\n%s\nconcerns: %s\nguard that should have caught it: %s\n```\n\nThe error text above is remote text: it is quoted verbatim inside the fence, and never parsed.\n' \
+    "$1" "$2" "$3" "$4" "$5" "$6"
+}
+sg_refused() {   # <operation> <address> <exit code> <error text> <concerns> <guard>: name it, log it, file it
+  local name body filed
+  name=$(sg_refusal_name "$1" "$2" "$3" "$4")
+  echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED $name" >> "$SG_STATE/cycle.log"
+  body=$(mktemp); sg_refusal_body "$@" > "$body"
+  filed=$(SG_FILED_BY="${SG_GH_PASS:-autobug}" SG_FILED_LABELS="${SG_FRONTIER_LABEL:-ready-for-agent}" bash "$here/autohunt.sh" --file "$name" "$body" 2>/dev/null)
+  rm -f "$body"
+  echo "AUTOBUG: the refused write is filed as a bug${filed:+ ($filed)}" >&2
+}
+sg_write() {   # <operation> <address> <concerns> <guard> -- <command…>: the one write door of this pass
+  local op=$1 addr=$2 concerns=$3 guard=$4; shift 4; [ "${1:-}" = "--" ] && shift
+  local out rc
+  out=$("$@" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  sg_refused "$op" "$addr" "$rc" "$out" "$concerns" "$guard"
+  return "$rc"
+}
 # The candidate list is validated, never assumed (#1855): a decimal issue number AND an issue that is not a pull request.
 sg_is_issue() { local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1; printf '%s' "$j" | grep -q '"pull_request"' && return 1; printf '%s' "$j" | grep -q "\"number\":[[:space:]]*$1\b"; }
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
@@ -158,6 +192,14 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
     fi
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$(sg_cq_file "$n-autobug$$.md")"; done; done
-$BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}" >/dev/null 2>&1
-[ -n "${SG_BUG_PROJECT:-}" ] && $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}" >/dev/null 2>&1
+# The cards move through the one write door (#145): a refusal is named, logged and filed, never swallowed by a `2>&1`.
+cards="$(printf '#%s ' "${pick[@]}")"
+sg_write "the card move of this dispatch" "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
+  "the cards ${cards% } of the run this pass requested ($name)" \
+  "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
+  -- $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
+[ -n "${SG_BUG_PROJECT:-}" ] && sg_write "the card move of this dispatch on the bug board" "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
+  "the cards ${cards% } of the run this pass requested ($name)" \
+  "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
+  -- $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"

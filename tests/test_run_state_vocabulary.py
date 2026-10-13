@@ -18,6 +18,10 @@ PALETTE = {"ok": "#3ecf8e", "err": "#ff6b6b", "warn": "#f5b041", "run": "#2dd4bf
 
 @pytest.fixture(scope="module")
 def hub():
+    os.environ.setdefault("SG_REPO", "x/y")
+    os.environ.setdefault("SG_OWNER", "x")
+    os.environ.setdefault("SG_PROJECT", "4")
+    os.environ.setdefault("SG_CHECKOUT", tempfile.mkdtemp())
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
     spec = importlib.util.spec_from_file_location("hub_under_test", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
