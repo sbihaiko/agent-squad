@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
+import datetime as dt, glob, importlib.util, json, os, re, select, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 
 def _profile():
-    """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
-    seam, address.sh, for the profile in force (SG_PROFILE); never from the cwd. A profile the seam refuses gives
-    nothing. One profile is one repository: the retired SG_TOOLING_REPO is never read (#20)."""
+    """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment, else from env.sh (the profile matched from the cwd's
+    origin). One profile is one repository: the retired SG_TOOLING_REPO is never read (#20)."""
     keys = ["SG_REPO", "SG_OWNER", "SG_PROJECT", "SG_CHECKOUT"]
-    if all(os.environ.get(k) for k in keys): return {k: os.environ.get(k, "") for k in keys}
+    if all(os.environ.get(k) for k in keys[:4]): return {k: os.environ.get(k, "") for k in keys}
     here = pathlib.Path(__file__).resolve().parent
-    p = subprocess.run(["bash", str(here / "address.sh"), os.environ.get("SG_PROFILE", "")], capture_output=True, text=True, timeout=30)
-    ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
-    return {k: os.environ.get(k) or ctx.get(k, "") for k in keys}
+    out = subprocess.run(["bash", "-c", '. "$1/env.sh" >/dev/null 2>&1; printf "%s\\n" "$SG_REPO" "$SG_OWNER" "$SG_PROJECT" "$SG_CHECKOUT"', "_", str(here)], capture_output=True, text=True, timeout=30).stdout.split("\n")
+    return {k: os.environ.get(k) or (out[i] if i < len(out) else "") for i, k in enumerate(keys)}
 PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], PROF["SG_PROJECT"]
-if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
-CHECKOUT = PROF["SG_CHECKOUT"]
-if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
+if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE or run from a checkout a profile matches)")
 def repos_from(primary, *others):
     """The repositories the board reads, named in ONE place and never guessed: the profile's SG_REPO, plus each
     repository given after it, deduplicated in order (#1820). A profile gives none: one profile is one repository (#20)."""
@@ -41,7 +37,7 @@ def status_field():
     return o[0] if o else ""
 HOME = pathlib.Path.home(); STATE = pathlib.Path(os.environ.get("SG_STATE", HOME / ".cache/squad-goal"))
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
-HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(CHECKOUT) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
+HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
 (HUBDIR / ".gitignore").write_text("*\n")   # keeps the folder untracked even where runs/ is not ignored
 for _n in ("hub-history.json", "hub-prs.json", "hub-kills.log"):   # one-time move from the old per-user cache
     if (STATE / _n).exists() and not (HUBDIR / _n).exists(): (HUBDIR / _n).write_bytes((STATE / _n).read_bytes())
@@ -152,7 +148,7 @@ def state_of(r, age):
     return ver
 
 def project_dirs():
-    ds = {pathlib.Path(CHECKOUT) / "runs"}
+    ds = {pathlib.Path(PROF["SG_CHECKOUT"] or os.getcwd()) / "runs"}
     for x in os.environ.get("SG_PROJECTS", "").split(":"):
         if x: ds.add(pathlib.Path(x) / "runs")
     for l in sh("/bin/ps", "-axo", "command=").splitlines():
@@ -189,7 +185,7 @@ def handled_of(st, r, checkout=None):
     if r.get("merged"): return "handled"
     head = r.get("head")
     if not head: return st
-    root = pathlib.Path(checkout) if checkout else pathlib.Path(CHECKOUT)
+    root = pathlib.Path(checkout) if checkout else pathlib.Path(PROF.get("SG_CHECKOUT") or os.getcwd())
     p = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", str(head), "main"], capture_output=True)
     return "handled" if p.returncode == 0 else st
 def badge_of(st, r=None):
@@ -218,7 +214,7 @@ def loop_caps():
     try:
         if root not in sys.path: sys.path.insert(0, root)
         from squad import caps as C
-        c = C.ceiling(os.environ.get("SG_CHECKOUT") or CHECKOUT)
+        c = C.ceiling(os.environ.get("SG_CHECKOUT") or os.getcwd())
         return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting()}
     except Exception:
         return None
@@ -2203,7 +2199,7 @@ def last_coding_model(limit=15):
     router was pinned to a model whose provider had stopped serving (2026-10-11). A child's outcome event carries
     its model (`route.router.N`), so the last one is read from the records, newest run first.
     """
-    runs = pathlib.Path(CHECKOUT) / "runs"
+    runs = pathlib.Path(PROF["SG_CHECKOUT"] or os.getcwd()) / "runs"
     try: ds = sorted((d for d in runs.glob("run-*")), key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
     except OSError: return ""
     for d in ds:

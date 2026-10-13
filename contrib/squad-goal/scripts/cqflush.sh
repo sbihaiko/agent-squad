@@ -1,11 +1,11 @@
 #!/bin/bash
 # usage: cqflush.sh [--once]   Loop: post <SG_STATE_BASE>/<profile>/cq/<issue>-<tag>.md as issue comments, retrying (the API answers 500 at times).
 # A comment's address is where it sits: the profile whose state directory holds it, and the issue number its name starts
-# with. The repository comes from that address through the seam (address.sh), never from the cwd the flusher started in, so one
+# with. The repository comes from that address through repoctx.sh, never from the cwd the flusher started in, so one
 # flusher serves every repository (#20). A queue under a state directory no profile owns is set aside as .dead, unposted.
 # Only files idle for 5 s are read (a writer may still be filling one). A file that fails 5 times
 # moves to <name>.dead and is reported once, so a permanently rejected comment cannot retry forever. --once: one pass, no sleep.
-here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/repoctx.sh"
 base=${SG_STATE_BASE:-$HOME/.cache/squad-goal}
 while :; do left=0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue

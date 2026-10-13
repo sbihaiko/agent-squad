@@ -1,15 +1,13 @@
 # Shared settings for squad-goal scripts. Override any of them in the environment.
 # A profile (scripts/profiles/<name>.sh) supplies the per-repo defaults: repo, board, base branch,
-# merge method, e2e command, review and coding rules. Pick one with SG_PROFILE, else the seam (address.sh) resolves the
-# checkout the script was started in, as it resolves any checkout. Add a repo by copying a profile.
-# A profile the seam does not know stops here, naming it, so no script reaches GitHub with no repository resolved.
+# merge method, e2e command, review and coding rules. Pick one with SG_PROFILE, else it is matched
+# from the origin remote of the current checkout. Add a repo by copying a profile.
 # One profile is one repository. SG_TOOLING_REPO, the second repository a profile could name, is retired (#20): a profile
 # that sets it stops here, naming it; give that repository its own profile instead.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-. "$here/address.sh"   # the one resolution of a repository: profiles dir, checkout and origin match, state directory
-[ -n "${SG_PROFILE:-}" ] || SG_PROFILE=$(repoctx "$PWD" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
+. "$here/repoctx.sh"   # the one resolution of a repository: profiles dir, origin match, state directory (#20)
+[ -n "${SG_PROFILE:-}" ] || SG_PROFILE=$(sg_profile_from_origin .) || SG_PROFILE=""
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
-repoctx "$SG_PROFILE" >/dev/null || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
 [ -z "${SG_TOOLING_REPO:-}" ] || { echo "env.sh: SG_TOOLING_REPO is set (by profile $SG_PROFILE or the environment) and is retired: unset it and give $SG_TOOLING_REPO its own profile" >&2; exit 2; }
 if [ -z "${SG_SQUAD:-}" ]; then
