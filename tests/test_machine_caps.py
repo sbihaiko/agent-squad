@@ -6,6 +6,7 @@ expires fails by name. A lease whose holder is dead is reclaimed when the slots 
 import json
 import os
 import subprocess
+import types
 
 import anyio
 import pytest
@@ -86,6 +87,35 @@ def test_no_twenty_first_child_starts_while_twenty_are_live(tmp_path):
     assert c.occupancy()["children"] == 20
 
 
+def counting_ps(monkeypatch):
+    """Every process `squad/caps.py` itself starts, as the argv it was given. This module's process count is the cost a
+    poll pays, so it is what a fork storm is measured in."""
+    calls = []
+
+    def run(argv, *a, **k):
+        calls.append(argv)
+        return subprocess.run(argv, *a, **k)
+
+    monkeypatch.setattr(caps, "subprocess", types.SimpleNamespace(run=run))
+    return calls
+
+
+def test_counting_the_live_leases_starts_one_process_whatever_the_number_of_leases(tmp_path, monkeypatch):
+    """The count runs on every poll of every wait, and a wait polls until a slot frees. A `ps` per lease turns that loop
+    into a fork storm: a worker spins in a subprocess loop and holds what the rest of the suite needs, so on a two-core
+    runner the wait never converges and the run never reaches a verdict (#130; the runner in #158). One process per
+    count, whatever the number of leases."""
+    c = caps.Ceiling({"runs": 10, "children": 20}, tmp_path / "leases")
+    for i in range(20):
+        c.try_take("children", f"other-repo:{i}")     # 20 live leases, each of them a `ps` a count would start
+    calls = counting_ps(monkeypatch)
+    assert c.occupancy()["children"] == 20
+    assert len(calls) == 1, f"one count over 20 live leases started {len(calls)} processes"
+    calls.clear()
+    assert c.try_take("children", "late") is None    # the call a waiting poll makes while the ceiling is full
+    assert len(calls) == 1, f"one poll over 20 live leases started {len(calls)} processes"
+
+
 def test_a_lease_whose_holder_is_dead_is_reclaimed_and_the_ceiling_recovers(tmp_path):
     c = caps.Ceiling({"runs": 1, "children": 20}, tmp_path / "leases")
     assert c.try_take("runs", "killed-run", pid=dead_pid())
@@ -125,16 +155,24 @@ def events(tmp_path, kind):
     return [e for e in read(tmp_path / "run" / "record.jsonl") if e["event"] == kind]
 
 
+def free_when_the_ceiling_reports_the_wait(c, lease, seconds=30.0):
+    """The other side of the case: release `lease` once the wait is registered. Bounded, because a case that waits on a
+    loop that never reports must fail by name rather than spin: that is how one worker parked a whole run (#130, #158)."""
+    async def free_one():
+        deadline = anyio.current_time() + seconds
+        while not c.waiting():
+            assert anyio.current_time() < deadline, f"the ceiling never reported a wait within {seconds:g} s"
+            await anyio.sleep(0.01)
+        c.release(lease)
+    return free_one
+
+
 @pytest.mark.anyio
 async def test_a_child_over_the_ceiling_waits_and_starts_when_a_slot_frees(tmp_path):
     c = caps.Ceiling({"runs": 10, "children": 20}, tmp_path / "leases", poll=0.01)
     others = [c.try_take("children", f"other-repo:{i}") for i in range(20)]
     eng = make(tmp_path, c, {"router": routed(req()), "route.router.1": CHILD})
-
-    async def free_one():
-        while not c.waiting():
-            await anyio.sleep(0.01)
-        c.release(others[0])
+    free_one = free_when_the_ceiling_reports_the_wait(c, others[0])
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(free_one)
@@ -161,11 +199,7 @@ async def test_a_run_over_the_ceiling_waits_and_records_the_ceiling(tmp_path):
     c = caps.Ceiling({"runs": 10, "children": 20}, tmp_path / "leases", poll=0.01)
     others = [c.try_take("runs", f"other-{i}") for i in range(10)]
     eng = make(tmp_path, c, {"router": routed(req()), "route.router.1": CHILD})
-
-    async def free_one():
-        while not c.waiting():
-            await anyio.sleep(0.01)
-        c.release(others[-1])
+    free_one = free_when_the_ceiling_reports_the_wait(c, others[-1])
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(free_one)

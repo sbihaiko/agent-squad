@@ -6,8 +6,10 @@ This pair is not the per-run pair (`run.max_parallel`, dispatch `max_children`):
 
 A slot is a lease file in the leases folder (`SQUAD_CAPS_DIR`, else ~/.cache/agent-squad/caps), one subfolder per kind.
 A lease names the pid of its holder. A lease whose pid is dead is reclaimed each time the slots are counted, the same reasoning
-the janitor applies to a stranded run: no live process holds it. Filling the ceiling queues: `take` waits for a slot until its
-bound, writes a waiting marker the panel names, then raises CeilingWaitExpired, which names the ceiling that was full.
+the janitor applies to a stranded run: no live process holds it. The holders of one count are asked about in one call, never one
+process per lease: the count runs on every poll of every wait, and a `ps` per lease is the fork storm that parks a small runner.
+Filling the ceiling queues: `take` waits for a slot until its bound, writes a waiting marker the panel names, then raises
+CeilingWaitExpired, which names the ceiling that was full.
 
 Guard: `tests/test_machine_caps.py`.
 """
@@ -67,16 +69,36 @@ def folder():
     return Path(os.environ.get("SQUAD_CAPS_DIR") or Path.home() / ".cache" / "agent-squad" / "caps")
 
 
-def process_started_at(pid):
-    """The wall time at which `pid` started, or None when the system cannot say."""
+def started_at(pids):
+    """{pid: the wall time it started} for every pid the system answers for, in ONE call for all of them.
+
+    The slots are counted on every poll of every wait, and a wait polls until a slot frees, so one `ps` per lease is a fork
+    storm: a worker spins in a subprocess loop and holds what the rest of the suite needs, and on a two-core runner the
+    wait never converges and the run never reaches a verdict (#130; the runner in #158). One call per count, whatever the
+    number of leases; the answer is the same one.
+    """
+    want = sorted({int(p) for p in pids if isinstance(p, int) and not isinstance(p, bool) and p > 0})
+    if not want:
+        return {}
     try:
-        out = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, check=False).stdout.strip()
-        return datetime.datetime.strptime(out, "%a %b %d %H:%M:%S %Y").timestamp()
-    except (OSError, ValueError):
-        return None
+        out = subprocess.run(["/bin/ps", "-o", "pid=,lstart=", "-p", ",".join(str(p) for p in want)],
+                             capture_output=True, text=True, check=False).stdout
+    except OSError:
+        return {}
+    found = {}
+    for line in out.splitlines():
+        pid, _, lstart = line.strip().partition(" ")
+        try:
+            found[int(pid)] = datetime.datetime.strptime(lstart.strip(), "%a %b %d %H:%M:%S %Y").timestamp()
+        except ValueError:
+            continue
+    return found
 
 
-def alive(pid, since=None):
+def alive(pid, since=None, started=None):
+    """True while the process `pid` lives; `since` adds the pid-reuse rule: a process that started after the lease was
+    written is a different process than the one it names, so the lease is dead. `started` is the answer to `started_at`
+    when the caller already holds it, one call for many pids; None asks the system for this one pid."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -85,8 +107,10 @@ def alive(pid, since=None):
         return True
     if not isinstance(since, (int, float)):
         return True
-    started = process_started_at(pid)
-    return started is None or started <= since
+    if started is None:
+        started = started_at([pid])
+    began = started.get(pid)
+    return began is None or began <= since
 
 
 def _name(holder):
@@ -108,14 +132,21 @@ class Ceiling:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
     def _live(self, sub):
-        """The leases of one subfolder whose holder lives. A lease of a dead holder is removed here."""
-        out = []
+        """The leases of one subfolder whose holder lives. A lease of a dead holder is removed here.
+
+        The leases are read first and their holders asked about in one call, so a count costs one process however many
+        leases stand (`started_at`): the per-lease `ps` was the fork storm that parked the runner.
+        """
+        leases = []
         for p in sorted((self.folder / sub).glob("*.json")):
             try:
-                lease = json.loads(p.read_text())
+                leases.append((p, json.loads(p.read_text())))
             except (OSError, ValueError):
                 continue
-            if alive(lease.get("pid", -1), lease.get("since")):
+        started = started_at([lease.get("pid", -1) for _, lease in leases])
+        out = []
+        for p, lease in leases:
+            if alive(lease.get("pid", -1), lease.get("since"), started):
                 out.append(lease)
             else:
                 p.unlink(missing_ok=True)
