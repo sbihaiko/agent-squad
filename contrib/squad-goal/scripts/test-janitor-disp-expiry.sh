@@ -83,6 +83,10 @@ o=$(run)
 /usr/bin/grep -q 'stale disp-906' "$T/st/cycle.log" 2>/dev/null && ok "E: the drop is announced with the request that failed" || ko "E announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"
 [ -e "$T/st/auto/disp-908" ] && ok "E: an open PR naming the issue keeps its marker" || ko "E disp-908 dropped although a PR names it"
+# A failed dispatch whose issue a PR names is past dispatch: the pass keeps the marker AND says so, naming the issue, so the
+# operator can tell that decision from a dispatch that was released, and it writes no card of its own for the issue.
+/usr/bin/grep -q 'DISPATCH-FAILED #908:.*a PR names the issue' "$T/st/cycle.log" 2>/dev/null && ok "E: the pass names the issue whose dispatch stands" || ko "E #908 kept without a word: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 908$' "$T/board.calls" 2>/dev/null)" = 0 ] && ok "E: an open-PR issue's card is left alone" || ko "E #908 card written: $(cat "$T/board.calls" 2>/dev/null)"
 run >/dev/null   # the announcement is once per run, not once per pass
 [ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "R: a board that follows the writes is written once; the card does not flap" || ko "#901 flapped across passes: $(cat "$T/board.calls" 2>/dev/null)"
