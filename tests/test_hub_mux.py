@@ -84,6 +84,31 @@ def test_a_repository_page_calls_its_own_api(fleet):
     assert code == 200 and "v" in json.loads(ver)
 
 
+def test_a_test_card_link_in_the_json_carries_its_repository():
+    """The link a test card opens is `/test/<id>` in the JSON of /api/runs: without the slug the mux read `test` as a
+    repository and showed its index page where the log belonged."""
+    spec = importlib.util.spec_from_file_location("hubmux_json_under_test", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps([{"id": "t1", "url": "/test/t1"}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+    stub = type("M", (), {"H": H})
+    srv = mux.server(0, {"alpha": {"mod": stub, "repo": "x/alpha"}})
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        _, body = _get(f"http://127.0.0.1:{srv.server_address[1]}/alpha/api/runs")
+    finally:
+        srv.shutdown()
+    assert json.loads(body)[0]["url"] == "/alpha/test/t1", body
+
+
 def test_an_unknown_path_answers_404_with_the_list(fleet):
     code, body = _get(fleet["url"] + "/gamma")
     assert code == 404
