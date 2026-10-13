@@ -130,5 +130,10 @@ out=$(guard bash "$d/cqflush.sh" --once); [ ! -s "$T/ghcalls" ] && [ -e "$B/nope
 for r in env.sh hubctl.sh cqflush.sh hub.py hubmux.py; do
   /usr/bin/grep -q 'address\.sh' "$d/$r" && ! /usr/bin/grep -q 'repoctx\.sh' "$d/$r" && ok "readers: $r reads the seam" || ko "readers: $r does not read address.sh alone"; done
 ! /usr/bin/grep -q 'getcwd' "$d/hub.py" && ok "readers: hub.py never takes its checkout from its own working directory" || ko "readers: hub.py falls back to os.getcwd()"
+# --- The scripts run on the loop's macOS and on the CI's Linux: a file's mtime is read portably, BSD stat with a GNU fallback.
+bad=""; for s in "$d"/*.sh; do
+  /usr/bin/grep -q 'stat -f' "$s" && ! /usr/bin/grep -q 'stat -c' "$s" && bad="$bad $(basename "$s")"; done
+[ -z "$bad" ] && ok "portable: every script that reads mtime names the GNU stat form beside the BSD one" \
+  || ko "portable: these scripts read mtime with BSD stat alone, which GNU stat does not answer:$bad"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

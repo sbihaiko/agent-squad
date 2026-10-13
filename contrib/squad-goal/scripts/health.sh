@@ -13,9 +13,9 @@ causes=(); detail=(); briefs=()
 add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); }
 alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
 alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every 30 s) is not running"
-c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(stat -f %m "$c"))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(stat -f %m "$c")) / 60 )) min while watchd is up"
+c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(stat -f %m "$c" 2>/dev/null || stat -c %Y "$c" 2>/dev/null || echo 0))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(stat -f %m "$c" 2>/dev/null || stat -c %Y "$c" 2>/dev/null || echo 0)) / 60 )) min while watchd is up"
 nv=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "$r" ] && f="$SG_CHECKOUT/runs/$r"
-  [ -e "$f/record.jsonl" ] || { [ -e "$f/request.txt" ] && [ $((now - $(stat -f %m "$f/request.txt"))) -gt 300 ] && nv=$((nv+1)); }; done
+  [ -e "$f/record.jsonl" ] || { [ -e "$f/request.txt" ] && [ $((now - $(stat -f %m "$f/request.txt" 2>/dev/null || stat -c %Y "$f/request.txt" 2>/dev/null || echo 0))) -gt 300 ] && nv=$((nv+1)); }; done
 [ $nv -gt 0 ] && add never-started-runs "$nv run(s) with no record.jsonl after 5 min (the squad refused to start)"
 no=0; for f in "$A"/runof-*; do [ -e "$f" ] || continue; k=${f##*/runof-}; [ -e "$A/queued-$k" ] || continue; d="$SG_CHECKOUT/runs/$(cat "$f")"
   [ -e "$d/record.jsonl" ] || [ ! -d "$d" ] || { [ $((now - $(stat -f %m "$d/request.txt" 2>/dev/null || echo $now))) -gt 600 ] && no=$((no+1)); }; done
@@ -69,12 +69,12 @@ for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "
   # no record yet: inside its 5-min launch window (request.txt mtime) the launcher is still bringing the child up and the card for
   # it is moved to In Progress by autofrontier right after the launch. Same grace never-started-runs grants above; such a run holds
   # a card slot we cannot name yet, so it is counted as a slot and excuses one unmatched card below.
-  [ -e "$f/request.txt" ] && [ $((now - $(stat -f %m "$f/request.txt"))) -le 300 ] && nyoung=$((nyoung+1))
+  [ -e "$f/request.txt" ] && [ $((now - $(stat -f %m "$f/request.txt" 2>/dev/null || stat -c %Y "$f/request.txt" 2>/dev/null || echo 0))) -le 300 ] && nyoung=$((nyoung+1))
 done
 slots=$((nlive+nyoung)); nboard=-1; ip=""
 if [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ]; then
   sf="$A/status-field-$SG_OWNER-$SG_PROJECT"; fid=""
-  [ -e "$sf" ] && [ $((now - $(stat -f %m "$sf"))) -lt 86400 ] && fid=$(cat "$sf")
+  [ -e "$sf" ] && [ $((now - $(stat -f %m "$sf" 2>/dev/null || stat -c %Y "$sf" 2>/dev/null || echo 0))) -lt 86400 ] && fid=$(cat "$sf")
   if [ -z "$fid" ]; then   # the Status field id, the same lookup board.py caches: the items read takes field ids, not names
     fid=$(gh api --paginate "users/$SG_OWNER/projectsV2/$SG_PROJECT/fields?per_page=100" --jq '[.[]|select(.name=="Status")][0].id' 2>/dev/null)
     [ -n "$fid" ] && [ -z "${HEALTH_DRY:-}" ] && printf '%s\n' "$fid" > "$sf"

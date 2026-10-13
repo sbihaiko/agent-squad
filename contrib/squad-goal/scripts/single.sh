@@ -6,7 +6,7 @@ st=${SG_STATE:-$HOME/.cache/squad-goal}; n=$1; shift; L="$st/locks/single-$n"; m
 if ! mkdir "$L" 2>/dev/null; then
   h=$(cat "$L/pid" 2>/dev/null)
   if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # stale: take over
-  elif [ -z "$h" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || echo 0) )) -gt 10 ]; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
+  elif [ -z "$h" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || stat -c %Y "$L" 2>/dev/null || echo 0) )) -gt 10 ]; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
   else exit 0; fi
 fi
 echo $$ > "$L/pid"; trap 'rm -rf "$L"' EXIT INT TERM

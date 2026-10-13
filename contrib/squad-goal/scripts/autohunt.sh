@@ -65,7 +65,7 @@ hunt_going() {
   n=$(cat "$A/hunt-live" 2>/dev/null)
   [ "$n" = dry ] && return 0
   live_run && return 0
-  age=$(( now - $(stat -f %m "$A/hunt-live" 2>/dev/null || echo 0) ))
+  age=$(( now - $(stat -f %m "$A/hunt-live" 2>/dev/null || stat -c %Y "$A/hunt-live" 2>/dev/null || echo 0) ))
   [ "$age" -lt 900 ]
 }
 

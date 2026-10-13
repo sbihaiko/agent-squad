@@ -62,7 +62,7 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
       f="$r/record.jsonl"; [ -f "$f" ] || continue
       grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue   # a run that has ended owns nothing
-      [ $(( now - $(stat -f %m "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+      [ $(( now - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
       grep -qE "(^|[^0-9])gui/$n([^0-9]|$)|wt-(as|fr)-$n([^0-9]|$)" "$f" "$r/request.txt" 2>/dev/null && { live=1; break; }
     done; fi
     [ $live = 0 ] || continue

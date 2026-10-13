@@ -36,7 +36,7 @@ runs=$( { cat "$SG_STATE/active-runs.txt" 2>/dev/null; ls -t "$SG_CHECKOUT/runs"
 livebrs=" $(for r in $runs; do
   d=$r; [ "${r#/}" = "$r" ] && d=$SG_CHECKOUT/runs/$r   # no `case` here: bash 3.2 cannot parse one inside $( )
   f="$d/record.jsonl"; [ -f "$f" ] || continue
-  grep -qx "$r" "$SG_STATE/active-runs.txt" 2>/dev/null || [ $(( now - $(stat -f %m "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+  grep -qx "$r" "$SG_STATE/active-runs.txt" 2>/dev/null || [ $(( now - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
   grep -oE '(fix|gui)/[0-9]+[A-Za-z0-9._-]*' "$d/request.txt" 2>/dev/null | sort -u | tr '\n' ' '
 done) "
 # What holds a branch: a live run that names it, or a worktree that has it checked out with uncommitted tracked changes.

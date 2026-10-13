@@ -150,7 +150,7 @@ slice_guard() {
     h=$(shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1)
     case "$liveh" in *" $h "*) return 0;; esac          # a run without a verdict carries it: still in flight
     case "$deadh" in *" $h "*) return 1;; esac          # its run recorded a verdict: history, however young the file is
-    [ $(( now - $(/usr/bin/stat -f %m "$1" 2>/dev/null || echo 0) )) -lt "$ttl" ]   # no run carries it: the launch window
+    [ $(( now - $(/usr/bin/stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0) )) -lt "$ttl" ]   # no run carries it: the launch window
   }
   for q in "$HOME/.cache/squad-goal/req"/*.txt; do
     [ -e "$q" ] || continue; [ "$q" = "$out" ] && continue

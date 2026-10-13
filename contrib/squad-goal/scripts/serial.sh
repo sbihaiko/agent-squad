@@ -15,7 +15,7 @@ case "$n" in gui-suite)
 case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mkdir -p "$st/locks"; w=${SERIAL_WAIT_SECONDS:-1800}; t0=$(date +%s); said=0
 until mkdir "$L" 2>/dev/null; do
   h=$(cat "$L/pid" 2>/dev/null); if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; continue; fi
-  [ -z "$h" ] && [ -d "$L" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || echo 0) )) -gt 10 ] && { rm -rf "$L"; continue; }   # a lock with no pid after 10 s: its owner died before writing it
+  [ -z "$h" ] && [ -d "$L" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || stat -c %Y "$L" 2>/dev/null || echo 0) )) -gt 10 ] && { rm -rf "$L"; continue; }   # a lock with no pid after 10 s: its owner died before writing it
   # One line, the first time this process has to wait, naming what it waits for: a gate that waits for another gate has to say so
   # once -- silence reads as a hang. `said` keeps it to one line however long the wait runs.
   [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; }

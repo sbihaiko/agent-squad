@@ -12,7 +12,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"
 base=${SG_STATE_BASE:-$HOME/.cache/squad-goal}
 while :; do left=0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue
-    [ $(( $(date +%s) - $(stat -f %m "$f") )) -lt 5 ] && { left=1; continue; }
+    [ $(( $(date +%s) - $(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt 5 ] && { left=1; continue; }
     b=$(basename "$f"); slug=$(basename "$(dirname "$(dirname "$f")")")
     case "$b" in
       *__*"#"*) r=${b#*__}; want="${b%%__*}/${r%%#*}"; n=${r#*#}; n=${n%%-*}

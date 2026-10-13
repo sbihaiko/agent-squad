@@ -14,7 +14,7 @@ mkdir -p "$(dirname "$wlock")"
 if ! mkdir "$wlock" 2>/dev/null; then
   wh=$(cat "$wlock/pid" 2>/dev/null)
   if [ -n "$wh" ] && ! kill -0 "$wh" 2>/dev/null; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # stale: take over
-  elif [ -z "$wh" ] && [ $(( $(date +%s) - $(stat -f %m "$wlock" 2>/dev/null || echo 0) )) -gt 10 ]; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
+  elif [ -z "$wh" ] && [ $(( $(date +%s) - $(stat -f %m "$wlock" 2>/dev/null || stat -c %Y "$wlock" 2>/dev/null || echo 0) )) -gt 10 ]; then rm -rf "$wlock"; mkdir "$wlock" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
   else echo "watch.sh already running pid=$wh for $wme"; exit 0; fi
 fi
 echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit 0' INT TERM   # a TERM'd loop stops, it does not keep polling without its lock

@@ -24,7 +24,7 @@ case $rc in 0) diverged="";; 1) diverged=$(printf '%s\n' "$out" | sed 1d);; *) e
 L="$A/forkclose.lock"   # the landing pass's lock: held by a live pid, a pass is mid-flight; held by the step, no pass can start
 if ! mkdir "$L" 2>/dev/null; then
   p=$(cat "$L/pid" 2>/dev/null)
-  if { [ -n "$p" ] && kill -0 "$p" 2>/dev/null; } || { [ -z "$p" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || echo 0) )) -le 10 ]; }; then
+  if { [ -n "$p" ] && kill -0 "$p" 2>/dev/null; } || { [ -z "$p" ] && [ $(( $(date +%s) - $(stat -f %m "$L" 2>/dev/null || stat -c %Y "$L" 2>/dev/null || echo 0) )) -le 10 ]; }; then
     once midflight "a landing pass is mid-flight (pid ${p:-unknown}); nothing is published until it ends"; exit 0; fi
   rm -rf "$L"; mkdir "$L" 2>/dev/null || { once midflight "a landing pass started; nothing is published until it ends"; exit 0; }
 fi
