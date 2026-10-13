@@ -39,6 +39,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0137](0137-a-gui-keeps-its-rules-out-of-the-view.md) | A GUI keeps its rules out of the view |
 | [0138](0138-a-profile-works-a-list-of-repositories.md) | A profile works a list of repositories, and one seam resolves every address |
 | [0139](0139-a-test-without-its-fixture-repo-is-deselected.md) | A test whose fixture repository the runner does not own is deselected there, by name, and never skipped |
+| [0140](0140-the-live-copy-follows-in-the-cycle.md) | The live copy follows the repository copy in the cycle, and the difference is read |
 
 ## Adding an ADR
 

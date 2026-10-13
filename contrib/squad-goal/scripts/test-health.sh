@@ -105,7 +105,7 @@ kill $sp $hp $w3 2>/dev/null; wait $sp $hp $w3 2>/dev/null; rm -f "$T/st/watchd.
 rm -f "$T/st/auto/health-loops-duplicated"
 # a detached step, `( cmd & )`, is a fork whose parent exited: parent pid 1, the loop's argv, the loop's process group (watch.sh runs forkclose so)
 printf '#!/bin/bash\n{ x=$(sleep 20; true); } &\n( { sleep 20; true; } & )\ntrue | { sleep 20; true; } | cat > /dev/null\nwait\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & wf=$!; sleep 1
-/bin/ps -axo ppid=,command= | /usr/bin/grep -v grep | /usr/bin/grep -q "^ *1 bash $T/s/watch\.sh\$" && ok "the fake loop leaves a detached fork (parent pid 1)" || ko "no orphaned fork in the fake loop"
+/bin/ps -axwwo ppid=,command= | /usr/bin/grep -v grep | /usr/bin/grep -q "^ *1 bash $T/s/watch\.sh\$" && ok "the fake loop leaves a detached fork (parent pid 1)" || ko "no orphaned fork in the fake loop"
 nf=$(/usr/bin/pgrep -f "$T/s/watch\.sh$" | wc -l | tr -d ' ')
 [ "$nf" -gt 1 ] && ok "the fake loop is forking ($nf pgrep matches for one loop)" || ko "the fake loop does not fork: $nf match(es), the next check proves nothing"
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one forking loop alerted: $o" || ok "one watch.sh that forks is not a duplication"
