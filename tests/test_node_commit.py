@@ -221,6 +221,54 @@ async def test_a_dry_run_writes_nothing(tmp_path):
     assert git.dirty(wt) == ["?? new.txt"] and git.head(wt) == head and eng.record.events == []
 
 
+# #93: a loop child run starts in its own issue worktree, so the engine commits its target. The loop's issue worktree is the
+# linked worktree under the checkout's `worktrees/child/`, on the branch the land reads, and the run folder lives inside it.
+# The child declares no workspace, so it works in the target. A run started the old way, on the owner checkout, is refused
+# and the branch the land reads stays at base: that tip is what the close pass reads.
+
+LOOP_CHILD = {**TARGET_NODE, "instructions": "Work it.\n\nWork:\nClose #93 for good"}
+
+
+def loop_child_run(tmp_path, *, in_issue_worktree):
+    """The loop's shape: the issue worktree inside the checkout, the run folder beside the child, and no declared workspace."""
+    checkout = make_repo(tmp_path / "checkout")
+    wt = checkout / "worktrees" / "child" / "gui-93"
+    wt.parent.mkdir(parents=True)
+    sh(checkout, "git", "worktree", "add", "-q", "-b", "gui/93", str(wt))
+    target = wt if in_issue_worktree else checkout
+    run_dir = target / "runs" / "run-1"
+    adapter = ScriptedAdapter({"a": {**PASS, "effect": write_file("new.txt", "hi\n")}})
+    return checkout, wt, run_dir, Engine(from_doc(flow([LOOP_CHILD], ["a"])), adapter, run_dir, target=target, run_id="run-1")
+
+
+async def test_a_loop_child_commits_in_its_issue_worktree_and_the_land_branch_is_the_final_state(tmp_path):
+    checkout, wt, run_dir, eng = loop_child_run(tmp_path, in_issue_worktree=True)
+    base = git.head(checkout)
+    v = await eng.run()
+    a = outs(run_dir, "a")[0]
+    assert v.verdict == "completed" and a["outcome"] == "pass"
+    assert git.dirty(wt, exclude="runs/run-1") == []
+    assert git.head(wt) != base and sh(checkout, "git", "rev-parse", "gui/93") == git.head(wt)
+    assert sh(checkout, "git", "rev-parse", "main") == base          # the owner's checkout is untouched
+    assert sh(wt, "git", "ls-files", "runs") == ""                    # the run's own folder is never part of the commit
+    ev = events(run_dir, "workspace_commit")
+    assert [(e["node"], e["status"], e["head"], e["workspace"], e["path"]) for e in ev] == [("a", "committed", git.head(wt), "target", str(wt.resolve()))]
+    assert sh(wt, "git", "log", "-1", "--format=%an") == "agent-squad"
+    assert sh(wt, "git", "log", "-1", "--format=%B").splitlines()[-1] == "Refs #93"
+
+
+async def test_a_loop_child_run_started_on_the_owner_checkout_is_refused_and_the_land_branch_stays_at_base(tmp_path):
+    checkout, wt, run_dir, eng = loop_child_run(tmp_path, in_issue_worktree=False)
+    base = git.head(checkout)
+    v = await eng.run()
+    a = outs(run_dir, "a")[0]
+    assert v.verdict == "completed" and a["outcome"] == "pass"       # a refusal never fails the node
+    ev = events(run_dir, "workspace_commit")
+    assert [(e["status"], e["reason"], e["workspace"], e["path"]) for e in ev] == [("refused", "owner_checkout", "target", str(checkout.resolve()))]
+    assert git.head(checkout) == base and "?? new.txt" in git.dirty(checkout, exclude="runs/run-1")
+    assert sh(checkout, "git", "rev-parse", "gui/93") == base        # the tip the land reads is still at base: a person must commit
+
+
 def test_the_issue_a_run_names_is_read_from_the_request():
     assert node_commit.issue_of({"nodes": [worker()]}) == 73
     assert node_commit.issue_of({"nodes": [agent("a", instructions="Fix #12 now\n\nTask:\nno number")]}) is None

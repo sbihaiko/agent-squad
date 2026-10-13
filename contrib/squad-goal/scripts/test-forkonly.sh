@@ -85,4 +85,11 @@ ls "$T/rs/st/cq"/*#1-forkrescue* >/dev/null 2>&1 && ok "rescue: note queued on t
 /usr/bin/git -C "$F" rev-parse -q --verify gui/3 >/dev/null && ko "rescue: touched a non-fork-only issue (#3)" || ok "rescue: non-fork-only issue left alone"
 # 9: forkclose.sh's conflict and red-suite builders mark their bodies fork-only, so mkreq.sh gives them the fork checklist
 [ "$($G -c "^      echo \"FORK-ONLY: all\"\|echo \"FORK-ONLY: all\"" "$d/forkclose.sh")" -ge 2 ] && ok "forkclose builders carry the FORK-ONLY marker" || ko "forkclose builders lack the FORK-ONLY marker"
+# 10: the fork preamble names the worktree the run commits (#93): where the fork checkout IS the checkout, that is the issue
+# worktree under it, never a ~/wt-as-<N> outside the run area; a fork checkout elsewhere keeps the old line.
+p=$(SG_CHECKOUT=$d SG_FORK_DIR=$d SG_FORK_BASE=main SG_FORK_BRANCH='gui/%n' SG_REPO=o/r bash -c ". '$S/forkonly.sh'; sg_fork_preamble")
+case "$p" in *"$d/worktrees/child/gui-<N>"*) ok "in-place fork preamble names the issue worktree";; *) ko "in-place fork preamble: $p";; esac
+case "$p" in *"wt-as-"*) ko "in-place fork preamble still sends the child outside the run area";; *) ok "in-place fork preamble makes no second worktree";; esac
+p=$(SG_CHECKOUT=$d SG_FORK_DIR=$T SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_REPO=o/r bash -c ". '$S/forkonly.sh'; sg_fork_preamble")
+case "$p" in *"worktree add ~/wt-as-<N>"*) ok "a fork checkout elsewhere keeps the old line";; *) ko "fork elsewhere preamble: $p";; esac
 rm -rf "$T"; exit $fail

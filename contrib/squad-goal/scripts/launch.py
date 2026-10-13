@@ -105,11 +105,64 @@ if root and gp.exists():
                          capture_output=True, text=True)
     if chk.returncode: sys.exit(f"invalid graph {gp}:\n{chk.stdout}{chk.stderr}")
 
+# ADR-0106 rule 4: the engine commits a passing node's target only when the run owns it, a linked worktree that holds the
+# run folder. A loop child works on the branch the land reads, so the run this starts for it has that issue worktree as its
+# target and the run folder lives inside it (#93). Left on the owner checkout, the target is refused as `owner_checkout` and
+# the child's work sits in a worktree outside the run area, so a person had to commit it.
+FALLBACK = "$SG_CHECKOUT"   # the target a run keeps when no issue worktree is resolved, named in the notes without its path
+
+def _issue_named(txt):
+    """The issues a request names: the dispatch header's list first (`GitHub issue(s) N, M`), the plain `issue #N` mention as a fallback."""
+    for pat in (r"GitHub issue\(?s?\)? ?#? ?([0-9][0-9, ]*)", r"\bissue #([0-9]+)"):
+        m = re.search(pat, txt)
+        if m: return [int(x) for x in re.split(r"[^0-9]+", m.group(1)) if x]
+    return []
+
+def _issue_child_request(txt):
+    """True when the deliverable is a local commit on the branch the land reads: the dispatch builders mark those runs with a
+    `CHILD - GitHub issue` block (`autofrontier.sh`, `autobug.sh`) or a `FORK-ONLY` line (`forkclose.sh`'s fix run). A fix run
+    on a PR branch names an issue too, and its child commits on the PR branch: that run keeps today's target."""
+    return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
+
+def _issue_worktree(issue):
+    """The linked worktree the child works in, made when it is missing, else None: the checkout's own fork route only.
+
+    A profile whose fork checkout is another checkout keeps today's target: the child commits in the fork, which is no
+    worktree of this run. A path that is no worktree of its own, or that sits on another branch, is left alone with the
+    reason printed: the loop must not reset or replace work an earlier child left behind (#65)."""
+    co, fork = os.environ.get("SG_CHECKOUT"), os.environ.get("SG_FORK_DIR")
+    if not co or not fork or pathlib.Path(co).resolve() != pathlib.Path(fork).resolve(): return None
+    br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(issue))
+    wt = pathlib.Path(co).resolve() / "worktrees" / "child" / br.replace("/", "-")
+    if wt.is_dir():
+        cur = subprocess.run(["git", "-C", str(wt), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True)
+        if cur.returncode or cur.stdout.strip() != br:
+            print(f"note: {wt} is on {cur.stdout.strip() or 'no branch'}, not {br}: the run keeps {FALLBACK}, and a person must look", file=sys.stderr)
+            return None
+        return wt
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    base = os.environ.get("SG_FORK_BASE") or os.environ.get("SG_BASE") or "main"
+    have = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", f"refs/heads/{br}"], capture_output=True).returncode == 0
+    made = subprocess.run(["git", "-C", co, "worktree", "add", "-q", str(wt), br] if have else
+                          ["git", "-C", co, "worktree", "add", "-q", "-b", br, str(wt), base], capture_output=True, text=True)
+    if made.returncode:
+        print(f"note: cannot make the issue worktree {wt} on {br}: {made.stderr.strip()}: the run keeps {FALLBACK}", file=sys.stderr)
+        return None
+    return wt
+
+req_text = req_file.read_text()
+issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a run that commits on the branch the land reads
+target = _issue_worktree(issues[0]) if len(issues) == 1 else None
+if len(issues) > 1: print(f"note: the request names {issues}: one run has one target, so this run keeps {FALLBACK}", file=sys.stderr)
+if target:
+    print(f"note: the run's target is the issue worktree {target}: the engine commits it (#93, ADR-0106 rule 4)", file=sys.stderr)
+runs = (target or cwd) / "runs"
 before = set(p.name for p in runs.glob("run-*")) if runs.exists() else set()
 log = state / (req_file.stem + ".log")
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + [
-                        "--target", str(cwd), req_file.read_text()],
+                        "--target", str(target or cwd), req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
+                        cwd=str(target) if target else None,
                         env={**os.environ, "SQUAD_HEADLESS": "1"})
 new = []
 for _ in range(90):
