@@ -319,7 +319,9 @@ printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
 : > "$T/filed"; : > "$T/st/cycle.log"
-export BOARD="$T/s/board.sh" SG_BUG_PROJECT=4 SG_BUG_DOING="In Progress"
+# The loop board and the bug board are two boards (#140): a distinct bug board makes the two card moves two causes, so
+# each is filed once. Were they one board, the same cause twice would be one issue, and this case wants two writers.
+export BOARD="$T/s/board.sh" SG_BUG_PROJECT=5 SG_BUG_DOING="In Progress"
 bash "$T/s/autobug.sh" >/dev/null 2>&1
 set=$(bash "$d/refusal-names.sh" 2>/dev/null)
 [ -n "$set" ] && ok "10 the helper prints the closed set in one place" || ko "10 nothing prints the set"
@@ -334,7 +336,8 @@ done < <($G '^title=' "$T/filed")
 $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused BOARD-WRITE-FAILED ' "$T/st/cycle.log" \
   && [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 2 ] && ok "10 the cycle log repeats the same two names, in one shape" \
   || ko "10 cycle.log: $(cat "$T/st/cycle.log")"
-[ "$($G -c '^--add o 4 In Progress 1228$' "$T/board.calls")" = 2 ] && ok "10 both refusals came from the pass's own card moves" || ko "10 board calls: $(cat "$T/board.calls")"
+[ "$($G -c '^--add o 4 In Progress 1228$' "$T/board.calls")" = 1 ] && [ "$($G -c '^--add o 5 In Progress 1228$' "$T/board.calls")" = 1 ] \
+  && ok "10 both refusals came from the pass's own card moves, one per board" || ko "10 board calls: $(cat "$T/board.calls")"
 unset SG_BUG_PROJECT SG_BUG_DOING
 
 rm -rf "$T"; exit $fail
