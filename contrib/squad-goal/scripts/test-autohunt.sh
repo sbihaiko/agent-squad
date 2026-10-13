@@ -42,6 +42,7 @@ scene() {
   restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   cp "$src" "$S/autohunt.sh"
+  cp "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$S/"   # the filing write goes through the door (ADR-0277)
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
@@ -265,5 +266,29 @@ mv=$(bash "$S/board.sh" o 1 "In Progress" 1228 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "18 the card move of the pass that picks it up succeeds" || ko "18 the dispatch's card move exited $rc: '$mv'"
 case "$mv" in *"#1228 -> In Progress"*) ok "18 the card the board carries is In Progress";; *) ko "18 the dispatch's card move: '$mv'";; esac
 case "$mv" in *"not on the board"*) ko "18 the pass that picks the filed issue up reports it absent: '$mv'";; *) ok "18 the filed issue is never reported absent";; esac
+
+# 19) a write GitHub refused is never read back as a filed issue (#139): `gh api` writes GitHub's error body to stdout
+# and exits non-zero, so the words of a rate limit ("... for user ID 1 ...") read as a number and the filer logged
+# `HUNT filed #1` -- an issue nobody opened, which the index of a refused write then pointed at. A refused filing is the
+# door's exit 2, and it is never a number.
+scene refused
+printf 'repro\n' > "$T/refused/body.md"
+cat > "$T/bin/gh" <<'GH'
+#!/bin/bash
+echo "$*" >> "${GHLOG:-/dev/null}"
+case "$*" in
+  *"--method POST"*)
+    printf '%s' '{"message":"API rate limit exceeded for user ID 1. Include the request ID 06F8:34CAED:22CD6B:3FC4397.","documentation_url":"https://docs.github.com/rest","status":"403"}'
+    exit 1;;
+  *) ;;
+esac
+GH
+chmod +x "$T/bin/gh"
+n=$(bash "$S/autohunt.sh" --file "a refused filing" "$T/refused/body.md" 2>&1)
+case "$n" in *"HUNT filed #"*) ko "19 a refused filing is never read back as a filed issue: '$n'";;
+             *"HUNT filed"*)  ok "19 a refused filing is never read back as a filed issue";;
+             *)                ko "19 the filer said something else: '$n'";; esac
+case "$n" in *"rate limit"*|*"403"*) ko "19 the refusal's own words became the filer's line: '$n'";;
+             *)                      ok "19 the refusal's own words are never read as an issue number";; esac
 
 rm -rf "$T"; exit $fail

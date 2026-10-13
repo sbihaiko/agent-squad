@@ -5,9 +5,10 @@
 #                              "Filed by" line and the labels -- puts its card on the board in the dispatch column in
 #                              the same call, and logs HUNT filed #N. The hunt files with the bug kind alone; a caller
 #                              that is not the hunt names itself in SG_FILED_BY and asks for the startable label beside
-#                              the bug kind in SG_FILED_LABELS (a refused write, #145).
+#                              the bug kind in SG_FILED_LABELS (a refused write, #145). A write GitHub refused logs
+#                              HUNT filed with no number, because a refused filing is not a filed issue (#139).
 # --none                       logs HUNT none (a hunt that found nothing)
-. "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
@@ -19,9 +20,13 @@ file_issue() {
   tagged=$(mktemp)
   cat "$body" > "$tagged"
   grep -qF "Filed by $by" "$tagged" || echo "Filed by $by" >> "$tagged"
-  resp=$(gh api --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" "${labs[@]}" 2>/dev/null)
-  rm -f "$tagged"
-  num=$(printf '%s' "$resp" | python3 -c 'import sys,json,re
+  # The write goes through the door (ADR-0277): `gh api` prints GitHub's error body on stdout and exits non-zero, so a
+  # refused filing used to be read back as a number -- the words of a rate limit carry one ("... for user ID 1 ..."),
+  # and the filer logged `HUNT filed #1`, an issue nobody opened. A refused write is gh_send's exit 2, whose line is
+  # never read as an answer.
+  num=""
+  if resp=$(gh_send --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" "${labs[@]}" 2>/dev/null); then
+    num=$(printf '%s' "$resp" | python3 -c 'import sys,json,re
 t=sys.stdin.read().strip()
 try:
   d=json.loads(t)
@@ -29,7 +34,9 @@ try:
   elif isinstance(d, int): print(d)
 except Exception:
   m=re.search(r"[0-9]+", t); print(m.group(0) if m else "")')
-  [ -z "$num" ] && num=$(printf '%s' "$resp" | grep -oE '[0-9]+' | head -1)
+    [ -z "$num" ] && num=$(printf '%s' "$resp" | grep -oE '[0-9]+' | head -1)
+  fi
+  rm -f "$tagged"
   # The issue is on the board at once (#175): a filed issue with no card is one the next pass cannot move -- board.py
   # answers "#N not on the board", the pass files the write it cannot prove as a defect, and the bug it files has no
   # card either, so every pass files one more (#169 -> #171 -> #174 -> #175). One idempotent add, in the column the
