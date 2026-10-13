@@ -65,7 +65,8 @@ run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sl
 lines() { local c; c=$($G -c . "$1" 2>/dev/null); echo "${c:-0}"; }
 marked() { local n c=0; for n in "$@"; do [ -e "$SG_STATE/auto/disp-$n" ] && c=$((c+1)); done; echo $c; }
 asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
-moved() { local n; for n in "$@"; do $G -qE "^o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
+moved() { local n; for n in "$@"; do $G -qE "^(--add )?o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
+added() { $G -qE '^--add o 1 In Progress( [0-9]+)*$' "$BOARDLOG"; }   # a dispatch adds a missing board card before its status is written
 seedmax() { python3 - "$repo" <<'PY'
 import json, pathlib, sys
 d = json.loads((pathlib.Path(sys.argv[1]) / "docs/design/router.graph.json").read_text())
@@ -98,6 +99,7 @@ r=$(run)
 [ "$(ls "$d/st/cq" | $G -c -- '^o__r#[0-9]*-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
 case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request";; *) ko "a marker names the request";; esac
 moved 21 22 23 && ok "every dispatched issue gets its own card move" || ko "every dispatched issue gets its own card move: '$(cat "$BOARDLOG")'"
+added && ok "a dispatch adds each missing board card before its move" || ko "a dispatch does not add missing board cards: '$(cat "$BOARDLOG")'"
 
 # 1a) A ticket whose blockers have all closed may carry only its wave label. The wave orders the
 #     frontier; it does not grant permission to start. A label-gated read leaves it invisible.

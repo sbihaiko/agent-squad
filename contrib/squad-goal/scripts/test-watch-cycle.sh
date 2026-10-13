@@ -21,7 +21,7 @@ printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # no open PR, no revci summary, 
 printf '#!/bin/bash\n[ -n "$REAL_SLEEP" ] && exec /bin/sleep "$@"\nexit 0\n' > "$B/sleep"   # REAL_SLEEP=1 keeps a stub slow on purpose
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
-for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh startability.sh; do
+for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh; do
   printf '#!/bin/bash\necho %s >> "%s"\n' "${s%.sh}" "$STEPS" > "$S/$s"; chmod +x "$S/$s"; done
 printf 'open("%s","a").write("childcc\\n")\n' "$STEPS" > "$S/childcc.py"
 # reconcile.py blocks for REC_SLEEP: the case times the cycle around it (a detached pass costs the cycle nothing) and reads its own log
@@ -192,5 +192,15 @@ while kill -0 "$local_p" 2>/dev/null && [ $i -lt 100 ]; do /bin/sleep 0.1; i=$((
 kill -TERM "$local_p" 2>/dev/null; wait "$local_p" 2>/dev/null
 [ -s "$STEPS" ] && ok "7 a stale lock (its holder is gone) is taken over: the cycle runs" || ko "7 a stale lock stopped the loop: '$(cat "$T/takeover.out")'"
 rm -rf "$WL"
+
+# 8) (#152) the cycle reads the live skill's drift. The live copy is what the loop and the owner's info bar run, and it
+# follows the repository copy by hand: the cycle runs the live-guard pass, which reads the difference through
+# publish-live.sh --check, publishes it and names what it read. A cycle that skips it leaves the copies a day apart in
+# silence -- the bar kept printing the footer the repository had dropped.
+lane_down; run_cycles 1
+[ "$(count live-guard)" = 1 ] && ok "8 the cycle runs the live-guard pass once" || ko "8 the cycle ran $(count live-guard) live-guard pass(es)"
+[ ! -e "$ST/locks/single-liveguard" ] && ok "8 the pass's single-flight lock is released when it ends" || ko "8 the live-guard lock stayed behind"
+run_cycles 2
+[ "$(count live-guard)" = 2 ] && ok "8 a per-cycle step keeps its cadence (two cycles, two reads)" || ko "8 live-guard ran $(count live-guard)× in 2 cycles"
 
 rm -rf "$T"; exit $fail
