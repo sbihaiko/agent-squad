@@ -94,6 +94,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A profile works a list of repositories, and one seam resolves every address** ([ADR-0138](docs/adr/0138-a-profile-works-a-list-of-repositories.md)). Guard: `contrib/squad-goal/scripts/test-address.sh`, `contrib/squad-goal/scripts/test-land-target.sh`.
 - **The live copy follows the repository copy in the cycle, and the difference is read** ([ADR-0140](docs/adr/0140-the-live-copy-follows-in-the-cycle.md)). Guard: `contrib/squad-goal/scripts/test-live-guard.sh`, `contrib/squad-goal/scripts/test-watch-cycle.sh`.
 - **The board is a shipped definition, applied by one command; the definition names the vocabulary and the repository binds it to a carrier** ([ADR-0141](docs/adr/0141-the-board-is-a-shipped-definition.md)). Guard: none yet; a draft.
+- **A spec is a document, never a unit of work; only its tickets are, and the owner starts it** ([ADR-0142](docs/adr/0142-a-spec-is-never-work.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `tests/test_vendor_skills.py`.
 
 ## Where decisions go
 
