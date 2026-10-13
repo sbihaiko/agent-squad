@@ -133,6 +133,8 @@ relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --hard HEAD; return 1;
   t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") || { $G reset -q --hard HEAD; return 1; }
   auditmerge "$c" || { $G reset -q --hard HEAD; return 1; }   # (#14) the same audit before the commit is moved onto the branch
   $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --hard HEAD; return 1; }; }
+# The spawn `workspace` field is a logical workspace the graph allows, never the branch worktree (#55): the router read `worktree add ~/wt-fr-<n> gui/<n>` as the workspace, the envelope refused 'worktrees/child/gui-<n>' whole and the run ended no_dispatch.
+wsrule="In the spawn call, set the spawn \`workspace\` field to the allowed workspace \`${SG_CHILD_WORKSPACE:-worktrees/child}\` (the first workspace the dispatch envelope allows), never the branch worktree path: the branch worktree is a path in this text only."
 brof() { sg_fork_branch "$1"; }   # the land and the request name the branch from one setting (#1836)
 # (#14) A merge is a resolution, and a resolution can drop a line both parents hold without anything noticing: the file still
 # parses, `bash -n` is happy, and the symptom arrives hours later in a tree nobody wrote (#9's evidence: a deleted `watch.sh`
@@ -501,7 +503,7 @@ for n in $cc; do
     files=$($G merge-tree --write-tree --name-only "$SG_FORK_BASE" "$br" 2>/dev/null | sed -n '2,/^$/p' | grep . | tr '\n' ' ')
     nm="forkrebase-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"
     { echo "FORK-ONLY: all"   # mkreq.sh: fork DONE CHECK and checklist, no PR text (#1411)
-      echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a CONFLICT FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
+      echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a CONFLICT FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). $wsrule en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
       echo "In $SG_FORK_DIR the branch $br (head ${head:0:9}) no longer merges into $SG_FORK_BASE: conflict in $files. Work in a worktree: \`git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br\` (or reuse the existing worktree of $br), then \`git merge $SG_FORK_BASE\` into $br and resolve every conflict KEEPING BOTH SIDES (sibling issues appended their own cases; never drop one). Run \`$SG_FORK_TEST_CMD\` there until it passes, commit the merge on $br, NEVER push, keep the worktree. Do not change anything beyond the conflict resolution."
       echo "Before you commit that merge: for every file you resolved, WHILE the merge is in progress and before \`git add\`, run \`bash $here/merge-audit.sh <file>\`. A line both parents hold that your resolution drops is a fabrication, and the landing refuses the branch for it (#14); putting the line back is the fix."
       echo "GitHub issue #$n: the issue is already implemented; only the conflict is in scope."; } > "$body"
@@ -564,7 +566,7 @@ EOT
       continue; fi
     nm="forkred-$n-${head:0:9}"; body="$SG_STATE/req/$nm.body"   # a fix run makes that commit
     { echo "FORK-ONLY: all"   # mkreq.sh: fork DONE CHECK and checklist, no PR text (#1411)
-      echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). Spawn it with spend 8. en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
+      echo "IMPORTANT: your first and only action is to call the spawn tool for the one child below; ending the turn without a spawn call fails the run. Spawn the child with spend 8 (the router may not request more: spend_outside_budget). One child, a FIX on the local fork branch $br for GitHub issue #$n (repo $SG_REPO). Spawn it with spend 8. $wsrule en-US; no Co-Authored-By and no \"Generated with Claude Code\" line."
       echo "In $SG_FORK_DIR the fork suite failed after merging $br into $SG_FORK_BASE (test pass $id, exit $rc); the merge was reverted and the branch re-applied. Work in the existing worktree of $br (${bw:-git -C $SG_FORK_DIR worktree add ~/wt-fr-$n $br}). Run \`$SG_FORK_TEST_CMD\` there, fix the root cause (never weaken or skip a test; a test that needs a missing environment variable is fixed in the environment only if the variable is documented, else report it), commit on $br, NEVER push, keep the worktree. Log tail:"
       tail -40 "$SG_STATE/tests/$id.log"; echo "GitHub issue #$n: only the failing suite is in scope."; } > "$body"
     if dispatch "$nm" "$n" red; then

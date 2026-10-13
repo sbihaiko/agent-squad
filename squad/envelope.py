@@ -90,7 +90,7 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
     if parent_time_left is not None and req["deadline"] > parent_time_left:
         e.append("deadline_over_parent")
     if not inside_workspace(req["workspace"], a["workspaces"]):
-        e.append("workspace_outside_allow")
+        e.append(f"workspace_outside_allow:requested {req['workspace']!r}, allowed {list(a['workspaces'])}")
     return e
 
 

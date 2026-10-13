@@ -270,7 +270,7 @@ def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
     cases = [({"model": "gpt"}, "model_outside_allow:gpt"), ({"tools": ["WebFetch"]}, "tool_outside_allow:WebFetch"),
              ({"skill": {"name": "tdd", "version": "2"}}, "skill_pin_mismatch:tdd"), ({"stalls": 999}, "stalls_outside_budget"),
              ({"spend": 99.0}, "spend_outside_budget"), ({"deadline": 99999}, "deadline_over_dispatch"),
-             ({"workspace": "/etc"}, "workspace_outside_allow"), ({"effort": "extreme"}, "effort_outside_allow")]
+             ({"workspace": "/etc"}, "workspace_outside_allow:requested '/etc', allowed ['worktrees/child']"), ({"effort": "extreme"}, "effort_outside_allow")]
     for patch, rule in cases:
         _, errs = validate_request(disp, {**ok, **patch}, 1, None, 10.0)
         assert rule in errs, (patch, errs)
@@ -291,7 +291,7 @@ def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
     for w in ("worktrees", "worktrees/childish", "worktrees/child/../other", "worktrees/child/..",
               "../worktrees/child", "/worktrees/child", "/etc"):
         _, errs = validate_request(disp, {**ok, "workspace": w}, 1, None, 10.0)
-        assert "workspace_outside_allow" in errs, (w, errs)
+        assert any(e.startswith("workspace_outside_allow") for e in errs), (w, errs)   # the refusal quotes it (#55)
 
 
 def test_a_model_supplied_identity_in_a_spawn_request_is_refused():
