@@ -284,5 +284,22 @@ run red-fork && [ -f "$R/red-fork.txt" ] && ok "a fork-only body carrying a RED-
 for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'your result notes' 'not a gate input'; do
   $G -qF -- "$w" "$R/red-fork.txt" && ok "fork DONE CHECK states '$w'" || ko "fork DONE CHECK lacks '$w'"
 done
+# 15. (#44) a path a request only RUNS is not a slice it edits. Every frontier request carries the preamble line
+# `bash contrib/squad-goal/scripts/shell-suites.sh` -- the suite the child must run -- and a fork fix request names the same
+# command; the scan read both as a claim on that file, so the two requests refused each other. On 2026-10-12 forkred-10 held
+# contrib/squad-goal/scripts/shell-suites.sh against every frontier pass: `refusing: request frontier-20261012-211002 and
+# request forkred-10-25f2a596b both name: contrib/squad-goal/scripts/shell-suites.sh`, for twelve passes in a row, and the six
+# ready tickets in that batch were never dispatched against ten free run slots. The preamble is shared by EVERY ticket in the
+# batch, so the held path contests the whole frontier, which is why nothing was dispatched at all.
+bodycmd() { printf 'IMPORTANT: your first and only action is X\nPANEL: %s\nEdit %s\nRun `bash contrib/squad-goal/scripts/shell-suites.sh && uv run --extra dev pytest tests -q -p no:deepeval` there.\n' "$1" "$2" > "$T/$3.body"; }
+bodycmd p15a scripts/one.py cmd1; bodycmd p15b scripts/two.py cmd2
+run cmd1 || ko "a request naming the file it edits was refused: $(cat "$T/cmd1.err")"
+run cmd2 || ko "a request whose only shared path is a command it runs was refused: $(cat "$T/cmd2.err")"
+$G -q 'shell-suites.sh' "$T/cmd2.err" && ko "the command path staged a refusal" || ok "a path inside a command is not a slice"
+# 15b. the accepted half: naming the same file as work still refuses. The rule is the command span, not an exemption for the path
+body p15a contrib/squad-goal/scripts/shell-suites.sh cmd3; body p15b contrib/squad-goal/scripts/shell-suites.sh cmd4
+run cmd3 && ok "a plain claim of that path launches" || ko "plain claim refused: $(cat "$T/cmd3.err")"
+run cmd4 && ko "a second plain claim of the same path launched" || ok "a plain claim of the same path still refuses"
+$G -qF -- 'contrib/squad-goal/scripts/shell-suites.sh' "$T/cmd4.err" && ok "and the refusal still names the path" || ko "refusal text: $(cat "$T/cmd4.err")"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
