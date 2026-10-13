@@ -593,9 +593,11 @@ def load_tick(sample=None):
 # subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
 # SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
-# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · #73 2h 14m ago`,
-# the newest `auto/fork-<n>-<sha9>` marker the close pass touches when it merges that commit — its name is the issue, its
-# mtime the age. The marker is the pass's own claim of a landing, so no log line is parsed and no GitHub call is made.
+# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · PR #73 2h 14m ago`,
+# the newest merged pull request the board pass has read — its number is the landing and its merge time the age. Delivery
+# is a pull request (#75), so the merge is the landing; it reads the rows the board pass already holds, so no log line is
+# parsed and no GitHub call is made. The `auto/fork-<n>-<sha9>` marker is NOT read: a marker outlives the landing it named,
+# and a bar that reports it names a landing nothing made.
 # The quota pair (`codex ok · agy reset 14:20`) left the line for the opposite reason (#87): each marker names a CLI whose
 # subscription the subs block already carries as a token, so the purple block repeated the green one. `MARKER_SUB` keeps
 # the pairing, and a marker returns the day its subscription leaves SUBS: a fact is never lost, only never said twice.
@@ -638,13 +640,15 @@ def _rel_span(x):
     return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
 
 def _landing_parts(ld, now):
-    """`last landing` and `#73 2h 14m ago`: the issue the newest fork marker names and the age of the marker itself.
-    No marker, or one whose issue or age cannot be read, is `?` in the neutral tone — never a landing that did not happen."""
+    """`last landing` and `PR #73 2h 14m ago`: the number of the newest merged pull request and the age of its merge.
+    No merge, or one whose number or time cannot be read, is `?` in the neutral tone — never a landing that did not happen.
+    The number is named as a pull request, because the row it comes from is one: a bare `#73` reads as an issue, and the
+    issue is not what landed."""
     if not isinstance(ld, dict): return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
     n, ts = ld.get("issue"), ld.get("ts")
     if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
-    return [{"text": "last landing", "tone": ""}, {"text": f"#{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+    return [{"text": "last landing", "tone": ""}, {"text": f"PR #{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
 
 def _occ_fact(occ, caps):
     """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
@@ -807,17 +811,18 @@ def _json(p):
     except Exception: return None
 
 def _last_landing():
-    """The newest `auto/fork-<n>-<sha9>` marker: `{"issue", "ts"}`, or None with no marker the hub can read. One directory
-    listing on the sampler thread; a marker that vanished between the listing and its stat is not a landing."""
+    """The newest merged pull request the board pass has read: `{"issue", "ts"}`, naming the PR, or None.
+
+    Delivery is a pull request (#75): the merge is the landing, and the board pass already holds every closed PR of every
+    configured repository with its merge time and whether it merged. A closed pull request that was NOT merged is not a
+    landing, and a row whose time the hub cannot read is skipped rather than counted as now.
+    """
     best = None
-    try: names = list((STATE / "auto").iterdir())
-    except OSError: return None
-    for m in names:
-        mo = FORK_MARKER.fullmatch(m.name)
-        if not mo: continue
-        try: ts = m.stat().st_mtime
-        except OSError: continue
-        if best is None or ts > best["ts"]: best = {"issue": int(mo.group(1)), "ts": ts}
+    for p in board_cache.get("prev") or []:
+        if not p.get("m"): continue
+        try: ts = dt.datetime.fromisoformat(str(p.get("c") or "").replace("Z", "+00:00")).timestamp()
+        except ValueError: continue
+        if best is None or ts > best["ts"]: best = {"issue": p.get("n"), "ts": ts}
     return best
 
 def _newest_mtime(*paths):
