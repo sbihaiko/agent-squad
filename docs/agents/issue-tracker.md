@@ -11,7 +11,7 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
 - **Close**: `gh issue close <number> --comment "..."`
 
-The repo is `mmctech-ai/agent-squad`. Infer it from `git remote -v`; `gh` does this automatically when run inside a clone.
+The repo is `sbihaiko/agent-squad` (private; it moved from `mmctech-ai/agent-squad`, which no longer exists). Infer it from `git remote -v`; `gh` does this automatically when run inside a clone.
 
 ## Pull requests as a triage surface
 

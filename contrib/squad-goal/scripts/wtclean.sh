@@ -4,10 +4,19 @@
 # whose HEAD is on no remote branch (a fix run that landed without pushing) is pushed to its open PR's branch when that is a
 # fast-forward (WT PUSHED), else its fix is re-armed via retryfix.sh (autofix runs) or it is kept and reported once as WT UNPUSHED.
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
+# The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
+# (the set the footer counts), `free` per one it removed. A `while read` behind a pipe is a subshell, so the count lives
+# in a file and never in a variable.
+tally="$SG_STATE/wt-tally.$$"; : > "$tally"
+# in_use <path>: a live process is working in this tree or below it. Two rules the liveness tests need and a plain
+# `grep -F "$w/"` does not keep: a process whose cwd IS the tree carries no trailing slash, and a substring test reads
+# `wt-1` inside `wt-10`. `lsof` answers with resolved paths, so the caller resolves $SG_CHECKOUT first.
+in_use() { printf '%s\n' "$cwds" | awk -v p="$1" '$0==p || index($0,p"/")==1 {f=1} END{exit !f}'; }
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
 cd "$SG_CHECKOUT" || exit 0
+SG_CHECKOUT=$(pwd -P)   # resolved: every liveness test below compares a path with a process cwd, and lsof answers with the resolved one. Under a symlinked checkout (/var -> /private/var, a linked home) the unresolved form never matched, so a tree a live process was working in read as unused.
 cwds=$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')   # every live process's cwd, for the zombie test
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\1#p' | while read -r w; do
   run=${w%%/ws/*}   # only after the RUN's verdict: the run's land step reads every child workspace (removing one early fails it with land_workspace_missing)
@@ -34,6 +43,34 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   b=$($G -C "$w" branch --show-current); $G worktree remove "$w" && echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}"
   case $b in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$b" >/dev/null 2>&1;; esac   # throwaway local names only
 done
+# C: the child trees the loop holds at $SG_CHECKOUT/worktrees/child/* (and .worktrees/*) — the set the hub's footer counts
+# as `wt N` and the one the reader is looking at when he asks what can be freed. No pass touched them until now, so a landed
+# issue left its tree behind for good (measured 2026-10-13: 20 trees, 10 of them already in origin/main). A tree goes only
+# when nothing can be lost and nothing is using it: no live process whose cwd is inside it, a clean tree, and HEAD in the
+# base (its work landed). Anything else is held, and the tally below carries the ratio the footer shows.
+for rel in worktrees/child .worktrees; do
+  [ -d "$SG_CHECKOUT/$rel" ] || continue
+  for w in "$SG_CHECKOUT/$rel"/*; do
+    [ -e "$w/.git" ] || continue                 # what `git worktree add` writes: a stray directory is not a worktree
+    echo held >> "$tally"
+    in_use "$w" && continue
+    [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
+    [ -n "$SG_BASE" ] || continue
+    $G -C "$w" merge-base --is-ancestor HEAD "origin/$SG_BASE" 2>/dev/null || continue
+    # A run in flight that names this tree is the one case a merged tree is still in use: the child may not have started, so
+    # no process sits inside it yet. Same test as the fork rule below, and the same lesson (gui/1227).
+    live=0
+    for r in "$SG_CHECKOUT"/runs/run-*; do
+      f="$r/record.jsonl"; [ -f "$f" ] || continue
+      grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue
+      [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
+      grep -qF "${w##*/}" "$f" "$r/request.txt" 2>/dev/null && { live=1; break; }
+    done
+    [ $live = 0 ] || continue
+    b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
+    $G worktree remove "$w" && { echo free >> "$tally"; echo "WT CLEAN child ${w##*/} ${b:-detached} ${sha:-}"; }
+  done
+done
 # acceptance-command trees (acpr.sh) left by a killed gate: drop any older than 2 h
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/acpr\.[^/]*\)$#\1#p' | while read -r w; do
   [ -n "$(find "$w" -maxdepth 0 -mmin +120 2>/dev/null)" ] && $G worktree remove --force "$w" && echo "WT CLEAN acpr ${w##*/}"; done
@@ -42,7 +79,7 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^detached/{print w}' | w
   case $w in "$HOME"/wt-*|*/acpr.*) ;; *) continue;; esac
   case $w in "${SG_E2E_DIR:-//}"|"${SG_E2E_BUILD_DIR:-//}"|"$HOME"/wt-e2e*) continue;; esac   # the e2e trees are reused between verifications: an idle one is not a loose one (a run lost them mid-verification, 2026-10-10)
   [ -d "$w" ] || continue; [ -n "$(find "$w" -maxdepth 0 -mmin +10 2>/dev/null)" ] || continue
-  ! printf '%s\n' "$cwds" | grep -qF "$w" || continue
+  in_use "$w" && continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   if [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] && [ -n "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
     $G worktree remove "$w" && echo "WT CLEAN loose ${w##*/} ${sha:0:9}"
@@ -60,7 +97,7 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     # gui/<n> or wt-(as|fr)-<n>. The old record-grep deleted a live run's worktree the moment a sibling issue closed, and every
     # ac_command then failed with "cd: No such file or directory" (gui/1227, run 45a682, 2026-10-10).
     live=0
-    printf '%s\n' "$cwds" | grep -qF "$w/" && live=1
+    in_use "$w" && live=1
     if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
       f="$r/record.jsonl"; [ -f "$f" ] || continue
       grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue   # a run that has ended owns nothing
@@ -88,3 +125,8 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^branch /{sub("refs/head
   else grep -qx "kept $w" "$seen" || { echo "WT KEPT pr-merged $b (PR #$pn, head $href): the base lacks some of its commits; nothing removed"; echo "kept $w" >> "$seen"; }; fi
 done
 $G worktree prune
+# What the hub's footer reads: the tree count this pass saw in the child directories and how many of them it freed. The file
+# is written last, so a pass killed halfway leaves the previous reading in place instead of a half one.
+printf '{"total": %s, "cleanable": %s, "ts": %s}\n' \
+  "$(grep -c '^held$' "$tally" 2>/dev/null || echo 0)" "$(grep -c '^free$' "$tally" 2>/dev/null || echo 0)" "$now" > "$SG_STATE/wt.json"
+rm -f "$tally"

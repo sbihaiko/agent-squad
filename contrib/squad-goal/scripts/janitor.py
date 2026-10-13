@@ -294,6 +294,12 @@ def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's o
 def pr_merged_count(n):
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged \"Refs #{n}\"", "-q", ".total_count").strip()
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
+def branch_ahead(n):   # the run's own branch for this issue is still ahead of the fork base: the close pass has to merge it,
+                       # so the run's own `land` pass is not the base's landing and the card is never Done (#97)
+    if not (fd and fb) or not str(n).isdigit(): return False
+    br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(n))
+    if subprocess.run(["git", "-C", fd, "rev-parse", "-q", "--verify", "refs/heads/" + br], capture_output=True).returncode: return False
+    return sh("git", "-C", fd, "rev-list", "--count", f"{fb}..{br}").strip() not in ("", "0")
 def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
     if not (fd and fb): return "unknown"
     if subprocess.run(["git", "-C", fd, "cat-file", "-e", sha], capture_output=True).returncode: return "unknown"   # the fork does not hold the commit: nothing to test the claim against
@@ -327,8 +333,11 @@ def reconcile_board():
                 set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
-            elif i["landed"]:
+            elif i["landed"] and not branch_ahead(n):
                 set_expected(n, "Done", f"run {i['run_id']} landed work", i["run_id"], i["run_ts"], 70)
+            elif i["landed"]:   # the run finished, but its branch is not on the base: the close pass lands it, and Done before
+                                # that is a false delivery -- a card in Done over a branch the base never took (#97)
+                set_expected(n, "Code Complete", f"run {i['run_id']} finished with its branch still ahead of {fb}", i["run_id"], i["run_ts"], 60)
             elif i["failed"]:
                 why = "; ".join(i["reasons"]) or "nothing landed"
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} failed with nothing landed ({why})", i["run_id"], i["run_ts"], 20)

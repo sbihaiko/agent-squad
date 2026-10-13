@@ -32,7 +32,7 @@ SESSION_LIMIT = ("ResultError: Claude Code returned an error result: "
 # a pool's refusal, and a provider's, in the same shape
 USAGE_LIMIT = "ResultError: Claude Code returned an error result: API Error: The usage limit has been reached (exit code: 1)"
 
-REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": "sonnet", "effort": "medium",
+REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": "claude-gpt-5.5", "effort": "medium",
            "tools": ["Read", "Edit"], "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child"}
 SPAWNS = {"output": {"spawns": [REQUEST]}, "spend": 0.1}
 CHILD = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2, "turns": 3}
@@ -59,7 +59,7 @@ async def test_a_provider_error_on_the_router_falls_through_to_the_next_model(tm
 async def test_a_provider_error_on_a_child_falls_through_to_the_next_model(tmp_path):
     eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": [{"error": PROVIDER_ERROR}, CHILD]})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == ["sonnet", "claude-gpt-5.5"]   # the request's pick, then the chain
+    assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]   # the request's pick, then the chain
     assert v.verdict == "completed" and outcomes(tmp_path, "route.router.1")[0]["outcome"] == "pass"
 
 
@@ -89,11 +89,11 @@ async def test_a_pools_usage_limit_falls_through_to_the_next_model(tmp_path):
 async def test_a_chain_whose_every_entry_is_exhausted_fails_naming_each_entry(tmp_path):
     eng = engine(tmp_path, {"router": {"error": PROVIDER_ERROR}}, adapter={"repeat_last": True})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash", "sonnet", "opus"]
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]
     e = outcomes(tmp_path, "router")[0]
     assert e["outcome"] == "fail" and "adapter_error" in e["reasons"] and v.verdict == "failed"
     msg = e["diagnostic"]["error"]
-    assert msg.count("402 Grok upstream rejected the request") == 4 and all(m in msg for m in ("claude-gpt-5.5", "claude-deepseek-v4-flash", "sonnet", "opus"))
+    assert msg.count("402 Grok upstream rejected the request") == 2 and all(m in msg for m in ("claude-gpt-5.5", "claude-deepseek-v4-flash"))
 
 
 async def test_an_error_that_is_not_a_provider_failure_still_fails_at_once(tmp_path):

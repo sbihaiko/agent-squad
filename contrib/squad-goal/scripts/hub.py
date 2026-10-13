@@ -604,24 +604,24 @@ def load_tick(sample=None):
 # this sampler already makes. A value the hub cannot verify is `?`, never a stale or invented number, and a fact that
 # goes unreadable takes its own `?` with it while the rest of the line stands. The line is one row: on a window too
 # narrow for it, the trailing facts drop one whole block at a time — nothing wraps, and no number is ever cut into a different one.
-FOOT_PROGRESS_WARN_SECS = 15 * 60   # between `watch-stalled` (6 min of no cycle) and `frontier-idle` (30 min of no dispatch)
 FOOT_SEP = " · "
+# How long the cleanup pass's own tally (`wt 10/21`) still describes now: the pass runs every third cycle (~4.5 min), so a
+# reading older than three cycles is a claim about a machine that has moved on, and the block falls back to the plain count.
+WT_PLAN_SECS = 15 * 60
+# A cleanup pass asked for by hand: the same pass the loop makes every third cycle takes ~17 s, so a minute is generous and
+# an answer that never comes is reported as no answer rather than held open by the page.
+WT_CLEAN_SECS = 60
 # Every block of the line reads in its own palette colour, so six facts are told apart at a glance without a character
 # more on the row (#1843). The five colours that are not a state signal are the hub's own variables, and six blocks
 # means the two ends share one — neighbours are what must never collide. The tone a value earns is NOT a block colour:
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "landing": "wait", "occ": "mute", "quota": "none",
-                     "subs": "run"}  # subs last, and teal again: it shares with health, which is not its neighbour
+FOOT_BLOCK_COLORS = {"landing": "wait", "wt": "mute", "occ": "mute",
+                     "quota": "none", "subs": "run"}  # subs last, and teal again: it shares with landing, which is not its neighbour
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
 FORK_MARKER = re.compile(r"fork-(\d+)-([0-9a-f]{7,40})")   # the close pass's marker, the name janitor.py's rule P reads
-
-def foot_age(secs):
-    """An age as the line reads it — one token, the shape the page's own `age()` paints: `45s`, `4m`, `2h`."""
-    s = max(float(secs), 0.0)
-    return f"{int(s)}s" if s < 90 else (f"{int(round(s / 60))}m" if s < 5400 else f"{int(round(s / 3600))}h")
 
 def limited_until(txt, now=None):
     """The epoch a quota marker names while it skips a model; None when there is no marker or its window has passed (the
@@ -631,24 +631,6 @@ def limited_until(txt, now=None):
     try: t = float(s)
     except ValueError: return "?"
     return t if t > (time.time() if now is None else now) else None
-
-def _health_fact(h, now):
-    """`health ok`, or `health: <cause> <age>` for the most recent cause still armed. Named, never a count: `3 alerts`
-    would hide the one cause that says the loop is dead, which is the only thing this fact is on the page to say."""
-    if not isinstance(h, dict): return "health ?"
-    causes = [c for c in (h.get("causes") or []) if c]
-    if not causes: return "health ok"
-    armed = h.get("armed") or {}
-    ts = {c: armed[c] for c in causes if isinstance(armed.get(c), (int, float))}
-    if ts: c, t = max(ts.items(), key=lambda kv: kv[1])          # the newest alert still standing: the newest cause
-    elif isinstance(h.get("ts"), (int, float)): c, t = causes[0], h["ts"]   # no alert line left for it: the pass that saw it ages it
-    else: return f"health: {causes[0]} ?"    # the cause is armed but its age cannot be read: named, then `?`
-    brief = (h.get("briefs") or {}).get(c)    # a cause that carries one says more than its name: the cooldown's expiry and owner
-    return f"health: {c} {foot_age(now - t)}" + (f" ({brief})" if isinstance(brief, str) and brief else "")
-
-def _progress_fact(ts, now):
-    """The age of the newest transition the loop owns — a verdict, a land, a dispatch or a board move."""
-    return "last progress ?" if not isinstance(ts, (int, float)) else f"last progress {foot_age(now - ts)}"
 
 def _rel_span(x):
     """A span in the page's own `rel()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth."""
@@ -730,27 +712,76 @@ def _subs_fact(subs, now):
     """The subs block as one string: its parts in the order they are read, which is the text the line carries."""
     return FOOT_SEP.join(p["text"] for p in _subs_parts(subs, now))
 
-def _fact(key, text, bad=False, parts=None):
+def _fact(key, text, bad=False, parts=None, act=None):
     """One block of the line (#1843): its text, its own palette colour, and the parts it paints. A block with no parts
     of its own is the single part its text already is, with no tone — so the block's colour stands for the whole value.
     A part whose own reading earns a tone keeps it on top of that colour, which is how the block still says WHICH fact
-    it is while the value says whether it is the bad one."""
-    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key],
+    it is while the value says whether it is the bad one. `act` names the one press the block answers to, or None."""
+    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "act": act,
             "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
+# --- the worktrees the loop holds open: what its child checkouts cost, at a glance, without a git call.
+WT_DIRS = ("worktrees/child", ".worktrees")
+
+
+def _wt_count():
+    """The linked worktrees the loop holds under its checkout. A directory counts when it carries a `.git` file, which
+    is what `git worktree add` writes: a stray empty directory is not a worktree and is not counted."""
+    n = 0
+    for rel in WT_DIRS:
+        try: kids = sorted((pathlib.Path(CHECKOUT) / rel).iterdir())
+        except OSError: continue
+        n += sum(1 for c in kids if (c / ".git").exists())
+    return n
+
+
+def _wt_plan():
+    """What the last cleanup pass found in the child directories: `{"total", "cleanable", "ts"}` from `wtclean.sh`, or None
+    when no pass wrote it or the writing is older than WT_PLAN_SECS. The pass runs every third cycle, so a stale reading no
+    longer describes now and the block falls back to the plain count."""
+    d = _json(STATE / "wt.json")
+    if not isinstance(d, dict): return None
+    total, free, ts = d.get("total"), d.get("cleanable"), d.get("ts")
+    if not (isinstance(total, int) and isinstance(free, int) and isinstance(ts, (int, float))): return None
+    if time.time() - ts > WT_PLAN_SECS: return None
+    return d
+
+
+def _wt_fact(n):
+    """`wt 3` — the count of open child worktrees; `wt 10/21` — of the 21 the last pass saw, the 10 it freed. The block
+    draws nothing when neither reading exists."""
+    if isinstance(n, int): return f"wt {n}"
+    if isinstance(n, dict): return f"wt {n['cleanable']}/{n['total']}"
+    return ""
+
+
+def wt_clean():
+    """One cleanup pass, asked for by hand from the footer's `wt` block. It runs the loop's own `wtclean.sh`, which holds
+    the rules, so the press frees exactly what the block counted and the page adds no second rule of its own. A pass the
+    script refuses, or one that runs past the deadline, is reported as it stands and never as an empty success."""
+    try:
+        r = subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "wtclean.sh")],
+                           capture_output=True, text=True, timeout=WT_CLEAN_SECS)
+    except subprocess.TimeoutExpired:
+        return {"err": f"the pass ran longer than {WT_CLEAN_SECS}s"}
+    except OSError as e:
+        return {"err": f"the pass did not start: {e}"}
+    lines = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
+    return {"cleaned": [l for l in lines if l.startswith("WT CLEAN")],
+            "held": [l for l in lines if l.startswith(("WT UNPUSHED", "WT KEPT", "WT LOOSE"))],
+            "rc": r.returncode, "err": None if lines or not r.returncode else (r.stderr or "").strip()[-200:]}
+
+
 def foot_items(src, caps=None, now=None):
-    """The facts, in the order the line reads them, each carrying whether its value is the bad one (`bad` is what
-    the page paints amber, and only `last progress` has one — a stall between the loop's own two thresholds), the
-    palette colour of its block, and the parts it paints: a subscription token carries the tone its own consumption
-    earns, so the block is never painted as one value (#1843)."""
+    """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a
+    subscription token carries the tone its own consumption earns, so the block is never painted as one value (#1843).
+    The loop's own health and its last progress were dropped from the line by the owner: the line is a machine reading,
+    and both said as much about the loop's mood as about the machine."""
     now = time.time() if now is None else now
     src = src or {}
-    prog = src.get("progress")
     land = _landing_parts(src.get("landing"), now)
-    items = [_fact("health", _health_fact(src.get("health"), now)),
-             _fact("progress", _progress_fact(prog, now),
-                   bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
-             _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
+    items = [_fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
+             _fact("wt", _wt_fact(src.get("wt")), act="wtclean" if src.get("wt") is not None else None),
              _fact("occ", _occ_fact(src.get("occ"), caps)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
              # subs last, so a narrow window drops the block whole
@@ -796,42 +827,17 @@ def _newest_mtime(*paths):
         except OSError: pass
     return max(ts) if ts else None
 
-def _armed_from_alerts(text, causes):
-    """cause -> when its alert last reached alerts.log, i.e. when the health pass armed it. The pass writes one line when
-    a cause appears and re-arms it after it clears, so the newest line for a cause still armed is its age."""
-    out = {}
-    for l in (text or "").splitlines():
-        if " HEALTH " not in l: continue
-        head, _, rest = l.partition(" HEALTH ")
-        cause = rest.split(":", 1)[0].strip()
-        if cause not in causes: continue
-        try: t = time.mktime(time.strptime(head.strip(), "%Y-%m-%d %H:%M:%S"))
-        except ValueError: continue
-        out[cause] = max(t, out.get(cause, 0.0))
-    return out
-
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"health": None, "progress": None, "landing": _last_landing(), "occ": None,
+    out = {"landing": _last_landing(), "wt": _wt_plan() or _wt_count(), "occ": None,
            "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
                      "agy": limited_until(_read(STATE / "agy-limited"), now)}}
-    h = _json(STATE / "health.json")
-    if isinstance(h, dict):
-        causes = [c for c in (h.get("causes") or []) if c]
-        out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts"),
-                         "briefs": h.get("briefs") if isinstance(h.get("briefs"), dict) else {}}
-        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
-    stamps = [_newest_mtime(STATE / "cycle.log", STATE / "auto", STATE / "board-dirty")]
-    for r in list(LOAD_RUNS):   # the live runs' own records: what the loop's children wrote as they moved
-        stamps.append(_newest_mtime(pathlib.Path(r.get("dir") or "") / "record.jsonl"))
-    stamps = [s for s in stamps if s]
-    out["progress"] = max(stamps) if stamps else None
     return out
 
 def foot_refresh(now=None):
@@ -1715,12 +1721,27 @@ function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" �
 // serves already carries it. The tone is decided where the number is — the hub serves it — never here:
 const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
 function footParts(i){return (i.parts||[{text:i.text}]).map(p=>FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text)).join(" · ")}
-function footItem(i){const t=footParts(i);return i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`}
+function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`;return i.act?`<span class="fac${wtBusy?" busy":""}" data-act="${esc(i.act)}" role=button tabindex=0 title="Run one cleanup pass now: the loop's own wtclean.sh holds the rules, so the press frees exactly what this block counted">${s}</span>`:s}
+// The `wt` block answers one press. The press runs the loop's own pass and never a second rule of the page's, so what it
+// frees is what the block counted. The block says it is busy while it runs; the pass's own lines are reported beside it.
+let wtBusy=false,wtTimer=null;
+function wtSay(txt,bad){const f=$("#foot");if(!f)return;let e=$("#wtmsg");
+ if(!e){e=document.createElement("span");e.id="wtmsg";f.appendChild(e)}
+ e.textContent=" "+txt;e.style.color=bad?"var(--err)":"var(--mute)"}
+async function wtClean(el){if(wtBusy)return;wtBusy=true;if(el)el.classList.add("busy");
+ try{const d=await (await fetch("/api/wtclean",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
+  if(d.err)wtSay("cleanup refused: "+d.err,true);
+  else wtSay(d.cleaned.length?"cleanup freed "+d.cleaned.length+": "+d.cleaned.map(l=>l.replace(/^WT CLEAN \S+ /,"")).join(", "):"cleanup freed nothing");
+  await loadPoll()}
+ catch(e){wtSay("cleanup did not answer: "+e.message,true)}
+ finally{wtBusy=false;const b=document.querySelector("[data-act=wtclean]");if(b)b.classList.remove("busy");
+  clearTimeout(wtTimer);wtTimer=setTimeout(()=>{const m=$("#wtmsg");if(m)m.remove()},20000)}}
 function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
  const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
  return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
 function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
- if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")}
+ if(f){f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")
+  f.querySelectorAll("[data-act]").forEach(e=>{e.onclick=()=>wtClean(e);e.onkeydown=ev=>{if(ev.key===" "||ev.key==="Enter"){ev.preventDefault();wtClean(e)}}})}}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
@@ -1810,10 +1831,21 @@ function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loa
  $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
  b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk}${pv?" · "+pv:""}">${pv||rk}${of?" · out of the chain":""}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +mdlRouter()
  +(()=>{const e=mdl.envelope||{};if(!e.node)return"";const row=(l,a)=>`<div class=mx><span class=el>${l}</span> ${(a||[]).map(x=>`<code>${esc(String(x))}</code>`).join(" ")||"—"}</div>`;return `<div class=mc><div class=mt>Router</div><div class=mx>The dispatch envelope the router asks its children inside, read from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}. A request outside it is refused whole.</div>`+row("models",e.models)+row("efforts",e.efforts)+row("tools",e.tools)+row("workspaces",e.workspaces)+`<div class=mx><span class=el>limits</span> children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div>`+`<div class=mx>This is graph data: change it in the run graph, never in models.json (ADR-0106). A coding row above must name an id this envelope allows.</div></div>`})()
+ +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row. A coding row must name an id the dispatch envelope allows.</div>`
  +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Coding rows must name ids the dynamic dispatch envelope allows, or the allowed id that stands for the provider alias. Written per model, beside the chains, in models.json.</div>`
  +`<div class=mx>Each row also carries a <b>switch</b>: <code>off</code> takes the model out of the chain without removing it — it keeps its place, its rank, its effort and its hrs, and every consumer skips it exactly like a model outside its window. <b>✕</b> still deletes the entry, settings and all.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
+/* The router's own chain (#95): the dispatch envelope of the run graph. It is a queue like the role chains, so it
+   reads the same way -- rank, ↑ ↓, ✕, Add -- but it is graph data: it lives in the run graph, never in models.json
+   (ADR-0106), and the Save writes it there and restamps the record the graph ships beside. */
+function mdlRouter(){const ids=mdl.router_models||[],e=mdl.envelope||{};
+ const rk=i=>i?"fallback "+i:"primary";
+ return `<div class=mc><div class=mt>Router</div><div class=mx>The models the router may ask a child for, in order, from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}${e.node?` (<code>${esc(e.node)}</code>)`:""}. A request outside this list is refused whole; the first entry is the model a child takes when it names none.</div>`
+ +ids.map((m,i)=>`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk(i)}">${mdlProv(m)||rk(i)}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`).join("")
+ +`<div class=madd><input list=mk data-radd placeholder="add a model id…"><button data-raddb="router">Add</button></div>`
+ +`<div class=mx>efforts ${(e.efforts||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · workspaces ${(e.workspaces||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
  else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
@@ -1822,6 +1854,9 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  if(t.dataset.mv){const[k,i,d]=t.dataset.mv.split("|"),a=mdl[k],j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.sw){const[k,m]=t.dataset.sw.split("|");mdlSetOff(k,m,!mdlOff(k,m))}
  else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
+ else if(t.dataset.rv){const[i,d]=t.dataset.rv.split("|"),a=mdl.router_models,j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
+ else if(t.dataset.rrm){mdl.router_models.splice(+t.dataset.rrm,1)}
+ else if(t.dataset.raddb){const v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
  else if(t.dataset.addb){const k=t.dataset.addb,v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
@@ -2306,7 +2341,8 @@ def subs_month():
     return {"subs": out, "frac": round(frac, 3), "plans": round(plans, 2), "api": round(api, 2), "total": round(plans + api, 2)}
 
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
-CHAINS = ("coding_models", "review_models", "vision_models")
+CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
+ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
 READONLY = ("known", "last_coding", "envelope")   # fields models_get() adds for the panel: posted back, never stored
 MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
@@ -2447,12 +2483,31 @@ def efforts_of(d):
     """Per-chain {model-id: effort} from models.json's optional top-level `efforts`; every chain present, only entries whose model is in that chain."""
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
+def _graph_path():
+    """The run graph the loop starts, as launch.py resolves it: the project's own workflow file first, else the seed.
+
+    The checkout comes from the seam (CHECKOUT, resolved by address.sh), never from the cwd: the hub serves every
+    repository of the profile, so its working directory says nothing about whose graph it is reading."""
+    for p in (pathlib.Path(CHECKOUT) / "docs/squad/workflows/default.graph.json",
+              pathlib.Path(CHECKOUT) / "docs/squad/workflows/dynamic.graph.json",
+              pathlib.Path(CHECKOUT) / "docs/design/router.graph.json"):
+        if p.is_file(): return p
+    return None
+
+
 def _graph_doc():
     """The run graph this run starts, resolved exactly as launch.py resolves it: the file SG_WORKFLOW names (no id, `default`
     or `dynamic` is the owner's default file), the project's own file first, else the graph the plugin ships.
 
     The panel shows the envelope of the graph the run obeys only if both readers land on one file. A second, narrower
-    resolution here showed a reader an envelope no child was held inside (#95: the router named a model no chain allowed)."""
+    resolution here showed a reader an envelope no child was held inside (#95: the router named a model no chain allowed).
+
+    Two seams name that file, and both are read here: the checkout this hub serves (CHECKOUT, resolved by address.sh,
+    never the cwd) when the module carries that seam, and the environment a sliced read carries instead of it."""
+    p = _graph_path() if "CHECKOUT" in globals() else None
+    if p is not None:
+        try: return json.loads(p.read_text())
+        except (OSError, ValueError): return {}
     base = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd())
     roots = []
     for r in (os.environ.get("SG_SQUAD"), str(base)):   # launch.py's `squad`, then the checkout it runs in
@@ -2466,6 +2521,37 @@ def _graph_doc():
         if p.is_file():
             try: return json.loads(p.read_text())
             except (OSError, ValueError): return {}   # a graph the panel cannot read is no envelope, never a panel that fails
+    return {}
+
+
+def router_get():
+    """The router's own chain (#95): the models the dispatch envelope allows, in the order it lists them. It is the
+    same list the router reads to name a child's model, and the same one a request outside of which is refused whole."""
+    return [bare_id(m) for m in (envelope_of().get("models") or [])]
+
+
+def router_set(ids):
+    """Write that chain into the run graph and restamp the record it ships beside.
+
+    The envelope is graph data, never a models.json chain (ADR-0106): the graph is the author's, and the panel is its
+    editor. The record carries the graph hash `check_record.py` enforces, so the two move together."""
+    p = _graph_path()
+    if p is None: return {"err": "no run graph to write"}
+    try: doc = json.loads(p.read_text())
+    except (OSError, ValueError): return {"err": "the run graph does not parse"}
+    hit = False
+    for n in doc.get("nodes") or []:
+        if n.get("kind") == "dispatch":
+            n.setdefault("allow", {})["models"] = list(ids); hit = True
+    if not hit: return {"err": "the run graph has no dispatch node"}
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(doc, indent=2) + "\n"); tmp.replace(p)
+    venv = pathlib.Path(CHECKOUT) / ".venv" / "bin" / "python"
+    r = subprocess.run([str(venv) if venv.exists() else sys.executable,
+                        str(pathlib.Path(CHECKOUT) / "scripts" / "stamp_router_record.py")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return {"err": "the graph was written and its record could not be restamped: " + (r.stdout + r.stderr).strip()[-200:]}
     return {}
 
 
@@ -2493,14 +2579,26 @@ def models_get():
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
-            "known": known_models(d), "last_coding": last_coding_model(), "envelope": envelope_of()}
+            "known": known_models(d), "last_coding": last_coding_model(), "envelope": envelope_of(),
+            "router_models": router_get()}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
     # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`
     # (the add box's list) and `last_coding` (the header's line). Dropping only `known` made the other one read as a chain
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
     new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
-    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off"}: return {"err": "unknown chain"}
+    if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off", ROUTER_CHAIN}: return {"err": "unknown chain"}
+    # The router chain is the dispatch envelope, so it lives in the run graph and never in this file (#95)
+    rchain = new.pop(ROUTER_CHAIN, None)
+    if rchain == []:
+        rchain = None       # no run graph under this checkout: the panel has no envelope to write, and says nothing
+    if rchain is not None:
+        if not isinstance(rchain, list) or not 1 <= len(rchain) <= 8 or \
+           not all(isinstance(m, str) and MODEL_ID.match(m) for m in rchain) or len(set(rchain)) != len(rchain):
+            return {"err": f"{ROUTER_CHAIN}: need 1-8 distinct model ids"}
+        if rchain != router_get():          # a Save that did not move this queue leaves the graph and its record alone
+            err = router_set(rchain)
+            if err: return err
     d = json.loads(MODELS.read_text()); eff = new.pop("efforts", None); hrs = new.pop("hours", None); off = new.pop("off", None)
     for k, v in new.items():
         if not isinstance(v, list) or not 1 <= len(v) <= 8 or not all(isinstance(m, str) and MODEL_ID.match(m) for m in v):
@@ -2575,8 +2673,11 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         # loopback only, and a cross-site page must not be able to write: require our own origin and a JSON body
         host = (self.headers.get("Host") or "").split(":")[0]; org = self.headers.get("Origin") or ""
-        ok = self.path in ("/api/models", "/api/plans") and host in ("127.0.0.1", "localhost") and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
-        try: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")) if ok else {"err": "forbidden"}
+        ok = self.path in ("/api/models", "/api/plans", "/api/wtclean") and host in ("127.0.0.1", "localhost") and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
+        try:
+            if not ok: out = {"err": "forbidden"}
+            elif self.path == "/api/wtclean": out = wt_clean()
+            else: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}"))
         except Exception as e: out = {"err": "bad request"}
         body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 

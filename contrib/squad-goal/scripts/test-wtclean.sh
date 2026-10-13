@@ -88,4 +88,20 @@ case "$out" in *KEPT*gui/partial*) ok "W: the refusal names the branch";; *) ko 
 ! alive done && ! [ -d "$T/hm/wt-18-done" ] && ok "W: own merged PR, branch in the base: tree removed and branch deleted" || ko "W: merged branch was not cleaned: $out"
 case "$out" in *"WT CLEAN pr-merged gui/done"*"PR #6"*"head gui/done"*) ok "W: the decision line names branch, PR and head";; *) ko "W: decision line lacks branch, PR or head: $out";; esac
 ! alive squash && ok "W: squash-merged PR (tip is the PR head, merge commit in the base): cleaned" || ko "W: squash-merged branch was kept: $out"
-kill $spid 2>/dev/null; rm -rf "$T"; exit $fail
+# C: the child trees under $SG_CHECKOUT/worktrees/child — the set the hub's footer counts as `wt N` and the one a reader
+# asks to free. A tree is freed only when nothing can be lost and nothing is using it (clean, HEAD in the base, no process
+# inside, no run in flight naming it); anything else is held, and the pass writes the tally the footer reads as `wt 1/4`.
+cd "$T/co"; mkdir -p worktrees/child
+$G worktree add -q worktrees/child/c-merged -b gui/c1 HEAD
+$G worktree add -q worktrees/child/c-ahead -b gui/c2 HEAD; $G -C worktrees/child/c-ahead -c user.email=a@b -c user.name=t commit -q --allow-empty -m work
+$G worktree add -q worktrees/child/c-dirty -b gui/c3 HEAD; echo x > worktrees/child/c-dirty/f
+$G worktree add -q worktrees/child/c-busy -b gui/c4 HEAD
+( cd worktrees/child/c-busy && exec sleep 90 ) & cpid=$!; sleep 1
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d worktrees/child/c-merged ] && ok "C: merged, clean, unused child tree removed" || ko "C: c-merged kept: $out"
+[ -d worktrees/child/c-ahead ] && ok "C: child tree ahead of the base kept" || ko "C: c-ahead was removed: $out"
+[ -d worktrees/child/c-dirty ] && ok "C: dirty child tree kept" || ko "C: c-dirty was removed: $out"
+[ -d worktrees/child/c-busy ] && ok "C: child tree with a live process kept" || ko "C: c-busy was removed: $out"
+case "$out" in *"WT CLEAN child c-merged"*) ok "C: the decision line names the class and the tree";; *) ko "C: no child decision line: $out";; esac
+[ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 4 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "C: tally 1/4, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
+kill $cpid 2>/dev/null; rm -rf "$T"; exit $fail

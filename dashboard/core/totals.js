@@ -75,6 +75,10 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
     count: (v) => !num(v) ? DASH : String(v),
     tokens: (v) => !num(v) ? DASH : v < 1000 ? String(v) : v < 9950 ? (v / 1e3).toFixed(1) + "k" : v < 1e6 ? Math.round(v / 1e3) + "k" : (v / 1e6).toFixed(1) + "M",
     rate: (v) => !num(v) ? DASH : (v === 0 ? "0" : v < 10 ? v.toFixed(1) : String(Math.round(v))) + " tk/s",
+    // A model id is shown without its `claude-` prefix: the prefix is the CLI's provider marker, not part of what a reader
+    // compares. The record, the graph and an editable field keep the id whole. It is safe on a harness phrase, which starts
+    // with the id. An empty value is a dash, like every other missing figure here.
+    model: (m) => m === null || m === undefined || m === "" ? DASH : String(m).replace(/^claude-/, ""),
   };
 
   return { runCap, runTotals, totalsCells, issueProgress, progressCells, DASH, fmt };

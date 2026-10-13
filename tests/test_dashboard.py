@@ -27,7 +27,7 @@ def test_the_dashboard_embeds_the_engine_schema_registry_and_served_lists_not_a_
     assert data["schema"] == json.loads(graph.SCHEMA_PATH.read_text())
     served = served_lists()
     assert json.dumps(served, sort_keys=True) in text and len(served["hash"]) == 64
-    assert {"Read", "claude-sonnet-5-5", "medium", "tdd"} <= set(served["tools"] + served["models"] + served["efforts"] + served["skills"])
+    assert {"Read", "claude-deepseek-v4-flash", "medium", "tdd"} <= set(served["tools"] + served["models"] + served["efforts"] + served["skills"])
 
 
 def test_every_core_module_is_bundled_once_and_the_runner_and_page_share_the_bundle():

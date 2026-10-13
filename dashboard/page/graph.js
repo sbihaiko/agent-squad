@@ -83,7 +83,7 @@ function renderChildren(cards) {
     const f = core.fmt, landed = c.land ? (c.land.outcome === "pass" ? " · landed" : " · not landed") : "";
     // The task is the card's title, so the line under it names the role and the harness instead.
     const role = c.skillLabel ? `${c.skillLabel} · ` : "";
-    const kind = c.rejected ? "rejected request" : `${role}${c.model === null ? f.count(null) : c.model}${c.effort ? " " + c.effort : ""}${landed}`;
+    const kind = c.rejected ? "rejected request" : `${role}${f.model(c.model)}${c.effort ? " " + c.effort : ""}${landed}`;
     // A call in flight has no outcome yet, so its own figures are all unknown: the card shows how long it has run and
     // what the call itself reported. Without this the card showed three dashes for the whole call.
     const stat = c.rejected ? "" : running ? runningHead(c.running_for, live)
@@ -195,7 +195,8 @@ function renderGroups(cards) {
       return `<g class="sq s-${m.state}${S.selected === c.name ? " sel" : ""}${c.superseded_by ? " sup" : ""}" data-sq="${esc(c.name)}" tabindex="0" role="button" aria-label="${esc(c.title)}, ${esc(m.label)}${reworkNote(c, ", ")}" transform="translate(${q.x} ${q.y})"><title>${esc(c.title)} | ${esc(c.name)} | ${esc(m.label)} | ${esc(core.fmt.usd(c.spend))}${reworkNote(c, " | ")}</title><rect class="fr" x="-2.5" y="-2.5" width="25" height="25" rx="5"/><rect width="20" height="20" rx="3"/><text x="10" y="15" text-anchor="middle">${m.glyph}</text></g>`;
     }).join("");
     const mark = core.stateMark(gr.state);
-    g.innerHTML = `<title>${esc(gr.name)}${gr.harness ? " | " + esc(gr.harness) : ""} | ${esc(gr.line)} | double-click to expand</title><rect width="${p.w}" height="${p.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(clipText(gr.name, CLIP.name))}</text>${gr.harness ? `<text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(clipText(gr.harness, CLIP.harness))}</text>` : ""}<text class="st" x="10" y="${gr.harness ? 47 : 34}">${esc(gr.lineTime)}</text><text class="st" x="10" y="${gr.harness ? 58 : 48}">${esc(gr.lineTokens)}</text></g><text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${mark.glyph}</text>${sq}<circle class="port in" cx="0" cy="30" r="5"/>`;
+    const harn = gr.harness ? core.fmt.model(gr.harness) : "";
+    g.innerHTML = `<title>${esc(gr.name)}${harn ? " | " + esc(harn) : ""} | ${esc(gr.line)} | double-click to expand</title><rect width="${p.w}" height="${p.h}" rx="6"/><g clip-path="url(#card-clip)"><text class="nm" x="${TEXT.x}" y="${TEXT.name}">${esc(clipText(gr.name, CLIP.name))}</text>${harn ? `<text class="kd" x="${TEXT.x}" y="${TEXT.kind}">${esc(clipText(harn, CLIP.harness))}</text>` : ""}<text class="st" x="10" y="${gr.harness ? 47 : 34}">${esc(gr.lineTime)}</text><text class="st" x="10" y="${gr.harness ? 58 : 48}">${esc(gr.lineTokens)}</text></g><text class="gl" x="${BOX.w - GLYPH.right}" y="${GLYPH.top}" text-anchor="end">${mark.glyph}</text>${sq}<circle class="port in" cx="0" cy="30" r="5"/>`;
     wireSquares(g, gr);
     cards.appendChild(g);
   }

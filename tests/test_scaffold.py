@@ -18,7 +18,7 @@ def in_graph(node):
 @pytest.mark.parametrize("role", ROLES)
 def test_every_role_scaffolds_a_node_the_validator_accepts(role):
     n = scaffold.agent_node(CFG, role)
-    assert in_graph(n) and n["model"] == "claude-sonnet-5-5" and n["effort"] == "medium" and n["instructions"].startswith("# Role:")
+    assert in_graph(n) and n["model"] == "claude-deepseek-v4-flash" and n["effort"] == "medium" and n["instructions"].startswith("# Role:")
 
 
 def test_a_read_only_role_gets_no_write_tool_and_the_actor_does():

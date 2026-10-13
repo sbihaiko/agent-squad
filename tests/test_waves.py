@@ -221,8 +221,8 @@ async def test_a_dispatch_child_outcome_carries_its_model_effort_and_tokens_when
     eng = make(tmp_path, {"router": routed(req(), req("diagnosing-bugs")), "route.router.1": known, "route.router.2": unknown}, target=sibling_repo(tmp_path))
     await eng.run()
     one, two = child_outs(tmp_path)["route.router.1"], child_outs(tmp_path)["route.router.2"]
-    assert (one["model"], one["effort"], one["tokens_in"], one["tokens_out"]) == ("sonnet", "medium", 1200, 340)
-    assert (two["model"], two["effort"]) == ("sonnet", "medium") and "tokens_in" not in two      # unknown stays absent, never zero
+    assert (one["model"], one["effort"], one["tokens_in"], one["tokens_out"]) == ("claude-gpt-5.5", "medium", 1200, 340)
+    assert (two["model"], two["effort"]) == ("claude-gpt-5.5", "medium") and "tokens_in" not in two      # unknown stays absent, never zero
 
 
 @pytest.mark.anyio
