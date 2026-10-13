@@ -39,7 +39,20 @@ def status_field():
     """REST id of the board's Status field (the items endpoint needs it to return Status values)."""
     o = subprocess.run(["gh", "api", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id'], capture_output=True, text=True, timeout=60).stdout.split()
     return o[0] if o else ""
-HOME = pathlib.Path.home(); STATE = pathlib.Path(os.environ["SG_STATE"])
+HOME = pathlib.Path.home()
+def state_dir():
+    """$SG_STATE when the runner exports it, else the state directory the seam (address.sh) names, `sg_state_base`, for the
+    machine -- the shape single.sh and mkreq.sh already use. Only the seam spells the machine state directory, so a runner
+    that exports no SG_STATE reads a state directory under its own home instead of dying with KeyError at import; the loop,
+    which exports SG_STATE, keeps the directory it always had."""
+    st = os.environ.get("SG_STATE")
+    if st: return st
+    here = pathlib.Path(__file__).resolve().parent
+    p = subprocess.run(["bash", "-c", '. "$1/address.sh" 2>/dev/null; sg_state_base', "_", str(here)], capture_output=True, text=True, timeout=30)
+    st = p.stdout.strip()
+    if not st: sys.exit("hub: no state directory (export SG_STATE, or repair the seam, address.sh)")
+    return st
+STATE = pathlib.Path(state_dir())
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
 HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(CHECKOUT) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
 SHARED = pathlib.Path(os.environ.get("SG_SHARED") or STATE); SHARED.mkdir(parents=True, exist_ok=True)
