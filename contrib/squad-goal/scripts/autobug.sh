@@ -193,13 +193,18 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$(sg_cq_file "$n-autobug$$.md")"; done; done
 # The cards move through the one write door (#145): a refusal is named, logged and filed, never swallowed by a `2>&1`.
+# The move carries --add (#188): the issues of this dispatch include the ones the loop filed itself, and a card the board
+# does not carry yet made the plain move a refusal ("#N not on the board") that the door then filed as one more bug, whose
+# own dispatch was refused the same way -- the pass fed itself the same defect. --add is the idempotent add-then-move every
+# other board writer uses (board.py, janitor rule R, reconcile.py, the frontier dispatch): a card the board does not carry
+# is added with its status, and a card it already carries is answered "already exists" and moved.
 cards="$(printf '#%s ' "${pick[@]}")"
 sg_write "the card move of this dispatch" "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
 [ -n "${SG_BUG_PROJECT:-}" ] && sg_write "the card move of this dispatch on the bug board" "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"

@@ -243,4 +243,55 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#188) the dispatch moves the cards of the issues it just requested, and an issue the loop filed itself carries no
+# card until the board pass adds one. A plain move for a card the board does not carry is refused ("#N not on the
+# board"), and through sg_write that refusal is filed as one more bug, whose own dispatch is refused the same way and
+# files one more: the pass fed itself the same defect. A dispatch cannot assume the card: it moves its cards through the
+# idempotent add path every other board writer uses (board.py --add, janitor rule R, reconcile.py), so a card the board
+# does not carry is added with its status, and a card it already carries answers "already exists" and is moved.
+# The stub below answers like board.py does: the add path succeeds, the plain move is refused.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+: > "$T/board.calls"
+cat > "$T/s/board.sh" <<J
+#!/bin/bash
+echo "\$*" >> "$T/board.calls"
+case " \$* " in *" --add "*) echo "#1228 -> In Progress" ;; *) echo "#1228 not on the board" >&2; exit 1 ;; esac
+J
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+: > "$T/filed"; : > "$T/st/cycle.log"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
+    for a in "\$@"; do case "\$a" in body=@*) cat "\${a#body=@}" >> "$T/filed";; esac; done
+    echo '{"number":900}' ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+export BOARD="$T/s/board.sh" SG_BUG_PROJECT=4 SG_BUG_DOING="In Progress"   # both dispatch writes: the loop board and the bug board
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 the dispatch whose cards the board does not carry finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+filed=$($G -c '^title=' "$T/filed")
+[ "$filed" = 0 ] && ok "9 the dispatch adds the missing card, it files no bug about it" \
+  || ko "9 the dispatch filed $filed bug(s) about its own card move: $(cat "$T/filed")"
+[ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "9 no refusal is named in the cycle log" || ko "9 cycle.log: $(cat "$T/st/cycle.log")"
+# both writes reached the door through the add path: a bug board that does not carry the card is repaired the same way
+[ "$($G -c '^--add ' "$T/board.calls")" = 2 ] && ok "9 both card moves go through the add path" \
+  || ko "9 the door was called: $(cat "$T/board.calls")"
+unset SG_BUG_PROJECT SG_BUG_DOING
+
 rm -rf "$T"; exit $fail
