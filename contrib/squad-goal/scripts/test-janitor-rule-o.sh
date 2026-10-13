@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rule O (#1811): `landed` is the pass of the stage that lands the work, and the release must actually happen.
-#  (A) a failed run whose only pass is the router's landed nothing -> its issue goes back to Todo and its marker is dropped;
+#  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
 #  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed) keeps card and marker;
 #  (C) an issue an open PR names keeps its card and its marker.
 # The gh stub answers the same way the live API does, including its refusal of a POST to /search/issues:

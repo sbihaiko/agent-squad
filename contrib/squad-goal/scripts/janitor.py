@@ -14,8 +14,8 @@
  K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
     after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
-    A run that landed a change, an issue a live run works, and an issue an open or merged PR names keep their marker. The card goes back to the column the dispatch found it in --
-    auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- but only from the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
+    A run that landed a change, an issue a live run works, and an issue an open or merged PR names keep their marker. The loop-board card is rule R's: O writes none, and its comment names the column R wrote
+    (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open or merged PR naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
@@ -27,9 +27,10 @@
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open.
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
     A live run holds the issue (dispatch marker or accepted child) -> In Progress; a run that landed (a `land` pass, or a `fork-<n>-<sha9>` marker the close pass left) or an issue that is closed or carries a merged PR naming it -> Done;
-    a completed run whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); an issue labelled needs-owner or needs-ratification -> Blocked.
+    a completed run whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
+    and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
-    The board is read once per pass (one fields read, one items read per project). An issue the board answers no card for is added with its expected status in one write (board.sh --add);
+    The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
@@ -289,16 +290,18 @@ def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` 
     files = sh("git", "-C", fd, "show", "--pretty=format:", "--name-only", sha).split()
     if not files or subprocess.run(["git", "-C", fd, "diff", "--quiet", sha, fb, "--", *files], capture_output=True).returncode == 0: return "landed"   # the base holds the change itself: a rebased head, nothing was unwound
     return "unwound"
-def board_write(args, n, why):
+def board_write(args, n, why):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         say(f"BOARD-WRITE-FAILED #{n}: {why}: {msg[0] if msg else 'no output'}")
         return False
+    a = args[1:] if args and args[0] == "--add" else args
+    if len(a) == 4 and not a[0].startswith("--") and a[1] in _cards: _cards[a[1]][1][str(a[3])] = a[2]
     return True
+expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def reconcile_board():
     if not (owner and proj and repo0): return
-    expected = {}
     def set_expected(n, status, why, run_id="", run_ts="", rank=0):
         old = expected.get(n)
         if old and old[0] >= rank: return
@@ -316,11 +319,15 @@ def reconcile_board():
             elif i["failed"]:
                 why = "; ".join(i["reasons"]) or "nothing landed"
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} failed with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
+            elif i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor, and the board says so
+                why = "; ".join(i["reasons"]) or "no reason recorded"
+                set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             else:
                 set_expected(n, "Code Complete", f"run {i['run_id']} completed but nothing landed", i["run_id"], i["run_ts"], 40)
     for m in sorted((st / "auto").glob("disp-*")):
         n = m.name[5:]; holder = m.read_text().strip()
-        if n.isdigit() and holder in keep: set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder or n, "", 30)
+        if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
+            set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder or n, "", 30)
     for m in sorted((st / "auto").glob("fork-*")):   # the close pass leaves this marker when it merged that commit: the branch landed, unless the base says otherwise (rule P owns what it unwound, and a branch still ahead is work to come)
         mo = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", m.name)
         if mo and fork_verdict(mo.group(1), mo.group(2)) in ("landed", "unknown"): set_expected(mo.group(1), "Done", f"{m.name} marks a landed branch", "", "", 70)
@@ -373,14 +380,14 @@ if owner and proj and repo0:
             if n in byissue: continue   # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
-            moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if card_status(proj, n) == "In Progress" else []   # only the column the dispatch set: never downgrade a card another step moved past it (the marker is dropped either way: nothing must hold a finished run's issue back)
-            if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
+            moves = []   # the loop-board card is rule R's (one owner, #91): O reads the column R derived and writes none of its own; the marker is dropped either way, nothing must hold a finished run's issue back
+            if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])   # only the column the dispatch set: never downgrade a card another step moved past it
             mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
-            where = f"its card is back in {moves[-1][1]} and" if moves else "its card keeps its column and"
+            col = expected.get(n)
+            where = (f"its card is {col[1]}" if col else "its card keeps its column") + (f" (bug card back in {moves[-1][1]})" if moves else "") + " and"
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again")
             if not dry:
-                for p, s in moves:
-                    _run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)])
+                for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"bug card back in {s} after run {f.name} ended {i['name']}")
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
@@ -412,7 +419,7 @@ if owner and proj and repo0:
         mks = " and ".join("auto/" + k + "-" + n for k in sorted(ms))
         say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no PR names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
         if not dry:
-            for p, s in moves: _run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)])
+            for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"stale card back in {s}")
             for m in ms.values():
                 if m is not None: m.unlink()
             (st / "cq" / f"{CQ}#{n}-stalecard-{os.getpid()}.md").write_text(
@@ -462,7 +469,7 @@ if fd and fb:
             say(f"UNWOUND #{n}: {mk.name} claims {sha[:9]}, which {fb} no longer holds and {br} has nothing left to merge; card -> {', '.join(s for _, s in moves)}, {'+'.join(marks)} dropped so it dispatches again")
             if not dry:
                 km.touch()
-                for p, s in moves: _run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)])
+                for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"unwound landing, card back in {s}")
                 for k in marks:
                     f2 = st / "auto" / k
                     if f2.exists(): f2.unlink()
