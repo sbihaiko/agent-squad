@@ -243,4 +243,38 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#190) the card move of a dispatch is a write the pass CAN make: an issue the board does not carry is put on the
+# board by that same move (--add), never answered "#<n> not on the board" and filed as a defect. An issue of the block
+# that is not on the board is not a refused write -- it is a card the pass mints. The chain this breaks is why the
+# defect repeats: every bug the loop files about a card move is itself an issue with no card, so the next pass files the
+# next one (#186 -> #187 -> #188 -> #189 -> #190), and the [SQUAD] bugs pile up one per pass. The door here answers the
+# way board.py does: no --add and no card is that line on stderr and rc 1; --add mints the card and writes its Status.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+cat > "$T/s/board.sh" <<J
+#!/bin/bash
+printf '%s\n' "\$*" >> "$T/board.calls"
+add=; [ "\$1" = "--add" ] && { add=1; shift; }
+n=\${!#}                      # the last issue named: the card this move is about
+[ -n "\$add" ] && touch "$T/card-\$n"
+[ -e "$T/card-\$n" ] || { echo "#\$n not on the board" >&2; exit 1; }   # board.py's answer for a card no read carries
+echo "#\$n -> \$3"
+J
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+: > "$T/filed"; : > "$T/st/cycle.log"; : > "$T/board.calls"; rm -f "$T/card-1228"
+export BOARD="$T/s/board.sh"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 the pass whose dispatch moves a missing card finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch happens" ;; *) ko "9 no dispatch: '$r'";; esac
+$G -qE '^--add ' "$T/board.calls" && ok "9 the pass asks the board to add the missing card it moves" || ko "9 the move is made without an add: '$(cat "$T/board.calls")'"
+[ -e "$T/card-1228" ] && ok "9 the missing card is minted and its Status written" || ko "9 no card was minted: '$r'"
+[ ! -s "$T/filed" ] && ok "9 no bug is filed for a card the pass can mint" || ko "9 the pass filed a defect for its own missing card: $(cat "$T/filed")"
+[ "$($G -c REFUSED "$T/st/cycle.log")" = 0 ] && ok "9 the cycle log names no refusal" || ko "9 cycle.log: $(cat "$T/st/cycle.log")"
+
 rm -rf "$T"; exit $fail
