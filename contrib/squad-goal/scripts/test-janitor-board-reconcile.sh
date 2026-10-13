@@ -3,10 +3,15 @@
 # A card the board does not carry is created with its expected status in the same write (--add); a board that does not
 # answer at all (the items read fails) is told apart from one that answers "no such card": nothing is written, nothing is
 # reported as a defect. The items are read once per pass, never once per issue.
+# Every open issue the repository has carries a card, whether or not a run names it (#92): an issue with no run, no
+# marker and no card -- the case the measured defect showed, an issue created while the loop runs -- is added in the
+# dispatch column, and one that carries needs-owner or needs-ratification is added Blocked. The open issues are ONE read
+# through the door (gh_aggregate, the throttle), never one call per issue.
 # Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-board-reconcile.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
+here="$(cd "$(dirname "$src")" && pwd)"; cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -34,6 +39,12 @@ case "$a" in
     for n in 2001 2007 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2003 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
     printf '2014\t\thttps://api.github.com/repos/x/y\n';;   # on the board, no Status yet
+  *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
+    printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016; do
+      case $n in 2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';; 2012) labs='{"nodes":[{"name":"needs-ratification"}]}';; *) labs='{"nodes":[]}';; esac
+      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
+    printf ']}}}}';;
   *issues/2007*) echo $'open\t\tIssue 2007\tneeds-owner';;
   *issues/2010*) echo $'closed\t\tIssue 2010';;
   *issues/2012*) echo $'open\t\tIssue 2012\tneeds-ratification';;
@@ -103,6 +114,11 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2014$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'ADD .* 2014$' "$T/board.calls" && ok "a card with no Status is written, not added again" || ko "#2014: $(bc)"
 ! /usr/bin/grep -q 'ADD .* 2001$' "$T/board.calls" 2>/dev/null && ok "a card that exists is never added again" || ko "#2001 added: $(bc)"
 [ "$(/usr/bin/grep -c 'projectsV2/4/items' "$T/gh.calls")" = 1 ] && ok "the items are read once per pass" || ko "items read $(/usr/bin/grep -c 'projectsV2/4/items' "$T/gh.calls") times"
+# #92: an issue no run names, with no marker and no card, still carries one -- the open-issue list is ONE read
+/usr/bin/grep -q '^ADD o 4 Todo 2015$' "$T/board.calls" 2>/dev/null && ok "an open issue no run names gets a card in the dispatch column" || ko "#2015 not added: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2015: card added -> Todo' "$T/st/cycle.log" 2>/dev/null && ok "the add of an unclaimed issue is named in cycle.log" || ko "#2015 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
+[ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
