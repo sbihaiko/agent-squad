@@ -38,7 +38,8 @@
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
     Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
-import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
+import json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, time
+LSOF = os.environ.get("SG_LSOF") or shutil.which("lsof") or next((p for p in ("/usr/bin/lsof", "/usr/sbin/lsof") if os.path.exists(p)), "lsof")
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
@@ -123,7 +124,7 @@ for l in sh("/bin/ps", "-axo", "pid=,lstart=").splitlines():
         try: starts[int(p[0])] = time.mktime(time.strptime(" ".join(p[1:]).strip(), "%a %b %d %H:%M:%S %Y"))
         except ValueError: pass
 cwd = {}; pid = None
-for l in sh("/usr/sbin/lsof", "-d", "cwd", "-Fpn").splitlines():
+for l in sh(LSOF, "-d", "cwd", "-Fpn").splitlines():
     if l.startswith("p"): pid = int(l[1:])
     elif l.startswith("n") and pid: cwd[pid] = l[1:]
 me = set(); p = os.getpid()

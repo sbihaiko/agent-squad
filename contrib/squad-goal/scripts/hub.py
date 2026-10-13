@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
+import datetime as dt, glob, importlib.util, json, os, re, select, shlex, shutil, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+LSOF = os.environ.get("SG_LSOF") or shutil.which("lsof") or next((p for p in ("/usr/bin/lsof", "/usr/sbin/lsof") if os.path.exists(p)), "lsof")
 
 def _profile():
     """SG_REPO/SG_OWNER/SG_PROJECT/SG_CHECKOUT from the environment (hubmux.py pins them from the seam), else from the
@@ -930,7 +931,7 @@ def runs():
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
         pid, d = m.group(1), m.group(2)
-        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh("/usr/sbin/lsof", "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
+        port = re.search(r"TCP 127\.0\.0\.1:(\d+)|n127\.0\.0\.1:(\d+)", sh(LSOF, "-nP", "-a", "-p", pid, "-iTCP", "-sTCP:LISTEN", "-Fn"))
         if not port: continue
         p = pathlib.Path(d) / "record.jsonl"
         if not pathlib.Path(d).exists(): continue

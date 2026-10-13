@@ -24,6 +24,16 @@ fi
 eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOARD_CACHE)=' | sed 's/^/_ctx_/')"; unset _sg_ctx
 : "${SG_STATE:=$_ctx_SG_STATE}" "${SG_SHARED:=$_ctx_SG_SHARED}" "${SG_BOARD_CACHE:=$_ctx_SG_BOARD_CACHE}"
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
+# Resolve lsof once so scripts work on macOS and Linux. An explicit command wins, then PATH, then known system paths.
+if [ -z "${SG_LSOF:-}" ]; then
+  SG_LSOF=$(command -v lsof 2>/dev/null || true)
+  if [ -z "$SG_LSOF" ]; then
+    for _sg_lsof in /usr/bin/lsof /usr/sbin/lsof; do
+      [ -x "$_sg_lsof" ] && { SG_LSOF=$_sg_lsof; break; }
+    done
+  fi
+fi
+: "${SG_LSOF:=lsof}"
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
 if [ -n "${SG_TOOLING_REPO:-}" ]; then
   SG_REPOS=$(sg_repos | tr '\n' ' '); SG_REPOS=${SG_REPOS% }
@@ -32,7 +42,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
     echo "env.sh: profile $SG_PROFILE sets SG_TOOLING_REPO, which is retired: it is mapped into SG_REPOS for now; name $SG_TOOLING_REPO in SG_REPOS and remove SG_TOOLING_REPO from the profile" >&2; }
   unset SG_TOOLING_REPO
 fi
-export SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
+export SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_LSOF
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"
