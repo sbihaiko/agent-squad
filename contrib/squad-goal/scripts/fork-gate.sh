@@ -7,10 +7,11 @@
 # under the gui-suite lock, the one forkclose holds while it rebuilds the e2e emulator (#1410); the exit is non-zero when any of them fails.
 # The gate grades a tree of its own (#99): HEAD is checked out into a detached worktree and every suite runs there, so an
 # uncommitted edit beside the landing never decides the verdict; the checkout's dirty paths are reported once, by path.
-# One full gate per machine (#81): the suite phase -- the shell suites and the pytest suite this class needs -- runs inside ONE
-# `serial.sh gate` holder, so a second full gate (the land pass and a child's own suite run alike) waits for it, prints one wait
-# line and starts when it ends, instead of both taking every core. The GUI suite stays outside that holder: it takes gui-suite and
-# runs beside the phase, and holding `gate` for the emulator's minutes would make every other run wait for the emulator.
+# One full gate per machine (#81): the pytest suite -- the full gate that takes every core -- runs inside a `serial.sh gate`
+# holder, so a second full gate (the land pass and a child's own suite run alike) waits for it, prints one wait line and starts
+# its pytest half when the first one's ends. Only that half holds the lock (#94): the shell suites run beside it unlocked, since
+# one holder held across them blocked every gate on the machine for a quarter hour. The GUI suite stays outside the lock too:
+# it takes gui-suite, and holding `gate` for the emulator's minutes would make every other run wait for the emulator.
 here="$(cd "$(dirname "$0")" && pwd)"; gui=${1:-true}; rc=0; G=/usr/bin/git
 # The first five paths, then a count: the shape forkclose.sh's own WAIT line uses, so a long list never fills the log.
 namelist() { local n; n=$(printf '%s\n' "$@" | grep -c .)
@@ -49,17 +50,12 @@ if [ "$suites" = python ]; then
 fi
 # the shell suites and the pytest suite are offline and need no emulator, so they run beside the GUI suite (which holds the gui-suite lock itself), not after it
 sl=$(mktemp); pl=""; [ "$suites" = shell ] || pl=$(mktemp); rcf=$(mktemp)
-# The phase's own shell, so the two suites run side by side inside the holder as before: each one's exit is written to rcf, which is
-# what lets the gate name the half that failed. Both inherit SG_SERIAL_HELD, so a suite that runs the gate inside one waits for nobody.
-phase='
-  bash "$FG_SHELL" > "$FG_SL" 2>&1 & a=$!
-  if [ -n "$FG_PL" ]; then eval "$FG_PY" > "$FG_PL" 2>&1 & b=$!; fi
-  wait "$a" || echo shell >> "$FG_RC"
-  if [ -n "$FG_PL" ]; then wait "$b" || echo py >> "$FG_RC"; fi
-'
-FG_SHELL=$s FG_PY=$py FG_SL=$sl FG_PL=$pl FG_RC=$rcf bash "$here/serial.sh" gate bash -c "$phase" & ph=$!
+# Each half writes its exit to rcf, which is what lets the gate name the half that failed. Only the pytest half takes `gate`;
+# serial.sh's wait line goes to the gate's own stderr, so a waiting gate says so while it waits.
+{ bash "$s" > "$sl" 2>&1 || echo shell >> "$rcf"; } & a=$!
+if [ -n "$pl" ]; then { FG_PY=$py FG_PL=$pl bash "$here/serial.sh" gate bash -c 'eval "$FG_PY" > "$FG_PL" 2>&1' || echo py >> "$rcf"; } & b=$!; fi
 if [ "$suites" != shell ]; then echo "=== fork gate: GUI suite: $gui"; bash "$here/serial.sh" gui-suite bash -c "$gui" || { g=$?; echo "--- fork gate: GUI suite FAILED (exit $g)"; rc=1; }; fi
-wait "$ph"
+wait "$a"; [ -z "$pl" ] || wait "$b"
 echo "=== fork gate: squad shell suites"; cat "$sl"; rm -f "$sl"
 if /usr/bin/grep -qx shell "$rcf"; then echo "--- fork gate: shell suites FAILED"; rc=1; fi
 if [ -n "$pl" ]; then echo "=== fork gate: python tests: $py"; cat "$pl"; rm -f "$pl"; if /usr/bin/grep -qx py "$rcf"; then echo "--- fork gate: python tests FAILED"; rc=1; fi; fi

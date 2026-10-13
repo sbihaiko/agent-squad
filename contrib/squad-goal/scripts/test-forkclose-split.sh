@@ -1,8 +1,8 @@
 #!/bin/bash
 # Regression test for #85: the land pass is two phases. Phase one merges the branch into the base as soon as it is eligible and
-# needs no suite lock; phase two gates the landed head under the machine-wide `gate` lock (serial.sh), waits for a child gate
-# that holds it instead of running beside it, and says so (FORKCLOSE WAIT-GATE naming the holder, FORKCLOSE GATE-LOCK when it
-# takes it). A dirty path in the shared checkout holds only the merge that would touch it, and the WAIT line names the paths
+# needs no suite lock; phase two gates the landed head after a child gate that holds the machine-wide `gate` lock (serial.sh)
+# instead of beside it, and says so (FORKCLOSE WAIT-GATE naming the holder and how long it has held the lock, FORKCLOSE GATE-LOCK
+# when it takes it). The pass holds the lock only around that wait, never across the shell suites (#94). A dirty path in the shared checkout holds only the merge that would touch it, and the WAIT line names the paths
 # (five, then a count). A red re-gate still leaves the issue open, reverts the merge and arms the fix run.
 # Stub gh/test.sh/mkreq.sh, real fork-gate.sh and serial.sh, throwaway fork repo, no emulator. usage: bash test-forkclose-split.sh
 unset "${!SG_@}" FG_SUITES; here="$(cd "$(dirname "$0")" && pwd)"; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -10,7 +10,7 @@ G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 setup() {   # setup <issue>...: a fork whose base has f and g; branch 1 adds f1, branch 2 edits g, the rest add their own file
   T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/st/tests" "$T/bin" "$T/co/runs/.hub" "$T/fork"
   export HOME="$T/home"; mkdir -p "$HOME"
-  cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py $here/ghcall.sh "$T/s/"
+  cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'echo "held=${SG_SERIAL_HELD:-none}" >> %s/suitelock\n' "$T" > "$T/s/shell-suites.sh"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py $here/ghcall.sh "$T/s/"
   cat > "$T/s/test.sh" <<'EOS'
 #!/bin/bash
 iss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift
@@ -38,12 +38,13 @@ for i in $(seq 24); do g log --oneline local/next 2>/dev/null | grep -q "Merge g
 if g log --oneline local/next | grep -q "Merge gui/1" && kill -0 "$hp" 2>/dev/null && [ -d "$T/st/locks/gate" ]; then ok "the merge landed while the gate lock was held by someone else"; else ko "the merge waited for the gate lock: $(g log --oneline local/next | tr '\n' '|') holder alive: $(kill -0 "$hp" 2>/dev/null && echo yes || echo no)"; fi
 [ ! -e "$T/closed.log" ] && ok "the issue is not closed before its re-gate" || ko "closed before the gate ran"
 wait "$fp" "$hp"; r=$(cat "$T/fc.out")
-case "$r" in *"FORKCLOSE WAIT-GATE: waiting for the gate lock (holder $hpid)"*) ok "the wait is named, with the holder serial.sh recorded";; *) ko "no WAIT-GATE line naming pid $hpid: $r";; esac
+case "$r" in *"FORKCLOSE WAIT-GATE: waiting for the gate lock (holder $hpid, held "[0-9]*"s)"*) ok "the wait is named, with the holder serial.sh recorded and how long it has held the lock";; *) ko "no WAIT-GATE line naming pid $hpid and its hold time: $r";; esac
 case "$r" in *"FORKCLOSE GATE-LOCK: took the gate lock"*) ok "taking the lock is named";; *) ko "no GATE-LOCK line: $r";; esac
 [ "$(tr '\n' ' ' < "$T/log")" = "hold-start hold-end gate " ] && ok "the re-gate ran after the holder ended, never beside it" || ko "gate order: $(tr '\n' ' ' < "$T/log")"
 grep -q "state=closed" "$T/closed.log" 2>/dev/null && ok "the issue closes on the green re-gate" || ko "no close after the green re-gate: $r"
 [ -e "$T/st/auto/basetest-$(g rev-parse --short=9 local/next)" ] && ok "the gated head is recorded as a tested base" || ko "no basetest for the landed head"
 [ ! -d "$T/st/locks/gate" ] && ok "the gate lock is released after the pass" || ko "gate lock left behind"
+[ "$(cat "$T/suitelock" 2>/dev/null)" = "held=none" ] && ok "the re-gate's shell suites run outside the gate lock" || ko "the re-gate's shell suites ran under the gate lock: $(cat "$T/suitelock" 2>/dev/null)"
 rm -rf "$T"
 
 # 2. a dirty path the merge does not touch holds nothing; the pass lands beside it and never resets it

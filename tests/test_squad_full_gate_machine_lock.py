@@ -2,8 +2,10 @@
 
 The loop's land pass runs the fork gate (the shell suites and the pytest suite); a child working an issue ran the same
 suites in its own worktree. Eight cores take one of them, both finish later and the owner's editor loses the machine.
-The fix: the suite phase of the gate holds the machine-wide `gate` lock `serial.sh` already owns, so a second full gate
-prints one wait line, starts when the first ends, and the lock directory never carries two pids.
+The fix: the pytest half of the gate holds the machine-wide `gate` lock `serial.sh` already owns, so a second full gate
+prints one wait line, its pytest half starts when the first one's ends, and the lock directory never carries two pids.
+Issue #94: the lock is held around the pytest half only, never across the shell suites; one holder that held it for the
+whole shell suite blocked every other gate for a quarter hour.
 
 Host-free: the real gate scripts run in a throwaway tree with a throwaway SG_STATE, so nothing here touches the live
 loop's lock, the emulator or the network.
@@ -62,7 +64,10 @@ def test_the_suite_phase_of_the_gate_holds_the_machine_gate_lock(tmp_path):
 
 
 def test_two_full_gates_at_once_never_overlap_and_the_second_waits_once(tmp_path):
-    """Both gates of a race run to green, each one's work sits inside its own phase, and the second says it waits once."""
+    """Both gates of a race run to green, their pytest halves never overlap, and the second says it waits once.
+
+    The shell suites hold no lock (#94), so the two gates' shell suites may run side by side; the full pytest gate is what
+    takes the machine, and one of those runs whole before any line of the other."""
     d = _tree(tmp_path, {"test-slow.sh": 'echo "$FG_TAG suite start" >> "$LOG"; sleep 2; echo "$FG_TAG suite end" >> "$LOG"'})
     log = tmp_path / "log"
     py = 'echo "$FG_TAG pytest start" >> "$LOG"; sleep 2; echo "$FG_TAG pytest end" >> "$LOG"'
@@ -75,12 +80,48 @@ def test_two_full_gates_at_once_never_overlap_and_the_second_waits_once(tmp_path
     lines = log.read_text().splitlines()
     assert sorted(lines) == sorted(["A suite start", "A suite end", "A pytest start", "A pytest end",
                                     "B suite start", "B suite end", "B pytest start", "B pytest end"]), lines
-    # The whole of one gate runs before any of the other: a full gate that started inside another one would interleave here.
-    first, second = ("A", "B") if lines[0].startswith("A ") else ("B", "A")
-    assert max(i for i, ln in enumerate(lines) if ln.startswith(f"{first} ")) < \
-        min(i for i, ln in enumerate(lines) if ln.startswith(f"{second} ")), f"{first} ran beside {second}: {lines}"
+    pytest = [ln for ln in lines if " pytest " in ln]
+    first = pytest[0].split()[0]
+    assert pytest[:2] == [f"{first} pytest start", f"{first} pytest end"], f"two full pytest gates ran side by side: {lines}"
     waiting = WAIT_LINE.findall("".join(outs))
     assert len(waiting) == 1, f"the second full gate prints one wait line; got {len(waiting)}"
+
+
+def _holder(d, cwd, log, seconds):
+    """Another gate holding the machine-wide lock for `seconds`; returns once its pid is in the lock directory."""
+    h = subprocess.Popen(["bash", str(d / "serial.sh"), "gate", "bash", "-c", f"sleep {seconds}; echo holder end >> {log}"],
+                         cwd=cwd, env=_env(cwd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pid = Path(cwd) / "state" / "locks" / "gate" / "pid"
+    for _ in range(100):
+        if pid.exists() and pid.read_text().strip():
+            return h
+        time.sleep(0.05)
+    raise AssertionError("the holder never took the gate lock")
+
+
+def test_the_shell_suites_of_a_gate_run_while_another_gate_holds_the_lock(tmp_path):
+    """Only the pytest half waits for the holder (#94): the shell suites run at once, the pytest half after the holder ends."""
+    log = tmp_path / "log"
+    d = _tree(tmp_path, {"test-a.sh": f"echo suite >> {log}"})
+    holder = _holder(d, tmp_path, log, 4)
+    p = _gate(d, tmp_path, SG_FORK_PY_CMD=f"echo pytest >> {log}")
+    holder.wait(timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert log.read_text().split("\n")[:3] == ["suite", "holder end", "pytest"], (
+        f"the shell suites waited for the gate lock, so one holder blocks every gate for its whole run: {log.read_text()!r}")
+    assert len(WAIT_LINE.findall(p.stdout + p.stderr)) == 1, p.stdout + p.stderr
+
+
+def test_the_shell_suites_alone_take_no_gate_lock(tmp_path):
+    """shell-suites.sh run on its own does not take or wait for the machine-wide gate lock (#94)."""
+    log = tmp_path / "log"
+    d = _tree(tmp_path, {"test-a.sh": f"echo suite >> {log}"})
+    holder = _holder(d, tmp_path, log, 4)
+    p = _run("bash", str(d / "shell-suites.sh"), cwd=tmp_path)
+    holder.wait(timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert log.read_text().split() == ["suite", "holder", "end"], log.read_text()
+    assert not WAIT_LINE.findall(p.stdout + p.stderr), p.stderr
 
 
 def test_an_overlapping_gate_starts_after_the_holder_ends(tmp_path):
