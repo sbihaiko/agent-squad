@@ -70,4 +70,15 @@ o=$(cd "$T/plain" && env SG_STATE=$B/alpha bash "$d/refusal.sh" 77 BOARD-WRITE-F
 { [ $rc -ne 0 ] && [ -n "$o" ] && [ "$(pending)" = "$before" ]; } && ok "no repository in force: nothing is queued, named on stderr" || ko "queued with no repository (rc $rc): $o / $(pending)"
 o=$(refuse abc BOARD-WRITE-FAILED "$ERR" 2>&1); rc=$?
 { [ $rc -ne 0 ] && [ "$(pending)" = "$before" ]; } && ok "'abc' is not an issue number: nothing is queued" || ko "accepted a bad issue (rc $rc): $o / $(pending)"
+
+# 7. (#142) the refusal names are a closed set in code: a name outside it is refused by the helper, never queued under a
+# guessed name, and the refusal says which name it would not take
+: > "$T/ghlog"; before=$(pending)
+o=$(refuse 80 CARD-WRITE-FAILED "$ERR" 'moving the card to Done' 2>&1); rc=$?
+{ [ $rc -ne 0 ] && [ "$(pending)" = "$before" ]; } && ok "a name outside the closed set is refused, and nothing is queued" \
+  || ko "queued a name outside the set (rc $rc): $o / $(pending)"
+case "$o" in *CARD-WRITE-FAILED*) ok "the refusal names the name it would not take" ;; *) ko "the refusal does not name it: '$o'";; esac
+o=$(refuse 81 BOARD-WRITE-FAILED "$ERR"); settle; flush >/dev/null 2>&1
+$G -q '^api repos/x/alpha/issues/81/comments ' "$T/ghlog" && ok "a name in the set is still queued and posted" || ko "a name in the set was refused too: $(cat "$T/ghlog")"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "refusal comment: all green" || { echo "refusal comment: FAILED"; exit 1; }
