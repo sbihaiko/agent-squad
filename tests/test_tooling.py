@@ -41,8 +41,8 @@ def test_ci_workflow_runs_ruff_mypy_and_pytest_in_order():
     assert idx == sorted(idx), "ci.yml must run ruff, mypy, pytest in that order"
 
 
-def test_ci_workflow_triggers_python_matrix_and_permissions():
-    """Guard for the CI rule: push to main, pull requests, Python 3.11 and 3.13, read-only token."""
+def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
+    """Guard for the CI rule: push to main, pull requests, Python 3.11 and 3.13 inside one job, read-only token."""
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
@@ -50,9 +50,30 @@ def test_ci_workflow_triggers_python_matrix_and_permissions():
     assert on["push"]["branches"] == ["main"] and "pull_request" in on
     assert wf["permissions"] == {"contents": "read"}
     job = next(iter(wf["jobs"].values()))
-    assert job["strategy"]["matrix"]["python-version"] == ["3.11", "3.13"]
+    assert job["timeout-minutes"] == 20, "the job keeps the twenty minutes it gives itself"
+    versions = [s["with"]["python-version"] for s in job["steps"] if s.get("uses", "").startswith("actions/setup-python")]
+    assert versions == ["3.11", "3.13"], f"one job runs both supported versions in order; found {versions}"
     uses = [s["uses"] for j in wf["jobs"].values() for s in j["steps"] if "uses" in s]
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
+
+
+def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
+    """Guard for the CI rule: no matrix (one commit, one job), and one concurrency group per branch (#149).
+
+    A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
+    up answers nothing. The group is the branch, so a push and the pull request of that branch share it; `github.ref`
+    would not, because a pull request carries `refs/pull/<N>/merge` and a push `refs/heads/<branch>`.
+    """
+    import yaml
+
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    assert len(wf["jobs"]) == 1, "one commit starts one job"
+    job = next(iter(wf["jobs"].values()))
+    assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
+    group = wf["concurrency"]["group"]
+    assert "github.head_ref" in group and "github.ref_name" in group, group
+    assert not re.search(r"github\.ref\b", group), f"{group}: github.ref names a pull request by its merge ref"
+    assert "pull_request" in wf["concurrency"]["cancel-in-progress"], "a superseded pull request run is cancelled"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"

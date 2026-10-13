@@ -1181,10 +1181,13 @@ OPEN_PR_QUERY = """query{repository(owner:"%s",name:"%s"){pullRequests(first:100
 number title isDraft updatedAt createdAt headRefOid baseRefName mergeStateStatus
 labels(first:30){nodes{name}}
 reviewThreads(first:100){totalCount nodes{isResolved}}
-commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
+commits(last:1){nodes{commit{committedDate statusCheckRollup{state contexts(first:100){nodes{__typename ... on CheckRun{conclusion status} ... on StatusContext{state}}}}}}}}}}}"""
 
 LIVE_BAD = ("failure", "timed_out", "action_required", "startup_failure", "cancelled", "error")
 LIVE_WAIT = ("queued", "in_progress", "pending", "waiting", "requested", "expected", "completed")
+CI_WAIT = ("queued", "in_progress", "pending", "waiting", "requested")   # a check GitHub reports as unfinished
+CI_QUEUED = ("queued",)          # ... and that no runner has picked up: a queue is not a run (#149)
+CI_QUEUE_MAX = 20 * 60.0         # the timeout `.github/workflows/ci.yml` gives its job: still queued past it, no run started
 
 def _live_states(rollup):
     """The states of the live rollup's contexts: a CheckRun reports its conclusion once it has one and its status before
@@ -1224,7 +1227,7 @@ def prs_from_graphql(payload, repo=None):
         base = nd.get("baseRefName") or None
         rows.append({"n": nd["number"], "t": nd.get("title") or "", "d": bool(nd.get("isDraft")), "u": nd.get("updatedAt") or "",
                      "o": nd.get("createdAt") or "", "h": nd.get("headRefOid") or "", "base": base, "ms": ms, "l": labels,
-                     "th": threads, "ci": states, "rollup": _live_rollup(states), "r": repo,
+                     "th": threads, "ci": states, "hc": commit.get("committedDate") or None, "rollup": _live_rollup(states), "r": repo,
                      "facts": not (states is None or threads is None or labels is None or not ms or not base)})
     return rows
 
@@ -1386,12 +1389,25 @@ def gate_strip(x, t=None, now=None):
                       {"k": "B", "v": bv[0], "tip": bv[1]}, {"k": "H", "v": hv[0], "tip": hv[1]}],
             "age": age, "old": age > STRIP_MAX_AGE}
 
+def _head_pushed_age(x):
+    """The seconds since the head commit was pushed, from GitHub's own `committedDate` on the row; None when the query
+    did not return it. A fact nobody has is unknown, so it never carries a stop (ADR-0018)."""
+    at = x.get("hc")
+    if not at: return None
+    try: return time.time() - dt.datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+    except ValueError: return None
+
 def pr_state(x):
     """One word for an open PR, from GitHub facts (CI, mergeable state) and the squad's review files (revci-<pr>.out, auto/launched-*).
-    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-running, reviewing, ready, merged-soon, awaiting-review.
+    Worst first: draft, conflict, ci-failed, changes, review-timeout/failed, ci-cannot-run, ci-waiting, reviewing, ready,
+    merged-soon, awaiting-review.
     Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771).
     A row the batched query did not fill in says so instead of falling through to a passing word (#1772), and a debt-only
-    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed."""
+    CHANGES is the loop's to decide, not a block: the autopilot merges it once the debt is filed.
+    The CI chip reads the word GitHub reports (#149): a check that is `queued` says queued, never that a run is in
+    progress -- `queued` and `in_progress` are two different words, and only a runner that picked the check up makes one
+    of them a run. A head whose unfinished checks are all still queued past the timeout the ci job gives itself cannot
+    be answered at all, and the chip says that instead of implying progress."""
     n = x["n"]; sha9 = (x.get("h") or "")[:9]
     if (STATE / "auto" / "off").exists(): return gate_state(n, sha9)   # the loop is off: no card reports a verdict of its own
     if x.get("d"): return ["draft", "draft"]
@@ -1407,7 +1423,14 @@ def pr_state(x):
     rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
     if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
     if "BLOCKED" in line: return ["broke", "review blocked"]
-    if any(c in ("queued", "in_progress", "pending", "waiting", "requested") for c in ci): return ["running", "CI running"]
+    wait = [c for c in ci if c in CI_WAIT]   # the checks GitHub reports as unfinished
+    if wait:
+        if all(c in CI_QUEUED for c in wait):   # not one runner has picked a check up: a queue, not a run
+            age = _head_pushed_age(x)
+            if age is not None and age > CI_QUEUE_MAX:
+                return ["broke", "CI cannot run", f"the head {sha9} was pushed {_ago(age)} ago and every unfinished check on it is still queued, past the {int(CI_QUEUE_MAX / 60)} min the job gives itself: no run ever started, so this head answers nothing"]
+            return ["running", "CI queued", f"every unfinished check on {sha9} reads queued, not a run in progress: no runner has picked one up" + (f" (head pushed {_ago(age)} ago)" if age is not None else " (the query returned no head date)")]
+        return ["running", "CI running"]
     if not line and (STATE / "auto" / f"launched-{n}-{sha9}").exists(): return ["running", "reviewing"]
     if "APPROVE" in line: return gate_state(n, sha9)   # a green review line is not the loop's verdict: the gate file is
     return ["idle", "awaiting review"]
