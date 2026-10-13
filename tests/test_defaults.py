@@ -46,6 +46,13 @@ def test_call_env_carries_the_output_and_context_limits():
     assert env["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH"] == "3"
 
 
+def test_call_env_carries_the_call_deadline():
+    """#134 (ADR-0051): the deadline the run keeps reaches the process it starts, so a gate that outlives its
+    call carries the cap it must stop at."""
+    env = defaults.call_env(defaults.load())
+    assert env["SG_CALL_DEADLINE_SECONDS"] == "600"
+
+
 def test_a_missing_token_limit_is_a_defect():
     cfg = defaults.load()
     del cfg["limits"]["context_tokens"]

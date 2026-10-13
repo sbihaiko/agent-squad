@@ -82,10 +82,10 @@ scene gate
 mkdir -p "$SG_STATE/locks/gui-suite"; echo $$ > "$SG_STATE/locks/gui-suite/pid"
 r=$(run); skipped "$r" && ok "does not start while a gate test holds gui-suite" || ko "started with gui-suite lock: '$r'"
 
-# 5) forkclose lock held
+# 5) the landing pass's lock held: prland is what replaced the retired fork pass, so a hunt waits for it (#134)
 scene fc
-mkdir -p "$SG_STATE/locks/single-forkclose"; echo $$ > "$SG_STATE/locks/single-forkclose/pid"
-r=$(run); skipped "$r" && ok "does not start while forkclose is running" || ko "started with forkclose lock: '$r'"
+mkdir -p "$SG_STATE/locks/single-prland"; echo $$ > "$SG_STATE/locks/single-prland/pid"
+r=$(run); skipped "$r" && ok "does not start while the landing pass is running" || ko "started with prland lock: '$r'"
 
 # 6) startable autobug / autofrontier
 scene bug; touch "$SG_STATE/auto/startable-bug"

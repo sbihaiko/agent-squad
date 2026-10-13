@@ -243,15 +243,13 @@ ruff check squad tests && mypy squad
 The loop's own scripts are covered by shell suites that run every `test-*.sh` beside them:
 
 ```bash
-contrib/squad-goal/scripts/shell-suites.sh                      # the loop's suites
-contrib/squad-goal/scripts/fork-gate.sh "<gui suite command>"   # the gate a local landing runs
+contrib/squad-goal/scripts/shell-suites.sh    # the loop's suites
 ```
 
-This checkout is a **fork**: the engine tracks upstream (0.2.0, kept as `local/base-0.2.0`), and everything built on top of it is committed on `main`. The **live skill** (`~/.claude/skills/squad-goal/`) is a copy of `contrib/squad-goal` on `main`, and the loop runs the copy.
+This checkout is a **fork**: the engine tracks upstream (0.2.0, kept as `local/base-0.2.0`), and everything built on top of it is committed on `main`. The **live skill** (`~/.claude/skills/squad-goal/`) follows `contrib/squad-goal` on `main` through `publish-live.sh`, and the loop runs the copy.
 
 ```bash
-contrib/squad-goal/scripts/sync-to-fork.sh        # live skill -> fork, refuses to overwrite newer work
-contrib/squad-goal/scripts/refresh-from-fork.sh   # fork -> live skill (--check compares, changes nothing)
+contrib/squad-goal/scripts/publish-live.sh        # fork -> live skill, an explicit file list (--check compares, changes nothing)
 contrib/squad-goal/scripts/export-agent-squad.sh  # the ZIP for upstream
 ```
 
