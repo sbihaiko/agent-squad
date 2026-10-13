@@ -7,7 +7,7 @@ runs() { [ -f "$T/gui.log" ] && wc -l < "$T/gui.log" | tr -d ' ' || echo 0; }
 setup() {   # setup <issue>...: a fork whose base has hub.py (10 lines) and one branch per issue; 1 edits line 1, 2 edits line 10, 3 edits line 1 too (conflicts with 1), 4 adds the file "bad" (the gate goes red on it), others add their own file
   T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
   export HOME="$T/home"; mkdir -p "$HOME"   # serial.sh's durable GUI kill switch is $HOME/.squad-gui-tests-off, so a private home is what keeps THIS fixture's gate decision observable instead of letting the machine's switch answer for it (the command the gate runs is the stub in SG_FORK_TEST_CMD, so no emulator can start either way)
-  cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/ghcall.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py "$T/s/"
+  cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py $here/ghcall.sh "$T/s/"
   # test.sh's stub models the seam the landing reads its failures from: the real test.sh writes the gate's whole output to
   # $SG_STATE/tests/<TEST_ID>.log, which is what the batch pass reads a red batch's failing test out of (#13).
   cat > "$T/s/test.sh" <<'EOS'

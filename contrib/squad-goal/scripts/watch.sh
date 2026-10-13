@@ -18,8 +18,8 @@ if ! mkdir "$wlock" 2>/dev/null; then
   else echo "watch.sh already running pid=$wh for $wme"; exit 0; fi
 fi
 echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit 0' INT TERM   # a TERM'd loop stops, it does not keep polling without its lock
-# ONE reader owns every GitHub read of this cycle (#1893, ADR-0277): ghread.py answers in exactly three outcomes -- the
-# answer in stdout with exit 0, a refusal naming GitHub's own message and request id with exit 2, and a failure before
+# ONE door owns every GitHub read of this cycle (ghcall.sh, #1893, ADR-0277): ghread.py answers in exactly three outcomes --
+# the answer in stdout with exit 0, a refusal naming GitHub's own message and request id with exit 2, and a failure before
 # GitHub reached a verdict with exit 1 -- and the body of a refusal is never on stdout as data. `gh api` writes the error
 # body to stdout and exits non-zero, and it does not honour -q on a failed request, so every `gh api … 2>/dev/null` here
 # used to treat a 403/404/500 body as a valid answer: on 2026-10-12 a rate-limit body became the open-PR list and the
@@ -28,18 +28,11 @@ echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit
 # The outcome travels in the exit code with its line in stdout, never in a variable: every call site below reads the
 # list inside `$( )`, and a subshell cannot set a variable in its caller, so a refusal kept in `$gh_api_err` reached the
 # log as `the open-PR list is not a list: ;` -- GitHub's own words lost, the empty tail read as "no PRs".
-gh_api() {
-  local route=$1; shift
-  local q=""; [ "${1:-}" = "-q" ] && q=${2:-}
-  local o rc
-  o=$(python3 "$(dirname "$0")/ghread.py" "$route"); rc=$?
-  if [ "$rc" -eq 0 ]; then
-    if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi
-    return 0
-  fi
-  printf '%s' "$o"   # the refusal/failure line: stdout is the only channel a subshell has
-  return "$rc"
-}
+#
+# The cycle reads the open PRs as ONE aggregate (#45): the list carries each PR's branch, title and body, so a new PR is
+# announced from the list it was found in and costs no read of its own, and `gh_aggregate` answers a repeat inside its
+# window (90 s) from the snapshot. A PR opened inside the window is announced by the next cycle, not this one.
+. "$(dirname "$0")/ghcall.sh"
 # reported verdicts / stalls persist across restarts ($W); a first start (no file) records current verdicts silently
 W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
@@ -48,7 +41,7 @@ seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall
 # life of the process. The refusal is named in the log from the module's own line, which carries GitHub's message and
 # request id -- a caller that only ever learns from an answer cannot clear what it already knew.
 prs=" "
-if pl=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number'); then prs=" $(printf '%s\n' "$pl" | tr '\n' ' ')"
+if pl=$(gh_aggregate "repos/$SG_REPO/pulls?state=open&per_page=100") && pn=$(printf '%s' "$pl" | jq -r '.[].number'); then prs=" $(printf '%s\n' "$pn" | tr '\n' ' ')"
 else echo "WATCH: the open-PR list is not readable, keeping the last known set: $pl"; fi
 for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rs"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
@@ -76,13 +69,13 @@ if v:
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
   # a refusal is not an open-PR list (#1870): the words of an error body are never PR numbers, the per-PR follow-up is
   # read only after the list answered, and a PR the follow-up could not read stays unannounced for the next cycle
-  if lp=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number'); then
+  if lj=$(gh_aggregate "repos/$SG_REPO/pulls?state=open&per_page=100") && lp=$(printf '%s' "$lj" | jq -r '.[].number'); then
     for n in $lp; do case "$n" in ''|*[!0-9]*) continue;; esac; case "$prs" in *" $n "*) ;; *)
-      t=$(gh_api repos/$SG_REPO/pulls/$n -q '.head.ref+" "+.title+"\t"+(.body//"")') \
+      t=$(printf '%s' "$lj" | jq -r --argjson n "$n" '.[]|select(.number==$n)|.head.ref+" "+.title+"\t"+(.body//"")') \
         || { echo "WATCH: PR #$n is not readable: $t"; continue; }
       echo "NEW PR #$n ${t%%$'\t'*}"; prs="$prs$n "
       for i in $(printf '%s' "$t" | grep -oE 'Refs #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do printf "PR #%s opened: %s. Refs #%s\n" $n "${t%%$'\t'*}" $i > "$SG_STATE/cq/$i-pr$n.md"; done;; esac; done
-  else echo "WATCH: the open-PR list is not readable, keeping the last known set: $lp"; fi
+  else echo "WATCH: the open-PR list is not readable, keeping the last known set: $lj"; fi
   for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rn"
   comm -13 "$SG_STATE/.rs" "$SG_STATE/.rn" | sed 's/^/REVIEW /'; cp "$SG_STATE/.rn" "$SG_STATE/.rs"
   # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes; review with no summary after review_stall_minutes
@@ -117,4 +110,6 @@ if v:
   tm "$(dirname "$0")/janitor.sh" 2>&1   # leftover processes of finished runs, zombie runs, idle dashboards, stale dispatch markers   # finished, pushed child worktrees
   tm bash "$(dirname "$0")/single.sh" vendorguard bash "$(dirname "$0")/vendor-guard.sh" 2>&1   # re-vendor drifted personal skills (a drifted vendor makes every squad start refuse)
   boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1; tm "$(dirname "$0")/autopilot.sh" 2>&1; }; done; sleep 30
+  # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains
+  x=$(gh_stretch 90); [ "$x" -gt 0 ] 2>/dev/null && { echo "$(date +%T) QUOTA low: this cycle waits ${x}s more" >> "$SG_STATE/cycle.log"; sleep "$x"; }
   echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc, autopilot and both dispatches every 30 s (fastloop.sh when watchd runs it), the rest every 90 s

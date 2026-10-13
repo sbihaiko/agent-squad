@@ -11,7 +11,7 @@ pass() { bash "$T/s/forkclose.sh" 2>&1; }
 board() { printf '{"items":[%s]}\n' "$1" > "$T/co/runs/.hub/hub-board.json"; }
 mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each case builds the history it is about
   rm -rf "$T/s" "$T/st" "$T/co" "$T/bin" "$T/fork"; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,prland.sh,ghcall.sh,address.sh,fork-gate.sh,serial.sh,gate-suites.sh,merge-audit.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,fork-gate.sh,serial.sh,gate-suites.sh,merge-audit.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/"
   printf 'exit 0\n' > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
   cat > "$T/bin/gh" <<'J'

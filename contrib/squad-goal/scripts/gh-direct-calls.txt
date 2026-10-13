@@ -22,7 +22,7 @@ childcc.py 2
 forkonly.sh 1
 health.sh 5
 hub.py 11
-janitor.py 16
+janitor.py 14
 mkreq.sh 3
 prepush.sh 3
 reconcile.py 2

@@ -11,10 +11,11 @@ for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/watch.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; B=$T/bin
 mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log REC_SLEEP=5
-cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/repoctx.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
+cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/repoctx.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
 cat > "$S/env.sh" <<EOF
 export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
+export SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001   # every case below is its own GitHub: a list kept, or a cooldown set, by the last case would answer this one (#45)
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # no open PR, no revci summary, nothing to move
 printf '#!/bin/bash\n[ -n "$REAL_SLEEP" ] && exec /bin/sleep "$@"\nexit 0\n' > "$B/sleep"   # REAL_SLEEP=1 keeps a stub slow on purpose
@@ -134,12 +135,13 @@ n=$(/usr/bin/grep -c '^NEW PR #' "$T/watch.out")
 # number in it is not a PR number either. The stub refuses the list on the first cycle and answers PR #7 from the second,
 # and the title of #7 is only served once the list has actually answered -- so the announcement can only come from a
 # successful read.
+# The list carries the PR's branch, title and body (#45): the announcement is read from it, with no read of its own.
 # The stub answers the RAW body now (#1893): ghread.py owns the read and the caller's `jq` does the projection, so `gh`
 # is stubbed at the wire and no longer at the projection (which is what `-q` used to fold into the same fake).
 cat > "$B/gh" <<J
 #!/bin/bash
 case "\$*" in
-  *pulls?state=open*|*graphql*) [ "\$(cat "$T/cyc" 2>/dev/null || echo 0)" -ge 1 ] && { echo '[{"number":7}]'; touch "$T/list-ok"; exit 0; }
+  *pulls?state=open*|*graphql*) [ "\$(cat "$T/cyc" 2>/dev/null || echo 0)" -ge 1 ] && { echo '[{"number":7,"title":"a real open PR","body":"Refs #1870","head":{"ref":"gui/1870"}}]'; touch "$T/list-ok"; exit 0; }
     i=\$(( \$(cat "$T/reqid" 2>/dev/null || echo 0) + 1 )); echo "\$i" > "$T/reqid"
     printf '{"message":"API rate limit exceeded for user ID 122891372; retry after 7 seconds (request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2%s)","status":"403"}\n' "\$i"
     exit 1 ;;
@@ -162,7 +164,7 @@ cat > "$B/gh" <<J
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*|*graphql*) case "\$(cat "$T/cyc" 2>/dev/null || echo 0)" in
-      1|3) echo '[{"number":7}]'; exit 0 ;;
+      1|3) echo '[{"number":7,"title":"a real open PR","body":"Refs #1893","head":{"ref":"gui/1893"}}]'; exit 0 ;;
     esac
     printf '{"message":"API rate limit exceeded for user ID 122891372 (request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2A)","status":"403"}\n'
     exit 1 ;;

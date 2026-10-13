@@ -3,7 +3,7 @@
 # Nested fork-gate.sh honors inherited FG_SUITES; a contrib-only outer gate sets FG_SUITES=shell and would skip the GUI command this suite asserts, so the nested calls pin FG_SUITES=full. They pin SG_FORK_PY_CMD too: the full gate runs the pytest suite (#1822) and this suite is about the gui-suite lock, not about pytest.
 src=${1:-$(dirname "$0")/forkclose.sh}; here=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}" FG_SUITES; export HOME="$T/home" GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b; mkdir -p "$HOME"
-mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$here/fork-gate.sh" "$here/serial.sh" "$T/s/"; printf "exit 0\n" > "$T/s/shell-suites.sh"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"
+mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp "$here/fork-gate.sh" "$here/serial.sh" "$T/s/"; printf "exit 0\n" > "$T/s/shell-suites.sh"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py $(dirname "$src")/ghcall.sh "$T/s/"
 printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init

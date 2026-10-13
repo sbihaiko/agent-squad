@@ -58,16 +58,45 @@ def listing(apps):
     return {"hub": "squad-hub", "repos": [{"slug": s, "repo": a["repo"], "path": f"/{s}", "live": live(a), **({"err": a["err"]} if "err" in a else {})} for s, a in apps.items()]}
 
 
-def root_page(apps, title):
-    rows = "".join(f'<li><a href="/{html.escape(r["slug"])}">{html.escape(r["slug"])}</a> {html.escape(r["repo"])} &middot; '
-                   + (f'<b>broken profile</b>: {html.escape(r["err"])}' if "err" in r else f'{len(r["live"])} live: {html.escape(" ".join(r["live"]) or "none")}')
-                   + "</li>" for r in listing(apps)["repos"])
-    return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><body style="background:#0d1117;color:#c9d1d9;font:14px system-ui;margin:16px">'
-            f"<h1>{html.escape(title)}</h1><ul>{rows or '<li>no profile known</li>'}</ul>").encode()
+CSS = ("body{background:#0d1117;color:#c9d1d9;font:14px system-ui;margin:16px}"
+       "h1{font-size:18px;margin:0 0 4px}ul{list-style:none;padding:0;margin:12px 0 0;max-width:54em}"
+       "li{padding:7px 0;border-bottom:1px solid #21262d}a{color:#5aa9ff;text-decoration:none}"
+       "a:hover{text-decoration:underline}.repo{color:#8b9bb3}.live{color:#3ecf8e}.none{color:#8b9bb3}"
+       ".broken{color:#ff6b6b}.note{color:#8b9bb3;margin:0}"
+       ".runs{color:#8b9bb3;font:11px ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;margin-top:3px}")
+
+
+def root_page(apps, title, note=None):
+    """The index: ONE line per repository -- its link, its owner/name and its live count, with the live run ids in a
+    muted block of their own. A repository holding twenty runs must not bury the list under its own ids, which is what
+    the old single-line row did when an operator opened `/test` and got every repository's runs in one paragraph."""
+    rows = []
+    for r in listing(apps)["repos"]:
+        slug, repo = html.escape(r["slug"]), html.escape(r["repo"])
+        if "err" in r:
+            badge = f'<span class="broken">broken profile: {html.escape(r["err"])}</span>'
+        else:
+            badge = f'<span class="live">{len(r["live"])} live</span>' if r["live"] else '<span class="none">none live</span>'
+        ids = " ".join(sorted(r["live"]))
+        runs = f'<div class="runs">{html.escape(ids)}</div>' if ids else ""
+        rows.append(f'<li><a href="/{slug}"><b>{slug}</b></a> <span class="repo">{repo}</span> {badge}{runs}</li>')
+    return (f'<!doctype html><meta charset=utf-8><title>squad hub</title><style>{CSS}</style><body>'
+            f'<h1>{html.escape(title)}</h1>{note or ""}<ul>{"".join(rows) or "<li>no profile known</li>"}</ul>').encode()
+
+
+def test_note(slug, apps):
+    """What a path the hub does not own is told: a test log belongs to a repository, so name where it lives instead of
+    leaving the operator at a list. `/test/<id>` read as a repository named `test` is the case that sent them here."""
+    if slug != "test" or not apps:
+        return None
+    first = sorted(apps)[0]
+    return (f'<p class="note">A test log belongs to a repository: open <code>/{html.escape(first)}/test/&lt;id&gt;</code>. '
+            "The repositories and their live runs are:</p>")
 
 
 def rewrite(body, slug):
-    """A repository's page calls its own API: every absolute /api/ and /test/ reference gains the /<slug> prefix."""
+    """A repository's page calls its own API: every absolute /api/ and /test/ reference gains the /<slug> prefix, in the page and in
+    the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
         for p in (b"/api/", b"/test/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
@@ -88,7 +117,7 @@ def server(port, apps):
             slug = path.split("/")[1]
             app = apps.get(slug)
             if not app or "mod" not in app:
-                return self._send(404, root_page(apps, f"no repository at /{slug}"), "text/html; charset=utf-8")
+                return self._send(404, root_page(apps, f"no repository at /{slug}", test_note(slug, apps)), "text/html; charset=utf-8")
             self.path = self.path[len(slug) + 1:] or "/"
             if self.path.startswith("?"): self.path = "/" + self.path
             real, buf = self.wfile, io.BytesIO()
@@ -96,7 +125,7 @@ def server(port, apps):
             try: getattr(app["mod"].H, "do_" + method)(self)
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
-            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head else body))
+            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head or b"application/json" in head else body))
 
         def do_GET(self): self._route("GET")
         def do_POST(self): self._route("POST")

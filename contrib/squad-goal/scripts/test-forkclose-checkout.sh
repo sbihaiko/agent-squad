@@ -6,7 +6,7 @@
 # Not a dry run: the WAIT lives on the merge path, past the FC_DRY return. Stub gh, stubbed gate, throwaway fork repo.
 # usage: bash test-forkclose-checkout.sh [path/to/forkclose.sh]
 src=${1:-$(dirname "$0")/forkclose.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py $(dirname "$src")/ghcall.sh "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 printf '#!/bin/bash\nbash -c "$1"\n' > "$T/s/fork-gate.sh"   # the gate is not what this test is about
 printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -- ] && { shift; "$@"; exit $?; }; shift; done\nexit 0\n' > "$T/s/test.sh"

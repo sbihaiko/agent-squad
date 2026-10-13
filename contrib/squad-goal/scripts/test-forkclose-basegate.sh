@@ -7,7 +7,7 @@ unset SG_E2E_DIR SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD   # the real e2e checkouts of
 here="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; A="$T/st/auto"
 mkdir -p "$T/s" "$T/bin"
-cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/gate-suites.sh" "$T/s/"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py "$T/s/"
+cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/gate-suites.sh" "$T/s/"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py $here/ghcall.sh "$T/s/"
 # The gate stub records the FG_SUITES it was handed and runs the GUI command only for the full gate, like fork-gate.sh does.
 printf '#!/bin/bash\ns=${FG_SUITES:-full}; echo "$s" >> %s/suites.log\n[ "$s" = full ] && eval "$1"\n[ -e %s/red ] && exit 1\nexit 0\n' "$T" "$T" > "$T/s/fork-gate.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"

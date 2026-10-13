@@ -18,30 +18,20 @@
 # at a time, so a culprit is still named. A branch that conflicts with an earlier one stays out of the batch and gets its conflict-fix run as usual.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
-# The collection's reads go through ONE reader (#5, #1893, ADR-0277), and that reader is the throttled one (#4): this is
-# the loop's heaviest reader and the pass the bucket is sized for, so it hands every route to ghthrottle.py, which
-# spends a token from the bucket every process of the loop shares, answers a refusal without touching the network while
-# a cooldown holds, and delegates the route itself to ghread.py -- an aggregate route stays one GraphQL request, and a
-# cooldown held by another reader holds here too. The projection stays here -- `gh_api <route> -q <jq>`, the shape
-# watch.sh reads with. The outcome is read from the module's exit code, never from the body: `gh api` writes the error
-# body to stdout and exits non-zero, and it does not honour -q on a failed request, so a refusal used to arrive here as
-# data -- and a quota-exhausted pass used to read as "no eligible branches", silently.
-gh_api() {
-  local route=$1; shift
-  local q=""; [ "${1:-}" = "-q" ] && q=${2:-}
-  local o rc
-  o=$(python3 "$here/ghthrottle.py" "$route"); rc=$?
-  if [ "$rc" -eq 0 ]; then
-    if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q"; else printf '%s' "$o"; fi
-    return 0
-  fi
-  printf '%s' "$o"   # the refusal/failure line: stdout is the only channel a subshell has
-  return "$rc"
-}
+# The collection's reads go through the loop's one door (ghcall.sh, #5, #1893, ADR-0277), and the reader behind it is the
+# throttled one (#4): this is the loop's heaviest reader and the pass the bucket is sized for, so every route goes to
+# ghthrottle.py, which spends a token from the bucket every process of the loop shares, answers a refusal without touching
+# the network while a cooldown holds, and delegates the route itself to ghread.py -- an aggregate route stays one GraphQL
+# request, and a cooldown held by another reader holds here too. The projection stays here -- `gh_api <route> -q <jq>`.
+# The outcome is read from the module's exit code, never from the body: `gh api` writes the error body to stdout and
+# exits non-zero, and it does not honour -q on a failed request, so a refusal used to arrive here as data -- and a
+# quota-exhausted pass used to read as "no eligible branches", silently. The two lists are `gh_aggregate`: the snapshot
+# answers a repeat inside its window, and the pass reads each list once for ALL its candidates (#45).
+SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"
 # The repository's open issues, labels and blocking edges together: ONE request per pass (#5), read here in the parent
 # shell -- a read inside `$( )` is a subshell, and its cache would not survive the candidate it was made for. This is the
 # fan-out the pass used to pay per branch: a state read and a body read for every candidate.
-oissues=""; oissues_ok=""
+oissues=""; oissues_ok=""; ocomplete=""
 # The one issue's own facts -- its state and its blocking edges -- from the aggregate answer when it carries the issue,
 # else from that one issue's read through the same reader: a candidate the answer does not carry is not an open issue of
 # this repository (closed, or an issue the query did not cover), and that is one read, not one per fact. Prints the
@@ -50,6 +40,7 @@ issue_object() { local n=$1 a
   if [ -n "$oissues_ok" ]; then
     a=$(printf '%s' "$oissues" | jq -c --argjson n "$n" '.[]?|select(.number==$n)' 2>/dev/null)
     [ -n "$a" ] && { printf '%s' "$a"; return 0; }
+    [ -n "$ocomplete" ] && return 1   # both lists answered and neither names it: there is no such issue, and that is not worth a read each
   fi
   a=$(gh_api "repos/$SG_REPO/issues/$n") || { printf '%s' "$a"; return 1; }
   printf '%s' "$a"; }
@@ -386,10 +377,18 @@ fi
 # The open PRs of the repository are ONE request (#5), and the projection is the same caller's jq it always was. A list
 # that did not answer stops the pass instead of reading as "no open PRs": landing a branch whose PR is open is the merge
 # this check exists to prevent, and a refusal is not an empty list (#1893).
-if prs=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))'); then
+if prs=$(gh_aggregate "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))'); then
   refs=" $(printf '%s\n' "$prs" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')"
 else echo "FORKCLOSE NO-PR-LIST: the open-PR list is not readable, so nothing is landed this pass (a branch whose PR is open would land behind it): $prs"; exit 0; fi
-if oissues=$(gh_api "repos/$SG_REPO/issues?state=open"); then oissues_ok=1
+if oissues=$(gh_aggregate "repos/$SG_REPO/issues?state=open") && printf '%s' "$oissues" | jq -e 'type == "array"' >/dev/null 2>&1; then oissues_ok=1; ocomplete=1
+  # A candidate the open list lacks is a closed issue whose fork half still lands: the issues of ALL such candidates are ONE
+  # read by number, live because the close decision rests on it. A read that did not answer leaves each of them to its own.
+  omiss=$(printf '%s' "$oissues" | jq -r --argjson w "[$(printf '%s\n' $cc | paste -sd, -)]" '[.[]?.number] as $o | $w[] | select(. as $n | $o | index($n) | not)' 2>/dev/null | paste -sd, -)
+  if [ -n "$omiss" ]; then
+    # a batch that names none of them is not proof they do not exist (a reader that cannot answer the batch answers an empty
+    # list): that is read per candidate below, as before. The common case -- closed issues -- is answered by the batch.
+    if ob=$(gh_api "repos/$SG_REPO/issues?numbers=$omiss") && [ "$(printf '%s' "$ob" | jq 'length' 2>/dev/null)" -gt 0 ] 2>/dev/null \
+       && oissues=$(jq -c -n --argjson a "$oissues" --argjson b "$ob" '$a + $b' 2>/dev/null); then :; else ocomplete=""; fi; fi
 else echo "FORKCLOSE NO-ISSUE-LIST: the repository's open issues are not readable in one request, so each candidate below pays its own read (or waits, if that read is refused too): $oissues"; fi
 [ -n "${FC_DRY:-}${FC_NOBATCH:-}${FC_COLLECT:-}" ] || [ "$(wc -w <<<"$cc")" -lt 2 ] || batchpass
 for n in $cc; do
@@ -469,7 +468,10 @@ for n in $cc; do
   fi
   [ -n "${FC_COLLECT:-}" ] && { [ -z "$late$reland$mixed" ] && echo "$n" >> "$FC_COLLECT"; continue; }   # a plain open fork-only candidate
   # A fork-only fix has no PR body to carry its TDD RED output, so the child posts it on the issue ("TDD RED" first line, req-checklist-fork.txt). Missing: say so, once per issue; a warning only, the landing goes on (#1413).
-  if ! gh api "repos/$SG_REPO/issues/$n/comments" --paginate -q '.[].body' 2>/dev/null | grep -q 'TDD RED'; then
+  # The aggregate read carries whether a comment holds the report; only an issue read on its own has to ask for its comments.
+  tdd=$(printf '%s' "$ifact" | jq -r '.tdd_red' 2>/dev/null)
+  case "$tdd" in true|false) ;; *) if gh_get "repos/$SG_REPO/issues/$n/comments" --paginate -q '.[].body' 2>/dev/null | grep -q 'TDD RED'; then tdd=true; else tdd=false; fi;; esac
+  if [ "$tdd" != true ]; then
     echo "FORKCLOSE WARN #$n: no TDD RED comment on the issue for $br (a fork-only fix records its failing test output there)"
     [ -n "${FC_DRY:-}" ] || [ -e "$A/redwarn-$n" ] || { touch "$A/redwarn-$n"; printf "Fork-only close: %s is landing but this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; please post the RED and GREEN output here. The landing is not blocked.\n" "$br" > "$SG_STATE/cq/$n-redwarn$$.md"; }
   fi
@@ -524,7 +526,7 @@ for n in $cc; do
   elif [ $rc = 0 ]; then
     [ -n "$late" ] && landline="- $br was already in $SG_FORK_BASE as $late: the pass that merged it ended before its close step, and every later pass read the branch as landed and skipped it. The fork suite result below (a batch or base test that covers it) is the evidence that rule asks for." \
                    || landline="- $br at ${head:0:9} merged into $SG_FORK_BASE as ${m:0:9}."
-    gh api -X POST repos/$SG_REPO/issues/$n/comments -F body=@- >/dev/null <<EOT
+    gh_send -X POST "repos/$SG_REPO/issues/$n/comments" -F body=@- >/dev/null <<EOT
 Done (fork-only work; owner-approved rule: merged into the fork's $SG_FORK_BASE and the fork suite green there).
 $landline
 - Test pass $id: \`$SG_FORK_TEST_CMD\` → exit 0.
@@ -533,7 +535,7 @@ $tl
 \`\`\`
 No MesenAI file changed, so no PR.
 EOT
-    gh api -X PATCH repos/$SG_REPO/issues/$n -f state=closed -f state_reason=completed >/dev/null && $BOARD $SG_OWNER $SG_PROJECT Done $n >/dev/null
+    gh_send -X PATCH "repos/$SG_REPO/issues/$n" -f state=closed -f state_reason=completed >/dev/null && $BOARD $SG_OWNER $SG_PROJECT Done $n >/dev/null
     [ -n "$late" ] && echo "FORKCLOSE #$n closed late ($br was already in $SG_FORK_BASE as $late; the close had been lost, $id green)" \
                    || echo "FORKCLOSE #$n closed ($br ${head:0:9} -> ${m:0:9}, $id green)"
   else

@@ -78,18 +78,27 @@ def priced(d):
 # A run's issue is named by its own request (runs/<run>/request.txt, written before the run starts). The forms are
 # owner/repo#N, "issue #N" and "Refs #N", with any run of digits: this repository's issues start at one digit.
 ISSUE_REF = re.compile(r"(?:\b[\w.-]+/[\w.-]+#|\b(?:issue|Refs) #)(\d+)", re.I)
+# A dispatch request (autofrontier, autobug) names its children with a `PANEL:` line and one `CHILD — GitHub issue(s) 33, 56 (...)`
+# line per child, and pastes each ticket's text under it. The CHILD lines are the issues the run dispatched; a number the pasted
+# text quotes ("issue #900") is not, so when a request has CHILD lines they alone name the run's issues (#33).
+CHILD_ISSUES = re.compile(r"^CHILD\s+[\u2014-]\s+GitHub\s+issues?(?:\(s\))?\s+([#\d][^()\n:]*)", re.M)
+
+def request_issues(text):
+    """The issues a request names: every number on its CHILD lines when it has any, else every reference in its text."""
+    kids = [n for g in CHILD_ISSUES.findall(text) for n in re.findall(r"\d+", g)]
+    return set(kids) if kids else set(ISSUE_REF.findall(text))
 
 def scan(p):
     """Parse one record.jsonl into fields. Finished runs come from `hist`, unfinished ones are cached by (mtime, size)."""
     p = str(p)
-    if p in hist and "v11" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt
+    if p in hist and "v12" in hist[p]: return hist[p]   # v10 added the worktree paths a run works in (the load attribution reads them); v11 reads the run issue from request.txt; v12 reads every issue of a dispatch request's CHILD lines
     try: st = os.stat(p)
     except OSError: return None
     c = live.get(p)
     if c and c[0] == st.st_mtime and c[1] == st.st_size: return c[2]
     spend = sub = api = 0.0; mod = {}; t0 = t1 = ver = None; reasons = []; land = False; issues = set(); ntok = 0; kind = "code"; fix = None; stack = None; bug = False; merge = False; head = None; rc = None
     accepted, done_kids, wts = set(), set(), set()
-    try: req_issues = set(ISSUE_REF.findall((pathlib.Path(p).parent / "request.txt").read_text(errors="replace"))); has_req = True
+    try: req_issues = request_issues((pathlib.Path(p).parent / "request.txt").read_text(errors="replace")); has_req = True
     except OSError: req_issues = set(); has_req = False
     with open(p) as f:
         for i, l in enumerate(f):
@@ -136,7 +145,7 @@ def scan(p):
             elif e == "verdict": ver, reasons, t1, rc = d.get("verdict"), d.get("reasons") or [], ts, d.get("exit_code")
     if has_req: src, why, issues = ("request", None, req_issues) if req_issues else (None, "request-no-issue", set())   # the request is the truth; the transcript never overrides it
     else: src, why = ("transcript" if issues else None), "request-missing"
-    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts)}
+    r = {"spend": round(spend, 4), "sub": round(sub, 4), "api": round(api, 4), "mod": mod, "v8": 1, "v9": 1, "v10": 1, "v11": 1, "v12": 1, "t0": t0, "t1": t1, "verdict": ver, "reasons": reasons, "land": land, "issues": sorted(issues, key=int), "issue_src": src, "issue_why": why, "kind": kind, "fix": fix, "stack": stack, "bug": bug, "merge": merge, "head": head, "exit_code": rc, "agents": len(accepted - done_kids), "wts": sorted(wts)}
     if ver is not None:
         hist[p] = r
         with LOCK:
@@ -210,22 +219,53 @@ def group_of(r):
     h = (r.get("age") or 0) / 3600
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
 
+def squad_roots(sg_squad, sg_checkout, checkout, here):
+    """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
+    hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
+    Rule layer: no hub state, no I/O."""
+    out = []
+    for r in (sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
+        if r and r not in out: out.append(r)
+    return out
+
+def load_squad(roots):
+    """`squad.caps` and `squad.run_caps` from the first root that holds the package. A root that fails leaves nothing behind (not on
+    sys.path, not in sys.modules), so the next one imports clean. Raises the last failure, which names what was missing."""
+    err = ModuleNotFoundError("no squad package in: " + ", ".join(roots))
+    for root in roots:
+        added = root not in sys.path
+        if added: sys.path.insert(0, root)
+        try:
+            from squad import caps, run_caps
+            return caps, run_caps
+        except Exception as e:
+            err = e
+            for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
+            if added: sys.path.remove(root)
+    raise err
+
+CAPS_LOGGED = set()
+def log_once(line, seen=CAPS_LOGGED, out=None):
+    """One stderr line per distinct text per process: a failure that repeats every poll is named once, never silenced and never a flood."""
+    if line in seen: return
+    seen.add(line); print(line, file=out or sys.stderr, flush=True)
+
 def loop_caps():
     """The machine-wide ceiling (squad/caps.py), from the one resolution the engine and the loop enforce: {runs, children, waiting}.
     `waiting` lists each live wait as {ceiling, holder}. The project file of SG_CHECKOUT may lower the pair. None when the
-    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling.
+    resolution fails (no squad package in any root, no caps block, a project that raises it): the failure is logged once and the panel
+    then shows plain counts, never a guessed ceiling.
     `per_run` is the other pair, read by squad/run_caps.py from the graph the engine resolves (or the newest live run's own);
     it is named in the tooltip and never merged into the machine-wide pair. None when no graph reads."""
-    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
-        if root not in sys.path: sys.path.insert(0, root)
-        from squad import caps as C
+        C, RC = load_squad(roots)
         co = os.environ.get("SG_CHECKOUT") or CHECKOUT   # the profile's checkout is the fallback, never the process cwd
         c = C.ceiling(co)
-        from squad import run_caps as RC
         per_run = RC.read(co, [r.get("dir") for r in list(LOAD_RUNS) if r.get("dir")])
         return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting(), "per_run": per_run}
-    except Exception:
+    except Exception as e:
+        log_once(f"hub: loop_caps unavailable, the footer shows plain counts: {type(e).__name__}: {' '.join(str(e).split())} (roots tried: {', '.join(roots)})")
         return None
 
 def waiting_txt(caps):
@@ -536,7 +576,7 @@ FOOT_SEP = " · "
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "occ": "mute", "drift": "wait", "quota": "none",
+FOOT_BLOCK_COLORS = {"health": "run", "progress": "pin", "occ": "mute", "quota": "none",
                      "subs": "run"}  # subs last, and teal again: it shares with health, which is not its neighbour
 
 def foot_age(secs):
@@ -577,14 +617,6 @@ def _occ_fact(occ, caps):
     mp, mc = caps.get("runs"), caps.get("children")
     if not isinstance(mp, int) or not isinstance(mc, int): return "?"
     return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
-
-def _drift_fact(d):
-    """The pair #1795 writes (`runs` and `inprogress` in health.json) and never a second count computed here: a board the
-    health pass could not read reports -1, which is not a drift — it is a `?`."""
-    if not isinstance(d, dict): return "drift ?"
-    runs, ip = d.get("runs"), d.get("inprogress")
-    if not isinstance(runs, int) or not isinstance(ip, int) or runs < 0 or ip < 0: return "drift ?"
-    return f"drift {abs(runs - ip)}"
 
 def _quota_fact(q, now):
     """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
@@ -661,7 +693,6 @@ def foot_items(src, caps=None, now=None):
             _fact("progress", _progress_fact(prog, now),
                   bad=isinstance(prog, (int, float)) and (now - prog) > FOOT_PROGRESS_WARN_SECS),
             _fact("occ", _occ_fact(src.get("occ"), caps)),
-            _fact("drift", _drift_fact(src.get("drift"))),
             _fact("quota", _quota_fact(src.get("quota"), now)),
             # subs last, so a narrow window drops the block whole
             _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
@@ -709,14 +740,13 @@ def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"health": None, "progress": None, "occ": None, "drift": None,
+    out = {"health": None, "progress": None, "occ": None,
            "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
                      "agy": limited_until(_read(STATE / "agy-limited"), now)}}
     h = _json(STATE / "health.json")
     if isinstance(h, dict):
         causes = [c for c in (h.get("causes") or []) if c]
         out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts")}
-        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
@@ -1538,7 +1568,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <div id=pop><div id=pbox></div></div>
 <div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>BUILDER <span id=bt class=m></span></b><button id=br title="re-read the board now: the Project statuses, the blockers and the open PRs" aria-label="refresh the board now" aria-busy=false><span>&#8635;</span></button><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
-<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, drift, quotas"></span></div>
+<div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
 const LAYOUTS={1:[1,1],2:[2,1],3:[3,1],4:[2,2],6:[3,2]};
 const $=s=>document.querySelector(s),ls=JSON.parse(localStorage.hub||"{}");
