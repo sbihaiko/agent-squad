@@ -278,6 +278,22 @@ def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
     assert "depth_over_max" in errs
 
 
+def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
+    """The author allows `worktrees/child`; the router names each child's own path below it (`worktrees/child/gui-26`).
+    The rule read the value as a string, so an allowed envelope rejected every child that named the directory it works in:
+    three children of one frontier run, and the run folded to fail `no_dispatch, spawn_rejected:workspace_outside_allow`
+    with nothing delivered (#55)."""
+    disp = node(router(), "route")
+    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": "sonnet", "tools": ["Read"]}
+    for w in ("worktrees/child", "worktrees/child/gui-26", "worktrees/child/gui-26/", "worktrees/child/a/b"):
+        _, errs = validate_request(disp, {**ok, "workspace": w}, 1, None, 10.0)
+        assert errs == [], (w, errs)
+    for w in ("worktrees", "worktrees/childish", "worktrees/child/../other", "worktrees/child/..",
+              "../worktrees/child", "/worktrees/child", "/etc"):
+        _, errs = validate_request(disp, {**ok, "workspace": w}, 1, None, 10.0)
+        assert "workspace_outside_allow" in errs, (w, errs)
+
+
 def test_a_model_supplied_identity_in_a_spawn_request_is_refused():
     disp = node(router(), "route")
     for key in ("id", "child", "request_key", "name"):

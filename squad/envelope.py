@@ -9,6 +9,24 @@ REQUEST_FIELDS = {"prompt", "skill", "model", "effort", "tools", "stalls", "spen
 IDENTITY_FIELDS = {"id", "key", "child", "name", "request_key", "parent", "depth"}
 
 
+def inside_workspace(w, roots):
+    """Whether a requested workspace is one the author allows or a path below one. The author writes the envelope as a
+    directory (`worktrees/child`) and the router names the child's own directory below it (`worktrees/child/gui-26`): a
+    string equality read that as outside the allow, and every dispatch run died `workspace_outside_allow` with nothing
+    delivered (#55). Compared segment by segment, so `worktrees/childish` is not inside `worktrees/child`; a `..` segment
+    is never inside, and an absolute path is not a workspace of this run."""
+    if not isinstance(w, str) or not w or w.startswith("/"):
+        return False
+    parts = [p for p in w.split("/") if p]
+    if not parts or ".." in parts:
+        return False
+    for r in roots:
+        root = [p for p in str(r).split("/") if p]
+        if root and parts[:len(root)] == root:
+            return True
+    return False
+
+
 def normalize_request(dispatch, raw, vendor=skills.VENDOR):
     """Fill the optional fields from the envelope. Return (request, errors). A key outside REQUEST_FIELDS is ignored: it narrows nothing, and one model's extra word must not cost the run its dispatch."""
     errs = [f"model_supplied_identity:{k}" for k in raw if k in IDENTITY_FIELDS]
@@ -71,7 +89,7 @@ def limit_errors(req, disp, depth, parent_tools, parent_spend_left, parent_time_
         e.append("deadline_over_dispatch")
     if parent_time_left is not None and req["deadline"] > parent_time_left:
         e.append("deadline_over_parent")
-    if req["workspace"] not in a["workspaces"]:
+    if not inside_workspace(req["workspace"], a["workspaces"]):
         e.append("workspace_outside_allow")
     return e
 
