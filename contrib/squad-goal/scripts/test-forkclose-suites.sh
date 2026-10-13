@@ -36,8 +36,8 @@ g checkout -q -b gui/1 local/next; echo 1 >> "$T/fork/contrib/squad-goal/f"; g c
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
 printf '#!/bin/bash\ncase "$*" in\n  *"issues/"*" -q .state"*) echo open;;\n\n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 FC_NOBATCH=1 bash "$T/s/forkclose.sh" >/dev/null 2>&1
-[ "$(wc -l < "$T/gui.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "squad-goal-only branch: the GUI suite ran once (the base test), not for the branch" || ko "gui runs: $(cat "$T/gui.log" 2>/dev/null | wc -l)"
-[ "$(wc -l < "$T/shell.log" 2>/dev/null | tr -d ' ')" = 2 ] && ok "squad-goal-only branch: the shell suites ran for the base and for the branch" || ko "shell runs: $(cat "$T/shell.log" 2>/dev/null | wc -l)"
+[ ! -e "$T/gui.log" ] && ok "squad-goal-only branch: the GUI suite never ran (no base test before a merge since #85, and the landing is shell-only)" || ko "gui runs: $(cat "$T/gui.log" 2>/dev/null | wc -l)"
+[ "$(wc -l < "$T/shell.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "squad-goal-only branch: the shell suites ran once, for the landing" || ko "shell runs: $(cat "$T/shell.log" 2>/dev/null | wc -l)"
 rm -rf "$T"
 # #15: the set that gates a LANDING is read off the landing's own change to the base, never off the branch's diff at its fork point
 # (git diff --name-only $(git merge-base $1 $2) $2). A branch that only touched contrib/squad-goal/ is a shell branch by fork point --
@@ -64,7 +64,7 @@ out=$(FC_NOBATCH=1 bash "$T/s/forkclose.sh" 2>&1)
 case "$out" in *"full by the landing rule"*) ok "#15: the landing gate answers from the landing's own change, not from the branch's fork point";; *) ko "#15: no landing-rule line in: $out";; esac
 case "$out" in *"the branch's fork-point diff answered shell"*) ok "#15: the log line names which rule answered, and here the two disagree";; *) ko "#15: the rule that answered is not named: $out";; esac
 [ -e "$T/fork/tests/test_spec.py" ] && ok "#15: the resolution restored the spec the branch's own diff never named" || ko "#15: the landing did not carry tests/test_spec.py"
-[ "$(wc -l < "$T/gui.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "#15: the landing gate is full (it carries tests/test_spec.py); the base test's own rule asked for no GUI suite" || ko "#15: gui runs: $(cat "$T/gui.log" 2>/dev/null | wc -l)"
-[ "$(wc -l < "$T/shell.log" 2>/dev/null | tr -d ' ')" = 2 ] && ok "#15: basesuites() answered shell for the base (the base's own diff) while the landing answered full: both rules side by side" || ko "#15: shell runs: $(cat "$T/shell.log" 2>/dev/null | wc -l)"
+[ "$(wc -l < "$T/gui.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "#15: the landing gate is full (it carries tests/test_spec.py)" || ko "#15: gui runs: $(cat "$T/gui.log" 2>/dev/null | wc -l)"
+[ "$(wc -l < "$T/shell.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "#15: one gate, the landing's (the base is not gated before a merge since #85; basesuites() is test-forkclose-basegate.sh's)" || ko "#15: shell runs: $(cat "$T/shell.log" 2>/dev/null | wc -l)"
 [ "$(wc -l < "$T/py.log" 2>/dev/null | tr -d ' ')" = 1 ] && ok "#15: the full landing gate ran the pytest suite; the base test (shell) did not" || ko "#15: py runs: $(cat "$T/py.log" 2>/dev/null | wc -l)"
 rm -rf "$T"; exit $fail
