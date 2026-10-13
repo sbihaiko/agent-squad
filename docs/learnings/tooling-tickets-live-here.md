@@ -1,7 +1,7 @@
 # Tooling tickets and learnings live here
 
 **Superseded by #20.** `SG_TOOLING_REPO` is retired: `env.sh` stops, naming it, when it is set, and
-`repoctx.sh` refuses a profile that sets it. Each repository has its own profile, its own state
+`address.sh` refuses a profile that sets it. Each repository has its own profile, its own state
 directory (`~/.cache/squad-goal/<profile>`) and its own path on the hub (`/<profile>`). The sections
 below record the two-repository setup as it stood before.
 

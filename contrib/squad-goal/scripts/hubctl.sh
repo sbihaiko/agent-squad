@@ -5,7 +5,7 @@
 # else is refused by name, and a hub that does not serve the cwd's profile (started before the profile existed) is reported.
 # Each repository's hub state goes to <its checkout>/runs/.hub (self-gitignored).
 port="${1:-7700}"; here="$(cd "$(dirname "$0")" && pwd)"; url="http://127.0.0.1:$port"
-slug=$(bash "$here/repoctx.sh" "${SG_PROFILE:-.}" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
+slug=$(bash "$here/address.sh" "${SG_PROFILE:-.}" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
 ask() { curl -s --max-time 3 "$url/api/hub"; }
 a=$(ask); rc=$?
 if [ $rc = 7 ]; then   # nothing listens: start the hub
