@@ -27,6 +27,7 @@
 # exits non-zero, and it does not honour -q on a failed request, so a refusal used to arrive here as data -- and a
 # quota-exhausted pass used to read as "no eligible branches", silently. The two lists are `gh_aggregate`: the snapshot
 # answers a repeat inside its window, and the pass reads each list once for ALL its candidates (#45).
+export SG_GH_PASS=landing   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"
 # The repository's open issues, labels and blocking edges together: ONE request per pass (#5), read here in the parent
 # shell -- a read inside `$( )` is a subshell, and its cache would not survive the candidate it was made for. This is the

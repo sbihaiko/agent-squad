@@ -8,6 +8,7 @@
 # happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 # ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
 # -q on a failed request, so every `gh api … 2>/dev/null` here used to treat a 403/404/500 body as a valid answer: on
 # 2026-10-12 a rate-limit body became the whole candidate list and the dispatch spent money on children spawned from it.

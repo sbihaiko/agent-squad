@@ -630,7 +630,8 @@ def _health_fact(h, now):
     if ts: c, t = max(ts.items(), key=lambda kv: kv[1])          # the newest alert still standing: the newest cause
     elif isinstance(h.get("ts"), (int, float)): c, t = causes[0], h["ts"]   # no alert line left for it: the pass that saw it ages it
     else: return f"health: {causes[0]} ?"    # the cause is armed but its age cannot be read: named, then `?`
-    return f"health: {c} {foot_age(now - t)}"
+    brief = (h.get("briefs") or {}).get(c)    # a cause that carries one says more than its name: the cooldown's expiry and owner
+    return f"health: {c} {foot_age(now - t)}" + (f" ({brief})" if isinstance(brief, str) and brief else "")
 
 def _progress_fact(ts, now):
     """The age of the newest transition the loop owns — a verdict, a land, a dispatch or a board move."""
@@ -772,7 +773,9 @@ def foot_sources(now=None):
     h = _json(STATE / "health.json")
     if isinstance(h, dict):
         causes = [c for c in (h.get("causes") or []) if c]
-        out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts")}
+        out["health"] = {"causes": causes, "armed": _armed_from_alerts(_read(STATE / "alerts.log"), causes), "ts": h.get("ts"),
+                         "briefs": h.get("briefs") if isinstance(h.get("briefs"), dict) else {}}
+        out["drift"] = {"runs": h.get("runs"), "inprogress": h.get("inprogress")}
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read

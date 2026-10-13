@@ -52,21 +52,47 @@ REST stays the transport for Project v2 items, for every write, and for every ot
 not demonstrably cheaper, the route is not aggregate. `errors` beside a `data` in a GraphQL answer is a *partial*
 failure, and `Read.partial` names it: the field that failed is null and the rest of the answer is kept.
 
-Scope (ADR-0277): this is the outcome contract and the transports behind it, nothing else. The token bucket, the shared
-`$SG_STATE` cooldown, the per-resource response cache and the api.log/health reporting are separate clauses of that
-decision, each with its own ticket; adding them here would put a rate governor behind an interface whose whole job is to
-keep three outcomes apart.
+The call log. Every door appends one line per call to `$SG_STATE/api.log`, and the writer lives here because this is the one
+module every door carries (see `log_call`):
+
+    <UTC timestamp> <transport> <route> <hit|miss> <outcome> <pass>
+    2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing
+
+* transport: `REST`, or `GraphQL` for an aggregate route.
+* cache: `hit` when the snapshot answered it, `miss` for every read that went to GitHub, snapshottable or not (`ghspend.py`
+  leaves the routes that gate a write out of the miss rate).
+* outcome: `answer`, `refused` (GitHub refused it), `failed` (no verdict), `done` (a write GitHub took) or `cooling` (the shared
+  cooldown held the call back and no request was sent).
+* pass: the pass that spent the call -- `frontier`, `landing`, `autobug` or `board` -- from `SG_GH_PASS`, which each pass script
+  exports for itself. A caller that names none is `unattributed`: a guess would put the spend on the wrong pass, which is the one
+  thing this column exists to prevent.
+
+A line holds no space, so it splits into exactly six fields. A failed append costs the line and never the call, and the log is
+rotated once at `LOG_MAX_BYTES` so it cannot grow without bound. This module logs at its two CLI doors (`read`/`write` as a
+process); a library caller -- the throttle -- logs its own calls, because only it knows a snapshot answered them.
+
+    python3 ghread.py --log <REST|GraphQL> <route> <hit|miss> <outcome>    # one line, for a shell door that has no Python of its own
+
+Scope (ADR-0277): this is the outcome contract, the transports behind it and the call log. The token bucket, the shared
+`$SG_STATE` cooldown and the per-resource response cache are `ghthrottle.py`, and the health causes read from the log and the
+cooldown are `ghspend.py`; adding them here would put a rate governor behind an interface whose whole job is to keep three
+outcomes apart.
 """
 
 from __future__ import annotations
 
+import calendar
+import contextlib
 import json
+import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, NamedTuple
 
 ANSWER = "answer"
 DONE = "done"
@@ -597,10 +623,94 @@ def _parse_write(args: list[str]) -> tuple[str, str, dict[str, str]] | None:
     return (route, method, fields) if route else None
 
 
+# --- the call log: one line per call (ADR-0277) -----------------------------------------------------------------------
+
+STATE_ENV = "SG_STATE"
+PASS_ENV = "SG_GH_PASS"
+LOG_FILE = "api.log"
+LOG_MAX_BYTES = 2_000_000  # one rotation: days of a healthy loop, and far more than any health window reads
+UNATTRIBUTED = "unattributed"
+HIT, MISS, COOLING = "hit", "miss", "cooling"
+_PASS = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_LOG_TS = "%Y-%m-%dT%H:%M:%SZ"
+
+
+class Call(NamedTuple):
+    """One line of the call log, parsed."""
+
+    at: float
+    transport: str
+    route: str
+    cache: str
+    outcome: str
+    pass_name: str
+
+
+def state_dir() -> Path:
+    """Where the loop's shared state lives: `$SG_STATE`, else the loop's default cache dir."""
+    return Path(os.environ.get(STATE_ENV) or Path.home() / ".cache" / "squad-goal")
+
+
+def current_pass() -> str:
+    """The pass that is spending: `SG_GH_PASS` when it is one lowercase word, else `unattributed` (never a guess)."""
+    name = os.environ.get(PASS_ENV, "")
+    return name if _PASS.match(name) else UNATTRIBUTED
+
+
+def transport_name(route: str) -> str:
+    """`GraphQL` for an aggregate route -- its one request is a query -- and `REST` for every other."""
+    return "GraphQL" if aggregate(route) is not None else "REST"
+
+
+def call_line(call: Call) -> str:
+    return " ".join((time.strftime(_LOG_TS, time.gmtime(call.at)), call.transport, call.route, call.cache, call.outcome, call.pass_name))
+
+
+def parse_call(text: str) -> Call | None:
+    """One log line as a `Call`, or None for anything that is not one: a half line, a foreign line, a forged one."""
+    parts = text.split()
+    if len(parts) != 6:
+        return None
+    try:
+        at = float(calendar.timegm(time.strptime(parts[0], _LOG_TS)))
+    except ValueError:
+        return None
+    return Call(at, parts[1], parts[2], parts[3], parts[4], parts[5])
+
+
+def log_call(
+    state: Path | str | None,
+    route: str,
+    cache: str,
+    outcome: str,
+    transport: str | None = None,
+    pass_name: str | None = None,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Append one line to the call log. Never raises: an unwritable state dir costs the line and not the call."""
+    path = (Path(state) if state is not None else state_dir()) / LOG_FILE
+    call = Call(clock(), transport or transport_name(route), "".join(route.split()), cache, outcome, pass_name or current_pass())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            if path.stat().st_size > LOG_MAX_BYTES:
+                os.replace(path, path.with_name(path.name + ".1"))  # atomic: a writer that loses the race appends to the new file
+        with path.open("a") as f:
+            f.write(call_line(call) + "\n")  # one write of one short line: O_APPEND keeps two processes' lines apart
+    except OSError:
+        return
+
+
 def main(argv: list[str]) -> int:
     """The CLI: the exit code carries the outcome, stdout carries the answer or the one-line refusal."""
     name = argv[0] if argv else "ghread.py"
     args = argv[1:]
+    if args and args[0] == "--log":
+        if len(args) != 5 or args[3] not in (HIT, MISS):
+            sys.stderr.write(f"usage: {name} --log <REST|GraphQL> <route> <hit|miss> <outcome>\n")
+            return _USAGE
+        log_call(None, args[2], args[3], args[4], transport=args[1])
+        return 0
     if args and args[0] in _WRITE_FLAGS:
         parsed = _parse_write(args)
         if parsed is None:
@@ -608,6 +718,7 @@ def main(argv: list[str]) -> int:
             return _USAGE
         route, method, fields = parsed
         outw = write(route, method=method, fields=fields)
+        log_call(None, route, MISS, outw.kind)
         if outw.is_done:
             sys.stdout.write(outw.body)
             return 0
@@ -620,6 +731,7 @@ def main(argv: list[str]) -> int:
         )
         return _USAGE
     out = read(args[0])
+    log_call(None, args[0], MISS, out.kind)
     if out.is_answer:
         sys.stdout.write(out.body)
         return 0

@@ -3,11 +3,14 @@
 # One health pass -> $SG_STATE/health.json. Causes: watchd-down, fastloop-down, watch-stalled (cycle.log silent 6 min), never-started-runs,
 # orphan-markers (queued-/runof- whose run never recorded), stuck-prs (janitor-stuck- markers of still-open PRs), loose-worktrees,
 # runs-board-drift (live runs that disagree with the cards sitting In Progress -- it NAMES both sides, not just the two counts).
+# gh-cooldown and gh-miss-rate come from ghspend.py (ADR-0277, the spend is visible): an exhausted cooldown names when it expires and
+# which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
+# the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
 # Each cause alerts ONCE (alerts.log + macOS notification) when it appears and re-arms when it clears. HEALTH_DRY=1 prints only; HEALTH_NOTIFY overrides the notifier.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -o command= 2>/dev/null | grep -q "$2"; }
-causes=(); detail=()
-add() { causes+=("$1"); detail+=("$2"); }
+causes=(); detail=(); briefs=()
+add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); }
 alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
 alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every 30 s) is not running"
 c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(stat -f %m "$c"))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(stat -f %m "$c")) / 60 )) min while watchd is up"
@@ -33,6 +36,10 @@ if [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ]; then
     t=$($G -C "$SG_FORK_DIR" log -1 --format=%ct "$b" 2>/dev/null); [ $(( now - t )) -ge $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] && { npk=$((npk+1)); pk="$pk #$s"; }
   done
   [ $npk -gt 0 ] && add fork-parked "$npk fork branch(es)$pk ahead of $SG_FORK_BASE with no process on them: forkclose re-arms the ones it can, the rest need a fix run"
+fi
+# the spend: an exhausted cooldown and a sustained miss rate (ghspend.py reads $SG_STATE/gh-cooldown.json and $SG_STATE/api.log)
+if [ -f "$(dirname "$0")/ghspend.py" ]; then
+  while IFS=$'\t' read -r gc gb gd; do [ -n "$gc" ] && add "$gc" "$gd" "$gb"; done < <(python3 "$(dirname "$0")/ghspend.py" causes "$SG_STATE" 2>/dev/null)
 fi
 # ready work nobody is on: no run started in 30 min while a ready-for-agent issue has no open PR
 ra=" $(gh issue list --repo $SG_REPO --label ready-for-agent --state open --limit 100 --json number --jq '.[].number' 2>/dev/null | tr '\n' ' ')"
@@ -167,7 +174,7 @@ nw=$(printf '%s\n' $wl | grep -c .)
 wd=; [ -s "$SG_STATE/watchd.pid" ] && wd=$(cat "$SG_STATE/watchd.pid"); held=
 [ -n "$wd" ] && for p in $wl; do [ "$(/bin/ps -p "$p" -o ppid= 2>/dev/null | tr -d ' ')" = "$wd" ] && held="$held $p"; done; held=${held# }
 [ "$nw" -gt 1 ] && add loops-duplicated "$nw watch.sh process(es) alive (pids $wl; watchd pid ${wd:-none} holds ${held:-none}): watchd runs exactly one, and a second copy doubles every GitHub read the loop makes (the API answers with its abuse limit)"
-{ printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf ']}\n'; } > "$SG_STATE/health.json"
+{ printf '{"ts":%s,"ok":%s,"runs":%s,"inprogress":%s,"causes":[' "$now" "$([ ${#causes[@]} = 0 ] && echo true || echo false)" "$slots" "$nboard"; for i in "${!causes[@]}"; do [ $i = 0 ] || printf ','; printf '"%s"' "${causes[$i]}"; done; printf '],"briefs":{'; bn=0; for i in "${!causes[@]}"; do [ -n "${briefs[$i]}" ] || continue; [ $bn = 0 ] || printf ','; bn=1; printf '"%s":"%s"' "${causes[$i]}" "${briefs[$i]}"; done; printf '}}\n'; } > "$SG_STATE/health.json"
 notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
 for i in "${!causes[@]}"; do m="$A/health-${causes[$i]}"
   if [ ! -e "$m" ]; then msg="HEALTH ${causes[$i]}: ${detail[$i]}"; echo "$msg"
