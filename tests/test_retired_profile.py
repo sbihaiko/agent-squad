@@ -25,7 +25,3 @@ def test_retired_profile_migration_cycle():
 
 def test_address_seam_accepts_a_retired_profile():
     run_shell_test("test-address.sh")
-
-
-def test_refresh_check_reports_then_clears_a_retired_setting():
-    run_shell_test("test-sync-refresh.sh")

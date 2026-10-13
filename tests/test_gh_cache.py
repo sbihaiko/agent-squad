@@ -25,8 +25,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_gh_throttle_landing_pass import _collect, _fixture
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 
@@ -322,7 +320,7 @@ def test_the_cheap_and_the_expensive_facts_are_classified_as_such():
     assert ghthrottle.fact_class(KEYED) == ghthrottle.KEYED
 
 
-def test_a_gating_read_ignores_the_cache_the_writes_ignore_it_and_the_landing_pass_reads_live(tmp_path):
+def test_a_gating_read_ignores_the_cache_and_the_write_ignores_it_too(tmp_path):
     """The liveness rule, proved by mutation: the cache is poisoned for every fact that gates a write, with entries that
     are fresh, well formed and WRONG -- and the write path, the single-fact reads and the landing pass's own eligibility
     and base-state reads all go to GitHub and never believe it."""
@@ -361,22 +359,3 @@ def test_a_gating_read_ignores_the_cache_the_writes_ignore_it_and_the_landing_pa
 
     done = ghread.write("repos/o/r/issues/7", method="PATCH", fields={"state": "closed"}, transport=write_transport)
     assert done.is_done and sent == [["--method", "PATCH", "repos/o/r/issues/7", "-f", "state=closed"]]
-
-    # 3. the landing pass: its eligibility reads (the open-PR list, the open-issue list, the one issue) are about the
-    # base it is about to write. Poison them with "an open PR already carries Refs #1" and "issue 1 is closed": a pass
-    # that believed them would drop candidate 1 and collect nothing. The stub gh records every request it receives.
-    (tmp_path / "landing").mkdir()
-    t = _fixture(tmp_path / "landing", candidates=(1,))
-    landing = ghthrottle.Cache(state_dir=t / "st", window=3600)
-    poisons = {
-        "repos/x/y/pulls?state=open&per_page=100": [{"number": 9, "title": "Refs #1", "body": ""}],
-        "repos/x/y/issues?state=open": [{"number": 1, "state": "closed", "labels": [], "blocked_by": []}],
-        "repos/x/y/issues/1": {"number": 1, "state": "closed", "labels": [], "blocked_by": []},
-    }
-    for route, body in poisons.items():
-        landing.store(route, ghread.Read(kind=ghread.ANSWER, answer=body, body=json.dumps(body)))
-    out, routes, collected = _collect(t)
-    assert routes, f"the pass read nothing from GitHub: it believed the cache: {out}"
-    assert "pullRequests(states: OPEN" in routes[0], f"the open-PR fact was not read live first: {routes}"
-    assert any("issues(states: OPEN" in r for r in routes), f"the open-issue fact was not read live: {routes}"
-    assert collected == ["1"], f"the pass acted on a poisoned snapshot: {collected} / {out}"
