@@ -8,17 +8,21 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def run_inner(tmp_path, body):
+def run_inner(tmp_path, body, ini=(), timeout=60):
+    """One nested pytest run. `timeout` is the caller's own bound: a case about a test that never ends must not end the suite
+    it runs in, so the nested run is cut there and the case fails on the exception instead of parking the worker."""
     (tmp_path / "test_inner.py").write_text(body)
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    opts = [x for i in ini for x in ("-o", i)]
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "tests.slowcap", "-o", "slow_cap_seconds=0.2",
-         "-c", "/dev/null", "--rootdir", str(tmp_path), "test_inner.py"],
-        cwd=tmp_path, env=env, capture_output=True, text=True,
+         *opts, "-c", "/dev/null", "--rootdir", str(tmp_path), "test_inner.py"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=timeout,
     )
 
 
 SLEEP = "import time\n"
+SPIN = "def test_spin():\n    while True:\n        pass\n"
 
 
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
@@ -47,9 +51,27 @@ def test_a_slow_marker_with_no_reason_refuses_the_run(tmp_path):
     assert r.returncode != 0 and "needs a reason" in r.stdout + r.stderr
 
 
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+def test_a_test_that_never_returns_fails_by_name_at_its_deadline(tmp_path):
+    """The cap is read after the call, so a test that never returns walks past it and parks the whole suite -- one xdist
+    worker spinning is what hung a full gate (#130). The deadline is read while the test runs, so the suite ends, naming it."""
+    r = run_inner(tmp_path, SPIN, ini=("test_deadline_seconds=1",), timeout=30)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "test_inner.py::test_spin" in r.stdout, "the spinning test has to be named"
+    assert "deadline" in r.stdout, "and the deadline has to be the reason"
+
+
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+def test_a_slow_marker_with_a_reason_is_exempt_from_the_deadline(tmp_path):
+    """The deadline carries the cap's own exemption: a test that declares why it runs long is not cut, so no GUI or e2e suite
+    that names its work is lost to it."""
+    body = SLEEP + "import pytest\n@pytest.mark.slow(reason='real subprocess')\ndef test_slow():\n    time.sleep(1.5)\n"
+    assert run_inner(tmp_path, body, ini=("test_deadline_seconds=1",)).returncode == 0
+
+
 def test_the_repo_default_cap_is_20_seconds_and_durations_print():
     text = (ROOT / "pyproject.toml").read_text()
-    assert "--durations=15" in text and 'slow_cap_seconds = "20"' in text
+    assert "--durations=15" in text and 'slow_cap_seconds = "20"' in text and 'test_deadline_seconds = "60"' in text
 
 
 def _slow_reason(test):
@@ -65,10 +87,14 @@ def test_nested_pytest_checks_explain_their_slow_marker():
         test_a_test_under_the_cap_passes,
         test_a_slow_marker_with_a_reason_lets_a_test_pass,
         test_a_slow_marker_with_no_reason_refuses_the_run,
+        test_a_test_that_never_returns_fails_by_name_at_its_deadline,
+        test_a_slow_marker_with_a_reason_is_exempt_from_the_deadline,
     )
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {
         "test_a_test_over_the_cap_fails_and_is_named": "starts a nested pytest subprocess",
         "test_a_test_under_the_cap_passes": "starts a nested pytest subprocess",
         "test_a_slow_marker_with_a_reason_lets_a_test_pass": "starts a nested pytest subprocess",
         "test_a_slow_marker_with_no_reason_refuses_the_run": "starts a nested pytest subprocess",
+        "test_a_test_that_never_returns_fails_by_name_at_its_deadline": "starts a nested pytest subprocess",
+        "test_a_slow_marker_with_a_reason_is_exempt_from_the_deadline": "starts a nested pytest subprocess",
     }
