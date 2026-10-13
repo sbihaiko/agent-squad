@@ -193,13 +193,17 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$(sg_cq_file "$n-autobug$$.md")"; done; done
 # The cards move through the one write door (#145): a refusal is named, logged and filed, never swallowed by a `2>&1`.
+# The move is the board's idempotent add-then-move path (`--add`, #184): an issue created while the loop runs carries no
+# card until the board pass adds one, and the plain move form answered "#<n> not on the board" for it. That refusal filed
+# a bug -- and the bug arrives the same way, with no card, so the next pass filed one more and the chain never ended. A
+# card the board does not carry is added in the column this dispatch writes; a card it already carries is moved. The one
+# write door stays the one door, so a real refusal is still named, logged and filed.
 cards="$(printf '#%s ' "${pick[@]}")"
+guard="contrib/squad-goal/scripts/test-autobug.sh (a card the board does not carry is added, never refused; a refused write opens one bug)"
 sg_write "the card move of this dispatch" "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
-  "the cards ${cards% } of the run this pass requested ($name)" \
-  "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
+  "the cards ${cards% } of the run this pass requested ($name)" "$guard" \
+  -- $BOARD --add $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
 [ -n "${SG_BUG_PROJECT:-}" ] && sg_write "the card move of this dispatch on the bug board" "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
-  "the cards ${cards% } of the run this pass requested ($name)" \
-  "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
+  "the cards ${cards% } of the run this pass requested ($name)" "$guard" \
+  -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"

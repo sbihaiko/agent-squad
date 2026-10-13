@@ -243,4 +243,55 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#184) a dispatch moves a card the board does not carry yet. An issue created while the loop runs has no card until
+# the board pass adds one, so the plain move form answered "#1228 not on the board" and the refused write filed a bug --
+# and that bug arrives the same way, with no card, so the next pass files one more. The move is the idempotent
+# add-then-move path (--add) the board pass itself uses: a card the board does not carry is added with the status the
+# dispatch writes, and no write is named a refusal. The real board.py runs under a stubbed gh, so the assertion is about
+# the card that ends up carrying the status, never about the shape of the call.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$T/s/"
+rm -f "$T/st"/owner-kind-*.json "$T/st"/rest-items-*.json "$T/st"/rest-fields-*.json "$T/st"/rest-text-fields-*.json "$T/st/board-dirty" "$T/card1228"
+: > "$T/filed"; : > "$T/st/cycle.log"; : > "$T/gh.calls"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+echo "\$*" >> "$T/gh.calls"
+case "\$*" in *"--input -"*) cat > "$T/last.in";; esac
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
+    for a in "\$@"; do case "\$a" in body=@*) cat "\${a#body=@}" >> "$T/filed";; esac; done
+    echo '{"number":900}' ;;
+  *projectsV2*fields?per_page=100*) printf '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_PROG","name":{"raw":"In Progress"}}]}]\n' ;;
+  *"-X PATCH"*items/ITEM1228*)   # the status write: the card carries what the pass asked for, read back from the card
+    v=\$(sed -n 's/.*"value": "\([^"]*\)".*/\1/p' "$T/last.in"); echo "\$v" > "$T/card1228"; echo '{"id":"ITEM1228"}' ;;
+  *"-X POST"*projectsV2*items*) echo '{"id":"ITEM1228"}'; echo O_TODO > "$T/card1228" ;;   # the card the board does not carry yet, added
+  *projectsV2*items*fields*) [ -e "$T/card1228" ] && printf '[1228,"%s"]\n' "\$(cat "$T/card1228")" ;;
+  *projectsV2*items*)   # the items route: #1228 has no card until the add; #1300 is another card of the same repository
+    [ -e "$T/card1228" ] && printf '[1228,"ITEM1228","https://api.github.com/repos/x/y"]\n'
+    printf '[1300,"ITEM1300","https://api.github.com/repos/x/y"]\n' ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py","id":301228}\n' ;;
+  *users/*) echo '{"type":"Organization"}' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+export BOARD="$T/s/board.sh" SG_OWNER=o SG_PROJECT=4 SG_BOARD_READ_BACKOFF=0
+unset SG_BUG_PROJECT
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 a dispatch whose card the board does not carry finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+[ -s "$T/filed" ] && ko "9 a card the board does not carry was filed as a refused write: $(head -2 "$T/filed")" || ok "9 a card the board does not carry is not a refused write"
+[ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "9 no refusal reaches the cycle log" || ko "9 cycle.log: $(cat "$T/st/cycle.log")"
+$G -q -- '-X POST' "$T/gh.calls" && ok "9 the missing card is added before the move" || ko "9 no card add: $(cat "$T/gh.calls")"
+[ "$(cat "$T/card1228" 2>/dev/null)" = O_PROG ] && ok "9 the card the add created carries In Progress" || ko "9 card status: $(cat "$T/card1228" 2>/dev/null)"
+[ -e "$T/st/board-dirty" ] && ok "9 the move went through the board's one write door" || ko "9 the board move did not run"
+
 rm -rf "$T"; exit $fail
