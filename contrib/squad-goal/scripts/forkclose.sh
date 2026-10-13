@@ -1,11 +1,12 @@
 #!/bin/bash
 # usage: forkclose.sh   (watch.sh, every loop; FC_DRY=1 prints the candidates)
 # Fork work merges itself: an issue that also has a MesenAI PR waits for it, then gets its fork half merged with no close.
-# Fork-only work closes itself: an open issue whose card is Code Complete, with no open PR naming it and a fork branch
+# Fork-only work closes itself: an open issue with no open PR naming it and a fork branch
 # ($SG_FORK_BRANCH, %n = issue) ahead of $SG_FORK_BASE in $SG_FORK_DIR, is merged into the base (--no-ff), the card goes to
 # Testing and the fork suite ($SG_FORK_TEST_CMD) runs through test.sh. Green: the issue closes with the evidence and the
 # card goes Done. Red: the merge is reverted (git revert -m 1, never a reset) and the card goes back to In Progress. A merge
 # conflict aborts and launches a conflict-fix squad run on the branch (base merged in, both sides kept); its new head re-arms the close. One issue at a time (lock); a fork checkout a child left on its own branch is put back on the base by the pass itself while the tree is clean and no live run names that branch (WAIT, naming the reason, when it is not).
+# The card column never selects a candidate (#97): the card is state this pass owns and derives, so a branch ahead of the base whose run recorded its verdict is landed whatever column the card sits in (FORKCLOSE CARD, naming the run that is over), and a card is written Done only once that merge is in the base. A card in Done over a branch the base never took is a false delivery.
 # A branch whose own worktree still holds uncommitted changes is not the run's final state: the pass refuses (FORKCLOSE UNLANDED, naming the branch) instead of merging a mid-work tip and closing the issue with the code absent from the base (#1821).
 # An issue whose `## Blocked by` names an issue with an unlanded fork branch waits for it (FORKCLOSE WAIT, once per set): its tests import the blocker's files.
 # Cheaper queue (#1409): a green merge is recorded as a tested base (basetest-<new sha>), so the next landing pays no second base test; the suites a
@@ -75,6 +76,18 @@ livebrs=" $(for r in $(ls -t "$SG_CHECKOUT/runs" 2>/dev/null | head -60); do
   [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
   grep -oE 'gui/[0-9]+' "$SG_CHECKOUT/runs/$r/request.txt" 2>/dev/null | sort -u | tr '\n' ' '
 done) "
+# The run that delivered a branch whose card has not caught up: a record carrying a verdict is a run that is over, so the
+# branch tip is the state that run delivered and this pass lands it. The card column used to select the candidates, and the
+# run's own `land` event is not the base taking the merge, so a card could sit in Done -- or any other column -- while
+# gui/<n> was still ahead of the base and the pass never looked at it (#97). A live run that names the branch still owns
+# its tip, so a run with no verdict answers "not yet" whatever an older one says.
+runover() { local b=$1 r f
+  for r in $(ls -t "$SG_CHECKOUT/runs" 2>/dev/null | head -60); do
+    f="$SG_CHECKOUT/runs/$r/record.jsonl"; [ -f "$f" ] || continue
+    grep -qxF "$b" <(grep -oE 'gui/[0-9]+' "$SG_CHECKOUT/runs/$r/request.txt" 2>/dev/null) || continue
+    grep -q '"event": *"verdict"' "$f" 2>/dev/null || return 1
+    echo "$r"; return 0
+  done; return 1; }
 # A branch ahead of the base with nobody on it and no recent commit: the fix run meant to move it is gone. Without this its
 # card (In Progress) and its marker (fork-<n>-<head>) would park it forever: a wait whose only release is a process that died.
 orphan() { local b=$1 w t
@@ -465,8 +478,15 @@ for n in $cc; do
   fi
   mixed=""; if [ "$st" = closed ]; then mixed=1                       # closed: its PR half landed, merge the fork half without touching the issue
   else case "$ready" in *" $n "*) ;; *)
-    orphan "$br" || continue   # the card is state THIS script owns (In Progress on a red, Done on a green): derived, never the gate
-    echo "FORKCLOSE ORPHAN #$n: $br is ahead of $SG_FORK_BASE with nobody in its worktree and no commit for $(( ${SG_FORK_ORPHAN_MINUTES:-20} )) min; a fix run that is gone left the card behind. Re-arming."
+    # The card is state THIS script owns (In Progress on a red, Done on a green): derived, never the gate (#97). A branch
+    # whose run recorded its verdict is the state that run delivered, so the pass lands it whatever column the card sits in;
+    # a branch nobody claims and that has been silent past the window is the other shape of that, and the card is re-armed
+    # to Code Complete below so the board reads what is waiting.
+    if rn=$(runover "$br"); then
+      echo "FORKCLOSE CARD #$n: $br is ahead of $SG_FORK_BASE and run $rn, which names it, is over (its record carries a verdict): the card is not Code Complete and this pass lands the branch anyway, because the card is derived and never the gate."
+    elif orphan "$br"; then
+      echo "FORKCLOSE ORPHAN #$n: $br is ahead of $SG_FORK_BASE with nobody in its worktree and no commit for $(( ${SG_FORK_ORPHAN_MINUTES:-20} )) min; a fix run that is gone left the card behind. Re-arming."
+    else continue; fi
     $BOARD $SG_OWNER $SG_PROJECT "Code Complete" $n >/dev/null;; esac; fi
   # 0 ahead: every commit of the branch is in the base already. If a file it touched is missing the base lost it to a sibling's
   # revert (reland). If nothing is missing it landed for real -- but the pass that merged it may have died before its close, and
