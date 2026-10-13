@@ -47,6 +47,10 @@ def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets
     if dry: print("JANITOR " + m, flush=True)
     else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
 DEADLINE = float(os.environ.get("JANITOR_CALL_TIMEOUT", "60"))   # a call has a deadline (ADR-0051); 0 waits, and is only for a hand run
+# A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
+# hardcoded path turns a missing tool into a failed pass. The shell resolves it into SG_LSOF (env.sh); this is the same
+# one resolution for a run with no shell around it, and the last entry keeps a tool outside both paths reachable.
+LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
 def _run(a, cwd=None, env=None, timeout=None):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
     """Run one command and return (exit status, stdout), at most DEADLINE seconds. A pipe is never used: a command's
     grandchild that inherits stdout would hold the pipe past the child's exit, and the pass would wait for it for ever
@@ -113,17 +117,17 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
                 queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
                 alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
 procs = {}
-for l in sh("/bin/ps", "-axo", "pid=,ppid=,command=").splitlines():
+for l in sh("/bin/ps", "-ewwo", "pid=,ppid=,command=").splitlines():
     p = l.split(None, 2)
     if len(p) == 3 and p[0].isdigit(): procs[int(p[0])] = (int(p[1]), p[2])
 starts = {}
-for l in sh("/bin/ps", "-axo", "pid=,lstart=").splitlines():
+for l in sh("/bin/ps", "-eo", "pid=,lstart=").splitlines():
     p = l.split(None, 5)
     if len(p) == 6 and p[0].isdigit():
         try: starts[int(p[0])] = time.mktime(time.strptime(" ".join(p[1:]).strip(), "%a %b %d %H:%M:%S %Y"))
         except ValueError: pass
 cwd = {}; pid = None
-for l in sh("/usr/sbin/lsof", "-d", "cwd", "-Fpn").splitlines():
+for l in sh(LSOF, "-d", "cwd", "-Fpn").splitlines():
     if l.startswith("p"): pid = int(l[1:])
     elif l.startswith("n") and pid: cwd[pid] = l[1:]
 me = set(); p = os.getpid()
@@ -255,6 +259,9 @@ if DASH_MAX:
         if dm and ours(dm.group(1)): dash[q] = dm.group(1)
     orphans = sorted((q for q, d in dash.items() if not live_run(folder(d))), key=lambda q: (starts.get(q) or now, q))
     victims = orphans[:max(0, len(dash) - DASH_MAX)]
+    if os.environ.get("JANITOR_DIAG"):
+        cand = [c for _, c in procs.values() if "dashboard_server" in c]
+        say(f"DASH-DIAG: ps read {len(procs)} processes, {len(dash)} dashboards of this loop, {len(orphans)} without a live run, ceiling {DASH_MAX}; {len(cand)} lines name a dashboard manager: {cand[:1]}")
     if victims:
         say(f"DASHBOARD-CEILING: {len(dash)} dashboards of this loop over the ceiling of {DASH_MAX}; killing {len(victims)} no live run owns (oldest first)")
         for q in victims: kill(q, f"dashboard over the ceiling ({len(dash)} > {DASH_MAX})")
