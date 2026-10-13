@@ -43,14 +43,19 @@ fi
 if [ -f "$(dirname "$0")/ghspend.py" ]; then
   while IFS=$'\t' read -r gc gb gd; do [ -n "$gc" ] && add "$gc" "$gd" "$gb"; done < <(python3 "$(dirname "$0")/ghspend.py" causes "$SG_STATE" 2>/dev/null)
 fi
-# ready work nobody is on: no run started in 30 min while a ready-for-agent issue has no open PR
-ra=" $(gh issue list --repo $SG_REPO --label ready-for-agent --state open --limit 100 --json number --jq '.[].number' 2>/dev/null | tr '\n' ' ')"
-if [ -n "${ra// /}" ]; then
+# Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
+# A ready issue with no run or pull request for one pass must remain visible even when it has only a wave label.
+ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
+ready=""
+for n in $ra; do
+  "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^(READY|STACK )' && ready="$ready $n"
+done
+if [ -n "${ready// /}" ]; then
   prn=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')"
-  free=""; for n in $ra; do case "$prn" in *" $n "*) ;; *) free="$free $n";; esac; done
+  free=""; for n in $ready; do case "$prn" in *" $n "*) ;; *) free="$free $n";; esac; done
   nv2=$(sed 's|.*/runs/||' "$SG_STATE/active-runs.txt" 2>/dev/null | sort -u | while read -r r; do d="$SG_CHECKOUT/runs/$r"; [ -d "$d" ] || continue
     grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null || { [ -n "$(find "$d/request.txt" -mmin -30 2>/dev/null)" ] && echo x; }; done | wc -l | tr -d ' ')
-  [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "ready-for-agent$free with no open PR and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
+  [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "startable$free with no open PR and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
 fi
 # The loop against its own board (#1795): a run that dies without its verdict leaves an `In Progress` card with nobody on it while
 # the loop still looks busy. Both numbers come from sources the loop already reads -- $SG_STATE/active-runs.txt and the REST board

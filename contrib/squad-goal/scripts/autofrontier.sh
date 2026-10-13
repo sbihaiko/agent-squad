@@ -1,7 +1,6 @@
 #!/bin/bash
 # usage: autofrontier.sh   (watch.sh, every ~3 min; AF_DRY=1 prints what it would dispatch)
-# Dispatches the startable frontier as soon as a blocker falls: every open issue labeled $SG_FRONTIER_LABEL (not a bug:
-# autobug.sh owns those) with no open PR naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
+# Dispatches the startable frontier as soon as a blocker falls: every open non-bug issue with no open PR naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
 # which stack.sh says READY or STACK, all as the children of ONE run (one squad start; it needs a free run slot), wave label first.
 # A run takes as many children as its envelope allows: the dispatch node's max_children, and run.max_children less the children the
 # live runs already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
@@ -143,7 +142,8 @@ joins() {   # one when issue $2 joins a child the picks of its own group already
 # would need a child of its own -- that one, and every issue after it, wait for the next pass. The envelope therefore never
 # cuts a shared-file slice in two, which is what bounding the picks alone did (#1521, #57).
 cands=()
-while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(gh api "repos/$SG_REPO/issues?state=open&labels=$SG_FRONTIER_LABEL&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
+# Read every open issue once. `stack.sh` owns the blocker gate; a label only orders a ready issue and never hides it.
+while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
 i=0
 while [ $i -lt ${#cands[@]} ]; do
   IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
