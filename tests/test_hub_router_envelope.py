@@ -11,6 +11,7 @@ starts the hub: its module body needs a profile, and a test that needs one canno
 """
 import ast
 import json
+import os
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -20,12 +21,12 @@ SEED = ROOT / "docs" / "design" / "router.graph.json"
 ANTHROPIC = ("sonnet", "opus", "haiku", "fable")
 
 
-def _hub_functions(*names):
+def _hub_functions(*names, checkout=""):
     """The named functions of hub.py, compiled alone, so importing the module never starts a server."""
     tree = ast.parse(HUB.read_text())
     keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     assert [n.name for n in keep] == list(names), "hub.py no longer ships these functions"
-    ns = {"json": json, "os": __import__("os"), "pathlib": pathlib}
+    ns = {"json": json, "os": __import__("os"), "pathlib": pathlib, "CHECKOUT": checkout}
     exec(compile(ast.Module(body=keep, type_ignores=[]), str(HUB), "exec"), ns)
     return ns
 
@@ -35,30 +36,27 @@ def _doc(envelope):
         {"name": "main", "kind": "loop"}, {"name": "route", "kind": "dispatch", **envelope}]}
 
 
-def test_the_envelope_is_read_from_the_run_graph_the_loop_starts(tmp_path, monkeypatch):
-    ns = _hub_functions("_graph_doc", "envelope_of")
+def test_the_envelope_is_read_from_the_run_graph_the_loop_starts(tmp_path):
+    ns = _hub_functions("_graph_doc", "envelope_of", checkout=str(tmp_path))
     d = tmp_path / "docs" / "design"; d.mkdir(parents=True)
     (d / "router.graph.json").write_text(json.dumps(_doc(
         {"allow": {"models": ["a-1"], "efforts": ["low"]}, "max_children": 3, "max_parallel": 2, "max_depth": 1})))
-    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path))
     got = ns["envelope_of"]()
     assert got["node"] == "route" and got["models"] == ["a-1"] and got["efforts"] == ["low"]
     assert got["max_children"] == 3 and got["max_parallel"] == 2 and got["max_depth"] == 1
 
 
-def test_the_project_workflow_file_wins_over_the_seed(tmp_path, monkeypatch):
-    ns = _hub_functions("_graph_doc", "envelope_of")
+def test_the_project_workflow_file_wins_over_the_seed(tmp_path):
+    ns = _hub_functions("_graph_doc", "envelope_of", checkout=str(tmp_path))
     w = tmp_path / "docs" / "squad" / "workflows"; w.mkdir(parents=True)
     (w / "dynamic.graph.json").write_text(json.dumps(_doc({"allow": {"models": ["mine-1"]}})))
-    monkeypatch.setenv("SG_CHECKOUT", str(tmp_path))
     assert ns["envelope_of"]()["models"] == ["mine-1"]
 
 
-def test_the_shipped_envelope_names_no_anthropic_model(tmp_path, monkeypatch):
+def test_the_shipped_envelope_names_no_anthropic_model():
     """The rule behind the measured defect: the envelope is what the router is held inside, so it names no model the
     owner withheld. A chain entry alone is not enough: the router reads this list."""
-    ns = _hub_functions("_graph_doc", "envelope_of")
-    monkeypatch.setenv("SG_CHECKOUT", str(ROOT))
+    ns = _hub_functions("_graph_doc", "envelope_of", checkout=str(ROOT))
     got = ns["envelope_of"]()
     assert got["models"], "the shipped graph has no dispatch envelope"
     for m in got["models"]:

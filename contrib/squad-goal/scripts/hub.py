@@ -2448,13 +2448,16 @@ def efforts_of(d):
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
 def _graph_doc():
-    """The run graph the loop starts, as launch.py resolves it: the project's own workflow file first, else the seed."""
-    for base in (pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()),):
-        for p in (base / "docs/squad/workflows/default.graph.json", base / "docs/squad/workflows/dynamic.graph.json",
-                  base / "docs/design/router.graph.json"):
-            if p.is_file():
-                try: return json.loads(p.read_text())
-                except (OSError, ValueError): return {}
+    """The run graph the loop starts, as launch.py resolves it: the project's own workflow file first, else the seed.
+
+    The checkout comes from the seam (CHECKOUT, resolved by address.sh), never from the cwd: the hub serves every
+    repository of the profile, so its working directory says nothing about whose graph it is reading."""
+    for p in (pathlib.Path(CHECKOUT) / "docs/squad/workflows/default.graph.json",
+              pathlib.Path(CHECKOUT) / "docs/squad/workflows/dynamic.graph.json",
+              pathlib.Path(CHECKOUT) / "docs/design/router.graph.json"):
+        if p.is_file():
+            try: return json.loads(p.read_text())
+            except (OSError, ValueError): return {}
     return {}
 
 
