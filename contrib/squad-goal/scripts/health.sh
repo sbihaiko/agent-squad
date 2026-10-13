@@ -10,7 +10,7 @@
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
-alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -o command= 2>/dev/null | grep -q "$2"; }
+alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
 causes=(); detail=(); briefs=()
 add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); }
 alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
@@ -29,7 +29,7 @@ nl=$($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk '/^worktre
 [ "$nl" -gt 0 ] && add loose-worktrees "$nl loose detached worktree(s) (wtclean keeps the dirty or unpushed ones; look at WT LOOSE)"
 # a fork branch ahead of the base with nobody on it: the fix run that was meant to move it is gone (forkclose re-arms it)
 if [ -n "${SG_FORK_DIR:-}" ] && [ -d "$SG_FORK_DIR" ]; then
-  cwf=$(/usr/sbin/lsof -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); npk=0; pk=""
+  cwf=$("$SG_LSOF" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'); npk=0; pk=""
   for b in $($G -C "$SG_FORK_DIR" for-each-ref --format='%(refname:short)' "refs/heads/${SG_FORK_BRANCH//%n/}*" 2>/dev/null); do
     s=${b#${SG_FORK_BRANCH//%n/}}; case "$s" in ''|*[!0-9]*) continue;; esac
     [ "$($G -C "$SG_FORK_DIR" rev-list --count "$SG_FORK_BASE..$b" 2>/dev/null)" -gt 0 ] || continue
@@ -172,7 +172,7 @@ wr=${SG_WATCH_CMD_RE:-'squad-goal/scripts/watch\.sh$'}
 # loop's process group, so a match with parent pid 1 that shares a group with another match is a fork too. Two loops started by two
 # watchd runs sit in two groups and both count. One ps snapshot gives pid, parent, group and command together; the regex goes in the
 # environment, never in awk's argv.
-wl=$(/bin/ps -axo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/awk -v me=$$ '{ pp[$1]=$2; pg[$1]=$3; c=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); if ($1 != me && c ~ ENVIRON["WR"]) m[$1]=1 }
+wl=$(/bin/ps -axwwo pid=,ppid=,pgid=,command= 2>/dev/null | WR="$wr" /usr/bin/awk -v me=$$ '{ pp[$1]=$2; pg[$1]=$3; c=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/, "", c); if ($1 != me && c ~ ENVIRON["WR"]) m[$1]=1 }
   END { for (p in m) { if (pp[p] in m) continue
     if (pp[p] == 1) { f = 0; for (q in m) if (q != p && pg[q] == pg[p]) f = 1; if (f) continue }
     print p } }' | sort -n | tr '\n' ' '); wl=${wl% }
