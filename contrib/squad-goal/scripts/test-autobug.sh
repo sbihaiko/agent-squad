@@ -243,4 +243,45 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) a dispatched issue the board does not carry yet: the card move adds it (`board.py --add`, the idempotent
+# add-then-move path janitor's board reconcile and reconcile.py already use), so an absent card is repaired and never
+# filed as a refused write. A bug the loop files enters this candidate list before any pass has put a card on the
+# board, so without the flag board.py answers `#<n> not on the board` and exits 1; that absence -- not a refusal by
+# GitHub -- opened a bug, and that bug's own card was missing the same way, so every pass handed the next one the same
+# absent card. The stub board answers the way board.py does: the move that asked to add lands, the plain move of a
+# card the board does not carry is refused by name.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\nfor a in "$@"; do [ "$a" = "--add" ] && exit 0; done\necho "#1228 not on the board" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+: > "$T/filed9"; : > "$T/st/cycle.log"; : > "$T/board.calls"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed9"
+    for a in "\$@"; do case "\$a" in body=@*) cat "\${a#body=@}" >> "$T/filed9";; esac; done
+    echo '{"number":900}' ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 a dispatch of a cardless issue finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+$G -qE '(^| )--add ' "$T/board.calls" && ok "9 the card move asks for the card the board does not carry" || ko "9 board call: $(cat "$T/board.calls")"
+filed9=$($G -c '^title=' "$T/filed9")
+[ "$filed9" = 0 ] && ok "9 an absent card is repaired, never filed as a refused write" || ko "9 an absent card opened $filed9 bug(s): $(cat "$T/filed9")"
+$G -q 'REFUSED' "$T/st/cycle.log" && ko "9 the repair is logged as a refusal: $(cat "$T/st/cycle.log")" || ok "9 no refusal is named for a repaired card"
+
 rm -rf "$T"; exit $fail
