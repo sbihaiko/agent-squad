@@ -87,7 +87,7 @@ def test_run_list_first_group_header_reads_workers(hub):
 
 
 def test_other_run_groups_keep_their_wording(hub):
-    assert _groups(hub)[1:] == [("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h", "2–4 h"), ("8h", "4–8 h"), ("d", "8 h+ (days)")]
+    assert _groups(hub)[1:] == [("1h", "≤ 1 h"), ("2h", "1–2 h"), ("4h", "2–4 h"), ("8h", "4–8 h"), ("24h", "8–24 h"), ("d", "24 h+ (days)")]
 
 
 def test_the_running_group_key_is_unchanged(hub):
