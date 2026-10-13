@@ -93,6 +93,12 @@ G=/usr/bin/grep
 for w in "commit early and often" "as soon as a slice compiles or its test runs" "commit again after each further step" "squash"; do
   $G -qF -- "$w" "$S/req-checklist-fork.txt" && $G -qF -- "$w" "$R/fork.txt" && ok "fork request carries '$w'" || ko "fork request lacks '$w'"
 done
+# 6b. (#81) the request names what the child RUNS: the suite beside the script it touched and the targeted cases, and the
+# machine's full gate as the loop's, once per landing -- a child that runs the full gate too starts a second one on the same box.
+G=/usr/bin/grep
+for w in "SUITES: run what you touched" "test-<script>.sh" "pytest tests/<file>.py" "belongs to the loop and to the land pass, once per landing: never run it"; do
+  $G -qF -- "$w" "$R/fork.txt" && $G -qF -- "$w" "$R/k.txt" && ok "both requests carry '$w'" || ko "a request lacks '$w'"
+done
 # 7. a child that follows that instruction then dies at the spend cap leaves git log <base>..gui/<N> non-empty
 F=$T/cap; /usr/bin/git init -q -b local/next "$F"
 (cd "$F" && /usr/bin/git -c user.email=a@b -c user.name=n commit -q --allow-empty -m base \
