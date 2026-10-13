@@ -4,6 +4,8 @@
 # Not shipped (ignored on both sides): __pycache__/, *.pyc, *.bak*.
 # Out of scope: a file only live carries (the fork never shipped it, so it can never converge) is not divergence.
 # Never touched: scripts/models.json, per-repo profiles (only profiles/example.sh ships) and $SG_STATE (sync-deny, fork-base).
+# --check also reads the fork's env.sh declaration of what a profile must set (SG_REQUIRED_SETTINGS) against every live
+# profile: a required setting a profile lacks, or a retired setting it still names, is a warning line, never a divergence.
 # Refused (SG_REFRESH_FORCE=1 overrides) when live carries edits neither synced to the fork nor on main, which the copy would erase.
 set -euo pipefail
 live="$(cd "$(dirname "$0")/.." && pwd)"; F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-main}; st=${SG_STATE:-$HOME/.cache/squad-goal}
@@ -19,9 +21,28 @@ diverged=$( shipped "$fk" | while read -r f; do
   [ -f "$live/$f" ] || { echo "$f"; continue; }   # only what $br ships can be current or stale; a live-only file is neither
   cmp -s "$live/$f" "$fk/$f" || { echo "$f"; continue; }
   if [ -x "$fk/$f" ] && [ ! -x "$live/$f" ]; then echo "$f"; fi; done )
+# The profile is read alone, with no inherited setting: is <setting> named after the profile loads?
+named() { env -i HOME="$HOME" PATH="$PATH" bash -c '. "$1" >/dev/null 2>&1; [ -n "${!2:-}" ]' _ "$1" "$2"; }
+# Entry form: <setting>:<the setting that engages it>, or <setting>:<engaging setting>:retired:<replacement>. A retired
+# setting is named as retired while a profile still has it; a migrated profile is quiet.
+settings_report() {
+  local decl e s eng kind repl p
+  decl=$(sed -n 's/^SG_REQUIRED_SETTINGS="\(.*\)"$/\1/p' "$fk/scripts/env.sh" 2>/dev/null || true)
+  for p in "$live"/scripts/profiles/*.sh; do
+    [ -f "$p" ] && [ "$(basename "$p")" != example.sh ] || continue
+    for e in $decl; do IFS=: read -r s eng kind repl <<< "$e"
+      if [ "$kind" = retired ]; then
+        ! named "$p" "$s" || echo "profile $(basename "$p" .sh): $s is retired, use $repl"
+      elif named "$p" "$eng" && ! named "$p" "$s"; then
+        echo "profile $(basename "$p" .sh): $eng is set but $s is not, and the shipped code refuses without it"
+      fi
+    done
+  done
+}
 if [ "${1:-}" = "--check" ]; then
-  [ -z "$diverged" ] && { echo "live skill matches $br"; exit 0; }
-  echo "live skill and $br disagree on:"; echo "$diverged"; exit 1
+  report=$(settings_report)
+  [ -z "$diverged" ] && { echo "live skill matches $br"; [ -z "$report" ] || echo "$report"; exit 0; }
+  echo "live skill and $br disagree on:"; echo "$diverged"; [ -z "$report" ] || echo "$report"; exit 1
 fi
 [ -z "$diverged" ] && { echo "already current with $br"; exit 0; }
 ahead=$(echo "$diverged" | while read -r f; do

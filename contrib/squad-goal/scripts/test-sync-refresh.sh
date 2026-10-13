@@ -53,4 +53,14 @@ r=$(rf --check) && ko "check passed while the executable bit differs" || case "$
 r=$(rf) && [ -x "$L/scripts/new-gate.sh" ] && ok "refresh restores the executable bit" || ko "refresh left the script unrunnable: $r"
 r=$(rf --check) && ok "check clean once the mode matches" || ko "check dirty after the mode fix: $r"
 
+# The contract a profile carries: env.sh declares it (SG_REQUIRED_SETTINGS), and --check reads it against every live profile.
+# A retired setting is named as retired, with its replacement, until the profile is migrated; then the check is quiet.
+cp "$d/env.sh" "$F/contrib/squad-goal/scripts/env.sh"; $G add -A; c -m declaration; rf >/dev/null
+printf ': "${SG_REPO:=x/emu}"; SG_TOOLING_REPO=x/tool\n' > "$L/scripts/profiles/old.sh"
+r=$(rf --check) && case "$r" in *old*SG_TOOLING_REPO*retired*SG_REPOS*) ok "check names a retired setting as retired, with the profile and its replacement";; *) ko "retired setting not named: $r";; esac || ko "check failed on a retired setting, which only warns: $r"
+printf ': "${SG_REPO:=x/emu}"; SG_REPOS="x/emu x/tool"\n' > "$L/scripts/profiles/old.sh"
+r=$(rf --check) && case "$r" in *SG_TOOLING_REPO*|*retired*) ko "check still warns on a migrated profile: $r";; *) ok "check stops warning once the profile is migrated";; esac || ko "check failed on a migrated profile: $r"
+printf ': "${SG_REPO:=x/emu}"; SG_FORK_DIR=/nowhere\n' > "$L/scripts/profiles/old.sh"
+r=$(rf --check) && case "$r" in *SG_TOOLING_REPO*) ko "check asks a fork-route profile for the retired SG_TOOLING_REPO: $r";; *) ok "a profile on the fork route is no longer asked for SG_TOOLING_REPO";; esac || ko "check failed: $r"
+
 rm -rf "$T"; exit $fail

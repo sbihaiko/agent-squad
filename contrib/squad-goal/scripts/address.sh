@@ -77,7 +77,7 @@ sg_land_base() { local row; row=$(sg_land_target "${1:-}#0") || return 1; printf
 # too) or a bare n / #n. A bare n is the profile in force (SG_PROFILE) and nothing else: never the profile the cwd's origin
 # matches. A repository no profile names is refused by name with the list of known ones; nothing falls back to another.
 # The context: SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_STATE SG_HUB_PATH SG_ISSUE.
-# A profile that sets the retired SG_TOOLING_REPO is refused by name: every repository has its own profile.
+# A profile that still sets the retired SG_TOOLING_REPO is read like any other: env.sh maps it into SG_REPOS and warns.
 # A profile is read on its own (no inherited SG_* value reaches it), so one profile can never borrow another's settings.
 # SG_PROFILES_DIR (default the profiles/ beside this file) and SG_STATE_BASE (default ~/.cache/squad-goal) are its inputs.
 # The context reads nothing from GitHub: it is resolved before any caller may reach it.
@@ -97,7 +97,6 @@ _sg_ctx_of() { local slug=$1 issue=$2 f; f="$(sg_profiles_dir)/$slug.sh"
   [ -f "$f" ] && [ "$slug" != example ] || { echo "repoctx: unknown profile: $slug (known: $(sg_profiles | tr '\n' ' '))" >&2; return 2; }
   env $(compgen -e | /usr/bin/grep '^SG_' | /usr/bin/grep -vx 'SG_PROFILES_DIR\|SG_STATE_BASE' | sed 's/^/-u /') \
     bash -c 'here=$1; . "$2" >/dev/null 2>&1
-      [ -z "${SG_TOOLING_REPO:-}" ] || { echo "repoctx: profile $3 sets SG_TOOLING_REPO, which is retired: give $SG_TOOLING_REPO its own profile" >&2; exit 2; }
       printf "%s=%q\n" SG_PROFILE "$3" SG_REPO "$SG_REPO" SG_OWNER "${SG_OWNER:-${SG_REPO%%/*}}" SG_PROJECT "$SG_PROJECT" \
         SG_CHECKOUT "$SG_CHECKOUT" SG_BASE "${SG_BASE:-main}" SG_FORK_DIR "$SG_FORK_DIR" \
         SG_STATE "${SG_STATE_BASE:-$HOME/.cache/squad-goal}/$3" SG_HUB_PATH "/$3" SG_ISSUE "$4"' _ "$_sg_ctx_here" "$f" "$slug" "$issue"; }
