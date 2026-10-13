@@ -21,7 +21,7 @@ printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # no open PR, no revci summary, 
 printf '#!/bin/bash\n[ -n "$REAL_SLEEP" ] && exec /bin/sleep "$@"\nexit 0\n' > "$B/sleep"   # REAL_SLEEP=1 keeps a stub slow on purpose
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
-for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh forkclose.sh prland.sh publish-landing.sh; do
+for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh forkclose.sh publish-landing.sh; do
   printf '#!/bin/bash\necho %s >> "%s"\n' "${s%.sh}" "$STEPS" > "$S/$s"; chmod +x "$S/$s"; done
 printf 'open("%s","a").write("childcc\\n")\n' "$STEPS" > "$S/childcc.py"
 for p in forkrescue forkstrand; do printf 'open("%s","a").write("%s\\n")\n' "$STEPS" "$p" > "$S/$p.py"; done
