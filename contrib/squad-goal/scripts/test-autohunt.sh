@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493, #1504).
 # Offline: stub gh, autobug, autofrontier, mkreq, launch. usage: bash test-autohunt.sh [path/to/autohunt.sh]
-src=${1:-$(dirname "$0")/autohunt.sh}; T=$(mktemp -d); fail=0
+src=${1:-$(dirname "$0")/autohunt.sh}; here=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0
 repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
 export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -42,6 +42,7 @@ scene() {
   restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   cp "$src" "$S/autohunt.sh"
+  cp "$here/ghcall.sh" "$S/"   # the filer's one write door (#140): --file spends through gh_send, so the suite ships it
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
@@ -54,6 +55,7 @@ E
   : > "$T/$1/st/active-runs.txt"
   export HOME=$T/$1/home SG_STATE=$T/$1/st GHLOG=$T/$1/gh.log GHPOST=$T/$1/ghpost
   export SG_AUTO_HUNT=yes SG_HUNT_IDLE_MINUTES=0 SG_HUNT_COOLDOWN_MINUTES=0 SG_HUNT_PER_DAY=6
+  unset SG_FILE_PASS SG_GH_PASS SG_FILE_CEILING   # a filing names no pass here: the ceiling is not this suite's subject (#140)
   echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
 }
 run() { AH_DRY=1 bash "$S/autohunt.sh" 2>&1; }
@@ -150,7 +152,7 @@ n=$(bash "$S/autohunt.sh" --none 2>&1)
 case "$n" in *"HUNT none"*) ok "empty hunt logs HUNT none";; *) ko "none: '$n'";; esac
 
 # 15) watch.sh calls autohunt.sh every cycle after autobug.sh
-w=$(cd "$(dirname "$src")" && pwd)/watch.sh
+w=$here/watch.sh
 if [ -f "$w" ]; then
   python3 - "$w" <<'PY' && ok "watch.sh calls autohunt.sh after autobug.sh" || ko "watch.sh does not call autohunt.sh after autobug.sh"
 import pathlib, sys
