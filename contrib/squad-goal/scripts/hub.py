@@ -39,12 +39,15 @@ def status_field():
     """REST id of the board's Status field (the items endpoint needs it to return Status values)."""
     o = subprocess.run(["gh", "api", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id'], capture_output=True, text=True, timeout=60).stdout.split()
     return o[0] if o else ""
-HOME = pathlib.Path.home(); STATE = pathlib.Path(os.environ.get("SG_STATE", HOME / ".cache/squad-goal"))
+HOME = pathlib.Path.home(); STATE = pathlib.Path(os.environ.get("SG_STATE") or sys.exit("hub.py: SG_STATE is not set; run it under env.sh, which names the repository's own directory"))
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
 HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(CHECKOUT) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
 (HUBDIR / ".gitignore").write_text("*\n")   # keeps the folder untracked even where runs/ is not ignored
 for _n in ("hub-history.json", "hub-prs.json", "hub-kills.log"):   # one-time move from the old per-user cache
     if (STATE / _n).exists() and not (HUBDIR / _n).exists(): (HUBDIR / _n).write_bytes((STATE / _n).read_bytes())
+# what must not split comes from the seam (address.sh): the provider limit markers and the quota cache sit in one shared
+# directory, the board cache is one per owner and project. Unset (a hub run outside the seam): markers in SG_STATE, caches here.
+SHARED = pathlib.Path(os.environ.get("SG_SHARED") or STATE); SHARED.mkdir(parents=True, exist_ok=True)
 HIST = HUBDIR / "hub-history.json"; LOCK = threading.Lock()
 BASE = {"pr": {"n": 31, "median": 38, "mean": 73, "max": 266, "over60": 13}, "run_median": 13, "cutoff": "2026-10-09T19:00:00Z"}
 try: hist = json.loads(HIST.read_text())          # finished runs never get re-parsed: {record path: fields}
@@ -835,9 +838,9 @@ def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"health": None, "progress": None, "landing": _last_landing(), "wt": _wt_count(), "occ": None,
-           "quota": {"codex": limited_until(_read(STATE / "codex-limited"), now),
-                     "agy": limited_until(_read(STATE / "agy-limited"), now)}}
+    out = {"health": None, "progress": None, "landing": _last_landing(), "wt": _wt_count(), "occ": None, "drift": None,
+           "quota": {"codex": limited_until(_read(SHARED / "codex-limited"), now),
+                     "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
     h = _json(STATE / "health.json")
     if isinstance(h, dict):
         causes = [c for c in (h.get("causes") or []) if c]
@@ -976,7 +979,7 @@ def stats(period, src="both"):
     models = sorted(({**x, "spend": round(x["spend"], 2)} for x in mt.values()), key=lambda x: -(x["in"] + x["out"]))
     return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
 
-BOARD = HUBDIR / "hub-board.json"
+BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
 try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
@@ -1032,7 +1035,7 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
             # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
-    BOARD.write_text(json.dumps(board_cache))
+    _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)   # two hubs of one project share it
     return board_cache
 def refresh_board():
     """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag). The header's
@@ -2184,7 +2187,7 @@ def plans_set(new):
     tmp = PLANS.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=2) + "\n"); os.replace(tmp, PLANS)
     return d
 # ---- quota read from each provider's own CLI, so nobody has to type it. Every window is {label, pct, resets (epoch)}.
-QUOTA = HUBDIR / "hub-quota.json"
+QUOTA = (SHARED if os.environ.get("SG_SHARED") else HUBDIR) / "hub-quota.json"   # one per machine under the seam
 try: quota = json.loads(QUOTA.read_text())
 except Exception: quota = {}
 def q_claude():

@@ -1,7 +1,7 @@
 #!/bin/bash
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
-# usage: cqflush.sh [--once]   Loop: post <SG_STATE_BASE>/<profile>/cq/<owner>__<repo>#<issue>-<tag>.md as issue comments, retrying (the API answers 500 at times).
+# usage: cqflush.sh [--once]   Loop: post the cq/ queue of every repository's own directory (sg_state_dir) as issue comments, retrying (the API answers 500 at times).
 # A comment carries its own address (#20): the name says the repository and the issue, and the comment is posted there whatever
 # directory it sits in -- the queue directory gives isolation, never the write target. The repository is resolved from that
 # address through the seam (address.sh), never from the cwd or the profile the flusher started in, so one flusher serves every
@@ -11,7 +11,7 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # Only files idle for 5 s are read (a writer may still be filling one). A file that fails 5 times
 # moves to <name>.dead and is reported once, so a permanently rejected comment cannot retry forever. --once: one pass, no sleep.
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"
-base=${SG_STATE_BASE:-$HOME/.cache/squad-goal}
+base=$(sg_state_base)
 while :; do left=0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue
     [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }

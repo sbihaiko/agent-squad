@@ -4,7 +4,7 @@
 # same chain, against its own repository's issue and diff. With no argument it is the profile's $SG_REPO (#1820).
 # Walks review_models in models.json (claude:* -> claude CLI, grok-* -> grok CLI, gemini-* -> agy (Antigravity) CLI, else codex): a model that fails for infrastructure reasons (non-zero exit,
 # empty output, no VERDICT line) after model_retry_budget tries is skipped, and MODEL_FAIL/MODEL_SWITCH
-# are queued on the issue. Anthropic entries are skipped while $SG_STATE/quota-guard exists.
+# are queued on the issue. Anthropic entries are skipped while $SG_SHARED/quota-guard exists.
 # A model try is killed after review_timeout_seconds and the chain moves on (no retry of a timed-out model).
 # The saved review is the checklist shape of revformat.py (#1777), capped at review_max_lines of models.json:
 # an answer outside it (prose, a verdict off line 1, a bullet over two lines) is a MODEL_FORMAT failure of that
@@ -77,7 +77,8 @@ hours_ok() { local k=$1 m=$2 w h a b; w=$(jq -r --arg k "$k" --arg m "$m" '.hour
 off_ok() { [ "$(jq -r --arg k "$1" --arg m "$2" '.off[$k][$m] // false' "$cfg" 2>/dev/null)" != true ]; }
 may_run() { hours_ok "$1" "$2" && off_ok "$1" "$2"; }
 # a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
-python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_STATE/codex-limited"
+LIM=${SG_SHARED:-$SG_STATE}   # the provider limit markers: one shared directory, so a limit one loop sees skips the model for every loop
+python3 "$(dirname "$0")/codex-reset.py" --sync "$LIM/codex-limited"
 out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev=""
 # autopilot's age SLA (a PR open past SG_AGE_MINUTES) pins the review to one model and one try: an old PR may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
@@ -116,20 +117,20 @@ PY
 # make the only reachable model fail by construction: count who would actually be tried, and skip the clamp
 # when that count is 1. Several reachable models still get the leash.
 eligible() { local m=$1
-  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && return 1;; esac
-  case $m in gemini-*) [ -e "$SG_STATE/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/agy-limited")" ] && return 1;; esac
-  if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
+  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$LIM/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$LIM/codex-limited")" ] && return 1;; esac
+  case $m in gemini-*) [ -e "$LIM/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$LIM/agy-limited")" ] && return 1;; esac
+  if [ -e "$LIM/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
   may_run review_models "$m" || return 1
   return 0; }
 reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
 used=0
 for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
-  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_STATE/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/codex-limited")" ] && continue;; esac
+  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$LIM/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$LIM/codex-limited")" ] && continue;; esac
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
   # until the reset the error itself names, instead of spending one dead try per review round
-  case $m in gemini-*) [ -e "$SG_STATE/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_STATE/agy-limited")" ] && continue;; esac
-  if [ -e "$SG_STATE/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
+  case $m in gemini-*) [ -e "$LIM/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$LIM/agy-limited")" ] && continue;; esac
+  if [ -e "$LIM/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
   off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on PR #%s: switched off in models.json.\n" "$m" "$pr" > "$(sg_cq_file "$iss-moff$$.md")"; continue; }
@@ -152,10 +153,10 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     [ -e "$p.superseded" ] && { echo "VERDICT: BLOCKED (PR head moved during the review)" > "$out"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
-      python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_STATE/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
+      python3 "$(dirname "$0")/codex-reset.py" --hit > "$LIM/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
     if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$SG_STATE/review-$pr.err" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
-      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_STATE/agy-limited"
-      printf "MODEL_QUOTA review %s skipped until %s for PR #%s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_STATE/agy-limited")" '+%F %T')" "$pr" > "$(sg_cq_file "$iss-mquota$$.md")"
+      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$LIM/agy-limited"
+      printf "MODEL_QUOTA review %s skipped until %s for PR #%s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$LIM/agy-limited")" '+%F %T')" "$pr" > "$(sg_cq_file "$iss-mquota$$.md")"
       rc=99; break; fi
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on PR #%s after %ss; next model.\n" "$m" "$pr" "$tmo" > "$(sg_cq_file "$iss-mtimeout$$.md")"; break; }
     # the verdict goes on line 1 in the exact form the loop parses (revci/autopilot/hub.py read line 1): the model may

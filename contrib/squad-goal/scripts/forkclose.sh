@@ -408,7 +408,7 @@ dispatch() { local nm=$1 n=$2 kind=$3 mo="$SG_STATE/req/$nm.mkres" req rc
     printf "Fork-only close: the %s fix request %s for issue #%s was refused by mkreq.sh and NO fix run was launched. The merge was reverted and the branch re-applied; the next pass retries the close. Nothing is waiting on a commit that cannot come.\n\`\`\`\n%s\n\`\`\`\n" "$kind" "$nm" "$n" "$(cat "$mo")" > "$(sg_cq_file "$n-slicerefused$$.md")"
     return $rc; fi
   (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$SG_STATE/$nm.log"); }
-ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null | tr '\n' ' ') "
+ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_BOARD_CACHE:-${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json}" 2>/dev/null | tr '\n' ' ') "
 pat=$(sg_fork_branch_pattern); pat=${pat//%n/}; cc=$($G for-each-ref --format='%(refname:short)' "refs/heads/$pat*" | sed "s#^$pat##" | grep -E '^[0-9]+$')   # every fork branch, so a closed issue's fork half still lands
 # The base LEFT ALREADY broken by an earlier merge of such a branch is the other half of #1823: local/next is ahead of
 # origin/<base> with a tip nobody can push, every later pass reads the work as landed, and the run sees nothing. This pass

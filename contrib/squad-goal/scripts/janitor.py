@@ -541,7 +541,7 @@ for l in open_pulls():   # M
     tried = sum(1 for _ in (st / "auto").glob(f"retry-{pr}-{sha[:9]}"))
     say(f"PR-STUCK #{pr} @ {sha[:9]}: {why}, unchanged {int((now - upd) // 60)} min, no live run on it" + (" (retries spent)" if tried else ""))
     if not dry: mk.touch(); alert(f"PR #{pr} stuck: {why}; no live fix run for {int((now - upd) // 60)} min")
-hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
+hb = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"); hm = st / "auto" / "janitor-h-last"
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     if not dry: hm.touch()
     try: items = json.loads(hb.read_text()).get("items", [])

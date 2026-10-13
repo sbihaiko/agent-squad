@@ -6,7 +6,7 @@
 Field/option ids are cached a day and the issue -> item id map 10 min (refetched on a miss) under $SG_STATE; one PATCH per card.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import json, os, pathlib, subprocess, sys, time
-st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); st.mkdir(parents=True, exist_ok=True)
+st = pathlib.Path(os.environ.get("SG_STATE") or sys.exit("board.py: SG_STATE is not set; run it under env.sh, which names the repository's own directory")); st.mkdir(parents=True, exist_ok=True)
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]
 args = args[1:] if add or run_fields or clear_run else args
 owner, num = args[0], args[1]

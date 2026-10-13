@@ -10,7 +10,7 @@ posted by cqflush.sh) and in the loop's log, naming the branch, the commit and t
 branches answering one issue number are refused, both named, neither moved. Nothing is moved, renamed, re-pointed or closed
 here -- the report is the whole deliverable, and a pass over a head it already named says nothing new."""
 import json, os, pathlib, re, subprocess, sys
-st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
+st = pathlib.Path(os.environ.get("SG_STATE") or sys.exit("forkstrand.py: SG_STATE is not set; run it under env.sh, which names the repository's own directory")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 fork, base = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main")
 if not fork or not pathlib.Path(fork).is_dir(): sys.exit(0)
@@ -30,7 +30,7 @@ def fork_diff(b):   # every file b changed since it left the base is fork toolin
     return files if files and all(is_fork_path(p) for p in files) else []
 def issue_of(b): return int(m.group(1)) if (m := re.search(r"(\d+)", b)) else None
 def ready():   # the loop's own card source (hub.py's board cache): what is parked at the landing stage. No gh call, no budget.
-    try: items = json.loads(pathlib.Path(os.environ.get("SG_HUB_DIR", os.path.join(os.environ.get("SG_CHECKOUT", ""), "runs/.hub")) + "/hub-board.json").read_text()).get("items") or []
+    try: items = json.loads(pathlib.Path(os.environ.get("SG_BOARD_CACHE") or os.environ.get("SG_HUB_DIR", os.path.join(os.environ.get("SG_CHECKOUT", ""), "runs/.hub")) + "/hub-board.json").read_text()).get("items") or []
     except Exception: return {}
     return {int(i["n"]): i.get("st") for i in items if i.get("s") == "open" and str(i.get("n", "")).isdigit() and i.get("st") in ("Code Complete", "Testing")}
 def say(n, key, text):

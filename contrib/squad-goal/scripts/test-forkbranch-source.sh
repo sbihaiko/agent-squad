@@ -41,8 +41,8 @@ g() { /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 forkrepo() { rm -rf "$T/fork"; mkdir -p "$T/fork"; g init -q -b local/next
   echo 0 > "$T/fork/f"; g add f; g commit -q -m init
   g checkout -q -b "$1" local/next; echo one > "$T/fork/one.py"; g add .; g commit -q -m "work 1"; g checkout -q local/next; }
-reqtext() { cat "$T/home"/.cache/squad-goal/req/*.txt 2>/dev/null; }
-clearreq() { rm -rf "$T/home/.cache"; }
+reqtext() { cat "$T/st"/req/*.txt 2>/dev/null; }
+clearreq() { rm -rf "$T/st/req"; }
 ask() { bash "$S/mkreq.sh" "$1" "$T/$1.body" 2>"$T/$1.err" >"$T/$1.out"; }   # exit status: refused or not
 # A. The setting is `issue/%n`, NOT the tooling's own habit: the request must name the branch the land reads, and the land
 # must land exactly it. Nothing here reads `gui/`, so a name that still says gui/1 came from a second source.
@@ -66,7 +66,7 @@ clearreq
 ask b1 && ko "a fork-only request naming fix/<N>-short-slug was accepted" || ok "a fork-only request naming fix/<N>-short-slug is refused"
 $G -qF 'fix/<N>' "$T/b1.err" && ok "the refusal names the branch the request carried" || ko "refusal hides it: $(cat "$T/b1.err")"
 $G -qF 'gui/<N>' "$T/b1.err" && ok "the refusal names the branch the land reads" || ko "refusal hides the land's branch: $(cat "$T/b1.err")"
-[ -f "$T/home/.cache/squad-goal/req/b1.txt" ] && ko "the refused dispatch wrote a request (a run could start)" || ok "the refused dispatch wrote no request: nothing can launch"
+[ -f "$T/st/req/b1.txt" ] && ko "the refused dispatch wrote a request (a run could start)" || ok "the refused dispatch wrote no request: nothing can launch"
 env_of 'issue/%n'
 printf 'IMPORTANT: your first and only action is X\nFORK-ONLY: all\nCHILD — GitHub issue(s) 1 (FORK-ONLY bug; one root cause, one local commit on gui/1):\n' > "$T/b2.body"
 clearreq
@@ -78,7 +78,7 @@ printf 'IMPORTANT: your first and only action is X\nFORK-ONLY: all\nCHILD — Gi
 clearreq
 ask c1 && ko "a setting that names no branch per issue was accepted" || ok "a setting without %n is refused"
 $G -qF '%n' "$T/c1.err" && ok "the refusal names the missing %n" || ko "refusal text: $(cat "$T/c1.err")"
-[ -f "$T/home/.cache/squad-goal/req/c1.txt" ] && ko "the refused dispatch wrote a request" || ok "no request written for c1"
+[ -f "$T/st/req/c1.txt" ] && ko "the refused dispatch wrote a request" || ok "no request written for c1"
 env_of 'gui %n'
 printf 'IMPORTANT: your first and only action is X\nFORK-ONLY: all\nCHILD — GitHub issue(s) 1 (FORK-ONLY bug; one local commit):\n' > "$T/c2.body"
 clearreq
@@ -89,7 +89,7 @@ env_of 'gui/%n'
 printf 'IMPORTANT: your first and only action is X\nFORK-ONLY: all\nCHILD — GitHub issue(s) 1 (FORK-ONLY bug; one local commit on gui/1):\n' > "$T/d1.body"
 clearreq
 ask d1 && ok "a well-formed fork-only request builds" || ko "control refused: $(cat "$T/d1.err")"
-f=$T/home/.cache/squad-goal/req/d1.txt
+f=$T/st/req/d1.txt
 [ -f "$f" ] && ok "the control request exists" || ko "no control request"
 $G -q 'cd <fork worktree>' "$f" 2>/dev/null && ok "the control carries the fork DONE CHECK" || ko "control lacks the fork DONE CHECK"
 $G -qE 'origin/main|open the PR|prepush.sh' "$f" 2>/dev/null && ko "control carries PR text" || ok "control carries no PR text"

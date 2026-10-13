@@ -6,8 +6,9 @@
 # the names are listed and nothing is removed. Bring it over with refresh-from-fork.sh, or SG_SYNC_FORCE=1 to discard it.
 set -euo pipefail
 src="$(cd "$(dirname "$0")/.." && pwd)"; F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; dst="$F/contrib/squad-goal"
-deny=$(cat "${SG_STATE:-$HOME/.cache/squad-goal}/sync-deny")   # required: the names that must never ship
-st=${SG_STATE:-$HOME/.cache/squad-goal}
+[ -n "${SG_STATE:-}" ] || . "$(dirname "$0")/env.sh"   # the repository's own directory comes from the seam, never a shared default
+deny=$(cat "$SG_STATE/sync-deny")   # required: the names that must never ship
+st=$SG_STATE
 sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
 if [ -d "$dst" ] && [ "${SG_SYNC_FORCE:-}" != 1 ]; then   # fork-ahead = a fork file that differs from live and is not what the last sync/refresh left there
   ahead=$(cd "$dst" && find . -type f ! -name .DS_Store | sed 's|^\./||' | { grep -v '^scripts/models\.json$' || true; } | sort | while read -r f; do

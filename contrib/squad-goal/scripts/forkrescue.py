@@ -11,7 +11,7 @@ fork-only-branded issue's stray branch is fork work by the issue's own word. The
 landing stage (Code Complete/Testing, open) is rescued, so a branch a run is still working on (In Progress) is never taken
 from under it. Once per child (marker auto/rescue-<run>-<child>)."""
 import json, os, pathlib, re, subprocess, sys
-st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
+st = pathlib.Path(os.environ.get("SG_STATE") or sys.exit("forkrescue.py: SG_STATE is not set; run it under env.sh, which names the repository's own directory")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 fork, base, pat = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main"), os.environ.get("SG_FORK_BRANCH", "gui/%n")
@@ -30,7 +30,7 @@ def fork_paths_only(b):   # every file b changed since it left the base is fork 
     files = [p for p in git("diff", "--name-only", mb, b).stdout.split("\n") if p] if mb else []
     return bool(files) and all(any(p == x or (x.endswith("/") and p.startswith(x)) for x in FORK_PATHS) for p in files)
 def ready_cards():   # the loop's own card source (hub.py's board cache): what is parked at the landing stage. No gh call, no budget.
-    try: items = json.loads(pathlib.Path(os.environ.get("SG_HUB_DIR", os.path.join(os.environ.get("SG_CHECKOUT", ""), "runs/.hub")) + "/hub-board.json").read_text()).get("items") or []
+    try: items = json.loads(pathlib.Path(os.environ.get("SG_BOARD_CACHE") or os.environ.get("SG_HUB_DIR", os.path.join(os.environ.get("SG_CHECKOUT", ""), "runs/.hub")) + "/hub-board.json").read_text()).get("items") or []
     except Exception: return set()
     return {int(i["n"]) for i in items if i.get("s") == "open" and i.get("st") in ("Code Complete", "Testing") and str(i.get("n", "")).isdigit()}
 def worktree_of(b):

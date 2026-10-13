@@ -11,9 +11,9 @@ for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/watch.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; B=$T/bin
 mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log REC_SLEEP=5
-cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/repoctx.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
+cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/address.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
 cat > "$S/env.sh" <<EOF
-export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
+export SG_PROFILE=\${SG_PROFILE:-p} SG_STATE=\${SG_STATE:-$ST} SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001   # every case below is its own GitHub: a list kept, or a cooldown set, by the last case would answer this one (#45)
 EOF
@@ -179,16 +179,31 @@ n=$(/usr/bin/grep -c '^NEW PR #7 gui/1893' "$T/watch.out")
 /usr/bin/grep -q 'the open-PR list is not readable' "$T/watch.out" \
   && ok "6c the refusal in between is still named in the log" || ko "6c the refusal between the two answers was silent"
 
-# 7) (#1872) one watch.sh per resolved path. The lock is keyed on this script's own resolved path, NOT on $SG_STATE: a second
-#    start under a different state would otherwise poll the same repository beside the first and double every read. A lock
-#    whose holder is gone is taken over, so a killed loop never wedges the next start.
-WL="$T/cache/watch-locks/$(printf '%s' "$(cd "$S" && pwd -P)/watch.sh" | tr -c A-Za-z0-9 _)"   # the key is the script's RESOLVED path (/var and /private/var are two names for it), under the seam's base
+# 7) (#1872) one watch.sh per resolved path and repository. The lock is keyed on this script's own resolved path in the
+#    repository's own directory the seam names, NOT on $SG_STATE: a second start under a different state would otherwise
+#    poll the same repository beside the first and double every read. A lock whose holder is gone is taken over, so a
+#    killed loop never wedges the next start.
+WL="$T/cache/p/locks/watch-$(printf '%s' "$(cd "$S" && pwd -P)/watch.sh" | tr -c A-Za-z0-9 _)"   # the key is the script's RESOLVED path (/var and /private/var are two names for it), in the repository's own directory
 rm -rf "$WL"; mkdir -p "$WL"; echo $$ > "$WL/pid"          # held by this shell: alive, so the next start must refuse
 : > "$STEPS"
 env SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/lock.out" 2>&1
 case "$(cat "$T/lock.out")" in *"watch.sh already running pid=$$"*) ok "7 a second watch.sh on the same path refuses by name";; *) ko "7 the second start was not refused: '$(cat "$T/lock.out")'";; esac
 [ ! -s "$STEPS" ] && ok "7 and it read nothing and ran no step" || ko "7 the refused start still ran: $(tr '\n' ' ' < "$STEPS")"
-echo 999999 > "$WL/pid"                                    # a holder that is gone: the lock is stale
+# 7b) one repository stopping or stalling never pauses another's: repository p's own supervisor is really alive and holds
+#     its lock -- it is parked inside a six-second step, as a stalled loop is -- and the supervisor of repository q,
+#     started from the same scripts, is not refused by it and runs its own cycle. p is inside its step, so everything
+#     written to the steps file after the one below is q's.
+mkdir -p "$T/stq"; rm -rf "$WL"; : > "$STEPS"
+( AF_HOLD=6 REAL_SLEEP=1 SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/held.out" 2>&1 & echo $! > "$T/held.pid" )
+i=0; while ! /usr/bin/grep -q autofrontier "$STEPS" 2>/dev/null && [ $i -lt 200 ]; do /bin/sleep 0.1; i=$((i+1)); done
+held_p=$(cat "$T/held.pid" 2>/dev/null); : > "$STEPS"
+env SG_PROFILE=q SG_STATE="$T/stq" SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/other.out" 2>&1
+case "$(cat "$T/other.out")" in *"already running"*) ko "7b repository q was refused by p's lock: '$(cat "$T/other.out")'";;
+  *) ok "7b repository q's supervisor is not refused by p's";; esac
+/usr/bin/grep -q forkclose "$STEPS" && ok "7b another repository's supervisor runs its cycle while this one is held" || ko "7b repository q was paused by p: '$(tr '\n' ' ' < "$STEPS")' '$(cat "$T/other.out")'"
+pkill -P "$held_p" 2>/dev/null; kill -TERM "$held_p" 2>/dev/null; wait "$held_p" 2>/dev/null
+[ -n "$(cat "$T/held.pid" 2>/dev/null)" ] && kill -TERM "$(cat "$T/held.pid")" 2>/dev/null; true
+mkdir -p "$WL"; echo 999999 > "$WL/pid"                    # a holder that is gone: the lock is stale
 : > "$STEPS"
 env SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/takeover.out" 2>&1 & local_p=$! i=0
 while kill -0 "$local_p" 2>/dev/null && [ $i -lt 100 ]; do /bin/sleep 0.1; i=$((i+1)); done

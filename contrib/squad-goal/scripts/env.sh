@@ -13,15 +13,17 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/address.sh"   # the one resolution of a repository: profiles dir, checkout and origin match, state directory
 [ -n "${SG_PROFILE:-}" ] || SG_PROFILE=$(repoctx "$PWD" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
-repoctx "$SG_PROFILE" >/dev/null || exit 2
+_sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
 if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
-# One state directory per repository (#20): markers, locks, active-runs.txt, auto/, cq/, tests, alerts, watch.log and
-# health.json of one profile never share a namespace with another's. SG_STATE set in the environment still wins.
-: "${SG_STATE_BASE:=$HOME/.cache/squad-goal}"
-: "${SG_STATE:=$SG_STATE_BASE/$SG_PROFILE}"
+# One state directory per repository (#20, #25): markers, locks, active-runs.txt, auto/, req/, cq/, tests, alerts,
+# watch.log and health.json of one profile never share a namespace with another's. What must not split comes from the
+# same seam: SG_SHARED (provider limit markers, quota cache) and SG_BOARD_CACHE (one per owner and project).
+# SG_STATE, SG_SHARED or SG_BOARD_CACHE set in the environment still wins.
+eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOARD_CACHE)=' | sed 's/^/_ctx_/')"; unset _sg_ctx
+: "${SG_STATE:=$_ctx_SG_STATE}" "${SG_SHARED:=$_ctx_SG_SHARED}" "${SG_BOARD_CACHE:=$_ctx_SG_BOARD_CACHE}"
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
 if [ -n "${SG_TOOLING_REPO:-}" ]; then
@@ -31,7 +33,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
     echo "env.sh: profile $SG_PROFILE sets SG_TOOLING_REPO, which is retired: it is mapped into SG_REPOS for now; name $SG_TOOLING_REPO in SG_REPOS and remove SG_TOOLING_REPO from the profile" >&2; }
   unset SG_TOOLING_REPO
 fi
-export SG_STATE_BASE SG_PROFILE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
+export SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
-mkdir -p "$SG_STATE/cq" "$SG_STATE/req"
+mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"

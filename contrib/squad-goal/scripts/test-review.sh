@@ -176,4 +176,11 @@ printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"r
 printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".* "$T/st/cq/"*
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "an ineligible model is not promoted by its latency ($wc)";; *) ko "skip before ordering: '$out'";; esac
+# 13) a provider limit is machine policy, not one repository's: the markers sit in the shared directory ($SG_SHARED), so a
+# limit another repository's loop wrote there skips the model here too, though this repository's own directory has none.
+printf '{"review_models":["gemini-3.8-flash-high","codex-x","claude:claude-opus-5-5","claude:b"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"]}' > "$T/s/models.json"
+mkdir -p "$T/shared"; rm -f "$T/st/agy-limited" "$T/st/codex-limited" "$T/st/quota-guard" "$T/st/review-7".* "$T/st/cq/"* "$T/st/review-times.tsv"
+echo $(( $(date +%s) + 3600 )) > "$T/shared/agy-limited"; echo $(( $(date +%s) + 3600 )) > "$T/shared/codex-limited"; touch "$T/shared/quota-guard"
+out=$(SG_SHARED="$T/shared" bash "$T/s/review.sh" 7 8 2>/dev/null)
+case "$out" in model=claude:b*) ok "the shared limit markers skip gemini, codex and the guarded Anthropic model for this repository too";; *) ko "shared limit markers ignored: '$out'";; esac
 rm -rf "$T"; exit $fail

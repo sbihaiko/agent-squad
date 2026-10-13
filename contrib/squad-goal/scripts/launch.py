@@ -12,7 +12,7 @@ if not os.environ.get("SG_SQUAD"):   # env.sh not sourced (SG_PROFILE alone sele
     out = subprocess.run(["bash", "-c", f'. "{here}/env.sh" >/dev/null && env'], capture_output=True, text=True).stdout
     os.environ.update(dict(l.split("=", 1) for l in out.splitlines() if l.startswith("SG_") and "=" in l))
 squad = os.environ.get("SG_SQUAD") or json.load(open(os.path.expanduser("~/.claude/plugins/installed_plugins.json")))["plugins"]["agent-squad@agent-squad"][0]["installPath"]
-state = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal"))
+state = pathlib.Path(os.environ.get("SG_STATE") or sys.exit("launch.py: SG_STATE is not set; run it under env.sh, which names the repository's own directory"))
 state.mkdir(parents=True, exist_ok=True); (state / "cq").mkdir(exist_ok=True)
 req_file = pathlib.Path(sys.argv[1]).resolve(); cwd = pathlib.Path.cwd().resolve(); runs = cwd / "runs"
 

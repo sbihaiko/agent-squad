@@ -47,7 +47,7 @@ case "$*" in
 esac
 GH
 chmod +x "$T/bin/gh"
-export HOME=$T/home PATH="$T/bin:$PATH"; R=$HOME/.cache/squad-goal/req
+export HOME=$T/home SG_STATE=$T/home/.cache/squad-goal PATH="$T/bin:$PATH"; R=$SG_STATE/req   # the repository's own directory (env.sh sets it from the seam)
 body() { printf 'IMPORTANT: your first and only action is X\nPANEL: %s\nEdit %s\n' "$1" "$2" > "$T/$3.body"; }
 run() { bash "$S/mkreq.sh" "$1" "$T/$1.body" 2>"$T/$1.err" >"$T/$1.out"; }
 runf() { SG_SLICE_FORCE=1 bash "$S/mkreq.sh" "$1" "$T/$1.body" 2>"$T/$1.err" >"$T/$1.out"; }

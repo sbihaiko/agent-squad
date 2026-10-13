@@ -15,7 +15,7 @@ body=$(gh api repos/$SG_REPO/issues/$iss -q .body)
 # Taking the whole section made two issues that mention each other a cycle neither could ever leave -- both WAIT on
 # each other forever, and health.sh reports nothing, so the stall was silent (#1803).
 bl=$(printf '%s\n' "$body" | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '(^|[^/[:alnum:]])#[0-9]+' | grep -oE '[0-9]+' | sort -u)
-hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
+hb="${SG_BOARD_CACHE:-${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json}"   # hub's board cache: one per owner and project
 testing=" $(jq -r '.items[]?|select(.st=="Testing" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 cc=" $(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 prs=$(gh api "repos/$SG_REPO/pulls?state=open&per_page=100")

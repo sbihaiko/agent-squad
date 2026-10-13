@@ -13,7 +13,7 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # A view restart that failed stays pending ($SG_STATE/auto/publish-view-pending) and is retried by the next run.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"; live="$(cd "$here/.." && pwd)"
-F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-main}; st=${SG_STATE:-$HOME/.cache/squad-goal}; A="$st/auto"
+F=${SG_SQUAD_FORK:-$HOME/VSCodeProjects/agent-squad}; br=${SG_FORK_BRANCH:-main}; : "${SG_STATE:?publish-landing.sh: SG_STATE is not set; run it under env.sh, which names the directory of the repository}"; st=$SG_STATE; A="$st/auto"
 G="/usr/bin/git -C $F"; refresh="$here/refresh-from-fork.sh"; pending="$A/publish-view-pending"
 VIEW="scripts/hub.py scripts/hubmux.py scripts/panes.js scripts/address.sh"
 head=$($G rev-parse --verify -q "$br^{commit}") || { echo "PUBLISH REFUSED: $br is not a branch of $F"; exit 1; }; h9=${head:0:9}

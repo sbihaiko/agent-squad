@@ -29,7 +29,8 @@ def load_apps():
             apps[slug] = {**app, "err": "address.sh refuses this profile"}
             continue
         pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
-                  "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": ""}
+                  "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
+                  "SG_SHARED": c.get("SG_SHARED", ""), "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", "")}
         before = {k: os.environ.get(k) for k in pinned}
         try:
             os.environ.update(pinned)

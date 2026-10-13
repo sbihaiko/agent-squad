@@ -7,7 +7,9 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # Re-entrant: a command already running under this lock (SG_SERIAL_HELD names it) that asks for it again just runs, so a gate inside a gui-suite holder cannot deadlock.
 # SERIAL_WAIT_SECONDS (default 1800) bounds the wait, and a waiter prints one line naming its holder before it waits, so a gate
 # held up by another gate says so instead of reading as a hang; the command's exit code is passed through (75 when the wait ran out).
-st=${SG_STATE:-$HOME/.cache/squad-goal}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
+# The locks belong to one repository (#25): they live in the repository's own directory the seam names, never in a shared default.
+[ -n "${SG_STATE:-}" ] || . "$(dirname "$0")/env.sh"
+st=$SG_STATE; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
 # Mesen GUI run takes -- the fork gate, the e2e and a hand-run suite -- so one marker stops them all without touching a caller. It
 # exits 0, never non-zero: a suite deliberately not run is not a failure, and a red gate would revert every branch in flight.
 case "$n" in gui-suite)
