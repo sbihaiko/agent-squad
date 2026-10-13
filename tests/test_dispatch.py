@@ -14,9 +14,14 @@ from squad.record import read
 from tests.gitrepo import make_repo, sh, sibling_repo
 from tests.helpers import DESIGN, node, router
 
+# The model a request in these fixtures names: the first entry the shipped route node allows. An id spelled here went
+# stale the day the envelope named the coding chain's own first entry (claude-gpt-5.5 was left outside it), and every
+# dispatch in the suite was refused `model_outside_allow` -- so the fixture reads the envelope it is checked against.
+MODEL = node(router(), "route")["allow"]["models"][0]
+
 
 def req(skill="tdd", **kw):
-    return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": "claude-gpt-5.5", "effort": "medium", "tools": ["Read", "Edit"],
+    return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": MODEL, "effort": "medium", "tools": ["Read", "Edit"],
             "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child", **kw}
 
 
