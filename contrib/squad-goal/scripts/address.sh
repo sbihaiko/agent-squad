@@ -102,7 +102,18 @@ sg_land_base() { local row; row=$(sg_land_target "${1:-}#0") || return 1; printf
 # SG_PROFILES_DIR (default the profiles/ beside this file) and SG_STATE_BASE (default ~/.cache/squad-goal) are its inputs.
 # The context reads nothing from GitHub: it is resolved before any caller may reach it.
 _sg_ctx_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SG_CTX_KEYS="SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_STATE SG_HUB_PATH SG_ISSUE"
+SG_CTX_KEYS="SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_FORK_DIR SG_STATE SG_HUB_PATH SG_ISSUE SG_SHARED SG_BOARD_CACHE"
+# The machine state directory and the places in it. Only these functions spell a path under it.
+sg_state_base() { printf '%s\n' "${SG_STATE_BASE:-$HOME/.cache/squad-goal}"; }
+# One repository's own directory: its supervisor, cycle, slots, pid files, markers, live-run list, queued requests,
+# comment queue, locks, health causes, test artifacts and logs. No repository reads or writes another's.
+sg_state_dir() { printf '%s/%s\n' "$(sg_state_base)" "$1"; }
+# The one shared directory: the provider limit markers and the provider quota cache. A limit one loop sees skips that model for every loop.
+sg_shared_dir() { printf '%s/_shared\n' "$(sg_state_base)"; }
+# The board cache: one per owner and project, never one per repository.
+sg_board_cache() { printf '%s/_boards/%s_%s/hub-board.json\n' "$(sg_state_base)" "$1" "$2"; }
+# The launchd label of one repository's health agent: one agent per repository, so each supervisor is watched.
+sg_health_label() { printf 'com.squad-goal.health.%s\n' "$1"; }
 sg_profiles_dir() { echo "${SG_PROFILES_DIR:-$_sg_ctx_here/profiles}"; }
 # Every known profile slug, one per line, in byte order; example.sh is a template, never a repository.
 sg_profiles() { local f n; for f in "$(sg_profiles_dir)"/*.sh; do [ -f "$f" ] || continue; n=$(basename "$f" .sh)
@@ -113,13 +124,16 @@ sg_profile_from_origin() { local url n hit=""; url=$(git -C "${1:-.}" remote get
   for n in $(sg_profiles); do case "$url" in *"$(echo "$n" | tr A-Z a-z)"*) hit=$n;; esac; done
   [ -n "$hit" ] && echo "$hit"; }
 # The context of one profile, KEY=value lines; the profile's own values only.
-_sg_ctx_of() { local slug=$1 issue=$2 f; f="$(sg_profiles_dir)/$slug.sh"
+_sg_ctx_of() { local slug=$1 issue=$2 f out op; f="$(sg_profiles_dir)/$slug.sh"
   [ -f "$f" ] && [ "$slug" != example ] || { echo "repoctx: unknown profile: $slug (known: $(sg_profiles | tr '\n' ' '))" >&2; return 2; }
-  env $(compgen -e | /usr/bin/grep '^SG_' | /usr/bin/grep -vx 'SG_PROFILES_DIR\|SG_STATE_BASE' | sed 's/^/-u /') \
+  out=$(env $(compgen -e | /usr/bin/grep '^SG_' | /usr/bin/grep -vx 'SG_PROFILES_DIR\|SG_STATE_BASE' | sed 's/^/-u /') \
     bash -c 'here=$1; . "$2" >/dev/null 2>&1
       printf "%s=%q\n" SG_PROFILE "$3" SG_REPO "$SG_REPO" SG_OWNER "${SG_OWNER:-${SG_REPO%%/*}}" SG_PROJECT "$SG_PROJECT" \
-        SG_CHECKOUT "$SG_CHECKOUT" SG_BASE "${SG_BASE:-main}" SG_FORK_DIR "$SG_FORK_DIR" \
-        SG_STATE "${SG_STATE_BASE:-$HOME/.cache/squad-goal}/$3" SG_HUB_PATH "/$3" SG_ISSUE "$4"' _ "$_sg_ctx_here" "$f" "$slug" "$issue"; }
+        SG_CHECKOUT "$SG_CHECKOUT" SG_BASE "${SG_BASE:-main}" SG_FORK_DIR "$SG_FORK_DIR" SG_HUB_PATH "/$3" SG_ISSUE "$4"' \
+    _ "$_sg_ctx_here" "$f" "$slug" "$issue") || return 2
+  op=$(eval "$out"; printf '%s %s' "$SG_OWNER" "$SG_PROJECT")
+  printf '%s\n' "$out"
+  printf '%s=%q\n' SG_STATE "$(sg_state_dir "$slug")" SG_SHARED "$(sg_shared_dir)" SG_BOARD_CACHE "$(sg_board_cache "${op% *}" "${op#* }")"; }
 _sg_repo_of() { _sg_ctx_of "$1" "" 2>/dev/null | sed -n 's/^SG_REPO=//p'; }
 _sg_real() { (cd "$1" 2>/dev/null && pwd -P); }
 # repoctx <input>: print the context, or refuse (return 2) naming what it could not resolve.

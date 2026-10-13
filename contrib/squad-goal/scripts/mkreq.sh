@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: mkreq.sh <name> <body-file>   writes ~/.cache/squad-goal/req/<name>.txt = body + pre-push checklist
+# usage: mkreq.sh <name> <body-file>   writes $SG_STATE/req/<name>.txt = body + pre-push checklist
 set -e
 # The model this request names is the first coding_models entry that may run now -- not switched off in the hub's models
 # panel, and inside its `hours` window, an absent window always matching -- the same rule launch.py enforces: naming entry
@@ -16,7 +16,12 @@ for m in $(jq -r '.coding_models[]' "$mjson"); do mayrun "$m" || continue
 [ -n "$cm" ] || cm=$(jq -r '.coding_models[0] // empty' "$mjson")   # every entry off or out of window: name [0], launch.py refuses loudly
 [ -n "$fb" ] || fb=$(jq -r --arg c "$cm" 'first(.coding_models[]|select(.!=$c)) // empty' "$mjson")
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
-here="$(cd "$(dirname "$0")" && pwd)"; out="$HOME/.cache/squad-goal/req/$1.txt"
+here="$(cd "$(dirname "$0")" && pwd)"
+# The request lands in the state directory of the repository it is for (#25); every request builder sources env.sh, which
+# resolves it from the seam and exports it. Run with no SG_STATE the path would have been `/req/<name>.txt` -- the
+# filesystem root -- so the script refuses by name instead, the way gui-tests.sh does: the seam owns the path, and a
+# script that is handed none says so rather than writing outside its own state.
+out="${SG_STATE:?mkreq.sh: no state directory; source env.sh for this repository, or set SG_STATE}/req/$1.txt"
 . "$here/forkonly.sh"   # sg_fork_branch: the one source of the branch a fork-only child commits on (#1836)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
@@ -129,7 +134,7 @@ slice_guard() {
         taken="$taken$f	PR #$p
 "; done; done
   fi
-  # (#1529) A request counts as in flight only while its work is. Nothing ever deletes ~/.cache/squad-goal/req/*.txt, so
+  # (#1529) A request counts as in flight only while its work is. Nothing ever deletes $SG_STATE/req/*.txt, so
   # reading every one of them as in flight made the set only grow: a request whose run ended days ago still refused every
   # later slice naming one of its files (auto-fix-1203-3fbfa13ca, PR #1203 closed 2026-10-10), citing a run long over. The
   # run folder is the evidence: launch.py copies the request into runs/<run>/request.txt, so content links the request to
@@ -138,7 +143,7 @@ slice_guard() {
   # seconds, 30 min), which is all that mkreq.sh -> launch.py ever takes: an abandoned request must not hold a file forever.
   local now ttl d deadl="" livel="" deadh=" " liveh=" " hit h q qp
   now=$(date +%s); ttl=${SG_SLICE_REQ_TTL:-1800}
-  for d in $(cat "${SG_STATE:-$HOME/.cache/squad-goal}/active-runs.txt" 2>/dev/null || true); do
+  for d in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null || true); do
     case "$d" in /*) ;; *) d="${co:+$co/}runs/$d";; esac
     [ -f "$d/request.txt" ] && [ -f "$d/record.jsonl" ] || continue
     if /usr/bin/grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null; then deadl="$deadl$d/request.txt
@@ -154,7 +159,7 @@ slice_guard() {
     case "$deadh" in *" $h "*) return 1;; esac          # its run recorded a verdict: history, however young the file is
     [ $(( now - $(mtime "$1") )) -lt "$ttl" ]   # no run carries it: the launch window
   }
-  for q in "$HOME/.cache/squad-goal/req"/*.txt; do
+  for q in "$SG_STATE/req"/*.txt; do
     [ -e "$q" ] || continue; [ "$q" = "$out" ] && continue
     # Only a request naming a path this body also names can refuse it, and there are usually none: the liveness test below
     # is paid per candidate. A loose match is safe here -- the `taken` lookup that decides is exact.
@@ -240,7 +245,7 @@ slice_guard() {
     fi
     case "$holder" in
       "request "*)
-        rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$HOME/.cache/squad-goal/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
+        rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$SG_STATE/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
         msg="refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f$at. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
       "PR "*)
         msg="refusing: request $1 names $f$at, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." ;;

@@ -11,7 +11,7 @@ for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=$(dirname "$0"); src=${1:-$d/watch.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; B=$T/bin
 mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 export STEPS=$T/steps.log REC_SLEEP=5
-cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/repoctx.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
+cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$S/"   # the cycle's reader and its throttle travel with it since #1893
 cat > "$S/env.sh" <<EOF
 export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
@@ -179,10 +179,9 @@ n=$(/usr/bin/grep -c '^NEW PR #7 gui/1893' "$T/watch.out")
 /usr/bin/grep -q 'the open-PR list is not readable' "$T/watch.out" \
   && ok "6c the refusal in between is still named in the log" || ko "6c the refusal between the two answers was silent"
 
-# 7) (#1872) one watch.sh per resolved path. The lock is keyed on this script's own resolved path, NOT on $SG_STATE: a second
-#    start under a different state would otherwise poll the same repository beside the first and double every read. A lock
-#    whose holder is gone is taken over, so a killed loop never wedges the next start.
-WL="$T/cache/watch-locks/$(printf '%s' "$(cd "$S" && pwd -P)/watch.sh" | tr -c A-Za-z0-9 _)"   # the key is the script's RESOLVED path (/var and /private/var are two names for it), under the seam's base
+# 7) One watch.sh per repository state directory. A live holder refuses another supervisor for the same repository,
+# while a separate repository uses its own lock. A holder that is gone is taken over.
+WL="$ST/locks/watch"
 rm -rf "$WL"; mkdir -p "$WL"; echo $$ > "$WL/pid"          # held by this shell: alive, so the next start must refuse
 : > "$STEPS"
 env SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/lock.out" 2>&1
