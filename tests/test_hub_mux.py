@@ -46,7 +46,10 @@ def fleet(tmp_path_factory):
     spec = importlib.util.spec_from_file_location("hubmux_under_test", SCRIPTS / "hubmux.py")
     mux = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mux)
-    srv = mux.server(0, mux.load_apps())
+    apps = mux.load_apps()
+    apps["alpha"]["mod"].runs = lambda: [_row("run-alpha-7", "running")]   # what the hub sees working; the live-run list is not read
+    apps["beta"]["mod"].runs = lambda: []
+    srv = mux.server(0, apps)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield {"url": f"http://127.0.0.1:{srv.server_address[1]}", "port": srv.server_address[1], "env": env, "mux": mux}
     srv.shutdown()
@@ -125,6 +128,36 @@ def test_the_hub_names_itself_and_its_repositories(fleet):
     assert code == 200 and d["hub"] == "squad-hub"
     assert [(r["slug"], r["repo"], r["live"]) for r in d["repos"]] == [
         ("alpha", "x/alpha", ["run-alpha-7"]), ("beta", "y/beta", [])]
+
+
+def _row(id_, state, kind="code"):
+    return {"id": id_, "state": state, "kind": kind, "live": True, "age": 5}
+
+
+def test_the_index_counts_only_the_runs_that_work(tmp_path, monkeypatch):
+    """The live-run list keeps finished runs on purpose; the index counts what the hub sees working."""
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    (tmp_path / "co").mkdir()
+    _profile(prof, "alpha", "x/alpha", tmp_path / "co")
+    (base / "alpha").mkdir(parents=True)
+    ids = ["run-a", "run-b", "run-c", "run-done-1", "run-done-2"]
+    (base / "alpha" / "active-runs.txt").write_text("".join(f"{tmp_path}/co/runs/{i}\n" for i in ids))
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    spec = importlib.util.spec_from_file_location("hubmux_live_under_test", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    rows = [_row("run-a", "running"), _row("run-b", "stalled"), _row("run-c", "starting"),
+            _row("run-done-1", "verified"), _row("test-1", "running", "test")]
+    monkeypatch.setattr(apps["alpha"]["mod"], "runs", lambda: rows)
+    assert mux.live(apps["alpha"]) == ["run-a", "run-b", "run-c"]
+    page = mux.root_page(apps, "squad hub").decode()
+    head, block, runs = page.partition('<div class="runs">')
+    assert '<span class="live">3 live</span>' in head, page       # the row states the count, and the finished run is out of it
+    assert runs.split("</div>")[0].split() == ["run-a", "run-b", "run-c"], page
+    assert "run-done" not in page
 
 
 def _hubctl(port, cwd, env):
