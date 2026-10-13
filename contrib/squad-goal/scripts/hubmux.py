@@ -48,10 +48,11 @@ def load_apps():
 
 
 def live(app):
-    """The live workers of one repository: the run folders on its live-run list (<state>/active-runs.txt)."""
-    try: lines = pathlib.Path(app["state"], "active-runs.txt").read_text().split()
-    except OSError: return []
-    return [pathlib.Path(x).name for x in lines]
+    """The live workers of one repository: the runs the hub itself sees working (hub.py), not the live-run list, which keeps finished runs on purpose."""
+    mod = app.get("mod")
+    if mod is None: return []
+    try: return mod.working(mod.runs())
+    except Exception: return []
 
 
 def listing(apps):
