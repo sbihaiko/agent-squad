@@ -243,4 +243,27 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#193) the cards this dispatch moves include the cards of the issues the loop filed itself, and such an issue carries
+# no card until the board pass adds one. The dispatch assumed the card: board.py answered "#N not on the board", the one
+# write door filed that refusal as one more bug, and the dispatch of that bug was refused the same way -- one defect filed
+# per pass, a chain that feeds itself. The dispatch cannot assume a card: it moves its cards through the idempotent add
+# path every other board writer uses (board.py --add, janitor rule R, reconcile.py, the frontier dispatch), so a card the
+# board does not carry is added with its status and a card it already carries is answered "already exists" and moved.
+# The stub below answers like board.py does: the add path succeeds, the plain move is refused.
+rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq"
+: > "$T/board.calls"
+cat > "$T/s/board.sh" <<J
+#!/bin/bash
+echo "\$*" >> "$T/board.calls"
+case " \$* " in *" --add "*) echo "#1228 -> In Progress" ;; *) echo "#1228 not on the board" >&2; exit 1 ;; esac
+J
+chmod +x "$T/s/board.sh"; : > "$T/filed"; : > "$T/st/cycle.log"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 the dispatch whose card the board does not carry finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+[ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "9 the dispatch adds the card it moves, it files no bug about it" \
+  || ko "9 the dispatch filed a bug about its own card move: $(cat "$T/filed")"
+[ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "9 the cardless move is no refusal, so none is named" || ko "9 cycle.log: $(cat "$T/st/cycle.log")"
+[ "$($G -c '^--add ' "$T/board.calls")" = 1 ] && ok "9 the card move goes through the add path" || ko "9 the door was called: $(cat "$T/board.calls")"
+
 rm -rf "$T"; exit $fail
