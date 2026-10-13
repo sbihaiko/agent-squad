@@ -19,10 +19,11 @@
 # at a time, so a culprit is still named. A branch that conflicts with an earlier one stays out of the batch and gets its conflict-fix run as usual.
 # Owner-approved Done rule for fork-only issues (#1180, 2026-10-10). Unset SG_FORK_DIR turns it off.
 # Two phases per landing (#85). Phase one LANDS: the merge needs no suite lock, so an eligible branch is in the base before any
-# gate runs (FORKCLOSE LANDED #n), and its dependents (Blocked by) are released at once. Phase two GATES the landed head under
-# the machine-wide `gate` lock (serial.sh, the lock shell-suites.sh and the pytest gate hold): it never runs beside a child's
-# gate, it waits for it and says so once (FORKCLOSE WAIT-GATE, naming the holder serial.sh recorded) and once more when it has
-# the lock (FORKCLOSE GATE-LOCK). No gate runs before the merge any more: a base nobody recorded green is gated on its own only
+# gate runs (FORKCLOSE LANDED #n), and its dependents (Blocked by) are released at once. Phase two GATES the landed head after
+# the machine-wide `gate` lock (serial.sh, the lock the full pytest gate holds) is free: it never starts beside a child's gate,
+# it waits for it and says so once (FORKCLOSE WAIT-GATE, naming the holder serial.sh recorded and how long it has held the
+# lock) and once more when it has the lock (FORKCLOSE GATE-LOCK). The pass holds the lock only around that wait (#94); the
+# gate's own pytest half takes it again, so the shell suites never run under it. No gate runs before the merge any more: a base nobody recorded green is gated on its own only
 # after a red re-gate, with the merge taken back first, so a red base is never blamed on the branch and a parked base
 # (basered-<sha>) is still never merged into. A red re-gate keeps its rule: the failure is named, the issue stays open, the
 # merge is reverted and the fix run arms. A dirty path in the shared checkout holds only the merge that would touch it (git
@@ -181,16 +182,19 @@ relandbr() { $G checkout -q "$br" -- $lf || { $G reset -q --merge HEAD; return 1
   t=$($G write-tree) && c=$($G commit-tree "$t" -p HEAD -p "$br" -m "Merge $br (Refs #$n)") || { $G reset -q --merge HEAD; return 1; }
   auditmerge "$c" || { $G reset -q --merge HEAD; return 1; }   # (#14) the same audit before the commit is moved onto the branch
   $G merge --ff-only -q "$c" >/dev/null 2>&1 || { $G reset -q --merge HEAD; return 1; }; }
-# (#85) Phase two runs under the machine-wide gate lock: never beside a child's gate, after it. The wait is named once with the
-# holder serial.sh recorded (its lock holds the pid), and the take is named once; both go to the pass's own stdout (fd 3), so a
-# gate whose output is captured still says so in the loop's log. Re-entrant by serial.sh's rule; a tree with no serial.sh beside
-# this script runs the gate unwrapped and says so, as shell-suites.sh does: a missing lock never passes as a held one.
+# (#85) Phase two starts after the machine-wide gate lock is free: never beside a child's gate, after it. The wait is named once
+# with the holder serial.sh recorded (its lock holds the pid) and how long it has held the lock (the pid file's age), and the
+# take is named once; both go to the pass's own stdout (fd 3), so a gate whose output is captured still says so in the loop's
+# log. (#94) The lock is held only around the wait, never across the gate: fork-gate.sh takes it again around its pytest half,
+# so two full pytest gates still never overlap, while the shell suites hold nothing. Re-entrant by serial.sh's rule; a tree with
+# no serial.sh beside this script runs the gate without the wait and says so: a missing lock never passes as a held one.
 gatelock() { local l=$1 h; shift
   case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) "$@"; return;; esac
   [ -f "$here/serial.sh" ] || { echo "FORKCLOSE GATE-NOLOCK: no serial.sh beside forkclose.sh; the gate for $l runs without the machine-wide gate lock" >&3; "$@"; return; }
   h=$(cat "$SG_STATE/locks/gate/pid" 2>/dev/null)
-  [ -n "$h" ] && kill -0 "$h" 2>/dev/null && echo "FORKCLOSE WAIT-GATE: waiting for the gate lock (holder $h) before the gate for $l" >&3
-  FC_GATE_LABEL=$l bash "$here/serial.sh" gate bash -c 'echo "FORKCLOSE GATE-LOCK: took the gate lock for $FC_GATE_LABEL" >&3; exec "$@"' _ "$@"; }
+  [ -n "$h" ] && kill -0 "$h" 2>/dev/null && echo "FORKCLOSE WAIT-GATE: waiting for the gate lock (holder $h, held $(( $(date +%s) - $(stat -f %m "$SG_STATE/locks/gate/pid" 2>/dev/null || date +%s) ))s) before the gate for $l" >&3
+  FC_GATE_LABEL=$l bash "$here/serial.sh" gate bash -c 'echo "FORKCLOSE GATE-LOCK: took the gate lock for $FC_GATE_LABEL; released it, the gate'"'"'s pytest half takes it again" >&3' || return
+  "$@"; }
 # The spawn `workspace` field is a logical workspace the graph allows, never the branch worktree (#55): the router read `worktree add ~/wt-fr-<n> gui/<n>` as the workspace, the envelope refused 'worktrees/child/gui-<n>' whole and the run ended no_dispatch.
 wsrule="In the spawn call, set the spawn \`workspace\` field to the allowed workspace \`${SG_CHILD_WORKSPACE:-worktrees/child}\` (the first workspace the dispatch envelope allows), never the branch worktree path: the branch worktree is a path in this text only."
 brof() { sg_fork_branch "$1"; }   # the land and the request name the branch from one setting (#1836)
@@ -583,7 +587,7 @@ for n in $cc; do
   if [ "$way" = rebase ]; then printf '%s\n' "$br" > "$A/landed-$($G rev-parse --short=9 HEAD)"; fi   # the fast-forward landing has no `Merge $br` subject: this record is what names the branch it came from (#11)
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
   if [ -z "$late" ]; then   # the landing is gated by its OWN change to the base (#15); a reland stays any-doubt, as it always was
-    dn=$(dirtypaths); echo "FORKCLOSE LANDED #$n: $br ${head:0:9} -> ${m:0:9} in $SG_FORK_BASE ($way); the gate runs next, under the gate lock${dn:+; uncommitted beside it, untouched: $(namelist $dn)}"   # (#85) phase one is done: dependents are released now
+    dn=$(dirtypaths); echo "FORKCLOSE LANDED #$n: $br ${head:0:9} -> ${m:0:9} in $SG_FORK_BASE ($way); the gate runs next, once the gate lock is free${dn:+; uncommitted beside it, untouched: $(namelist $dn)}"   # (#85) phase one is done: dependents are released now
     fs=full; [ -z "$reland" ] && fs=$(ldiff "$b0" HEAD | suiteset)
     echo "FORKCLOSE SUITES #$n: $fs by the landing rule (the landing's own change to $SG_FORK_BASE), the branch's fork-point diff answered $fsf"; fi
   if [ -n "$late" ] && [ -e "$A/basetest-$bs" ]; then   # the base that holds the branch is already tested green (a batch that just landed it, or the base test above): no second run
