@@ -358,6 +358,14 @@ def reconcile_board():
     for m in sorted((st / "auto").glob("fork-*")):   # the close pass leaves this marker when it merged that commit: the branch landed, unless the base says otherwise (rule P owns what it unwound, and a branch still ahead is work to come)
         mo = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", m.name)
         if mo and not landing_reverted(mo.group(1)) and fork_verdict(mo.group(1), mo.group(2)) in ("landed", "unknown"): set_expected(mo.group(1), "Done", f"{m.name} marks a landed branch", "", "", 70)
+    # Every open issue starts at the loop floor. This rank is below every rule above, so current run, marker, PR, landing,
+    # closure, or owner-label evidence wins; a Blocked card never preserves a blocking cause that has disappeared.
+    oans, olabels = open_issues()
+    if oans:
+        for n in sorted(olabels, key=int):
+            set_expected(n, os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
+            if olabels[n] & {"needs-owner", "needs-ratification"}:
+                set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(list(expected), key=int):
         state, _, _ = issue_info(n)
         if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
@@ -379,13 +387,6 @@ def reconcile_board():
             board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
         elif have == "In Progress":
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left In Progress for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
-    oans, olabels = open_issues()   # every open issue the repository has, ONE read per pass (#92): an issue no run, marker or release names is still the owner's to see
-    if oans:
-        for n in sorted(olabels, key=int):
-            if n in expected or n in have_all: continue   # a run, a marker or a release already ranks the card, or the board carries it
-            want = "Blocked" if olabels[n] & {"needs-owner", "needs-ratification"} else os.environ.get("SG_TODO", "Todo")
-            why = f"open issue, no card ({', '.join(sorted(olabels[n])) or 'no label'})"
-            if board_write(["--add", owner, str(proj), want, n], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
 reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
