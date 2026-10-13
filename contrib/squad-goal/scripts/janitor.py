@@ -28,7 +28,9 @@
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
     A live run holds the issue (dispatch marker or accepted child) -> In Progress; a run that landed (a `land` pass, or a `fork-<n>-<sha9>` marker the close pass left) or an issue that is closed or carries a merged PR naming it -> Done;
     a completed run whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); an issue labelled needs-owner or needs-ratification -> Blocked.
-    Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed."""
+    Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
+    The board is read once per pass (one fields read, one items read per project). An issue the board answers no card for is added with its expected status in one write (board.sh --add);
+    a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -258,11 +260,21 @@ for n, i in live.items():
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()
 owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
-def card_status(p, n):   # the card's Status on project p, "" when unreadable (childcc.py reads it the same way)
+_cards = {}
+def cards(p):   # every card of project p, read once per pass: (answered, {issue: Status}). answered is False when GitHub did not answer (a refusal, a deadline miss), and then nothing is moved on a guess; an issue missing from an answered map is a card that does not exist
+    if p not in _cards:
+        f = sh("gh", "api", f"/users/{owner}/projectsV2/{p}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id').strip()
+        r, out = _run(["gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
+                       '.[]|select(.content_type=="Issue")|[.content.number, ((.fields[]?|select(.name=="Status")|.value.name.raw)//""), (.content.repository_url//"")]|@tsv'])
+        m = {}
+        for l in out.splitlines():
+            n, s, u = (l.split("\t") + ["", ""])[:3]
+            if n.isdigit() and (not u or u.endswith("/" + repo0)): m[n] = s
+        _cards[p] = (bool(f) and r == 0, m)
+    return _cards[p]
+def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""
-    f = sh("gh", "api", f"/users/{owner}/projectsV2/{p}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id').strip()
-    return sh("gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
-              f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")').strip()
+    return cards(p)[1].get(str(n), "")
 def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's own text: a refusal is not a digit string. -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip()
 def pr_merged_count(n):
@@ -321,10 +333,14 @@ def reconcile_board():
         if pc.isdigit() and pc != "0": set_expected(n, "Code Complete", "PR names the issue and has not landed", "", "", 50)
         mc = pr_merged_count(n)
         if mc.isdigit() and mc != "0": set_expected(n, "Done", "merged PR names the issue", "", "", 80)
+    answered, have_all = cards(proj)
+    if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
-        have = card_status(proj, n)
-        if not have: continue   # no answer from the board: nothing is moved on a guess
-        if have != want and board_write([owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
+        have = have_all.get(str(n))
+        if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
+            if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
+            else: continue
+        elif have != want and board_write([owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
         if want == "In Progress":
             board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
         elif have == "In Progress":

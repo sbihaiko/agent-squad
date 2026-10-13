@@ -24,8 +24,8 @@ case "$a" in
     case "$a" in *"is:merged"*) echo 0;; *"Refs #803"*) echo 1;; *) echo 0;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) case "$(printf '%s' "$a" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')" in 801|802|803) echo "In Progress";; esac;;
-  *projectsV2/1/items*) case "$(printf '%s' "$a" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')" in 801|802|803) echo "Doing";; esac;;
+  *projectsV2/4/items*) for n in 801 802 803; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/1/items*) for n in 801 802 803; do printf '%s\tDoing\n' "$n"; done;;
   *issues/80*) echo open;;
 esac
 J

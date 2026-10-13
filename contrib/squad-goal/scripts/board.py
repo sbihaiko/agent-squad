@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Move Project (v2) cards over REST only (no GraphQL quota): board.py <owner> <project> "<Status>" <issue#>...
-       board.py --add <owner> <project> "<Status>" <issue#>...   add the issues to the board first (when missing)
+       board.py --add <owner> <project> "<Status>" <issue#>...   add the issues to the board first (when missing); idempotent: a refused add is re-read once
        board.py --run-fields <owner> <project> <issue#> <run> <run-started>
        board.py --clear-run <owner> <project> <issue#>
 Field/option ids are cached a day and the issue -> item id map 10 min (refetched on a miss) under $SG_STATE; one PATCH per card.
@@ -40,7 +40,10 @@ def item_id(n, add_missing=False):
     if str(n) not in M: M = items(); (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))
     if str(n) not in M and add_missing and repo:
         iid = json.loads(api(f"repos/{repo}/issues/{n}"))["id"]
-        M[str(n)] = json.loads(api("-X", "POST", f"{base}/items", "--input", "-", inp=json.dumps({"type": "Issue", "id": iid})))["id"]
+        try: M[str(n)] = json.loads(api("-X", "POST", f"{base}/items", "--input", "-", inp=json.dumps({"type": "Issue", "id": iid})))["id"]
+        except RuntimeError:   # the add is idempotent: a refused add is re-read once (a stale cache held no item that is there), and only a second miss is a failure
+            M = items()
+            if str(n) not in M: raise
         (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))
     return M.get(str(n))
 if run_fields or clear_run:
@@ -61,7 +64,8 @@ if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missi
 if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
 rc = 0
 for n in nums:
-    iid = item_id(n, add)
+    try: iid = item_id(n, add)
+    except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the add GitHub refused twice, named: the caller logs it
     if not iid: print(f"#{n} not on the board", file=sys.stderr); rc = 1; continue
     try: api("-X", "PATCH", f"{base}/items/{iid}", "--input", "-", inp=json.dumps({"fields": [{"id": F["id"], "value": F["opt"][status]}]})); print(f"#{n} -> {status}")
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1
