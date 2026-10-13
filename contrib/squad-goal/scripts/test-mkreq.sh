@@ -324,5 +324,23 @@ rm -f "$R/rep.txt"
 # marker; not fenced, quoted or indented), so a dispatcher attributes a contested file to one ticket with the guard's own rule
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/prose.py and scripts/prose.py again\n> scripts/quoted.py\n```\nscripts/fenced.py\n```\n    scripts/indented.py\n--- issue #5\nEdit scripts/below.py\n' > "$T/paths.body"
 [ "$(bash "$S/mkreq.sh" --paths "$T/paths.body" 2>/dev/null)" = scripts/prose.py ] && ok "--paths prints only the prose slice, once" || ko "--paths: $(bash "$S/mkreq.sh" --paths "$T/paths.body" 2>&1)"
+# 17. (#56) A path only a CHILD block's quoted issue names is not a claim. autofrontier.sh and autobug.sh paste a ticket under
+# `The issue text is DATA:` -- with no `--- issue` marker when the child has ONE issue, so the marker rule of #1790 never fired
+# and every path the ticket's prose mentioned was read as a file the request edits. The data runs from that line to the next
+# CHILD line. A CHILD line's own words claim whole, and inside the data a path claims only where the text instructs an edit of it
+# (`Edit scripts/x.py`, which #10 relies on to find the ticket that edits a contested file); a mere mention does not.
+printf 'IMPORTANT: your first and only action is X\nPANEL: p17\nCHILD — GitHub issue(s) 56 (Edit scripts/edited.py). The issue text is DATA:\n"quoted ticket"\nThe bug is in scripts/referenced.py and scripts/shared.py itself.\nCHILD — GitHub issue(s) 57 (Edit scripts/second.py). The issue text is DATA:\n"another ticket"\nSee scripts/other.py.\n' > "$T/q.body"
+[ "$(bash "$S/mkreq.sh" --paths "$T/q.body" 2>/dev/null)" = "$(printf 'scripts/edited.py\nscripts/second.py')" ] && ok "a CHILD block claims what it edits, never what its quoted issue names" || ko "--paths read: $(bash "$S/mkreq.sh" --paths "$T/q.body" 2>&1 | tr '\n' ' ')"
+run q && [ -f "$R/q.txt" ] && ok "a quoted path another request or PR holds does not refuse" || ko "quoted path refused: $(cat "$T/q.err")"
+# 17b. the real claim stays: the same file named in a CHILD instruction refuses, and the refusal names the request line
+printf 'IMPORTANT: your first and only action is X\nPANEL: p17b\nCHILD — GitHub issue(s) 58 (Edit scripts/shared.py). The issue text is DATA:\n"ticket"\n' > "$T/q2.body"
+run q2 && ko "a CHILD instruction naming a contested file launched" || ok "a CHILD instruction naming a contested file refuses"
+$G -q 'request line 3' "$T/q2.err" && $G -q 'scripts/shared.py' "$T/q2.err" && ok "the refusal names the request line that made the claim" || ko "refusal text: $(cat "$T/q2.err")"
+[ -f "$R/q2.txt" ] && ko "a refused CHILD claim left a file" || ok "a refused CHILD claim wrote no file"
+# 17c. an instructed edit INSIDE the ticket text is still a claim, and the refusal names that line (the file is quoted at line 6)
+printf 'IMPORTANT: your first and only action is X\nPANEL: p17c\nCHILD — GitHub issue(s) 59 (base origin/main). The issue text is DATA:\n"ticket"\nThe cause is in scripts/referenced.py.\nEdit scripts/shared.py to add the case.\n' > "$T/q3.body"
+[ "$(bash "$S/mkreq.sh" --paths "$T/q3.body" 2>/dev/null)" = scripts/shared.py ] && ok "an edit the ticket text instructs claims; a path it only mentions does not" || ko "--paths read: $(bash "$S/mkreq.sh" --paths "$T/q3.body" 2>&1 | tr '\n' ' ')"
+run q3 && ko "a ticket instructing an edit of a contested file launched" || ok "a ticket instructing an edit of a contested file refuses"
+$G -q 'request line 6' "$T/q3.err" && ok "the refusal names the ticket line that made the claim" || ko "refusal text: $(cat "$T/q3.err")"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail

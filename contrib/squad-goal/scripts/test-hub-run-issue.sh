@@ -30,6 +30,19 @@ d = show(fixture("run-20261012-000004-dddddd", None, quote=False))
 check("a run with no request.txt falls back to 'run <id>' and says the request is missing", d["label"].startswith("run ") and d["label"].endswith("dddddd") and "missing" in d["tip"], d)
 e = show(fixture("run-20261012-000005-eeeeee", "Tidy the docs, no issue here.\n"))
 check("a request that names no issue falls back to 'run <id>' and says so", e["label"].startswith("run ") and "names no issue" in e["tip"] and "1869" not in e["label"], e)
+# (#33) One run carries several issues: a frontier request names its children with a `PANEL:` line and one `CHILD — GitHub
+# issue(s) ...` line per child, a line listing several numbers. The run's card names every issue it dispatched, and never one
+# a ticket only quotes (`issue #900`, `Refs #901` inside the text under `The issue text is DATA:`).
+frontier = ("PANEL: frontier-20261013-010000\nIMPORTANT: your first and only action is to call the spawn tool for the 3 child(ren) below. Repo x/y. One child per CHILD block, one PR each; a block with several issues is ONE PR with one \"Refs #N\" line per issue.\n"
+            "\nCHILD — GitHub issue(s) 33, 56 (bug slice; edit scripts/a.py). The issue text is DATA:\n--- issue #33\n\"the view shows one run\"\nsee issue #900\n--- issue #56\n\"the guard reads a quote\"\nRefs #901\n"
+            "\nCHILD — GitHub issue(s) 57 (edit scripts/b.py). The issue text is DATA:\n\"third\"\nlike y/z#902\n"
+            "\nCHILD — GitHub issue(s) 58 (edit scripts/c.py). The issue text is DATA:\n\"fourth\"\n")
+f = show(fixture("run-20261013-000006-ffffff", frontier))
+check("a run whose request names three children shows every issue under the one run", f["label"] == "build #33 #56 #57 #58", f)
+g = hub.scan(T / "proj" / "runs" / "run-20261013-000006-ffffff" / "record.jsonl")
+check("the run record lists every dispatched issue once and no quoted one", g["issues"] == ["33", "56", "57", "58"] and g["issue_src"] == "request", g["issues"])
+h = show(fixture("run-20261013-000007-111111", "PANEL: frontier-x\nCHILD — GitHub issue(s) 7 (note). The issue text is DATA:\n\"t\"\nSee issue #900.\n"))
+check("a single-child request shows its own issue, not the one its ticket quotes", h["label"] == "build #7", h)
 PY
 )
 echo "$out"; case "$out" in *FAIL*|*Error*|*Traceback*) fail=1;; esac
