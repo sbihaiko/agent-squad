@@ -243,4 +243,21 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#181) a card the board does not carry yet is a card this pass creates, never an absent card it files as a refused
+# write. #181 is that cascade: the pass requested the cards of #177 and #178 in one call, #178 had no card (an issue the
+# loop had filed for itself a moment before), board.py answered "#178 not on the board", and the write door filed it as
+# "GitHub refused it" -- a refusal GitHub never gave. The next pass dispatched that filed bug, whose card was absent too.
+# The board contract is board.py's: a card no read carries is absent from the project, and the idempotent --add form
+# creates it and writes its Status in one call (#86), where a PATCH the board refuses is still named and filed.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+: > "$T/calls9"; : > "$T/filed"; : > "$T/st/cycle.log"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/calls9\ncase "$*" in *--add*) echo "#1228 -> In Progress"; exit 0;; esac\nprintf "board.py: items read 112; project total: none on the REST items route (source: /users/o/projectsV2/4/items, a bare array)\\n#1228 not on the board\\n" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
+chmod +x "$T/s/board.sh"; export BOARD="$T/s/board.sh" SG_OWNER=o SG_PROJECT=4
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 the pass whose card the board does not carry yet finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+$G -qF -- '--add o 4 In Progress 1228' "$T/calls9" && ok "9 the pass asks the board to add the card it moves" || ko "9 the card move does not add the missing card: $(cat "$T/calls9")"
+$G -q '^title=' "$T/filed" && ko "9 the absent card was filed as a refused write: $(cat "$T/filed")" || ok "9 an absent card is never filed as a refused write"
+$G -q 'REFUSED' "$T/st/cycle.log" && ko "9 a refusal is named in the cycle log: $(cat "$T/st/cycle.log")" || ok "9 no refusal is named in the cycle log"
+
 rm -rf "$T"; exit $fail

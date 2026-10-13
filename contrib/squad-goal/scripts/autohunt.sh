@@ -5,13 +5,14 @@
 #                              "Filed by" line and the labels -- and logs HUNT filed #N. The hunt files with the bug
 #                              kind alone; a caller that is not the hunt names itself in SG_FILED_BY and asks for the
 #                              startable label beside the bug kind in SG_FILED_LABELS (a refused write, #145).
+#                              It also puts the issue on the board at once, in Todo (#181).
 # --none                       logs HUNT none (a hunt that found nothing)
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
 file_issue() {
-  local title=$1 body=$2 resp num tagged by=${SG_FILED_BY:-autohunt} l
+  local title=$1 body=$2 resp num tagged by=${SG_FILED_BY:-autohunt} l out
   local -a labs=(-f "labels[]=${SG_BUG_LABEL:-bug}")   # the bug kind, so the loop's own dispatcher picks the issue up
   for l in ${SG_FILED_LABELS//,/ }; do [ -n "$l" ] && labs+=(-f "labels[]=$l"); done   # and the label that makes it startable beside it
   case $title in \[*) ;; *) title="[SQUAD] $title";; esac   # every issue the loop files about its own tooling carries the prefix
@@ -30,6 +31,17 @@ except Exception:
   m=re.search(r"[0-9]+", t); print(m.group(0) if m else "")')
   [ -z "$num" ] && num=$(printf '%s' "$resp" | grep -oE '[0-9]+' | head -1)
   [ -n "$num" ] && echo "HUNT filed #$num" || echo "HUNT filed"
+  # The issue is on the board at once (#181): a filed issue with no card is what the loop then dispatches, and the
+  # move of a card the project does not carry was reported as a write GitHub refused and filed as a bug -- which had
+  # no card either. Todo is the loop floor the reconciler gives an open issue with no blocking cause, and the add is
+  # idempotent (board.py --add, #86). The filing is never at stake here: the issue is already open, so a refused add
+  # is named on stderr, with board.py's own line, and nothing retries it.
+  case "$num" in ''|*[!0-9]*) ;; *)
+    if [ -n "$SG_OWNER" ] && [ -n "$SG_PROJECT" ]; then
+      out=$($BOARD --add "$SG_OWNER" "$SG_PROJECT" "${SG_TODO:-Todo}" "$num" 2>&1) \
+        || echo "HUNT: the card for #$num was not added: $out" >&2
+    fi;;
+  esac
 }
 case "${1:-}" in
   --file) file_issue "$2" "$3"; exit 0;;

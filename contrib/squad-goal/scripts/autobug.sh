@@ -193,13 +193,19 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
     if [ "$n" = "$p" ]; then printf "Bug fix dispatched automatically (autobug loop, request %s; TDD with the RED output in the PR)%s. The run id is in %s once it starts.\n" "$name" "$([ $# -gt 1 ] && echo "; clustered with ${c#* } as one root cause, one PR")" "${log##*/}"
     else printf "Clustered with #%s as one probable root cause (same area within the window, or a shared file): fixed in that one PR, not a separate one (autobug request %s).\n" "$p" "$name"; fi > "$(sg_cq_file "$n-autobug$$.md")"; done; done
 # The cards move through the one write door (#145): a refusal is named, logged and filed, never swallowed by a `2>&1`.
+# The move ADDS the card the project does not carry (#181): an issue this pass dispatches was often filed minutes ago
+# (the loop's own filer, the hunt), so the project has no card for it yet, and the move of a plain card reported that
+# absence as "not on the board" -- a refusal GitHub never gave, filed as a bug the next pass dispatched in turn, whose
+# card was absent too. A card the project does not carry is created with its Status in one write: board.py's --add is
+# idempotent, and it is what the board pass already uses for an issue created while the loop runs (#86). A write GitHub
+# refuses -- the add included -- is still named on the card and filed by the door below.
 cards="$(printf '#%s ' "${pick[@]}")"
 sg_write "the card move of this dispatch" "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
 [ -n "${SG_BUG_PROJECT:-}" ] && sg_write "the card move of this dispatch on the bug board" "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"

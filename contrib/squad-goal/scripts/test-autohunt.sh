@@ -220,4 +220,23 @@ echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
 r=$(AH_DRY=1 bash "$S/autohunt.sh" 2>&1)
 skipped "$r" && ok "next hunt waits 60 minutes after a hunt-fix dispatch" || ko "hunted inside cooldown after dispatch: '$r'"
 
+# 18) (#181) an issue the loop files for itself is on the board at once. #181 is the cascade that shows the cost of
+# leaving it off: the filer filed a bug about a refused card move, the project had no card for that bug, the next pass
+# dispatched it, board.py answered "#178 not on the board", and the write door filed that absence as "GitHub refused
+# it" -- one more bug, one more issue without a card. The filer adds the card with its status in one idempotent write
+# (board.py --add, #86), and a refused add never costs the filing: the issue is already open, so the failure is named
+# on stderr and nothing else.
+scene filedcard
+printf 'repro\n' > "$T/filedcard/body.md"
+printf 'SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=%s/filedcard/st; SG_CHECKOUT=%s/filedcard/co; SG_BASE=main\nSG_CODING_RULES=rules; BOARD=%s/board.sh\n' "$T" "$T" "$S" > "$S/env.sh"   # the board the filer writes to is the one env.sh resolves
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/filedcard/calls\nexit 0\n' "$T" > "$S/board.sh"; chmod +x "$S/board.sh"
+r=$(bash "$S/autohunt.sh" --file "refused the card move of this dispatch o/1 #1228 -> In Progress [deadbeef0000]" "$T/filedcard/body.md" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "18 the filer exits 0" || ko "18 the filer exited $rc: '$r'"
+case "$r" in *"HUNT filed #42"*) ok "18 the filed issue is still logged";; *) ko "18 the filing was lost: '$r'";; esac
+$G -qF -- '--add o 1 Todo 42' "$T/filedcard/calls" && ok "18 the filer puts the issue it files on the board at once" || ko "18 the filed issue is left without a card: $(cat "$T/filedcard/calls" 2>/dev/null)"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/filedcard/calls\nprintf "board.py: items read 112; project total: none on the REST items route (source: /users/o/projectsV2/1/items, a bare array)\\n#42 not on the board\\n" >&2\nexit 1\n' "$T" > "$S/board.sh"; chmod +x "$S/board.sh"
+r=$(bash "$S/autohunt.sh" --file "a refused card add" "$T/filedcard/body.md" 2>&1); rc=$?
+[ "$rc" = 0 ] && case "$r" in *"HUNT filed #42"*) ok "18 a refused card add never costs the filing";; *) ko "18 the filing was lost on a refused add: '$r'";; esac || ko "18 a refused card add failed the filer: exit $rc '$r'"
+case "$r" in *"the card for #42"*) ok "18 the refused card add is named with its error";; *) ko "18 the refused add is silent: '$r'";; esac
+
 rm -rf "$T"; exit $fail
