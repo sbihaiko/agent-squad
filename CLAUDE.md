@@ -64,6 +64,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **Needs-human is not success and has its own exit code; on a board its card is Blocked, written by one rule** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
+- **A wedged run is killed, not merely logged** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_heartbeat.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
 - **Seven node kinds; a gate is never skipped; control is order-based** ([ADR-0100](docs/adr/0100-node-kinds-gate-control.md)). Guard: `tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`.
 - **A node is one fresh session with a deadline and a declared workspace** ([ADR-0102](docs/adr/0102-node-is-one-fresh-session.md)). Guard: `tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.
