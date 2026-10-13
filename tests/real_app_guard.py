@@ -17,7 +17,9 @@ SHELLS = {"sh", "bash", "zsh", "dash", "fish", "ps", "grep", "pgrep"}
 
 
 def _table():
-    out = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    # `-ww`: procps cuts the command column at $COLUMNS, and readline (loaded under pytest) exports COLUMNS=80 to every child.
+    # The hook flag is the last word, so a cut line hides the app.
+    out = subprocess.run(["ps", "-ww", "-axo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
     rows = []
     for line in out.splitlines():
         parts = line.strip().split(None, 2)

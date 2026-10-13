@@ -42,15 +42,28 @@ SLICE_RE='(^|[^A-Za-z0-9_./-])(UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/
 # scripts/checks/verify_report_bug_prefix.sh off line 19 of #1773's body and was refused against the pass before it). The scan
 # therefore stops at the first marker line: the slice is what the request's OWN instructions name, and everything from the
 # marker down is the ticket text it hands the child. A path above the marker claims its slice exactly as before.
+# (#44) A path inside an inline command is a command the request RUNS, never a file it edits. The frontier preamble hands EVERY
+# child the same line -- `bash contrib/squad-goal/scripts/shell-suites.sh` and the pytest command beside it -- and a fork fix
+# request names that suite in the same shape, so both bodies claimed it: on 2026-10-12 forkred-10 held
+# contrib/squad-goal/scripts/shell-suites.sh against every frontier pass, `refusing: request frontier-... and request
+# forkred-10-25f2a596b both name: contrib/squad-goal/scripts/shell-suites.sh` for twelve passes, and because that line sits in
+# the preamble SHARED by the six tickets of the batch, no ticket of that batch was ever dispatched against ten free run slots.
+# A span whose first word is a command is dropped; a span whose first word is a path is a claim and is kept.
 slice_paths() {
   /usr/bin/awk '
-    BEGIN { indent = "    "; tab = sprintf("%c", 9) }
+    BEGIN { indent = "    "; tab = sprintf("%c", 9)
+            cmd = "^(bash|sh|dash|zsh|python|python3|pip|pip3|uv|pytest|node|npm|npx|cargo|go|make|just|git|rtk|env|cd|time|xargs|sudo|gh|docker|shasum|cat|sed|awk|grep|find|xargs)[ \t]" }
     /^--- issue #[0-9]+/ { exit }                             # the embedded issue text below: quoted evidence, not a slice here
     /^[[:space:]]*(```|~~~)/ { fence = !fence; next }         # a fenced block opens and closes: nothing inside it is a slice
     fence { next }
     { if ($0 ~ /^[[:space:]]*>/) next                         # a blockquote: quoted evidence
       if (substr($0, 1, 4) == indent || substr($0, 1, 1) == tab) next   # an indented code block
-      print }
+      line = ""; rest = $0
+      while (match(rest, /`[^`]*`/)) {                        # an inline span: a command span is not a claim (#44)
+        pre = substr(rest, 1, RSTART - 1); span = substr(rest, RSTART + 1, RLENGTH - 2)
+        rest = substr(rest, RSTART + RLENGTH)
+        line = line pre; if (span !~ cmd) line = line "`" span "`" }
+      print line rest }
   ' "$1" 2>/dev/null | grep -oE "$SLICE_RE" | sed -E 's#^[^A-Za-z0-9_/.-]+##' | sort -u
 }
 # Slice guard. Two requests that name the same file both edit it, and whichever merges second conflicts with the first: the
