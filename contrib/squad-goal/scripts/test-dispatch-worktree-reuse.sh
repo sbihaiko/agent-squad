@@ -4,7 +4,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/docs/squad"
 : > "$T/st/active-runs.txt"
-cp "$d"/{autobug.sh,cluster.py,forkonly.sh} "$T/s/"
+cp "$d"/{autobug.sh,cluster.py,startability.sh} "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 /usr/bin/git init -q -b main "$T/co"
 /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base

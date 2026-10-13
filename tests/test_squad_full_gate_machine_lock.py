@@ -25,7 +25,7 @@ def _tree(tmp_path, suites):
     """A scripts folder holding the real gate scripts and the given fake shell suites (name -> shell body)."""
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("shell-suites.sh", "fork-gate.sh", "serial.sh"):
+    for name in ("shell-suites.sh", "startability.sh", "serial.sh"):
         shutil.copy(SCRIPTS / name, d / name)
     for name, body in suites.items():
         (d / name).write_text("#!/bin/bash\n" + body + "\n")
@@ -48,7 +48,7 @@ def _run(*cmd, cwd, env=None, timeout=60):
 
 
 def _gate(d, cwd, gui="true", **env):
-    return _run("bash", str(d / "fork-gate.sh"), gui, cwd=cwd, env={"FG_SUITES": "full", **env})
+    return _run("bash", str(d / "startability.sh"), gui, cwd=cwd, env={"FG_SUITES": "full", **env})
 
 
 def test_the_suite_phase_of_the_gate_holds_the_machine_gate_lock(tmp_path):
@@ -71,7 +71,7 @@ def test_two_full_gates_at_once_never_overlap_and_the_second_waits_once(tmp_path
     d = _tree(tmp_path, {"test-slow.sh": 'echo "$FG_TAG suite start" >> "$LOG"; sleep 2; echo "$FG_TAG suite end" >> "$LOG"'})
     log = tmp_path / "log"
     py = 'echo "$FG_TAG pytest start" >> "$LOG"; sleep 2; echo "$FG_TAG pytest end" >> "$LOG"'
-    gates = [subprocess.Popen(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, text=True, stdout=subprocess.PIPE,
+    gates = [subprocess.Popen(["bash", str(d / "startability.sh"), "true"], cwd=tmp_path, text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT,
                               env=_env(tmp_path, FG_SUITES="full", SG_FORK_PY_CMD=py, LOG=str(log), FG_TAG=tag))
              for tag in ("A", "B")]
@@ -129,7 +129,7 @@ def test_an_overlapping_gate_starts_after_the_holder_ends(tmp_path):
     d = _tree(tmp_path, {"test-a.sh": "echo ok a"})
     log = tmp_path / "log"
     py = f'echo py start >> {log}; sleep 3; echo py end >> {log}'
-    first = subprocess.Popen(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, text=True,
+    first = subprocess.Popen(["bash", str(d / "startability.sh"), "true"], cwd=tmp_path, text=True,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              env=_env(tmp_path, FG_SUITES="full", SG_FORK_PY_CMD=py))
     time.sleep(1)   # the first gate owns the lock by now: its pytest half sleeps 3 s
@@ -145,11 +145,11 @@ def test_the_python_class_gate_waits_for_the_machine_lock_too(tmp_path):
     d = _tree(tmp_path, {})
     log = tmp_path / "log"
     py = f'echo start >> {log}; sleep 3; echo end >> {log}'
-    first = subprocess.Popen(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, text=True,
+    first = subprocess.Popen(["bash", str(d / "startability.sh"), "true"], cwd=tmp_path, text=True,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              env=_env(tmp_path, FG_SUITES="python", SG_FORK_PY_CMD=py))
     time.sleep(1)
-    second = _run("bash", str(d / "fork-gate.sh"), "true", cwd=tmp_path,
+    second = _run("bash", str(d / "startability.sh"), "true", cwd=tmp_path,
                   env={"FG_SUITES": "python", "SG_FORK_PY_CMD": f'echo second >> {log}'})
     out = first.communicate(timeout=60)[0]
     assert first.returncode == 0 and second.returncode == 0, out + second.stdout

@@ -25,7 +25,7 @@ Documented defaults (every one of them overridable per loop, never edited at run
 Why 300/60 s: the landing pass is the loop's heaviest reader and it reads in bursts, not in a stream. Its eligible-branch
 collection reads the open-PR list once and then two routes per candidate (the issue's state and its `Blocked by` body) --
 `landing_pass_burst(n) = 1 + 2n`. A 149-candidate pass fits inside one full bucket with no wait at all, which is more
-than this loop has ever had waiting (`forkclose.sh` collected against a 48-candidate board on 2026-10-12), and it is a
+than this loop has ever had waiting (the landing pass collected against a candidate board), and it is a
 third of the ~900 REST points per minute GitHub's own secondary limits allow. A doubled reader shares the same 300: it
 can spend the bucket twice as fast and then it waits, which is the whole point -- two readers, one rate.
 
@@ -71,7 +71,7 @@ cooldown held back is a `miss` with the outcome `cooling`, because no request wa
 wrote it (`SG_GH_PASS`), so health can say who owns an exhausted cooldown, and `ghspend.py` reads both files to say so.
 
 Nothing here reaches the network on its own account. A caller that only ever replaces its knowledge from an answer keeps what
-it had, and the refusal line is what tells the operator why the loop is quiet (see `forkclose.sh`'s `gh_read`, which prints it).
+it had, and the refusal line is what tells the operator why the loop is quiet (the landing pass prints it).
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ DEFAULT_JITTER = 60.0  # seconds of jitter added to it, drawn per writer, so two
 DEFAULT_AGGREGATE_WINDOW = 90.0  # seconds the open lists are answered from the snapshot, for a caller that chose it
 DEFAULT_CACHE_WINDOW = 60.0  # seconds a snapshot answers a repeated read; one bucket window, so a beat-by-beat loop repeats at most once
 
-# The landing pass's own burst (forkclose.sh's eligible-branch collection): the open-PR list once, then the state and
+# The landing pass's own burst (the pull-request collection): the open-PR list once, then the state and
 # the `Blocked by` body of each candidate. Measured against the pass, and asserted against it in tests/test_gh_throttle.
 LANDING_PASS_FIXED_READS = 3  # the open PRs, the open issues, and the issues of the candidates the open list lacks
 LANDING_PASS_READS_PER_CANDIDATE = 0  # since #45 a candidate adds no read: its facts come from those three

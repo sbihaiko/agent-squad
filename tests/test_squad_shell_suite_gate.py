@@ -11,7 +11,7 @@ def _tree(tmp_path, suites):
     """A scripts folder holding the real gate scripts and the given fake suites (name -> shell body)."""
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("shell-suites.sh", "fork-gate.sh", "serial.sh"):
+    for name in ("shell-suites.sh", "startability.sh", "serial.sh"):
         if (SCRIPTS / name).exists():
             shutil.copy(SCRIPTS / name, d / name)
     for name, body in suites.items():
@@ -56,13 +56,13 @@ def test_a_suite_that_prints_fail_but_exits_zero_is_not_hidden(tmp_path):
 def test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either(tmp_path):
     d = _tree(tmp_path, {"test-a.sh": "echo ok a"})
     marker = tmp_path / "gui-ran"
-    # The gate's own inputs are pinned rather than inherited: forkclose.sh exports FG_SUITES for the branch's diff (gate-suites.sh) and this
+    # The gate's own inputs are pinned rather than inherited: startability.sh exports FG_SUITES for the branch's diff (gate-suites.sh) and this
     # test runs inside that very gate. Left inherited, a `python` outer gate makes the gate run its pytest branch instead of the full one this
-    # test is about, which the fixture's /usr/bin:/bin PATH cannot even start (fork-gate.sh: uv: not found) -- SG_FORK_PY_CMD is pinned with
+    # test is about, which the fixture's /usr/bin:/bin PATH cannot even start (startability.sh: uv: not found) -- SG_FORK_PY_CMD is pinned with
     # it, since the full gate runs the pytest suite too (#1822), and this test is about the GUI command and the shell suites. SG_STATE is pinned for the same
     # reason: left shared, the GUI suite waits on the machine's gui-suite lock behind every other run's own suite, so a busy machine reddens a
     # test that says nothing about locks (serial.sh waits 1800s, the fixture's timeout is 60s). test-forkclose-serial.sh owns that arbitration.
-    gate = lambda gui: _run("bash", str(d / "fork-gate.sh"), gui, cwd=tmp_path,  # noqa: E731
+    gate = lambda gui: _run("bash", str(d / "startability.sh"), gui, cwd=tmp_path,  # noqa: E731
                             env={"FG_SUITES": "full", "SG_STATE": str(tmp_path / "state"), "SG_FORK_PY_CMD": "true"})
     p = gate(f"touch {marker}")
     assert p.returncode == 0, p.stdout + p.stderr
@@ -80,6 +80,6 @@ def test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_ei
 
 
 def test_forkclose_runs_the_gate_instead_of_the_bare_gui_command():
-    src = (SCRIPTS / "forkclose.sh").read_text()
-    assert src.count("fork-gate.sh") >= 2, "both the base test and the merge test must go through the gate"
+    src = (SCRIPTS / "startability.sh").read_text()
+    assert src.count("startability.sh") >= 2, "both the base test and the merge test must go through the gate"
     assert "sh -c \"$SG_FORK_TEST_CMD\"" not in src

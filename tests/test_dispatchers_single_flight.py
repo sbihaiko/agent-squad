@@ -50,7 +50,7 @@ def _scripts(tmp_path, cluster_sleep):
     for name in ("single.sh", "autobug.sh", "autofrontier.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
-    (d / "forkonly.sh").write_text(FORKONLY)
+    (d / "startability.sh").write_text(FORKONLY)
     (d / "cluster.py").write_text(f"import time\ntime.sleep({cluster_sleep})\nprint('42')\n")
     (d / "stack.sh").write_text(STACK)
     (d / "launch.py").write_text(LAUNCH)

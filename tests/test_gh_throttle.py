@@ -1,7 +1,7 @@
 """One shared throttle: the bucket every process spends from, and the cooldown every process observes (#4, ADR-0277).
 
 The reader owns one outcome contract (`ghread.py`, #1893); this is the rate governor in front of it. The loop's heaviest
-reader is the landing pass: `forkclose.sh`'s eligible-branch collection reads the open-PR list once and then two routes
+reader is the landing pass: `startability.sh`'s eligible-branch collection reads the open-PR list once and then two routes
 per candidate (the issue's state and its `Blocked by` body). On 2026-10-12 that pass read against an exhausted REST
 quota, collected **zero** eligible branches and said nothing -- "quiet because there is no work" and "quiet because
 there is no quota" read identically in the log. So the bucket and the cooldown belong to the pass that spends, and the

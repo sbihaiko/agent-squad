@@ -65,7 +65,7 @@ touch "$T/ratelimited"; SG_GH_PASS=board $RD repos/o/r/issues/9 >/dev/null
 tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/9 miss refused board$" && ok "a refusal is a refused outcome" || bad "refusal: $(tail -1 "$LOG")"
 
 echo "each pass names itself:"
-for pair in forkclose.sh:landing autofrontier.sh:frontier autobug.sh:autobug board.sh:board; do
+for pair in startability.sh:landing autofrontier.sh:frontier autobug.sh:autobug board.sh:board; do
   s=${pair%%:*}; p=${pair##*:}
   grep -Eq "^export SG_GH_PASS=$p( |$)" "$here/$s" && ok "$s spends as the $p pass" || bad "$s does not export SG_GH_PASS=$p"
 done

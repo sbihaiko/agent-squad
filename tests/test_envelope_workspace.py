@@ -27,13 +27,13 @@ def disp():
 
 
 def conflict_request_body(tmp_path):
-    """The body forkclose.sh writes for a fork branch that no longer merges into the base (the real script, a throwaway fork)."""
+    """The body startability.sh writes for a fork branch that no longer merges into the base (the real script, a throwaway fork)."""
     fork, st, co, s = (tmp_path / d for d in ("fork", "st", "co", "s"))
     for d in (fork, st / "auto", st / "cq", st / "tests", st / "req", co / "runs" / ".hub", s, tmp_path / "bin"):
         d.mkdir(parents=True)
-    for f in ("forkclose.sh", "forkonly.sh", "gate-suites.sh", "ghread.py", "ghthrottle.py", "ghcall.sh", "address.sh"):
+    for f in ("startability.sh", "startability.sh", "gate-suites.sh", "ghread.py", "ghthrottle.py", "ghcall.sh", "address.sh"):
         (s / f).write_bytes((SCRIPTS / f).read_bytes())
-    (s / "fork-gate.sh").write_text('#!/bin/bash\neval "$1"\n')
+    (s / "startability.sh").write_text('#!/bin/bash\neval "$1"\n')
     (s / "test.sh").write_text("#!/bin/bash\nexit 1\n")
     (s / "mkreq.sh").write_text(f'#!/bin/bash\ncp "{st}/req/$1.body" "{tmp_path}/$1.body"; echo "{tmp_path}/$1.txt"\n')
     (s / "launch.py").write_text("import sys\n")
@@ -56,7 +56,7 @@ def conflict_request_body(tmp_path):
     g("commit", "-qam", "base moved f")
     env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
     env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
-    out = subprocess.run(["bash", str(s / "forkclose.sh")], env=env, capture_output=True, text=True, timeout=60).stdout
+    out = subprocess.run(["bash", str(s / "startability.sh")], env=env, capture_output=True, text=True, timeout=60).stdout
     bodies = list(tmp_path.glob("forkrebase-34-*.body"))
     assert bodies, out
     return bodies[0].read_text()

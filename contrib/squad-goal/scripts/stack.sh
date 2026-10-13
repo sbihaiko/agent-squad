@@ -1,14 +1,12 @@
 #!/bin/bash
 # usage: stack.sh <issue>   Optimistic stacking decision for one issue, from its "## Blocked by" section:
-#   READY [FORK <br>...]      every blocker is closed, or its card is in Testing or Code Complete (child passed; owner's pick
-#                             2026-10-10: dispatch on Code Complete). A Code Complete blocker with fork-only work names its
-#                             unmerged fork branch after FORK: merge it into the new fork branch. Testing (code merged, its e2e or fork suite
+#   READY                    every blocker is closed, or its card is in Testing or Code Complete. Testing (code merged, its e2e
 #                             running: optimistic while testing; a PR that merely says "Refs #N" proves nothing; a red e2e reopens the blocker's fix, not this child): branch from origin/$SG_BASE
-#   STACK <pr> <branch> [FORK <br>...]  exactly one blocker is open (or Code Complete with a PR) and it has an open PR (stacked chains up to SG_STACK_DEPTH, default 3), with no
+#   STACK <pr> <branch>      exactly one blocker is open (or Code Complete with a PR) and it has an open PR (stacked chains up to SG_STACK_DEPTH, default 3), with no
 #                             failing CI on its head: branch from origin/<branch>, open the PR with base <branch>, and put
 #                             "Merge after #<pr>" in the body (autopilot never merges it first and retargets it after)
 #   WAIT <reason>             anything else (two open blockers, a blocker with no PR, a parent that is itself stacked, red CI)
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; iss=$1
+. "$(dirname "$0")/env.sh"; iss=$1
 body=$(gh api repos/$SG_REPO/issues/$iss -q .body)
 # The blockers are a LIST: reading stops at the first line that is neither blank nor a bullet, so a prose line that
 # merely names another issue ("Blocks #1792: ...", information the author wrote for a human) cannot become an edge.
@@ -20,7 +18,7 @@ testing=" $(jq -r '.items[]?|select(.st=="Testing" and .s=="open")|.n' "$hb" 2>/
 cc=" $(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 prs=$(gh api "repos/$SG_REPO/pulls?state=open&per_page=100")
 prof() { printf '%s' "$prs" | jq -r --arg b "$1" '[.[]|select(((.title+" "+(.body//""))|test("Refs #"+$b+"\\b")))][0]|select(.)|"\(.number) \(.head.ref) \(.base.ref) \(.head.sha)"'; }
-open=(); fork=(); for b in $bl; do [ "$(gh api repos/$SG_REPO/issues/$b -q .state)" = open ] || continue
+open=(); for b in $bl; do [ "$(gh api repos/$SG_REPO/issues/$b -q .state)" = open ] || continue
   case "$testing" in *" $b "*) continue;; esac   # its card is in Testing (code merged, test pass running): does not gate
   case "$cc" in *" $b "*)   # Code Complete: a PR stacks like an open blocker; fork-only work is merged into the child's fork branch
     br=$(sg_fork_branch "$b")   # an issue can carry both a PR and fork work: hand over both
@@ -40,4 +38,4 @@ if [ "$base" != "$SG_BASE" ]; then   # nested stack: allowed up to SG_STACK_DEPT
     cur=$(printf '%s' "$prs" | jq -r --arg h "$cur" '[.[]|select(.head.ref==$h)][0].base.ref // empty'); [ -n "$cur" ] || { echo "WAIT blocker #$b's PR #$n is stacked on $base, whose parent PR is gone"; exit 0; }; done
 fi
 gh api repos/$SG_REPO/commits/$sha/check-runs -q '[.check_runs[].conclusion]|any(.=="failure" or .=="timed_out")' | grep -q true && { echo "WAIT blocker #$b's PR #$n has failing CI"; exit 0; }
-echo "STACK $n $ref$fx"
+echo "STACK $n $ref"

@@ -10,7 +10,7 @@
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/fork"; git -C "$T/fork" init -q; git -C "$T/fork" remote add origin https://github.com/x/tool
 export SG_REPO=x/emu SG_REPOS="x/emu x/tool" SG_CHECKOUT=$T/co SG_BASE=dev SG_FORK_DIR=$T/fork SG_FORK_BASE=main SG_FORK_BRANCH=gui/%n
-. "$d/forkonly.sh"; . "$d/address.sh"   # address.sh last: the seam under test, whichever forkonly.sh is beside it
+. "$d/startability.sh"; . "$d/address.sh"   # address.sh last: the seam under test, whichever startability.sh is beside it
 land() {  # name, address, expected row (empty = refused, with the address named on stderr), optional "row" (a board row came with it)
   local out rc err; out=$(sg_land_target "$2" ${4:+"$4"} 2>"$T/err"); rc=$?; err=$(cat "$T/err")
   if [ -z "$3" ]; then

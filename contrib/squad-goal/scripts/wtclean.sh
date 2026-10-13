@@ -117,7 +117,7 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     # Which run owns this tree? The tree's own name is the wrong key twice over: a run in flight never writes "wt-as-<n>" to its
     # record (that only appears when the gate writes its outcome), and "some run has no verdict yet" is true of every tree at
     # once, because one live run anywhere parks them all. What a run does carry is the branch it was launched for, so the test
-    # is forkclose.sh's: a process inside the tree, or a run whose record moved in the orphan window and whose request names
+    # is the landing pass's: a process inside the tree, or a run whose record moved in the orphan window and whose request names
     # gui/<n> or wt-(as|fr)-<n>. The old record-grep deleted a live run's worktree the moment a sibling issue closed, and every
     # ac_command then failed with "cd: No such file or directory" (gui/1227, run 45a682, 2026-10-10).
     live=0

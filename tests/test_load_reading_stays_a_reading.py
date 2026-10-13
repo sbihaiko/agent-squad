@@ -21,8 +21,8 @@ READS_THE_LOAD = {"contrib/squad-goal/scripts/hub.py"}
 CONTROL_PATHS = [
     "contrib/squad-goal/scripts/serial.sh",           # holds a run: the machine-wide locks
     "contrib/squad-goal/scripts/shell-suites.sh",     # holds the machine-wide gate
-    "contrib/squad-goal/scripts/fork-gate.sh",
-    "contrib/squad-goal/scripts/forkclose.sh",
+    "contrib/squad-goal/scripts/startability.sh",
+    "contrib/squad-goal/scripts/startability.sh",
     "contrib/squad-goal/scripts/watch.sh",
     "contrib/squad-goal/scripts/watchd.sh",
     "contrib/squad-goal/scripts/single.sh",

@@ -7,7 +7,6 @@
 # could name, is retired (#20): a profile that still sets it keeps working. It is mapped into SG_REPOS and one warning per
 # state directory names the profile, the setting and its replacement. SG_REQUIRED_SETTINGS is the contract in one place
 # (`<setting>:<the setting that engages it>`; the retired form is `<setting>:<engaging setting>:retired:<replacement>`).
-# refresh-from-fork.sh --check reads it against every live profile.
 SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/address.sh"   # the one resolution of a repository: profiles dir, checkout and origin match, state directory

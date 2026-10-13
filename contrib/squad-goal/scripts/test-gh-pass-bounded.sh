@@ -4,7 +4,7 @@
 #
 # The primary limit is per user and per hour (5000), and a pass that reads once per candidate spends it N times: on
 # 2026-10-12 the landing pass hit the limit and every landing stopped (FORKCLOSE NO-PR-LIST). The two passes that read per
-# candidate were forkclose.sh (an issue read, a `Blocked by` read and a comments read each) and watch.sh (a PR read for
+# candidate were startability.sh (an issue read, a `Blocked by` read and a comments read each) and watch.sh (a PR read for
 # every PR it had not announced). Each now reads ONE aggregate for the whole set, so the count is the same for one
 # candidate and for many. The proof is a stub `gh` that logs every request, run for N=1 and for N=6, and the two counts
 # compared. Writes are not reads: landing an issue closes it, once per issue, and no read can avoid that.
@@ -38,7 +38,7 @@ J
 fork_pass() {
   local op=$1 cl=$2 t; t=$(mktemp -d -p "$T"); local all="$op $cl" n
   mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/runs/.hub" "$t/fork" "$t/fix"
-  for f in forkclose.sh forkonly.sh gate-suites.sh ghread.py ghthrottle.py ghcall.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$t/s/"; done
+  for f in startability.sh startability.sh gate-suites.sh ghread.py ghthrottle.py ghcall.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$t/s/"; done
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$t/st" "$t/fork" "$t/co" > "$t/s/env.sh"
   g() { $G -C "$t/fork" -c user.email=a@b -c user.name=t "$@"; }
   g init -q -b local/next; echo 0 > "$t/fork/f"; g add f; g commit -q -m init
@@ -50,7 +50,7 @@ fork_pass() {
   jq -n --arg ns "$cl" '{data:{repository:([$ns|split(" ")[]|select(length>0)|tonumber|{key:"i\(.)",value:{number:.,title:"t",body:"",state:"CLOSED",labels:{nodes:[]},comments:{nodes:[]}}}]|from_entries)}}' > "$t/fix/numbers.json"
   mkgh "$t/bin"
   : > "$t/gh.log"
-  ( cd "$t" && PATH="$t/bin:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" FC_DRY=1 bash "$t/s/forkclose.sh" > "$t/out" 2>&1 )
+  ( cd "$t" && PATH="$t/bin:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" FC_DRY=1 bash "$t/s/startability.sh" > "$t/out" 2>&1 )
   cp "$t/out" "$T/fork.out"; [ -n "${DBG:-}" ] && { echo "--- out:" >&2; cat "$t/out" >&2; echo "--- log:" >&2; cut -c1-120 "$t/gh.log" >&2; }; wc -l < "$t/gh.log" | tr -d ' '; }
 
 nums() { seq -s ' ' 1 "$1"; }
@@ -100,7 +100,7 @@ mkdir -p "$T/q"; ( . "$d/ghcall.sh"; export SG_STATE=$T/q
 SEED_QUOTA=100 watch_pass 1 > /dev/null; /usr/bin/grep -qx 630 "$T/watch.sleeps" && ok "under 20 percent of the limit left the cycle waits longer" || ko "no longer wait with 2 percent left: $(cat "$T/watch.sleeps")"
 
 # --- the budget file only shrinks ----------------------------------------------------------------------------------------
-for s in forkclose.sh watch.sh; do
+for s in startability.sh watch.sh; do
   /usr/bin/grep -qE "^$s " "$d/gh-direct-calls.txt" && ko "$s is still on the migration budget" || ok "$s is off the migration budget"
   # the checker reads a call in command position at a line's start, so this scan also reads an indented one and a `! gh`
   /usr/bin/grep -nE '(^|[;|&(`{!]|then|do|else)[[:space:]]*gh[[:space:]]+(api|pr|issue)\b' "$d/$s" | /usr/bin/grep -vE '^[0-9]+:[[:space:]]*#' | /usr/bin/grep -q . \

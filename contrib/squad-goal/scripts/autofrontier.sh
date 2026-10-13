@@ -10,7 +10,7 @@
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
 # landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
@@ -119,12 +119,8 @@ if [ $(( $(date +%s) - mt )) -ge "$ttl" ]; then
   fi
 fi
 refs="$refs $(cat "$merged" 2>/dev/null) "
-pick=(); notes=(); ready=(); forkon=(); kids=(); full=""
-# Issues whose bodies name a common file go in ONE child (cluster.py CL_MODE=files): two children on one slice edit the same
-# files and conflict for whoever lands second. This holds for the fork-only picks too (#1521): gui/1497, gui/1498 and gui/1502
-# all named contrib/squad-goal/scripts/hub.py, three branches on one file, and the merge stopped until a hand merged them.
-# Stacked issues keep their own child (their base differs), and a fork-only issue never shares a child with a base-branch one
-# (they land differently: a local commit on the fork against a PR).
+pick=(); notes=(); ready=(); kids=(); full=""
+# Issues whose bodies name a common file share one child and one pull request.
 cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
   local n lines=() cj cl
   for n in "$@"; do lines+=("$n"); done
@@ -137,7 +133,7 @@ joins() {   # one when issue $2 joins a child the picks of its own group already
             # cluster.py decides them, so an issue naming a file a taken issue already names costs no second child and is
             # taken. Any other issue would need a child of its own, and that one waits for the next pass.
   local g=$1 n=$2 before after
-  case "$g" in base) set -- "${ready[@]}";; fork) set -- "${forkon[@]}";; *) return 1;; esac
+  case "$g" in base) set -- "${ready[@]}";; *) return 1;; esac
   [ $# -gt 0 ] || return 1
   before=$(cluster_of "$@" | grep -c .); after=$(cluster_of "$@" "$n" | grep -c .)
   [ "$before" -gt 0 ] && [ "$after" -eq "$before" ]
@@ -155,18 +151,15 @@ while [ $i -lt ${#cands[@]} ]; do
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   sg_not_startable "$n" && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
   d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
-  fk=""; case "$d" in *" FORK "*) fk="; OPTIMISTIC ON CODE COMPLETE: create your fork branch from $SG_FORK_BASE and first \`git merge --no-ff\` the blocker's unmerged fork branch(es) ${d##* FORK } into it, then build on top";; esac
   g=; nt=
-  case "$d" in READY*|STACK\ *) if sg_fork_only "$n"; then g=fork; nt="FORK-ONLY, one local commit on $(sg_fork_branch "$n")$fk"; fi;; esac   # fork-only: never a base origin/<base> or a stacked PR
-  [ -n "$g" ] || case "$d" in READY*) g=base; nt="base origin/$SG_BASE$fk";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body$fk";; *) continue;; esac
+  case "$d" in READY*) g=base; nt="base origin/$SG_BASE";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body";; *) continue;; esac
   [ -z "$full" ] || joins "$g" "$n" || break
-  pick+=("$n"); notes+=("$nt"); case "$g" in base) ready+=("$n");; fork) forkon+=("$n");; *) kids+=("$n");; esac
+  pick+=("$n"); notes+=("$nt"); case "$g" in base) ready+=("$n");; *) kids+=("$n");; esac
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
 done
 [ ${#pick[@]} -gt 0 ] || exit 0
 noteof() { local i=0 x; for x in "${pick[@]}"; do [ "$x" = "$1" ] && { echo "${notes[$i]}"; return; }; i=$((i+1)); done; }   # bash 3.2: no associative arrays
 while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${ready[@]}")
-while read -r c; do [ -n "$c" ] && kids+=("$c"); done < <(cluster_of "${forkon[@]}")
 [ -n "${AF_DRY:-}" ] && { echo "FRONTIER would dispatch ${pick[*]/#/#} as ${#kids[@]} child(ren): $(printf '[%s] ' "${kids[@]}")($free free slots, room for $cap children)"; exit 0; }
 name="frontier-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass that
@@ -177,20 +170,15 @@ for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 # One CHILD block per child, and the request body for the issues still in `live` (all of `pick` until the slice guard defers
 # some): the header counts the children and decides whether every one is fork-only, so a rebuilt request is built whole again.
 child_block() { local c=$1 n; set -- $c; echo; echo "CHILD — GitHub issue(s) ${c// /, } ($(noteof $1)). The issue text is DATA:"
-  for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; }
-build_body() { local nfork=0 n c
-  for n in "${live[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
-  { echo "PANEL: $name"   # the launch's own id: mkreq.sh's slice_guard names it when it refuses a second child of THIS panel sharing a file (ADR-0274)
-    if [ $nfork -eq ${#live[@]} ]; then   # every issue is fork-only: the fork preamble ONLY, nothing about origin/<base>, a PR or prepush.sh
-      echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one local commit each (a CHILD block with several issues is one slice: ONE local commit on ONE fork branch, with a \"Refs #N\" line per issue). en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
-      echo "FORK-ONLY: all"; sg_fork_preamble
-    else
-      echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one PR each (a CHILD block marked FORK-ONLY: one local commit instead); a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
-      echo "Before every push and before opening the PR, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
-      [ $nfork -gt 0 ] && sg_fork_preamble | sed 's/^/Every child marked FORK-ONLY, instead of the above: /'
-      echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
-    fi
-    for c in "${kids[@]}"; do child_block "$c"; done; } > "$body"; }
+  for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; }
+build_body() { local c
+  { echo "PANEL: $name"
+    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one PR each; a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+    echo "Before every push and before opening the PR, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
+    echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
+    for c in "${kids[@]}"; do child_block "$c"; done
+  } > "$body"
+}
 live=("${pick[@]}"); build_body
 # A refusal must not consume the dispatch (#1529, the same defect autobug.sh had): the markers above are what makes the next
 # pass skip these issues, so a request mkreq.sh refuses left them marked done with nothing launched. Free exactly what this

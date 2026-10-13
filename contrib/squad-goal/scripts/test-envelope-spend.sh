@@ -48,7 +48,7 @@ case "$got" in *spend\ [0-9]*) ko "a graph with no dispatch budget still printed
 
 # The guard that matters: no pass builds the request with a number of its own again.
 bad=""
-for s in autobug.sh autofix.sh autohunt.sh forkclose.sh; do
+for s in autobug.sh autofix.sh autohunt.sh startability.sh; do
   $G -q 'spend 8 (the router may not request more' "$here/$s" && bad="$bad $s"
   $G -q 'envelope-spend.sh' "$here/$s" || bad="$bad $s(no-call)"
 done

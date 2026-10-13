@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for #8 (ADR-0277): check-gh-interface.sh refuses a live loop script that reaches GitHub with a call
 # site of its own, naming the script and the route -- a write exactly as a read -- and lets a caller through the door
-# go. It runs from shell-suites.sh beside this script, and that is what gates a branch: fork-gate.sh runs the suites
+# go. It runs from shell-suites.sh beside this script, and that is what gates a branch: startability.sh runs the suites
 # for a branch that edits contrib/squad-goal/scripts, which is exactly the branch that could add a call site.
 #
 # The last case runs the tree this suite ships in, so the rule is checked on the real scripts and not only on fixtures:

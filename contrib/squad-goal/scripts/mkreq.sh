@@ -22,18 +22,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # filesystem root -- so the script refuses by name instead, the way gui-tests.sh does: the seam owns the path, and a
 # script that is handed none says so rather than writing outside its own state.
 out="${SG_STATE:?mkreq.sh: no state directory; source env.sh for this repository, or set SG_STATE}/req/$1.txt"
-. "$here/forkonly.sh"   # sg_fork_branch: the one source of the branch a fork-only child commits on (#1836)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
-# The setting behind it is read from the environment first -- every request builder sources env.sh and exports it -- and
-# from env.sh itself otherwise, exactly as the slice guard below resolves SG_FORK_BASE. forkonly.sh owns the only default.
-if [ -z "${SG_FORK_BRANCH:-}" ]; then
-  SG_FORK_BRANCH=$( ( . "$here/env.sh" >/dev/null 2>&1; printf '%s' "${SG_FORK_BRANCH:-}" ) 2>/dev/null ) || true
-  export SG_FORK_BRANCH
-fi
 [ "$1" = --paths ] || grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body lacks the 'IMPORTANT: your first and only action' line" >&2; exit 1; }
-# A path a body can claim: the trees a child edits, the fork's own tree included (contrib/squad-goal/..., dashboard/...), which
-# the old UI|UI.<x>|Core|scripts|docs|tests list was blind to -- a fork-only child's slice lives there and matched nothing.
+# A path a body can claim.
 SLICE_ROOTS='UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/squad-goal|dashboard'
 SLICE_RE='(^|[^A-Za-z0-9_./-])('"$SLICE_ROOTS"')/[A-Za-z0-9_./-]+'
 # (#1774) Only prose counts as a slice. A frontier/autobug request embeds the full text of every issue it dispatches, so a path
@@ -171,40 +163,6 @@ slice_guard() {
     for f in $qp; do taken="$taken$f	request $rid
 "; done
   done
-  # A fork-only child commits on gui/<N> off the fork base and opens no PR, so its slice is only visible in the fork checkout.
-  # (#1794) A branch whose issue is closed claims no slice: it can never land. gui/1510-mine (#1510, closed 2026-10-11) sat one
-  # commit ahead of the fork base (then local/next, now main) touching contrib/squad-goal/scripts/hub.py, so the guard refused every request naming that file
-  # -- five startable issues, zero live runs, and the refusal on stderr once per pass was all anyone was told. The digits of the
-  # branch name are its issue (gui/1510-mine -> 1510), and `gh issue view` is asked once per number, cached for the pass. A
-  # branch GitHub cannot answer for (no `gh`, no repo, an API error, an empty answer) stays in flight exactly as before: an
-  # unreachable API must never silently drop a live slice, and it says nothing. A branch that is skipped is NAMED, because what
-  # can no longer land is what the operator has to retire and nothing else on the loop says so.
-  local bglob br bref bnum bstate ghcache=" "; bglob=$(sg_fork_branch_pattern)   # the same setting the request names and the land resolves (#1836)
-  bref=${bglob%%/%n*}; bglob="refs/heads/${bglob%%/%n*}"
-  if [ -n "$fdir" ] && [ -d "$fdir" ]; then
-    for br in $(/usr/bin/git -C "$fdir" for-each-ref --format='%(refname:short)' "$bglob/*" 2>/dev/null || true); do
-      [ -n "$(/usr/bin/git -C "$fdir" rev-list -1 "$fbase..$br" 2>/dev/null)" ] || continue
-      # The digits of the branch name are the issue it belongs to; a branch that names none (a hand-made one) is left in flight.
-      if [[ $br =~ ([0-9]+) ]]; then
-        bnum=${BASH_REMATCH[1]}
-        # The cache is read and written here, in the loop's own scope: a function returning the state would run in the
-        # command substitution's subshell and lose every write, asking GitHub once per branch instead of once per issue.
-        case "$ghcache" in
-          *" $bnum:"*) bstate=${ghcache#* "$bnum:"}; bstate=${bstate%% *};;
-          *) bstate=""
-             if [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then bstate=$(gh issue view "$bnum" --repo "$repo" --json state -q .state 2>/dev/null) || bstate=""; fi
-             ghcache="$ghcache$bnum:$bstate ";;
-        esac
-        if [ "$bstate" = CLOSED ]; then
-          echo "slice guard: $br skipped, its issue #$bnum is closed" >&2
-          continue
-        fi
-      fi
-      for f in $(/usr/bin/git -C "$fdir" diff --name-only "$fbase...$br" 2>/dev/null || true); do
-        taken="$taken$f	branch $br
-"; done
-    done
-  fi
   [ -n "$taken" ] || return 0
   for f in $paths; do
     holder=$(printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
@@ -225,32 +183,12 @@ slice_guard() {
     if [[ $1 =~ ^auto-fix-([0-9]+)-[0-9a-f]{9}$ ]] && [ "$holder" = "PR #${BASH_REMATCH[1]}" ]; then
       echo "SLICE SELF-FIX $1: $f is $holder's own file; a fix run on the PR it repairs is not a second slice (#1769)" >&2; continue
     fi
-    # (#1786) A rebase of an already-written branch is not a second writer either. forkclose.sh names its request
-    # `forkrebase-<issue>-<sha9>` and its body names the files the branch no longer merges over -- which that same branch holds
-    # by definition, since it is the branch being merged. With gui/1767 and gui/1768 both editing
-    # contrib/squad-goal/scripts/autopilot.sh, the guard refused each rebase run citing the other branch's claim, and the only
-    # request that could break the deadlock was the one refused. So the file of the branch this request repairs is exempt,
-    # exactly as #1769 exempts a fix run's own PR -- and the claim record already carries the number the request name carries.
-    # The closes are serialized instead: the first branch's rebase lands, and the second then collides with the base, not with a
-    # branch. Another request's file, an open PR's file, and the file of a branch this request's own branch does not claim
-    # refuse exactly as before, and so does any request whose name is not a rebase run's.
-    # The exemption asks whether the request's OWN branch claims the file, not whether the branch the lookup happened to return
-    # is that branch. `holder` above is the FIRST claimer in for-each-ref order, and that order is alphabetical: of gui/1767 and
-    # gui/1768 both editing contrib/squad-goal/scripts/autopilot.sh, gui/1767 always answers first, so comparing `holder` against
-    # the request's own branch exempted gui/1767's rebase and refused gui/1768's -- the one that repairs the branch the refusal
-    # named. The pair stayed deadlocked, one-sided, and the refusal read as a mirror-check failure. Asking the claim list instead
-    # exempts a file the request's own branch claims even when another branch claims it too, which is what serializes the closes.
-    if [[ $1 =~ ^forkrebase-([0-9]+)-[0-9a-f]{9}$ ]] && printf '%s\n' "$taken" | /usr/bin/awk -F'\t' -v f="$f" -v b="branch ${bref}/${BASH_REMATCH[1]}" '$1==f && $2==b {mine=1} END{exit !mine}'; then
-      echo "SLICE SELF-REBASE $1: $f is ${bref}/${BASH_REMATCH[1]}'s own file; a rebase of the branch it repairs is not a second slice (#1786)" >&2; continue
-    fi
     case "$holder" in
       "request "*)
         rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$SG_STATE/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
         msg="refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f$at. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
       "PR "*)
         msg="refusing: request $1 names $f$at, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
-      *)
-        msg="refusing: request $1 names $f$at, which the unmerged fork branch ${holder#branch } touches (that is where a fork-only child's slice lives). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
     esac
     [ -n "$refused" ] || echo "$msg" >&2   # the first contested file is the one the operator reads; the report below carries the rest
     [ -z "${SG_SLICE_REPORT:-}" ] || printf '%s\t%s\n' "$f" "$holder" >> "$SG_SLICE_REPORT"
@@ -260,42 +198,6 @@ slice_guard() {
 }
 [ "$1" = --paths ] && { slice_paths "$2"; exit 0; }   # (#10) the slice the guard would read from a body: a dispatcher attributes a contested file to one ticket with the guard's own rule
 slice_guard "$1" "$2" || exit 1
-# (#1836) The branch a fork-only child commits on has ONE source: $SG_FORK_BRANCH (%n = the issue), the setting
-# forkclose.sh substitutes into the ref it merges (sg_fork_branch, forkonly.sh). Two builders used to carry their own
-# literal beside it -- autofrontier and autobug each wrote `gui/<N>` while the land resolved whatever the profile said --
-# and a hand-written body could name anything at all. The MesenAI habit `fix/<N>-<short-slug>` reached fork-only children
-# that way, the commit landed on a branch no close pass reads, and the card sat at Code Complete with nobody waiting for
-# it (#1831). The check runs HERE, before the request file exists and so before launch.py makes a run folder: a fork-only
-# dispatch that would name anything else is refused, naming both branches, and so is one whose setting cannot name a
-# landing branch at all.
-fork_landing_refusal() {   # <body> : the reason this fork-only request could never land; empty when it can
-  local pat pref ref own cl scan t exp num
-  pat=$(sg_fork_branch_pattern)
-  case "$pat" in *%n*) ;; *)
-    echo "is fork-only and cannot name a landing branch: SG_FORK_BRANCH=$pat carries no %n, so it names no branch per issue and forkclose.sh would resolve one ref for every issue."; return;; esac
-  ref=$(sg_fork_branch 1)
-  /usr/bin/git check-ref-format --branch "$ref" >/dev/null 2>&1 ||
-    { echo "is fork-only and cannot name a landing branch: SG_FORK_BRANCH=$pat yields '$ref' for issue #1, which is not a valid branch name (\`git worktree add -b '$ref'\` refuses it), so no fork-only commit could land."; return; }
-  pref=${pat%%/%n*}
-  # What the request TELLS the child: its own lines above the first CHILD line, plus each CHILD line's own note. The ticket
-  # text pasted below those is DATA the request hands over, and a ticket that happens to name a branch must never refuse
-  # the dispatch carrying it (#1790).
-  own=$(/usr/bin/awk '/^CHILD/ { exit } { print }' "$1" 2>/dev/null)
-  cl=$(/usr/bin/grep -E '^CHILD' "$1" 2>/dev/null) || true
-  scan=$(printf '%s\n%s\n' "$own" "$cl")
-  for t in $(printf '%s\n' "$scan" | /usr/bin/grep -oE '(^|[^A-Za-z0-9_./-])[A-Za-z][A-Za-z0-9._-]*/(<N>|[0-9]+)(-[A-Za-z0-9._-]+)?' | sed -E 's#^[^A-Za-z]+##' | sort -u); do
-    case "$t" in *'/<N>'*) exp=$(sg_fork_branch '<N>');; *)
-      num=${t##*/}; num=${num%%-*}; exp=$(sg_fork_branch "$num")
-      # A branch-shaped token whose number this request does not dispatch, and whose family is not the land's, is not a
-      # name for its issue: a path, a run folder, another issue's ref. A `gui/1` under a gui/%n land is checked either way.
-      [ "${t%%/*}" = "$pref" ] || printf '%s\n' "$cl" | /usr/bin/grep -qE "(^|[^0-9])$num([^0-9]|\$)" || continue;; esac
-    [ "$t" = "$exp" ] || { echo "is fork-only and names $t, but the branch a fork-only child commits on has ONE source: SG_FORK_BRANCH=$pat, so forkclose.sh resolves $exp. A commit on $t reaches no close pass (#1831)."; return; }
-  done
-}
-# Fork-only (#1411, the rule of forkonly.sh): the builders write a `FORK-ONLY: all` line when every child is fork-only; a hand-written body
-# with no CHILD blocks is fork-only when it carries the "Fork-only work" line. A fork-only request gets the fork DONE CHECK and checklist:
-# nothing in it names a PR, a push or prepush.sh.
-fork=0; if grep -qE '^FORK-ONLY: all' "$2"; then fork=1; elif ! grep -qE '^CHILD' "$2" && grep -q 'Fork-only work' "$2"; then fork=1; fi
 # (#81) What the child RUNS, and what it leaves alone. The full gate -- the shell suites and the pytest gate beside them -- is
 # the loop's and its land pass's, once per landing: a child that runs it too starts a second full gate on the same machine, the
 # two take every core between them and the owner's editor loses the box. Both halves weigh the same, so the length of the run is
@@ -303,8 +205,4 @@ fork=0; if grep -qE '^FORK-ONLY: all' "$2"; then fork=1; elif ! grep -qE '^CHILD
 # touched and the cases it needs. Both inline spans open with a command word, so the slice guard reads them as what the request
 # RUNS and never as a file it claims (#44); the paths they name are not slices either way.
 suites_line="SUITES: run what you touched -- the shell suite beside the script you changed (\`bash contrib/squad-goal/scripts/test-<script>.sh\`) and the targeted pytest cases (\`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>\`). The machine's full gate (\`bash contrib/squad-goal/scripts/shell-suites.sh\` and the pytest gate beside it) belongs to the loop and to the land pass, once per landing: never run it."
-if [ $fork = 1 ]; then
-  rea=$(fork_landing_refusal "$2"); [ -z "$rea" ] || { echo "refusing: request $1 $rea" >&2; exit 1; }
-  mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence, each as \"cd <fork worktree> && <command>\" (the gate runs in the fork worktree you committed in). Use the targeted commands (the touched test files, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in your result notes, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for your result notes, not a gate input (#1799)."; echo "$suites_line"; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; ck=$(cat "$here/req-checklist-fork.txt"); ck=${ck//gui\/<N>/$(sg_fork_branch '<N>')}; echo "$ck"; } > "$out"; echo "$out"; exit 0
-fi
 mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a PR branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in the PR body, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for the PR body, not a gate input (#1799)."; echo "$suites_line"; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; echo "$out"

@@ -1,8 +1,7 @@
 #!/bin/bash
 # usage: prland.sh      one pass over the open pull requests: merge the ones nothing holds, whose check failed on nothing but the baseline.
 #
-# The loop lands its own work two ways and only one had a closer (#83): a fork-only branch is merged by forkclose.sh, while
-# a child that delivers through a pull request was closed by the run's own land node and by nothing else. A PR whose check
+# The loop lands finished work through pull requests. A PR whose check
 # is red sat open forever, and its issue in Code Complete. The check IS red, constantly: `tests/test_gui_test_e2e.py` needs
 # a MesenAI checkout the runner never has, and two app-reaping cases run only on macOS (#36). So this pass never merges on
 # "checks green" and never on "checks red": it reads the failed test set out of the job log and merges when that set lies
@@ -10,12 +9,11 @@
 # line with its reason). One failure the baseline does not hold is refused, and the refusal names it.
 #
 # A PR is merged when, and only when: it is open, not a draft, on $SG_BASE, and names its issue (fix/<n>-… or Refs #n);
-# no live run names its head branch and no worktree holds that branch with uncommitted changes (the reading forkclose.sh
-# does: active-runs.txt, the recent run records, `git worktree list`); its check run finished; every failed test is in
+# no live run names its head branch and no worktree holds that branch with uncommitted changes (the pass does: active-runs.txt, the recent run records, `git worktree list`); its check run finished; every failed test is in
 # the baseline; GitHub reports it mergeable. Then: `gh pr merge --squash --delete-branch`, one comment on the issue naming
 # the merge sha, and the issue closed. Anything else is one `PRLAND WAIT #<n>` (it may resolve on its own) or one
 # `PRLAND REFUSE #<n>` (a person decides) per head and reason, kept as a marker under $SG_STATE/auto so it is never
-# repeated for the same head (forkclose.sh's forkwait-/forkunlanded- pattern).
+# repeated for the same head (a per-head marker pattern).
 #
 # Every GitHub read goes through the throttle (ghthrottle.py behind ghcall.sh): a cooldown held by any reader holds here
 # too, and a refused list is printed and is never read as "no PRs". The one direct `gh` reach is the merge itself
@@ -33,7 +31,7 @@ BL=${SG_CI_BASELINE:-$SG_CHECKOUT/contrib/squad-goal/ci-baseline.txt}
 baseline=" $(sed 's/#.*//' "$BL" 2>/dev/null | awk 'NF{print $1}' | tr '\n' ' ') "   # no file: an empty baseline, so any red is refused
 
 # The branches a live run is working on: a run listed in active-runs.txt, or one whose record moved inside the orphan window,
-# names the branch it was launched for in its request (forkclose.sh reads gui/<n> the same way).
+# names the branch it was launched for in its request (the request records the branch).
 runs=$( { cat "$SG_STATE/active-runs.txt" 2>/dev/null; ls -t "$SG_CHECKOUT/runs" 2>/dev/null | head -60; } | sort -u)
 livebrs=" $(for r in $runs; do
   d=$r; [ "${r#/}" = "$r" ] && d=$SG_CHECKOUT/runs/$r   # no `case` here: bash 3.2 cannot parse one inside $( )

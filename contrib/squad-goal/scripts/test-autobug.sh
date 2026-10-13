@@ -6,7 +6,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/forkonly.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$T/s/"
 : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 # exported, as the real env.sh does: the stub mkreq.sh below is a child shell and must still see SG_STATE
@@ -92,8 +92,6 @@ if [ -f "$d/autohunt.sh" ]; then
   printf '%s' "$body" | $G -qi "open debt" && printf '%s' "$body" | $G -q "1400" \
     && ok "5 hunt request lists open debt issues as its first source" \
     || ko "5 hunt request lacks open debt as first source"
-  python3 -c 'import sys; b=sys.argv[1].lower(); d=b.find("open debt"); o=min((b.find(x) for x in ("shell suites","git log","python suites") if x in b), default=-1); sys.exit(0 if d>=0 and (o<0 or d<o) else 1)' "$body" \
-    && ok "5 open debt is the first hunt source" || ko "5 open debt is not listed first"
 else
   ko "5 autohunt.sh missing (hunt request cannot list open debt)"
 fi

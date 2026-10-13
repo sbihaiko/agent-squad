@@ -32,7 +32,7 @@ def _scripts(tmp_path):
     """A scripts folder holding the real request builder and everything it reads."""
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
-    for name in ("mkreq.sh", "forkonly.sh", "models.json", "req-checklist.txt", "req-checklist-fork.txt"):
+    for name in ("mkreq.sh", "startability.sh", "models.json", "req-checklist.txt", "req-checklist-fork.txt"):
         shutil.copy(SCRIPTS / name, d / name)
     return d
 

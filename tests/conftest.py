@@ -126,7 +126,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
 
 def pytest_collection_modifyitems(config, items):
-    # With the switch off, fork-gate.sh hands the GUI command to serial.sh, which deliberately does not run it -- so a test
+    # With the switch off, startability.sh hands the GUI command to serial.sh, which deliberately does not run it -- so a test
     # asserting "the GUI suite the gate already ran must keep running" fails by construction, and the gate itself goes red on
     # it. Skipped, never weakened: with the switch on the test runs exactly as before.
     if gui_tests_off():

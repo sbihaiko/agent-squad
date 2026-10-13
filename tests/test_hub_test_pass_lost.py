@@ -40,7 +40,7 @@ def _pass_file(hub, stem, state, age, issue=1565):
     t.mkdir(parents=True, exist_ok=True)
     f = t / (stem + ".json")
     now = time.time()
-    f.write_text(json.dumps({"issue": issue, "cmd": "bash fork-gate.sh bash serial.sh gui-suite pytest",
+    f.write_text(json.dumps({"issue": issue, "cmd": "bash startability.sh bash serial.sh gui-suite pytest",
                              "dir": "/tmp/x", "state": state, "t0": now - age}))
     os.utime(f, (now - age, now - age))
     return f
