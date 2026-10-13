@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for autohunt.sh: when the loop is idle, start one read-only bug hunt (Refs #1493, #1504).
 # Offline: stub gh, autobug, autofrontier, mkreq, launch. usage: bash test-autohunt.sh [path/to/autohunt.sh]
-src=${1:-$(dirname "$0")/autohunt.sh}; T=$(mktemp -d); fail=0
+src=${1:-$(dirname "$0")/autohunt.sh}; here=$(cd "$(dirname "$src")" && pwd); T=$(mktemp -d); fail=0
 repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
 export SG_SQUAD=$repo SQUAD_CAPS_DIR=$T/caps   # (#21) the pass reads the machine-wide ceiling through squad.caps, exported so the reader process sees it; the leases are sandboxed
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -42,7 +42,7 @@ scene() {
   restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   cp "$src" "$S/autohunt.sh"
-  cp "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$S/"   # the filing write goes through the door (ADR-0277)
+  cp "$here/ghcall.sh" "$here/ghread.py" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
@@ -55,6 +55,7 @@ E
   : > "$T/$1/st/active-runs.txt"
   export HOME=$T/$1/home SG_STATE=$T/$1/st GHLOG=$T/$1/gh.log GHPOST=$T/$1/ghpost
   export SG_AUTO_HUNT=yes SG_HUNT_IDLE_MINUTES=0 SG_HUNT_COOLDOWN_MINUTES=0 SG_HUNT_PER_DAY=6
+  unset SG_FILE_PASS SG_GH_PASS SG_FILE_CEILING   # a filing names no pass here: the ceiling is not this suite's subject (#140)
   echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
 }
 run() { AH_DRY=1 bash "$S/autohunt.sh" 2>&1; }
@@ -151,7 +152,7 @@ n=$(bash "$S/autohunt.sh" --none 2>&1)
 case "$n" in *"HUNT none"*) ok "empty hunt logs HUNT none";; *) ko "none: '$n'";; esac
 
 # 15) watch.sh calls autohunt.sh every cycle after autobug.sh
-w=$(cd "$(dirname "$src")" && pwd)/watch.sh
+w=$here/watch.sh
 if [ -f "$w" ]; then
   python3 - "$w" <<'PY' && ok "watch.sh calls autohunt.sh after autobug.sh" || ko "watch.sh does not call autohunt.sh after autobug.sh"
 import pathlib, sys
@@ -267,10 +268,17 @@ mv=$(bash "$S/board.sh" o 1 "In Progress" 1228 2>&1); rc=$?
 case "$mv" in *"#1228 -> In Progress"*) ok "18 the card the board carries is In Progress";; *) ko "18 the dispatch's card move: '$mv'";; esac
 case "$mv" in *"not on the board"*) ko "18 the pass that picks the filed issue up reports it absent: '$mv'";; *) ok "18 the filed issue is never reported absent";; esac
 
-# 19) a write GitHub refused is never read back as a filed issue (#139): `gh api` writes GitHub's error body to stdout
+# 19) (#140) the ceiling the filer enforces is the number the hunt request asks a child for: the bound and the
+# instruction about it share one declaration, so they cannot drift apart.
+scene ceiling; export SG_FILE_CEILING=2
+r=$(run)
+body=$(cat "$SG_STATE/req/"*.body 2>/dev/null)
+printf '%s' "$body" | $G -qF 'at most 2 bugs per hunt' && ok "19 the hunt request asks for the ceiling the filer declares" || ko "19 the request does not carry the declared ceiling: $(printf '%s' "$body" | $G -o 'at most [0-9]* bugs per hunt')"
+
+# 20) (#139) a write GitHub refused is never read back as a filed issue: `gh api` writes GitHub's error body to stdout
 # and exits non-zero, so the words of a rate limit ("... for user ID 1 ...") read as a number and the filer logged
-# `HUNT filed #1` -- an issue nobody opened, which the index of a refused write then pointed at. A refused filing is the
-# door's exit 2, and it is never a number.
+# `HUNT filed #1` -- an issue nobody opened. A refused filing is the door's exit 2, named with its fingerprint, and it
+# is never a number.
 scene refused
 printf 'repro\n' > "$T/refused/body.md"
 cat > "$T/bin/gh" <<'GH'
@@ -285,10 +293,10 @@ esac
 GH
 chmod +x "$T/bin/gh"
 n=$(bash "$S/autohunt.sh" --file "a refused filing" "$T/refused/body.md" 2>&1)
-case "$n" in *"HUNT filed #"*) ko "19 a refused filing is never read back as a filed issue: '$n'";;
-             *"HUNT filed"*)  ok "19 a refused filing is never read back as a filed issue";;
-             *)                ko "19 the filer said something else: '$n'";; esac
-case "$n" in *"rate limit"*|*"403"*) ko "19 the refusal's own words became the filer's line: '$n'";;
-             *)                      ok "19 the refusal's own words are never read as an issue number";; esac
+case "$n" in *"HUNT filed #"*)   ko "20 a refused filing is never read back as a filed issue: '$n'";;
+             *"HUNT refused"*) ok "20 a refused filing is named with its fingerprint, never read back as a filed issue";;
+             *)                ko "20 the filer said something else: '$n'";; esac
+case "$n" in *"rate limit"*|*"403"*) ko "20 the refusal's own words became the filer's line: '$n'";;
+             *)                      ok "20 the refusal's own words are never read as an issue number";; esac
 
 rm -rf "$T"; exit $fail

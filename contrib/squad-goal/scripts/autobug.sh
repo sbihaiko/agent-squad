@@ -9,6 +9,7 @@
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
+export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
 # ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
 # -q on a failed request, so every `gh api … 2>/dev/null` here used to treat a 403/404/500 body as a valid answer: on
 # 2026-10-12 a rate-limit body became the whole candidate list and the dispatch spent money on children spawned from it.
@@ -42,9 +43,12 @@ print(f"GitHub refused (HTTP {st}): {msg}" if (msg and st) else "no verdict: the
 # The operation is a refusal NAME out of the closed set the helper beside this pass owns (refusal-names.sh, #142): every
 # writer below names its refusal through that set, and a name the set does not hold is refused by sg_refused -- logged by
 # name, filed under none -- so a spelling invented at a call site never becomes an issue.
+sg_refusal_fingerprint() {   # <operation> <address> <exit code> <error text>: the cause's key, never the occurrence
+  printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" | python3 -c 'import hashlib,sys; print(hashlib.sha1(sys.stdin.buffer.read()).hexdigest()[:12])' 2>/dev/null
+}
 sg_refusal_name() {   # <refusal name> <address> <exit code> <error text>: the one name of a refusal
   local fp
-  fp=$(printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$4" | python3 -c 'import hashlib,sys; print(hashlib.sha1(sys.stdin.buffer.read()).hexdigest()[:12])' 2>/dev/null)
+  fp=$(sg_refusal_fingerprint "$@")
   printf 'refused %s %s [%s]' "$1" "$2" "${fp:-000000000000}"
 }
 sg_refusal_body() {   # <operation> <address> <exit code> <error text> <concerns> <guard>: the evidence, in one fence
@@ -52,16 +56,18 @@ sg_refusal_body() {   # <operation> <address> <exit code> <error text> <concerns
     "$1" "$2" "$3" "$4" "$5" "$6"
 }
 sg_refused() {   # <refusal name> <address> <exit code> <error text> <concerns> <guard>: name it, log it, file it
-  local name body filed
+  local name body filed fp
   sg_refusal_named "$1" || {   # a name outside the closed set is refused: logged by name, filed under no guessed name
     echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED-UNKNOWN $1: not a refusal name in the closed set ($(sg_refusal_names | tr '\n' ' ')), so nothing is filed" >> "$SG_STATE/cycle.log"
     echo "AUTOBUG: '$1' is not a refusal name in the closed set; the refusal is filed under no guessed name" >&2
     return 1
   }
-  name=$(sg_refusal_name "$1" "$2" "$3" "$4")
+  name=$(sg_refusal_name "$1" "$2" "$3" "$4"); fp=$(sg_refusal_fingerprint "$1" "$2" "$3" "$4")
   echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED $name" >> "$SG_STATE/cycle.log"
   body=$(mktemp); sg_refusal_body "$@" > "$body"
-  filed=$(SG_FILED_BY="${SG_GH_PASS:-autobug}" SG_FILED_LABELS="${SG_FRONTIER_LABEL:-ready-for-agent}" bash "$here/autohunt.sh" --file "$name" "$body" 2>/dev/null)
+  # The filer counts the cause the pass files under, not the occurrence: the same fingerprint twice in one pass is one
+  # issue, and the pass's ceiling bounds the distinct causes (#140). The name and the fingerprint come from one helper.
+  filed=$(SG_FILED_BY="${SG_GH_PASS:-autobug}" SG_FILED_LABELS="${SG_FRONTIER_LABEL:-ready-for-agent}" bash "$here/autohunt.sh" --file "$name" "$body" --fingerprint "${fp:-000000000000}" 2>/dev/null)
   rm -f "$body"
   echo "AUTOBUG: the refused write is filed as a bug${filed:+ ($filed)}" >&2
 }
