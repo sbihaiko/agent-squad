@@ -44,7 +44,7 @@ scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
   cat > "$T/scripts/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BASE=main
-SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=$T/board.sh
+SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_FRONTIER_SKIP_LABELS=spec,needs-owner,needs-ratification,wontfix,needs-info; SG_CODING_RULES=rules; BOARD=$T/board.sh
 . "$(dirname "$src")/address.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
 E
   if [ -n "$2" ]; then   # the author's graph: a root loop that holds one dispatch node, and a run block
@@ -166,6 +166,17 @@ case "$r" in *"refused slice"*) ok "the pass says a slice was refused";; *) ko "
 scene nograph
 five; r=$(run); sm=$(seedmax)
 [ "$(asked)" = "$sm" ] && ok "no graph of its own: the request fits the seed's envelope" || ko "no graph of its own: asked for '$(asked)' against the seed's '$sm': '$r'"
+
+# 7) #208: a spec is a document until its owner starts it, and an issue that waits on him is not a unit of work either. The
+#    pass reads every open issue, so the labels SG_FRONTIER_SKIP_LABELS names -- the spec, beside the bug label autobug.sh
+#    already owns -- never become a child: a run that implemented one would commit a decision the owner has not made.
+scene skip 24
+issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"spec"},{"name":"wave:01"}]},{"number":40,"title":"a","body":"b","labels":[{"name":"needs-owner"},{"name":"wave:01"}]},{"number":42,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 42)" = 1 ] && ok "the startable ticket beside them goes out" || ko "the ticket beside a spec did not go out: '$r'"
+[ "$(marked 41)" = 0 ] && ok "a spec the owner has not started is left alone" || ko "the pass dispatched a spec: $(marked 41) marker(s)"
+[ "$(marked 40)" = 0 ] && ok "an issue that waits on the owner is left alone" || ko "the pass dispatched an issue waiting on the owner: $(marked 40) marker(s)"
+[ "$(childblocks)" = 1 ] && ok "the request asks for the one ticket alone" || ko "the request asks for $(childblocks) children: '$($G '^CHILD' "$MKLOG.body")'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
