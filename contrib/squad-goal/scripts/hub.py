@@ -1866,16 +1866,6 @@ function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=
 function mdlOff(k,m){return !!(mdl.off&&mdl.off[k]&&mdl.off[k][m])}
 function mdlSetOff(k,m,v){mdl.off=mdl.off||{};mdl.off[k]=mdl.off[k]||{};if(v)mdl.off[k][m]=true;else delete mdl.off[k][m]}
 function mdlProv(m){const x=m.replace(/^claude:/,"");return /^claude-(sonnet|opus|haiku|fable)/.test(x)||x==="claude-session"?"Claude":/^claude-/.test(x)?"via CLI":/^gpt/.test(x)?"Codex":/^grok/.test(x)?"xAI":/^gemini/.test(x)?"Google":""}
-function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
- $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
- const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
- b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk}${pv?" · "+pv:""}">${pv||rk}${of?" · out of the chain":""}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
- +mdlRouter()
- +(()=>{const e=mdl.envelope||{};if(!e.node)return"";const row=(l,a)=>`<div class=mx><span class=el>${l}</span> ${(a||[]).map(x=>`<code>${esc(String(x))}</code>`).join(" ")||"—"}</div>`;return `<div class=mc><div class=mt>Router</div><div class=mx>The dispatch envelope the router asks its children inside, read from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}. A request outside it is refused whole.</div>`+row("models",e.models)+row("efforts",e.efforts)+row("tools",e.tools)+row("workspaces",e.workspaces)+`<div class=mx><span class=el>limits</span> children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div>`+`<div class=mx>This is graph data: change it in the run graph, never in models.json (ADR-0106). A coding row above must name an id this envelope allows.</div></div>`})()
- +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row. A coding row must name an id the dispatch envelope allows.</div>`
- +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Coding rows must name ids the dynamic dispatch envelope allows, or the allowed id that stands for the provider alias. Written per model, beside the chains, in models.json.</div>`
- +`<div class=mx>Each row also carries a <b>switch</b>: <code>off</code> takes the model out of the chain without removing it — it keeps its place, its rank, its effort and its hrs, and every consumer skips it exactly like a model outside its window. <b>✕</b> still deletes the entry, settings and all.</div>`
- +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 /* The router's own chain (#95): the dispatch envelope of the run graph. It is a queue like the role chains, so it
    reads the same way -- rank, ↑ ↓, ✕, Add -- but it is graph data: it lives in the run graph, never in models.json
    (ADR-0106), and the Save writes it there and restamps the record the graph ships beside. */
@@ -1885,6 +1875,13 @@ function mdlRouter(){const ids=mdl.router_models||[],e=mdl.envelope||{};
  +ids.map((m,i)=>`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk(i)}">${mdlProv(m)||rk(i)}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`).join("")
  +`<div class=madd><input list=mk data-radd placeholder="add a model id…"><button data-raddb="router">Add</button></div>`
  +`<div class=mx>efforts ${(e.efforts||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · workspaces ${(e.workspaces||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div></div>`}
+function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
+ $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
+ const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
+ b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk}${pv?" · "+pv:""}">${pv||rk}${of?" · out of the chain":""}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ +mdlRouter()
+ +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row. A coding row must name an id the dispatch envelope allows.</div>`
+ +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
 async function mdlLoad(){try{mdl=await (await fetch("/api/models")).json();mdlSrv=JSON.stringify(mdl);mdlRender()}catch(e){}}
 $("#mbody").addEventListener("change",e=>{const t=e.target;if(!mdl)return;mdlMsg="";if(t.dataset.ef){const[k,m]=t.dataset.ef.split("|");mdlSetEff(k,m,t.value)}
  else if(t.dataset.hr){const[k,m]=t.dataset.hr.split("|");mdlSetHrs(k,m,t.value)}
@@ -2535,32 +2532,10 @@ def _graph_path():
 
 
 def _graph_doc():
-    """The run graph this run starts, resolved exactly as launch.py resolves it: the file SG_WORKFLOW names (no id, `default`
-    or `dynamic` is the owner's default file), the project's own file first, else the graph the plugin ships.
-
-    The panel shows the envelope of the graph the run obeys only if both readers land on one file. A second, narrower
-    resolution here showed a reader an envelope no child was held inside (#95: the router named a model no chain allowed).
-
-    Two seams name that file, and both are read here: the checkout this hub serves (CHECKOUT, resolved by address.sh,
-    never the cwd) when the module carries that seam, and the environment a sliced read carries instead of it."""
-    p = _graph_path() if "CHECKOUT" in globals() else None
-    if p is not None:
-        try: return json.loads(p.read_text())
-        except (OSError, ValueError): return {}
-    base = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd())
-    roots = []
-    for r in (os.environ.get("SG_SQUAD"), str(base)):   # launch.py's `squad`, then the checkout it runs in
-        if r and r not in roots: roots.append(pathlib.Path(r))
-    folder = base / "docs" / "squad" / "workflows"; wf = os.environ.get("SG_WORKFLOW")
-    if wf in (None, "", "default", "dynamic"):
-        name = [folder / "default.graph.json", folder / "dynamic.graph.json"] + [r / "docs/design/router.graph.json" for r in roots]
-    else:
-        name = [folder / f"{wf}.graph.json"] + [r / "docs/workflows" / f"{wf}.graph.json" for r in roots]
-    for p in name:
-        if p.is_file():
-            try: return json.loads(p.read_text())
-            except (OSError, ValueError): return {}   # a graph the panel cannot read is no envelope, never a panel that fails
-    return {}
+    p = _graph_path()
+    if p is None: return {}
+    try: return json.loads(p.read_text())
+    except (OSError, ValueError): return {}
 
 
 def router_get():
