@@ -121,10 +121,15 @@ def test_the_pages_cost_does_not_grow_with_the_number_of_runs(hub):
 
 
 def test_a_missing_cap_file_cannot_make_the_page_expensive(hub):
-    co = tempfile.mkdtemp()                                         # a checkout with no workflows folder
+    bare = tempfile.mkdtemp()                                       # a checkout with no project file: the machine-wide pair still resolves
+    co = tempfile.mkdtemp()                                         # a checkout whose project file raises the ceiling: the resolution fails
+    (Path(co) / "docs/squad").mkdir(parents=True)
+    (Path(co) / "docs/squad/defaults.yaml").write_text("caps:\n  runs: 11\n")
     old = os.environ.get("SG_CHECKOUT")
-    os.environ["SG_CHECKOUT"] = co
     try:
+        os.environ["SG_CHECKOUT"] = bare
+        assert hub.loop_caps() is not None
+        os.environ["SG_CHECKOUT"] = co
         assert hub.loop_caps() is None
     finally:
         os.environ["SG_CHECKOUT"] = old
