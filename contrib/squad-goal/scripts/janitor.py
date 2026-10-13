@@ -447,7 +447,9 @@ for d in (st / "auto").glob("disp-*"):
     if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
-    if pr_count(n) != "0": continue   # a PR exists (open or merged)
+    if pr_count(n) != "0":   # a PR exists (open or merged): the issue is past dispatch, so the marker stands -- and the pass names the issue, so this decision reads apart from a release (#217)
+        say(f"DISPATCH-FAILED #{n}: request {req} ended failed, but a PR names the issue; {d.name} kept so the pass never dispatches it again")
+        continue
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
 if owner and proj and repo0:
