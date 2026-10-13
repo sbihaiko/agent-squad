@@ -105,7 +105,11 @@ kill $sp $hp $w3 2>/dev/null; wait $sp $hp $w3 2>/dev/null; rm -f "$T/st/watchd.
 rm -f "$T/st/auto/health-loops-duplicated"
 # a detached step, `( cmd & )`, is a fork whose parent exited: parent pid 1, the loop's argv, the loop's process group (watch.sh runs forkclose so)
 printf '#!/bin/bash\n{ x=$(sleep 20; true); } &\n( { sleep 20; true; } & )\ntrue | { sleep 20; true; } | cat > /dev/null\nwait\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & wf=$!; sleep 1
-/bin/ps -axo ppid=,command= | /usr/bin/grep -v grep | /usr/bin/grep -q "^ *1 bash $T/s/watch\.sh\$" && ok "the fake loop leaves a detached fork (parent pid 1)" || ko "no orphaned fork in the fake loop"
+/bin/ps -ww -axo ppid=,command= | /usr/bin/grep -v grep | /usr/bin/grep -q "^ *1 bash $T/s/watch\.sh\$" && ok "the fake loop leaves a detached fork (parent pid 1)" || ko "no orphaned fork in the fake loop"
+# #177: /bin/ps cuts the command column at the output width, so a read below or in health.sh that matches a command asks for the
+# wide form (-ww). A host that does not cut the column cannot show the cut, so the suite asserts the shape of the read instead.
+cut=$(/usr/bin/grep -E '/bin/ps.*(command=|args=)' "$T/s/health.sh" | /usr/bin/grep -cv -- '-ww'); cut=${cut:-0}
+[ "$cut" = 0 ] && ok "every process read of health.sh asks /bin/ps for the wide form" || ko "$cut process read(s) of health.sh arrive cut at the output width on Linux (#177)"
 nf=$(/usr/bin/pgrep -f "$T/s/watch\.sh$" | wc -l | tr -d ' ')
 [ "$nf" -gt 1 ] && ok "the fake loop is forking ($nf pgrep matches for one loop)" || ko "the fake loop does not fork: $nf match(es), the next check proves nothing"
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one forking loop alerted: $o" || ok "one watch.sh that forks is not a duplication"
