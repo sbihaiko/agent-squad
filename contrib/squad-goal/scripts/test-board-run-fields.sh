@@ -4,6 +4,7 @@
 # PATCH on the one item, they flag the hub to refresh at once, and a refusal is named on stderr and exits non-zero.
 # The clear sends null, the value the endpoint documents for clearing a field; the stubbed gh refuses an empty string as a
 # field value exactly as GitHub does ("Invalid field values", HTTP 400, #101).
+# A miss re-reads the items with a bounded backoff (#96); SG_BOARD_READ_BACKOFF is 0 here, so the suite sleeps for no read.
 # Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
 # usage: bash test-board-run-fields.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -24,7 +25,7 @@ case "$a" in
 esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-run() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s-board.py" "$@"; }
+run() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0 python3 "$T/s-board.py" "$@"; }
 o=$(run --run-fields o 4 2001 run-abc 2026-10-13T08:00:00Z 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "writing Run fields exits 0" || ko "exit $rc: $o"
 /usr/bin/grep -q '"id": "F_RUN", "value": "run-abc"' "$T/patch.in" 2>/dev/null && ok "Run carries the run id" || ko "Run field: $(cat "$T/patch.in" 2>/dev/null)

@@ -13,6 +13,10 @@ refused with HTTP 400 (#105). After the PATCH the card is read back, and the Sta
 card whose Status is unset is NOT written. SG_BOARD_READ_ATTEMPTS and SG_BOARD_READ_BACKOFF bound the retries (a backoff of 0
 sleeps for no read), and a card no read then carries the Status is a READ FAILURE, named and exiting non-zero, never a card
 written and never left in the state cache as one.
+A miss on the item map re-reads the items with the same bounded backoff (#96): the project-items route is eventually consistent,
+so a card written a moment ago is not always in the next read. A card the board answered "already exists" for and no read then
+carried is a READ FAILURE, named by name, never "not on the board"; only a card no read ever carried, with nothing written for
+it here, is absent.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import json, os, pathlib, subprocess, sys, time
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); st.mkdir(parents=True, exist_ok=True)
@@ -27,8 +31,11 @@ def api(*a, inp=None):
 def _num(name, default):   # a bad value in the environment must not kill a card move
     try: return float(os.environ.get(name, default))
     except ValueError: return float(default)
-ATTEMPTS = max(1, int(_num("SG_BOARD_READ_ATTEMPTS", "4")))   # bounded: the items route is eventually consistent
+ATTEMPTS = max(1, int(_num("SG_BOARD_READ_ATTEMPTS", "4")))   # bounded: the items route is eventually consistent (#96)
 BACKOFF = max(0.0, _num("SG_BOARD_READ_BACKOFF", "1"))        # the base delay, doubled per retry; 0 sleeps for no read
+class ReadFailure(Exception):
+    """A card the board answered "already there" for, which no read then carried: the read is behind the write, not the card gone."""
+    def __init__(self, reads, count): super().__init__(f"the board read never carried it after {reads} reads ({count} items read); a read failure, not an absence")
 def cached(name, ttl, fn):
     f = st / name
     try:
@@ -45,21 +52,38 @@ def fields():
 def text_fields():
     fs = raw_fields()
     return {x.get("name"): x.get("id") for x in fs if x.get("name") in ("Run", "Run started")}
-def items():
+def _save():
+    (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))
+def items():   # REST only: the items route is a bare array with no total, so name the count read and its source, never a number not read (#96)
     out = api("--paginate", f"{base}/items?per_page=100", "--jq", '.[]|select(.content.number)|[.content.number,.id,(.content.repository_url//"")]|@json')
-    return {str(n): i for n, i, ru in (json.loads(l) for l in out.splitlines() if l.strip()) if not repo or ru.endswith("/" + repo)}
+    m = {str(n): i for n, i, ru in (json.loads(l) for l in out.splitlines() if l.strip()) if not repo or ru.endswith("/" + repo)}
+    print(f"board.py: items read {len(m)}; project total: none on the REST items route (source: {base}/items, a bare array)", file=sys.stderr)
+    return m
 M = cached(f"rest-items-{owner}-{num}.json", 600, items)
 def item_id(n, add_missing=False):
+    """The one reader every caller uses (move, --add, --run-fields, --clear-run). A miss re-reads the items a bounded
+    number of times with a growing delay: the items route is eventually consistent, so a card written a moment ago is
+    not always in the next read (#96). None means a card no read ever carried and nothing was written for it here."""
     global M
-    if str(n) not in M: M = items(); (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))
-    if str(n) not in M and add_missing and repo:
+    key = str(n)
+    if key not in M: M = items(); _save()
+    if key in M: return M[key]
+    wrote = False   # an add that landed, or a refusal that proves the card is on the board: the write is done, the read is behind
+    if add_missing and repo:
         iid = json.loads(api(f"repos/{repo}/issues/{n}"))["id"]
-        try: M[str(n)] = json.loads(api("-X", "POST", f"{base}/items", "--input", "-", inp=json.dumps({"type": "Issue", "id": iid})))["id"]
-        except RuntimeError:   # the add is idempotent: a refused add is re-read once (a stale cache held no item that is there), and only a second miss is a failure
-            M = items()
-            if str(n) not in M: raise
-        (st / f"rest-items-{owner}-{num}.json").write_text(json.dumps(M))
-    return M.get(str(n))
+        try: M[key] = json.loads(api("-X", "POST", f"{base}/items", "--input", "-", inp=json.dumps({"type": "Issue", "id": iid})))["id"]; _save(); return M[key]
+        except RuntimeError as e:
+            if "already exists" not in str(e):   # the add itself was refused, not the read: re-read once to repair a stale cache, and only then is the refusal the add's
+                M = items(); _save()
+                if key in M: return M[key]
+                raise
+            wrote = True   # the refusal proves the card is there: only the read is behind it
+    for k in range(ATTEMPTS):
+        if k and BACKOFF: time.sleep(BACKOFF * (2 ** (k - 1)))
+        M = items(); _save()
+        if key in M: return M[key]
+    if wrote: raise ReadFailure(ATTEMPTS, len(M))
+    return None   # a read that never carried it, and nothing was written for it here: genuinely absent
 def carried_status(n):
     """The Status option id the board carries on the card for n, "" when the card carries none (or no read carried the
     card). The read asks for the Status field by id: a single-select value is carried only when the field is asked for,
@@ -69,7 +93,9 @@ def carried_status(n):
               '.[]|select(.content.number)|[.content.number,((.fields[]?|select(.name=="Status")|.value.id)//"")]|@json')
     return {str(n): str(i) for n, i in (json.loads(l) for l in out.splitlines() if l.strip())}.get(str(n), "")
 if run_fields or clear_run:
-    n = int(args[2]); iid = item_id(n)
+    n = int(args[2])
+    try: iid = item_id(n)
+    except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
     if not iid: print(f"#{n} not on the board", file=sys.stderr); sys.exit(1)
     tf = cached(f"rest-text-fields-{owner}-{num}.json", 86400, text_fields)
     if "Run" not in tf or "Run started" not in tf:
@@ -87,6 +113,7 @@ if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
 rc = 0
 for n in nums:
     try: iid = item_id(n, add)
+    except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the card is on the board and the read has not caught up: named, never "not on the board"
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the add GitHub refused twice, named: the caller logs it
     if not iid: print(f"#{n} not on the board", file=sys.stderr); rc = 1; continue
     want, refused, written = F["opt"][status], "", False

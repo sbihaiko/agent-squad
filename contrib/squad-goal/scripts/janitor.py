@@ -350,7 +350,8 @@ def board_write(args, n, why):   # the one writer of a card: a status write that
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
-        say(f"BOARD-WRITE-FAILED #{n}: {why}: {msg[0] if msg else 'no output'}")
+        named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
+        say(f"BOARD-WRITE-FAILED #{n}: {why}: {named or (msg[0] if msg else 'no output')}")
         return False
     a = args[1:] if args and args[0] == "--add" else args
     if len(a) == 4 and not a[0].startswith("--") and a[1] in _cards: _cards[a[1]][1][str(a[3])] = a[2]
