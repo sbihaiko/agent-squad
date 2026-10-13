@@ -117,7 +117,7 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
                 queue_neverstart(n, f"run {f.name} never started (attempt {k} of 2); not retrying.{quoted}")
                 alert(f"HEALTH never-started-retry: issue #{n} never started twice (run {f.name}); not retrying")
 procs = {}
-for l in sh("/bin/ps", "-eo", "pid=,ppid=,command=").splitlines():
+for l in sh("/bin/ps", "-ewwo", "pid=,ppid=,command=").splitlines():
     p = l.split(None, 2)
     if len(p) == 3 and p[0].isdigit(): procs[int(p[0])] = (int(p[1]), p[2])
 starts = {}
@@ -259,7 +259,9 @@ if DASH_MAX:
         if dm and ours(dm.group(1)): dash[q] = dm.group(1)
     orphans = sorted((q for q, d in dash.items() if not live_run(folder(d))), key=lambda q: (starts.get(q) or now, q))
     victims = orphans[:max(0, len(dash) - DASH_MAX)]
-    if os.environ.get("JANITOR_DIAG"): say(f"DASH-DIAG: ps read {len(procs)} processes, {len(dash)} dashboards of this loop, {len(orphans)} without a live run, ceiling {DASH_MAX}")
+    if os.environ.get("JANITOR_DIAG"):
+        cand = [c for _, c in procs.values() if "dashboard_server" in c]
+        say(f"DASH-DIAG: ps read {len(procs)} processes, {len(dash)} dashboards of this loop, {len(orphans)} without a live run, ceiling {DASH_MAX}; {len(cand)} lines name a dashboard manager: {cand[:1]}")
     if victims:
         say(f"DASHBOARD-CEILING: {len(dash)} dashboards of this loop over the ceiling of {DASH_MAX}; killing {len(victims)} no live run owns (oldest first)")
         for q in victims: kill(q, f"dashboard over the ceiling ({len(dash)} > {DASH_MAX})")

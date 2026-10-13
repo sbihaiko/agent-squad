@@ -55,6 +55,21 @@ def test_no_script_invokes_lsof_by_a_platform_specific_path():
     assert not offenders, "a call site hardcodes lsof's macOS path:\n" + "\n".join(offenders)
 
 
+def test_every_process_table_read_of_a_command_asks_for_the_full_one():
+    """A guard for the portability rule: GNU ps cuts the command column at the output width, so on the CI runner
+    `python .../squad.dashboard_server <folder>` arrives without its folder, a match on the dashboard finds nothing,
+    and the pass reads a process table it cannot see (ADR-0018, ADR-0133). A read that wants a command asks for the
+    wide form, `-ww`."""
+    offenders = []
+    for p in sorted((ROOT / "contrib" / "squad-goal" / "scripts").glob("*")):
+        if not p.is_file() or p.suffix not in (".sh", ".py"):
+            continue
+        for n, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            if "/bin/ps" in line and ("command=" in line or "args=" in line) and "ww" not in line:
+                offenders.append(f"{p.relative_to(ROOT)}:{n}: {line.strip()[:120]}")
+    assert not offenders, "a ps read of a command is not asked for the wide form:\n" + "\n".join(offenders)
+
+
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
     """Guard for the CI rule: push to main, pull requests, Python 3.11 and 3.13 inside one job, read-only token."""
     import yaml

@@ -212,7 +212,7 @@ def project_dirs():
     ds = {pathlib.Path(CHECKOUT) / "runs"}
     for x in os.environ.get("SG_PROJECTS", "").split(":"):
         if x: ds.add(pathlib.Path(x) / "runs")
-    for l in sh("/bin/ps", "-axo", "command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
         if m: ds.add(pathlib.Path(m.group(1)).parent)
     return [d for d in ds if d.is_dir()]
@@ -581,7 +581,7 @@ def proc_snapshot():
         if out: return out
     except Exception: pass
     out = {}
-    for l in sh("/bin/ps", "-axo", "pid=,ppid=,time=,command=").splitlines():
+    for l in sh("/bin/ps", "-axwwo", "pid=,ppid=,time=,command=").splitlines():
         f = l.split(None, 3)
         if len(f) < 4 or not f[0].isdigit(): continue
         out[int(f[0])] = (int(f[1]) if f[1].isdigit() else 0, _ps_time(f[2]), f[3])
@@ -934,7 +934,7 @@ TEST_LOST_DROP_SECS = 24 * 3600
 def runs():
     _titles()
     out = []; load_rows = []
-    ps_lines = sh("/bin/ps", "-axo", "pid=,command=").splitlines()
+    ps_lines = sh("/bin/ps", "-axwwo", "pid=,command=").splitlines()
     for l in ps_lines:
         m = re.match(r"\s*(\d+)\s+\S*python\S*\s+-m\s+squad\.dashboard_server\s+(\S+)", l)
         if not m: continue
