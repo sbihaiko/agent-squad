@@ -271,14 +271,18 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
   }
 }""" % _PAGE
 
+# What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
+# read of the issue's comments, which was one request per candidate (#45).
+_COMMENTS = 50
+_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
       pageInfo { hasNextPage }
-      nodes { number title body state labels(first: 100) { nodes { name } } }
+      nodes { %s }
     }
   }
-}""" % _PAGE
+}""" % (_PAGE, _ISSUE_FIELDS)
 
 _FAILED_CONCLUSIONS = ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
 _PASSED_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
@@ -389,7 +393,15 @@ def _issue(node: Any) -> dict[str, Any]:
         "state": state.lower() if isinstance(state, str) else None,
         "labels": _labels(node.get("labels")),
         "blocked_by": blocked_by(node.get("body")),
+        "tdd_red": _tdd_red(node.get("comments")),
     }
+
+
+def _tdd_red(comments: Any) -> bool | None:
+    """Does a comment of the issue name a TDD RED report? `None` when the answer carried no comments to look in."""
+    if not isinstance(comments, dict):
+        return None
+    return any("TDD RED" in str(c.get("body") or "") for c in _connection(comments).get("nodes") or [] if isinstance(c, dict))
 
 
 @dataclass(frozen=True)
@@ -421,10 +433,41 @@ def _route(route: Any) -> re.Match[str] | None:
     return _ROUTE.match(route) if isinstance(route, str) else None
 
 
+_NUMBERS_LIMIT = 100  # aliases in one request; a longer list is cut here and the fact says so
+
+
+def _numbers(route: str) -> list[int] | None:
+    """The issue numbers of `repos/o/r/issues?numbers=1,2,3`, or `None` for any other route."""
+    m = _route(route)
+    if m is None or m.group("rest") != "issues":
+        return None
+    raw = dict(p.split("=", 1) for p in (m.group("params") or "").split("&") if "=" in p).get("numbers")
+    if raw is None:
+        return None
+    return [int(x) for x in raw.split(",") if x.isdigit()]
+
+
+def _numbers_fact(numbers: list[int]) -> Fact:
+    """The issues of a known set of numbers -- open or closed -- in ONE request: the fork landing pass asks for the
+    candidates the open list did not carry, and the answer must not cost a read per candidate (#45)."""
+    shown = numbers[:_NUMBERS_LIMIT]
+    body = " ".join(f"i{n}: issue(number: {n}) {{ {_ISSUE_FIELDS} }}" for n in shown)
+    document = "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { %s } }" % body
+    return Fact(
+        "the issues of the named numbers",
+        document,
+        lambda data: [_issue(v) for v in _connection(_connection(data).get("repository")).values() if isinstance(v, dict)],
+        lambda data: len(numbers) > _NUMBERS_LIMIT,
+    )
+
+
 def aggregate(route: str) -> Fact | None:
     """The fact a route asks for -- or `None`, which is every route that stays REST: Project v2 items, writes, and any
     endpoint whose equivalent query is not demonstrably cheaper."""
     m = _route(route)
+    numbers = _numbers(route)
+    if numbers is not None:
+        return _numbers_fact(numbers) if numbers else None
     if m is None or m.group("rest") not in _AGGREGATE:
         return None
     params = dict(p.split("=", 1) for p in (m.group("params") or "").split("&") if "=" in p)

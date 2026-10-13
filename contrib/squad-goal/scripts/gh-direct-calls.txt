@@ -19,7 +19,6 @@ autopanel.sh 1
 autopilot.sh 13
 board.py 1
 childcc.py 2
-forkclose.sh 3
 forkonly.sh 1
 health.sh 5
 hub.py 11
@@ -31,5 +30,4 @@ revci.sh 7
 review.sh 5
 speed.py 1
 stack.sh 4
-watch.sh 3
 wtclean.sh 3

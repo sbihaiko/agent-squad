@@ -50,8 +50,8 @@ jq -e '.tokens == 299' "$T/st/gh-budget.json" >/dev/null && ok "and one token le
 c=$(. "$T/ghcall.sh"; gh_snapshot $CHEAP -q '.[0].name'); [ "$c" = bug ] && [ "$(requests)" = 1 ] && ok "gh_snapshot answers from it too, with the caller's projection" || bad "gh_snapshot: $c / $(requests)"
 
 echo "the window:"
-reset; setfact '["old"]'; $CLI $CHEAP >/dev/null; backdate $CHEAP; setfact '["new"]'
-a=$($CLI $CHEAP); [ "$a" = '["new"]' ] && [ "$(requests)" = 2 ] && ok "a read past the window is live" || bad "expired: $a / $(requests)"
+reset; setfact '["old"]'; $CLI $CHEAP >/dev/null; backdate $CHEAP; setfact '["new"]' e2   # GitHub moves the etag when the fact moves (#45)
+a=$($CLI $CHEAP); [ "$a" = '["new"]' ] && [ "$(requests)" = 3 ] && ok "a read past the window is live (the etag check that found it moved, then the read)" || bad "expired: $a / $(requests)"
 reset; setfact '[]'; export SG_GH_CACHE_WINDOW=0; $CLI $CHEAP >/dev/null; $CLI $CHEAP >/dev/null
 [ "$(requests)" = 2 ] && ok "SG_GH_CACHE_WINDOW=0 turns the snapshot off" || bad "window 0: $(requests)"
 reset; setfact '[]'; export SG_GH_CACHE_WINDOW=junk; $CLI $CHEAP >/dev/null; $CLI $CHEAP >/dev/null

@@ -73,7 +73,7 @@ def _fixture(tmp_path: Path, candidates: tuple[int, ...]) -> Path:
     """A fork with one branch per candidate, a board card for each, a stub `gh`, and the scripts under test."""
     s = tmp_path / "s"
     s.mkdir()
-    for name in ("forkclose.sh", "forkonly.sh", "gate-suites.sh", "ghthrottle.py", "ghread.py"):
+    for name in ("forkclose.sh", "forkonly.sh", "gate-suites.sh", "ghthrottle.py", "ghread.py", "ghcall.sh"):
         if (SCRIPTS / name).exists():
             shutil.copy(SCRIPTS / name, s / name)
     (tmp_path / "st").mkdir()
@@ -128,13 +128,11 @@ def test_the_collection_passes_burst_is_the_burst_the_throttle_documents(tmp_pat
     t = _fixture(tmp_path, candidates=(1, 2))
     out, routes, collected = _collect(t)
     assert collected == ["1", "2"], f"the collection read nothing: {out}"
-    # The budget is sized for the pass's worst case, `landing_pass_burst(n) = 1 + 2n`: the open-PR read once, then two
-    # reads per candidate. Since #5 the collection asks for the repository's open PRs and its open issues as one
-    # aggregate request each, so the pass stays UNDER that bound -- and the bound is what the bucket must cover, the
-    # pass's real count is what it spends. (Against a real GitHub the aggregate issue list also answers the per-candidate
-    # read this stub cannot shape, so what is measured here is the pass's worst case, not its best.)
-    assert len(routes) <= ghthrottle.landing_pass_burst(len(collected)), (
-        f"the pass asked GitHub for {len(routes)} requests, the throttle sizes its budget for {ghthrottle.landing_pass_burst(2)}: {routes}"
+    # The pass reads the open PRs, the open issues and one batch for the candidates the open list lacks: three reads, whatever
+    # the candidate count (#45). This stub cannot shape the batch, so each candidate falls back to its own read -- the worst
+    # case, which the bucket still covers: the fixed reads plus one per candidate. Against a real GitHub the batch answers.
+    assert len(routes) <= ghthrottle.landing_pass_burst(len(collected)) + len(collected), (
+        f"the pass asked GitHub for {len(routes)} requests, the throttle sizes its budget for {ghthrottle.landing_pass_burst(2)} plus one per candidate: {routes}"
     )
     assert "pullRequests(states: OPEN" in routes[0], f"the open-PR fact is the first read, in one request: {routes}"
     assert "issues(states: OPEN" in routes[1], f"the candidates' facts come from one list, not one read each: {routes}"

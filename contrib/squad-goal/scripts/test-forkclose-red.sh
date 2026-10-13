@@ -6,7 +6,7 @@ d=$(cd "$(dirname "$0")" && pwd); src=$d/forkclose.sh; T=$(mktemp -d); fail=0; o
 # 1: the fork request carries the RED-on-issue rule
 for w in "TDD RED" "comment on the GitHub issue" "GREEN"; do $(command -v grep) -qF -- "$w" "$d/req-checklist-fork.txt" && ok "req-checklist-fork.txt carries '$w'" || ko "req-checklist-fork.txt lacks '$w'"; done
 # 2: the warning
-mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
+mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py $(dirname "$src")/ghcall.sh "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
