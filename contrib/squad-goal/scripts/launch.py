@@ -120,8 +120,9 @@ def _issue_named(txt):
 
 def _issue_child_request(txt):
     """True when the deliverable is a local commit on the branch the land reads: the dispatch builders mark those runs with a
-    `CHILD - GitHub issue` block (`autofrontier.sh`, `autobug.sh`) or a `FORK-ONLY` line (`forkclose.sh`'s fix run). A fix run
-    on a PR branch names an issue too, and its child commits on the PR branch: that run keeps today's target."""
+    `CHILD - GitHub issue` block (`autofrontier.sh`, `autobug.sh`) or a `FORK-ONLY` line, which the retired local land route
+    wrote and a run record from before its retirement still carries. A fix run on a PR branch names an issue too, and its
+    child commits on the PR branch: that run keeps today's target."""
     return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
 
 def _issue_worktree(issue):

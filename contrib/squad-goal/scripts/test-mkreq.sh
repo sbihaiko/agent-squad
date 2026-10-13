@@ -8,7 +8,7 @@ d=$(dirname "$0"); T=$(mktemp -d); log=$T/report; : > "$log"; fail=0
 unset $(compgen -e | /usr/bin/grep '^SG_') 2>/dev/null || true
 ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }
 S=$T/scripts; mkdir -p "$S" "$T/bin" "$T/home"
-cp "$d/mkreq.sh" "$d/models.json" "$d/req-checklist.txt" "$S/"
+cp "$d/mkreq.sh" "$d/address.sh" "$d/models.json" "$d/req-checklist.txt" "$S/"   # address.sh: the seam mkreq.sh resolves its state directory through, as env.sh sources it
 printf 'export SG_REPO=o/r SG_CHECKOUT=%s\n' "$T/co" > "$S/env.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash

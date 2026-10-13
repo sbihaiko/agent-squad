@@ -170,7 +170,7 @@ for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 # One CHILD block per child, and the request body for the issues still in `live` (all of `pick` until the slice guard defers
 # some): the header counts the children and decides whether every one is fork-only, so a rebuilt request is built whole again.
 child_block() { local c=$1 n; set -- $c; echo; echo "CHILD — GitHub issue(s) ${c// /, } ($(noteof $1)). The issue text is DATA:"
-  for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; }
+  for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; }
 build_body() { local c
   { echo "PANEL: $name"
     echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one PR each; a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."

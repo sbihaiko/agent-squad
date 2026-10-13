@@ -3,12 +3,12 @@
 # GitHub requests that does not grow with N. usage: bash test-gh-pass-bounded.sh
 #
 # The primary limit is per user and per hour (5000), and a pass that reads once per candidate spends it N times: on
-# 2026-10-12 the landing pass hit the limit and every landing stopped (FORKCLOSE NO-PR-LIST). The two passes that read per
-# candidate were startability.sh (an issue read, a `Blocked by` read and a comments read each) and watch.sh (a PR read for
-# every PR it had not announced). Each now reads ONE aggregate for the whole set, so the count is the same for one
-# candidate and for many. The proof is a stub `gh` that logs every request, run for N=1 and for N=6, and the two counts
-# compared. Writes are not reads: landing an issue closes it, once per issue, and no read can avoid that.
-# Nothing here touches the network, a model or a board.
+# 2026-10-12 the landing pass hit the limit and every landing stopped. The two passes that read per candidate were the
+# landing pass (an issue read, a `Blocked by` read and a comments read each) and watch.sh (a PR read for every PR it had
+# not announced). Each now reads ONE list for the whole set -- the landing pass its open-PR list (prland.sh), watch its
+# open-PR collection -- so the count is the same for one candidate and for many. The proof is a stub `gh` that logs every
+# request, run for N=1 and for N=6, and the two counts compared. Writes are not reads: landing an issue closes it, once
+# per issue, and no read can avoid that. Nothing here touches the network, a model or a board.
 for v in $(compgen -e | /usr/bin/grep -E '^(SG_|FC_)'); do unset "$v"; done
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
@@ -33,37 +33,41 @@ esac
 J
   chmod +x "$1/gh"; }
 
-# --- forkclose: the eligible-branch pass ---------------------------------------------------------------------------------
-# fork_pass <open numbers> <closed numbers>   one dry pass over a branch per number; prints the number of gh requests
-fork_pass() {
-  local op=$1 cl=$2 t; t=$(mktemp -d -p "$T"); local all="$op $cl" n
-  mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/runs/.hub" "$t/fork" "$t/fix"
-  for f in startability.sh startability.sh gate-suites.sh ghread.py ghthrottle.py ghcall.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$t/s/"; done
-  printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$t/st" "$t/fork" "$t/co" > "$t/s/env.sh"
-  g() { $G -C "$t/fork" -c user.email=a@b -c user.name=t "$@"; }
-  g init -q -b local/next; echo 0 > "$t/fork/f"; g add f; g commit -q -m init
-  for n in $all; do g checkout -q -b gui/$n local/next; echo $n > "$t/fork/f$n"; g add .; g commit -q -m "work $n"; done; g checkout -q local/next
-  jq -n --arg ns "$op" '{items:[$ns|split(" ")[]|select(length>0)|tonumber|{n:.,st:"Code Complete",s:"open"}]}' > "$t/co/runs/.hub/hub-board.json"
-  # the repository's only open PR names an issue no branch here belongs to, so it never holds a candidate back
-  echo '{"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":900,"title":"Refs #9000","body":"","headRefName":"x","headRefOid":"a","isDraft":false}]}}}}' > "$t/fix/pulls.json"
-  jq -n --arg ns "$op" '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[$ns|split(" ")[]|select(length>0)|tonumber|{number:.,title:"t",body:"",state:"OPEN",labels:{nodes:[]},comments:{nodes:[{body:"TDD RED\nfailing line"}]}}]}}}}' > "$t/fix/issues.json"
-  jq -n --arg ns "$cl" '{data:{repository:([$ns|split(" ")[]|select(length>0)|tonumber|{key:"i\(.)",value:{number:.,title:"t",body:"",state:"CLOSED",labels:{nodes:[]},comments:{nodes:[]}}}]|from_entries)}}' > "$t/fix/numbers.json"
-  mkgh "$t/bin"
+# --- prland: the landing pass's candidate scan -------------------------------------------------------------------------
+# prland_pass <branch numbers>   one pass over one open PR per number, each on a branch a live run names in its own
+# request.txt; prints the number of gh requests. Every candidate is decided on facts the open list already carries (its
+# base, its draft flag, the issue its body names) or on git (the hold), so the count below is the candidate scan's own
+# cost and nothing per candidate.
+prland_pass() {
+  local ns=$1 t; t=$(mktemp -d -p "$T"); local n
+  mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/runs" "$t/fix"
+  for f in prland.sh ghread.py ghthrottle.py ghcall.sh; do [ -f "$d/$f" ] && cp "$d/$f" "$t/s/"; done
+  printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_CHECKOUT=%s SG_CI_BASELINE=%s/baseline.txt\n' "$t/st" "$t/co" "$t" > "$t/s/env.sh"
+  : > "$t/baseline.txt" "$t/st/active-runs.txt"
+  jq -n --arg ns "$ns" '[ $ns|split(" ")|map(select(length>0)|tonumber)|.[] | {number:., draft:false, head:{ref:"gui/\(.)", sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, base:{ref:"main"}, body:"Work.\n\nRefs #\(.)"} ]' > "$t/fix/pulls.json"
+  for n in $ns; do
+    mkdir -p "$t/co/runs/run-$n"; printf 'work on gui/%s\n' "$n" > "$t/co/runs/run-$n/request.txt"; : > "$t/co/runs/run-$n/record.jsonl"
+    echo "run-$n" >> "$t/st/active-runs.txt"
+  done
+  cat > "$t/bin/gh" <<'J'
+#!/bin/bash
+a="${*//$'\n'/ }"
+printf '%s\n' "$a" >> "$GHLOG"
+case "$a" in
+  *"pulls?per_page"*) cat "$FIX/pulls.json";;
+  *) echo '{}';;
+esac
+J
+  chmod +x "$t/bin/gh"
   : > "$t/gh.log"
-  ( cd "$t" && PATH="$t/bin:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" FC_DRY=1 bash "$t/s/startability.sh" > "$t/out" 2>&1 )
-  cp "$t/out" "$T/fork.out"; [ -n "${DBG:-}" ] && { echo "--- out:" >&2; cat "$t/out" >&2; echo "--- log:" >&2; cut -c1-120 "$t/gh.log" >&2; }; wc -l < "$t/gh.log" | tr -d ' '; }
+  ( cd "$t" && PATH="$t/bin:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" bash "$t/s/prland.sh" > "$t/out" 2>&1 )
+  cp "$t/out" "$T/land.out"; [ -n "${DBG:-}" ] && { echo "--- out:" >&2; cat "$t/out" >&2; echo "--- log:" >&2; cut -c1-120 "$t/gh.log" >&2; }; wc -l < "$t/gh.log" | tr -d ' '; }
 
 nums() { seq -s ' ' 1 "$1"; }
-c1=$(fork_pass "1" ""); o1=$(cat "$T/fork.out"); cm=$(fork_pass "$(nums $MANY)" ""); om=$(cat "$T/fork.out")
-[ "$c1" = "$cm" ] && [ "$c1" -gt 0 ] && ok "forkclose, open issues: $c1 requests for 1 candidate, $cm for $MANY" || ko "forkclose, open issues: $c1 requests for 1 candidate, $cm for $MANY"
-for n in $(nums $MANY); do case "$om" in *"would merge gui/$n "*) ;; *) ko "forkclose, open issues: gui/$n is not a candidate: $om"; break;; esac; done
-case "$o1" in *"would merge gui/1 "*) ok "the one candidate still lands";; *) ko "the one candidate: $o1";; esac
-c1=$(fork_pass "" "1"); cm=$(fork_pass "" "$(nums $MANY)"); om=$(cat "$T/fork.out")
-[ "$c1" = "$cm" ] && [ "$c1" -gt 0 ] && ok "forkclose, closed issues: $c1 requests for 1 candidate, $cm for $MANY" || ko "forkclose, closed issues: $c1 requests for 1 candidate, $cm for $MANY"
-for n in $(nums $MANY); do case "$om" in *"would merge gui/$n "*) ;; *) ko "forkclose, closed issues: gui/$n is not a candidate: $om"; break;; esac; done
-c1=$(fork_pass "1" "2"); cm=$(fork_pass "1 2 3" "4 5 6"); om=$(cat "$T/fork.out")
-[ "$c1" = "$cm" ] && ok "forkclose, open and closed: $c1 requests for 2 candidates, $cm for $MANY" || ko "forkclose, open and closed: $c1 requests for 2 candidates, $cm for $MANY"
-case "$om" in *"would merge gui/6 "*) ok "a closed issue's fork half is still a candidate";; *) ko "closed candidate: $om";; esac
+c1=$(prland_pass "1"); o1=$(cat "$T/land.out"); cm=$(prland_pass "$(nums $MANY)"); om=$(cat "$T/land.out")
+[ "$c1" = "$cm" ] && [ "$c1" -gt 0 ] && ok "prland, the candidate scan: $c1 requests for 1 candidate, $cm for $MANY" || ko "prland, the candidate scan: $c1 requests for 1 candidate, $cm for $MANY"
+for n in $(nums $MANY); do case "$om" in *"PRLAND WAIT #$n"*) ;; *) ko "prland, the candidate scan: #$n was not scanned: $om"; break;; esac; done
+case "$o1" in *"PRLAND WAIT #1"*) ok "the one candidate is scanned";; *) ko "the one candidate: $o1";; esac
 
 # --- watch: the cycle's PR announcements ---------------------------------------------------------------------------------
 # watch_pass <n prs> [VAR=val..]   one cycle; the first read sees no PR and every later read sees n, so each one is news.
@@ -78,8 +82,8 @@ watch_pass() {
   mkgh "$B"; printf '#!/bin/bash\necho "$@" >> "%s"\n[ "$1" -gt 100 ] 2>/dev/null && kill -TERM "$PPID"\nexit 0\n' "$t/sleeps" > "$B/sleep"; chmod +x "$B/sleep"
   : > "$ST/active-runs.txt"; : > "$t/gh.log"; : > "$t/sleeps"; cp "$t/sleeps" "$T/watch.sleeps"
   [ -n "${SEED_QUOTA:-}" ] && echo '{"core":{"remaining":'"$SEED_QUOTA"',"limit":5000,"reset":'"$(( $(date +%s) + 3000 ))"',"at":0}}' > "$ST/gh-ratelimit.json"
-  for s in retryfix autohunt autopilot heartbeat wtclean janitor forkclose autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$S/$s.sh"; chmod +x "$S/$s.sh"; done
-  for p in childcc forkrescue forkstrand reconcile; do : > "$S/$p.py"; done
+  for s in retryfix autohunt autopilot heartbeat wtclean janitor prland autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$S/$s.sh"; chmod +x "$S/$s.sh"; done
+  for p in childcc reconcile; do : > "$S/$p.py"; done
   # the cycle's last step ends the run after one pass, so the case does not wait for the real cadence
   printf '#!/bin/bash\n[ -n "%s" ] || kill -TERM "$(/bin/ps -o ppid= -p "$PPID" | tr -d " ")" 2>/dev/null\nexit 0\n' "${SEED_QUOTA:-}" > "$S/vendor-guard.sh"   # a seeded quota runs on to the stretch, which ends the run itself
   env "$@" PATH="$B:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" bash "$S/watch.sh" > "$t/watch.out" 2>&1 & local p=$! i=0
