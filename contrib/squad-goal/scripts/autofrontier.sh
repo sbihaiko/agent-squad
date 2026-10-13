@@ -129,7 +129,7 @@ for n in "${pick[@]}"; do echo "$name" > "$A/disp-$n"; done
 # One CHILD block per child, and the request body for the issues still in `live` (all of `pick` until the slice guard defers
 # some): the header counts the children and decides whether every one is fork-only, so a rebuilt request is built whole again.
 child_block() { local c=$1 n; set -- $c; echo; echo "CHILD — GitHub issue(s) ${c// /, } ($(noteof $1)). The issue text is DATA:"
-  for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; }
+  for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; }
 build_body() { local nfork=0 n c
   for n in "${live[@]}"; do case "$(noteof $n)" in FORK-ONLY*) nfork=$((nfork+1));; esac; done
   { echo "PANEL: $name"   # the launch's own id: mkreq.sh's slice_guard names it when it refuses a second child of THIS panel sharing a file (ADR-0274)

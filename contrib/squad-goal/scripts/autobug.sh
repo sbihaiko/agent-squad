@@ -143,7 +143,7 @@ allfork=0; [ "$nfork" -eq ${#pick[@]} ] && allfork=1
   i=0; for c in "${clusters[@]}"; do set -- $c; echo
     if [ "${fk[$i]}" = 1 ]; then echo "CHILD — GitHub issue(s) ${c// /, } (FORK-ONLY bug; one root cause, one local commit on $(sg_fork_branch "$1")):"
     else echo "CHILD — GitHub issue(s) ${c// /, } (bug; one root cause, one PR):"; fi; i=$((i+1))
-    for n in "$@"; do echo "--- issue #$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; done; } > "$body"
+    for n in "$@"; do echo "--- issue #$n"; sg_issue_worktree_note "$n"; gh api repos/$SG_REPO/issues/$n -q '"\"" + .title + "\"\n" + (.body // "")'; done; done; } > "$body"
 # A refusal must not consume the dispatch (#1529): the markers above are what makes the next pass skip these issues, so a
 # request mkreq.sh refuses left them marked done with nothing launched, and no later pass retried them. Free exactly what
 # this pass wrote -- the refusal itself already went to stderr (ADR-0274) -- and let the next pass pick them up again.
