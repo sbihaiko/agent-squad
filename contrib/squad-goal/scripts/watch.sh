@@ -83,17 +83,12 @@ if v:
     [ -n "$(find "$f" -mmin +$rs 2>/dev/null)" ] && case "$stalled" in *" $k "*) ;; *) echo "STALL REVIEW ${k#revci-} no result for ${rs}m"; stalled="$stalled$k "; echo "stall $k" >> "$W";; esac; done
   tick=$((tick+1))
   # reconcile.py is the most expensive step of the cycle by a wide margin (137 runs, 22,902 s, ~167 s each) and all it does is move cards
-  # from GitHub facts: detached exactly as forkclose.sh below, under its own single.sh lock, filing its stream in $SG_STATE/reconcile.log
+  # from GitHub facts: detached under its own single.sh lock, filing its stream in $SG_STATE/reconcile.log
   # instead of holding the cycle (#1845). A pass already running is skipped, not doubled.
   [ $((tick % 8)) -eq 1 ] && ( bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log" & ) 2>/dev/null   # card Status from GitHub facts, every ~12 min (GraphQL budget)
-  # fork-only Code Complete: merge into the fork base, fork suite, close. In the background under single.sh: the fork suite waits for the GUI lock for minutes and must not hold the cycle (#1239)
-  [ -n "${SG_FORKCLOSE_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" forkclose "$(dirname "$0")/forkclose.sh" 2>&1 & ) 2>/dev/null
   # PR Code Complete (#83): a pull request nothing holds, whose check failed on the known baseline only, is squash-merged and
-  # its issue closed. Same slot pattern as forkclose: under single.sh, so two passes never overlap; the job logs it reads can take seconds
+  # its issue closed. Under single.sh, so two passes never overlap; the job logs it reads can take seconds
   [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" prland "$(dirname "$0")/prland.sh" 2>&1 & ) 2>/dev/null
-  tm bash "$(dirname "$0")/single.sh" publish "$(dirname "$0")/publish-landing.sh" 2>&1   # a green landing that changed the loop's own tooling reaches the live skill, and the view restarts when it serves a changed file (#31); waits while forkclose.sh holds its lock
-  tm python3 "$(dirname "$0")/forkrescue.py" 2>&1   # a fork-only run that ended needs-human/fail with its commit off gui/<N>: re-point it, Code Complete (#1411)
-  tm python3 "$(dirname "$0")/forkstrand.py" 2>&1   # after the rescue: a fork commit on a branch no landing path reads, for a card at the landing stage, is reported once per head (#1837)
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc, autopilot and both dispatch passes every 30 s outside this cycle
   # The fast lane owns childcc, autopilot, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up

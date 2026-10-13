@@ -41,7 +41,7 @@ def section(body):
     return m.group(1) if m else ""
 def blockers(body):
     # A list, not prose: reading stops at the first line that is neither blank nor a bullet, so a trailing line that
-    # merely names another issue ("Blocks #N: ...") is not an edge (#1803, the parse stack.sh and forkclose.sh share).
+    # merely names another issue ("Blocks #N: ...") is not an edge (#1803, the parse stack.sh shares).
     out = []
     for line in section(body).splitlines():
         if not line.strip(): continue

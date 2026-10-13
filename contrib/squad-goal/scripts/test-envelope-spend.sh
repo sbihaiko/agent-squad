@@ -5,8 +5,9 @@
 # The pass that builds the request used to write a number of its own -- "spend 8" -- while the dispatch node of the graph
 # the engine runs allows 4. The envelope refuses the whole request (`spend_outside_budget`), the router never spawns, and
 # the run ends `no_dispatch`: a conflict-fix run for gui/82, gui/84 and gui/85 was born dead this way, and the branches
-# behind it waited for a pass that could not start. autofrontier.sh was fixed first (#57); the four passes beside it were
-# not, so this suite guards the helper and every caller of it.
+# behind it waited for a pass that could not start. autofrontier.sh was fixed first (#57); the passes beside it were
+# not, so this suite guards the helper and every caller of it. The fork-close spawner was one of those callers and left
+# with the local land route (#115); the three below are every spawner that remains.
 #
 # Offline and hermetic: its own temp SG_CHECKOUT holding the project's own workflow file, its own temp SG_SQUAD whose
 # squad/ package is not there so the unreadable path can be exercised, no network.
@@ -48,7 +49,7 @@ case "$got" in *spend\ [0-9]*) ko "a graph with no dispatch budget still printed
 
 # The guard that matters: no pass builds the request with a number of its own again.
 bad=""
-for s in autobug.sh autofix.sh autohunt.sh forkclose.sh; do
+for s in autobug.sh autofix.sh autohunt.sh; do
   $G -q 'spend 8 (the router may not request more' "$here/$s" && bad="$bad $s"
   $G -q 'envelope-spend.sh' "$here/$s" || bad="$bad $s(no-call)"
 done

@@ -3510,27 +3510,32 @@ def test_1276_a_run_hands_the_window_switch_to_the_adapter_unchanged(tmp_path):
         assert {f.read_text().strip() for f in seen} == {value}, [f.read_text() for f in seen]
 
 
-def test_1392_the_fork_gate_keeps_the_gui_suite_command_and_adds_the_squad_shell_suites(tmp_path):
-    """The fork gate hands SG_FORK_TEST_CMD through unchanged (quotes and env intact) and a red squad suite blocks it."""
+def test_1392_the_gui_suite_command_goes_through_the_serial_lock_and_the_shell_suites_beside_it(tmp_path):
+    """#1392/#1410 where they live now, with the local gate retired (#115): the profile's GUI command is handed through
+    `serial.sh gui-suite` unchanged (quotes and env intact) and takes that one lock, and the squad's own shell suites are
+    the other half of the gate -- they take no lock and every red one is named."""
     scripts = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("fork-gate.sh", "shell-suites.sh", "serial.sh"):
+    for name in ("shell-suites.sh", "serial.sh"):
         (d / name).write_text((scripts / name).read_text())
     suite = d / "test-x.sh"
     suite.write_text("#!/bin/bash\nexit 0\n")
-    # Its own lock directory, so the gate's gui-suite lock is not the one a suite run around this test already holds. The pytest
-    # command is pinned: the full gate runs the pytest suite too (#1822), and running the suite this test lives in is not the point here.
-    env = {**os.environ, "SG_STATE": str(tmp_path / "state"), "SG_FORK_PY_CMD": "true"}
+    # Its own lock directory, so this run's gui-suite lock is not the one a suite run around this test already holds.
+    env = {**os.environ, "SG_STATE": str(tmp_path / "state")}
     env.pop("SG_SERIAL_HELD", None)
     seen = tmp_path / "seen"
     gui = f"MESENAI_ROOT=/r MESEN_GUI_BINARY='/b b' sh -c 'echo \"$MESENAI_ROOT|$MESEN_GUI_BINARY\" > {seen}'"
-    p = subprocess.run(["bash", str(d / "fork-gate.sh"), gui], cwd=tmp_path, capture_output=True, text=True, timeout=15, env=env)
+    p = subprocess.run(["bash", str(d / "serial.sh"), "gui-suite", "bash", "-c", gui], cwd=tmp_path,
+                       capture_output=True, text=True, timeout=15, env=env)
     assert p.returncode == 0, p.stdout + p.stderr
     assert seen.read_text().strip() == "/r|/b b"
+    assert not (tmp_path / "state" / "locks" / "gui-suite").exists(), "the lock outlived the command it guarded"
     suite.write_text("#!/bin/bash\nexit 1\n")
-    p = subprocess.run(["bash", str(d / "fork-gate.sh"), "true"], cwd=tmp_path, capture_output=True, text=True, timeout=15, env=env)
+    p = subprocess.run(["bash", str(d / "shell-suites.sh")], cwd=tmp_path, capture_output=True, text=True, timeout=60, env=env)
     assert p.returncode != 0 and "FAILED: test-x.sh" in p.stdout, p.stdout
+
+
 def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
     """#1394: the command files each DEBT finding with the debt labels, and a second run files nothing."""
     log = tmp_path / "issues.jsonl"

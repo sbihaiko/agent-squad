@@ -1,7 +1,7 @@
 #!/bin/bash
 # usage: <changed file names, one per line> | gate-suites.sh   Prints the fork-gate suite set a diff needs: full | shell | python.
 # The one table (path regex -> suite), first match wins. A diff confined to one suite's paths runs that suite; a diff touching two
-# suites, a path the table does not know, or no paths at all (any doubt) runs the full gate. fork-gate.sh reads the answer as FG_SUITES.
+# suites, a path the table does not know, or no paths at all (any doubt) runs the full gate.
 table() { cat <<'T'
 ^contrib/squad-goal/	shell
 ^tests/test_gui_test_	full

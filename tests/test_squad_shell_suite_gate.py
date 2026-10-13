@@ -1,17 +1,23 @@
-"""Issue #1392: the fork gate runs the squad's own shell suites (contrib/squad-goal/scripts/test-*.sh), offline."""
+"""Issue #1392: the squad's own shell suites (contrib/squad-goal/scripts/test-*.sh) run offline, and every red is named.
+
+The gate script that ran the GUI command beside them retired with the local land path (#115), so what this file guards is
+shell-suites.sh itself: the shell half of the machine's full gate, run by hand (`bash contrib/squad-goal/scripts/
+shell-suites.sh`) and handed to a child by the request builder's line. The pytest half of that gate runs in CI.
+"""
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def _tree(tmp_path, suites):
     """A scripts folder holding the real gate scripts and the given fake suites (name -> shell body)."""
     d = tmp_path / "contrib" / "squad-goal" / "scripts"
     d.mkdir(parents=True)
-    for name in ("shell-suites.sh", "fork-gate.sh", "serial.sh"):
+    for name in ("shell-suites.sh", "startability.sh", "serial.sh"):
         if (SCRIPTS / name).exists():
             shutil.copy(SCRIPTS / name, d / name)
     for name, body in suites.items():
@@ -53,33 +59,27 @@ def test_a_suite_that_prints_fail_but_exits_zero_is_not_hidden(tmp_path):
     assert p.returncode == 0 and "FAIL something" in p.stdout
 
 
-def test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either(tmp_path):
-    d = _tree(tmp_path, {"test-a.sh": "echo ok a"})
-    marker = tmp_path / "gui-ran"
-    # The gate's own inputs are pinned rather than inherited: forkclose.sh exports FG_SUITES for the branch's diff (gate-suites.sh) and this
-    # test runs inside that very gate. Left inherited, a `python` outer gate makes the gate run its pytest branch instead of the full one this
-    # test is about, which the fixture's /usr/bin:/bin PATH cannot even start (fork-gate.sh: uv: not found) -- SG_FORK_PY_CMD is pinned with
-    # it, since the full gate runs the pytest suite too (#1822), and this test is about the GUI command and the shell suites. SG_STATE is pinned for the same
-    # reason: left shared, the GUI suite waits on the machine's gui-suite lock behind every other run's own suite, so a busy machine reddens a
-    # test that says nothing about locks (serial.sh waits 1800s, the fixture's timeout is 60s). test-forkclose-serial.sh owns that arbitration.
-    gate = lambda gui: _run("bash", str(d / "fork-gate.sh"), gui, cwd=tmp_path,  # noqa: E731
-                            env={"FG_SUITES": "full", "SG_STATE": str(tmp_path / "state"), "SG_FORK_PY_CMD": "true"})
-    p = gate(f"touch {marker}")
-    assert p.returncode == 0, p.stdout + p.stderr
-    assert marker.exists(), "the GUI suite the gate already ran must keep running"
-    assert "test-a.sh" in p.stdout, "the shell suites must run too"
+def test_a_script_the_loop_edits_is_still_read_by_the_suites_that_gate_it():
+    """#1392, after #115 retired the local gate: a diff touching contrib/squad-goal/scripts is otherwise gated by a suite
+    that never looks at them. Its two halves live where they run now: the shell suites beside the script (handed to a child
+    by the request builder, run by hand) and the pytest suite, which CI runs on every push and every pull request."""
+    assert "shell-suites.sh" in (SCRIPTS / "mkreq.sh").read_text(), (
+        "the request builder must hand a child the suite beside the script it changed")
+    import yaml
 
-    (d / "test-a.sh").write_text("#!/bin/bash\nexit 1\n")
-    marker.unlink()
-    p = gate(f"touch {marker}")
-    assert p.returncode != 0, "a failing shell suite must block the merge"
-    assert marker.exists(), "a red shell suite must not skip the GUI suite"
-
-    (d / "test-a.sh").write_text("#!/bin/bash\nexit 0\n")
-    assert gate("exit 4").returncode != 0, "a red GUI suite still blocks, and the shell suites do not mask it"
+    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    runs = [step["run"] for job in wf["jobs"].values() for step in job["steps"] if "run" in step]
+    assert any("pytest" in r for r in runs), runs
 
 
-def test_forkclose_runs_the_gate_instead_of_the_bare_gui_command():
-    src = (SCRIPTS / "forkclose.sh").read_text()
-    assert src.count("fork-gate.sh") >= 2, "both the base test and the merge test must go through the gate"
-    assert "sh -c \"$SG_FORK_TEST_CMD\"" not in src
+def test_the_emulator_acceptance_goes_through_the_one_serial_lock_and_is_never_bare():
+    """#1410/#1392 where they live now, with the gate retired: an acceptance command that launches the emulator runs
+    through serial.sh's `gui-suite` lock -- the prompt checklist a branch is handed names it -- and no script of the loop
+    runs a profile's GUI command bare, since Mesen's SingleInstance mutex makes the second emulator exit 0."""
+    bare = [p.name for p in SCRIPTS.glob("*.sh")
+            if not p.name.startswith("test-")
+            and any("$SG_FORK_TEST_CMD" in line for line in p.read_text().splitlines()
+                    if not line.lstrip().startswith("#"))]
+    assert bare == [], f"a script runs the profile's GUI command bare: {bare}"
+    assert "serial.sh gui-suite" in (SCRIPTS / "req-checklist.txt").read_text(), (
+        "the checklist must send an emulator acceptance through the gui-suite lock")

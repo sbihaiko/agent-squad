@@ -5,7 +5,7 @@
 # left the spend out, and the run spent its turns on the disagreement (#57). The graph is resolved by id the way
 # squad/workflows.py resolves it -- the project's docs/squad/workflows/<id>.graph.json, else the seed the engine falls back
 # to -- never by hand-built path, which read the seed dir and found nothing there, so no bound applied at all.
-# Offline and hermetic: stub gh (fixtures through jq), stub stack.sh, forkonly.sh, mkreq.sh and launch.py, its own temp
+# Offline and hermetic: stub gh (fixtures through jq), stub stack.sh, startability.sh, mkreq.sh and launch.py, its own temp
 # SG_STATE and HOME.
 # usage: bash test-autofrontier-envelope.sh [path/to/autofrontier.sh]
 src=${1:-$(dirname "$0")/autofrontier.sh}; T=$(mktemp -d); fail=0
@@ -35,9 +35,9 @@ if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
 GH
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
-printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\n' > "$T/scripts/forkonly.sh"
+printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 printf '#!/bin/bash\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\necho x >> "$MKLOG"; cp "$2" "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
-cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src")"/{models.json,req-checklist.txt,req-checklist-fork.txt} "$T/scripts/"
+cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src")"/{models.json,req-checklist.txt} "$T/scripts/"
 printf '%%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -48,6 +48,7 @@ scene() { # <name>: fresh state, its own env.sh; no graph written here -- each c
   cat > "$T/scripts/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BASE=main
 SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=$T/board.sh
+sg_cq_file() { printf '%s/cq/o__r#%s\n' "$SG_STATE" "$1"; }
 E
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
   export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"

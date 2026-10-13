@@ -12,7 +12,7 @@ printf ': "${SG_REPO:=acme/emu}"\n' > "$T/profiles/emu.sh"
 git -C "$T/co" init -q; git -C "$T/co" remote add origin https://github.com/acme/tool.git
 mkdir -p "$T/co2"; git -C "$T/co2" init -q; git -C "$T/co2" remote add origin git@github.com:acme/emu.git
 export SG_REPO=acme/emu SG_REPOS="acme/emu acme/tool other/emu2" SG_PROFILES_DIR=$T/profiles
-. "$d/forkonly.sh"; . "$d/address.sh"   # address.sh last: the seam under test, whichever forkonly.sh is beside it
+. "$d/startability.sh"; . "$d/address.sh"   # address.sh last: the seam under test, whichever startability.sh is beside it
 row() {  # name, input, expected repository (empty = refused, with the input named on stderr)
   local out err rc; out=$(sg_resolve_repo "$2" 2>"$T/err"); rc=$?; err=$(cat "$T/err")
   if [ -z "$3" ]; then
@@ -102,9 +102,9 @@ envok=0; { [ $rc != 0 ] && [ ! -s "$T/ghcalls" ] && printf '%s' "$out" | /usr/bi
 # every script that calls gh resolves its repository first: its first command sources env.sh, and with an unknown
 # profile it stops there with no call recorded. Run only once env.sh is shown to stop, so no script runs unresolved.
 for s in "$d"/*.sh; do b=$(basename "$s")
-  # gh wrappers take the repository as an argument; forkonly.sh is a library; cqflush.sh and mkreq.sh resolve per
+  # gh wrappers take the repository as an argument; startability.sh is a library; cqflush.sh and mkreq.sh resolve per
   # address and run below
-  case "$b" in test-*|env.sh|address.sh|ghcall.sh|check-gh-interface.sh|forkonly.sh|cqflush.sh|mkreq.sh) continue;; esac
+  case "$b" in test-*|env.sh|address.sh|ghcall.sh|check-gh-interface.sh|startability.sh|cqflush.sh|mkreq.sh) continue;; esac
   /usr/bin/grep -qE '(^|[^a-z_-])gh (api|issue|pr|repo|project|run|label)' "$s" || continue
   first=$(/usr/bin/grep -nvE '^[[:space:]]*(#|$)' "$s" | head -1); e=$(/usr/bin/grep -n 'env\.sh"' "$s" | head -1 | cut -d: -f1)
   [ "${first%%:*}" = "$e" ] || { ko "guard: $b calls gh but does not resolve its repository first (first command: ${first#*:})"; continue; }

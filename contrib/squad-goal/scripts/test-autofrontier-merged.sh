@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for autofrontier.sh: an issue whose PR already MERGED is delivered, so the frontier must not redispatch
 # it into a child with nothing to build (#1808).
-# Offline and hermetic: stub gh (fixtures served through jq, the way gh --jq does), stub stack.sh and forkonly.sh, its own
+# Offline and hermetic: stub gh (fixtures served through jq, the way gh --jq does), stub stack.sh and startability.sh, its own
 # temp SG_STATE and HOME. AF_DRY=1 prints the dispatch list and returns before mkreq.sh/launch.py, so nothing is launched
 # and no live run state is read or written.
 # usage: bash test-autofrontier-merged.sh [path/to/autofrontier.sh]
@@ -34,7 +34,7 @@ GH
 chmod +x "$T/bin/gh"
 export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"
-printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%n"; }\n' > "$T/scripts/forkonly.sh"
+printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 chmod +x "$T/scripts/stack.sh"
 cp "$src" "$T/scripts/autofrontier.sh"
 scene() { # <name>: fresh temp state, its own env.sh, empty gh log

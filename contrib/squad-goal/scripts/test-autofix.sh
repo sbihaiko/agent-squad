@@ -23,9 +23,12 @@ export GH_BASE=feat/parent; r=$(run)
 case "$r" in *"Rebase onto origin/feat/parent"*) ok "stacked on an open parent: rebase onto the parent's branch";; *) ko "stacked: '$r'";; esac
 case "$r" in *"onto origin/main"*) ko "stacked: still mentions rebasing onto main";; *) ok "stacked: no rebase onto main";; esac
 case "$r" in *"only this PR's own commits (message says Refs #8"*) ok "stacked: replays only the PR's own commits";; *) ko "stacked: no own-commits hint";; esac
-# 3) a review round tells the run that findings needing a push to the agent-squad fork are out of its scope (it has no write access there; forkclose.sh lands them after the merge)
-echo "#9 aaaaaaaaa clean CI=success:1 VERDICT: CHANGES" > "$T/st/revci-9.out"; printf 'VERDICT: CHANGES\n1. send gui/9 to the fork\n' > "$T/st/review-9.md"; unset GH_BASE
-r=$(AF_DRY=1 bash "$T/s/autofix.sh" 9 8 2>&1); case "$r" in *"squad-only"*) case "$r" in *"forkclose.sh"*) ok "review round: fork-only findings are out of scope";; *) ko "review round: no fork-only rule in the request";; esac;; *) ko "review round: no fork-only rule in the request";; esac
+# 3) a review round hands EVERY finding of the review to the child: the verdict that armed the round, and each bullet under it.
+# The fork-only scope note left with the local land route (#115); what remains is the review the child has to answer.
+echo "#9 aaaaaaaaa clean CI=success:1 VERDICT: CHANGES" > "$T/st/revci-9.out"; printf 'VERDICT: CHANGES\n1. rename the local helper\n' > "$T/st/review-9.md"; unset GH_BASE
+r=$(AF_DRY=1 bash "$T/s/autofix.sh" 9 8 2>&1)
+case "$r" in *"VERDICT: CHANGES"*) ok "review round: the request carries the verdict that armed the round";; *) ko "review round: no verdict in the request";; esac
+case "$r" in *"rename the local helper"*) ok "review round: the request carries the review's own findings";; *) ko "review round: no finding in the request: '$r'";; esac
 # 4) an issue closed as a duplicate / not planned: no fix run (janitor rule I would kill it and retryfix would re-arm it forever)
 for v in "closed not_planned Some bug" "closed completed [duplicate of #1] Some bug"; do
   r=$(GH_ISSUE="$v" AF_DRY=1 bash "$T/s/autofix.sh" 9 8 2>&1); case "$r" in "AUTOFIX SKIPPED #9"*) ok "dup issue ($v): skipped";; *) ko "dup issue ($v): '$r'";; esac; done

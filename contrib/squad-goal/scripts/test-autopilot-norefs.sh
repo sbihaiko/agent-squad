@@ -97,11 +97,11 @@ case "$r" in *"REFSADDED #10"*) ko "existing Refs logged REFSADDED: '$r'";; *) o
 
 # --- the dispatch request template carries the literal line the child pastes
 MK=$T/mk; mkdir -p "$MK/scripts" "$MK/bin" "$MK/home"
-cp "$here/mkreq.sh" "$here/forkonly.sh" "$here/models.json" "$here/req-checklist.txt" "$MK/scripts/"   # forkonly.sh: the one source of the fork branch (#1836)
+cp "$here/mkreq.sh" "$here/address.sh" "$here/models.json" "$here/req-checklist.txt" "$MK/scripts/"   # address.sh: the seam mkreq.sh resolves its state directory through
 echo 'export SG_REPO=o/r' > "$MK/scripts/env.sh"
 printf '#!/bin/bash\ncase "$*" in *"/files"*) echo scripts/shared.py;; *pulls\\?state=open*) echo 7;; esac\n' > "$MK/bin/gh"
 chmod +x "$MK/bin/gh"
-export HOME=$MK/home PATH="$MK/bin:$PATH"
+export HOME=$MK/home PATH="$MK/bin:$PATH"; unset SG_STATE   # this caller has a repository and no state of its own: mkreq.sh's seam resolves the base from HOME, as a builder that sources env.sh would
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/z.py\n' > "$MK/body"
 bash "$MK/scripts/mkreq.sh" ac4 "$MK/body" >/dev/null 2>&1
 req=$HOME/.cache/squad-goal/req/ac4.txt

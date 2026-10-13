@@ -16,11 +16,12 @@ echo "$r" | /usr/bin/grep -qx 1300 && ok "same area outside the window stays apa
 echo "$r" | /usr/bin/grep -qx "1301 1302" && ok "shared file path clusters" || ko "files: '$r'"
 echo "$r" | /usr/bin/grep -qx 1303 && ok "unrelated issue alone" || ko "alone: '$r'"
 r=$(CL_MODE=files python3 "$d/cluster.py" <<<"$I"); echo "$r" | /usr/bin/grep -qx 1228 && ok "CL_MODE=files ignores the area rule" || ko "files mode: '$r'"
-# autobug: clusters become children. single.sh and forkonly.sh travel with the dispatchers: both run the pass under
-# single.sh (#1514) and source forkonly.sh, so a sandbox without them cannot start a pass at all.
-mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/forkonly.sh" "$T/s/"; : > "$T/st/active-runs.txt"
+# autobug: clusters become children. single.sh and startability.sh travel with the dispatchers: both run the pass under
+# single.sh (#1514) and source startability.sh (which sources ghcall.sh beside it), so a sandbox without them cannot start
+# a pass at all. envelope-spend.sh is what the request builder reads its child's spend from; address.sh is the seam.
+mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/address.sh" "$d/envelope-spend.sh" "$T/s/"; : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
-printf 'SG_REPO=x/y; SG_STATE=%s; SG_BASE=main; SG_CHECKOUT=%s; SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"
+printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"   # exported, as the real env.sh does: a pass re-execs itself under single.sh, and an unexported SG_STATE is lost there
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 cat > "$T/bin/gh" <<J
 #!/bin/bash
@@ -63,7 +64,7 @@ r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); rc=$?; case "$rc:$r" in 1:*"caps
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"
 # The body carries the launch's own PANEL id, so mkreq.sh's slice_guard refuses a second child of this panel naming a file
 # this one names (ADR-0274, subsumed by the wider in-flight rule of #1519): the overlap is caught before a run is spent.
-mkdir -p "$T/home/.cache/squad-goal/req"; cp "$d/mkreq.sh" "$d/models.json" "$d/req-checklist.txt" "$d/req-checklist-fork.txt" "$T/s/" 2>/dev/null
+mkdir -p "$T/home/.cache/squad-goal/req"; cp "$d/mkreq.sh" "$d/models.json" "$d/req-checklist.txt" "$T/s/"   # address.sh already staged above: mkreq.sh resolves its state directory through the seam
 printf 'PANEL: p1\nIMPORTANT: your first and only action is to call the spawn tool\nCHILD\ntouches scripts/hub.py\n' > "$T/b1.body"
 printf 'PANEL: p1\nIMPORTANT: your first and only action is to call the spawn tool\nCHILD\nalso scripts/hub.py\n' > "$T/b2.body"
 HOME="$T/home" bash "$T/s/mkreq.sh" c1 "$T/b1.body" >/dev/null 2>&1 && ok "mkreq: the first child of a panel is accepted" || ko "mkreq: the first child was refused"

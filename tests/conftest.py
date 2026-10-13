@@ -126,13 +126,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
 
 
 def pytest_collection_modifyitems(config, items):
-    # With the switch off, fork-gate.sh hands the GUI command to serial.sh, which deliberately does not run it -- so a test
-    # asserting "the GUI suite the gate already ran must keep running" fails by construction, and the gate itself goes red on
-    # it. Skipped, never weakened: with the switch on the test runs exactly as before.
+    # With the switch off, serial.sh deliberately does not run a command under the `gui-suite` lock -- so a test asserting
+    # "the GUI suite command ran" fails by construction, and a run goes red on it. Skipped, never weakened: with the switch
+    # on the test runs exactly as before.
     if gui_tests_off():
-        skip = pytest.mark.skip(reason="the GUI test switch is off (scripts/gui-tests.sh off): the gate does not run the GUI suite")
+        skip = pytest.mark.skip(reason="the GUI test switch is off (scripts/gui-tests.sh off): the gui-suite lock does not run the GUI suite")
         for it in items:
-            if it.name == "test_the_fork_gate_runs_the_gui_command_and_the_shell_suites_and_fails_on_either":
+            if it.name == "test_1392_the_gui_suite_command_goes_through_the_serial_lock_and_the_shell_suites_beside_it":
                 it.add_marker(skip)
     # A test whose fixture is a repository this runner does not own is deselected, never skipped: a skip would read green
     # while proving nothing (ADR-0018 item 6; ADR-0062 items 2 and 3 refuse a skip). The deselection is reported by name.

@@ -19,11 +19,10 @@ autopanel.sh 1
 autopilot.sh 13
 board.py 1
 childcc.py 2
-forkonly.sh 1
 health.sh 5
 hub.py 11
 janitor.py 14
-mkreq.sh 3
+mkreq.sh 2
 prepush.sh 3
 prland.sh 1
 reconcile.py 2

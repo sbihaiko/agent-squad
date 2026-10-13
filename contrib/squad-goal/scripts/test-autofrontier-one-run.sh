@@ -2,10 +2,7 @@
 # Regression test for autofrontier.sh: startable issues go out as the children of ONE run, and the number of children a pass
 # asks for never passes the envelope the author set (the dispatch node's max_children) or the machine-wide child ceiling
 # (run.max_children less the children live runs already hold). A second run opens only in a later pass, and the pass says why.
-# Offline and hermetic: stub gh (fixtures served through jq), stub stack.sh, forkonly.sh, mkreq.sh and launch.py, its own temp
-# SG_STATE and HOME. mkreq.sh and launch.py only count their calls, so no request is written and no run is launched -- except
-# for the cases that set MK_REAL=1: those run the real mkreq.sh slice guard against a throwaway fork holding one unmerged gui/*
-# branch, so what a refusal reports to the dispatcher is the guard's own answer, never a stub's (#10).
+# Offline and hermetic: stub gh (fixtures served through jq), stack.sh, startability.sh, mkreq.sh and launch.py, with its own state and HOME.
 # usage: bash test-autofrontier-one-run.sh [path/to/autofrontier.sh]
 src=${1:-$(dirname "$0")/autofrontier.sh}; T=$(mktemp -d); fail=0
 repo=$(cd "$(dirname "$src")/../../.." && pwd)   # SG_SQUAD: squad/caps.py lives in the tooling repo the fixture is testing (#21)
@@ -34,13 +31,9 @@ if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
 GH
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"; chmod +x "$T/scripts/stack.sh"
-printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\n' > "$T/scripts/forkonly.sh"
+printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_not_startable() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 # mkreq.sh keeps the body it was handed and prints a request path (or refuses when MK_REFUSE is set); launch.py only counts
 printf '#!/bin/bash\n[ -n "$MK_REFUSE" ] && { echo "refusing: stub" >&2; exit 1; }\n[ "$1" = --paths ] && exec bash "$(dirname "$0")/mkreq-real.sh" "$@"\n[ -n "$MK_REAL" ] && { bash "$(dirname "$0")/mkreq-real.sh" "$@" || exit 1; echo x >> "$MKLOG"; cp "$2" "$MKLOG.body"; exit 0; }\necho x >> "$MKLOG"; cp "$2" "$MKLOG.body"; echo "$HOME/req.txt"\n' > "$T/scripts/mkreq.sh"
-cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src")"/{models.json,req-checklist.txt,req-checklist-fork.txt} "$T/scripts/"
-# The fork the real guard reads: gui/9 is unmerged over contrib/squad-goal/scripts/hub.py, which is what a ticket below names.
-FK=$T/fork; /usr/bin/git init -q -b main "$FK"; mkdir -p "$FK/contrib/squad-goal/scripts"; echo old > "$FK/contrib/squad-goal/scripts/hub.py"
-(cd "$FK" && /usr/bin/git add -A && /usr/bin/git -c user.email=a@b -c user.name=n commit -q -m base && /usr/bin/git checkout -q -b gui/9 && echo x >> contrib/squad-goal/scripts/hub.py && /usr/bin/git -c user.email=a@b -c user.name=n commit -qam hub && /usr/bin/git checkout -q main)
 printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
@@ -154,37 +147,6 @@ five; r=$(MK_REFUSE=1 run)
 [ "$(marked 11 12 13 14 15)" = 0 ] && ok "a refused slice frees every marker" || ko "a refused slice frees every marker: $(marked 11 12 13 14 15) held"
 [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "a refused slice launches nothing" || ko "a refused slice launches nothing"
 case "$r" in *"refused slice"*) ok "the pass says a slice was refused";; *) ko "the pass says a slice was refused: '$r'";; esac
-
-# 5b) #10: one contested ticket must not refuse the whole bundled request. Three startable issues, the guard is the real one,
-#    and #22's text names the file gui/9 holds: the other two still go out, as one request that asks for two children
-scene deferone 24
-issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":23,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
-issuebody 21 "Edit scripts/free-21.py to add the case."; issuebody 22 "Edit contrib/squad-goal/scripts/hub.py to add the case."; issuebody 23 "Edit scripts/free-23.py to add the case."
-r=$(real run)
-[ "$(lines "$LAUNCHLOG")" = 1 ] && ok "one contested ticket: the rest still launch one run" || ko "one contested ticket: $(lines "$LAUNCHLOG") launches: '$r'"
-[ "$(asked)" = 2 ] && [ "$(childblocks)" = 2 ] && ok "one contested ticket: the rebuilt request asks for the other two children" || ko "one contested ticket: asked '$(asked)', $(childblocks) CHILD blocks: '$r'"
-$G -q 'issue #22\|hub.py' "$MKLOG.body" && ko "one contested ticket: the dropped ticket's text is still in the request" || ok "one contested ticket: the request no longer carries the dropped ticket"
-[ "$(marked 21 23)" = 2 ] && [ "$(marked 22)" = 0 ] && ok "one contested ticket: the dropped ticket's marker is freed, the others stay held" || ko "one contested ticket markers: $(marked 21 23) of 2 held, #22 held=$(marked 22)"
-case "$r" in *"FRONTIER frontier-"*" deferred #22: names contrib/squad-goal/scripts/hub.py, held by branch gui/9"*) ok "one contested ticket: the log names the ticket, the file and the holder";; *) ko "one contested ticket: no deferred line: '$r'";; esac
-case "$r" in *"refused slice"*) ko "one contested ticket: the pass reported the whole batch refused: '$r'";; *) ok "one contested ticket: the pass does not report a whole-batch refusal";; esac
-case "$r" in *"dispatched #21 #23 in one run"*) ok "one contested ticket: the pass says it dispatched the other two";; *) ko "one contested ticket: dispatch line: '$r'";; esac
-
-# 5c) #10: every ticket contested still refuses the whole batch, frees every marker and prints the existing refusal line
-scene deferall 24
-issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
-issuebody 21 "Edit contrib/squad-goal/scripts/hub.py first."; issuebody 22 "Edit contrib/squad-goal/scripts/hub.py second."
-r=$(real run)
-[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 21 22)" = 0 ] && ok "every ticket contested: nothing launches and every marker is freed" || ko "every ticket contested: $(lines "$LAUNCHLOG") launches, $(marked 21 22) markers held: '$r'"
-case "$r" in *"refused slice (mkreq.sh); freed its dispatch markers, next pass retries"*) ok "every ticket contested: the existing refusal line is printed";; *) ko "every ticket contested: no refusal line: '$r'";; esac
-case "$r" in *"refusing: request frontier-"*) ok "every ticket contested: the guard's own refusal is still on stderr";; *) ko "every ticket contested: guard refusal missing: '$r'";; esac
-
-# 5d) #10: SG_SLICE_FORCE=1 is the documented way past the guard and stays so: all three go out, none is deferred
-scene deforce 24
-issues '[{"number":21,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":22,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":23,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
-issuebody 21 "Edit scripts/free-21.py to add the case."; issuebody 22 "Edit contrib/squad-goal/scripts/hub.py to add the case."; issuebody 23 "Edit scripts/free-23.py to add the case."
-r=$(SG_SLICE_FORCE=1 real run)
-[ "$(asked)" = 3 ] && [ "$(marked 21 22 23)" = 3 ] && [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "SG_SLICE_FORCE=1 still dispatches all three" || ko "forced: asked '$(asked)', $(marked 21 22 23) of 3 held, $(lines "$LAUNCHLOG") launches: '$r'"
-case "$r" in *deferred*) ko "forced: a ticket was deferred: '$r'";; *) ok "SG_SLICE_FORCE=1 defers nothing";; esac
 
 # 6) #57: a project with no graph of its own runs the seed squad/workflows.py falls back to, so the pass reads THAT file's
 #    envelope -- the envelope the engine will enforce -- instead of reading nothing and leaving the bound to free run slots.

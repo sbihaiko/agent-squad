@@ -23,8 +23,10 @@ case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","cre
 exit 0
 """
 
-FORKONLY = """sg_fork_only() { return 1; }
-sg_fork_preamble() { :; }
+STARTABILITY = """sg_not_startable() { return 1; }
+sg_fork_branch() { echo "gui/$1"; }
+sg_fork_branch_pattern() { echo "gui/%n"; }
+sg_issue_worktree_note() { :; }
 """
 
 @pytest.fixture(autouse=True)
@@ -50,7 +52,7 @@ def _scripts(tmp_path, cluster_sleep):
     for name in ("single.sh", "autobug.sh", "autofrontier.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
-    (d / "forkonly.sh").write_text(FORKONLY)
+    (d / "startability.sh").write_text(STARTABILITY)
     (d / "cluster.py").write_text(f"import time\ntime.sleep({cluster_sleep})\nprint('42')\n")
     (d / "stack.sh").write_text(STACK)
     (d / "launch.py").write_text(LAUNCH)

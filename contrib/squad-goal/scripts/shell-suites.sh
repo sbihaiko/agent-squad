@@ -2,7 +2,7 @@
 # usage: shell-suites.sh   Runs every test-*.sh next to this script and reports every failing suite, not just the first; exit 1 if any failed.
 # Hermetic by construction (#1410): each suite runs with every inherited SG_* variable cleared and HOME pointed at its own temp dir, so the live loop's state, fork and profile never reach an assertion.
 # Offline by construction: the suites stub gh, claude and the board and use throwaway repos; nothing here touches the network, a model or the emulator.
-# No machine-wide `gate` lock (#94): the lock guards the full pytest gate only (fork-gate.sh takes it around that half). Held
+# No machine-wide `gate` lock (#94): the lock guards the full pytest gate only, taken around that half alone. Held
 # across these suites, one holder blocked every other gate on the machine for a quarter hour.
 here="$(cd "$(dirname "$0")" && pwd)"; failed=""; n=0
 for s in "$here"/test-*.sh; do [ -f "$s" ] || continue; b=$(basename "$s"); n=$((n+1))

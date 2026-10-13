@@ -1,7 +1,9 @@
-"""Ticket #55: a fork fix request names a workspace the graph allows, and a refusal quotes what it refused.
+"""Ticket #55: the workspace a request names is inside the graph's envelope, and a refusal quotes what it refused.
 
-The router read `git worktree add ~/wt-fr-34 gui/34` in the request text and asked for the workspace 'worktrees/child/gui-34'.
-The graph allows only 'worktrees/child', so the envelope rejected the request whole and the run ended no_dispatch.
+The router read a worktree path out of the request text and asked for the workspace that path named. A path outside the
+graph's allowance was rejected whole, so the run ended no_dispatch. The fork-conflict request that stood here drove the
+fork-only land, which retired (#115); the request a child gets now comes from the dispatchers, and the worktree path it
+names is the issue worktree the loop owns (#65, #93).
 """
 import os
 import re
@@ -26,59 +28,52 @@ def disp():
     return node(router(), "route")
 
 
-def conflict_request_body(tmp_path):
-    """The body forkclose.sh writes for a fork branch that no longer merges into the base (the real script, a throwaway fork)."""
-    fork, st, co, s = (tmp_path / d for d in ("fork", "st", "co", "s"))
-    for d in (fork, st / "auto", st / "cq", st / "tests", st / "req", co / "runs" / ".hub", s, tmp_path / "bin"):
-        d.mkdir(parents=True)
-    for f in ("forkclose.sh", "forkonly.sh", "gate-suites.sh", "ghread.py", "ghthrottle.py", "ghcall.sh", "address.sh"):
+def issue_worktree_note(tmp_path):
+    """The line the live dispatchers paste for an issue whose worktree an earlier run left behind: the real
+    startability.sh (the piece that owns that path, #65) over a throwaway checkout that holds it."""
+    co, s = (tmp_path / d for d in ("co", "s"))
+    (co / "worktrees" / "child").mkdir(parents=True)
+    s.mkdir(parents=True)
+    for f in ("startability.sh", "ghcall.sh"):   # startability.sh sources the one GitHub door beside it
         (s / f).write_bytes((SCRIPTS / f).read_bytes())
-    (s / "fork-gate.sh").write_text('#!/bin/bash\neval "$1"\n')
-    (s / "test.sh").write_text("#!/bin/bash\nexit 1\n")
-    (s / "mkreq.sh").write_text(f'#!/bin/bash\ncp "{st}/req/$1.body" "{tmp_path}/$1.body"; echo "{tmp_path}/$1.txt"\n')
-    (s / "launch.py").write_text("import sys\n")
-    (s / "env.sh").write_text(f"export SG_STATE={st} SG_FORK_DIR={fork} SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%n SG_REPO=x/y "
-                              f"SG_CHECKOUT={co} SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n")
-    (co / "runs" / ".hub" / "hub-board.json").write_text('{"items":[{"n":34,"st":"Code Complete","s":"open"}]}')
-    (tmp_path / "bin" / "gh").write_text('#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *graphql*) echo "[]";; '
-                                         '*"--include"*) echo "{\\"state\\":\\"open\\"}";; esac\n')
-    for f in (s / "test.sh", s / "mkreq.sh", tmp_path / "bin" / "gh"):
-        f.chmod(0o755)
 
     def g(*a):
-        subprocess.run([*GIT, "-C", str(fork), *a], check=True, capture_output=True)
-    g("init", "-q", "-b", "local/next")
-    (fork / "f").write_text("0\n")
-    g("add", "f"), g("commit", "-q", "-m", "init"), g("checkout", "-q", "-b", "gui/34")
-    (fork / "f").write_text("branch\n")
-    g("commit", "-qam", "work 34"), g("checkout", "-q", "local/next")
-    (fork / "f").write_text("base\n")
-    g("commit", "-qam", "base moved f")
+        subprocess.run([*GIT, "-C", str(co), *a], check=True, capture_output=True)
+
+    g("init", "-q", "-b", "main")
+    (co / "f").write_text("0\n")
+    g("add", "f"), g("commit", "-q", "-m", "init")
+    g("branch", "gui/34")   # the branch an issue's work lives on (SG_FORK_BRANCH defaults to gui/%n, #93)
+    g("worktree", "add", "-q", str(co / "worktrees" / "child" / "gui-34"), "gui/34")
     env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
-    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
-    out = subprocess.run(["bash", str(s / "forkclose.sh")], env=env, capture_output=True, text=True, timeout=60).stdout
-    bodies = list(tmp_path.glob("forkrebase-34-*.body"))
-    assert bodies, out
-    return bodies[0].read_text()
+    env["SG_CHECKOUT"] = str(co)
+    out = subprocess.run(["bash", "-c", f'. "{s}/startability.sh"; sg_issue_worktree_note 34'],
+                         env=env, capture_output=True, text=True, timeout=60)
+    assert out.stdout.startswith("REUSE ISSUE WORKTREE:"), out.stdout + out.stderr
+    return out.stdout
 
 
 def router_reads(text):
-    """What a router does with the request text: the workspace it is told to use, else the worktree path the text names."""
+    """What the router does with the request text: the workspace field it is told to use, else the worktree path the text
+    names, as the path it names below the checkout the loop owns."""
     m = re.search(r"spawn `workspace` field[^`]*`([^`]+)`", text)
     if m:
         return m.group(1)
-    m = re.search(r"worktree add ~/wt-fr-(\d+) (gui/\d+)", text)
-    return f"worktrees/child/{m.group(2).replace('/', '-')}"
+    m = re.search(r"(worktrees/child/[\w.\-]+)", text)
+    assert m, f"the request names no worktree: {text!r}"
+    return m.group(1)
 
 
 @pytest.mark.anyio
-async def test_a_fork_conflict_fix_request_dispatches_a_child(tmp_path):
-    body = conflict_request_body(tmp_path / "fx")
+async def test_the_issue_worktree_a_real_request_names_is_inside_the_graphs_envelope(tmp_path):
+    """A child is handed its issue worktree, and the envelope allows it, so the run dispatches instead of ending with a
+    refusal it cannot act on (#55)."""
+    note = issue_worktree_note(tmp_path / "fx")
     run = tmp_path / "run"
     run.mkdir()
     d = router()
     d["run"]["deadline"] = 7200
-    eng = Engine(from_doc(d), ScriptedAdapter({"router": routed(req(workspace=router_reads(body))), "route.router.1": CHILD}), run,
+    eng = Engine(from_doc(d), ScriptedAdapter({"router": routed(req(workspace=router_reads(note))), "route.router.1": CHILD}), run,
                  target=sibling_repo(tmp_path))
     v = await eng.run()
     assert [e["reason"] for e in ev(run, "spawn_rejected")] == []
