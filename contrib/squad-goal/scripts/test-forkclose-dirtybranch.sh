@@ -9,7 +9,7 @@
 # usage: bash test-forkclose-dirtybranch.sh [path/to/forkclose.sh]
 src=${1:-$(dirname "$0")/forkclose.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"   # the land resolves the branch through forkonly.sh (#1836)
-cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$T/s/"; printf "exit 0\n" > "$T/s/shell-suites.sh"   # the gate runs the squad suites too; this test is about the dirty branch, not them, and the full gate also runs the pytest suite (#1822), so SG_FORK_PY_CMD is pinned below with the other gate inputs: the fixture's fork is a stub repo with no tests/ for the default command to run
+cp "$(dirname "$src")/fork-gate.sh" "$(dirname "$src")/serial.sh" "$(dirname "$src")/prland.sh" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/address.sh" "$T/s/"; printf "exit 0\n" > "$T/s/shell-suites.sh"   # the gate runs the squad suites too; this test is about the dirty branch, not them, and the full gate also runs the pytest suite (#1822), so SG_FORK_PY_CMD is pinned below with the other gate inputs: the fixture's fork is a stub repo with no tests/ for the default command to run
 printf "echo shell\n" > "$T/s/gate-suites.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
@@ -18,12 +18,16 @@ printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/t
 FC="env -u SG_E2E_DIR -u SG_E2E_BUILD_DIR -u SG_E2E_HEADLESS_DIR FC_NOBATCH=1"
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
+$G init -q --bare "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next   # the land pushes and merges by PR (#32)
 g checkout -q -b gui/1 local/next; echo mid > "$T/fork/source"; g add source; g commit -q -m "work 1 (mid)"; g checkout -q local/next
 echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 echo "\$*" >> "$T/gh.log"
 case "\$*" in
+  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, checks are green, GitHub merges it
+  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
+  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"issues/"*"/comments"*) echo 'TDD RED (test-forkclose-dirtybranch.sh: FAIL x)';;
   *"issues/"*" -q .body"*) ;;
@@ -54,4 +58,5 @@ r=$($FC bash "$T/s/forkclose.sh" 2>&1)
 g log --oneline local/next | grep -q "Merge gui/1" && ok "once the tip is the final state the branch lands" || ko "the branch is still unlanded: '$r'"
 g show local/next:source | grep -q final && ok "the base got the run's final code" || ko "the base has the mid-work version: $(g show local/next:source | tr '\n' ' ')"
 /usr/bin/grep -q "state=closed" "$T/gh.log" 2>/dev/null && ok "the issue closes once its code is in the base" || ko "no close after a real landing"
+[ "$($G --git-dir="$T/gh/x/tool.git" rev-parse -q --verify refs/heads/gui/1)" = "$(g rev-parse gui/1)" ] && /usr/bin/grep -q "pulls/7/merge" "$T/gh.log" && ok "the close follows the push of gui/1 and its PR merge (#32)" || ko "the issue closed with gui/1 unpushed or its PR unmerged"
 rm -rf "$T"; exit $fail

@@ -30,7 +30,9 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
     fi
     echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept"; echo "$w" >> "$seen"; continue; fi
   b=$($G -C "$w" branch --show-current); $G worktree remove "$w" && echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}"
-  case $b in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$b" >/dev/null 2>&1;; esac   # throwaway local names only
+  # A throwaway local name goes only when origin's base holds its tip (#32): work the base lacks keeps its branch, and a
+  # deleted one is restored from the remote by the tip the line names (`git branch <name> <tip>`).
+  case $b in ""|feat/*|fix/*|docs/*) ;; *) $G merge-base --is-ancestor "$sha" "origin/${SG_BASE:-main}" 2>/dev/null && $G branch -D "$b" >/dev/null 2>&1 && echo "WT BRANCH DELETED $b ${sha:0:9}: in origin/${SG_BASE:-main}, restore with git branch $b $sha";; esac
 done
 # acceptance-command trees (acpr.sh) left by a killed gate: drop any older than 2 h
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/acpr\.[^/]*\)$#\1#p' | while read -r w; do
@@ -47,7 +49,8 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^detached/{print w}' | w
   else grep -qx "loose $w" "$seen" || { echo "WT LOOSE ${w##*/} ${sha:0:9}: detached, dirty or on no remote branch; kept"; echo "loose $w" >> "$seen"; }; fi
 done
 # fork-only issue worktrees ($SG_FORK_DIR, ~/wt-as-<n>, ~/wt-fr-<n>): once the issue is closed, the tree clean and its branch
-# merged into $SG_FORK_BASE, remove the tree and delete the branch (git branch -d: refuses an unmerged one)
+# merged into $SG_FORK_BASE on the remote (origin/$SG_FORK_BASE, #32: a local-only merge is no land and no restore point),
+# remove the tree and delete the branch (git branch -d: refuses an unmerged one)
 if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
   $G -C "$SG_FORK_DIR" worktree list --porcelain | sed -En 's#^worktree (.*/wt-(as|fr)-[0-9]+)$#\1#p' | while read -r w; do
     n=${w##*-}; b=$($G -C "$w" branch --show-current 2>/dev/null)
@@ -68,8 +71,9 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     [ $live = 0 ] || continue
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
     [ "$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null)" = closed ] || continue
-    [ -z "$b" ] || $G -C "$SG_FORK_DIR" merge-base --is-ancestor "$b" "$SG_FORK_BASE" || continue
-    $G -C "$SG_FORK_DIR" worktree remove "$w" && { [ -n "$b" ] && $G -C "$SG_FORK_DIR" branch -d "$b" >/dev/null 2>&1; echo "WT CLEAN fork #$n ${b:-detached}"; }
+    [ -z "$b" ] || $G -C "$SG_FORK_DIR" merge-base --is-ancestor "$b" "origin/$SG_FORK_BASE" 2>/dev/null || continue
+    bt=$([ -n "$b" ] && $G -C "$SG_FORK_DIR" rev-parse --short=9 "$b")
+    $G -C "$SG_FORK_DIR" worktree remove "$w" && { [ -n "$b" ] && $G -C "$SG_FORK_DIR" branch -d "$b" >/dev/null 2>&1; echo "WT CLEAN fork #$n ${b:-detached} ${bt}"; }
   done; $G -C "$SG_FORK_DIR" worktree prune
 fi
 # PR worktrees under ~ (git worktree add ~/wt-<n>-*): drop once the branch's OWN PR is merged, its commits are in the base and the tree is clean.
