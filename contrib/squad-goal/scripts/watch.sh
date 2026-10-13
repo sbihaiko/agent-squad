@@ -2,6 +2,7 @@
 # Monitor stream: one line per run verdict, new PR, or review+CI summary. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
 . "$(dirname "$0")/env.sh"
+type sg_state_base >/dev/null 2>&1 || . "$(dirname "$0")/repoctx.sh"   # the one place the machine-wide state base is spelled
 # One watch.sh per checkout, whoever started it (#1872). The lock is keyed on this script's resolved path, NOT on
 # $SG_STATE: `watchd.sh start` under a temp SG_STATE walks past watchd's own pidfile guard and would otherwise spawn a
 # second watch.sh on the live path, which polls the real repository beside the supervised one and doubles every read.

@@ -24,7 +24,7 @@ if [ -z "${SG_FORK_BRANCH:-}" ]; then
   SG_FORK_BRANCH=$( ( . "$here/env.sh" >/dev/null 2>&1; printf '%s' "${SG_FORK_BRANCH:-}" ) 2>/dev/null ) || true
   export SG_FORK_BRANCH
 fi
-grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body lacks the 'IMPORTANT: your first and only action' line" >&2; exit 1; }
+[ "$1" = --paths ] || grep -q 'IMPORTANT: your first and only action' "$2" || { echo "refusing: body lacks the 'IMPORTANT: your first and only action' line" >&2; exit 1; }
 # A path a body can claim: the trees a child edits, the fork's own tree included (contrib/squad-goal/..., dashboard/...), which
 # the old UI|UI.<x>|Core|scripts|docs|tests list was blind to -- a fork-only child's slice lives there and matched nothing.
 SLICE_RE='(^|[^A-Za-z0-9_./-])(UI|UI\.[A-Za-z]+|Core|scripts|docs|tests|contrib/squad-goal|dashboard)/[A-Za-z0-9_./-]+'
@@ -76,9 +76,14 @@ slice_paths() {
 # that rule, and an overlapping pair of that panel still says so; or an unmerged gui/* branch in the fork checkout, which is the
 # only place a fork-only child's slice is visible at all, since it never opens a PR. SG_SLICE_FORCE=1 is the documented way past
 # it: a deliberate overlap stays possible, but it has to be asked for and it is announced on stderr.
+# (#10) The refusal prints ONE line, for the first contested file, because that is what an operator reads. A dispatcher that
+# bundles several tickets into one request needs all of them: with SG_SLICE_REPORT=<file> a refusal also writes `file <TAB>
+# holder` for EVERY contested file there (emptied first, so a stale report never survives), and the dispatcher drops only the
+# tickets that name one instead of refusing the whole batch.
 slice_guard() {
+  [ -n "${SG_SLICE_REPORT:-}" ] && : > "$SG_SLICE_REPORT"
   [ -n "$(slice_paths "$2")" ] || return 0
-  local paths id taken f holder rid hpanel force=0
+  local paths id taken f holder rid hpanel msg refused="" force=0
   [ "${SG_SLICE_FORCE:-}" = 1 ] && force=1
   paths=$(slice_paths "$2")
   id=$(grep -m1 -E '^PANEL: *[^ ]+' "$2" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true; id=${id:-${SG_PANEL:-}}
@@ -208,15 +213,19 @@ slice_guard() {
     case "$holder" in
       "request "*)
         rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$HOME/.cache/squad-goal/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
-        echo "refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." >&2 ;;
+        msg="refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
       "PR "*)
-        echo "refusing: request $1 names $f, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." >&2 ;;
+        msg="refusing: request $1 names $f, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
       *)
-        echo "refusing: request $1 names $f, which the unmerged fork branch ${holder#branch } touches (that is where a fork-only child's slice lives). Set SG_SLICE_FORCE=1 to dispatch anyway." >&2 ;;
+        msg="refusing: request $1 names $f, which the unmerged fork branch ${holder#branch } touches (that is where a fork-only child's slice lives). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
     esac
-    return 1
+    [ -n "$refused" ] || echo "$msg" >&2   # the first contested file is the one the operator reads; the report below carries the rest
+    [ -z "${SG_SLICE_REPORT:-}" ] || printf '%s\t%s\n' "$f" "$holder" >> "$SG_SLICE_REPORT"
+    refused=1
   done
+  [ -z "$refused" ]
 }
+[ "$1" = --paths ] && { slice_paths "$2"; exit 0; }   # (#10) the slice the guard would read from a body: a dispatcher attributes a contested file to one ticket with the guard's own rule
 slice_guard "$1" "$2" || exit 1
 # (#1836) The branch a fork-only child commits on has ONE source: $SG_FORK_BRANCH (%n = the issue), the setting
 # forkclose.sh substitutes into the ref it merges (sg_fork_branch, forkonly.sh). Two builders used to carry their own

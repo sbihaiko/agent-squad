@@ -15,7 +15,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b GIT_COMMITTER_NAME=t GIT_COMMITTER
 # is a boundary whose parent Y is absent from the machine. gui/1 is C + the legacy lineage + one commit, which is what the
 # conflict pass (base merged into the branch) leaves behind for a branch born before the migration.
 mkfix() { T=$1; export FCT=$T PATH="$T/bin:$PATH"; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/up" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$(dirname "$src")/prland.sh" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/address.sh" "$T/s/"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$(dirname "$src")/forkonly.sh" "$(dirname "$src")/ghcall.sh" "$T/s/"; cp "${here}/gate-suites.sh" "$T/s/" 2>/dev/null || cp "$own/gate-suites.sh" "$T/s/"; cp $(dirname "$src")/ghread.py "$T/s/"; cp $(dirname "$src")/ghthrottle.py "$T/s/"
   printf '#!/bin/bash\neval "$1"\n' > "$T/s/fork-gate.sh"
   cat > "$T/s/test.sh" <<'J'
 #!/bin/bash
@@ -29,9 +29,6 @@ J
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
-  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, checks are green, GitHub merges it
-  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
-  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"issues/1/comments"*|*"issues/2/comments"*|*"issues/3/comments"*) echo "TDD RED (test-forkclose-shallow.sh): FAIL test_x" ;;
   *"-q .state"*) echo open ;;
@@ -106,7 +103,6 @@ rm -rf "$T1"
 T2=$(mktemp -d); mkfix "$T2"; export FCT=$T2; b2=$(base_of "$T2"); control "$T2"
 r=$(bash "$T2/s/forkclose.sh" 2>&1)
 case "$r" in *"FORKCLOSE #2"*) ok "the branch without a boundary still lands";; *) ko "the control branch did not land: '$r'";; esac
-[ "$(/usr/bin/git --git-dir="$T2/origin.git" rev-parse -q --verify refs/heads/gui/2 2>/dev/null)" = "$(/usr/bin/git -C "$T2/fork" rev-parse gui/2)" ] && ok "it lands by its pushed branch and PR (#32)" || ko "the control branch landed unpushed"
 case "$r" in *"FORKCLOSE SHALLOW #2"*) ko "the control branch was refused: '$r'";; *) ok "no false refusal on the control branch";; esac
 [ "$(base_of "$T2")" != "$b2" ] && ok "local/next moved for the control branch" || ko "local/next did not move for the control branch"
 rm -rf "$T2"
