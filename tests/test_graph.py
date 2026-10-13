@@ -264,7 +264,7 @@ def test_refuses_a_dispatch_with_no_checks():
 
 def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
     disp = node(router(), "route")
-    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": "claude-gpt-5.5", "tools": ["Read"]}
+    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": node(router(), "route")["allow"]["models"][0], "tools": ["Read"]}
     _, errs = validate_request(disp, ok, 1, None, 10.0)
     assert errs == []
     cases = [({"model": "gpt"}, "model_outside_allow:gpt"), ({"tools": ["WebFetch"]}, "tool_outside_allow:WebFetch"),
@@ -284,7 +284,7 @@ def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
     three children of one frontier run, and the run folded to fail `no_dispatch, spawn_rejected:workspace_outside_allow`
     with nothing delivered (#55)."""
     disp = node(router(), "route")
-    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": "claude-gpt-5.5", "tools": ["Read"]}
+    ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": node(router(), "route")["allow"]["models"][0], "tools": ["Read"]}
     for w in ("worktrees/child", "worktrees/child/gui-26", "worktrees/child/gui-26/", "worktrees/child/a/b"):
         _, errs = validate_request(disp, {**ok, "workspace": w}, 1, None, 10.0)
         assert errs == [], (w, errs)
