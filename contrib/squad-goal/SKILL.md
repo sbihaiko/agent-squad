@@ -340,6 +340,8 @@ Any meaningful change goes to the issue immediately by writing:
 
 `cqflush` posts it with retries, to the repository the name carries (a name no profile knows is retired as `.dead`, never posted).
 
+A write the loop cannot prove is a defect, not a silence (#117). When a write to the tracker is refused, the pass that hit the refusal keeps its log line and queues ONE comment on the issue that write was about: `scripts/refusal.sh <issue> <REFUSAL-NAME> "<GitHub's error>" [<what the pass was doing>]` writes it into this same queue, so the issue says why it did not move whatever happens to that pass. The comment carries the refusal's name and GitHub's own error, quoted, and its first line names the refusal and the issue, so the issue is greppable beside the cycle log; the same refusal on the same issue is one entry, never one per cycle. The bug issue such a refusal files is the task, and this comment is the place.
+
 Move the board card on the same event:
 
 ```sh

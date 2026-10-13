@@ -346,12 +346,18 @@ def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` 
     files = sh("git", "-C", fd, "show", "--pretty=format:", "--name-only", sha).split()
     if not files or subprocess.run(["git", "-C", fd, "diff", "--quiet", sha, fb, "--", *files], capture_output=True).returncode == 0: return "landed"   # the base holds the change itself: a rebased head, nothing was unwound
     return "unwound"
+def refuse_comment(n, refusal, err, why):   # a refused write queues one comment on the issue it was about (#141): the card says why it did not move, through the queue cqflush.sh posts from, so the comment lands whatever happens to this pass. The bug the refusal files is the task; this comment is the place. It goes through the helper, so the file name and the body are built in one place.
+    rc, _ = _run(["bash", str(pathlib.Path(__file__).parent / "refusal.sh"), str(n), refusal, err, why])
+    if rc: say(f"REFUSAL-COMMENT FAILED #{n}: {refusal} was not queued for this issue (exit {rc})")
+    return rc == 0
 def board_write(args, n, why):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
-        say(f"BOARD-WRITE-FAILED #{n}: {why}: {named or (msg[0] if msg else 'no output')}")
+        err = named or (msg[0] if msg else "no output")
+        say(f"BOARD-WRITE-FAILED #{n}: {why}: {err}")
+        if not dry: refuse_comment(n, "BOARD-WRITE-FAILED", err, why)   # a dry run acts on nothing, so it queues nothing
         return False
     a = args[1:] if args and args[0] == "--add" else args
     if len(a) == 4 and not a[0].startswith("--") and a[1] in _cards: _cards[a[1]][1][str(a[3])] = a[2]
