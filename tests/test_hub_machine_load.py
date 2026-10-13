@@ -559,6 +559,7 @@ def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(
     line = hub.foot_line(hub.foot_items(_src(progress=None), CAPS, NOW))
     assert line == ("health ok · last progress ? · last landing · #73 2h 14m ago · 4/10 runs 7/20 agents · "
                     "CL ? · GK ? · GPT ? · GEM ?")
+    # The worktree count was never read here, so its block draws nothing (only `foot_sources` reads it).
     assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None,
                                         "quota": {"codex": "?", "agy": None}}, None, NOW)) \
         == "health ? · last progress ? · last landing ? · ? · CL ? · GK ? · GPT ? · GEM ?"
@@ -582,7 +583,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     assert "last landing ?" in facts                                           # no fork marker: no landing to name
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
-        == "health ? · last progress ? · last landing ? · ? · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def _mark(st, name, age, now):
