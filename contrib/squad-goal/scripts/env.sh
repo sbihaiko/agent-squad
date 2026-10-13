@@ -3,15 +3,18 @@
 # merge method, e2e command, review and coding rules. Pick one with SG_PROFILE, else the seam (address.sh) resolves the
 # checkout the script was started in, as it resolves any checkout. Add a repo by copying a profile.
 # A profile the seam does not know stops here, naming it, so no script reaches GitHub with no repository resolved.
-# One profile is one repository. SG_TOOLING_REPO, the second repository a profile could name, is retired (#20): a profile
-# that sets it stops here, naming it; give that repository its own profile instead.
+# A profile works a list of repositories (SG_REPOS, the primary first). SG_TOOLING_REPO, the second repository a profile
+# could name, is retired (#20): a profile that still sets it keeps working. It is mapped into SG_REPOS and one warning per
+# state directory names the profile, the setting and its replacement. SG_REQUIRED_SETTINGS is the contract in one place
+# (`<setting>:<the setting that engages it>`; the retired form is `<setting>:<engaging setting>:retired:<replacement>`).
+# refresh-from-fork.sh --check reads it against every live profile.
+SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/address.sh"   # the one resolution of a repository: profiles dir, checkout and origin match, state directory
 [ -n "${SG_PROFILE:-}" ] || SG_PROFILE=$(repoctx "$PWD" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
 repoctx "$SG_PROFILE" >/dev/null || exit 2
 . "$(sg_profiles_dir)/$SG_PROFILE.sh"
-[ -z "${SG_TOOLING_REPO:-}" ] || { echo "env.sh: SG_TOOLING_REPO is set (by profile $SG_PROFILE or the environment) and is retired: unset it and give $SG_TOOLING_REPO its own profile" >&2; exit 2; }
 if [ -z "${SG_SQUAD:-}" ]; then
   SG_SQUAD=$(python3 -I -c "import json,os;print(json.load(open(os.path.expanduser('~/.claude/plugins/installed_plugins.json')))['plugins']['agent-squad@agent-squad'][0]['installPath'])")
 fi
@@ -20,7 +23,15 @@ fi
 : "${SG_STATE_BASE:=$HOME/.cache/squad-goal}"
 : "${SG_STATE:=$SG_STATE_BASE/$SG_PROFILE}"
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
-export SG_STATE_BASE SG_PROFILE SG_REPO SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
+# The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
+if [ -n "${SG_TOOLING_REPO:-}" ]; then
+  SG_REPOS=$(sg_repos | tr '\n' ' '); SG_REPOS=${SG_REPOS% }
+  mkdir -p "$SG_STATE"
+  [ -e "$SG_STATE/warned-SG_TOOLING_REPO" ] || { touch "$SG_STATE/warned-SG_TOOLING_REPO"
+    echo "env.sh: profile $SG_PROFILE sets SG_TOOLING_REPO, which is retired: it is mapped into SG_REPOS for now; name $SG_TOOLING_REPO in SG_REPOS and remove SG_TOOLING_REPO from the profile" >&2; }
+  unset SG_TOOLING_REPO
+fi
+export SG_STATE_BASE SG_PROFILE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req"
 touch "$SG_STATE/active-runs.txt"

@@ -83,8 +83,7 @@ for u in 'z/gone#3' z/gone; do out=$(PROF=alpha cli "$u"); rc=$?
     && ! printf '%s' "$out" | /usr/bin/grep -q '^SG_'; } \
     && ok "refusal: '$u' is refused by name, listing the known repositories" || ko "refusal: '$u' (rc $rc): $out"; done
 refused nope nope; refused example example; refused 12 'no profile in force'; refused 12 gone gone; refused "$T/plain" "$T/plain"
-refused legacy SG_TOOLING_REPO
-out=$(cli --list); [ "$out" = "$(printf 'Beta\tY/Beta\nalpha\tx/alpha\nlegacy\t')" ] \
+out=$(cli --list); [ "$out" = "$(printf 'Beta\tY/Beta\nalpha\tx/alpha\nlegacy\tx/legacy')" ] \
   && ok "list: --list names every known profile and its repository, the example excluded" || ko "--list: $out"
 out=$(cd "$T/plain" && SG_PROFILES_DIR=$P SG_STATE_BASE=$B bash -c '. "$1"; sg_repo_ctx "y/beta#5" && echo "$SG_REPO $SG_ISSUE $SG_STATE"' _ "$src")
 [ "$out" = "Y/Beta 5 $B/Beta" ] && ok "sourced: sg_repo_ctx sets the context in the caller" || ko "sourced form: '$out'"
@@ -117,10 +116,10 @@ done
 printf 'IMPORTANT: your first and only action\n' > "$T/body"; : > "$T/ghcalls"
 out=$(SG_PROFILE=nope guard bash "$d/mkreq.sh" g24 "$T/body"); [ ! -s "$T/ghcalls" ] \
   && ok "guard: mkreq.sh reaches no gh on an unknown profile" || ko "guard: mkreq.sh reached gh unresolved (gh: $(head -3 "$T/ghcalls"))"
-# the retired two-repository key stops env.sh, naming it
+# the retired two-repository key no longer stops env.sh: it warns, naming it, and the profile goes on (test-retired-settings.sh)
 out=$(SG_PROFILE=legacy guard bash -c '. "$1/env.sh"; echo reached' _ "$d"); rc=$?
-[ $rc != 0 ] && printf '%s' "$out" | /usr/bin/grep -q SG_TOOLING_REPO && ! printf '%s' "$out" | /usr/bin/grep -q reached \
-  && ok "guard: env.sh stops on a profile that sets SG_TOOLING_REPO, naming it" || ko "env.sh with SG_TOOLING_REPO set (rc $rc): $out"
+[ $rc = 0 ] && printf '%s' "$out" | /usr/bin/grep -q SG_TOOLING_REPO && printf '%s' "$out" | /usr/bin/grep -q reached \
+  && ok "guard: env.sh warns on a profile that sets SG_TOOLING_REPO, naming it, and goes on" || ko "env.sh with SG_TOOLING_REPO set (rc $rc): $out"
 # the queue flusher resolves each comment's repository from the state directory it sits in: one no profile owns is set
 # aside unposted, never posted to a repository it was not filed for
 mkdir -p "$B/nope/cq"; echo hi > "$B/nope/cq/12-x.md"; touch -t 202001010000 "$B/nope/cq/12-x.md"; : > "$T/ghcalls"

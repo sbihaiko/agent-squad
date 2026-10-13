@@ -106,9 +106,9 @@ issues ──► frontier (stack.sh) ──► squad run: router ──► child
 
 ### Settings and the contract they carry
 
-Per-repository settings live in a profile ([`scripts/profiles/example.sh`](contrib/squad-goal/scripts/profiles/example.sh)): `SG_REPO`, `SG_PROJECT`, `SG_BASE`, `SG_FORK_DIR`, `SG_TOOLING_REPO`, the test commands. Profiles are live-only — never shipped, never edited by the refresh.
+Per-repository settings live in a profile ([`scripts/profiles/example.sh`](contrib/squad-goal/scripts/profiles/example.sh)): `SG_REPO`, `SG_PROJECT`, `SG_BASE`, `SG_FORK_DIR`, `SG_REPOS`, the test commands. Profiles are live-only — never shipped, never edited by the refresh.
 
-A profile is not free-form: shipped code may hard-require a setting, and `env.sh` declares that contract in one place (`SG_REQUIRED_SETTINGS`, `<setting>:<the setting that engages it>`). `refresh-from-fork.sh --check` reads it against every live profile and names the profile, the setting and the cause when a profile engages a route whose code refuses without the setting.
+A profile is not free-form: shipped code may hard-require a setting, and `env.sh` declares that contract in one place (`SG_REQUIRED_SETTINGS`, `<setting>:<the setting that engages it>`). `refresh-from-fork.sh --check` reads it against every live profile and names the profile, the setting and the cause when a profile engages a route whose code refuses without the setting. A retired setting (`SG_TOOLING_REPO`, replaced by `SG_REPOS`) keeps working: `env.sh` maps it and warns once, and the check names it as retired until the profile is migrated.
 
 The loop's operating rules are in the skill, and they are the reason it can run unattended: GitHub is live state and is updated immediately; a stall is recoverable, never a wait; a failing gate is a defect, never retuned; every event and decision lands on the issue it belongs to.
 
