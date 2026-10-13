@@ -480,7 +480,7 @@ def test_the_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names: the subs block carries it
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
     assert [i["key"] for i in items] == ["landing", "occ", "subs"]
-    assert hub.foot_line(items) == ("last landing · #73 2h 14m ago · "
+    assert hub.foot_line(items) == ("last landing · PR #73 2h 14m ago · "
                                     "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
     assert [i["bad"] for i in items] == [False] * 3
 
@@ -533,7 +533,7 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
     line = hub.foot_line(hub.foot_items(_src(occ=None), CAPS, NOW))
-    assert line == ("last landing · #73 2h 14m ago · ? · "
+    assert line == ("last landing · PR #73 2h 14m ago · ? · "
                     "CL ? · GK ? · GPT ? · GEM ?")
     # The worktree count was never read here, so its block draws nothing (only `foot_sources` reads it).
     assert hub.foot_line(hub.foot_items({"occ": None, "quota": {"codex": "?", "agy": None}}, None, NOW)) \
@@ -549,41 +549,52 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
     facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
     assert "drift" not in facts and "agy" not in facts
-    assert "last landing ?" in facts                                           # no fork marker: no landing to name
+    assert "last landing ?" in facts                                # no merged PR read: no landing to name
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
         == "last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
-def _mark(st, name, age, now):
-    m = st / "auto" / name; m.write_text(""); os.utime(m, (now - age, now - age)); return m
+def _iso(ts):
+    """One merge time in the shape the read that fills it writes."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
-def test_the_last_landing_is_the_newest_fork_marker_the_close_pass_left(hub, tmp_path, monkeypatch):
-    """`forkclose.sh` touches `auto/fork-<n>-<sha9>` when it merged that commit: the pass's own claim of a landing.
-    The newest marker names the issue and its mtime the age; an older one still names its own age."""
+def _closed_pr(n, age, now, merged=True, at=None, repo="o/r"):
+    """One row of the closed-PR read the board pass holds, in the shape `closed_prs_of` builds."""
+    return {"n": n, "t": f"landing {n}", "c": _iso(now - age if at is None else at), "m": merged, "r": repo}
+
+
+def test_the_last_landing_is_the_newest_merged_pull_request(hub, monkeypatch):
+    """Delivery is a pull request (#75): the merge is the landing. The newest merge names the bar and its merge time is
+    the age; an older merge still names its own age."""
     now = time.time()
-    st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
-    monkeypatch.setattr(hub, "STATE", st)
-    _mark(st, "fork-42-0123456ab", 5 * 3600, now)
+    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(42, 5 * 3600, now)]})
     assert hub.foot_sources(now)["landing"] == {"issue": 42, "ts": pytest.approx(now - 5 * 3600, abs=2)}
-    assert "last landing · #42 5h 0m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
-    _mark(st, "fork-73-deadbeef9", 2 * 3600 + 14 * 60, now)                   # the newest marker wins
-    assert hub.foot_sources(now)["landing"]["issue"] == 73
-    assert "last landing · #73 2h 14m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    assert "last landing · PR #42 5h 0m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(42, 5 * 3600, now),
+                                                      _closed_pr(73, 2 * 3600 + 14 * 60, now)]})
+    assert hub.foot_sources(now)["landing"]["issue"] == 73                      # the newest merge wins
+    assert "last landing · PR #73 2h 14m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
 
 
-def test_a_marker_whose_name_does_not_parse_is_not_a_landing(hub, tmp_path, monkeypatch):
+def test_a_closed_pull_request_that_never_merged_is_not_a_landing(hub, monkeypatch):
+    """A pull request closed without a merge landed nothing: it is named by its own column, never by this fact."""
     now = time.time()
-    st = tmp_path / "st"; (st / "auto").mkdir(parents=True)
-    monkeypatch.setattr(hub, "STATE", st)
-    _mark(st, "fork-abc-0123456ab", 60, now)                                   # no issue number
-    _mark(st, "forkwait-12-#13", 60, now)                                      # a wait marker, not a landing
-    _mark(st, "launched-12-0123456ab", 60, now)                                # a PR marker, not a fork landing
+    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(12, 60, now, merged=False)]})
     assert hub.foot_sources(now)["landing"] is None
     assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
-    _mark(st, "fork-9-0123456ab", 3 * 86400 + 2 * 3600, now)
-    assert "last landing · #9 3d 2h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(12, 60, now, merged=False),
+                                                      _closed_pr(9, 3 * 86400 + 2 * 3600, now)]})
+    assert "last landing · PR #9 3d 2h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+
+
+def test_a_merge_time_the_hub_cannot_read_is_not_a_landing(hub, monkeypatch):
+    now = time.time()
+    monkeypatch.setattr(hub, "board_cache", {"prev": [{"n": 7, "t": "landing", "c": "soon", "m": True, "r": "o/r"},
+                                                      {"n": 8, "t": "landing", "m": True, "r": "o/r"}]})
+    assert hub.foot_sources(now)["landing"] is None
+    assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
 
 
 def test_no_marker_reads_a_question_mark_in_the_neutral_tone_never_a_landing(hub):
@@ -593,8 +604,8 @@ def test_no_marker_reads_a_question_mark_in_the_neutral_tone_never_a_landing(hub
         assert item["text"] == "last landing ?" and item["bad"] is False, src
         assert [p["tone"] for p in item["parts"]] == [hub.FOOT_NEUTRAL]
     item = [i for i in hub.foot_items(_src(), CAPS, NOW) if i["key"] == "landing"][0]
-    assert item["text"] == "last landing · #73 2h 14m ago" and item["bad"] is False
-    assert [p["text"] for p in item["parts"]] == ["last landing", "#73 2h 14m ago"]
+    assert item["text"] == "last landing · PR #73 2h 14m ago" and item["bad"] is False
+    assert [p["text"] for p in item["parts"]] == ["last landing", "PR #73 2h 14m ago"]
     assert [p["tone"] for p in item["parts"]] == ["", ""]                      # the block's colour stands for the value
     assert hub.FOOT_BLOCK_COLORS["landing"] not in hub.FOOT_TONES
 
@@ -607,7 +618,7 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
                            "facts": hub.foot_items(_src(), CAPS, NOW)})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
-    assert p["facts"][0]["text"] == "last landing · #73 2h 14m ago" and len(p["facts"]) == 3
+    assert p["facts"][0]["text"] == "last landing · PR #73 2h 14m ago" and len(p["facts"]) == 3
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
@@ -826,7 +837,7 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
-    assert hub.foot_line(items) == ("last landing · #73 2h 14m ago · "
+    assert hub.foot_line(items) == ("last landing · PR #73 2h 14m ago · "
                                     "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
     painted = re.sub(r"<[^>]+>", "", _foot_paint(hub, items))
