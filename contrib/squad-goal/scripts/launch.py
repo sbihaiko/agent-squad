@@ -49,6 +49,40 @@ if primary and not os.environ.get("SG_ALLOW_MODEL"):
         sys.exit(f"request does not name the configured coding model {primary!r} ({why}). "
                  "Fix the request, or set SG_ALLOW_MODEL=1 for a deliberate exception.")
 
+# The switch above only guarded the request's "Coding model:" line; the nodes of the graph run another value (#60): the router
+# pins `opus`, a child with no model of its own takes `allow.models[0]`, and `claude-sonnet-5-5` is the defaults file's own. So the
+# switch is also read against the model each node of the graph this run starts runs: an alias is resolved to its provider id and
+# the node is refused when the panel switched that id off in any chain it sits in. The alias table mirrors the CLI's own.
+ALIASES = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"}
+def _off_ids():   # {bare model id: chain}: hub.py's model_off (the switch counts when the model is in the chain); review_models spells an Anthropic id `claude:<id>`
+    out = {}
+    for chain, row in (mdoc.get("off") or {}).items():
+        for mid, v in (row or {}).items():
+            if v and mid in (mdoc.get(chain) or []): out.setdefault(mid.removeprefix("claude:"), chain)
+    return out
+def _graph_path(workflow):   # mirrors squad/workflows.py resolve: no id, `default` or `dynamic` is the owner's default file, else the dynamic seed
+    folder = cwd / "docs" / "squad" / "workflows"; sq = pathlib.Path(squad)
+    if workflow in (None, "", "default", "dynamic"):
+        return next((p for p in (folder / "default.graph.json", folder / "dynamic.graph.json") if p.is_file()), sq / "docs" / "design" / "router.graph.json")
+    mine = folder / f"{workflow}.graph.json"
+    return mine if mine.is_file() else sq / "docs" / "workflows" / f"{workflow}.graph.json"
+def _run_models(doc):   # [(node, model as the graph names it, first: whether it is the one the node runs first)]: an agent's own model; a dispatch's child default and fallbacks
+    for n in doc.get("nodes", []):
+        if n.get("kind") == "agent" and n.get("model"): yield n["name"], n["model"], True
+        if n.get("kind") == "dispatch":
+            for i, m in enumerate((n.get("allow") or {}).get("models") or []): yield n["name"], m, i == 0
+off_ids = _off_ids()
+if off_ids:
+    try: gdoc = json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text())
+    except (OSError, ValueError): gdoc = {}   # an absent or malformed graph is the squad's own refusal to make, not this gate's
+    hits = [(nm, m, ALIASES.get(m, m), off_ids[ALIASES.get(m, m)], first) for nm, m, first in _run_models(gdoc) if ALIASES.get(m, m) in off_ids]
+    said = lambda h: f"node {h[0]!r} runs {h[1]}{'' if h[1] == h[2] else f' -> {h[2]}'}, which the models panel switched off in models.json ({h[3]})"
+    for h in hits:
+        if not h[4] or os.environ.get("SG_ALLOW_MODEL"): print(f"warning: {said(h)}" + ("" if h[4] else " (a fallback of the dispatch)"), file=sys.stderr)
+    if any(h[4] for h in hits) and not os.environ.get("SG_ALLOW_MODEL"):
+        sys.exit("refusing to start: " + "; ".join(said(h) for h in hits if h[4]) + ". Switch the model on in the hub's models panel, "
+                 "or change the model in the workflow graph, or set SG_ALLOW_MODEL=1 for a deliberate exception.")
+
 co = os.environ.get("SG_CHECKOUT")
 if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTHER_CWD"):
     sys.exit(f"launch from $SG_CHECKOUT ({co}), not {cwd}: watch.sh, heartbeat.sh and the hub look for runs there. "
