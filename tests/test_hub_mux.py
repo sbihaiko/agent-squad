@@ -109,6 +109,27 @@ def test_hubctl_takes_a_running_hub_and_prints_the_repository_path(fleet, tmp_pa
     assert p.stdout.strip() == f"http://127.0.0.1:{fleet['port']}/beta"
 
 
+def test_the_index_row_states_its_count_and_keeps_the_run_ids_out_of_the_line(fleet):
+    """An operator who opens a path the hub does not own gets the list, and a repository holding twenty runs must not
+    bury it: the row says `N live`, the ids sit in a block of their own, and the two never share a line."""
+    _, body = _get(fleet["url"] + "/gamma")
+    head, block, runs = body.partition('<div class="runs">')
+    assert '<div class="runs">' in body
+    assert "1 live" in head and "run-alpha-7" not in head, head
+    assert "run-alpha-7" in runs.split("</div>")[0]
+    assert "none live" in body                                   # the repository with no run says so in words, not with a blank
+    assert "x/alpha" in head and "y/beta" in body
+
+
+def test_a_test_path_is_told_where_a_test_log_lives(fleet):
+    """`/test/<id>` reaches the hub as a repository named `test`; the page must name the address that works instead of
+    leaving the operator at a list of repositories and no way back."""
+    code, body = _get(fleet["url"] + "/test/t1")
+    assert code == 404
+    assert "no repository at /test" in body
+    assert "/alpha/test/&lt;id&gt;" in body, body
+
+
 def test_hubctl_refuses_a_port_held_by_something_else(fleet, tmp_path):
     other = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http.server.SimpleHTTPRequestHandler)
     threading.Thread(target=other.serve_forever, daemon=True).start()

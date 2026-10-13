@@ -455,8 +455,9 @@ def test_escape_restores_the_split(hub):
 # ---------------------------------------------------------------- the line's facts (#1797)
 # The strip answered "is this machine saturated?". These pin the facts that answer the other half — whether the squad is
 # working or merely looks busy — and nothing else: the order they are read in, the `?` for a source that went unreadable,
-# `ok` for an empty health pass, the pair #1795 writes for the drift, the caps the graph carries, the quota markers the
-# review chain skips models over, the amber past the quarter hour, the drop on a window too narrow for the row, and the
+# `ok` for an empty health pass, the drift the health block already carries as a cause and the bar never repeats, the caps
+# the graph carries, the quota markers the review chain skips models over, the amber past the quarter hour, the drop on a
+# window too narrow for the row, and the
 # one token per subscription (#1839) the line carries last — the acronym, the quota and the time to its reset.
 
 NOW = 1_000_000.0
@@ -475,13 +476,13 @@ def _facts(hub, src=None, caps=CAPS):
     return [i["text"] for i in hub.foot_items(src or _src(), caps, NOW)]
 
 
-def test_the_six_facts_follow_the_load_cells_in_this_order(hub):
+def test_the_five_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names, read as a clock time
     items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
-    assert [i["key"] for i in items] == ["health", "progress", "occ", "drift", "quota", "subs"]
-    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · drift 0 · "
+    assert [i["key"] for i in items] == ["health", "progress", "occ", "quota", "subs"]
+    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · "
                                     "codex ok · agy reset 14:20 · CL ? · GK ? · GPT ? · GEM ?")
-    assert [i["bad"] for i in items] == [False] * 6
+    assert [i["bad"] for i in items] == [False] * 5
 
 
 def test_health_names_the_most_recent_still_armed_cause_with_its_age(hub):
@@ -513,20 +514,22 @@ def test_occupancy_reads_the_resolved_ceiling_and_never_a_hard_coded_pair(hub):
     assert _facts(hub, _src(occ=None))[2] == "?"
 
 
-def test_drift_is_the_pair_health_writes_and_never_a_count_of_its_own(hub):
-    assert _facts(hub, _src(drift={"runs": 2, "inprogress": 5}))[3] == "drift 3"
-    assert _facts(hub, _src(drift={"runs": 2, "inprogress": 2}))[3] == "drift 0"
-    assert _facts(hub, _src(drift=None))[3] == "drift ?"                     # #1795's pair is not there yet
-    assert _facts(hub, _src(drift={"runs": 2, "inprogress": -1}))[3] == "drift ?"   # an unreadable board is not a drift
-    # the live-run count the footer already holds is NOT this number: only the pair decides it
-    assert _facts(hub, _src(occ={"live": 9, "agents": 1}, drift={"runs": 2, "inprogress": 2}))[3] == "drift 0"
+def test_the_bar_carries_no_drift_fact(hub):
+    """The bar shows what an operator acts on: health, progress, occupancy, quotas. The board-versus-runs drift was a
+    sixth fact whose reading the health block already carries as the `runs-board-drift` cause, so it left the bar (#59)."""
+    srcs = [_src(drift={"runs": 2, "inprogress": 5}), _src(drift={"runs": 2, "inprogress": 2}), _src(drift=None),
+            _src(occ={"live": 9, "agents": 1}, drift={"runs": 2, "inprogress": 2})]
+    for s in srcs:
+        line = hub.foot_line(hub.foot_items(s, CAPS, NOW))
+        assert "drift" not in line, line
+    assert [i["key"] for i in hub.foot_items(_src(), CAPS, NOW)] == ["health", "progress", "occ", "quota", "subs"]
 
 
 def test_only_the_limited_quota_markers_are_named_each_with_its_reset(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))
-    assert _facts(hub, _src(quota={"codex": reset, "agy": reset}))[4] == "codex reset 14:20 · agy reset 14:20"
-    assert _facts(hub, _src(quota={"codex": None, "agy": None}))[4] == "codex ok · agy ok"
-    assert _facts(hub, _src(quota={"codex": "?", "agy": None}))[4] == "codex ? · agy ok"   # one unreadable marker only
+    assert _facts(hub, _src(quota={"codex": reset, "agy": reset}))[3] == "codex reset 14:20 · agy reset 14:20"
+    assert _facts(hub, _src(quota={"codex": None, "agy": None}))[3] == "codex ok · agy ok"
+    assert _facts(hub, _src(quota={"codex": "?", "agy": None}))[3] == "codex ? · agy ok"   # one unreadable marker only
 
 
 def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
@@ -538,11 +541,11 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
     line = hub.foot_line(hub.foot_items(_src(progress=None), CAPS, NOW))
-    assert line == ("health ok · last progress ? · 4/10 runs 7/20 agents · drift 0 · codex ok · agy ok · "
+    assert line == ("health ok · last progress ? · 4/10 runs 7/20 agents · codex ok · agy ok · "
                     "CL ? · GK ? · GPT ? · GEM ?")
-    assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None, "drift": None,
+    assert hub.foot_line(hub.foot_items({"health": None, "progress": None, "occ": None,
                                         "quota": {"codex": "?", "agy": None}}, None, NOW)) \
-        == "health ? · last progress ? · ? · drift ? · codex ? · agy ok · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · ? · codex ? · agy ok · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
@@ -557,13 +560,12 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     src = hub.foot_sources(now)
     assert src["health"]["causes"] == ["watch-stalled"]
     assert abs(src["health"]["armed"]["watch-stalled"] - (now - 540)) < 2
-    assert src["drift"] == {"runs": 2, "inprogress": 5}                       # the pair #1795 writes, read as it stands
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
     facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
-    assert "health: watch-stalled 9m" in facts and "drift 3" in facts and "agy reset " in facts
+    assert "health: watch-stalled 9m" in facts and "drift" not in facts and "agy reset " in facts
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
-        == "health ? · last progress ? · ? · drift ? · codex ok · agy ok · CL ? · GK ? · GPT ? · GEM ?"
+        == "health ? · last progress ? · ? · codex ok · agy ok · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub, monkeypatch):
@@ -574,7 +576,7 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
                            "facts": hub.foot_items(_src(), CAPS, NOW)})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
-    assert p["facts"][0]["text"] == "health ok" and len(p["facts"]) == 6
+    assert p["facts"][0]["text"] == "health ok" and len(p["facts"]) == 5
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
@@ -698,7 +700,7 @@ def test_an_unverifiable_subscription_reads_a_question_mark_and_stays_neutral(hu
 def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
     items = hub.foot_items(_src(), CAPS, NOW)
     order = [i["color"] for i in items]
-    assert [i["key"] for i in items] == ["health", "progress", "occ", "drift", "quota", "subs"]
+    assert [i["key"] for i in items] == ["health", "progress", "occ", "quota", "subs"]
     root = re.search(r"^:root\{([^}]*)\}", hub.PAGE, re.M).group(1)
     palette = set(re.findall(r"--([a-z-]+):", root))
     assert all(c in palette for c in order), order                             # a colour the hub already has, not a new one
@@ -723,7 +725,7 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
-    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · drift 0 · "
+    assert hub.foot_line(items) == ("health ok · last progress 4m · 4/10 runs 7/20 agents · "
                                     "codex ok · agy ok · CL ? · GK ? · GPT ? · GEM ?")
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
     painted = re.sub(r"<[^>]+>", "", _foot_paint(hub, items))
