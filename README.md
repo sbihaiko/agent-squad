@@ -145,7 +145,7 @@ One process serves every repository, on one path each. The board columns are rea
 
 The models panel is the model policy you can edit: the three chains with rank, effort, time window and an on/off switch per row, the quota cache (`codex-reset.py` reads the same cache), and the **router's own queue**. That queue is the dispatch envelope of the run graph — the models the router may ask a child for, in order — so the panel reads it from the graph, writes it there, and restamps the record the graph ships beside. A reader who cuts a model from a chain can no longer miss that the router may still ask for it.
 
-The footer of the page is one line of readings: health, last progress, last landing, the open child worktrees (`wt 3`), the live occupancy against the ceilings, and the subscription tokens left. A reading is never a rule: no path ends, parks or blocks a run because of a number on that line.
+The footer of the page is one line of readings: the last landing, the open child worktrees as `<cleanable>/<total>` (`wt 10/21`), the live occupancy against the ceilings, and the subscription tokens left. A reading is never a rule: no path ends, parks or blocks a run because of a number on that line. The worktree block is also a button: one press runs the loop's own cleanup pass, so the number is freed by the same rules that counted it.
 
 The page is one Python file — `http.server` from the standard library, and the HTML, CSS and JS inline — with no build step and no framework. Its state lives in `<repo>/runs/.hub` and ignores itself. `verify-view-domain-firewall.sh` guards the rule that a page only reaches what its view may see.
 
@@ -157,8 +157,10 @@ An issue carries a route, and the route decides how its work is delivered:
 
 | Route | Deliverable | Closes the issue |
 | --- | --- | --- |
-| Default | A branch, a push and a **pull request** whose body carries `Closes #<n>` | The merge, through `Closes` |
+| Default | A branch, a push and a **pull request** whose body carries `Refs #<n>` and `Closes #<n>` | The merge, through `Closes` |
 | `squad-only` label, or a `Fork-only work` line in the body | A **local commit** on `gui/<n>`, merged by `forkclose.sh`, with no PR | The close pass, after its gate is green |
+
+A pull request carries **two** lines and needs both. The loop maps a pull request to its issue by reading `Refs #<n>`; a body that names only `Closes #<n>` is skipped out loud as `NOREFS` and the close pass never sees it. GitHub closes the issue on the merge through `Closes #<n>`. A pull request the loop wrote itself carries both.
 
 The PR route is the parallelism: the runner checks several pull requests at once, while one machine runs one full gate at a time. The PR route is also what closes an issue by itself, so no card can claim a delivery the base never took.
 
