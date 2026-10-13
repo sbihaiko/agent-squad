@@ -20,6 +20,11 @@ refresh-from-""fork.sh
 forkrescue.py
 forkstrand.py
 req-checklist-""fork.txt"
+# A retired name takes its suites with it: the fork route's suites stayed in the live copy after its scripts were gone, and
+# every one of them failed on a call to a file that is not there (#210). Two of them do not carry their subject in their
+# name, so they are named here.
+RETIRED_SUITES="test-""forkbranch-source.sh
+test-sync-refresh.sh"
 set -uo pipefail
 check=""; args=()
 for a in "$@"; do case "$a" in --check) check=1;; *) args+=("$a");; esac; done
@@ -45,9 +50,18 @@ for f in $(shipped); do
   cp -p "$src/$f" "$dest/$f.new.$$" && mv "$dest/$f.new.$$" "$dest/$f"    # new inode: a running copy keeps reading the old one
 done
 for n in $RETIRED; do
-  [ -e "$dest/scripts/$n" ] || continue
-  if [ -n "$check" ]; then echo "drop scripts/$n"; rc=1; continue; fi
-  rm -f "$dest/scripts/$n"; echo "publish-live: dropped scripts/$n"
+  stem=${n%.*}
+  for f in "$dest/scripts/test-$stem"*.sh "$dest/scripts/$n"; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f")
+    if [ -n "$check" ]; then echo "drop scripts/$b"; rc=1; continue; fi
+    rm -f "$f"; echo "publish-live: dropped scripts/$b"
+  done
+done
+for s in $RETIRED_SUITES; do
+  [ -e "$dest/scripts/$s" ] || continue
+  if [ -n "$check" ]; then echo "drop scripts/$s"; rc=1; continue; fi
+  rm -f "$dest/scripts/$s"; echo "publish-live: dropped scripts/$s"
 done
 [ -n "$check" ] && exit $rc
 echo "publish-live: $(shipped | wc -l | tr -d ' ') file(s) published to $dest, retired names dropped by name"
