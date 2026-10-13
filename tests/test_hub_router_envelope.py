@@ -14,6 +14,7 @@ never imports the module: the module body needs a profile, and a test that needs
 import ast
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -88,6 +89,17 @@ def test_the_panel_offers_the_router_as_an_editable_queue():
     for control in ("data-rv", "data-rrm", "data-raddb"):
         assert control in src, f"the router queue has no {control} control"
     assert src.index("MODEL_ID.match") < src.index("router_set(rchain)"), "a save writes before it validates"
+
+
+def test_no_attribute_the_handler_reads_carries_no_value():
+    """`t.dataset.raddb` is the empty string when the attribute is written without one, and the empty string is falsy:
+    the branch never runs and the button does nothing. Measured 2026-10-13: the router queue's Add was dead this way
+    while the Vision chain's Add (which carries its chain id) worked."""
+    src = HUB.read_text()
+    for name in set(re.findall(r"t\.dataset\.(\w+)", src)):
+        for tag in re.findall(r"<button[^>]*\bdata-" + name + r"\b[^>]*>", src):
+            m = re.search(r"data-" + name + r'(?:\s*=\s*(?:"([^"]*)"|([^\s>]+)))?', tag)
+            assert m and (m.group(1) or m.group(2)), f"the handler reads data-{name} but this button carries no value: {tag[:70]}"
 
 
 def test_the_queue_says_it_is_graph_data():
