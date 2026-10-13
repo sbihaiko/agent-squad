@@ -47,7 +47,7 @@ Give each ticket its **labels**: the triage label (`ready-for-agent` unless inst
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
-- **Title**: short descriptive name
+- **Title**: short descriptive name. A child of a spec carries the spec's number as the first words of its title, written `[SPEC <n>] <title>` (for example `[SPEC 117] Every refusal has one shape: a closed set in code`). The prefix is a reading aid: it never replaces the parent relation, and the sub-issue link stays the fact. A child whose parent is not a spec (a plan, a conversation) carries no prefix, and a prefix names the spec's number only, never a wave, a kind or a column.
 - **Blocked by**: which other tickets (if any) must complete first
 - **Wave** and **labels**: `wave:NN` and the labels it will be published with
 - **What it delivers**: the end-to-end behaviour this ticket makes work
@@ -72,6 +72,7 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
   gh api "repos/$OWNER/$REPO/issues/$PARENT/sub_issues" -F sub_issue_id="$id"   # -F, so the value is sent as an integer
   ```
   Verify the relation landed (read the parent's sub-issue list back) before moving on. Where the tracker has no such relation, set each ticket's "Blocked by" to the blocking issues and name the parent in the body.
+  When the parent is a **spec** (the source was a spec issue, and the tickets are its children), publish every child with that spec's number as the first words of its title: `[SPEC <n>] <title>`. The prefix is what a person reads where the relation is not drawn — the issue list, a search result, a board card, a run's request — and two children of two open specs otherwise carry near-identical titles with nothing to tell them apart. It never replaces the sub-issue link, which stays the fact. A ticket whose parent is not a spec (a plan, a conversation) carries no prefix, and a prefix names the spec's number, never a wave, a kind or a column.
   Write every blocking edge as the platform's own dependency too, so the relation is visible where a reader looks for it and not only in the body: on GitHub, `POST /repos/$OWNER/$REPO/issues/$TICKET/dependencies/blocked_by` with `-F issue_id=<the blocker's numeric id>` says "this ticket is blocked by that one", and the blocker's own panel then answers it as blocking. Read every edge back before moving on. Both relations carry their own weight: the parent link puts the tasks under the parent issue, and the dependencies are what the issue's Relationships panel shows.
   Publish no `relates_to` edge of the parent to its own tickets, and none between tickets on a guess. The parent link already lists them under the parent, with progress; a second copy can only disagree with it. A `relates_to` edge (on GitHub: `POST /repos/$OWNER/$REPO/issues/$TICKET/relates_to` with `-F issue_id=<the numeric id>`) is earned when two tickets touch the same place and neither blocks the other — and only once the reason is known and written in a comment, because the edge itself carries no direction and no proof. Where the repository already defers a startable ticket whose file another holds, that guard is the operational half and no edge replaces it.
   Apply every ticket's labels when it is created: the triage label, its `wave:NN` label and any type label. Before the first issue, make sure each `wave:NN` label you need exists (on GitHub: `gh label create "wave:NN" --color <hex> --description "Wave NN: startable once waves before it are done" --force`, one color per wave or one shared color). If a later edge change moves a ticket to another wave, move its label too: a ticket carries exactly one `wave:` label.
@@ -84,6 +85,8 @@ Do NOT close or modify any parent issue.
 <local-ticket-template>
 
 # <NN>: <Ticket title>
+
+A child of a spec issue starts its title with the spec's number, `[SPEC <n>] <title>`; a child of anything else carries no prefix.
 
 **What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.
 
@@ -101,6 +104,8 @@ Do NOT close or modify any parent issue.
 </local-ticket-template>
 
 <issue-template>
+
+**Title:** a child of a spec issue carries the spec's number first, `[SPEC <n>] <title>`; any other ticket carries the plain title, with no prefix.
 
 ## Parent
 
