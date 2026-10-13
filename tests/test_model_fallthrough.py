@@ -28,9 +28,11 @@ SPAWNS = {"output": {"spawns": [REQUEST]}, "spend": 0.1}
 CHILD = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2, "turns": 3}
 
 
-def engine(tmp_path, script, **kw):
+def engine(tmp_path, script, tweak=None, **kw):
     d = router()
     d["run"]["deadline"] = 7200
+    if tweak:
+        tweak(d)
     kw.setdefault("target", sibling_repo(tmp_path))
     return Engine(from_doc(d), ScriptedAdapter(script, **kw.pop("adapter", {})), tmp_path, **kw)
 
@@ -50,7 +52,8 @@ async def test_a_provider_error_on_a_child_falls_through_to_the_next_model(tmp_p
     eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": [{"error": PROVIDER_ERROR}, CHILD]})
     v = await eng.run()
     assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == ["sonnet", "opus"]   # the request's pick, then the chain
-    assert v.verdict == "completed" and outcomes(tmp_path, "route.router.1")[0]["outcome"] == "pass"
+    e = outcomes(tmp_path, "route.router.1")[0]
+    assert v.verdict == "completed" and e["outcome"] == "pass" and e["model"] == "opus"   # the outcome shows the model that actually answered
 
 
 async def test_a_provider_error_named_by_a_status_without_the_api_error_prefix_falls_through(tmp_path):
@@ -60,13 +63,15 @@ async def test_a_provider_error_named_by_a_status_without_the_api_error_prefix_f
 
 
 async def test_a_chain_whose_every_entry_is_exhausted_fails_naming_each_entry(tmp_path):
-    eng = engine(tmp_path, {"router": {"error": PROVIDER_ERROR}}, adapter={"repeat_last": True})
+    eng = engine(tmp_path, {"router": {"error": PROVIDER_ERROR}}, adapter={"repeat_last": True},
+                 tweak=lambda d: next(n for n in d["nodes"] if n["name"] == "route")["allow"].update(models=["opus", "sonnet", "haiku"]))
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["opus", "sonnet", "haiku"]
+    tried = [c.model for c in eng.adapter.calls if c.node == "router"]
+    assert tried == ["opus", "sonnet", "haiku"]
     e = outcomes(tmp_path, "router")[0]
     assert e["outcome"] == "fail" and "adapter_error" in e["reasons"] and v.verdict == "failed"
     msg = e["diagnostic"]["error"]
-    assert msg.count("402 Grok upstream rejected the request") == 3 and all(m in msg for m in ("opus", "sonnet", "haiku"))
+    assert msg.count("402 Grok upstream rejected the request") == len(tried) and all(m in msg for m in tried)
 
 
 async def test_an_error_that_is_not_a_provider_failure_still_fails_at_once(tmp_path):
