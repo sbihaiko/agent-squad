@@ -104,4 +104,33 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ -d worktrees/child/c-busy ] && ok "C: child tree with a live process kept" || ko "C: c-busy was removed: $out"
 case "$out" in *"WT CLEAN child c-merged"*) ok "C: the decision line names the class and the tree";; *) ko "C: no child decision line: $out";; esac
 [ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 4 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "C: tally 1/4, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
-kill $cpid 2>/dev/null; rm -rf "$T"; exit $fail
+kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
+# S: a tree whose submodules are CHECKED OUT. `git worktree remove` refuses the whole tree — `fatal: working trees containing
+# submodules cannot be moved or removed` — a line git prints with no run id and no class, so the tree was never freed and the
+# footer's count never dropped for it (#102). The pass answers the class itself: it adds the flag git needs, after the tree is
+# already proved clean, unused and landed (its submodule's own dirt reads as ` M sub` in the status check above, so the flag
+# loses nothing), and names the run or the tree in the line. A tree it still cannot free is reported once with its own reason.
+$G init -q -b main "$T/sub"; ( cd "$T/sub" && $G -c user.email=a@b -c user.name=t commit -q --allow-empty -m s )
+$G fetch -q origin main; $G merge -q --ff-only origin/main   # the W cases above pushed their own commits to origin/main: the submodule commit rides on top of the base, never beside it
+$G -c protocol.file.allow=always -c user.email=a@b -c user.name=t submodule add -q "$T/sub" sub >/dev/null 2>&1
+$G -c user.email=a@b -c user.name=t commit -q -m submodule; $G push -q origin main 2>/dev/null
+cd "$T/co"; mkdir -p runs/run-sub/ws .worktrees
+$G worktree add -q --detach runs/run-sub/ws/w HEAD; ( cd runs/run-sub/ws/w && $G -c protocol.file.allow=always submodule update --init -q )
+echo '{"event": "verdict"}' > runs/run-sub/record.jsonl
+$G worktree add -q -b gui/csub .worktrees/c-sub HEAD; ( cd .worktrees/c-sub && $G -c protocol.file.allow=always submodule update --init -q )
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d runs/run-sub/ws/w ] && ok "S: run workspace whose submodule is checked out is freed" || ko "S: the submodule tree leaked: $out"
+case "$out" in *"WT CLEAN run-sub"*submodule*) ok "S: the line names the run and the submodule class";; *) ko "S: no line names the run and the class: $out";; esac
+[ ! -d .worktrees/c-sub ] && ok "S: child tree whose submodule is checked out is freed" || ko "S: the child submodule tree leaked: $out"
+case "$out" in *"WT CLEAN child c-sub"*submodule*) ok "S: the child line names the tree and the class";; *) ko "S: no child line names the class: $out";; esac
+case "$out" in *"cannot be moved or removed"*) ko "S: git's own refusal still reaches the log, naming nothing: $out";; *) ok "S: no bare git refusal reaches the log";; esac
+[ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 1 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "S: the footer's count drops for the freed submodule tree (1/1)" || ko "S: the count does not agree: $(cat "$T/st/wt.json" 2>/dev/null)"
+# S2: the tree the flag still cannot free — the same class, now with its parent directory unwritable. Silence was the other
+# half of the defect: the pass says the class itself, names the tree, and says why, instead of leaving git's nameless fatal
+# as the only word on it.
+$G worktree add -q -b gui/clocked .worktrees/c-locked HEAD; ( cd .worktrees/c-locked && $G -c protocol.file.allow=always submodule update --init -q )
+chmod 500 .worktrees; out=$(bash "$T/s/wtclean.sh" 2>&1); chmod 700 .worktrees
+case "$out" in *"WT KEPT submodule child c-locked"*) ok "S2: a tree the flag cannot free is reported with its class and its name";; *) ko "S2: the pass kept it in silence: $out";; esac
+case "$out" in *"cannot be moved or removed"*) ko "S2: git's nameless fatal is still the only word: $out";; *) ok "S2: no nameless refusal reaches the log";; esac
+$G worktree prune 2>/dev/null; rm -rf .worktrees
+rm -rf "$T"; exit $fail
