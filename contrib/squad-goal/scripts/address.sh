@@ -57,12 +57,22 @@ sg_same_repo() {
 # repository the address NAMES and in no other. Merging is the one step a revert does not undo cheaply, so a repository
 # this profile does not land is REFUSED (nothing printed, the address named on stderr, return 1), never guessed.
 # route=local: the repository the fork checkout ($SG_FORK_DIR) resolves to; its branch (sg_fork_branch) is merged into
-# $SG_FORK_BASE in that checkout, by forkclose.sh. A bare legacy number reads this row: the branch a bare number was filed
-# with is the fork's. route=pr: the profile's repository ($SG_REPO); its land is the pull request's merge into $SG_BASE,
-# by autopilot.sh, so no branch is named.
+# $SG_FORK_BASE in that checkout, by forkclose.sh. route=pr: the profile's repository ($SG_REPO); its land is the pull
+# request's merge into $SG_BASE, by autopilot.sh, so no branch is named.
+# A bare number names no repository. `sg_land_target <N> row` says it came WITH a board row: a legacy row, which keeps the
+# route it had (local: the branch a bare number was filed with is the fork's), and the line on stderr names it. With no
+# `row` the number came with no board row and is the profile in force ($SG_REPO), so it lands on the pr route, and a line
+# on stderr says so. A legacy row with no local land to keep is refused, never turned into a pull request in $SG_REPO.
 sg_land_target() {
-  local n r fr=""; n=$(sg_address_issue "${1:-}"); r=$(sg_address_repo "${1:-}")
+  local n r fr="" row=${2:-}; n=$(sg_address_issue "${1:-}"); r=$(sg_address_repo "${1:-}")
   [ -n "${SG_FORK_DIR:-}" ] && fr=$(sg_resolve_repo "$SG_FORK_DIR" 2>/dev/null)
+  if [ -z "$r" ] && [ -n "$row" ]; then
+    [ -n "$fr" ] || { echo "refused: legacy row #$n names no repository and this profile has no local land to keep" >&2; return 1; }
+    echo "legacy row #$n: the board row names no repository; it keeps route local ($fr, $(sg_fork_branch "$n"))" >&2
+  elif [ -z "$r" ]; then
+    r=$(sg_resolve_repo "$n" 2>/dev/null) || { echo "refused: no board row for #$n and no profile repository to resolve it to" >&2; return 1; }
+    echo "no board row #$n: it resolves to the profile repository $r; route pr" >&2
+  fi
   if [ -n "$fr" ] && { [ -z "$r" ] || sg_same_repo "$r" "$fr" 2>/dev/null; }; then
     printf '%s %s %s %s\n' "$SG_FORK_DIR" "${SG_FORK_BASE:-main}" "$(sg_fork_branch "$n")" local
   elif [ -n "$r" ] && sg_same_repo "$r" "${SG_REPO:-}" 2>/dev/null; then
