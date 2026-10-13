@@ -49,8 +49,6 @@ async def test_worktree_create_makes_a_worktree_and_records_its_head(tmp_path):
 
 
 async def test_commit_records_a_new_head_and_nothing_to_commit_passes(tmp_path):
-    """#84: a passing node's declared workspace is already committed by the engine, so this action commits what a
-    node that failed left behind; the second commit finds nothing."""
     repo = make_repo(tmp_path / "repo")
     # A failed agent leaves its tree dirty (#84: the engine commits only a passing node), so the commit action has work to commit.
     d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"], next={"fail": "continue"}),
