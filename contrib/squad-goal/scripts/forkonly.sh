@@ -65,8 +65,18 @@ sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
 # #1837). A trailing / is a directory prefix, anything else is that exact root file. Prints one per line.
 sg_fork_paths() { printf '%s\n' contrib/squad-goal/ .claude-plugin/ CHANGELOG.md; }
 # The fork preamble: all a fork-only child is told about where its work goes. Nothing in it mentions a PR to open, so nothing contradicts it.
-sg_fork_preamble() { local br; br=$(sg_fork_branch '<N>')
-  echo "FORK-ONLY (label fork-only): this work lands in the agent-squad repository, never in $SG_REPO. Create the worktree from ${SG_FORK_BASE:-main}: \`git -C ${SG_FORK_DIR:-<fork checkout>} worktree add ~/wt-as-<N> -b $br ${SG_FORK_BASE:-main}\` (N = the issue number) and work only there. Commit locally on $br; never push; never open a PR; never ask where a PR goes: the local commit on $br is the deliverable. Keep the worktree. End your result with the commands you ran as \`cd ~/wt-as-<N> && <command>\`."; }
+sg_fork_preamble() { local br dir a b; br=$(sg_fork_branch '<N>')
+  a=$(cd "${SG_FORK_DIR:-}" 2>/dev/null && pwd -P); b=$(cd "${SG_CHECKOUT:-}" 2>/dev/null && pwd -P)   # an unresolved setting is no match: today's line stands
+  # Where the fork checkout IS this checkout, the run this child belongs to already holds that worktree as its target (#93):
+  # the engine commits a passing node's target, so the child works there and makes no second worktree -- one outside the run
+  # area would never be committed. A fork checkout elsewhere keeps the old line: that child commits in the fork, which is no
+  # worktree of this run.
+  if [ -n "$a" ] && [ "$a" = "$b" ]; then
+    dir="${SG_CHECKOUT%/}/worktrees/child/${br//\//-}"
+    echo "FORK-ONLY (label fork-only): this work lands in the agent-squad repository, never in $SG_REPO. Work in the worktree the run made for you, $dir, on branch $br from ${SG_FORK_BASE:-main}: it is the run's target, so the engine commits there. Make no second worktree; never push; never open a PR; never ask where a PR goes: the local commit on $br is the deliverable. Keep the worktree. End your result with the commands you ran as \`cd $dir && <command>\`."
+  else
+    echo "FORK-ONLY (label fork-only): this work lands in the agent-squad repository, never in $SG_REPO. Create the worktree from ${SG_FORK_BASE:-main}: \`git -C ${SG_FORK_DIR:-<fork checkout>} worktree add ~/wt-as-<N> -b $br ${SG_FORK_BASE:-main}\` (N = the issue number) and work only there. Commit locally on $br; never push; never open a PR; never ask where a PR goes: the local commit on $br is the deliverable. Keep the worktree. End your result with the commands you ran as \`cd ~/wt-as-<N> && <command>\`."
+  fi; }
 # `if` and not `A && B`: the test failing is a condition here, so a caller running under `set -e` (mkreq.sh) can source
 # this file instead of being aborted by the last line.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then . "$(dirname "$0")/env.sh"; sg_fork_only "$1"; fi
