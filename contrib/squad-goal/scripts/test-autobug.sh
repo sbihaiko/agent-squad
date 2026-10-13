@@ -305,4 +305,41 @@ filed=$($G -c '^title=' "$T/filed")
   || ko "9 the door was called: $(cat "$T/board.calls")"
 unset SG_BUG_PROJECT SG_BUG_DOING
 
+# 10) (#218) the request the pass builds carries each issue's own text. The block runs its jq program through the real
+# jq -- the stub below serves `-q` the way `gh api` does -- so a program that does not parse prints nothing and the child
+# reads a bare `--- issue #N` line, while the request itself tells it the text below is DATA. Every stub above answers
+# without a `-q`, which is what let a malformed program go unnoticed: a program that never runs is never checked.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$T/s/"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+printf '#!/bin/bash\ncp "$2" %s/req.body\necho %s/req.json\n' "$T" "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+printf '#!/bin/bash\necho "#1228 -> In Progress"\n' > "$T/s/board.sh"
+chmod +x "$T/s/mkreq.sh" "$T/s/launch.py" "$T/s/board.sh"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+prog=; prev=; for a in "\$@"; do [ "\$prev" = "-q" ] && prog="\$a"; prev="\$a"; done
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *issues/*)
+    j='{"number":1228,"title":"Core: null deref","body":"step a.py"}'
+    if [ -n "\$prog" ]; then printf '%s' "\$j" | jq -r "\$prog"; else printf '%s\n' "\$j"; fi ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+r=$(bash "$T/s/autobug.sh" 2>"$T/err218"); rc=$?
+[ "$rc" = 0 ] && ok "10 the pass that pastes the issue text finishes" || ko "10 the pass exited $rc: '$r'"
+[ -f "$T/req.body" ] && ok "10 the pass built a request" || ko "10 no request was built: '$r'"
+blk=$(awk '/^--- issue #1228$/{f=1;next} /^CHILD /{f=0} f' "$T/req.body" 2>/dev/null)
+$G -qF 'Core: null deref' <<<"$blk" && ok "10 the issue block carries the issue's title" || ko "10 the block carries no title: '$blk'"
+$G -qF 'step a.py' <<<"$blk" && ok "10 the issue block carries the issue's body" || ko "10 the block carries no body: '$blk'"
+$G -qE 'jq: error' "$T/err218" && ko "10 the pass logged a jq parse error: $(cat "$T/err218")" || ok "10 the pass logs no jq parse error"
+
 rm -rf "$T"; exit $fail
