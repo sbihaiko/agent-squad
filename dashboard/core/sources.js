@@ -7,7 +7,7 @@ function sourcesModule({ STATES }) {
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
-    { cls: "err", label: "Rule error on the node", group: "node" },
+    { cls: "err", label: "Breaks a graph rule: fix it", group: "node" },   // an editor state (core.validate), never a record event: a run refuses a graph with one
     { cls: "sel", label: "Selected", group: "interaction" },
     { cls: "drop", label: "Target of the link you drag", group: "interaction" },
   ];

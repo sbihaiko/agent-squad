@@ -106,3 +106,22 @@ def test_the_legend_is_a_side_strip_always_expanded_with_no_collapse_control():
     assert set(groups) <= {"node", "run", "interaction"} and None not in groups
     runs = [g for i, g in enumerate(groups) if i == 0 or g != groups[i - 1]]
     assert len(runs) == len(set(runs)), groups  # contiguous: no group appears twice
+
+
+def test_each_legend_row_names_a_record_state_and_what_the_reader_does_in_the_order_he_acts():
+    """The owner scans the strip across many runs. A row names the state the record writes (or the page derives from it) and what he does:
+    nothing (it worked, or it never ran), look (it failed, or its call has no outcome), wait (it runs), act (it needs him, or it breaks a rule)."""
+    legend = run_node([{"op": "legend"}])[0]["legend"]
+    assert [(r["cls"], r["label"]) for r in legend] == [
+        ("o-pass", "Passed"),
+        ("o-not-run", "Not run: the run ended first"),
+        ("o-fail", "Failed: read the cause"),
+        ("o-deadline", "Deadline hit: counts as failed"),
+        ("o-started", "Started, no outcome recorded"),
+        ("running", "Running now: wait"),
+        ("o-needs-human", "Needs your decision"),
+        ("err", "Breaks a graph rule: fix it"),
+        ("sel", "Selected"),
+        ("drop", "Target of the link you drag"),
+    ]
+    assert all(len(r["label"]) <= 30 for r in legend), "a label is one line at the strip's width"
