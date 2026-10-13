@@ -243,4 +243,53 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#185) a dispatch whose issue carries no card moves the card anyway, by asking the board to add it. A defect the loop
+# files for itself reaches the board on a later reconcile pass, and the pass that picks the issue up first has no card to
+# move: board.py answers "#N not on the board", the write door files that refusal as a defect, and the issue filed to
+# report a refused write is refused again -- one bug per pass (#177 -> #181 -> #184 -> #185). The card move is the write
+# of the dispatch, so it asks for the card it does not carry. The real board.py behind a stub gh, so the proof is the
+# write itself: the card is added and the Status is read back on it, and no defect is filed.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.py" "$T/s/"
+printf '#!/bin/bash\nexec python3 "%s/s/board.py" "$@"\n' "$T" > "$T/s/board.sh"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+: > "$T/filed"; rm -f "$T/card-"* "$T/st-"*
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+a="\$*"; D="$T"
+echo "\$a" >> "\$D/gh.calls"
+case "\$a" in *"--input -"*) cat > "\$D/last.in";; esac
+p=\$(printf '%s' "\$a" | sed -n 's|.*projectsV2/\([0-9][0-9]*\)/.*|\1|p'); [ -n "\$p" ] || p=4
+case "\$a" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_PROG","name":{"raw":"In Progress"}}]}]' ;;
+  *items?per_page=100\&fields*) [ -e "\$D/card-\$p" ] && printf '[1228,"%s"]\n' "\$(cat "\$D/st-\$p" 2>/dev/null)"; exit 0 ;;
+  *items?per_page=100*) [ -e "\$D/card-\$p" ] && printf '[1228,"ITEM%s","https://api.github.com/repos/x/y"]\n' "\$p"; exit 0 ;;
+  *"-X POST"*items*) touch "\$D/card-\$p"; printf '{"id":"ITEM%s"}\n' "\$p" ;;
+  *"-X PATCH"*items/ITEM*) sed -n 's/.*"value": "\([^"]*\)".*/\1/p' "\$D/last.in" > "\$D/st-\$p"; printf '{"id":"ITEM%s"}\n' "\$p" ;;
+  *repos/x/y/issues/1228*) echo '{"number":1228,"id":3001,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z"}' ;;
+  *users/x*) echo '{"type":"User"}' ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "\$D/filed"
+    for x in "\$@"; do case "\$x" in body=@*) cat "\${x#body=@}" >> "\$D/filed";; esac; done
+    echo '{"number":900}' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+export BOARD="$T/s/board.sh" SG_BOARD_READ_BACKOFF=0
+r=$(SG_OWNER=x SG_PROJECT=4 SG_BUG_PROJECT=5 bash "$T/s/autobug.sh" 2>&1)
+[ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "9 a card the board does not carry is not filed as a defect" || ko "9 the missing card was filed: $(cat "$T/filed")"
+[ -e "$T/card-4" ] && [ "$(cat "$T/st-4" 2>/dev/null)" = O_PROG ] && ok "9 the dispatch adds the card and the read proves its Status" || ko "9 dispatch card: added=$([ -e "$T/card-4" ] && echo yes || echo no) status=$(cat "$T/st-4" 2>/dev/null)"
+[ -e "$T/card-5" ] && [ "$(cat "$T/st-5" 2>/dev/null)" = O_PROG ] && ok "9 the bug board's card is added the same way" || ko "9 bug-board card: added=$([ -e "$T/card-5" ] && echo yes || echo no) status=$(cat "$T/st-5" 2>/dev/null)"
+$G -q 'AUTOBUG dispatched' <<<"$r" && ok "9 the dispatch still happens" || ko "9 no dispatch: '$r'"
+
 rm -rf "$T"; exit $fail
