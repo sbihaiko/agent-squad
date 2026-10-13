@@ -920,14 +920,17 @@ function stateModule({ num }) {
 
   // One table for every state a card reads: its class, glyph, label and legend row. The card class table, the mark table and the legend
   // are all derived from it, so a state added here shows in all three. `queued` has no class: a child not started stays unmarked.
+  // The order is the legend's: what the reader does, not what the engine does. Nothing (passed, not run), look (failed, deadline,
+  // started with no outcome), wait (running), act (needs a decision). A legend row names the record's state and the reader's move, in one line.
+  // `started` is a call_start with no outcome and no live call: the run ended inside the call, or the replay cursor sits inside it.
   const STATES = [
     { state: "passed", cls: "o-pass", glyph: "✓", label: "passed", legend: "Passed" },
-    { state: "failed", cls: "o-fail", glyph: "✗", label: "failed", legend: "Failed" },
-    { state: "deadline", cls: "o-deadline", glyph: "◷", label: "deadline", legend: "Deadline hit" },
-    { state: "needs-human", cls: "o-needs-human", glyph: "!", label: "needs-human", legend: "A person is needed" },
-    { state: "not-run", cls: "o-not-run", glyph: "∅", label: "not run", legend: "Not run" },
-    { state: "started", cls: "o-started", glyph: "…", label: "started", legend: "Call started, no outcome yet" },
-    { state: "running", cls: "running", glyph: "▶", label: "running", legend: "Running now" },
+    { state: "not-run", cls: "o-not-run", glyph: "∅", label: "not run", legend: "Not run: the run ended first" },
+    { state: "failed", cls: "o-fail", glyph: "✗", label: "failed", legend: "Failed: read the cause" },
+    { state: "deadline", cls: "o-deadline", glyph: "◷", label: "deadline", legend: "Deadline hit: counts as failed" },
+    { state: "started", cls: "o-started", glyph: "…", label: "started", legend: "Started, no outcome recorded" },
+    { state: "running", cls: "running", glyph: "▶", label: "running", legend: "Running now: wait" },
+    { state: "needs-human", cls: "o-needs-human", glyph: "!", label: "needs-human", legend: "Needs your decision" },
     { state: "queued", cls: null, glyph: "–", label: "not started", legend: null },
   ];
   const STATE_CLASS = Object.fromEntries(STATES.filter((x) => x.cls).map((x) => [x.state, x.cls]));
@@ -2189,7 +2192,7 @@ function sourcesModule({ STATES }) {
   // A row with a `glyph` draws it in the swatch: the same glyph the card carries, so the color is never the only cue.
   const LEGEND = [
     ...STATES.filter((x) => x.legend).map((x) => ({ cls: x.cls, glyph: x.glyph, label: x.legend, group: "node" })),   // the card states: from the one STATES table
-    { cls: "err", label: "Rule error on the node", group: "node" },
+    { cls: "err", label: "Breaks a graph rule: fix it", group: "node" },   // an editor state (core.validate), never a record event: a run refuses a graph with one
     { cls: "sel", label: "Selected", group: "interaction" },
     { cls: "drop", label: "Target of the link you drag", group: "interaction" },
   ];
