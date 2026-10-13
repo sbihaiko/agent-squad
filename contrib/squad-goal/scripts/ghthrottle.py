@@ -53,11 +53,15 @@ neither looked up in the cache nor stored in it. Writes never reach the cache at
 
 This module is reached from a shell script the same way `ghread.py` is -- `python3 ghthrottle.py <route>` -- with the same
 exit codes (0 the answer on stdout, 2 a refusal, 1 a failure before a verdict), so a caller reads one contract whether the
-read was throttled or not. It does not own the api.log/health surface or the direct-read check.
+read was throttled or not. It does not own the health causes (`ghspend.py`) or the direct-read check.
 
-Nothing here reaches the network on its own account, and nothing here logs to `$SG_STATE`: a caller that only ever
-replaces its knowledge from an answer keeps what it had, and the refusal line is what tells the operator why the loop is
-quiet (see `forkclose.sh`'s `gh_read`, which prints it).
+The spend is visible (ADR-0277). Every call this module answers appends one line to `$SG_STATE/api.log` (the format is in
+`ghread.py`): a read the snapshot answered is a `hit` and spends no request; a read that went to GitHub is a `miss`; a read the
+cooldown held back is a `miss` with the outcome `cooling`, because no request was sent. The cooldown file names the pass that
+wrote it (`SG_GH_PASS`), so health can say who owns an exhausted cooldown, and `ghspend.py` reads both files to say so.
+
+Nothing here reaches the network on its own account. A caller that only ever replaces its knowledge from an answer keeps what
+it had, and the refusal line is what tells the operator why the loop is quiet (see `forkclose.sh`'s `gh_read`, which prints it).
 """
 
 from __future__ import annotations
@@ -259,8 +263,10 @@ class Cache:
         if entry is not None:
             if key is not None:
                 if entry["key"] == key:
+                    ghread.log_call(self.state_dir, route, ghread.HIT, ghread.ANSWER, clock=self.clock)
                     return self._refresh(entry)
             elif self.clock() - entry["at"] < self.window:
+                ghread.log_call(self.state_dir, route, ghread.HIT, ghread.ANSWER, clock=self.clock)
                 return ghread.Read(
                     kind=ghread.ANSWER, answer=json.loads(entry["body"]) if entry["body"].strip() else None, body=entry["body"]
                 )
@@ -377,6 +383,7 @@ class Throttle:
                 "message": out.message,
                 "request_id": out.request_id,
                 "pid": os.getpid(),
+                "pass": ghread.current_pass(),  # who owns it: the answer to "the loop is quiet, or has no quota left?"
             },
         )
 
@@ -403,9 +410,15 @@ class Throttle:
 
         def checked(route: str, etag: str) -> ghread.Transport:
             if self.holding():
+                self._log(route, ghread.MISS, ghread.COOLING)
                 return ghread.Transport(rc=1, detail="cooling down: the entry is not revalidated")
             self.spend()
-            return revalidate(route, etag)
+            res = revalidate(route, etag)
+            if _http_status(res.body) == 304:  # the entry still holds: one request spent, and the snapshot answered
+                self._log(route, ghread.HIT, ghread.ANSWER)
+            else:
+                self._log(route, ghread.MISS, ghread.ANSWER if res.rc == 0 else ghread.FAILED)
+            return res
 
         return checked
 
@@ -413,6 +426,7 @@ class Throttle:
         """Read one route through the throttle: refused while a cooldown holds, bounded by the bucket otherwise."""
         held = self.holding()
         if held:
+            self._log(route, ghread.MISS, ghread.COOLING)
             # GitHub's own words travel with the refusal, because the cooldown IS that refusal still holding; the note
             # beside them says no request was sent. Returning anything else here would let a caller read a rate limit as
             # an empty answer, which is the failure this whole interface exists to end.
@@ -432,9 +446,13 @@ class Throttle:
             return res
 
         out = ghread.read(route, transport=probe)
+        self._log(route, ghread.MISS, out.kind)
         if _self_attributed(out, status["code"]):
             self.write_cooldown(out)
         return out
+
+    def _log(self, route: str, cache: str, outcome: str) -> None:
+        ghread.log_call(self.state_dir, route, cache, outcome, clock=self.clock)
 
     def _remaining(self, held: dict[str, Any]) -> float:
         return max(0.0, float(held.get("until", 0)) - self.clock())
@@ -446,7 +464,7 @@ class Throttle:
             return ""
         return (
             f"the shared cooldown holds for {self._remaining(held):.0f}s more: GitHub answered '{held.get('message', '')}'"
-            f" (request id {held.get('request_id') or 'not named'}), written by pid {held.get('pid')}. No request is sent until it expires."
+            f" (request id {held.get('request_id') or 'not named'}), written by pid {held.get('pid')} for the {held.get('pass') or ghread.UNATTRIBUTED} pass. No request is sent until it expires."
         )
 
 

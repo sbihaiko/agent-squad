@@ -24,6 +24,11 @@
 # `SG_GH_CACHE_WINDOW` seconds from `$SG_STATE/gh-cache` with no request, and which reads live every route that is not one
 # of the few it classifies as cheap or keyed -- so a gating route handed to `gh_snapshot` by mistake is still live.
 #
+# The spend is visible (ADR-0277): every door appends one line to $SG_STATE/api.log -- timestamp, transport, route, cache hit or
+# miss, outcome and the spending pass (`SG_GH_PASS`, which each pass script exports for itself; a caller that names none is
+# `unattributed`). gh_api and gh_snapshot log through ghread.py / ghthrottle.py; gh_get and gh_send reach `gh` themselves, so they
+# log through `ghread.py --log`, with the outcome the call had. health.sh reads the log (ghspend.py).
+#
 # `-q`/`--jq` is the caller's projection and is applied HERE, on the answer, with `jq -r`, so the transport always
 # speaks raw JSON: a filtering transport cannot tell a refusal apart from an answer, and `gh` cannot either.
 
@@ -33,6 +38,21 @@ ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # _gh_refused <body>: 0 when the body is GitHub's own refusal shape (a message beside a status). Any body that is not
 # JSON, or is JSON without that shape, is not a refusal -- `jq -e` exits non-zero for both.
+# _gh_log <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument that is
+# neither a flag nor the value of one; the transport is REST (a write, a diff and a Project v2 read are all REST).
+_gh_log() {
+  local outcome=$1 route="" a; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -H|--header|-X|--method|-f|--raw-field|-F|--field|-q|--jq|--input|--cache|-t|--template|--hostname) shift 2;;
+      -*) shift;;
+      *) route=$1; break;;
+    esac
+  done
+  [ -n "$route" ] || return 0
+  $SG_GHREAD --log REST "$route" miss "$outcome" >/dev/null 2>&1 || true
+}
+
 _gh_refused() {
   printf '%s' "$1" | jq -e 'type == "object" and (.message | type == "string") and has("status")' >/dev/null 2>&1
 }
@@ -74,8 +94,9 @@ _gh_read() {   # _gh_read <reader command> <route> [-q <jq filter>]
 gh_get() {
   local o rc
   o=$(gh api "$@" 2>/dev/null); rc=$?
-  if [ "$rc" -eq 0 ] && ! _gh_refused "$o"; then printf '%s' "$o"; return 0; fi
-  if _gh_refused "$o"; then _gh_refusal_line "$o"; return 2; fi
+  if [ "$rc" -eq 0 ] && ! _gh_refused "$o"; then _gh_log answer "$@"; printf '%s' "$o"; return 0; fi
+  if _gh_refused "$o"; then _gh_log refused "$@"; _gh_refusal_line "$o"; return 2; fi
+  _gh_log failed "$@"
   printf 'failed: no verdict (gh exited %s)\n' "$rc"
   return 1
 }
@@ -92,8 +113,9 @@ gh_send() {
   done
   local o rc
   o=$(gh api "${args[@]}" 2>/dev/null); rc=$?
-  if _gh_refused "$o"; then _gh_refusal_line "$o"; return 2; fi
-  if [ "$rc" -ne 0 ]; then printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
+  if _gh_refused "$o"; then _gh_log refused "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
+  if [ "$rc" -ne 0 ]; then _gh_log failed "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
+  _gh_log done "${args[@]}"
   if [ -n "$q" ]; then printf '%s' "$o" | jq -r "$q" || return 1; else printf '%s' "$o"; fi
   return 0
 }
