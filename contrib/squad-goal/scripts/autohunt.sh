@@ -73,7 +73,7 @@ hunt_going() {
 
 live_run && busy
 lock_held gui-suite && busy
-lock_held single-forkclose && busy
+lock_held single-prland && busy   # the landing pass (#134: the fork pass it replaced is retired)
 startable && busy
 review_waiting && busy
 
