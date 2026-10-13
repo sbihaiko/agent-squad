@@ -3,6 +3,9 @@
 # verdict (or the run is a zombie: no verdict, idle 20 min, no process inside), the tree is clean and HEAD is on a remote branch. The run folder and its dashboard server are left alone (the hub lists runs from live servers). A finished worktree
 # whose HEAD is on no remote branch (a fix run that landed without pushing) is pushed to its open PR's branch when that is a
 # fast-forward (WT PUSHED), else its fix is re-armed via retryfix.sh (autofix runs) or it is kept and reported once as WT UNPUSHED.
+# A tree that holds a checked out submodule is its own class: git refuses to remove such a tree whole (`fatal: working trees
+# containing submodules cannot be moved or removed`, a line with no run id in it), so every removal here carries the flag that
+# case needs, and the line names the run or the tree. One the flag still cannot free is reported once as WT KEPT submodule.
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
 # The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
 # (the set the footer counts), `free` per one it removed. A `while read` behind a pipe is a subshell, so the count lives
@@ -14,6 +17,21 @@ tally="$SG_STATE/wt-tally.$$"; : > "$tally"
 in_use() { printf '%s\n' "$cwds" | awk -v p="$1" '$0==p || index($0,p"/")==1 {f=1} END{exit !f}'; }
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
+# has_sub <tree>: the tree holds a submodule git has checked out — the one state in which `git worktree remove` refuses the
+# whole tree whatever else is true of it: `fatal: working trees containing submodules cannot be moved or removed`.
+# `git submodule status` marks an uninitialized one with a leading `-`, a populated one with anything else (a space at the
+# recorded commit, `+` or `U` otherwise).
+has_sub() { $G -C "$1" submodule status 2>/dev/null | grep -qE '^[ +U]'; }
+# wt_remove <repo> <tree>: the one worktree removal, so that refusal is answered in one place. The caller has already proved
+# the tree clean, unused and landed, and a submodule's own dirt reads as ` M sub` in that same status check, so the flag the
+# populated case needs loses nothing. The class is read BEFORE the attempt: a removal that fails can take the worktree's own
+# registration with it, and then the tree can no longer say what it is. Returns 0 when the tree is gone, 2 when a tree
+# holding a checked out submodule would not go even with that flag, 1 otherwise; wt_forced says the flag was used.
+wt_remove() { wt_forced=0; wt_sub=0; has_sub "$2" && wt_sub=1
+  $G -C "$1" worktree remove "$2" 2>/dev/null && return 0
+  [ $wt_sub = 1 ] || return 1
+  $G -C "$1" worktree remove --force "$2" 2>/dev/null || return 2
+  wt_forced=1; return 0; }
 now=$(date +%s)
 cd "$SG_CHECKOUT" || exit 0
 SG_CHECKOUT=$(pwd -P)   # resolved: every liveness test below compares a path with a process cwd, and lsof answers with the resolved one. Under a symlinked checkout (/var -> /private/var, a linked home) the unresolved form never matched, so a tree a live process was working in read as unused.
@@ -40,8 +58,12 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
         bash "$(dirname "$0")/retryfix.sh" "${run##*/}"; echo "WT UNPUSHED ${run##*/} ${sha:0:9}: branch $own moved or has no open PR; fix re-armed (retryfix), tree kept"; echo "$w" >> "$seen"; continue; fi
     fi
     echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept"; echo "$w" >> "$seen"; continue; fi
-  b=$($G -C "$w" branch --show-current); $G worktree remove "$w" && echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}"
-  case $b in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$b" >/dev/null 2>&1;; esac   # throwaway local names only
+  b=$($G -C "$w" branch --show-current)
+  wt_remove "$SG_CHECKOUT" "$w"; rc=$?
+  if [ $rc = 0 ]; then echo "WT CLEAN ${run##*/} ${b:-detached} ${sha:0:9}${wt_forced:+ (submodule tree: removed with --force)}"
+    case $b in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$b" >/dev/null 2>&1;; esac   # throwaway local names only, and only once the tree is gone
+  # the tree a populated submodule kept alive: reported once with its own reason, never as git's own nameless fatal
+  elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule ${run##*/} ${sha:0:9} ${w}: a checked out submodule git refuses to remove, even with --force; kept"; echo "sub $w" >> "$seen"; }; fi
 done
 # C: the child trees the loop holds at $SG_CHECKOUT/worktrees/child/* (and .worktrees/*) — the set the hub's footer counts
 # as `wt N` and the one the reader is looking at when he asks what can be freed. No pass touched them until now, so a landed
@@ -68,7 +90,9 @@ for rel in worktrees/child .worktrees; do
     done
     [ $live = 0 ] || continue
     b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
-    $G worktree remove "$w" && { echo free >> "$tally"; echo "WT CLEAN child ${w##*/} ${b:-detached} ${sha:-}"; }
+    wt_remove "$SG_CHECKOUT" "$w"; rc=$?
+    if [ $rc = 0 ]; then echo free >> "$tally"; echo "WT CLEAN child ${w##*/} ${b:-detached} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
+    elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule child ${w##*/} ${sha:-} ${w}: a checked out submodule git refuses to remove, even with --force; kept"; echo "sub $w" >> "$seen"; }; fi
   done
 done
 # acceptance-command trees (acpr.sh) left by a killed gate: drop any older than 2 h
@@ -82,7 +106,7 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^detached/{print w}' | w
   in_use "$w" && continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   if [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] && [ -n "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
-    $G worktree remove "$w" && echo "WT CLEAN loose ${w##*/} ${sha:0:9}"
+    wt_remove "$SG_CHECKOUT" "$w" && echo "WT CLEAN loose ${w##*/} ${sha:0:9}${wt_forced:+ (submodule tree: removed with --force)}"
   else grep -qx "loose $w" "$seen" || { echo "WT LOOSE ${w##*/} ${sha:0:9}: detached, dirty or on no remote branch; kept"; echo "loose $w" >> "$seen"; }; fi
 done
 # fork-only issue worktrees ($SG_FORK_DIR, ~/wt-as-<n>, ~/wt-fr-<n>): once the issue is closed, the tree clean and its branch
@@ -108,7 +132,7 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
     [ "$(gh api repos/$SG_REPO/issues/$n -q .state 2>/dev/null)" = closed ] || continue
     [ -z "$b" ] || $G -C "$SG_FORK_DIR" merge-base --is-ancestor "$b" "$SG_FORK_BASE" || continue
-    $G -C "$SG_FORK_DIR" worktree remove "$w" && { [ -n "$b" ] && $G -C "$SG_FORK_DIR" branch -d "$b" >/dev/null 2>&1; echo "WT CLEAN fork #$n ${b:-detached}"; }
+    wt_remove "$SG_FORK_DIR" "$w" && { [ -n "$b" ] && $G -C "$SG_FORK_DIR" branch -d "$b" >/dev/null 2>&1; echo "WT CLEAN fork #$n ${b:-detached}${wt_forced:+ (submodule tree: removed with --force)}"; }
   done; $G -C "$SG_FORK_DIR" worktree prune
 fi
 # PR worktrees under ~ (git worktree add ~/wt-<n>-*): drop once the branch's OWN PR is merged, its commits are in the base and the tree is clean.
@@ -121,7 +145,7 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^branch /{sub("refs/head
   IFS='|' read -r pn hsha mat msha href < <(gh api "repos/$SG_REPO/pulls?state=closed&head=$SG_OWNER%3A$(printf %s "$b" | jq -sRr @uri)&per_page=1" -q '.[0] // empty | [.number, .head.sha, (.merged_at // ""), (.merge_commit_sha // ""), .head.ref] | join("|")' 2>/dev/null </dev/null)
   [ "$href" = "$b" ] && [ -n "$mat" ] || continue   # no PR of its own, or not merged
   if $G merge-base --is-ancestor "$b" "origin/$SG_BASE" 2>/dev/null || { [ "$($G -C "$w" rev-parse HEAD)" = "$hsha" ] && [ -n "$msha" ] && $G merge-base --is-ancestor "$msha" "origin/$SG_BASE" 2>/dev/null; }; then
-    $G worktree remove "$w" && $G branch -D "$b" >/dev/null 2>&1 && echo "WT CLEAN pr-merged $b (PR #$pn, head $href)"
+    wt_remove "$SG_CHECKOUT" "$w" && $G branch -D "$b" >/dev/null 2>&1 && echo "WT CLEAN pr-merged $b (PR #$pn, head $href)${wt_forced:+ (submodule tree: removed with --force)}"
   else grep -qx "kept $w" "$seen" || { echo "WT KEPT pr-merged $b (PR #$pn, head $href): the base lacks some of its commits; nothing removed"; echo "kept $w" >> "$seen"; }; fi
 done
 $G worktree prune
