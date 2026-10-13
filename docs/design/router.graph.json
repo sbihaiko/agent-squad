@@ -67,14 +67,11 @@
       "allow": {
         "models": [
           "claude-gpt-5.5",
-          "claude-deepseek-v4-flash",
-          "sonnet",
-          "opus"
+          "claude-deepseek-v4-flash"
         ],
         "efforts": [
           "low",
-          "medium",
-          "high"
+          "medium"
         ],
         "tools": [
           "Read",

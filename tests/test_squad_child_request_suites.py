@@ -53,7 +53,7 @@ def _mkreq(tmp_path, name, body):
 def test_a_child_request_names_the_suites_it_runs_and_the_full_gate_as_the_loops(tmp_path):
     text = _mkreq(tmp_path, "pr", PR_BODY)
     assert SUITES_LINE in text, text
-    lines = [l for l in text.splitlines() if l.startswith("SUITES:")]
+    lines = [ln for ln in text.splitlines() if ln.startswith("SUITES:")]
     assert lines == [SUITES_LINE], f"the request carries one SUITES line: {lines}"
 
 
@@ -65,7 +65,7 @@ def test_a_fork_only_child_request_carries_the_same_line(tmp_path):
 def test_the_line_names_the_targeted_commands_and_not_only_the_full_gate(tmp_path):
     # The instruction is actionable: the suite beside the touched script and the targeted cases, both named in a command.
     text = _mkreq(tmp_path, "pr2", PR_BODY)
-    line = [l for l in text.splitlines() if l.startswith("SUITES:")][0]
+    line = [ln for ln in text.splitlines() if ln.startswith("SUITES:")][0]
     assert "test-<script>.sh" in line and "pytest tests/<file>.py" in line, line
     assert "once per landing" in line and "belongs to the loop" in line, line
 

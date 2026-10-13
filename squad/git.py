@@ -2,6 +2,7 @@
 import hashlib
 import shutil
 import subprocess
+from pathlib import Path
 
 
 def run(args, cwd, check=False, timeout=None):
@@ -27,8 +28,21 @@ def state(cwd):
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
-def dirty(cwd):
-    return [ln for ln in run(["status", "--porcelain=v1", "-uall"], cwd).stdout.splitlines() if ln.strip()]
+def dirty(cwd, exclude=None, timeout=None):
+    """Changed paths, tracked or untracked. `exclude` is one path under `cwd` that never counts: the run's own folder."""
+    spec = ["--", ".", f":(exclude){exclude}"] if exclude else []
+    return [ln for ln in run(["status", "--porcelain=v1", "-uall", *spec], cwd, timeout=timeout).stdout.splitlines() if ln.strip()]
+
+
+def main_worktree(cwd, timeout=None):
+    """The directory of the repository's main checkout: where `.git` is a directory, never a linked worktree. None outside git."""
+    r = run(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd, timeout=timeout)
+    return Path(r.stdout.strip()).resolve().parent if r.returncode == 0 and r.stdout.strip() else None
+
+
+def toplevel(cwd, timeout=None):
+    r = run(["rev-parse", "--show-toplevel"], cwd, timeout=timeout)
+    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
 
 
 def unmerged(cwd):

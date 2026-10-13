@@ -2,7 +2,9 @@
 # Rule O, marker half (#1847): a dispatch marker expires when its run ended without landing -- and `failed` is not the
 # only way a run ends. A run that recorded any other verdict (`needs-human`, `pass`) and landed nothing left its
 # auto/disp-<n> behind, autofrontier.sh skips any issue holding that marker, and the frontier starved on a finished run.
-#  (A) ended-nothing (verdict `needs-human`, no land event, no PR): marker dropped, card back to Todo, announced once;
+#  (A) ended-nothing (verdict `needs-human`, no land event, no PR): marker dropped, card -> Blocked (ADR-0029: the owner is the next actor), announced once.
+#      Rule R owns that write; rule O writes no loop-board card (#91). The board stub answers the items read from the last
+#      status the pass itself wrote, as the live board does, so a second column written for the same card is a race, not a pass;
 #  (B) a run that landed (a `land` event with outcome pass) keeps its marker and reconciles its card to Done;
 #  (C) a live run (no verdict yet) keeps the marker of the issue it works and writes Run fields;
 #  (D) an open PR naming the issue keeps the marker and moves the card to Code Complete.
@@ -14,18 +16,17 @@ printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
-n=$(printf '%s' "$*" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')
 case "$*" in
   # the live API answers a POST to /search/issues with Not Found and a non-zero body, which a caller reading `.total_count` sees as "a PR exists" (#1981): the stub refuses it the same way
   *search/issues*) case "$*" in *"-X GET"*|*"--method GET"*) case "$*" in *"is:merged"*) echo 0;; *"Refs #904"*|*"Refs #908"*) echo 1;; *) echo 0;; esac;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) case "$n" in 901|902|903|904) echo "In Progress";; esac;;
+  *projectsV2/4/items*) for n in 901 902 903 904; do s=$(/usr/bin/grep "^o 4 .* $n\$" "TMPDIR/board.calls" 2>/dev/null | tail -1 | sed "s/^o 4 \(.*\) $n\$/\1/"); printf '%s\t%s\n' "$n" "${s:-In Progress}"; done;;   # one read, every card: the column the pass last wrote, In Progress before any write
   *projectsV2/1/items*) ;;
   *issues/90*) echo open;;
 esac
 J
-chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'CHILD — GitHub issue(s) %s (bug; one PR):\n' "$2" > "$T/co/runs/$1/request.txt"; }
 # A: the run recorded a verdict (needs-human) and landed nothing
 mk run-ended 901
@@ -56,8 +57,9 @@ echo frontier-old > "$T/st/auto/disp-908"; touch -t 202001010000 "$T/st/auto/dis
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" SG_FORK_DIR= SG_FORK_BASE= SG_TESTING=Testing JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run)
 [ ! -e "$T/st/auto/disp-901" ] && ok "O: an ended run with no landed change drops its disp marker" || ko "O disp-901 kept (the frontier starves on it): $o"
-/usr/bin/grep -q '^o 4 Todo 901$' "$T/board.calls" 2>/dev/null && ok "O: ended run -> card back to Todo" || ko "O #901 not demoted: $(cat "$T/board.calls" 2>/dev/null)"
-/usr/bin/grep -q 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null && ok "O: the drop is announced" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Blocked 901$' "$T/board.calls" 2>/dev/null && ok "R: a needs-human run with nothing landed -> card Blocked (the owner is the next actor)" || ko "R #901 not Blocked: $(cat "$T/board.calls" 2>/dev/null)"
+[ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "O: writes no loop-board card of its own (one column, one owner)" || ko "O raced R on #901: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q 'DISPATCH-FAILED #901.*card is Blocked' "$T/st/cycle.log" 2>/dev/null && ok "O: the drop is announced with the column R wrote" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q 'needs-human' "$T/st/cycle.log" 2>/dev/null && ok "O: the announcement names the verdict it ended on" || ko "O announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'owner_decision' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q 'run-ended' "$T/st/cq/"*901* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
 [ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Done 902$' "$T/board.calls" 2>/dev/null && ok "O: a run that landed moves to Done and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
@@ -68,5 +70,6 @@ o=$(run)
 [ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"
 [ -e "$T/st/auto/disp-908" ] && ok "E: an open PR naming the issue keeps its marker" || ko "E disp-908 dropped although a PR names it"
 run >/dev/null   # the announcement is once per run, not once per pass
-[ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && [ "$(/usr/bin/grep -c '^o 4 Todo 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "R: a board that follows the writes is written once; the card does not flap" || ko "#901 flapped across passes: $(cat "$T/board.calls" 2>/dev/null)"
 rm -rf "$T"; exit $fail

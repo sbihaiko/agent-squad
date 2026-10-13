@@ -4,6 +4,8 @@
 # --file <title> <body-file>   opens the issue with only the bug label and logs HUNT filed #N
 # --none                       logs HUNT none (a hunt that found nothing)
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
 file_issue() {
   local title=$1 body=$2 resp num tagged
@@ -65,7 +67,7 @@ hunt_going() {
   n=$(cat "$A/hunt-live" 2>/dev/null)
   [ "$n" = dry ] && return 0
   live_run && return 0
-  age=$(( now - $(stat -f %m "$A/hunt-live" 2>/dev/null || echo 0) ))
+  age=$(( now - $(mtime "$A/hunt-live") ))
   [ "$age" -lt 900 ]
 }
 

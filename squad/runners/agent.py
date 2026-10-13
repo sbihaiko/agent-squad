@@ -112,6 +112,7 @@ class AgentRunner:
             diagnostic["ended"] = r.ended
         if diagnostic:
             extra["diagnostic"] = diagnostic
+        ctx.commit_workspace(node, entry, sc, outcome)     # #84: the engine's commit, before the snapshot a resume compares against
         ws = ctx.ws_snapshot(node, sc)
         if ws:
             extra["workspace"] = ws

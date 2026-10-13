@@ -54,18 +54,20 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A gate is a stop condition, never a target** ([ADR-0012](docs/adr/0012-gate-is-a-stop-condition.md)). Guard: none yet; a draft.
 - **A failing gate is a defect; expectations are re-anchored, never retuned** ([ADR-0018](docs/adr/0018-failing-gate-is-a-defect.md)). Guard: The full suite, run in both modes.
 - **A red test is fixed, whoever broke it** ([ADR-0062](docs/adr/0062-red-test-is-fixed.md)). Guard: The full suite, run in both modes (ADR-0018).
+- **A test whose fixture repository the runner does not own is deselected there, never skipped** ([ADR-0139](docs/adr/0139-a-test-without-its-fixture-repo-is-deselected.md)). Guard: `tests/test_tooling.py`.
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and merges to main; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
 
 ### Run engine
 
 - **Run truth lives in one module; the exit code is a function of one verdict** ([ADR-0019](docs/adr/0019-run-truth-in-one-module.md)). Guard: none yet.
-- **Needs-human is not success and has its own exit code** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`.
+- **Needs-human is not success and has its own exit code; on a board its card is Blocked, written by one rule** ([ADR-0029](docs/adr/0029-needs-human-exit-code.md)). Guard: `tests/test_verdict.py`, `tests/test_resume.py`, `tests/test_cli.py`, `contrib/squad-goal/scripts/test-janitor-disp-expiry.sh`.
 - **An interruptible write is atomic** ([ADR-0030](docs/adr/0030-atomic-writes.md)). Guard: `tests/test_record.py`.
 - **A call has a deadline; a stuck agent is found without a caller** ([ADR-0051](docs/adr/0051-call-deadline-and-stuck-agent.md)). Guard: `tests/test_deadlines.py`, `tests/test_monitor.py`.
 - **A call or a loop stops on failed attempts that do not change, never on total turns or entries** ([ADR-0134](docs/adr/0134-stall-cap-counts-failures-without-evolution.md)). Guard: `tests/test_stall.py`, `tests/test_engine_skeleton.py`, `tests/test_sdk_adapter.py`.
 - **Seven node kinds; a gate is never skipped; control is order-based** ([ADR-0100](docs/adr/0100-node-kinds-gate-control.md)). Guard: `tests/test_graph.py`, `tests/test_engine_skeleton.py`, `tests/test_each.py`.
 - **A node is one fresh session with a deadline and a declared workspace** ([ADR-0102](docs/adr/0102-node-is-one-fresh-session.md)). Guard: `tests/test_graph.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.
+- **A node that passed commits its workspace, declared or the run-owned target, so a branch tip is the run's final state; the owner's checkout is never touched** ([ADR-0106](docs/adr/0106-run-option-graph-or-engine.md)). Guard: `tests/test_node_commit.py`.
 - **Six setting proposals over a closed facts registry** ([ADR-0103](docs/adr/0103-setting-proposals-and-facts.md)). Guard: `tests/test_graph.py`, `tests/test_adapt.py`, `tests/test_facts.py`.
 - **A loop outcome follows control flow; the verdict module folds the record** ([ADR-0105](docs/adr/0105-loop-outcome-and-verdict.md)). Guard: `tests/test_verdict.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.
 - **A run option is graph data or an engine option recorded at run start** ([ADR-0106](docs/adr/0106-run-option-graph-or-engine.md)). Guard: `tests/test_graph.py`, `tests/test_facts.py`, `tests/test_cli.py`.

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP = {".git", ".venv", "runs", "worktrees", "vendor", "node_modules", "__pycache__", "tests", "docs", "bench"}
+SKIP = {".git", ".venv", "runs", "worktrees", ".worktrees", "vendor", "node_modules", "__pycache__", "tests", "docs", "bench"}
 # The names the machine load reading goes by: the hub's samplers, its thresholds and its served route. `json.loads` and a
 # variable called `load` are different readings and are not in this list.
 LOAD_NAMES = re.compile(r"sample_load|cpu_pct|ram_pct|gpu_pct|load_payload|load_line|/api/load|LOAD_(WARN|ERR|MIN_SHARE|SAMPLE|HISTORY|STATE)")

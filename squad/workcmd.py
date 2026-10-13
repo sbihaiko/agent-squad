@@ -122,7 +122,7 @@ class CmdResult:
     ok: bool
     evidence: str = ""     # empty on success; the output tail on a failure; "timeout after N s" on a timeout
     malformed: bool = False     # the shell cannot parse the command (prose in it); the command never ran
-    counts: dict = None    # the counts of the output's last pytest summary, or None: how much of the suite passed (#80)
+    counts: dict | None = None    # the counts of the output's last pytest summary, or None: how much of the suite passed (#80)
 
 
 def run(cmd, cwd, timeout=None):

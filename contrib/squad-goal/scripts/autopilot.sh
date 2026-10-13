@@ -31,6 +31,8 @@
 #  so their mtime is the FIRST gate, not the last, and most exits write none at all.
 # Events: AUTOREVIEW, STALE-REVIEW, AUTOFIX, AUTOPANEL, NEEDS OWNER, AUTOMERGE, AGING, STALLED, CI MISSING, NOREFS, REFSADDED.
 . "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; printf '%s\n' "$(date +%s)" > "$A/.pass"; [ -e "$A/off" ] && exit 0
+# mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
+mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 # The repositories this pass reads, named in ONE place and never guessed: the profile's SG_REPO, as hub.py reads it --
 # or the single repository named as the argument (autopilot.sh x/tool). SG_TOOLING_REPO is retired and never read (#20).
 case "${1:-}" in */*) REPOS=${1}; shift;; *) REPOS="$SG_REPO";; esac
@@ -194,7 +196,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   # review instead, at most once per head per SG_REREVIEW_MINUTES, so a transient outage heals without moving the head.
   if [[ $line == *BLOCKED* ]] && [[ $ci != *failure* && $ci != *timed_out* && $ci != *cancelled* ]] && [ "$ms" != dirty ]; then
     rf="$A/rereview-$pr-$s9"
-    [ -e "$rf" ] && [ $(( $(date +%s) - $(stat -f %m "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] \
+    [ -e "$rf" ] && [ $(( $(date +%s) - $(mtime "$rf") )) -lt $(( ${SG_REREVIEW_MINUTES:-20} * 60 )) ] \
       && { gate reviewing "every review model failed (BLOCKED) and the re-review is not due yet"; continue; }
     /bin/ps -axo command= | grep -Eq "revci\.sh $pr( |\$)" && { gate reviewing "a review of this head is already in flight (revci.sh $pr)"; continue; }   # two would race on review-<pr>.md
     aenv=""; [ -n "$aging" ] && aenv="SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=${SG_REVIEW_TIMEOUT:-120}"

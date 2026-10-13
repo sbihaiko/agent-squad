@@ -20,8 +20,8 @@ case "$a" in
   *search/issues*) case "$a" in *"-X GET"*|*"--method GET"*) ;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac; echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) case "$(printf '%s' "$a" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')" in 901|902|903|904) echo "In Progress";; esac;;
-  *projectsV2/1/items*) case "$(printf '%s' "$a" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')" in 901) echo "Doing";; esac;;
+  *projectsV2/4/items*) for n in 901 902 903 904; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/1/items*) for n in 901; do printf '%s\tDoing\n' "$n"; done;;
   *issues/9*) echo open;;
 esac
 J

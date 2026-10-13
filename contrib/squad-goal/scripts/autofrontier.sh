@@ -9,7 +9,7 @@
 # READY issues naming a common file share one child and one PR (cluster.py). The profile's
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
-# landing anything, whatever its verdict (janitor rule O, which also puts the card back to Todo). Empty SG_FRONTIER_LABEL turns it off.
+# landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/forkonly.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0

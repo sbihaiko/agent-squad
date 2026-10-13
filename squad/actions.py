@@ -43,10 +43,11 @@ def worktree_revert(path, head, timeout=None):
     return ActionResult(True, [], git.head(path))
 
 
-def commit(path, message, timeout=None):
-    if not git.dirty(path):
+def commit(path, message, timeout=None, exclude=None):
+    """Stage and commit every change under `path`. `exclude` is one path under it that is never staged: the run's own folder."""
+    if not git.dirty(path, exclude):
         return ActionResult(True, ["nothing_to_commit"], git.head(path))
-    git.run(["add", "-A"], path, timeout=timeout)
+    git.run(["add", "-A", *(["--", ".", f":(exclude){exclude}"] if exclude else [])], path, timeout=timeout)
     r = git.run(["-c", "user.name=agent-squad", "-c", "user.email=squad@localhost", "commit", "-m", message], path, timeout=timeout)
     if r.returncode != 0:
         return ActionResult(False, ["commit_failed"], extra={"stderr": r.stderr.strip()})

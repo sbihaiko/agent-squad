@@ -21,15 +21,15 @@ printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
-a="$*"; n=$(printf '%s' "$a" | sed -n 's/.*content.number==\([0-9]*\).*/\1/p')
+a="$*"
 case "$a" in
   *search/issues*)
     case "$a" in *"-X GET"*|*"--method GET"*) ;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac
     case "$a" in *"Refs #1006"*|*"Refs #1011"*) echo 1;; *) echo 0;; esac;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) case "$n" in 1007) echo "Code Complete";; 100[1-6]|1008|1009|1010|1011) echo "In Progress";; esac;;
-  *projectsV2/1/items*) case "$n" in 1003) echo "Doing";; esac;;
+  *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/1/items*) for n in 1003; do printf '%s\tDoing\n' "$n"; done;;
   *issues/1010*) if [ -e "TMPDIR/refuse" ]; then echo "API rate limit exceeded for user"; else echo open; fi;;
   *issues/10*) echo open;;
 esac

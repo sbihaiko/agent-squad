@@ -16,7 +16,7 @@ from tests.helpers import DESIGN, node, router
 
 
 def req(skill="tdd", **kw):
-    return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": "sonnet", "effort": "medium", "tools": ["Read", "Edit"],
+    return {"prompt": f"Run {skill} on the task.", "skill": skill, "model": "claude-gpt-5.5", "effort": "medium", "tools": ["Read", "Edit"],
             "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child", **kw}
 
 
