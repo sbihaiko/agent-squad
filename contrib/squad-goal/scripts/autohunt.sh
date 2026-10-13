@@ -81,12 +81,14 @@ file_issue() {
   # The write goes through the door (ADR-0277). `gh api` prints GitHub's error body on stdout and exits non-zero, so a
   # refused filing used to be read back as a number: the body carries digits ("... for user ID 1 ..."), and a rate-limit
   # message became a filed issue nobody opened. A refused write is gh_send's exit 2, whose line is never read as an answer.
-  resp=$(gh_send --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" "${labs[@]}"); rc=$?
+  num=""
+  resp=$(gh_send --method POST "repos/$SG_REPO/issues" -f title="$title" -F "body=@$tagged" "${labs[@]}" 2>/dev/null); rc=$?
   rm -f "$tagged"
   # A refusal (2) and a failure before GitHub reached a verdict (1) are each named with their fingerprint and their name,
   # and each spends no line of the pass's ledger: a storm of refusals must not consume the ceiling a real defect needs.
-  if [ "$rc" -eq 2 ]; then printf '%s\n' "$resp"; echo "HUNT refused $fp $name"; return 0; fi
-  if [ "$rc" -ne 0 ]; then printf '%s\n' "$resp"; echo "HUNT failed $fp $name"; return 0; fi
+  # The refused write's own words are never echoed, and its line is never read as a filed issue (#139).
+  if [ "$rc" -eq 2 ]; then echo "HUNT refused $fp $name"; return 0; fi
+  if [ "$rc" -ne 0 ]; then echo "HUNT failed $fp $name"; return 0; fi
   num=$(printf '%s' "$resp" | python3 -c 'import sys,json,re
 t=sys.stdin.read().strip()
 try:

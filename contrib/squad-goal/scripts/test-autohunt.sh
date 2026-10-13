@@ -42,7 +42,7 @@ scene() {
   restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   cp "$src" "$S/autohunt.sh"
-  cp "$here/ghcall.sh" "$S/"   # the filer's one write door (#140): --file spends through gh_send, so the suite ships it
+  cp "$here/ghcall.sh" "$here/ghread.py" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
@@ -274,5 +274,29 @@ scene ceiling; export SG_FILE_CEILING=2
 r=$(run)
 body=$(cat "$SG_STATE/req/"*.body 2>/dev/null)
 printf '%s' "$body" | $G -qF 'at most 2 bugs per hunt' && ok "19 the hunt request asks for the ceiling the filer declares" || ko "19 the request does not carry the declared ceiling: $(printf '%s' "$body" | $G -o 'at most [0-9]* bugs per hunt')"
+
+# 20) (#139) a write GitHub refused is never read back as a filed issue: `gh api` writes GitHub's error body to stdout
+# and exits non-zero, so the words of a rate limit ("... for user ID 1 ...") read as a number and the filer logged
+# `HUNT filed #1` -- an issue nobody opened. A refused filing is the door's exit 2, named with its fingerprint, and it
+# is never a number.
+scene refused
+printf 'repro\n' > "$T/refused/body.md"
+cat > "$T/bin/gh" <<'GH'
+#!/bin/bash
+echo "$*" >> "${GHLOG:-/dev/null}"
+case "$*" in
+  *"--method POST"*)
+    printf '%s' '{"message":"API rate limit exceeded for user ID 1. Include the request ID 06F8:34CAED:22CD6B:3FC4397.","documentation_url":"https://docs.github.com/rest","status":"403"}'
+    exit 1;;
+  *) ;;
+esac
+GH
+chmod +x "$T/bin/gh"
+n=$(bash "$S/autohunt.sh" --file "a refused filing" "$T/refused/body.md" 2>&1)
+case "$n" in *"HUNT filed #"*)   ko "20 a refused filing is never read back as a filed issue: '$n'";;
+             *"HUNT refused"*) ok "20 a refused filing is named with its fingerprint, never read back as a filed issue";;
+             *)                ko "20 the filer said something else: '$n'";; esac
+case "$n" in *"rate limit"*|*"403"*) ko "20 the refusal's own words became the filer's line: '$n'";;
+             *)                      ok "20 the refusal's own words are never read as an issue number";; esac
 
 rm -rf "$T"; exit $fail

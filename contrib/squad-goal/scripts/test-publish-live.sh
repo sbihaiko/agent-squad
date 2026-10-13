@@ -16,6 +16,12 @@ printf 'note\n' > "$live/scripts/local-note.txt"                # a live-only fi
 retired=("fork""close.sh" "fork""-gate.sh" "publish-landing.sh" "sync-to-""fork.sh" "refresh-from-""fork.sh" \
          "fork""only.sh" "forkrescue.py" "forkstrand.py")
 for n in "${retired[@]}"; do printf '#!/bin/bash\n' > "$live/scripts/$n"; done
+# The suites of the retired route stayed behind when their scripts were dropped, and every one of them failed on a call to
+# a file that is not there (#210). A retired name takes its suites with it; two of them do not carry their subject in their
+# name. A suite the repository ships stays.
+mysuites=(test-forkclose-wait.sh test-forkbranch-source.sh test-sync-refresh.sh)
+for s in "${mysuites[@]}"; do printf '#!/bin/bash\n' > "$live/scripts/$s"; done
+printf '#!/bin/bash\n' > "$repo/scripts/test-watch-ok.sh"
 
 # --- --check changes nothing and names every file it would touch ---------------------------------
 before=$(cd "$live" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "$f"; done)
@@ -26,6 +32,9 @@ after=$(cd "$live" && find . -type f | LC_ALL=C sort | while read -r f; do print
 printf '%s\n' "$out" | /usr/bin/grep -qx 'copy SKILL.md' && ok "--check names the file it would copy" || ko "copy line missing: $out"
 for n in "${retired[@]}"; do
   printf '%s\n' "$out" | /usr/bin/grep -qx "drop scripts/$n" && ok "--check names the retired name it would drop: $n" || ko "drop line missing for $n: $out"
+done
+for s in "${mysuites[@]}"; do
+  printf '%s\n' "$out" | /usr/bin/grep -qx "drop scripts/$s" && ok "--check names the suite of the retired route it would drop: $s" || ko "drop line missing for $s: $out"
 done
 
 # --- a publish drops each retired name by name, never the whole directory ------------------------
@@ -39,6 +48,10 @@ done
 [ "$(cat "$live/scripts/models.json")" = '{"models": "mine"}' ] && ok "publish leaves the machine config (models.json) alone" || ko "models.json overwritten: $(cat "$live/scripts/models.json")"
 [ -f "$live/scripts/profiles/mine.sh" ] && ok "publish leaves a per-repo profile alone" || ko "the per-repo profile was removed"
 [ -f "$live/scripts/profiles/example.sh" ] && ok "publish ships the template profile" || ko "example.sh not shipped"
+for s in "${mysuites[@]}"; do
+  [ ! -e "$live/scripts/$s" ] && ok "publish dropped the suite of the retired route: $s" || ko "$s survived the publish"
+done
+[ -f "$live/scripts/test-watch-ok.sh" ] && ok "publish keeps the suite of a script it ships" || ko "the shipped suite was removed"
 [ -f "$live/scripts/local-note.txt" ] && ok "publish removes nothing it did not name" || ko "a file no one named was removed"
 
 # --- a second publish finds nothing to do --------------------------------------------------------
