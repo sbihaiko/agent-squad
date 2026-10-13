@@ -10,8 +10,8 @@
 #
 # A PR is merged when, and only when: it is open, not a draft, on $SG_BASE, and names its issue (fix/<n>-… or Refs #n);
 # no live run names its head branch and no worktree holds that branch with uncommitted changes (the pass does: active-runs.txt, the recent run records, `git worktree list`); its check run finished; every failed test is in
-# the baseline; GitHub reports it mergeable. Then: `gh pr merge --squash --delete-branch`, one comment on the issue naming
-# the merge sha, and the issue closed. Anything else is one `PRLAND WAIT #<n>` (it may resolve on its own) or one
+# the baseline; GitHub reports it mergeable. Then: `gh pr merge --squash --delete-branch`, the issue closed, and one closing comment that names
+# the pull request and merge sha. Anything else is one `PRLAND WAIT #<n>` (it may resolve on its own) or one
 # `PRLAND REFUSE #<n>` (a person decides) per head and reason, kept as a marker under $SG_STATE/auto so it is never
 # repeated for the same head (a per-head marker pattern).
 #
@@ -94,10 +94,10 @@ for n in $(printf '%s' "$pl" | jq -r '.[].number'); do
   out=$(gh pr merge "$n" --repo "$SG_REPO" --squash --delete-branch 2>&1) || { say refuse "$n" "$sha" merged "GitHub did not merge it: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; continue; }
   ms=$(gh_api "repos/$SG_REPO/pulls/$n" -q '.merge_commit_sha // ""') || ms=""
   rm -f "$A"/prland-*-"$n"-*
+  gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || { echo "PRLAND: #$i did not close after the merge of #$n"; continue; }
   gh_send -X POST "repos/$SG_REPO/issues/$i/comments" -F body=@- >/dev/null <<EOT
-PR #$n merged into ${SG_BASE:-main} as ${ms:-(sha not readable)} (squash, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
+Closed #$i after merging PR #$n into ${SG_BASE:-main} as ${ms:-(sha not readable)} (squash, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
 EOT
-  gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || echo "PRLAND: #$i did not close after the merge of #$n"
   echo "PRLAND MERGED #$n as ${ms:-?} into ${SG_BASE:-main}, closed #$i"
 done
 exit 0

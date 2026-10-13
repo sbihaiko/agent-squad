@@ -12,7 +12,15 @@ export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of thi
 mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
-printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7\n' "$T/st" "$T/co" > "$T/s/env.sh"; printf '#!/bin/bash\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7\n' "$T/st" "$T/co" > "$T/s/env.sh"
+cat > "$T/bin/gh" <<'GH'
+#!/bin/bash
+case "$*" in
+  *"issues?state=open"*) [ -n "$GH_READY" ] && printf '%s\n' "$GH_READY";;
+esac
+GH
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"; export HEALTH_NOTIFY="$T/notify"
 touch "$T/st/cycle.log" "$T/st/active-runs.txt"; git -C "$T/co" init -q 2>/dev/null
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q fork-parked && ko "a parked fork in the caller env reached the suite: $o" || ok "a parked fork in the caller env does not reach the suite"
@@ -24,6 +32,8 @@ o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'watchd-down cleared' &
 touch -t 202001010000 "$T/st/cycle.log"; o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'HEALTH watch-stalled' && ok "silent cycle.log -> watch-stalled" || ko "no stall: $o"
 mkdir -p "$T/co/runs/run-n"; echo r > "$T/co/runs/run-n/request.txt"; touch -t 202001010000 "$T/co/runs/run-n/request.txt"; echo run-n > "$T/st/active-runs.txt"
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'HEALTH never-started-runs' && ok "record-less run -> never-started-runs" || ko "no never-started: $o"
+# A wave-only issue can be READY after its blocker closes. The health pass must expose it without a triage label.
+o=$(GH_READY=41 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH frontier-idle: startable 41 with no open PR' && ok "a startable wave-only issue is reported" || ko "wave-only issue was not reported: $o"
 # ---- #1795: runs-board-drift, the loop against its own board ----
 bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 alerts() { local n; n=$(/usr/bin/grep -c 'HEALTH runs-board-drift' "$T/st/alerts.log" 2>/dev/null); echo "${n:-0}"; }
