@@ -26,7 +26,7 @@ gate full "$wait4"; (cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=full SG_FORK_PY_CMD
 rm -f "$T/shell.started"; printf 'exit 1\n' > "$T/g/contrib/squad-goal/scripts/shell-suites.sh"
 (cd "$T/g" && SG_STATE="$T/lk" FG_SUITES=full SG_FORK_PY_CMD=true bash contrib/squad-goal/scripts/fork-gate.sh "exit 3" >/dev/null 2>&1) && ko "a red gate exited 0" || ok "a red suite still fails the gate"
 # forkclose.sh picks the suites from the branch's diff
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py "$T/s/"
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"; cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py $here/ghcall.sh "$T/s/"
 printf 'echo shell >> %s/shell.log; exit 0\n' "$T" > "$T/s/shell-suites.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
@@ -47,7 +47,7 @@ rm -rf "$T"
 T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co/runs/.hub" "$T/fork"
 export HOME="$T/home"; mkdir -p "$HOME"
 cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"
-cp "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the landing reads through the throttle (#5): the readers must sit beside the script under test
+cp "$here/ghread.py" "$here/ghthrottle.py" "$here/ghcall.sh" "$T/s/"   # the landing reads through the throttle (#5): the readers must sit beside the script under test
 printf 'echo shell >> %s/shell.log; exit 0\n' "$T" > "$T/s/shell-suites.sh"
 printf '#!/bin/bash\niss=$1; shift; [ "$1" = -C ] && { cd "$2"; shift 2; }; [ "$1" = -- ] && shift; "$@"; rc=$?; echo "TEST #$iss x test-$iss-x"; exit $rc\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
 printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log"\nexport SG_FORK_PY_CMD="echo py >> %s/py.log"\n' "$T/st" "$T/fork" "$T/co" "$T" "$T" > "$T/s/env.sh"

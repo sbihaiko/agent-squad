@@ -20,6 +20,7 @@ Documented defaults (every one of them overridable per loop, never edited at run
     SG_GH_COOLDOWN           900   seconds the first self-attributed 403/429 holds every reader back
     SG_GH_COOLDOWN_JITTER     60   seconds of jitter added to that cooldown, drawn per writer
     SG_GH_CACHE_WINDOW        60   seconds a read is answered from the snapshot; 0 turns the snapshot off
+    SG_GH_AGGREGATE_WINDOW    90   seconds a caller that chose it reads the open-PR and open-issue lists from the snapshot
 
 Why 300/60 s: the landing pass is the loop's heaviest reader and it reads in bursts, not in a stream. Its eligible-branch
 collection reads the open-PR list once and then two routes per candidate (the issue's state and its `Blocked by` body) --
@@ -40,6 +41,8 @@ token, and the kind of fact decides what keeps an entry:
   away and the next read is live. Without a caller's key the ETag GitHub answered with is the key: once the window has
   passed the entry is revalidated with one conditional request, a `304` refreshes the entry without reading or parsing the
   fact again, and any other answer means the next read is live;
+* the ETag is kept for a cheap fact too, so past its window the entry is checked with one conditional request and a `304`
+  refreshes it: GitHub does not count a `304` against the primary limit (#45);
 * a corrupt, truncated, foreign or absent entry is a miss, never an error, and an unwritable state dir costs the snapshot
   and not the read. Only an answer is kept: a refusal or a failure never becomes a snapshot.
 
@@ -50,6 +53,13 @@ snapshot is an allowlist, not a denylist: `fact_class(route)` names the few rout
 route -- the open-PR and open-issue lists, a single issue, a single PR and its merge, a commit's status and checks, a
 branch, a ref, a compare, a workflow run, a comment, a board item, and any route nobody classified -- is `LIVE` and is
 neither looked up in the cache nor stored in it. Writes never reach the cache at all.
+
+Two doors sit beside the plain read, and both are a caller's explicit choice (#45). `--aggregate <route>` answers the
+open-PR or open-issue list from the snapshot for `SG_GH_AGGREGATE_WINDOW` seconds (60 to 120): the two passes that
+announce a PR and that land a branch read it once for the whole set, and the answer is at most one window old -- never for
+a read that is about to write. `--stretch <base>` is the adaptive cycle: every live read keeps the `x-ratelimit-*` headers
+GitHub answered with in `$SG_STATE/gh-ratelimit.json`, and once the lowest pool has under 20 percent of its limit left
+the loop waits longer between cycles (twice the base under 20 percent, four times under 10, eight times under 5).
 
 This module is reached from a shell script the same way `ghread.py` is -- `python3 ghthrottle.py <route>` -- with the same
 exit codes (0 the answer on stdout, 2 a refusal, 1 a failure before a verdict), so a caller reads one contract whether the
@@ -83,21 +93,29 @@ COOLDOWN_ENV = "SG_GH_COOLDOWN"
 JITTER_ENV = "SG_GH_COOLDOWN_JITTER"
 STATE_ENV = "SG_STATE"
 CACHE_WINDOW_ENV = "SG_GH_CACHE_WINDOW"
+AGGREGATE_WINDOW_ENV = "SG_GH_AGGREGATE_WINDOW"
 
 DEFAULT_BUDGET = 300  # requests per window, shared by every process
 DEFAULT_WINDOW = 60.0  # seconds in a window
 DEFAULT_COOLDOWN = 900.0  # the first self-attributed 403/429 holds every reader back for this long
 DEFAULT_JITTER = 60.0  # seconds of jitter added to it, drawn per writer, so two wake-ups do not collide
+DEFAULT_AGGREGATE_WINDOW = 90.0  # seconds the open lists are answered from the snapshot, for a caller that chose it
 DEFAULT_CACHE_WINDOW = 60.0  # seconds a snapshot answers a repeated read; one bucket window, so a beat-by-beat loop repeats at most once
 
 # The landing pass's own burst (forkclose.sh's eligible-branch collection): the open-PR list once, then the state and
 # the `Blocked by` body of each candidate. Measured against the pass, and asserted against it in tests/test_gh_throttle.
-LANDING_PASS_FIXED_READS = 1
-LANDING_PASS_READS_PER_CANDIDATE = 2
+LANDING_PASS_FIXED_READS = 3  # the open PRs, the open issues, and the issues of the candidates the open list lacks
+LANDING_PASS_READS_PER_CANDIDATE = 0  # since #45 a candidate adds no read: its facts come from those three
 
 BUCKET_FILE = "gh-budget.json"
 COOLDOWN_FILE = "gh-cooldown.json"
 CACHE_DIR = "gh-cache"
+RATELIMIT_FILE = "gh-ratelimit.json"
+AGGREGATE_PREFIX = "aggregate:"  # the snapshot key of an aggregate read: no cheap or keyed route can collide with it
+
+# The adaptive cycle: (share of the limit left below which the step applies, how many times longer the cycle is). The lowest
+# step that holds wins, and a pool at exactly 20 percent is not yet low.
+LOW_QUOTA_STEPS = ((0.05, 8.0), (0.10, 4.0), (0.20, 2.0))
 
 # What a route's fact may be answered from. LIVE is the default, and the only way out of it is to be named below.
 LIVE = "live"  # gates a write, or nobody classified it: read from GitHub every time, never looked up, never stored
@@ -133,6 +151,14 @@ def _number(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _aggregate_window() -> float:
+    try:
+        value = float(os.environ.get(AGGREGATE_WINDOW_ENV, DEFAULT_AGGREGATE_WINDOW))
+    except ValueError:
+        return DEFAULT_AGGREGATE_WINDOW
+    return value if value >= 0 else DEFAULT_AGGREGATE_WINDOW
 
 
 def _cache_window() -> float:
@@ -275,7 +301,7 @@ class Cache:
             return res
 
         out = live(route, tap)
-        self.store(route, out, key=key or "", etag=seen["etag"] if kind == KEYED else "")
+        self.store(route, out, key=key or "", etag=seen["etag"])
         return out
 
     @staticmethod
@@ -325,6 +351,10 @@ class Throttle:
     @property
     def cooldown_path(self) -> Path:
         return self.state_dir / COOLDOWN_FILE
+
+    @property
+    def quota_path(self) -> Path:
+        return self.state_dir / RATELIMIT_FILE
 
     @contextlib.contextmanager
     def _sole_writer(self) -> Iterator[None]:
@@ -429,11 +459,69 @@ class Throttle:
         def probe(r: str) -> ghread.Transport:
             res = inner(r)
             status["code"] = _http_status(res.body)
+            self._note_quota(res.body)
             return res
 
         out = ghread.read(route, transport=probe)
         if _self_attributed(out, status["code"]):
             self.write_cooldown(out)
+        return out
+
+    def _note_quota(self, body: str) -> None:
+        """Keep what GitHub says is left of the pool this answer was drawn from. A body without the headers keeps nothing."""
+        headers = ghread.headers_of(body)
+        try:
+            remaining, limit = int(headers["x-ratelimit-remaining"]), int(headers["x-ratelimit-limit"])
+            reset = float(headers.get("x-ratelimit-reset") or 0)
+        except (KeyError, ValueError):
+            return
+        if limit <= 0:
+            return
+        with self._sole_writer():
+            state = _read_json(self.quota_path)
+            state[headers.get("x-ratelimit-resource") or "core"] = {
+                "remaining": remaining, "limit": limit, "reset": reset, "at": self.clock(),
+            }
+            _write_json(self.quota_path, state)
+
+    def quota_left(self) -> float:
+        """The lowest share of its limit any pool still has (1.0 when nothing is known). A pool whose hour has rolled over
+        is not counted: its reading describes a window that is gone."""
+        now = self.clock()
+        shares = [1.0]
+        for pool in _read_json(self.quota_path).values():
+            if not isinstance(pool, dict):
+                continue
+            try:
+                remaining, limit, reset = float(pool["remaining"]), float(pool["limit"]), float(pool.get("reset") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if limit > 0 and (reset == 0 or reset > now):
+                shares.append(max(remaining, 0.0) / limit)
+        return min(shares)
+
+    def stretch(self, base: float) -> float:
+        """Extra seconds a cycle of `base` seconds waits: none while 20 percent or more of every pool is left."""
+        left = self.quota_left()
+        for below, times in LOW_QUOTA_STEPS:
+            if left < below:
+                return base * (times - 1.0)
+        return 0.0
+
+    def read_aggregate(self, route: str, transport: ghread.TransportFn | None = None) -> ghread.Read:
+        """Read one aggregate route (the open PRs or the open issues) from the snapshot while it is younger than
+        `SG_GH_AGGREGATE_WINDOW`, live otherwise. Only an answer is kept; a partial answer is read again."""
+        window = _aggregate_window()
+        cache = Cache(state_dir=self.state_dir, window=window, clock=self.clock)
+        key = AGGREGATE_PREFIX + route
+        if window > 0:
+            entry = cache._load(key)
+            if entry is not None and self.clock() - entry["at"] < window:
+                body = entry["body"]
+                return ghread.Read(kind=ghread.ANSWER, answer=json.loads(body) if body.strip() else None, body=body)
+        out = self._live(route, transport)
+        if window > 0 and out.body.strip():   # an empty body is no list: keeping it would answer the next window with nothing
+            cache.store(key, out)
         return out
 
     def _remaining(self, held: dict[str, Any]) -> float:
@@ -468,11 +556,26 @@ def read(route: str, transport: ghread.TransportFn | None = None, **kw: Any) -> 
 
 def main(argv: list[str]) -> int:
     """The CLI: ghread's exit codes, so a shell caller reads one contract whether the read was throttled or not."""
-    if len(argv) != 2 or argv[1] in ("-h", "--help"):
-        sys.stderr.write(f"usage: {argv[0] if argv else 'ghthrottle.py'} <route>   # e.g. repos/o/r/pulls?state=open\n")
+    if argv[1:2] == ["--stretch"] and len(argv) == 3:
+        try:
+            base = float(argv[2])
+        except ValueError:
+            base = -1.0
+        if base < 0:
+            sys.stderr.write(f"usage: {argv[0]} --stretch <base seconds>\n")
+            return _USAGE
+        print(f"{process_throttle().stretch(base):.0f}")
+        return 0
+    aggregate = argv[1:2] == ["--aggregate"]
+    args = argv[2:] if aggregate else argv[1:]
+    if len(args) != 1 or args[0] in ("-h", "--help") or args[0].startswith("--"):
+        sys.stderr.write(
+            f"usage: {argv[0] if argv else 'ghthrottle.py'} [--aggregate] <route>   # e.g. repos/o/r/pulls?state=open\n"
+            f"       {argv[0] if argv else 'ghthrottle.py'} --stretch <base seconds>\n"
+        )
         return _USAGE
     th = process_throttle()
-    out = th.read(argv[1])
+    out = th.read_aggregate(args[0]) if aggregate else th.read(args[0])
     if out.is_answer:
         sys.stdout.write(out.body)
         return 0

@@ -55,6 +55,20 @@ gh_snapshot() {
   _gh_read "$SG_GHSNAP" "$route" "$@"
 }
 
+# gh_aggregate <route> [-q <jq filter>]   The open-PR or open-issue list, from the snapshot while it is younger than
+# `SG_GH_AGGREGATE_WINDOW` (60 to 120 s, default 90): the same three outcomes as `gh_api`, and a repeat inside the window
+# sends no request (#45). It is the caller's explicit choice, for a pass that reads the list ONCE for its whole set and
+# tolerates an answer a window old -- the announcement of a PR, the landing pass's "an open PR names it" check. A read that
+# decides one write about one issue stays `gh_api`.
+gh_aggregate() {
+  local route=${1:?gh_aggregate: a route is required}; shift || true
+  _gh_read "$SG_GHSNAP --aggregate" "$route" "$@"
+}
+
+# gh_stretch <base seconds>   The extra seconds a loop cycle of that length waits, 0 while the quota is healthy (#45): once
+# less than 20 percent of a pool is left, the cycle gets longer. Never fails: a reading that cannot be had is no stretch.
+gh_stretch() { local o; o=$($SG_GHSNAP --stretch "${1:?gh_stretch: a base is required}" 2>/dev/null) && [ "$o" -ge 0 ] 2>/dev/null && echo "$o" || echo 0; }
+
 _gh_read() {   # _gh_read <reader command> <route> [-q <jq filter>]
   local reader=$1 route=$2; shift 2
   local q=""

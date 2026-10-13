@@ -97,14 +97,15 @@ def throttle(tmp_path: Path, clock: Clock, **kw):
 # --- the burst is bounded, and it is the landing pass's burst ---------------------------------------------------------
 
 
-def test_the_landing_pass_burst_is_the_collection_passes_own_shape(tmp_path):
-    """`1 + 2n`: the open-PR list once, then the state and the `Blocked by` body of each of the n candidates."""
-    assert ghthrottle.landing_pass_burst(0) == 1
-    assert ghthrottle.landing_pass_burst(48) == 97, "the 2026-10-12 candidate set was 48 issues: 1 + 2 * 48 routes"
+def test_the_landing_pass_burst_is_fixed_whatever_the_candidate_count(tmp_path):
+    """Three reads: the open PRs, the open issues, and the closed candidates the open list did not carry -- never one per candidate."""
+    assert ghthrottle.landing_pass_burst(0) == 3
+    assert ghthrottle.landing_pass_burst(48) == 3, "the 2026-10-12 candidate set was 48 issues: it cost 97 routes before the aggregate reads"
+    assert ghthrottle.landing_pass_burst(480) == ghthrottle.landing_pass_burst(1)
 
 
 def test_a_doubled_landing_pass_burst_is_bounded_by_the_budget(tmp_path):
-    """Two readers, one bucket: 2 x 401 routes, and still no more than one budget on the wire before the first wait."""
+    """Two readers, one bucket: 2 x a full budget of routes, and still no more than one budget on the wire before the first wait."""
     clock = Clock()
     served: list[float] = []
 
@@ -112,13 +113,13 @@ def test_a_doubled_landing_pass_burst_is_bounded_by_the_budget(tmp_path):
         served.append(clock.at)
         return ghread.Transport(rc=0, body="[]")
 
-    burst = ghthrottle.landing_pass_burst(200)
+    burst = ghthrottle.DEFAULT_BUDGET  # a reader that fans out per candidate: the shape the aggregate reads retired, and the case the bucket still bounds
     a = throttle(tmp_path, clock)
     b = throttle(tmp_path, clock)
     for i in range(2 * burst):
         (a if i % 2 else b).read(f"repos/o/r/issues/{i}", transport=transport)
     assert len(served) == 2 * burst, "a read past the budget waits its turn, it is never dropped"
-    assert clock.slept, "2 x 401 routes have to exceed a single budget"
+    assert clock.slept, "two full budgets have to exceed a single budget"
     before_the_first_wait = [at for at in served if at == served[0]]
     assert len(before_the_first_wait) == ghthrottle.DEFAULT_BUDGET, (
         f"{len(before_the_first_wait)} requests reached GitHub before the bucket ran dry"
@@ -146,11 +147,12 @@ def _elapsed(where: Path, readers: int, total: int) -> float:
 
 
 def test_the_documented_default_serves_a_healthy_pass_with_no_wait(tmp_path):
-    """Generous enough that a healthy loop never waits: a 100-candidate pass spends 201 routes and sleeps not once."""
+    """Generous enough that a healthy loop never waits: even the per-candidate shape the aggregate reads retired (201 routes
+    for 100 candidates) sleeps not once."""
     clock = Clock()
     t = stub()
     th = throttle(tmp_path, clock)
-    for i in range(ghthrottle.landing_pass_burst(100)):
+    for i in range(201):
         th.read(f"repos/o/r/issues/{i}", transport=t)
     assert len(t.seen) == 201
     assert clock.slept == [], f"a pass inside the budget must not wait: it waited {clock.slept}"
