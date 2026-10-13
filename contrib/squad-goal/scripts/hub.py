@@ -1810,7 +1810,7 @@ function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loa
  $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[];
  b.innerHTML=`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m),of=mdlOff(k,m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk}${pv?" · "+pv:""}">${pv||rk}${of?" · out of the chain":""}</span><span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
- +(()=>{const e=mdl.envelope||{};if(!e.node)return"";const row=(l,a)=>`<div class=mx><span class=el>${l}</span> ${(a||[]).map(x=>`<code>${esc(String(x))}</code>`).join(" ")||"—"}</div>`;return `<div class=mc><div class=mt>Router</div><div class=mx>The dispatch envelope the router asks its children inside, read from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}. A request outside it is refused whole.</div>`+row("models",e.models)+row("efforts",e.efforts)+row("workspaces",e.workspaces)+`<div class=mx><span class=el>limits</span> children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div>`+`<div class=mx>This is graph data: change it in the run graph, never in models.json (ADR-0106). A coding row above must name an id this envelope allows.</div></div>`})()
+ +(()=>{const e=mdl.envelope||{};if(!e.node)return"";const row=(l,a)=>`<div class=mx><span class=el>${l}</span> ${(a||[]).map(x=>`<code>${esc(String(x))}</code>`).join(" ")||"—"}</div>`;return `<div class=mc><div class=mt>Router</div><div class=mx>The dispatch envelope the router asks its children inside, read from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}. A request outside it is refused whole.</div>`+row("models",e.models)+row("efforts",e.efforts)+row("tools",e.tools)+row("workspaces",e.workspaces)+`<div class=mx><span class=el>limits</span> children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div>`+`<div class=mx>This is graph data: change it in the run graph, never in models.json (ADR-0106). A coding row above must name an id this envelope allows.</div></div>`})()
  +`<div class=mx>Each row sets its own <b>effort</b> and its own <b>hrs</b>: the local hours that model may run, <code>HH-HH</code>, start inclusive and end exclusive, wrapping midnight (<code>22-07</code>). Empty = always. A model outside its window is skipped like an unhealthy one and the chain moves on. Coding rows must name ids the dynamic dispatch envelope allows, or the allowed id that stands for the provider alias. Written per model, beside the chains, in models.json.</div>`
  +`<div class=mx>Each row also carries a <b>switch</b>: <code>off</code> takes the model out of the chain without removing it — it keeps its place, its rank, its effort and its hrs, and every consumer skips it exactly like a model outside its window. <b>✕</b> still deletes the entry, settings and all.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
@@ -2448,13 +2448,24 @@ def efforts_of(d):
     e = d.get("efforts") if isinstance(d.get("efforts"), dict) else {}
     return {k: {m: v for m, v in (e.get(k) or {}).items() if isinstance(e.get(k), dict) and m in d.get(k, []) and v in EFFORTS and v != "medium"} for k in CHAINS}
 def _graph_doc():
-    """The run graph the loop starts, as launch.py resolves it: the project's own workflow file first, else the seed."""
-    for base in (pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd()),):
-        for p in (base / "docs/squad/workflows/default.graph.json", base / "docs/squad/workflows/dynamic.graph.json",
-                  base / "docs/design/router.graph.json"):
-            if p.is_file():
-                try: return json.loads(p.read_text())
-                except (OSError, ValueError): return {}
+    """The run graph this run starts, resolved exactly as launch.py resolves it: the file SG_WORKFLOW names (no id, `default`
+    or `dynamic` is the owner's default file), the project's own file first, else the graph the plugin ships.
+
+    The panel shows the envelope of the graph the run obeys only if both readers land on one file. A second, narrower
+    resolution here showed a reader an envelope no child was held inside (#95: the router named a model no chain allowed)."""
+    base = pathlib.Path(os.environ.get("SG_CHECKOUT") or os.getcwd())
+    roots = []
+    for r in (os.environ.get("SG_SQUAD"), str(base)):   # launch.py's `squad`, then the checkout it runs in
+        if r and r not in roots: roots.append(pathlib.Path(r))
+    folder = base / "docs" / "squad" / "workflows"; wf = os.environ.get("SG_WORKFLOW")
+    if wf in (None, "", "default", "dynamic"):
+        name = [folder / "default.graph.json", folder / "dynamic.graph.json"] + [r / "docs/design/router.graph.json" for r in roots]
+    else:
+        name = [folder / f"{wf}.graph.json"] + [r / "docs/workflows" / f"{wf}.graph.json" for r in roots]
+    for p in name:
+        if p.is_file():
+            try: return json.loads(p.read_text())
+            except (OSError, ValueError): return {}   # a graph the panel cannot read is no envelope, never a panel that fails
     return {}
 
 
