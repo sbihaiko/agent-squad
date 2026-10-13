@@ -268,4 +268,11 @@ mv=$(bash "$S/board.sh" o 1 "In Progress" 1228 2>&1); rc=$?
 case "$mv" in *"#1228 -> In Progress"*) ok "18 the card the board carries is In Progress";; *) ko "18 the dispatch's card move: '$mv'";; esac
 case "$mv" in *"not on the board"*) ko "18 the pass that picks the filed issue up reports it absent: '$mv'";; *) ok "18 the filed issue is never reported absent";; esac
 
+# 19) (#140) the ceiling the filer enforces is the number the hunt request asks a child for: the bound and the
+# instruction about it share one declaration, so they cannot drift apart.
+scene ceiling; export SG_FILE_CEILING=2
+r=$(run)
+body=$(cat "$SG_STATE/req/"*.body 2>/dev/null)
+printf '%s' "$body" | $G -qF 'at most 2 bugs per hunt' && ok "19 the hunt request asks for the ceiling the filer declares" || ko "19 the request does not carry the declared ceiling: $(printf '%s' "$body" | $G -o 'at most [0-9]* bugs per hunt')"
+
 rm -rf "$T"; exit $fail
