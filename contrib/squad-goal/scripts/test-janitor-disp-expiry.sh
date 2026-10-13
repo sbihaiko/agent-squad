@@ -8,11 +8,25 @@
 #  (B) a run that landed (a `land` event with outcome pass) keeps its marker and reconciles its card to Done;
 #  (C) a live run (no verdict yet) keeps the marker of the issue it works and writes Run fields;
 #  (D) an open PR naming the issue keeps the marker and moves the card to Code Complete.
+#  A card is one column, written by one rule (#91): a needs-human run that landed nothing is not a completed run
+#  (ADR-0029), so the column is the dispatch's (Todo) and the release rule O owns the write. The board stub answers a
+#  read from the last status the pass itself wrote, as the live board does, so a second column for that card is a race
+#  the suite names, never a pass: with a stub that always answers In Progress, R's own Code Complete write stays hidden.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-disp-expiry.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
-printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
+cat > "$T/s/board.sh" <<'B'
+#!/bin/bash
+echo "$*" >> "CARDDIR/board.calls"
+a=("$@")
+case "$1" in
+  --*) ;;   # a Run-fields or clear-run write moves no card
+  *) printf '%s\t%s\n' "${a[$(($#-1))]}" "${a[*]:2:$(($#-3))}" >> "CARDDIR/board.status";;   # board.sh <owner> <project> <status> <n>
+esac
+B
+sed -i '' "s|CARDDIR|$T|" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+card() { /usr/bin/awk -v n="$1" '$1==n{s=substr($0,index($0,"\t")+1)} END{print s}' "$T/board.status" 2>/dev/null; }
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -28,7 +42,7 @@ esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'CHILD — GitHub issue(s) %s (bug; one PR):\n' "$2" > "$T/co/runs/$1/request.txt"; }
-# A: the run recorded a verdict (needs-human) and landed nothing
+# A: the run recorded a verdict (needs-human) and landed nothing: not a completed run, so the card is the dispatch's
 mk run-ended 901
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #901 on fix/901-x"}\n{"event": "outcome", "node": "router", "entry": 1, "outcome": "pass", "routed": "continue", "reasons": [], "pos": 3}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["owner_decision"], "exit_code": 0}\n' > "$T/co/runs/run-ended/record.jsonl"
 echo run-ended > "$T/st/auto/disp-901"
