@@ -67,7 +67,8 @@ def root_page(apps, title):
 
 
 def rewrite(body, slug):
-    """A repository's page calls its own API: every absolute /api/ and /test/ reference gains the /<slug> prefix."""
+    """A repository's page calls its own API: every absolute /api/ and /test/ reference gains the /<slug> prefix, in the page and in
+    the JSON it fetches (a test card's link is `/test/<id>` there; without the slug the path read `test` as a repository)."""
     for q in (b'"', b"'", b"`"):
         for p in (b"/api/", b"/test/"):
             body = body.replace(q + p, q + b"/" + slug.encode() + p)
@@ -96,7 +97,7 @@ def server(port, apps):
             try: getattr(app["mod"].H, "do_" + method)(self)
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
-            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head else body))
+            real.write(head + sep + (rewrite(body, slug) if b"text/html" in head or b"application/json" in head else body))
 
         def do_GET(self): self._route("GET")
         def do_POST(self): self._route("POST")
