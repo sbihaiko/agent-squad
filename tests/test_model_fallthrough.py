@@ -16,7 +16,8 @@ from squad.engine import Engine
 from squad.graph import from_doc
 from squad.record import read
 from tests.gitrepo import sibling_repo
-from tests.helpers import router
+from squad.session import model_chain
+from tests.helpers import load_doc, node, router
 
 pytestmark = pytest.mark.anyio
 
@@ -32,7 +33,14 @@ SESSION_LIMIT = ("ResultError: Claude Code returned an error result: "
 # a pool's refusal, and a provider's, in the same shape
 USAGE_LIMIT = "ResultError: Claude Code returned an error result: API Error: The usage limit has been reached (exit code: 1)"
 
-REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": "claude-gpt-5.5", "effort": "medium",
+# The shipped envelope, read and not copied: a chain this file hardcodes goes stale the day the envelope moves
+# (2026-10-13). The expected order is the one the engine builds, `[pick] + allow.models` without the pick.
+_DOC = load_doc("router")
+CHAIN = node(_DOC, "route")["allow"]["models"]
+ROUTER_CHAIN = model_chain(CHAIN, node(_DOC, "router")["model"])
+PICK, NEXT = CHAIN[0], CHAIN[1]
+CHILD_CHAIN = model_chain(CHAIN, PICK)
+REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": PICK, "effort": "medium",
            "tools": ["Read", "Edit"], "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child"}
 SPAWNS = {"output": {"spawns": [REQUEST]}, "spend": 0.1}
 CHILD = {"output": {"diff": {"files": [{"path": "a.py"}]}, "ac_commands": ["true"]}, "spend": 0.2, "turns": 3}
@@ -52,21 +60,21 @@ def outcomes(tmp_path, node):
 async def test_a_provider_error_on_the_router_falls_through_to_the_next_model(tmp_path):
     eng = engine(tmp_path, {"router": [{"error": PROVIDER_ERROR}, SPAWNS], "route.router.1": CHILD})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]   # the node's pick, then the allow list's next entry
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN[:2]   # the node's pick, then the allow list's next entry, and it answers
     assert v.verdict == "completed" and outcomes(tmp_path, "router")[0]["outcome"] == "pass"
 
 
 async def test_a_provider_error_on_a_child_falls_through_to_the_next_model(tmp_path):
     eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": [{"error": PROVIDER_ERROR}, CHILD]})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]   # the request's pick, then the chain
+    assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == CHILD_CHAIN   # the request's pick, then the chain
     assert v.verdict == "completed" and outcomes(tmp_path, "route.router.1")[0]["outcome"] == "pass"
 
 
 async def test_a_provider_error_named_by_a_status_without_the_api_error_prefix_falls_through(tmp_path):
     eng = engine(tmp_path, {"router": [{"error": PROVIDER_JSON}, SPAWNS], "route.router.1": CHILD})
     await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN[:2]
 
 
 async def test_the_subscriptions_own_refusal_falls_through_to_the_next_model(tmp_path):
@@ -74,7 +82,7 @@ async def test_the_subscriptions_own_refusal_falls_through_to_the_next_model(tmp
     refusing to serve: before this case the run died on its first call (116 runs on 2026-10-13)."""
     eng = engine(tmp_path, {"router": [{"error": SESSION_LIMIT}, SPAWNS], "route.router.1": CHILD})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN[:2]
     assert v.verdict == "completed" and outcomes(tmp_path, "router")[0]["outcome"] == "pass"
 
 
@@ -82,23 +90,23 @@ async def test_a_pools_usage_limit_falls_through_to_the_next_model(tmp_path):
     """The gateway answers a spent pool with `The usage limit has been reached`: the same refusal from another speaker."""
     eng = engine(tmp_path, {"router": [{"error": USAGE_LIMIT}, SPAWNS], "route.router.1": CHILD})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN[:2]
     assert v.verdict == "completed"
 
 
 async def test_a_chain_whose_every_entry_is_exhausted_fails_naming_each_entry(tmp_path):
     eng = engine(tmp_path, {"router": {"error": PROVIDER_ERROR}}, adapter={"repeat_last": True})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5", "claude-deepseek-v4-flash"]
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN
     e = outcomes(tmp_path, "router")[0]
     assert e["outcome"] == "fail" and "adapter_error" in e["reasons"] and v.verdict == "failed"
     msg = e["diagnostic"]["error"]
-    assert msg.count("402 Grok upstream rejected the request") == 2 and all(m in msg for m in ("claude-gpt-5.5", "claude-deepseek-v4-flash"))
+    assert msg.count("402 Grok upstream rejected the request") == len(ROUTER_CHAIN) and all(m in msg for m in ROUTER_CHAIN)
 
 
 async def test_an_error_that_is_not_a_provider_failure_still_fails_at_once(tmp_path):
     eng = engine(tmp_path, {"router": {"error": "socket closed"}})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ["claude-gpt-5.5"]   # no provider status: the node fails as before
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN[:1]   # no provider status: the node fails as before
     e = outcomes(tmp_path, "router")[0]
     assert e["reasons"] == ["adapter_error"] and e["diagnostic"]["error"] == "socket closed" and v.verdict == "failed"
