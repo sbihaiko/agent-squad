@@ -2,16 +2,17 @@
 # usage: autohunt.sh   (watch.sh, every cycle after autobug.sh; AH_DRY=1 prints what it would dispatch)
 # When the loop has been idle, start one read-only bug hunt that files reproducible defects (label bug only).
 # --file <title> <body-file>   opens the issue through the loop's ONE bug contract -- the [SQUAD] title prefix, the
-#                              "Filed by" line and the labels -- and logs HUNT filed #N. The hunt files with the bug
-#                              kind alone; a caller that is not the hunt names itself in SG_FILED_BY and asks for the
-#                              startable label beside the bug kind in SG_FILED_LABELS (a refused write, #145).
+#                              "Filed by" line and the labels -- puts its card on the board in the dispatch column in
+#                              the same call, and logs HUNT filed #N. The hunt files with the bug kind alone; a caller
+#                              that is not the hunt names itself in SG_FILED_BY and asks for the startable label beside
+#                              the bug kind in SG_FILED_LABELS (a refused write, #145).
 # --none                       logs HUNT none (a hunt that found nothing)
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A" "$SG_STATE/req"
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 now=$(date +%s)
 file_issue() {
-  local title=$1 body=$2 resp num tagged by=${SG_FILED_BY:-autohunt} l
+  local title=$1 body=$2 resp num tagged card by=${SG_FILED_BY:-autohunt} l
   local -a labs=(-f "labels[]=${SG_BUG_LABEL:-bug}")   # the bug kind, so the loop's own dispatcher picks the issue up
   for l in ${SG_FILED_LABELS//,/ }; do [ -n "$l" ] && labs+=(-f "labels[]=$l"); done   # and the label that makes it startable beside it
   case $title in \[*) ;; *) title="[SQUAD] $title";; esac   # every issue the loop files about its own tooling carries the prefix
@@ -29,6 +30,16 @@ try:
 except Exception:
   m=re.search(r"[0-9]+", t); print(m.group(0) if m else "")')
   [ -z "$num" ] && num=$(printf '%s' "$resp" | grep -oE '[0-9]+' | head -1)
+  # The issue is on the board at once (#175): a filed issue with no card is one the next pass cannot move -- board.py
+  # answers "#N not on the board", the pass files the write it cannot prove as a defect, and the bug it files has no
+  # card either, so every pass files one more (#169 -> #171 -> #174 -> #175). One idempotent add, in the column the
+  # dispatcher reads, through the one board door: it is the same add-then-write the board pass makes (janitor rule R),
+  # so a card another pass already added is answered "already exists" and written to, never added twice. A refusal is
+  # named on stderr and never un-files the issue; the board pass repairs the card on its next run.
+  if [ -n "$num" ]; then
+    card=$($BOARD --add "$SG_OWNER" "$SG_PROJECT" "${SG_TODO:-Todo}" "$num" 2>&1) \
+      || echo "HUNT: the card of #$num is not on the board: $card" >&2
+  fi
   [ -n "$num" ] && echo "HUNT filed #$num" || echo "HUNT filed"
 }
 case "${1:-}" in

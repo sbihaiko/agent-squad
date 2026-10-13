@@ -220,4 +220,50 @@ echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
 r=$(AH_DRY=1 bash "$S/autohunt.sh" 2>&1)
 skipped "$r" && ok "next hunt waits 60 minutes after a hunt-fix dispatch" || ko "hunted inside cooldown after dispatch: '$r'"
 
+# 18) an issue the loop files is on the board at once, so the pass that dispatch picks it up with has a card to move
+# (#175). A filed issue with no card made the very next autobug pass's card move exit 1 with "#N not on the board"; that
+# pass files a write it cannot prove as a defect, and the bug it filed had no card either, so every pass filed one more
+# (#169 -> #171 -> #174 -> #175). The filer and the real board door sit beside a stub gh, so the move the dispatch makes
+# is the one the card is proven by (#105).
+scene filed
+f=$T/filed
+cp "$(dirname "$src")/board.sh" "$(dirname "$src")/board.py" "$S/"
+printf 'export SG_REPO SG_OWNER SG_PROJECT SG_STATE SG_CHECKOUT\nexport SG_BOARD_READ_BACKOFF=0\nexport BOARD="%s/board.sh"\n' "$S" >> "$S/env.sh"
+export SGH_TMP=$f
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+a="$*"; D=${SGH_TMP:?}
+echo "$a" >> "$D/gh.calls"
+case "$a" in *"--input -"*) cat > "$D/last.in";; esac
+case "$a" in
+  *users/o) echo '{"type":"User"}';;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"In Progress"}}]}]';;
+  *items?per_page=100\&fields*)   # the Status read: what the card carries, "" when it carries none
+    [ -e "$D/seen" ] && printf '[1228,"%s"]\n' "$(cat "$D/carried" 2>/dev/null)"; exit 0;;
+  *items?per_page=100*)   # the items route is a bare array with no total, read through gh's --jq
+    [ -e "$D/seen" ] && printf '[1228,"ITEM1228","https://api.github.com/repos/o/r"]\n'; exit 0;;
+  *"-X POST"*items*)   # the add: an item already on the board is refused, exactly as GitHub refuses it
+    case "$(cat "$D/last.in")" in
+      *4711*) [ -e "$D/seen" ] && { echo '{"message":"Validation Failed: item already exists"}' >&2; exit 1; }
+              touch "$D/seen"; echo '{"id":"ITEM1228"}';;
+      *) echo '{"message":"Resource not accessible by integration"}' >&2; exit 1;;
+    esac;;
+  *"-X PATCH"*items/ITEM1228*)   # the write lands: the card carries it, which is the proof of the write (#105)
+    sed -n 's/.*"value": "\([^"]*\)".*/\1/p' "$D/last.in" > "$D/carried"; echo '{"id":"ITEM1228"}';;
+  *repos/o/r/issues/1228*) echo '{"id":4711}';;
+  *repos/o/r/issues*) echo "$a" >> "$D/ghpost"; echo '{"number":1228}';;
+  *) echo '{"message":"not found"}' >&2; exit 1;;
+esac
+J
+chmod +x "$T/bin/gh"
+printf 'repro\n' > "$f/body.md"; : > "$f/ghpost"
+n=$(bash "$S/autohunt.sh" --file "a defect" "$f/body.md" 2>&1)
+case "$n" in *"HUNT filed #1228"*) ok "18 the filer logs the issue it opened";; *) ko "18 the filer: '$n'";; esac
+$G -qF -- '-X POST /users/o/projectsV2/1/items' "$f/gh.calls" && ok "18 the issue the loop filed is on the board at once" || ko "18 the filer left the issue with no card: $(cat "$f/gh.calls")"
+export SG_STATE=$f/st SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_BOARD_READ_BACKOFF=0   # the move the dispatch makes reads these, never the caller's shell
+mv=$(bash "$S/board.sh" o 1 "In Progress" 1228 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ok "18 the card move of the pass that picks it up succeeds" || ko "18 the dispatch's card move exited $rc: '$mv'"
+case "$mv" in *"#1228 -> In Progress"*) ok "18 the card the board carries is In Progress";; *) ko "18 the dispatch's card move: '$mv'";; esac
+case "$mv" in *"not on the board"*) ko "18 the pass that picks the filed issue up reports it absent: '$mv'";; *) ok "18 the filed issue is never reported absent";; esac
+
 rm -rf "$T"; exit $fail
