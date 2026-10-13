@@ -17,6 +17,9 @@ mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each 
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
+  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, its checks are green, GitHub merges it
+  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
+  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";;
   *" -q .body"*) ;;
@@ -34,7 +37,8 @@ fab() { g init -q -b local/next; printf 'L1\nL2\nL3\n' > "$T/fork/wat.sh"; g add
   g checkout -q -b gui/1 local/next; sed -i '' 's/^L2$/L2 one/' "$T/fork/wat.sh"; g commit -qam "work 1"
   g merge --no-commit side >/dev/null 2>&1 || true
   if [ "$1" = drop ]; then printf 'L1\nL2 one\n' > "$T/fork/wat.sh"; else printf 'L1\nL2 one\nL3\n' > "$T/fork/wat.sh"; fi
-  g add wat.sh; g -c core.editor=true commit -q --no-edit; g rev-parse local/next; }
+  g add wat.sh; g -c core.editor=true commit -q --no-edit; rm -rf "$T/gh"; mkdir -p "$T/gh/x"; $G init -q --bare "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next   # the land pushes the branch and merges by PR (#32)
+  g rev-parse local/next; }
 
 mkfix; b0=$(fab drop); board '{"n":1,"st":"Code Complete","s":"open"}'
 r=$(pass)

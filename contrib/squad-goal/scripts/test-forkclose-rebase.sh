@@ -25,6 +25,9 @@ mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each 
 #!/bin/bash
 echo "$*" >> "$GHLOG"
 case "$*" in
+  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, its checks are green, GitHub merges it
+  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
+  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";;
   *" -q .body"*) ;;
@@ -38,7 +41,8 @@ board() { printf '{"items":[%s]}\n' "$1" > "$T/co/runs/.hub/hub-board.json"; }
 # The branch forks from the base and the base then moves on: that is the stale candidate the ticket is about.
 stale() { g init -q -b local/next; echo 0 > "$T/fork/f"; g add f; g commit -q -m init
   g checkout -q -b gui/1 local/next; echo one > "$T/fork/one.py"; g add .; g commit -q -m "work 1"
-  g checkout -q local/next; echo moved > "$T/fork/base-moved.txt"; g add .; g commit -q -m "the base moved on after the branch forked"; }
+  g checkout -q local/next; echo moved > "$T/fork/base-moved.txt"; g add .; g commit -q -m "the base moved on after the branch forked"; rm -rf "$T/gh"; mkdir -p "$T/gh/x"; $G init -q --bare "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next   # the land pushes the branch and merges by PR (#32)
+}
 
 mkfix; stale; board '{"n":1,"st":"Code Complete","s":"open"}'
 [ "$(g rev-list --count local/next..gui/1)" = 0 ] || true

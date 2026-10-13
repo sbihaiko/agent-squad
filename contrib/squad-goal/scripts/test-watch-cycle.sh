@@ -21,7 +21,7 @@ printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # no open PR, no revci summary, 
 printf '#!/bin/bash\n[ -n "$REAL_SLEEP" ] && exec /bin/sleep "$@"\nexit 0\n' > "$B/sleep"   # REAL_SLEEP=1 keeps a stub slow on purpose
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
-for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh forkclose.sh; do
+for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh forkclose.sh publish-landing.sh; do
   printf '#!/bin/bash\necho %s >> "%s"\n' "${s%.sh}" "$STEPS" > "$S/$s"; chmod +x "$S/$s"; done
 printf 'open("%s","a").write("childcc\\n")\n' "$STEPS" > "$S/childcc.py"
 for p in forkrescue forkstrand; do printf 'open("%s","a").write("%s\\n")\n' "$STEPS" "$p" > "$S/$p.py"; done
@@ -78,6 +78,7 @@ lane_down; run_cycles 1
 run_cycles 3
 [ "$(count wtclean)" = 1 ] && ok "wtclean runs once in three cycles" || ko "wtclean ran $(count wtclean)× in 3 cycles"
 [ "$(count janitor)" = 3 ] && ok "a per-cycle step still runs every cycle" || ko "janitor ran $(count janitor)× in 3 cycles"
+[ "$(count publish-landing)" = 3 ] && ok "the landing's publish step runs every cycle (#31); it is a no-op until a green landing changed what the loop runs" || ko "publish-landing ran $(count publish-landing)× in 3 cycles"
 
 # 4) reconcile does not hold the cycle, writes its own log, and stays out of cycle.log
 t0=$(date +%s); run_cycles 1; el=$(( $(date +%s) - t0 ))
