@@ -1,0 +1,754 @@
+{
+  "schema_version": 1,
+  "name": "dev-squad-default",
+  "description": "The five dev_squad phases in the graph vocabulary. Fixture for the schema.",
+  "run": {
+    "deadline": 21600,
+    "max_parallel": 2,
+    "spend_cap": 60
+  },
+  "facts": [
+    {
+      "name": "tier",
+      "type": "enum",
+      "values": [
+        "trivial",
+        "medium",
+        "large"
+      ],
+      "instrument": "code: classify tier from scout.size_estimate; a missing estimate is large",
+      "source_kind": "artifact"
+    },
+    {
+      "name": "sensitive",
+      "type": "bool",
+      "instrument": "code: sensitive path set over scout.paths",
+      "source_kind": "artifact"
+    },
+    {
+      "name": "visual",
+      "type": "bool",
+      "instrument": "code: changed files and web app flag, computed before execute",
+      "source_kind": "target"
+    },
+    {
+      "name": "git",
+      "type": "bool",
+      "instrument": "code: git is available in the target",
+      "source_kind": "target"
+    },
+    {
+      "name": "work_items",
+      "type": "int",
+      "instrument": "code: length of decompose.work_items, or 1 when decompose did not run",
+      "source_kind": "artifact"
+    },
+    {
+      "name": "review_required",
+      "type": "bool",
+      "instrument": "code: derived from diff size and sensitive; replaces the size backstop gate",
+      "source_kind": "artifact"
+    },
+    {
+      "name": "blocking_learnings",
+      "type": "int",
+      "instrument": "code: count of blocking entries in the declared file learnings.json (no cross-run input)",
+      "source_kind": "artifact"
+    },
+    {
+      "name": "architecture_issues",
+      "type": "int",
+      "instrument": "code: count of architecture issues in the critic artifact",
+      "source_kind": "run_record"
+    },
+    {
+      "name": "run_spend",
+      "type": "number",
+      "instrument": "code: sum of SDK result spend over agent entries",
+      "source_kind": "run_record"
+    }
+  ],
+  "gates": [
+    {
+      "id": "spec-shape",
+      "params": []
+    },
+    {
+      "id": "ac-command-shape",
+      "params": [
+        "duplicate_warn_ratio"
+      ]
+    },
+    {
+      "id": "plan-semantics",
+      "params": [
+        "max_work_items"
+      ]
+    },
+    {
+      "id": "spend-floor",
+      "params": [
+        "min_remaining_usd"
+      ]
+    },
+    {
+      "id": "scope",
+      "params": [
+        "allowed_generated"
+      ]
+    },
+    {
+      "id": "security",
+      "params": [
+        "sensitive_paths"
+      ]
+    },
+    {
+      "id": "ac-verify",
+      "params": [
+        "commands_from"
+      ]
+    },
+    {
+      "id": "visual-guard",
+      "params": []
+    },
+    {
+      "id": "learning-check",
+      "params": []
+    }
+  ],
+  "root": "main",
+  "nodes": [
+    {
+      "name": "main",
+      "kind": "loop",
+      "max": {
+        "value": 1,
+        "min": 1
+      },
+      "children": [
+        "scout",
+        "spec",
+        "plan",
+        "budget_gate",
+        "execute",
+        "verify",
+        "ship"
+      ]
+    },
+    {
+      "name": "scout",
+      "kind": "agent",
+      "model": "sonnet",
+      "tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 5,
+          "max": 40
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 2
+        }
+      },
+      "deadline": 600,
+      "output_key": "size_estimate",
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "spec",
+      "kind": "loop",
+      "max": {
+        "value": 4,
+        "min": 1
+      },
+      "children": [
+        "spec_draft",
+        "spec_gate",
+        "spec_proxy"
+      ],
+      "when": {
+        "fact": "tier",
+        "op": "ne",
+        "value": "trivial"
+      }
+    },
+    {
+      "name": "spec_draft",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read",
+        "Grep"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 5,
+          "max": 60
+        },
+        "spend": {
+          "min": 0.1,
+          "max": 4
+        }
+      },
+      "deadline": 900,
+      "output_key": "spec",
+      "next": {
+        "fail": "repeat"
+      },
+      "adapt": {
+        "kinds": [
+          "set_model",
+          "set_effort",
+          "shrink_stalls",
+          "shrink_spend"
+        ],
+        "models": [
+          "opus",
+          "sonnet"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "sees": [
+          "run_spend"
+        ]
+      },
+      "may_propose": true
+    },
+    {
+      "name": "spec_gate",
+      "kind": "gate",
+      "check": "ac-command-shape",
+      "params": {
+        "duplicate_warn_ratio": 0.4
+      },
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "spec_proxy",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 3,
+          "max": 20
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 2
+        }
+      },
+      "deadline": 600,
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "plan",
+      "kind": "loop",
+      "max": {
+        "value": 4,
+        "min": 1
+      },
+      "children": [
+        "decompose",
+        "plan_gate",
+        "plan_proxy"
+      ],
+      "when": {
+        "fact": "tier",
+        "op": "eq",
+        "value": "large"
+      }
+    },
+    {
+      "name": "decompose",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read",
+        "Grep"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 5,
+          "max": 60
+        },
+        "spend": {
+          "min": 0.1,
+          "max": 4
+        }
+      },
+      "deadline": 900,
+      "output_key": "work_items",
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "plan_gate",
+      "kind": "gate",
+      "check": "plan-semantics",
+      "params": {
+        "max_work_items": 5
+      },
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "plan_proxy",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 3,
+          "max": 20
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 2
+        }
+      },
+      "deadline": 600,
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "budget_gate",
+      "kind": "gate",
+      "check": "spend-floor",
+      "params": {
+        "min_remaining_usd": 1
+      },
+      "next": {
+        "fail": "exit:fail"
+      }
+    },
+    {
+      "name": "execute",
+      "kind": "each",
+      "items": "work_items",
+      "mode": "parallel",
+      "max_parallel": 2,
+      "join": "all",
+      "children": [
+        "worktree",
+        "work",
+        "merge",
+        "manual_merge"
+      ],
+      "deadline": 7200
+    },
+    {
+      "name": "worktree",
+      "kind": "action",
+      "effect": "worktree_create",
+      "workspace": "worktrees/item"
+    },
+    {
+      "name": "work",
+      "kind": "loop",
+      "max": {
+        "value": 12,
+        "min": 1
+      },
+      "children": [
+        "actor",
+        "scope_gate",
+        "security_gate",
+        "critic"
+      ],
+      "adapt": {
+        "kinds": [
+          "shrink_loop_max"
+        ]
+      }
+    },
+    {
+      "name": "actor",
+      "kind": "agent",
+      "model": "sonnet",
+      "tools": [
+        "Read",
+        "Edit",
+        "Write",
+        "Bash"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 10,
+          "max": 120
+        },
+        "spend": {
+          "min": 0.2,
+          "max": 8
+        }
+      },
+      "deadline": 1800,
+      "output_key": "diff",
+      "workspace": "worktrees/item",
+      "next": {
+        "fail": "repeat"
+      },
+      "adapt": {
+        "kinds": [
+          "set_model",
+          "set_effort",
+          "narrow_tools",
+          "shrink_stalls",
+          "shrink_spend"
+        ],
+        "models": [
+          "sonnet",
+          "haiku"
+        ],
+        "efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "tools": [
+          "Read",
+          "Edit",
+          "Write"
+        ],
+        "sees": [
+          "sensitive",
+          "run_spend"
+        ]
+      }
+    },
+    {
+      "name": "scope_gate",
+      "kind": "gate",
+      "check": "scope",
+      "params": {
+        "allowed_generated": [
+          "package-lock.json"
+        ]
+      },
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "security_gate",
+      "kind": "gate",
+      "check": "security",
+      "params": {
+        "sensitive_paths": [
+          "auth",
+          "crypto",
+          ".env*"
+        ]
+      },
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "critic",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read",
+        "Grep"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 3,
+          "max": 30
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 3
+        }
+      },
+      "deadline": 900,
+      "next": {
+        "fail": "repeat"
+      },
+      "when": {
+        "fact": "review_required",
+        "op": "eq",
+        "value": true
+      },
+      "adapt": {
+        "kinds": [
+          "set_model",
+          "shrink_stalls"
+        ],
+        "models": [
+          "opus",
+          "sonnet"
+        ],
+        "sees": [
+          "run_spend"
+        ]
+      }
+    },
+    {
+      "name": "merge",
+      "kind": "action",
+      "effect": "merge_land",
+      "workspace": "worktrees/item",
+      "deadline": 300,
+      "next": {
+        "fail": "continue"
+      }
+    },
+    {
+      "name": "manual_merge",
+      "kind": "wait",
+      "owner": "rafael",
+      "deadline": 86400,
+      "default": "fail",
+      "when": {
+        "fact": "outcome:merge",
+        "op": "eq",
+        "value": "fail"
+      },
+      "next": {
+        "fail": "exit:fail"
+      }
+    },
+    {
+      "name": "verify",
+      "kind": "loop",
+      "max": {
+        "value": 1,
+        "min": 1
+      },
+      "children": [
+        "ac_verify",
+        "visual",
+        "learning_gate",
+        "audit_a",
+        "audit_b",
+        "audit_c"
+      ]
+    },
+    {
+      "name": "ac_verify",
+      "kind": "gate",
+      "check": "ac-verify",
+      "params": {
+        "commands_from": [
+          "spec",
+          "scout"
+        ]
+      },
+      "next": {
+        "fail": "exit:fail"
+      }
+    },
+    {
+      "name": "visual",
+      "kind": "loop",
+      "max": {
+        "value": 4,
+        "min": 1
+      },
+      "children": [
+        "visual_actor",
+        "visual_guard",
+        "visual_critic"
+      ],
+      "when": {
+        "fact": "visual",
+        "op": "eq",
+        "value": true
+      }
+    },
+    {
+      "name": "visual_actor",
+      "kind": "agent",
+      "model": "sonnet",
+      "tools": [
+        "Bash",
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 5,
+          "max": 40
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 2
+        }
+      },
+      "deadline": 600,
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "visual_guard",
+      "kind": "gate",
+      "check": "visual-guard",
+      "params": {},
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "visual_critic",
+      "kind": "agent",
+      "model": "opus",
+      "tools": [
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 3,
+          "max": 20
+        },
+        "spend": {
+          "min": 0.05,
+          "max": 2
+        }
+      },
+      "deadline": 600,
+      "next": {
+        "fail": "repeat"
+      }
+    },
+    {
+      "name": "learning_gate",
+      "kind": "gate",
+      "check": "learning-check",
+      "params": {},
+      "next": {
+        "fail": "exit:fail"
+      }
+    },
+    {
+      "name": "audit_a",
+      "kind": "agent",
+      "model": "haiku",
+      "tools": [
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 1,
+          "max": 10
+        },
+        "spend": {
+          "min": 0.01,
+          "max": 0.5
+        }
+      },
+      "deadline": 300,
+      "when": {
+        "fact": "blocking_learnings",
+        "op": "gt",
+        "value": 0
+      },
+      "next": {
+        "fail": "continue",
+        "deadline": "continue"
+      }
+    },
+    {
+      "name": "audit_b",
+      "kind": "agent",
+      "model": "haiku",
+      "tools": [
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 1,
+          "max": 10
+        },
+        "spend": {
+          "min": 0.01,
+          "max": 0.5
+        }
+      },
+      "deadline": 300,
+      "when": {
+        "fact": "architecture_issues",
+        "op": "gt",
+        "value": 0
+      },
+      "next": {
+        "fail": "continue",
+        "deadline": "continue"
+      }
+    },
+    {
+      "name": "audit_c",
+      "kind": "agent",
+      "model": "haiku",
+      "tools": [
+        "Read"
+      ],
+      "budget": {
+        "stalls": {
+          "min": 1,
+          "max": 10
+        },
+        "spend": {
+          "min": 0.01,
+          "max": 0.5
+        }
+      },
+      "deadline": 300,
+      "when": {
+        "fact": "work_items",
+        "op": "gt",
+        "value": 1
+      },
+      "next": {
+        "fail": "continue",
+        "deadline": "continue"
+      }
+    },
+    {
+      "name": "ship",
+      "kind": "loop",
+      "max": {
+        "value": 1,
+        "min": 1
+      },
+      "children": [
+        "commit"
+      ]
+    },
+    {
+      "name": "commit",
+      "kind": "action",
+      "effect": "commit",
+      "workspace": ".",
+      "deadline": 120,
+      "when": {
+        "fact": "git",
+        "op": "eq",
+        "value": true
+      }
+    }
+  ]
+}

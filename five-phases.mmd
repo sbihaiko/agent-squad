@@ -1,0 +1,113 @@
+flowchart TD
+subgraph main["main loop max 1"]
+  direction TB
+  scout["scout<br/>sonnet"]
+  subgraph spec["spec loop max 4 when tier ne trivial"]
+    direction TB
+    spec_draft["spec_draft<br/>opus"]
+    spec_gate{{"spec_gate<br/>gate: ac-command-shape"}}
+    spec_proxy["spec_proxy<br/>opus"]
+  end
+  subgraph plan["plan loop max 4 when tier eq large"]
+    direction TB
+    decompose["decompose<br/>opus"]
+    plan_gate{{"plan_gate<br/>gate: plan-semantics"}}
+    plan_proxy["plan_proxy<br/>opus"]
+  end
+  budget_gate{{"budget_gate<br/>gate: spend-floor"}}
+  subgraph execute["execute each work_items parallel"]
+    direction TB
+    worktree["worktree<br/>action: worktree_create"]
+    subgraph work["work loop max 12"]
+      direction TB
+      actor["actor<br/>sonnet"]
+      scope_gate{{"scope_gate<br/>gate: scope"}}
+      security_gate{{"security_gate<br/>gate: security"}}
+      critic["critic<br/>opus<br/>when review_required eq true"]
+    end
+    merge["merge<br/>action: merge_land"]
+    manual_merge(["manual_merge<br/>wait: rafael, 86400s<br/>when outcome:merge eq fail"])
+  end
+  subgraph verify["verify loop max 1"]
+    direction TB
+    ac_verify{{"ac_verify<br/>gate: ac-verify"}}
+    subgraph visual["visual loop max 4 when visual eq true"]
+      direction TB
+      visual_actor["visual_actor<br/>sonnet"]
+      visual_guard{{"visual_guard<br/>gate: visual-guard"}}
+      visual_critic["visual_critic<br/>opus"]
+    end
+    learning_gate{{"learning_gate<br/>gate: learning-check"}}
+    audit_a["audit_a<br/>haiku<br/>when blocking_learnings gt 0"]
+    audit_b["audit_b<br/>haiku<br/>when architecture_issues gt 0"]
+    audit_c["audit_c<br/>haiku<br/>when work_items gt 1"]
+  end
+  subgraph ship["ship loop max 1"]
+    direction TB
+    commit["commit<br/>action: commit<br/>when git eq true"]
+  end
+end
+  scout --> spec_draft
+  spec_proxy --> decompose
+  plan_proxy --> budget_gate
+  budget_gate --> worktree
+  manual_merge --> ac_verify
+  audit_c --> commit
+  scout -. fail: repeat .-> scout
+  spec_draft --> spec_gate
+  spec_gate --> spec_proxy
+  spec_draft -. fail: repeat .-> spec_draft
+  spec_gate -. fail: repeat loop .-> spec_gate
+  spec_proxy -. fail: repeat .-> spec_proxy
+  decompose --> plan_gate
+  plan_gate --> plan_proxy
+  decompose -. fail: repeat .-> decompose
+  plan_gate -. fail: repeat loop .-> plan_gate
+  plan_proxy -. fail: repeat .-> plan_proxy
+  budget_gate -. fail: exit:fail .-> exit_fail
+  worktree --> actor
+  critic --> merge
+  merge --> manual_merge
+  actor --> scope_gate
+  scope_gate --> security_gate
+  security_gate --> critic
+  actor -. fail: repeat .-> actor
+  scope_gate -. fail: repeat loop .-> scope_gate
+  security_gate -. fail: repeat loop .-> security_gate
+  critic -. fail: repeat .-> critic
+  merge -. fail: continue .-> merge
+  manual_merge -. fail: exit:fail .-> exit_fail
+  ac_verify --> visual_actor
+  visual_critic --> learning_gate
+  learning_gate --> audit_a
+  audit_a --> audit_b
+  audit_b --> audit_c
+  ac_verify -. fail: exit:fail .-> exit_fail
+  visual_actor --> visual_guard
+  visual_guard --> visual_critic
+  visual_actor -. fail: repeat .-> visual_actor
+  visual_guard -. fail: repeat loop .-> visual_guard
+  visual_critic -. fail: repeat .-> visual_critic
+  learning_gate -. fail: exit:fail .-> exit_fail
+  audit_a -. fail: continue .-> audit_a
+  audit_a -. deadline: continue .-> audit_a
+  audit_b -. fail: continue .-> audit_b
+  audit_b -. deadline: continue .-> audit_b
+  audit_c -. fail: continue .-> audit_c
+  audit_c -. deadline: continue .-> audit_c
+  exit_fail((exit:fail))
+  classDef gate fill:#eee,stroke:#333,stroke-width:2px
+  classDef wait fill:#fff4d6,stroke:#333
+  classDef action fill:#dde8f8,stroke:#336
+  class spec_gate gate
+  class plan_gate gate
+  class budget_gate gate
+  class worktree action
+  class scope_gate gate
+  class security_gate gate
+  class merge action
+  class manual_merge wait
+  class ac_verify gate
+  class visual_guard gate
+  class learning_gate gate
+  class commit action
