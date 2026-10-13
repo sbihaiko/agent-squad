@@ -71,6 +71,23 @@ lines() { local c; c=$($G -c . "$1" 2>/dev/null); echo "${c:-0}"; }
 marked() { local n c=0; for n in "$@"; do [ -e "$SG_STATE/auto/disp-$n" ] && c=$((c+1)); done; echo $c; }
 asked() { sed -nE 's/.*call the spawn tool for the ([0-9]+) child.*/\1/p' "$MKLOG.body" | head -1; }
 moved() { local n; for n in "$@"; do $G -qE "^o 1 In Progress( [0-9]+)* $n( |\$)" "$BOARDLOG" || return 1; done; }   # every issue named is in the card move the pass made
+seedmax() { python3 - "$repo" <<'PY'
+import json, pathlib, sys
+d = json.loads((pathlib.Path(sys.argv[1]) / "docs/design/router.graph.json").read_text())
+def walk(o):
+    if isinstance(o, dict):
+        if o.get("kind") == "dispatch" and isinstance(o.get("max_children"), int): return o["max_children"]
+        for v in o.values():
+            r = walk(v)
+            if r is not None: return r
+    if isinstance(o, list):
+        for v in o:
+            r = walk(v)
+            if r is not None: return r
+    return None
+print(walk(d))
+PY
+}
 childblocks() { $G -c '^CHILD' "$MKLOG.body" 2>/dev/null; }
 
 # 1) AC1, AC2, AC3: three startable issues open ONE run; its request asks for three children, one issue each; every
@@ -156,10 +173,12 @@ r=$(SG_SLICE_FORCE=1 real run)
 [ "$(asked)" = 3 ] && [ "$(marked 21 22 23)" = 3 ] && [ "$(lines "$LAUNCHLOG")" = 1 ] && ok "SG_SLICE_FORCE=1 still dispatches all three" || ko "forced: asked '$(asked)', $(marked 21 22 23) of 3 held, $(lines "$LAUNCHLOG") launches: '$r'"
 case "$r" in *deferred*) ko "forced: a ticket was deferred: '$r'";; *) ok "SG_SLICE_FORCE=1 defers nothing";; esac
 
-# 6) with no readable envelope the pass keeps its old bound: the free run slots
+# 6) #57: a project with no graph of its own runs the seed squad/workflows.py falls back to, so the pass reads THAT file's
+#    envelope -- the envelope the engine will enforce -- instead of reading nothing and leaving the bound to free run slots.
+#    The bound was re-anchored when the pass started reading the file the engine runs: the seed allows four children, not five.
 scene nograph
-five; r=$(run)
-[ "$(asked)" = 5 ] && ok "no readable envelope: every startable issue is one child of the one run" || ko "no readable envelope: asked for '$(asked)': '$r'"
+five; r=$(run); sm=$(seedmax)
+[ "$(asked)" = "$sm" ] && ok "no graph of its own: the request fits the seed's envelope" || ko "no graph of its own: asked for '$(asked)' against the seed's '$sm': '$r'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
