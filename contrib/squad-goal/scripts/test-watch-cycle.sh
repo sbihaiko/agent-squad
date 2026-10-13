@@ -13,7 +13,7 @@ mkdir -p "$S" "$ST" "$B" "$T/co" "$T/fork"; fail=0; ok() { echo "ok   $1"; }; ko
 export STEPS=$T/steps.log REC_SLEEP=5
 cp "$src" "$S/watch.sh"; cp "$d/single.sh" "$S/"; cp "$d/models.json" "$S/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$S/"   # the cycle's reader and its throttle travel with it since #1893
 cat > "$S/env.sh" <<EOF
-export SG_STATE=$ST SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
+export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/co SG_FORK_DIR=$T/fork
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # no open PR, no revci summary, nothing to move
@@ -179,7 +179,7 @@ n=$(/usr/bin/grep -c '^NEW PR #7 gui/1893' "$T/watch.out")
 # 7) (#1872) one watch.sh per resolved path. The lock is keyed on this script's own resolved path, NOT on $SG_STATE: a second
 #    start under a different state would otherwise poll the same repository beside the first and double every read. A lock
 #    whose holder is gone is taken over, so a killed loop never wedges the next start.
-WL="$HOME/.cache/squad-goal/watch-locks/$(printf '%s' "$(cd "$S" && pwd -P)/watch.sh" | tr -c A-Za-z0-9 _)"   # the key is the script's RESOLVED path: /var and /private/var are two names for it
+WL="$T/cache/watch-locks/$(printf '%s' "$(cd "$S" && pwd -P)/watch.sh" | tr -c A-Za-z0-9 _)"   # the key is the script's RESOLVED path (/var and /private/var are two names for it), under the seam's base
 rm -rf "$WL"; mkdir -p "$WL"; echo $$ > "$WL/pid"          # held by this shell: alive, so the next start must refuse
 : > "$STEPS"
 env SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/lock.out" 2>&1
