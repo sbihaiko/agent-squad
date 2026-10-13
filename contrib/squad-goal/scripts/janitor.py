@@ -130,8 +130,11 @@ def read(f):
                 d = json.loads(l); pidc = d.get("pid") or pidc; started_at = d.get("started_at") or started_at
             except ValueError: pass
         if '"spawn_accepted"' in l:
-            m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
-            if m: acc.add(m.group(1))
+            # The router writes the issue down without the hash ("Fix GitHub issue 11 in the repository"), and a child that
+            # took several writes them as a list. A hashed-only read lost the run's own issues: rule I and free_reaped read
+            # this set (#66).
+            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)", l):
+                acc.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or "") if x)
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):

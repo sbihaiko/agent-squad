@@ -135,6 +135,18 @@ echo live > "$d/st/active-runs.txt"
 five; r=$(run)
 [ "$(asked)" = 1 ] && ok "the request fits the room the machine ceiling leaves" || ko "the request asks for '$(asked)' children with room for 1: '$r'"
 
+# 4b) The router writes the issue it works down without the hash -- "Fix GitHub issue 11 in the repository" is what the live
+#     runs of this repository carry. The busy test read the hashed form only, so the issue looked untouched, the pass sent
+#     it a second time, and the second run ended needs-human ("the required gui/11 branch is already checked out in a
+#     different worktree") while the first one was still building it (#66). A run in a live record holds what it accepted,
+#     however it is written.
+scene heldplain 24 4
+mkdir -p "$d/co/runs/live"; printf '{"event":"spawn_accepted","child":"c1","definition":"Fix GitHub issue 11 in the repository. Work only in worktrees/child/gui-11 on branch gui/11."}\n' > "$d/co/runs/live/record.jsonl"
+echo live > "$d/st/active-runs.txt"
+five; r=$(run)
+[ "$(marked 11)" = 0 ] && ok "an issue a live run holds with no hash is not dispatched a second time" || ko "an issue a live run holds with no hash was dispatched again: $(marked 11) marker(s)"
+[ "$(marked 12 13 14 15)" -gt 0 ] && ok "the issues no live run holds still go out" || ko "no other startable issue went out"
+
 # 5) AC6: a request the slice guard refuses says so, frees every marker and launches nothing
 scene refused 24
 five; r=$(MK_REFUSE=1 run)

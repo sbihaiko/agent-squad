@@ -79,8 +79,11 @@ for r in open(sys.argv[2]).read().split():
     for l in t.splitlines():
         if '"spawn_accepted"' in l:
             held += 1
-            m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
-            if m: busy.add(m.group(1))
+            # The router writes the issue down without the hash ("Fix GitHub issue 11 in the repository"), and a child that took
+            # several writes them as a list. A hashed-only read let the issue of a live run look untouched, so the pass sent it
+            # a second time, into a run that found the branch already checked out (#66).
+            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)", l):
+                busy.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or "") if x)
 # The children ONE run may take (#33): its envelope, and the child ceiling the run block of the graph names, both less the
 # children the live runs already hold -- and (#21) never more than the machine-wide ceiling caps.children, which is the one
 # resolution the engine enforces. "-" when nothing names a bound, and then the free run slots bound the picks, as before.
