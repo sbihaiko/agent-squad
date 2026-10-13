@@ -14,7 +14,7 @@ HOME = TMP / "home"
 # hub.py reads the profile and HOME at import time, so pin both before loading it.
 os.environ.update(SG_PROFILE=os.environ.get("SG_PROFILE", "example"), SG_REPO="example/repo",
                   SG_OWNER="example", SG_PROJECT="1", SG_CHECKOUT=str(TMP),
-                  SG_HUB_DIR=str(TMP / "hub"), SG_STATE=str(TMP / "state"), HOME=str(HOME))
+                  SG_HUB_DIR=str(TMP / "hub"), SG_SHARED=str(TMP / "hub"), SG_STATE=str(TMP / "state"), HOME=str(HOME))
 sys.path.insert(0, str(HERE))
 spec = importlib.util.spec_from_file_location("hub", HERE / "hub.py")
 hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)

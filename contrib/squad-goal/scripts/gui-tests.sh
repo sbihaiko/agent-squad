@@ -4,7 +4,8 @@
 # lock (serial.sh gui-suite). `off` writes the marker that makes serial.sh skip that lock's command and exit 0, so the fork gate and
 # the e2e go on while no GUI suite starts; `on` removes it. State: $SG_STATE/auto/gui-tests-off (per the auto/off idiom). A single
 # process tree can be silenced instead with SG_GUI_TESTS=no.
-st=${SG_STATE:-$HOME/.cache/squad-goal}; f="$st/auto/gui-tests-off"; mkdir -p "$st/auto"
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"; type sg_state_dir >/dev/null || exit 2
+st=${SG_STATE:?gui-tests.sh: SG_STATE is required}; f="$st/auto/gui-tests-off"; mkdir -p "$st/auto"
 # A second copy OUTSIDE $SG_STATE. A test or suite that inherits the machine's SG_STATE can clean that directory (observed
 # 2026-10-11: the fork-gate fixture drove the real state dir and the marker vanished twice in minutes), so the durable switch
 # cannot live only there. $HOME/.squad-gui-tests-off is written and read by nothing else.
