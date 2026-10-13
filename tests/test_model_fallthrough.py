@@ -15,8 +15,8 @@ from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
 from squad.record import read
-from tests.gitrepo import sibling_repo
 from squad.session import model_chain
+from tests.gitrepo import sibling_repo
 from tests.helpers import load_doc, node, router
 
 pytestmark = pytest.mark.anyio
