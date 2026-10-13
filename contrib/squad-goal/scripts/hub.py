@@ -219,22 +219,53 @@ def group_of(r):
     h = (r.get("age") or 0) / 3600
     return "1h" if h <= 1 else "2h" if h <= 2 else "4h" if h <= 4 else "8h" if h <= 8 else "d"
 
+def squad_roots(sg_squad, sg_checkout, checkout, here):
+    """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
+    hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
+    Rule layer: no hub state, no I/O."""
+    out = []
+    for r in (sg_squad, sg_checkout, checkout, str(pathlib.Path(here).resolve().parents[3])):
+        if r and r not in out: out.append(r)
+    return out
+
+def load_squad(roots):
+    """`squad.caps` and `squad.run_caps` from the first root that holds the package. A root that fails leaves nothing behind (not on
+    sys.path, not in sys.modules), so the next one imports clean. Raises the last failure, which names what was missing."""
+    err = ModuleNotFoundError("no squad package in: " + ", ".join(roots))
+    for root in roots:
+        added = root not in sys.path
+        if added: sys.path.insert(0, root)
+        try:
+            from squad import caps, run_caps
+            return caps, run_caps
+        except Exception as e:
+            err = e
+            for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
+            if added: sys.path.remove(root)
+    raise err
+
+CAPS_LOGGED = set()
+def log_once(line, seen=CAPS_LOGGED, out=None):
+    """One stderr line per distinct text per process: a failure that repeats every poll is named once, never silenced and never a flood."""
+    if line in seen: return
+    seen.add(line); print(line, file=out or sys.stderr, flush=True)
+
 def loop_caps():
     """The machine-wide ceiling (squad/caps.py), from the one resolution the engine and the loop enforce: {runs, children, waiting}.
     `waiting` lists each live wait as {ceiling, holder}. The project file of SG_CHECKOUT may lower the pair. None when the
-    resolution fails (no caps block, a project that raises it): the panel then shows plain counts, never a guessed ceiling.
+    resolution fails (no squad package in any root, no caps block, a project that raises it): the failure is logged once and the panel
+    then shows plain counts, never a guessed ceiling.
     `per_run` is the other pair, read by squad/run_caps.py from the graph the engine resolves (or the newest live run's own);
     it is named in the tooltip and never merged into the machine-wide pair. None when no graph reads."""
-    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
+    roots = squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)
     try:
-        if root not in sys.path: sys.path.insert(0, root)
-        from squad import caps as C
+        C, RC = load_squad(roots)
         co = os.environ.get("SG_CHECKOUT") or CHECKOUT   # the profile's checkout is the fallback, never the process cwd
         c = C.ceiling(co)
-        from squad import run_caps as RC
         per_run = RC.read(co, [r.get("dir") for r in list(LOAD_RUNS) if r.get("dir")])
         return {"runs": c.caps["runs"], "children": c.caps["children"], "waiting": c.waiting(), "per_run": per_run}
-    except Exception:
+    except Exception as e:
+        log_once(f"hub: loop_caps unavailable, the footer shows plain counts: {type(e).__name__}: {' '.join(str(e).split())} (roots tried: {', '.join(roots)})")
         return None
 
 def waiting_txt(caps):
@@ -1419,7 +1450,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .pie{display:flex;flex-direction:column;gap:6px;align-items:stretch}.pie svg{flex:none;width:112px;height:112px;margin:0 auto}.pie .lg{flex:1;min-width:0;font-size:11px}.pie .lg div{display:flex;align-items:center;gap:6px;padding:2px 0}.pie .lg i{width:9px;height:9px;border-radius:2px;flex:none}.pie .ln{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pie .lg b{font-weight:600}.warnl{margin-top:4px;font-size:9px;color:var(--warn)}
 .up{color:var(--err)}.dn{color:var(--ok)}svg{display:block;width:100%}
 #main{flex:1;min-width:0;display:grid;gap:4px;padding:4px}
-.cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--pin);color:var(--fg,inherit)}
+.cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}
 #board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
 #board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}#board.off #br{display:none}
@@ -1490,7 +1521,7 @@ body.dockb.max #win{grid-template-rows:minmax(0,1fr) 0}
 body.dockb.max #board{grid-row:1/-1;height:auto;border-top:0;overflow:hidden}
 body.dockb.max #main{visibility:hidden}
 #grip{display:none}body.dockb #grip{display:block;height:7px;margin-bottom:-3px;cursor:ns-resize;flex:none;position:relative;z-index:3}body.dockb #grip:hover,body.dockb #grip.drag{background:var(--pin);opacity:.6}body.dragging{user-select:none;cursor:ns-resize}body.dragging iframe{pointer-events:none}body.dockb.max #grip{display:none}
-/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and holds no dashboard (its source is blank), so it opens no stream; maximizing sources it and detaches the run pane's frame. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
+/* The pip over the maximized board (#1782): a small card of the run's own dashboard, floating on the board. It is the board's own child, so `absolute` is measured against the board and never the viewport; z-index 10 keeps it above the board header (2) and the column headers and below the filter popover (20), so an open popover is never trapped behind it. In the split the window is hidden with `visibility` and never detached, so the frame — one connection to the run's dashboard — is still there when the board is maximized again. `overscroll-behavior:contain` and a non-passive wheel listener on the chrome keep a wheel over the window off the board behind it. */
 #pip{position:absolute;z-index:10;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 22px #0009;overflow:hidden;overscroll-behavior:contain}
 body:not(.dockb.max) #pip{visibility:hidden}
 #piph{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;background:#1b212b;border-bottom:1px solid var(--line);cursor:move;touch-action:none;flex:none;font-size:11px}

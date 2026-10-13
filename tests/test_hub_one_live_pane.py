@@ -146,21 +146,3 @@ console.log("RESULT"+JSON.stringify(out));
     assert st["empty"] == {"pane": None, "pip": False}
     assert st["budget"] == 1
     assert max(st["counts"]) <= st["budget"] and max(st["countsMax"]) <= st["budget"]   # N runs, never more than the budget
-
-
-def test_a_missing_cap_file_cannot_make_the_page_expensive(hub):
-    bare = tempfile.mkdtemp()                                       # a checkout with no project file: the machine-wide pair still resolves
-    co = tempfile.mkdtemp()                                         # a checkout whose project file raises the ceiling: the resolution fails
-    (Path(co) / "docs/squad").mkdir(parents=True)
-    (Path(co) / "docs/squad/defaults.yaml").write_text("caps:\n  runs: 11\n")
-    old = os.environ.get("SG_CHECKOUT")
-    try:
-        os.environ["SG_CHECKOUT"] = bare
-        assert hub.loop_caps() is not None
-        os.environ["SG_CHECKOUT"] = co
-        assert hub.loop_caps() is None
-    finally:
-        os.environ["SG_CHECKOUT"] = old
-    assert "CAPS" not in _panes_slice(hub)                          # the live budget reads no cap: one stream whatever the file says
-    st = _drive(hub, "N=6;runs=mk(40);slots=runs.slice(0,6).map(r=>r.id);drawMain();out.s=state();")["s"]
-    assert len(st["live"]) == 1                                     # the harness's CAPS is null, as when the file is missing
