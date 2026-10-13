@@ -25,7 +25,7 @@
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min, report-only:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open."""
-import json, os, pathlib, re, signal, subprocess, sys, time
+import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
@@ -33,11 +33,28 @@ def say(m):   # details go to cycle.log (or stdout in a dry run); watch.log gets
     acts.append(m)
     if dry: print("JANITOR " + m, flush=True)
     else: open(st / "cycle.log", "a").write(time.strftime("%T ") + "janitor " + m + "\n")
-def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
+DEADLINE = float(os.environ.get("JANITOR_CALL_TIMEOUT", "60"))   # a call has a deadline (ADR-0051); 0 waits, and is only for a hand run
+def _run(a, cwd=None, env=None, timeout=None):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
+    """Run one command and return (exit status, stdout), at most DEADLINE seconds. A pipe is never used: a command's
+    grandchild that inherits stdout would hold the pipe past the child's exit, and the pass would wait for it for ever
+    (the loop stopped for 28 min on 2026-10-13). A deadline miss is one status of 1 and one line in the pass log."""
+    with tempfile.TemporaryFile("w+") as f:
+        try:
+            rc = subprocess.run(a, stdout=f, stderr=subprocess.DEVNULL, text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
+        except subprocess.TimeoutExpired:
+            say(f"call timed out after {(DEADLINE if timeout is None else timeout):g}s: {' '.join(a[:3])}")
+            return 1, ""
+        except OSError as e:
+            say(f"call failed: {' '.join(a[:3])}: {e}")
+            return 1, ""
+        f.seek(0)
+        return rc, f.read()
+def sh(*a): return _run(a)[1]
+def rc(*a): return _run(a)[0]
 alerts = st / "alerts.log"
 def alert(msg):   # alerts.log is what health.sh and the session read; the notification reaches the human away from the terminal
     open(alerts, "a").write(time.strftime("%F %T ") + msg + "\n")
-    if not dry: subprocess.run([os.environ.get("JANITOR_NOTIFY", "/usr/bin/osascript"), "-e", 'display notification "' + msg.replace('"', "'")[:180] + '" with title "squad-goal"'], capture_output=True)
+    if not dry: _run([os.environ.get("JANITOR_NOTIFY", "/usr/bin/osascript"), "-e", 'display notification "' + msg.replace('"', "'")[:180] + '" with title "squad-goal"'])
 def issues_named(text):   # the request's CHILD header is the authoritative list; the body of a request also embeds the raw
     found = set()          # issue text, which names other issues in prose, so a bare `issue #N` scan would free the wrong markers
     for l in text.splitlines():
@@ -145,7 +162,7 @@ def same_process(pidc, started_at):
 def mark_killed(f):
     """C: the zombie gets the killed verdict in its own record (squad.killed, the one writer), so the hub shows it ended. A record it cannot write stays as it is."""
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(x for x in (os.environ.get("SG_SQUAD"), os.environ.get("PYTHONPATH")) if x)}
-    subprocess.run(["python3", "-m", "squad.killed", str(f)], capture_output=True, text=True, env=env)
+    _run(["python3", "-m", "squad.killed", str(f)], env=env)
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 live = {}; keep = []; held = set(); landed_n = set()   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
@@ -174,7 +191,7 @@ for r in names:
         if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
             say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
             if not dry:
-                subprocess.run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], capture_output=True, text=True, cwd=co)   # K: re-arm the PR sha of a never-started autofix run
+                _run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], cwd=co)   # K: re-arm the PR sha of a never-started autofix run
             free_never_started(f)   # the run frees its own issues; say() reports it in a dry run too
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
@@ -273,7 +290,7 @@ if owner and proj and repo0:
             say(f"DISPATCH-FAILED #{n}: run {f.name} ended {i['name']} ({why}), nothing landed; {where} {mks} marker dropped so it dispatches again")
             if not dry:
                 for p, s in moves:
-                    subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
+                    _run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)])
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
@@ -303,7 +320,7 @@ if owner and proj and repo0:
         mks = " and ".join("auto/" + k + "-" + n for k in sorted(ms))
         say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no PR names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
         if not dry:
-            for p, s in moves: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
+            for p, s in moves: _run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)])
             for m in ms.values(): m.unlink()
             (st / "cq" / f"{CQ}#{n}-stalecard-{os.getpid()}.md").write_text(
                 f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
@@ -333,7 +350,7 @@ if fd and fb:
     # either: that pass merges a branch ahead of the base, and here there is nothing left to merge. So the issue goes
     # back to the column the dispatch reads and its markers are dropped (#1830).
     if owner and proj and repo0:
-        def gitrc(*a): return subprocess.run(["git", "-C", fd, *a], capture_output=True, text=True).returncode
+        def gitrc(*a): return rc("git", "-C", fd, *a)
         for mk in sorted((st / "auto").glob("fork-*")):
             m = re.fullmatch(r"fork-(\d+)-([0-9a-f]{7,40})", mk.name)
             if not m: continue
@@ -355,7 +372,7 @@ if fd and fb:
             say(f"UNWOUND #{n}: {mk.name} claims {sha[:9]}, which {fb} no longer holds and {br} has nothing left to merge; card -> {', '.join(s for _, s in moves)}, {'+'.join(marks)} dropped so it dispatches again")
             if not dry:
                 km.touch()
-                for p, s in moves: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
+                for p, s in moves: _run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)])
                 for k in marks:
                     f2 = st / "auto" / k
                     if f2.exists(): f2.unlink()
@@ -373,7 +390,7 @@ for l in sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", 
     if not k.exists():
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: APPROVE + clean for {int(age // 60)} min, not merged; running one autopilot pass")
         if not dry:
-            k.touch(); subprocess.run(["bash", str(pathlib.Path(__file__).parent / "autopilot.sh")], cwd=co, capture_output=True, timeout=180)
+            k.touch(); _run(["bash", str(pathlib.Path(__file__).parent / "autopilot.sh")], cwd=co, timeout=180)
     elif age > 900 and not k2.exists():
         say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
         if not dry: k2.touch()
