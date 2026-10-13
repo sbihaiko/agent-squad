@@ -1,7 +1,9 @@
 #!/bin/bash
 # The board pass names the run that holds a card: `board.py --run-fields <owner> <project> <issue#> <run> <run-started>` writes
-# the two text fields Run and Run started, and `--clear-run` empties them when the card leaves In Progress. Both are one
+# the two text fields Run and Run started, and `--clear-run` clears them when the card leaves In Progress. Both are one
 # PATCH on the one item, they flag the hub to refresh at once, and a refusal is named on stderr and exits non-zero.
+# The clear sends null, the value the endpoint documents for clearing a field; the stubbed gh refuses an empty string as a
+# field value exactly as GitHub does ("Invalid field values", HTTP 400, #101).
 # Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
 # usage: bash test-board-run-fields.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -12,7 +14,9 @@ a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
   *items/ITEM_REFUSE*) echo '{"message":"Resource not accessible by integration","status":"403"}' >&2; exit 1;;
-  *items/ITEM1*) echo '{"id":"ITEM1"}';;
+  *items/ITEM1*)
+    if /usr/bin/grep -q '"value": ""' "TMPDIR/patch.in"; then echo '{"message":"Invalid field values","status":"400"}' >&2; exit 1; fi   # an empty string is not a field value GitHub takes (#101)
+    echo '{"id":"ITEM1"}';;
   *users/o*) echo '{"type":"Organization"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}}]},{"id":"F_RUN","name":"Run"},{"id":"F_START","name":"Run started"}]';;
   *items?per_page=100*) printf '[2001,"ITEM1","https://api.github.com/repos/x/y"]\n[2002,"ITEM_REFUSE","https://api.github.com/repos/x/y"]\n';;
@@ -30,7 +34,7 @@ $o"
 [ -e "$T/st/board-dirty" ] && ok "the hub is flagged to refresh" || ko "board-dirty not touched"
 rm -f "$T/patch.in"; o=$(run --clear-run o 4 2001 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "clearing Run fields exits 0" || ko "clear exit $rc: $o"
-[ "$(grep -o '"value": ""' "$T/patch.in" 2>/dev/null | wc -l | tr -d ' ')" = "2" ] && ok "both text fields are emptied" || ko "clear payload: $(cat "$T/patch.in" 2>/dev/null)"
+[ "$(grep -o '"value": null' "$T/patch.in" 2>/dev/null | wc -l | tr -d ' ')" = "2" ] && ok "both text fields are cleared with null, the value the endpoint documents" || ko "clear payload: $(cat "$T/patch.in" 2>/dev/null)"
 o=$(run --run-fields o 4 2009 run-abc "" 2>&1); rc=$?
 [ "$rc" -eq 1 ] && case $o in *"2009 not on the board"*) ok "an issue not on the board is named and exits 1";; *) ko "not-on-board message: $o";; esac || ko "not-on-board exit $rc: $o"
 o=$(run --run-fields o 4 2002 run-abc "" 2>&1); rc=$?
