@@ -7,7 +7,7 @@ runs() { [ -f "$T/gui.log" ] && wc -l < "$T/gui.log" | tr -d ' ' || echo 0; }
 setup() {   # setup <issue>...: a fork whose base has hub.py (10 lines) and one branch per issue; 1 edits line 1, 2 edits line 10, 3 edits line 1 too (conflicts with 1), 4 adds the file "bad" (the gate goes red on it), others add their own file
   T=$(mktemp -d); mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
   export HOME="$T/home"; mkdir -p "$HOME"   # serial.sh's durable GUI kill switch is $HOME/.squad-gui-tests-off, so a private home is what keeps THIS fixture's gate decision observable instead of letting the machine's switch answer for it (the command the gate runs is the stub in SG_FORK_TEST_CMD, so no emulator can start either way)
-  cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/prland.sh" "$here/ghcall.sh" "$here/address.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py "$T/s/"
+  cp "$here/forkclose.sh" "$here/forkonly.sh" "$here/fork-gate.sh" "$here/gate-suites.sh" "$here/serial.sh" "$T/s/"; printf 'exit 0\n' > "$T/s/shell-suites.sh"; cp $here/ghread.py "$T/s/"; cp $here/ghthrottle.py "$T/s/"
   # test.sh's stub models the seam the landing reads its failures from: the real test.sh writes the gate's whole output to
   # $SG_STATE/tests/<TEST_ID>.log, which is what the batch pass reads a red batch's failing test out of (#13).
   cat > "$T/s/test.sh" <<'EOS'
@@ -20,12 +20,11 @@ EOS
   printf '#!/bin/bash\necho %s/req.txt\n' "$T" > "$T/s/mkreq.sh"; printf 'open(__import__("sys").argv[1]+".launched","w")\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_OWNER=x SG_PROJECT=4 BOARD=true\nexport SG_FORK_TEST_CMD="echo gui >> %s/gui.log; [ ! -e bad ]"\nexport SG_FORK_PY_CMD=true\n' "$T/st" "$T/fork" "$T/co" "$T" > "$T/s/env.sh"
   g init -q -b local/next; seq 1 10 > "$T/fork/hub.py"; g add .; g commit -q -m init
-  $G init -q --bare "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next   # the land pushes and merges by PR (#32)
   local n items=""; for n in "$@"; do g checkout -q -b gui/$n local/next
     case $n in 1|3) sed -i '' "1s/.*/edit-$n/" "$T/fork/hub.py";; 2) sed -i '' "10s/.*/edit-$n/" "$T/fork/hub.py";; 4) echo x > "$T/fork/bad";; *) echo $n > "$T/fork/f$n";; esac
     g add .; g commit -q -m "work $n"; g checkout -q local/next; items="$items{\"n\":$n,\"st\":\"Code Complete\",\"s\":\"open\"},"; done
   echo "{\"items\":[${items%,}]}" > "$T/co/runs/.hub/hub-board.json"
-  printf '#!/bin/bash\ncase "$*" in\n  *"--method POST repos/"*"/pulls -f"*) echo "{\\"number\\":7}";;\n  *"/check-runs"*) echo "{\\"check_runs\\":[{\\"status\\":\\"completed\\",\\"conclusion\\":\\"success\\"}]}";;\n  *"/pulls/7/merge"*) echo "{}";;\n  *"issues/"*" -q .state"*) echo open;;\n  *"-X PATCH"*"issues/"*) echo "$*" >> %s/closed.log;;\n\n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"; }
+  printf '#!/bin/bash\ncase "$*" in\n  *"issues/"*" -q .state"*) echo open;;\n  *"-X PATCH"*"issues/"*) echo "$*" >> %s/closed.log;;\n\n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"; }
 pass() { bash "$T/s/forkclose.sh" 2>&1; }
 
 # 1. one branch, one pass: the merge was tested on the exact tree that becomes the base, so that sha is a tested base
@@ -42,7 +41,6 @@ setup 1 2; r=$(pass)
 [ "$(runs)" = 2 ] && ok "batch of two: base test once, one gate run for the candidate" || ko "gui runs: $(runs); $r"
 [ "$(g log --merges --reverse --format=%s | tr '\n' '|')" = "Merge gui/1 (Refs #1)|Merge gui/2 (Refs #2)|" ] && ok "both branches landed, in order" || ko "merges: $(g log --merges --reverse --format=%s | tr '\n' '|')"
 [ "$(wc -l < "$T/closed.log" 2>/dev/null | tr -d ' ')" = 2 ] && ok "both issues closed" || ko "closes: $(cat "$T/closed.log" 2>/dev/null)"
-[ "$($G --git-dir="$T/gh/x/tool.git" for-each-ref refs/heads/gui | wc -l | tr -d ' ')" -ge 2 ] && ok "each closed issue's branch was pushed for its PR (#32)" || ko "the batch closed issues with unpushed branches"
 [ -z "$(g branch --list 'fc-batch*')" ] && [ -z "$(g status --porcelain)" ] && [ "$(g branch --show-current)" = local/next ] && ok "no candidate branch left, checkout clean on the base" || ko "leftovers: $(g branch | tr '\n' ' ')"
 [ -e "$T/st/auto/basetest-$(g rev-parse --short=9 HEAD)" ] && ok "the landed candidate is a tested base" || ko "no basetest for the landed candidate"
 rm -rf "$T"

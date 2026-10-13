@@ -36,7 +36,6 @@ case "$out" in *"WT PUSHED run-moved"*) ko "P: diverged branch was pushed";; *"W
 printf '#!/bin/bash\ncase "$*" in *pulls?state=open*head=*) echo 77;; *issues/*) echo closed;; *) echo "";; esac\n' > "$T/bin/gh"
 for d in run-zombie run-fresh run-busy run-landed run-moved; do rm -rf "$T/co/runs/$d"; done
 $G init -q -b local/next "$T/fork"; cd "$T/fork"; $G -c user.email=a@b -c user.name=t commit -q --allow-empty -m base; $G branch gui/7
-$G init -q --bare "$T/fork-origin.git"; $G remote add origin "$T/fork-origin.git"; $G push -q origin local/next 2>/dev/null; $G fetch -q origin   # a fork tree goes once the remote base holds its branch (#32)
 $G worktree add -q "$T/hm/wt-as-7" gui/7
 mkdir -p "$T/co/runs/run-live/ws"; echo '{"event": "call_start"}' > "$T/co/runs/run-live/record.jsonl"; echo "Work on gui/7 in ~/wt-as-7" > "$T/co/runs/run-live/request.txt"
 printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_REPO=x/y SG_OWNER=x\n' "$T/co" "$T/st" "$T/fork" > "$T/s/env.sh"
@@ -45,23 +44,6 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 echo '{"event": "verdict"}' > "$T/co/runs/run-live/record.jsonl"
 out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d "$T/hm/wt-as-7" ] && ok "F: fork tree removed once the run has a verdict" || ko "F: fork tree kept after the verdict: $out"
-# R (#32): a branch whose work is not in the base is never deleted, and a branch that is deleted can be restored from the
-# remote. A run's tree whose HEAD sits on a remote branch is removed, but its own branch goes only when origin's base holds
-# its tip, and the line names that tip. A fork branch merged into the fork's LOCAL base only (never pushed) is kept.
-rc() { $G -C "$1" -c user.email=a@b -c user.name=t commit -q --allow-empty -m "$2"; }
-cd "$T/co"; $G fetch -q origin
-$G worktree add -q -b squad/run-r/c "$T/co/runs/run-r/ws/w" origin/main; rc "$T/co/runs/run-r/ws/w" unlanded; $G -C "$T/co/runs/run-r/ws/w" push -q origin squad/run-r/c 2>/dev/null
-$G worktree add -q -b squad/run-s/c "$T/co/runs/run-s/ws/w" origin/main; rc "$T/co/runs/run-s/ws/w" landed; $G -C "$T/co/runs/run-s/ws/w" push -q origin HEAD:refs/heads/main 2>/dev/null
-S8=$($G -C "$T/co/runs/run-s/ws/w" rev-parse HEAD); $G fetch -q origin
-for r in run-r run-s; do echo '{"event": "verdict"}' > "$T/co/runs/$r/record.jsonl"; done
-cd "$T/fork"; $G checkout -q -b gui/8 local/next; rc "$T/fork" work8; $G checkout -q local/next; $G -c user.email=a@b -c user.name=t merge -q --no-ff -m "Merge gui/8" gui/8; $G worktree add -q "$T/hm/wt-as-8" gui/8
-out=$(bash "$T/s/wtclean.sh" 2>&1); cd "$T/co"
-$G merge -q --ff-only origin/main   # the W cases below build on main
-[ ! -d "$T/co/runs/run-r/ws/w" ] && ok "R: a finished run's tree on a remote branch is removed" || ko "R: run-r tree kept: $out"
-$G rev-parse -q --verify refs/heads/squad/run-r/c >/dev/null && ok "R: its branch, whose work the base lacks, is kept" || ko "R: squad/run-r/c was deleted with work the base lacks: $out"
-! $G rev-parse -q --verify refs/heads/squad/run-s/c >/dev/null && ok "R: a branch whose work origin's base holds is deleted" || ko "R: squad/run-s/c kept although origin/main holds it: $out"
-case "$out" in *"squad/run-s/c"*"${S8:0:9}"*) ok "R: the deletion names the tip, so the branch can be restored from the remote";; *) ko "R: the deletion line does not name squad/run-s/c and its tip ${S8:0:9}: $out";; esac
-$G -C "$T/fork" rev-parse -q --verify refs/heads/gui/8 >/dev/null && ok "R: a fork branch merged into the local base only is kept" || ko "R: gui/8 was deleted though no remote holds it: $out"
 # W: the PR-worktree rule (~/wt-<n>-*) force-deletes a branch, so it must act only on the branch's OWN merged PR. GitHub ignores a
 # head= value with an unencoded ':' or '/' and answers with the repo's newest closed PR, whatever its head is: the old rule then
 # removed every clean tree and force-deleted its branch, unmerged work included (see the issue "wtclean deletes a branch whose PR

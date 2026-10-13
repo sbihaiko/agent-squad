@@ -39,7 +39,6 @@ J
   /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t commit -q -m "work 1"
   /usr/bin/git -C "$T/fork" -c user.email=a@b -c user.name=t checkout -q local/next
   echo '{"items":[{"n":1,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"
-  printf '#!/bin/bash\ncase "$1" in push) echo "$*" >> "$FCT/pushes"; exit 1;; esac\nexec /usr/bin/git "$@"\n' > "$T/bin/git"; chmod +x "$T/bin/git"   # a push this fixture makes would reach the real origin of the cwd's repository (#32): the shim records it and refuses
   printf '#!/bin/bash\ncase "$*" in *"pulls?state=open"*) ;; *"-q .state"*) echo open;; *"issues/1/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";; \n  *"graphql"*) echo "[]";;\n  *"--include"*) echo "{\\"state\\":\\"open\\"}";;\nesac\n' > "$T/bin/gh"; chmod +x "$T/bin/gh"
 }
 # 1: a red fork gate on a branch the guard would refuse must still launch the fix run
@@ -51,8 +50,6 @@ case "$r" in *"FORKCLOSE RED #1 (test-1-"*) ok "the red gate is reported with it
 [ "$(cat "$T1/force" 2>/dev/null)" = 1 ] && ok "SG_SLICE_FORCE=1 is set on that one mkreq.sh call" || ko "SG_SLICE_FORCE not set: '$(cat "$T1/force" 2>/dev/null)'"
 case "$r" in *"fix run forkred-1-"*) [ "$(nfix)" = 1 ] && ok "the report names the fix run it launched" || ko "the report claims a fix run nothing launched: '$r'";; *) ko "no fix-run line: '$r'";; esac
 [ -z "$(ls "$T1/st/cq/"*slicerefus* 2>/dev/null)" ] && ok "no refusal card when the dispatch succeeded" || ko "a refusal card was written on a successful dispatch"
-[ ! -e "$T1/pushes" ] && ok "the fix request names the push it allows and runs none (#32)" || ko "the red message ran a push: $(cat "$T1/pushes")"
-/usr/bin/grep -q 'git push origin gui/1' "$T1"/st/req/forkred-1-*.body 2>/dev/null && ok "the child's request still says which branch it may push (#32)" || ko "the request does not name 'git push origin gui/1': $(ls "$T1/st/req" | tr '\n' ' ')"
 # 2: any other refusal (the stub refuses even under the force) must never read as a launched run
 T2=$(mktemp -d); mkfix "$T2"; export FCT=$T2; touch "$T2/refuse"
 r=$(bash "$T2/s/forkclose.sh" 2>&1)

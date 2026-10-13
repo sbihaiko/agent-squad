@@ -9,18 +9,14 @@ T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1;
 G=/usr/bin/git; g() { $G -C "$T/fork" -c user.email=a@b -c user.name=t "$@"; }
 pass() { bash "$T/s/forkclose.sh" 2>&1; }
 board() { printf '{"items":[%s]}\n' "$1" > "$T/co/runs/.hub/hub-board.json"; }
-origin() { rm -rf "$T/gh"; $G init -q --bare -b local/next "$T/gh/x/tool.git"; g remote add origin "$T/gh/x/tool.git"; g push -q origin local/next; }   # the land pushes and merges by PR (#32); a path ending in x/tool is the address the seam resolves
 mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each case builds the history it is about
   rm -rf "$T/s" "$T/st" "$T/co" "$T/bin" "$T/fork"; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/st/tests" "$T/st/req" "$T/bin" "$T/co/runs/.hub" "$T/fork"
-  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,prland.sh,address.sh,ghcall.sh,fork-gate.sh,serial.sh,gate-suites.sh,merge-audit.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
+  cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,fork-gate.sh,serial.sh,gate-suites.sh,merge-audit.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
   printf 'exit 0\n' > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
-  *"--method POST repos/"*"/pulls -f"*) echo '{"number":7}';;   # one route (#32): the land opens the PR, the checks are green, GitHub merges it
-  *"/check-runs"*) echo '{"check_runs":[{"status":"completed","conclusion":"success"}]}';;
-  *"/pulls/7/merge"*) echo '{"merged":true}';;
   *"pulls?state=open"*) ;;
   *"/comments"*) echo "TDD RED (test-x.sh, failure line): FAIL y";;
   *" -q .body"*) ;;
@@ -33,7 +29,7 @@ J
   chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"; }
 # gui/1 forks from the base, its own commit changes L2, and a sibling branch changes L2 too: the merge into gui/1 conflicts.
 # The resolution keeps one side's L2 -- that is allowed -- and the question is L1 and L3, which BOTH parents hold.
-fab() { g init -q -b local/next; printf 'L1\nL2\nL3\n' > "$T/fork/wat.sh"; g add .; g commit -q -m init; origin
+fab() { g init -q -b local/next; printf 'L1\nL2\nL3\n' > "$T/fork/wat.sh"; g add .; g commit -q -m init
   g checkout -q -b side local/next; sed -i '' 's/^L2$/L2 side/' "$T/fork/wat.sh"; g commit -qam side
   g checkout -q -b gui/1 local/next; sed -i '' 's/^L2$/L2 one/' "$T/fork/wat.sh"; g commit -qam "work 1"
   g merge --no-commit side >/dev/null 2>&1 || true
