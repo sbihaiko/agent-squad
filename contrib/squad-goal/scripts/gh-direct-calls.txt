@@ -14,7 +14,7 @@
 autobug.sh 1
 autofix.sh 3
 autofrontier.sh 4
-autohunt.sh 3
+autohunt.sh 2
 autopanel.sh 1
 autopilot.sh 13
 board.py 1
