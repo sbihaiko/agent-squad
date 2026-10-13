@@ -9,7 +9,7 @@
 version: 1
 
 options:
-  model: claude-sonnet-5-5          # owner ruling; record init.data["model"] in every run log
+  model: claude-deepseek-v4-flash   # owner ruling 2026-10-13: no Anthropic model until the quota resets; record init.data["model"] in every run log
   fallback_model: null              # alias or full id; unset means no fallback
   effort: medium                    # low | medium | high | max; Sonnet 5.5 API default is high
   thinking: null                    # supersedes max_thinking_tokens; unset keeps the model default
