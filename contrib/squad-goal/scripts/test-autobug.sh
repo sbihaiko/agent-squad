@@ -195,7 +195,7 @@ printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
 [{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
 JSON
-printf '#!/bin/bash\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' > "$T/s/board.sh"
+printf '#!/bin/bash\nprintf "%%s\\n" "$@" > %s/board.args\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/board.sh" "$T/s/mkreq.sh" "$T/s/launch.py"
@@ -218,6 +218,7 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 export BOARD="$T/s/board.sh"
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "8 the pass that hit the refusal finishes" || ko "8 the pass exited $rc: '$r'"
+$G -qx -- '--add' "$T/board.args" && ok "8 a dispatched issue missing from the board is added before its card moves" || ko "8 the card move did not add a missing dispatched issue: $(cat "$T/board.args" 2>/dev/null)"
 case "$r" in *"AUTOBUG dispatched"*) ok "8 the dispatch still happens" ;; *) ko "8 no dispatch: '$r'";; esac
 filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 1 ] && ok "8 a refused write opens exactly one bug" || ko "8 a refused write opened $filed issue(s): $(cat "$T/filed")"
