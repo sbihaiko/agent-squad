@@ -9,9 +9,9 @@
 # a fact the cycle cannot leave unread, and it is named as one.
 #
 # The rule of the publish is untouched: an explicit FILE LIST, never a mirror. Only the names the repository ships cross
-# over, the names it retired are dropped by name, and the live copy's machine config (scripts/models.json, the per-repo
-# profiles under scripts/profiles/, $SG_STATE) is never one of the names -- so this pass never builds a path of its own
-# and never removes a file no one named.
+# over, the names it retired are dropped by name together with the suites they took with them, and the live copy's
+# machine config (scripts/models.json, the per-repo profiles under scripts/profiles/, $SG_STATE) is never one of the
+# names -- so this pass never builds a path of its own and never removes a file no name of the publish covers.
 #
 # Source: the checkout this profile works in, when it carries the skill ($SG_CHECKOUT/contrib/squad-goal, named by its
 # own SKILL.md). A profile whose checkout is another repository ships no copy of this skill and the pass says nothing.

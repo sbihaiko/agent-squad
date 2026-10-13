@@ -1,16 +1,20 @@
 #!/bin/bash
 # usage: publish-live.sh [--check] [<src>] [<dest>]   Publishes this repository's contrib/squad-goal into the live skill
 # (~/.claude/skills/squad-goal) as an explicit FILE LIST, never a mirror: the live copy holds machine config (models.json,
-# per-repo profiles under scripts/profiles/, and $SG_STATE), so the step copies the files the repository ships and drops
-# the names it retired, and removes nothing else. It never removes the destination and never touches a file it did not name.
+# per-repo profiles under scripts/profiles/, and $SG_STATE), so the step copies the files the repository ships, drops the
+# names it retired together with the suites they took with them, and removes nothing else: the destination, the machine
+# config and every other file no name here covers are left alone.
 #
 # src  the repository tree to publish (default: the contrib/squad-goal this script sits in, else $SG_SQUAD/contrib/squad-goal).
 # dest the live skill (default: $SG_LIVE_DIR, else $HOME/.claude/skills/squad-goal).
 # --check changes nothing, prints one `copy <file>` / `drop <scripts/name>` line per difference and exits 1; with no
-# difference it prints nothing and exits 0. A publish prints each retired name it drops and a one-line count.
+# difference it prints nothing and exits 0. A publish prints each retired name and each retired script's suite it drops,
+# and a one-line count.
 #
 # The retired names (#122, #134) are the fork-only route the repository no longer ships. They are split in the source so
 # this list is not itself a call site: test-retire-fork-only.sh greps every shipped script for a retired name.
+# A retired script takes its suite with it (#210): the repository ships the suites of the scripts it ships, so a live
+# scripts/test-*.sh the source tree does not ship is the suite of a script the repository no longer ships.
 RETIRED="fork""close.sh
 fork""-gate.sh
 fork""only.sh
@@ -37,8 +41,10 @@ shipped() { { ( cd "$src" && find . -type f ! -name .DS_Store ! -name '*.pyc' ! 
   | { grep -vE '^scripts/profiles/.+\.sh$' || true; }
   [ -f "$src/scripts/profiles/example.sh" ] && printf '%s\n' scripts/profiles/example.sh; } | LC_ALL=C sort -u; }
 
+files=$(shipped)
+
 rc=0
-for f in $(shipped); do
+for f in $files; do
   if [ -f "$dest/$f" ] && cmp -s "$src/$f" "$dest/$f" && { [ ! -x "$src/$f" ] || [ -x "$dest/$f" ]; }; then continue; fi
   if [ -n "$check" ]; then echo "copy $f"; rc=1; continue; fi
   mkdir -p "$dest/$(dirname "$f")"
@@ -49,5 +55,12 @@ for n in $RETIRED; do
   if [ -n "$check" ]; then echo "drop scripts/$n"; rc=1; continue; fi
   rm -f "$dest/scripts/$n"; echo "publish-live: dropped scripts/$n"
 done
+for s in "$dest"/scripts/test-*.sh; do
+  [ -f "$s" ] || continue
+  b="scripts/$(basename "$s")"
+  printf '%s\n' $files | grep -qxF "$b" && continue        # the repository ships this suite: it stays, and the copy above is its content
+  if [ -n "$check" ]; then echo "drop $b"; rc=1; continue; fi
+  rm -f "$s"; echo "publish-live: dropped $b"
+done
 [ -n "$check" ] && exit $rc
-echo "publish-live: $(shipped | wc -l | tr -d ' ') file(s) published to $dest, retired names dropped by name"
+echo "publish-live: $(printf '%s\n' $files | grep -c .) file(s) published to $dest, retired names and their suites dropped by name"
