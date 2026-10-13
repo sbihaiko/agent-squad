@@ -196,7 +196,7 @@ async def test_a_workspace_outside_the_run_area_is_refused_with_a_record_event(t
 async def test_a_git_that_times_out_commits_nothing_and_does_not_fail_the_node(tmp_path, monkeypatch):
     repo, eng = engine(tmp_path, [act("wt", "worktree_create"), worker()], ["wt", "a"], PASS)
 
-    def slow(path, message, timeout=None):
+    def slow(path, message, timeout=None, exclude=None):
         raise subprocess.TimeoutExpired("git", timeout or 0)
     monkeypatch.setattr(node_commit.actions, "commit", slow)
     v = await eng.run()
