@@ -4,6 +4,9 @@
        board.py --run-fields <owner> <project> <issue#> <run> <run-started>
        board.py --clear-run <owner> <project> <issue#>
 Field/option ids are cached a day and the issue -> item id map 10 min (refetched on a miss) under $SG_STATE; one PATCH per card.
+A field is set by sending its value and cleared by sending null -- "To clear the field, set this to null" -- and an empty
+string is a value the field refuses, answered "Invalid field values" (HTTP 400) (#101): a clear, and a Run field with nothing
+to carry, are written as null, beside the field id they read.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import json, os, pathlib, subprocess, sys, time
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); st.mkdir(parents=True, exist_ok=True)
@@ -54,7 +57,7 @@ if run_fields or clear_run:
         (st / f"rest-text-fields-{owner}-{num}.json").unlink(missing_ok=True); tf = text_fields()
     missing = [x for x in ("Run", "Run started") if x not in tf]
     if missing: sys.exit("no text field " + ", ".join(missing))
-    run = "" if clear_run else args[3]; started = "" if clear_run else (args[4] if len(args) > 4 else "")
+    run = None if clear_run else (args[3] or None); started = None if clear_run else ((args[4] if len(args) > 4 else "") or None)   # None is JSON null: the value that clears a field, where an empty string is one GitHub refuses (#101)
     try: api("-X", "PATCH", f"{base}/items/{iid}", "--input", "-", inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)   # named on stderr, never swallowed: the caller logs the refusal it was given
     (st / "board-dirty").touch(); sys.exit(0)
