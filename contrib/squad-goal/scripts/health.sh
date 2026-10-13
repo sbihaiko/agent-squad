@@ -82,6 +82,7 @@ fi
 if [ "$nboard" -ge 0 ] 2>/dev/null; then
   cn=""; for c in $ip; do case " $li " in *" ${c#\#} "*) ;; *) cn="$cn $c";; esac; done      # cards with no live run
   rn=""; for n in $li; do case " $ip " in *" #$n "*) ;; *) rn="$rn #$n";; esac; done          # live runs with no In Progress card
+  cm=""; for c in $cn; do if [ -e "$A/disp-${c#\#}" ] || [ -e "$A/bug-${c#\#}" ]; then cm="$cm $c"; fi; done      # cards with no live run that still hold their dispatch marker: janitor rule Q releases them
   ncn=$(printf '%s\n' $cn | grep -c . || true); nrn=$(printf '%s\n' $rn | grep -c . || true)
   nslots=$(( slots - nboard )); [ $nslots -lt 0 ] && nslots=$((-nslots))
   # Two consecutive passes, so a single one during a merge or a revert is not a cause, and the zero difference costs nothing.
@@ -90,7 +91,7 @@ if [ "$nboard" -ge 0 ] 2>/dev/null; then
     sig="$slots $nboard"; prev=""; [ -e "$A/drift-prev" ] && prev=$(cat "$A/drift-prev" 2>/dev/null)
     # once the marker is set the drift keeps the cause, so a persisting drift whose counts move is not reported as cleared
     if [ "$sig" = "$prev" ] || [ -e "$A/health-runs-board-drift" ]; then
-      add runs-board-drift "$nlive live run(s), $nboard card(s) In Progress; cards with no live run:${cn:- -}; live runs with no In Progress card:${rn:- -}"; fi
+      add runs-board-drift "$nlive live run(s), $nboard card(s) In Progress; cards with no live run:${cn:- -}; live runs with no In Progress card:${rn:- -}${cm:+; holding a dispatch marker with no live run (the janitor releases them):$cm}"; fi
     [ -n "${HEALTH_DRY:-}" ] || printf '%s\n' "$sig" > "$A/drift-prev"
   else
     [ -n "${HEALTH_DRY:-}" ] || rm -f "$A/drift-prev"   # a drift that clears before the second pass leaves no stale count behind

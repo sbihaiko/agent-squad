@@ -16,6 +16,9 @@
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
     A run that landed a change, an issue a live run works, and an issue an open or merged PR names keep their marker. The card goes back to the column the dispatch found it in --
     auto/disp-<n> -> Todo on the loop board, auto/bug-<n> -> To triage on the bug board -- but only from the column the dispatch set (In Progress / $SG_BUG_DOING on the bug board), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
+ Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open or merged PR naming the issue, no fork-<n>-<sha9> marker.
+    Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
+    and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
  M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
  P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
@@ -125,7 +128,8 @@ def read(f):
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed}
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
-live = {}; keep = []
+live = {}; keep = []; held = set(); landed_n = set()   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 for r in names:
     f = folder(r); i = read(f)
     if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
@@ -138,7 +142,7 @@ for r in names:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
             continue
-        keep.append(r); continue
+        held |= req_issues(f); keep.append(r); continue
     n = f.name
     if i["verdict"]:
         if i["idle"] > 180:
@@ -147,6 +151,7 @@ for r in names:
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")
+        if i["landed"]: landed_n |= req_issues(f)
         keep.append(r); continue
     alive = bool(inside(f))
     if not alive and i["idle"] > 1200 and not (i["pid"] and i["pid"] in procs):
@@ -154,7 +159,7 @@ for r in names:
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
         continue
-    keep.append(r); live[n] = i
+    held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i
 if not dry and keep != names: act.write_text("\n".join(keep) + "\n")
 byissue = {}
 for n, i in live.items():
@@ -188,6 +193,8 @@ for n, i in live.items():
     else:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed but not as a duplicate; not stopped (a land or fix run may be finishing)")
         if not dry: mk.touch()
+def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's own text: a refusal is not a digit string. -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
+    return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
     n = d.name[5:]; lt = lg.read_text() if lg.exists() else ""
@@ -195,7 +202,7 @@ for d in (st / "auto").glob("disp-*"):
     if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
-    if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR exists (open or merged). -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
+    if pr_count(n) != "0": continue   # a PR exists (open or merged)
     say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
     if not dry: d.unlink()
 owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
@@ -219,7 +226,7 @@ if owner and proj and repo0:
         for n in sorted(marks, key=int):
             if n in byissue: continue   # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
-            if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch; -f alone would POST and the API answers that with Not Found, which reads as a PR forever
+            if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
             moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if card_status(proj, n) == "In Progress" else []   # only the column the dispatch set: never downgrade a card another step moved past it (the marker is dropped either way: nothing must hold a finished run's issue back)
             if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
             mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
@@ -231,6 +238,36 @@ if owner and proj and repo0:
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
+    # Q: a marker and an In Progress card with no run behind them. Only a definite answer counts: a refused read (not "open", not a digit, no status)
+    # touches nothing and leaves no once-only marker, so the next pass decides. A definite "no" is remembered for 10 min, so a landed issue's old marker is not re-read every pass.
+    qm = {}
+    for k in ("disp", "bug"):
+        for m in (st / "auto").glob(k + "-*"):
+            if m.name[len(k) + 1:].isdigit(): qm.setdefault(m.name[len(k) + 1:], {})[k] = m
+    for n, ms in sorted(qm.items(), key=lambda kv: int(kv[0])):
+        if n in held or n in landed_n or any(now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
+        seen = st / "auto" / f"janitor-q-seen-{n}"
+        if seen.exists() and now - seen.stat().st_mtime < 600: continue
+        def no():   # a definite answer that says "not ours": remember it
+            if not dry: seen.touch()
+        state = issue_info(n)[0]
+        if state not in ("open", "closed"): continue
+        if state == "closed": no(); continue
+        c = pr_count(n)
+        if not c.isdigit(): continue
+        if c != "0": no(); continue
+        cs = card_status(proj, n); bs = card_status(bproj, n) if bproj and "bug" in ms else ""
+        if not cs and not bs: continue
+        moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if cs == "In Progress" else []
+        if bs == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
+        if not moves: no(); continue
+        mks = " and ".join("auto/" + k + "-" + n for k in sorted(ms))
+        say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no PR names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
+        if not dry:
+            for p, s in moves: subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), owner, str(p), s, str(n)], capture_output=True)
+            for m in ms.values(): m.unlink()
+            (st / "cq" / f"{n}-stalecard-{os.getpid()}.md").write_text(
+                f"Its card was In Progress behind {mks}, and no run works this issue (no live run, none in its launch window; the run that took it ended without releasing it). The card is back in {moves[-1][1]} and the marker is dropped, so the next cycle dispatches the issue again.\n")
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 if fd and fb:
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
@@ -262,7 +299,7 @@ if fd and fb:
             if not files or gitrc("diff", "--quiet", sha, fb, "--", *files) == 0: continue   # the base holds the change itself: the head moved, nothing was unwound
             if n in byissue: continue                                                        # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
-            if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # a PR names it: the issue is past dispatch
+            if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
             if card_status(proj, n) not in ("In Progress", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
