@@ -98,7 +98,7 @@ def test_the_refresh_route_runs_the_pass_and_is_not_the_cached_board_route(hub):
 
 def test_the_button_sits_beside_the_title_in_the_header(hub):
     head = re.search(r"<div id=bhead>.*?</div>\n", hub.PAGE, re.S).group(0)
-    m = re.search(r"<b>BUILDER <span id=bt class=m></span></b>(<button id=br\b[^>]*>)", head)
+    m = re.search(r"<b>TASKS <span id=bt class=m></span></b>(<button id=br\b[^>]*>)", head)
     assert m, f"#br sits inline right after the title text: {head!r}"
     assert head.index("id=br") < head.index("id=lf"), "it belongs to the title, not to the labels/maximize/collapse group"
 
