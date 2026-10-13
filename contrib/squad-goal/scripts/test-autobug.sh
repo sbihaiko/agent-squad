@@ -243,4 +243,32 @@ $G -qE '^[0-9]{2}:[0-9]{2}:[0-9]{2} autobug REFUSED refused ' "$T/st/cycle.log" 
 LOG=$($G 'REFUSED' "$T/st/cycle.log")
 case "$LOG" in *"$FP"*) [ -n "$FP" ] && ok "8 the log line and the title carry the same fingerprint, from one helper" || ko "8 nothing was named, so nothing shares a fingerprint" ;; *) ko "8 log '$LOG' against title '$TITLE'";; esac
 
+# 9) (#187) a card the board does not carry is not a refusal. An issue the loop files itself has no card yet, so the
+# dispatch's card move was refused, and that refusal filed another issue with no card in the same shape: one more bug
+# every pass, for ever. The move is the door's --add: the card is created carrying the status the dispatch means, so the
+# pass proves the write and files nothing.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+# the profile names a bug board beside the run board: both moves are the same door
+printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=5 SG_BUG_DOING=Doing SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
+# the board as it answers: a card it does not carry is added with --add, anything else is moved
+cat > "$T/s/board.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$T/board.calls"
+[ "\$1" = --add ] && { echo "#1228 -> In Progress"; exit 0; }
+echo "#1228 not on the board" >&2; exit 1
+EOF
+chmod +x "$T/s/board.sh"
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+JSON
+: > "$T/board.calls"; : > "$T/filed"; : > "$T/st/cycle.log"
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "9 the pass that moved a cardless issue finishes" || ko "9 the pass exited $rc: '$r'"
+case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
+[ -s "$T/filed" ] && ko "9 a card the board does not carry was filed as a defect: $(cat "$T/filed")" || ok "9 the card the board does not carry is not a defect"
+[ "$(wc -l < "$T/board.calls" | tr -d ' ')" = 2 ] && ok "9 one move per board, the run board and the bug board" || ko "9 board calls: $(cat "$T/board.calls")"
+$G -qx -- '--add o 4 In Progress 1228' "$T/board.calls" && ok "9 the run board's move asks for the card it does not carry" || ko "9 run board call: $(cat "$T/board.calls")"
+$G -qx -- '--add o 5 Doing 1228' "$T/board.calls" && ok "9 the bug board's move asks for the card too" || ko "9 bug board call: $(cat "$T/board.calls")"
+
 rm -rf "$T"; exit $fail
