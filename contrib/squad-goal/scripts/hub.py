@@ -2135,7 +2135,7 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Open Specs","Closed PRs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
