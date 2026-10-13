@@ -26,6 +26,7 @@ J
   printf '#!/bin/bash\necho "$1" > "$FCT/lastreq"; echo "$FCT/req/$1.txt"\n' > "$T/s/mkreq.sh"
   printf 'import sys\n' > "$T/s/launch.py"; chmod +x "$T/s/test.sh" "$T/s/mkreq.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
+  echo ". \"$here/address.sh\"" >> "$T/s/env.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -71,7 +72,7 @@ case "$r" in *"${B1:0:9}"*) ok "the refusal names the boundary commit ${B1:0:9}"
 [ "$(base_of "$T1")" = "$b0" ] && ok "local/next did not move" || ko "the boundary branch was merged anyway: local/next is $(base_of "$T1")"
 [ "$(/usr/bin/git -C "$T1/fork" rev-list --count "$b0..gui/1")" != 0 ] && ok "the refused branch is left in place, not deleted" || ko "the refused branch was rewritten"
 [ -z "$(/usr/bin/git -C "$T1/fork" log --format=%s "$b0..local/next" 2>/dev/null | grep 'Merge gui/1')" ] && ok "no merge commit for the refused branch" || ko "a merge commit for gui/1 exists"
-c=$(ls "$T1/st/cq/"*shallow* 2>/dev/null | head -1)
+c=$(ls "$T1/st/cq/x__y#"*shallow* 2>/dev/null | head -1)
 [ -n "$c" ] && grep -q "#1" "$c" && grep -q "gui/1" "$c" && ok "a cq/ card names the issue and the branch" || ko "no cq/ card for the refusal: '$(cat "$c" 2>/dev/null)'"
 # the merge the loop used to do is exactly the tip #1823 is about: the push range carries the boundary commit and the remote
 # has never had its parent -- which is what index-pack reports as `remote: fatal: did not receive expected object <parent>`.

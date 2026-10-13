@@ -13,6 +13,7 @@ from under it. Once per child (marker auto/rescue-<run>-<child>)."""
 import json, os, pathlib, re, subprocess, sys
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
+CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 fork, base, pat = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main"), os.environ.get("SG_FORK_BRANCH", "gui/%n")
 here = pathlib.Path(__file__).resolve().parent
 forkonly = os.environ.get("SG_FORKONLY", str(here / "forkonly.sh")); board = os.environ.get("SG_BOARD", str(here / "board.sh"))
@@ -76,5 +77,5 @@ for r in (st / "active-runs.txt").read_text().split():
         if not place(n, src): print(f"FORKRESCUE #{n}: {dst} has diverged from {src}; left for the coordinator"); continue
         mk.touch()
         subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)
-        (st / "cq" / f"{n}-forkrescue-{mk.name}.md").write_text(f"Fork run {pathlib.Path(r).name} ({child}) ended {outcome or 'without an outcome'} ({why[:300]}) with commit {head} on {src}, off the {dst} branch forkclose.sh lands. The commit is now on {dst} in the fork (fast-forward, nothing pushed) and the card moved to Code Complete; forkclose.sh merges it and runs the fork suite. No owner decision needed.\n")
+        (st / "cq" / f"{CQ}#{n}-forkrescue-{mk.name}.md").write_text(f"Fork run {pathlib.Path(r).name} ({child}) ended {outcome or 'without an outcome'} ({why[:300]}) with commit {head} on {src}, off the {dst} branch forkclose.sh lands. The commit is now on {dst} in the fork (fast-forward, nothing pushed) and the card moved to Code Complete; forkclose.sh merges it and runs the fork suite. No owner decision needed.\n")
         print(f"FORKRESCUE #{n} {src} ({head}) -> {dst}, Code Complete")

@@ -11,6 +11,7 @@ branches answering one issue number are refused, both named, neither moved. Noth
 here -- the report is the whole deliverable, and a pass over a head it already named says nothing new."""
 import json, os, pathlib, re, subprocess, sys
 st = pathlib.Path(os.environ.get("SG_STATE", pathlib.Path.home() / ".cache/squad-goal")); A = st / "auto"; A.mkdir(parents=True, exist_ok=True); (st / "cq").mkdir(exist_ok=True)
+CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 fork, base = os.environ.get("SG_FORK_DIR", ""), os.environ.get("SG_FORK_BASE", "main")
 if not fork or not pathlib.Path(fork).is_dir(): sys.exit(0)
 here = pathlib.Path(__file__).resolve().parent; forkonly = os.environ.get("SG_FORKONLY", str(here / "forkonly.sh"))
@@ -33,7 +34,7 @@ def ready():   # the loop's own card source (hub.py's board cache): what is park
     except Exception: return {}
     return {int(i["n"]): i.get("st") for i in items if i.get("s") == "open" and str(i.get("n", "")).isdigit() and i.get("st") in ("Code Complete", "Testing")}
 def say(n, key, text):
-    (st / "cq" / f"{n}-forkstrand-{key}.md").write_text(f"FORKSTRAND #{n}: {text}\n")   # cqflush.sh posts it on the issue
+    (st / "cq" / f"{CQ}#{n}-forkstrand-{key}.md").write_text(f"FORKSTRAND #{n}: {text}\n")   # cqflush.sh posts it on the issue
     print(f"FORKSTRAND #{n}: {text}")                                                   # and the loop's log carries it too
 # A strand is a branch no landing path reads: ahead of the base, fork work by its own diff, and not the ref the land merges.
 # The card is the other half: a strand for an issue parked at the landing stage is one nothing releases.

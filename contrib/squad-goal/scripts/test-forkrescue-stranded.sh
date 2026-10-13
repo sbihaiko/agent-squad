@@ -52,7 +52,7 @@ run
 for p in "11:fix/11-tooling" "12:fix/12-changelog"; do i=${p%%:*}; b=${p#*:}
   [ "$($git -C "$F" rev-parse gui/$i 2>/dev/null)" = "$($git -C "$F" rev-parse $b)" ] && ok "stranded $b -> gui/$i" || ko "stranded $b not re-pointed to gui/$i ($(cat "$T/out"))"
   $G -q "Code Complete $i\$" "$T/st/moves" 2>/dev/null && ok "card #$i -> Code Complete" || ko "card #$i not moved"
-  ls "$T/st/cq"/$i-forkrescue* >/dev/null 2>&1 && ok "note queued for #$i" || ko "no note for #$i"; done
+  ls "$T/st/cq"/*#$i-forkrescue* >/dev/null 2>&1 && ok "note queued for #$i" || ko "no note for #$i"; done
 $git -C "$F" rev-parse -q --verify gui/13 >/dev/null && ko "moved a branch carrying MesenAI paths (#13)" || ok "MesenAI-path branch (#13) left alone"
 $git -C "$F" rev-parse -q --verify gui/14 >/dev/null && ko "moved a branch whose card is In Progress (#14)" || ok "In Progress card (#14) left alone"
 n1=$(ls "$T/st/cq" | wc -l | tr -d ' '); run; n2=$(ls "$T/st/cq" | wc -l | tr -d ' ')

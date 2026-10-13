@@ -50,6 +50,7 @@ scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh
   cat > "$T/scripts/env.sh" <<E
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BASE=main
 SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=true
+. "$(dirname "$src")/address.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
 E
   if [ -n "$2" ]; then   # the author's graph: a root loop that holds one dispatch node, and a run block
     rb='{"max_parallel":20}'; [ -n "$3" ] && rb="{\"max_parallel\":20,\"max_children\":$3}"
@@ -80,7 +81,7 @@ r=$(run)
 [ "$(asked)" = 3 ] && ok "the request asks for three children" || ko "the request asks for three children: '$(asked)'"
 [ "$(childblocks)" = 3 ] && ok "the request carries three CHILD blocks, one issue each" || ko "the request carries three CHILD blocks: '$(childblocks)'"
 [ "$(marked 21 22 23)" = 3 ] && ok "every dispatched issue holds its marker" || ko "every dispatched issue holds its marker: $(marked 21 22 23) of 3"
-[ "$(ls "$d/st/cq" | $G -c -- '-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
+[ "$(ls "$d/st/cq" | $G -c -- '^o__r#[0-9]*-frontier')" = 3 ] && ok "every dispatched issue gets its own comment" || ko "every dispatched issue gets its own comment: $(ls "$d/st/cq")"
 case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request";; *) ko "a marker names the request";; esac
 
 # 2) AC5: the envelope stays the author's. Five startable issues, a dispatch node that allows two children: the request asks

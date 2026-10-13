@@ -81,7 +81,7 @@ export SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 SG_CHECKOUT=$T/rs/co SG_FORK_DIR=$F S
 (cd "$T/rs/co" && python3 "$T/rs/scripts/forkrescue.py" >"$T/rs/out" 2>&1)
 [ "$(/usr/bin/git -C "$F" rev-parse gui/1 2>/dev/null)" = "$(/usr/bin/git -C "$F" rev-parse fix/1-x)" ] && ok "rescue: gui/1 points at the fix/1-x commit" || ko "rescue: gui/1 missing or elsewhere ($(cat "$T/rs/out"))"
 $G -q 'Code Complete 1$' "$T/rs/st/moves" 2>/dev/null && ok "rescue: card -> Code Complete" || ko "rescue: card not moved"
-ls "$T/rs/st/cq"/1-forkrescue* >/dev/null 2>&1 && ok "rescue: note queued on the issue" || ko "rescue: no note"
+ls "$T/rs/st/cq"/*#1-forkrescue* >/dev/null 2>&1 && ok "rescue: note queued on the issue" || ko "rescue: no note"
 /usr/bin/git -C "$F" rev-parse -q --verify gui/3 >/dev/null && ko "rescue: touched a non-fork-only issue (#3)" || ok "rescue: non-fork-only issue left alone"
 # 9: forkclose.sh's conflict and red-suite builders mark their bodies fork-only, so mkreq.sh gives them the fork checklist
 [ "$($G -c "^      echo \"FORK-ONLY: all\"\|echo \"FORK-ONLY: all\"" "$d/forkclose.sh")" -ge 2 ] && ok "forkclose builders carry the FORK-ONLY marker" || ko "forkclose builders lack the FORK-ONLY marker"

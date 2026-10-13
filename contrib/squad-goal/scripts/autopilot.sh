@@ -82,7 +82,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     fi
     [ -e "$A/norefs-$pr-$s9" ] && { gate no-refs "no Refs #N in the title or body: the loop cannot map the PR to an issue"; continue; }
     touch "$A/norefs-$pr-$s9"
-    printf "PR #%s is skipped by the autopilot: its title and body have no \`Refs #N\`, so the loop cannot map it to an issue and will not review, fix or merge it. Add \`Refs #<issue>\` (the live issue this PR delivers) and the next pass will pick it up.\n" $pr > "$SG_STATE/cq/$pr-norefs$s9.md"
+    printf "PR #%s is skipped by the autopilot: its title and body have no \`Refs #N\`, so the loop cannot map it to an issue and will not review, fix or merge it. Add \`Refs #<issue>\` (the live issue this PR delivers) and the next pass will pick it up.\n" $pr > "$(sg_cq_file "$pr-norefs$s9.md")"
     gate no-refs "no Refs #N in the title or body: the loop cannot map the PR to an issue"
     echo "NOREFS #$pr @ $s9: no Refs #N; skipped (the loop cannot map it to an issue)"
     continue
@@ -92,7 +92,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     par=$(gh api "repos/$SG_REPO/pulls?state=closed&head=${SG_REPO%%/*}:$base&per_page=5" -q '[.[]|select(.merged_at!=null)][0]|select(.)|"\(.number) \(.head.sha)"' 2>/dev/null)
     if [ -n "$par" ] && [ "$par" != null ] && [ "$(cat "$A/stack-$pr" 2>/dev/null)" != "${par#* }" ]; then   # once per parent (the list API can lag)
       echo "${par#* }" > "$A/stack-$pr"; gh api -X PATCH repos/$SG_REPO/pulls/$pr -f base="$SG_BASE" >/dev/null 2>&1 \
-        && { printf "PR #%s retargeted to %s: its parent PR #%s was merged. A conflict from the squash is fixed by replaying only this PR's commits onto %s.\n" $pr "$SG_BASE" "${par%% *}" "$SG_BASE" > "$SG_STATE/cq/$iss-retarget$pr.md"; echo "RETARGET #$pr -> $SG_BASE (parent #${par%% *} merged)"; }
+        && { printf "PR #%s retargeted to %s: its parent PR #%s was merged. A conflict from the squash is fixed by replaying only this PR's commits onto %s.\n" $pr "$SG_BASE" "${par%% *}" "$SG_BASE" > "$(sg_cq_file "$iss-retarget$pr.md")"; echo "RETARGET #$pr -> $SG_BASE (parent #${par%% *} merged)"; }
     fi
   fi
   out="$SG_STATE/revci-$pr.out"
@@ -122,7 +122,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     && { gate issue-duplicate "issue #$iss is closed as a duplicate / not planned, so the PR is superseded and is not reviewed, fixed or merged"; continue; }
   if [ -z "$(find "$ck" -mmin -10 2>/dev/null)" ]; then touch "$ck"
     if bash "$here/autofix.sh" --dupissue $iss; then
-      [ -e "$A/dupiss-$pr-$iss" ] || { touch "$A/dupiss-$pr-$iss"; printf "PR #%s is superseded: issue #%s is closed as a duplicate / not planned, so the loop will not review, fix or merge it. Close the PR, or point its Refs at the live issue.\n" $pr $iss > "$SG_STATE/cq/$iss-dupiss$pr.md"; echo "SUPERSEDED-ISSUE #$pr: issue #$iss closed as duplicate/not planned; no review, fix or merge"; }
+      [ -e "$A/dupiss-$pr-$iss" ] || { touch "$A/dupiss-$pr-$iss"; printf "PR #%s is superseded: issue #%s is closed as a duplicate / not planned, so the loop will not review, fix or merge it. Close the PR, or point its Refs at the live issue.\n" $pr $iss > "$(sg_cq_file "$iss-dupiss$pr.md")"; echo "SUPERSEDED-ISSUE #$pr: issue #$iss closed as duplicate/not planned; no review, fix or merge"; }
       gate issue-duplicate "issue #$iss is closed as a duplicate / not planned, so the PR is superseded and is not reviewed, fixed or merged"
       continue
     fi; rm -f "$A/dupiss-$pr-$iss"; fi
@@ -250,7 +250,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     gate ci-missing "the head has no check run at all: a green head cannot be claimed${SG_CI_WORKFLOW:+ and $SG_CI_WORKFLOW was re-dispatched}"
     if [ ! -e "$A/noci-$pr-$s9" ]; then touch "$A/noci-$pr-$s9"
       [ -n "${SG_CI_WORKFLOW:-}" ] && gh workflow run "$SG_CI_WORKFLOW" --repo "$SG_REPO" --ref "$(gh api repos/$SG_REPO/pulls/$pr -q .head.ref 2>/dev/null)" >/dev/null 2>&1
-      printf "PR #%s carries review APPROVE at %s but GitHub has no check run for that head at all, so the required checks of the %s ruleset never reported and a green head cannot be claimed. The merge is held and %s was re-dispatched. If no run appears, start it by hand: gh workflow run %s --repo %s --ref <head branch>.\n" $pr $s9 "$SG_BASE" "${SG_CI_WORKFLOW:-the CI workflow}" "${SG_CI_WORKFLOW:-the CI workflow}" "$SG_REPO" > "$SG_STATE/cq/$iss-noci$$.md"
+      printf "PR #%s carries review APPROVE at %s but GitHub has no check run for that head at all, so the required checks of the %s ruleset never reported and a green head cannot be claimed. The merge is held and %s was re-dispatched. If no run appears, start it by hand: gh workflow run %s --repo %s --ref <head branch>.\n" $pr $s9 "$SG_BASE" "${SG_CI_WORKFLOW:-the CI workflow}" "${SG_CI_WORKFLOW:-the CI workflow}" "$SG_REPO" > "$(sg_cq_file "$iss-noci$$.md")"
       echo "CI MISSING #$pr @ $s9: no check run exists for this head; merge held${SG_CI_WORKFLOW:+, $SG_CI_WORKFLOW re-dispatched}"; fi
     continue; fi
   # an APPROVE that does not merge says why, once per head and reason in auto.log, and always in auto/gate-$pr (the file
@@ -266,7 +266,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   [ "$st" = "$sha clean" ] || { hold state "GitHub reports '${st#* }' (head ${st%% *}), not clean on $s9"; continue; }
   if [ "$(gh api repos/$SG_REPO/pulls/$pr -q .changed_files 2>/dev/null)" = 0 ]; then   # a fix round that undid everything: nothing to merge
     gate empty-diff "the diff against $SG_BASE is empty (a fix round undid the change): nothing to merge"
-    [ -e "$A/empty-$pr-${sha:0:9}" ] || { touch "$A/empty-$pr-${sha:0:9}"; printf "NEEDS OWNER: PR #%s @ %s has an empty diff against %s (a fix round undid the change); not merged.\n" $pr ${sha:0:9} "$SG_BASE" > "$SG_STATE/cq/$iss-empty$$.md"; echo "NEEDS OWNER #$pr issue #$iss: empty diff at ${sha:0:9}, not merged"; }
+    [ -e "$A/empty-$pr-${sha:0:9}" ] || { touch "$A/empty-$pr-${sha:0:9}"; printf "NEEDS OWNER: PR #%s @ %s has an empty diff against %s (a fix round undid the change); not merged.\n" $pr ${sha:0:9} "$SG_BASE" > "$(sg_cq_file "$iss-empty$$.md")"; echo "NEEDS OWNER #$pr issue #$iss: empty diff at ${sha:0:9}, not merged"; }
     continue; fi
   [ "$(bash "$here/autofix.sh" --threads $pr)" = 0 ] || { rm -f "$tf"; hold threads "unresolved review threads opened after the cache"; continue; }   # a thread opened after the cache: re-ask next pass
   if [ $soft = 1 ]; then   # the merge cannot happen unless the filing succeeded; filing is idempotent per finding, so a retry files nothing twice
@@ -276,7 +276,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   fi
   if m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
     touch "$A/merged-$pr"; gate merged "merged as ${m:0:9}: APPROVE + CI green + clean + no open threads"
-    printf "PR #%s merged automatically (squash %s): review APPROVE and CI green on %s, mergeable clean, no open review threads. Follow-up: e2e on the merge SHA, close when AC are met.\n" $pr "${m:0:9}" $s9 > "$SG_STATE/cq/$iss-automerge$$.md"
+    printf "PR #%s merged automatically (squash %s): review APPROVE and CI green on %s, mergeable clean, no open review threads. Follow-up: e2e on the merge SHA, close when AC are met.\n" $pr "${m:0:9}" $s9 > "$(sg_cq_file "$iss-automerge$$.md")"
     $BOARD $SG_OWNER $SG_PROJECT "Testing" $iss >/dev/null   # merged: the e2e on the merge SHA is the test pass
     echo "AUTOMERGE #$pr issue #$iss sha ${m:0:9} -> e2e, worktree cleanup, close if done"
   else echo "AUTOMERGE FAILED #$pr: $m"; gate merge-failed "the merge call failed: $m"; touch "$A/merged-$pr"; fi

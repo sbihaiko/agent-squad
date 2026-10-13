@@ -74,6 +74,15 @@ be adding a profile, not adding a special case.
    force gives its start directory to the seam as a checkout. It does not read
    that checkout's origin itself. The hub takes its checkout from the context,
    never from its working directory.
+9. **A queued comment carries the repository it is for.** Its file is named
+   `<owner>__<repo>#<n>-<tag>.md`, and `sg_cq_file` in the seam makes that
+   name for the repository in force. `cqflush.sh` posts the comment to the
+   repository in the name, whichever process flushes it and whichever queue
+   directory holds it. The queue directory only isolates; it is never the write
+   target. A name that no profile knows is refused by name and retired as
+   `.dead`. It is never retried and never posted to another repository, the
+   flusher's own included. A bare `<n>-<tag>.md` from before this rule is read
+   as the repository of the profile whose state directory holds it.
 
 ## Consequences
 
@@ -81,6 +90,9 @@ be adding a profile, not adding a special case.
   parses an address itself is a second grammar that can disagree.
 - `forkonly.sh` loads `address.sh` from the same directory. A copy of
   `forkonly.sh` without `address.sh` loads with no seam.
+- Every writer of a queued comment names its file through `sg_cq_file`, or in
+  Python through the same `<owner>__<repo>#<n>` prefix. A writer that names a
+  bare issue number is a defect that a guard finds.
 - Callers outside the seam that still read `SG_TOOLING_REPO` move to
   `SG_REPOS` with the rest of the multi-repository work. This ADR does not
   change them.
@@ -92,4 +104,8 @@ owner-and-name equality, the refusal of a short name, the context table, the
 refusal of an unknown repository with its known list, a stub `gh` that fails a
 script which reaches GitHub before it resolves a repository, and the readers) and
 `contrib/squad-goal/scripts/test-land-target.sh` (one case per route, and the
-refusal).
+refusal) and `contrib/squad-goal/scripts/test-cqflush-address.sh` (a comment for
+one repository, flushed by another repository's process, is posted to the
+repository it names; a comment moved to another directory still is; an unknown
+repository is retired and never posted; and no script writes a bare issue
+number).

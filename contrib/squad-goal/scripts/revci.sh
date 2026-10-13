@@ -8,7 +8,7 @@
 # Notices go out with a `NOTICE ` prefix.
 . "$(dirname "$0")/env.sh"; pr=$1 iss=$2
 $BOARD $SG_OWNER $SG_PROJECT "Code Complete" $iss >/dev/null
-printf "%s" "PR #$pr open; independent review running (chain in models.json)." > "$SG_STATE/cq/$iss-open$$.md"
+printf "%s" "PR #$pr open; independent review running (chain in models.json)." > "$(sg_cq_file "$iss-open$$.md")"
 sha=$(gh api repos/$SG_REPO/pulls/$pr -q .head.sha)   # the head the review is about: a push during the review ends this run as SUPERSEDED
 rm=$(bash "$(dirname "$0")/review.sh" $pr $iss | head -1 | sed -n "s/^model=\([^ ]*\).*/\1/p")
 t0=$(date +%s)
@@ -29,13 +29,13 @@ while :; do
     ref=$(gh api repos/$SG_REPO/pulls/$pr -q .head.ref 2>/dev/null)
     if [ -n "$ref" ] && gh workflow run "${SG_CI_WORKFLOW:-checks.yml}" -R "$SG_REPO" --ref "$ref" >/dev/null 2>&1; then
       echo "NOTICE #$pr ${sha:0:9} CI_DISPATCH: the head has no check run at all, so the gate would wait forever; ${SG_CI_WORKFLOW:-checks.yml} dispatched on $ref"
-      printf "CI dispatch: PR #%s @ %s came out of the fix run with no workflow run behind it, so none of the required checks would ever report. \`%s\` was dispatched on \`%s\`.\n" $pr ${sha:0:9} "${SG_CI_WORKFLOW:-checks.yml}" "$ref" > "$SG_STATE/cq/$iss-cidisp$$.md"
+      printf "CI dispatch: PR #%s @ %s came out of the fix run with no workflow run behind it, so none of the required checks would ever report. \`%s\` was dispatched on \`%s\`.\n" $pr ${sha:0:9} "${SG_CI_WORKFLOW:-checks.yml}" "$ref" > "$(sg_cq_file "$iss-cidisp$$.md")"
     fi
   fi
-  [ $(( $(date +%s) - t0 )) -gt 2700 ] && { echo "NOTICE #$pr ${sha:0:9} CI_TIMEOUT after 45m"; printf "STALL CI: PR #%s @ %s has checks unfinished or missing after 45 min.\n" $pr ${sha:0:9} > "$SG_STATE/cq/$iss-cistall$$.md"; exit 1; }
+  [ $(( $(date +%s) - t0 )) -gt 2700 ] && { echo "NOTICE #$pr ${sha:0:9} CI_TIMEOUT after 45m"; printf "STALL CI: PR #%s @ %s has checks unfinished or missing after 45 min.\n" $pr ${sha:0:9} > "$(sg_cq_file "$iss-cistall$$.md")"; exit 1; }
   sleep 15; done
 ci=$(echo "$r"|jq -r '[.[]|.conclusion]|group_by(.)|map("\(.[0]):\(length)")|join(",")'); [ -n "$ci" ] || ci=none
 v=$(head -1 "$SG_STATE/review-$pr.md" | tr -d '*')
 # the run's summary line: the only line this script prints in the `#<pr> <sha9> ` namespace, and so the only one a reader selects
 echo "#$pr ${sha:0:9} $(gh api repos/$SG_REPO/pulls/$pr -q .mergeable_state) CI=$ci $v"
-{ echo "Status update — PR #$pr @ ${sha:0:9}: CI $ci; review ($rm): $v."; echo; tail -n +2 "$SG_STATE/review-$pr.md"; } > "$SG_STATE/cq/$iss-res$$.md"
+{ echo "Status update — PR #$pr @ ${sha:0:9}: CI $ci; review ($rm): $v."; echo; tail -n +2 "$SG_STATE/review-$pr.md"; } > "$(sg_cq_file "$iss-res$$.md")"

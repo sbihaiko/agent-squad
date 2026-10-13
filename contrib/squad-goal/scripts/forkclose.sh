@@ -218,7 +218,9 @@ basegate() { local l=$1 bt bgs rvt
     if [ ! -e "$A/basered-$bs.escalated" ]; then touch "$A/basered-$bs.escalated"
       ft=$(grep -E 'FAIL|not ok' "$SG_STATE/basetest-$bs.log" 2>/dev/null | grep -v 'fork gate' | head -3)
       wb=""; for w in $cc; do [ "$($G rev-list --count "$SG_FORK_BASE..$(sg_fork_branch "$w")" 2>/dev/null)" -gt 0 ] && wb="$wb $(sg_fork_branch "$w")"; done
-      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. This base's own diff is answered with the %s gate; past %s min it is retried once on its own, and a green retry lifts the park, a second red keeps it%s.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "$bgs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" "$rvt" > "$SG_STATE/cq/${l//[^0-9a-z]/}-basered$$.md"
+      # the gate of one issue ("#12") reports on that issue; the batch gate names no issue, so its card has no address and cqflush.sh retires it by name
+      cqn=${l//[^0-9]/}; if [ -n "$cqn" ]; then cqf=$(sg_cq_file "$cqn-basered$$.md"); else cqf="$SG_STATE/cq/batch-basered$$.md"; fi
+      mkdir -p "$SG_STATE/cq"; printf "Fork base is red: %s %s fails the fork suite on its own, so every branch waiting to land is parked:%s.\nFailing test:\n\`\`\`\n%s\n\`\`\`\nLog: %s/basetest-%s.log. This base's own diff is answered with the %s gate; past %s min it is retried once on its own, and a green retry lifts the park, a second red keeps it%s.\n" "$SG_FORK_BASE" "$bs" "${wb:- $l}" "${ft:-(no FAIL line in the log)}" "$SG_STATE" "$bs" "$bgs" "${SG_FORK_BASERED_BUDGET_MINUTES:-30}" "$rvt" > "$cqf"
     fi
     # Past the budget, one solo retry (this pass holds the lock and the e2e rebuild comes later, so no rebuild is in flight): a red that came from a rebuild window must not park the branches forever.
     if [ ! -e "$A/basered-$bs.retried" ] && [ $(( now - $(stat -f %m "$A/basered-$bs") )) -ge $(( ${SG_FORK_BASERED_BUDGET_MINUTES:-30} * 60 )) ]; then touch "$A/basered-$bs.retried"
@@ -364,7 +366,7 @@ batchpass() { local cf bl nn b2 key merged="" files="" suites first out rc id at
 dispatch() { local nm=$1 n=$2 kind=$3 mo="$SG_STATE/req/$nm.mkres" req rc
   req=$(SG_SLICE_FORCE=1 "$here/mkreq.sh" "$nm" "$SG_STATE/req/$nm.body" 2>"$mo"); rc=$?
   if [ $rc != 0 ]; then
-    printf "Fork-only close: the %s fix request %s for issue #%s was refused by mkreq.sh and NO fix run was launched. The merge was reverted and the branch re-applied; the next pass retries the close. Nothing is waiting on a commit that cannot come.\n\`\`\`\n%s\n\`\`\`\n" "$kind" "$nm" "$n" "$(cat "$mo")" > "$SG_STATE/cq/$n-slicerefused$$.md"
+    printf "Fork-only close: the %s fix request %s for issue #%s was refused by mkreq.sh and NO fix run was launched. The merge was reverted and the branch re-applied; the next pass retries the close. Nothing is waiting on a commit that cannot come.\n\`\`\`\n%s\n\`\`\`\n" "$kind" "$nm" "$n" "$(cat "$mo")" > "$(sg_cq_file "$n-slicerefused$$.md")"
     return $rc; fi
   (cd "$SG_CHECKOUT" && python3 -c 'import subprocess,sys;subprocess.Popen(["python3",sys.argv[1],sys.argv[2]],stdout=open(sys.argv[3],"w"),stderr=subprocess.STDOUT,start_new_session=True)' "$here/launch.py" "$req" "$SG_STATE/$nm.log"); }
 ready=" $(jq -r '.items[]?|select((.st=="Code Complete" or .st=="Testing") and .s=="open")|.n' "${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json" 2>/dev/null | tr '\n' ' ') "
@@ -410,7 +412,7 @@ for n in $cc; do
     echo "FORKCLOSE SHALLOW #$n: $br carries $sc, whose parent $sp is not in this clone (shallow boundary, a lineage that was never published). Merging it would drag $sc into $SG_FORK_BASE and the push of $SG_FORK_BASE would be rejected (remote: fatal: did not receive expected object $sp). Not merging. Rebuild $br on $SG_FORK_BASE by cherry-picking its own commits onto a fresh branch: \`git -C $SG_FORK_DIR switch -c $br-rebuilt $SG_FORK_BASE && git -C $SG_FORK_DIR cherry-pick $own\` (its own commits are $own; a \`rebase --onto $SG_FORK_BASE $sc $br\` would take $sc..$br instead, which is empty when $sc is the tip -- it would drop the whole branch). The next pass lands the rebuilt branch."
     if [ ! -e "$sm" ]; then touch "$sm"
       mkdir -p "$SG_STATE/cq"
-      printf "Fork-only close (#%s): %s did not land. The commit %s in its history has parent %s, which this clone never received (shallow boundary), so merging it would leave %s ahead of origin/%s with a tip the remote refuses (\`index-pack: did not receive expected object %s\`) and no later pass could undo that without rewriting history. Rebuild %s on %s and it lands on its own.\n" "$n" "$br" "$sc" "$sp" "$SG_FORK_BASE" "$SG_FORK_BASE" "$sp" "$br" "$SG_FORK_BASE" > "$SG_STATE/cq/$n-shallow$$.md"
+      printf "Fork-only close (#%s): %s did not land. The commit %s in its history has parent %s, which this clone never received (shallow boundary), so merging it would leave %s ahead of origin/%s with a tip the remote refuses (\`index-pack: did not receive expected object %s\`) and no later pass could undo that without rewriting history. Rebuild %s on %s and it lands on its own.\n" "$n" "$br" "$sc" "$sp" "$SG_FORK_BASE" "$SG_FORK_BASE" "$sp" "$br" "$SG_FORK_BASE" > "$(sg_cq_file "$n-shallow$$.md")"
     fi
     continue
   fi
@@ -464,14 +466,14 @@ for n in $cc; do
   if [ -z "$late$reland" ] && ! auditbranch > "$A/fabrication-$n-${head:0:9}.txt" 2>&1; then
     touch "$fm"; mkdir -p "$SG_STATE/cq"
     sed 's/^/  /' "$A/fabrication-$n-${head:0:9}.txt" >&2
-    printf 'Fork-only close (#%s): %s did not land. A merge it carries was made by hand and dropped a line both of its parents hold, so the merge is a fabrication, not a resolution (merge-audit.sh). The file and the line are below. Put the line back -- or re-make the merge keeping both sides -- and commit on %s: a new head releases this landing.\n\n```\n%s\n```\n' "$n" "$br" "$br" "$(cat "$A/fabrication-$n-${head:0:9}.txt")" > "$SG_STATE/cq/$n-fabrication$$.md"
+    printf 'Fork-only close (#%s): %s did not land. A merge it carries was made by hand and dropped a line both of its parents hold, so the merge is a fabrication, not a resolution (merge-audit.sh). The file and the line are below. Put the line back -- or re-make the merge keeping both sides -- and commit on %s: a new head releases this landing.\n\n```\n%s\n```\n' "$n" "$br" "$br" "$(cat "$A/fabrication-$n-${head:0:9}.txt")" > "$(sg_cq_file "$n-fabrication$$.md")"
     continue
   fi
   [ -n "${FC_COLLECT:-}" ] && { [ -z "$late$reland$mixed" ] && echo "$n" >> "$FC_COLLECT"; continue; }   # a plain open fork-only candidate
   # A fork-only fix has no PR body to carry its TDD RED output, so the child posts it on the issue ("TDD RED" first line, req-checklist-fork.txt). Missing: say so, once per issue; a warning only, the landing goes on (#1413).
   if ! gh api "repos/$SG_REPO/issues/$n/comments" --paginate -q '.[].body' 2>/dev/null | grep -q 'TDD RED'; then
     echo "FORKCLOSE WARN #$n: no TDD RED comment on the issue for $br (a fork-only fix records its failing test output there)"
-    [ -n "${FC_DRY:-}" ] || [ -e "$A/redwarn-$n" ] || { touch "$A/redwarn-$n"; printf "Fork-only close: %s is landing but this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; please post the RED and GREEN output here. The landing is not blocked.\n" "$br" > "$SG_STATE/cq/$n-redwarn$$.md"; }
+    [ -n "${FC_DRY:-}" ] || [ -e "$A/redwarn-$n" ] || { touch "$A/redwarn-$n"; printf "Fork-only close: %s is landing but this issue has no \`TDD RED\` comment (test name and failure line, run against the base before the fix). A fork-only fix has no PR body to carry it; please post the RED and GREEN output here. The landing is not blocked.\n" "$br" > "$(sg_cq_file "$n-redwarn$$.md")"; }
   fi
   [ -n "${FC_DRY:-}" ] && { echo "FORKCLOSE would merge $br into $SG_FORK_BASE and test #$n"; continue; }
   needbase "#$n" || exit 0
@@ -503,7 +505,7 @@ for n in $cc; do
       echo "GitHub issue #$n: the issue is already implemented; only the conflict is in scope."; } > "$body"
     if ! dispatch "$nm" "$n" conflict; then
       echo "FORKCLOSE CONFLICT-REFUSED #$n $br into $SG_FORK_BASE ($files): mkreq.sh refused the fix request $nm; no fix run was launched, card left as it is"; continue; fi
-    printf "Fork-only close: merging %s (%s) into %s conflicts (%s). A conflict-fix squad run (%s) merges the base into the branch keeping both sides; the loop retries the close when the branch head moves.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "$files" "$nm" > "$SG_STATE/cq/$n-forkconflict$$.md"
+    printf "Fork-only close: merging %s (%s) into %s conflicts (%s). A conflict-fix squad run (%s) merges the base into the branch keeping both sides; the loop retries the close when the branch head moves.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "$files" "$nm" > "$(sg_cq_file "$n-forkconflict$$.md")"
     echo "FORKCLOSE CONFLICT #$n $br into $SG_FORK_BASE ($files) -> fix run $nm"; continue; fi
   if [ "$way" = rebase ]; then printf '%s\n' "$br" > "$A/landed-$($G rev-parse --short=9 HEAD)"; fi   # the fast-forward landing has no `Merge $br` subject: this record is what names the branch it came from (#11)
   m=$([ -n "$late" ] && printf '%s' "$late" || $G rev-parse HEAD)
@@ -519,7 +521,7 @@ for n in $cc; do
     [ $rc = 0 ] && [ -z "$late" ] && [ "$($G rev-parse HEAD)" = "$m" ] && echo "$SG_STATE/tests/$id.log" > "$A/basetest-${m:0:9}"
   fi
   if [ $rc = 0 ] && [ -n "$mixed" ]; then
-    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$SG_STATE/cq/$n-forkhalf$$.md"
+    printf "Fork half merged: %s at %s into %s as %s, fork suite green (test pass %s). The MesenAI half already landed through its PR.\n" "$br" "${head:0:9}" "$SG_FORK_BASE" "${m:0:9}" "$id" > "$(sg_cq_file "$n-forkhalf$$.md")"
     echo "FORKCLOSE #$n fork half merged ($br ${head:0:9} -> ${m:0:9}, $id green; PR still open)"
   elif [ $rc = 0 ]; then
     [ -n "$late" ] && landline="- $br was already in $SG_FORK_BASE as $late: the pass that merged it ended before its close step, and every later pass read the branch as landed and skipped it. The fork suite result below (a batch or base test that covers it) is the evidence that rule asks for." \
@@ -537,12 +539,12 @@ EOT
     [ -n "$late" ] && echo "FORKCLOSE #$n closed late ($br was already in $SG_FORK_BASE as $late; the close had been lost, $id green)" \
                    || echo "FORKCLOSE #$n closed ($br ${head:0:9} -> ${m:0:9}, $id green)"
   else
-    [ -n "$late" ] && { printf "Fork-only close: %s was already in %s as %s and its issue #%s was still open, but the fork suite failed on the base itself (test pass %s, exit %s). Nothing of the branch was merged here and the branch has nothing to fix, so there is no revert and no fix run; the next pass retries.\n\`\`\`\n%s\n\`\`\`\n" "$br" "$SG_FORK_BASE" "$late" "$n" "$id" "$rc" "$tl" > "$SG_STATE/cq/$n-latered$$.md"
+    [ -n "$late" ] && { printf "Fork-only close: %s was already in %s as %s and its issue #%s was still open, but the fork suite failed on the base itself (test pass %s, exit %s). Nothing of the branch was merged here and the branch has nothing to fix, so there is no revert and no fix run; the next pass retries.\n\`\`\`\n%s\n\`\`\`\n" "$br" "$SG_FORK_BASE" "$late" "$n" "$id" "$rc" "$tl" > "$(sg_cq_file "$n-latered$$.md")"
       echo "FORKCLOSE LATE-RED #$n ($id exit $rc): $br was already in $SG_FORK_BASE and the suite is red on the base itself; no revert, no fix run"; continue; }
     ek=""; { [ $rc = 143 ] || [ $rc = 137 ] || grep -q '"state": "running"' "$SG_STATE/tests/$id.json" 2>/dev/null; } && ek=1   # killed by a signal (or never finalized): the environment failed, not the code (#1470)
     ms="$m $(standing "$br" | grep -vx "$m" | tr '\n' ' ')"   # the tip merge first, then the earlier merges of the branch still standing: one set, both or neither (#16)
     if ! blk=$(unland "$ms" "test pass $id exit $rc"); then
-      printf "Fork-only close: the fork suite failed after merging %s (test pass %s, exit %s) and the merge(s) of it (%s) cannot be taken back together: %s. NOTHING was reverted, because taking back only some of them would leave the others standing without the work on top of them. Owner: resolve the revert by hand (git revert -m 1 each merge, newest first); the base stays parked red until then.\n" "$br" "$id" "$rc" "$ms" "${blk##*$'\n'}" > "$SG_STATE/cq/$n-revertrefused$$.md"
+      printf "Fork-only close: the fork suite failed after merging %s (test pass %s, exit %s) and the merge(s) of it (%s) cannot be taken back together: %s. NOTHING was reverted, because taking back only some of them would leave the others standing without the work on top of them. Owner: resolve the revert by hand (git revert -m 1 each merge, newest first); the base stays parked red until then.\n" "$br" "$id" "$rc" "$ms" "${blk##*$'\n'}" > "$(sg_cq_file "$n-revertrefused$$.md")"
       echo "FORKCLOSE NEEDS OWNER #$n ($id exit $rc): the merges of $br ($ms) cannot be reverted as a set (${blk##*$'\n'}); nothing was reverted, no fix run"; continue; fi
     [ -z "$blk" ] || echo "$blk"
     rv=$($G rev-parse HEAD)
@@ -554,7 +556,7 @@ EOT
     if [ -n "$ek" ]; then   # no fix run: there is nothing to fix. One retry on the next cycle; a second kill on the same head goes to the owner
       rm -f "$mk"; nh=$($G rev-parse "$br"); kf="$A/envkill-$n"; kc=0; [ "$(cut -d' ' -f2 "$kf" 2>/dev/null)" = "$nh" ] && kc=$(cut -d' ' -f1 "$kf"); kc=$(( kc + 1 )); echo "$kc $nh" > "$kf"
       if [ "$kc" -ge 2 ]; then touch "$A/fork-$n-${nh:0:9}"   # parked until the head moves or the marker expires
-        printf "Fork-only close: the fork gate for %s was killed by a signal %s times in a row on the same head (test pass %s, exit %s, log %s/tests/%s.log). That is the environment, not the code, so no fix run was dispatched. Owner: check what kills the gate (a reaper, memory pressure, a stray pkill); the close resumes when the branch head moves.\n" "$br" "$kc" "$id" "$rc" "$SG_STATE" "$id" > "$SG_STATE/cq/$n-envkill$$.md"
+        printf "Fork-only close: the fork gate for %s was killed by a signal %s times in a row on the same head (test pass %s, exit %s, log %s/tests/%s.log). That is the environment, not the code, so no fix run was dispatched. Owner: check what kills the gate (a reaper, memory pressure, a stray pkill); the close resumes when the branch head moves.\n" "$br" "$kc" "$id" "$rc" "$SG_STATE" "$id" > "$(sg_cq_file "$n-envkill$$.md")"
         echo "FORKCLOSE NEEDS OWNER #$n ($id, exit $rc, log $SG_STATE/tests/$id.log): the gate was killed $kc times in a row on ${nh:0:9}; no fix run"
       else echo "FORKCLOSE ENV-KILL #$n ($id, exit $rc, log $SG_STATE/tests/$id.log), merge reverted, branch re-applied; the gate is retried once on the next cycle, no fix run"; fi
       continue; fi
@@ -565,11 +567,11 @@ EOT
       tail -40 "$SG_STATE/tests/$id.log"; echo "GitHub issue #$n: only the failing suite is in scope."; } > "$body"
     if dispatch "$nm" "$n" red; then
       [ -n "$mixed" ] || $BOARD $SG_OWNER $SG_PROJECT "In Progress" $n >/dev/null
-      printf "Fork-only close: the fork suite failed after merging %s (%s) as %s (test pass %s, exit %s); the merge was reverted on %s. Card back to In Progress.\n\`\`\`\n%s\n\`\`\`\n" "$br" "${head:0:9}" "${m:0:9}" "$id" "$rc" "$SG_FORK_BASE" "$tl" > "$SG_STATE/cq/$n-forkred$$.md"
+      printf "Fork-only close: the fork suite failed after merging %s (%s) as %s (test pass %s, exit %s); the merge was reverted on %s. Card back to In Progress.\n\`\`\`\n%s\n\`\`\`\n" "$br" "${head:0:9}" "${m:0:9}" "$id" "$rc" "$SG_FORK_BASE" "$tl" > "$(sg_cq_file "$n-forkred$$.md")"
       echo "FORKCLOSE RED #$n ($id exit $rc, log $SG_STATE/tests/$id.log), merge reverted, branch re-applied, fix run $nm"
     else   # a refused request launched nothing: say so, and keep no park marker (nothing is coming to move that head)
       nh2=$($G rev-parse -q --verify "$br" 2>/dev/null); rm -f "$mk" "$A/fork-$n-${nh2:0:9}"
-      echo "FORKCLOSE RED-REFUSED #$n ($id exit $rc, log $SG_STATE/tests/$id.log), merge reverted, branch re-applied: mkreq.sh refused the fix request $nm, so no fix run was launched (cq/$n-slicerefused$$.md)"
+      echo "FORKCLOSE RED-REFUSED #$n ($id exit $rc, log $SG_STATE/tests/$id.log), merge reverted, branch re-applied: mkreq.sh refused the fix request $nm, so no fix run was launched (cq/${SG_REPO/\//__}#$n-slicerefused$$.md)"
     fi
   fi
 done

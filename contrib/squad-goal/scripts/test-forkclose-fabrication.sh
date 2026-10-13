@@ -14,6 +14,7 @@ mkfix() {   # fresh state, stub gh/test.sh/env.sh, and an empty fork repo: each 
   cp "$src" "$T/s/forkclose.sh"; cp "$d"/{forkonly.sh,fork-gate.sh,serial.sh,gate-suites.sh,merge-audit.sh} "$T/s/"; cp "$d/ghread.py" "$d/ghthrottle.py" "$T/s/"
   printf 'exit 0\n' > "$T/s/shell-suites.sh"; printf '#!/bin/bash\necho "pass-1"; exit 0\n' > "$T/s/test.sh"; chmod +x "$T/s/test.sh"
   printf 'export SG_STATE=%s SG_FORK_DIR=%s SG_FORK_BASE=local/next SG_FORK_BRANCH=gui/%%n SG_REPO=x/y SG_CHECKOUT=%s SG_FORK_TEST_CMD=true SG_FORK_PY_CMD=true SG_OWNER=x SG_PROJECT=4 BOARD=true\n' "$T/st" "$T/fork" "$T/co" > "$T/s/env.sh"
+  echo ". \"$(dirname "$src")/address.sh\"" >> "$T/s/env.sh"   # the writers name a queued comment through the seam, as the real env.sh loads it
   cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -44,9 +45,9 @@ case "$r" in *"merge-audit: wat.sh:3:"*) ok "the audit names the file and the li
 case "$r" in *"L3"*) ok "and shows the dropped line";; *) ko "the dropped text is not shown: '$r'";; esac
 [ "$(g rev-parse local/next)" = "$b0" ] && ok "nothing landed: the base is where it was" || ko "the fabricated merge reached the base"
 [ ! -e "$T/closed.log" ] && ok "the issue was not closed" || ko "the issue was closed on a fabricated merge: $(cat "$T/closed.log")"
-n=$(ls "$T/st/cq"/1-fabrication* 2>/dev/null | wc -l | tr -d ' ')
+n=$(ls "$T/st/cq"/*#1-fabrication* 2>/dev/null | wc -l | tr -d ' ')
 [ "$n" -ge 1 ] && ok "the fabrication is recorded on the issue" || ko "nothing was written to cq/ for the issue"
-/usr/bin/grep -q 'wat.sh' "$T/st/cq"/1-fabrication*.md 2>/dev/null && ok "and the record carries the file the audit read" || ko "the record does not name the file"
+/usr/bin/grep -q 'wat.sh' "$T/st/cq"/*#1-fabrication*.md 2>/dev/null && ok "and the record carries the file the audit read" || ko "the record does not name the file"
 r2=$(pass)
 case "$r2" in *"FORKCLOSE FABRICATION"*) ko "the same head was retried on the next pass: '$r2'";; *) ok "the next pass does not retry the same head";; esac
 [ "$(g rev-parse local/next)" = "$b0" ] && ok "and lands nothing for it" || ko "the base moved on the second pass"

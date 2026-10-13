@@ -37,35 +37,35 @@ echo autobug-other > "$T/st/auto/bug-900"   # only mentioned in the request body
 o=$(runj)
 [ ! -e "$T/st/auto/bug-1492" ] && ok "first never-started run drops auto/bug-N" || ko "bug marker kept: $o"
 [ -e "$T/st/auto/bug-900" ] && ok "an issue only named in the request body keeps its marker" || ko "freed bug-900 (mentioned in prose): $o"
-[ -z "$(ls "$T/st/cq"/900-*.md 2>/dev/null)" ] && ok "no comment queued for an issue named only in prose" || ko "commented on 900: $(ls "$T/st/cq" 2>/dev/null)"
-cq=$(ls "$T/st/cq"/1492-*.md 2>/dev/null | wc -l | tr -d ' ')
+[ -z "$(ls "$T/st/cq"/*#900-*.md 2>/dev/null)" ] && ok "no comment queued for an issue named only in prose" || ko "commented on 900: $(ls "$T/st/cq" 2>/dev/null)"
+cq=$(ls "$T/st/cq"/*#1492-*.md 2>/dev/null | wc -l | tr -d ' ')
 [ "$cq" = 1 ] && ok "first never-started run queues one comment" || ko "cq count=$cq files=$(ls "$T/st/cq" 2>/dev/null)"
-/usr/bin/grep -q 'never started, dispatching again' "$T/st/cq"/1492-*.md && /usr/bin/grep -q 'attempt 1 of 2' "$T/st/cq"/1492-*.md \
-  && ok "retry comment names attempt 1 of 2" || ko "retry comment: $(cat "$T/st/cq"/1492-*.md 2>/dev/null)"
-/usr/bin/grep -q 'vendor/skills is not clean' "$T/st/cq"/1492-*.md && ok "retry comment quotes launch.log" || ko "launch.log not quoted"
+/usr/bin/grep -q 'never started, dispatching again' "$T/st/cq"/*#1492-*.md && /usr/bin/grep -q 'attempt 1 of 2' "$T/st/cq"/*#1492-*.md \
+  && ok "retry comment names attempt 1 of 2" || ko "retry comment: $(cat "$T/st/cq"/*#1492-*.md 2>/dev/null)"
+/usr/bin/grep -q 'vendor/skills is not clean' "$T/st/cq"/*#1492-*.md && ok "retry comment quotes launch.log" || ko "launch.log not quoted"
 
 # 2. second never-started run for the same issue: keep the marker, evidence + HEALTH, no third retry
-rm -f "$T/st/cq"/1492-*.md
+rm -f "$T/st/cq"/*#1492-*.md
 mkrun run-never-b 1492
 echo autobug-y > "$T/st/auto/bug-1492"
 o=$(runj)
 [ -e "$T/st/auto/bug-1492" ] && ok "second never-started run keeps auto/bug-N" || ko "bug marker dropped on second: $o"
 /usr/bin/grep -qi 'HEALTH' "$T/st/alerts.log" && ok "second never-started run raises HEALTH" || ko "no HEALTH: $(cat "$T/st/alerts.log" 2>/dev/null) $o"
-/usr/bin/grep -q 'vendor/skills is not clean' "$T/st/cq"/1492-*.md && /usr/bin/grep -q 'attempt 2 of 2' "$T/st/cq"/1492-*.md \
-  && ok "evidence comment quotes launch.log (attempt 2 of 2)" || ko "evidence: $(cat "$T/st/cq"/1492-*.md 2>/dev/null)"
+/usr/bin/grep -q 'vendor/skills is not clean' "$T/st/cq"/*#1492-*.md && /usr/bin/grep -q 'attempt 2 of 2' "$T/st/cq"/*#1492-*.md \
+  && ok "evidence comment quotes launch.log (attempt 2 of 2)" || ko "evidence: $(cat "$T/st/cq"/*#1492-*.md 2>/dev/null)"
 # a third janitor pass on a new never-started folder must not drop the marker either
-rm -f "$T/st/cq"/1492-*.md
+rm -f "$T/st/cq"/*#1492-*.md
 mkrun run-never-c 1492
 echo autobug-z > "$T/st/auto/bug-1492"
 o=$(runj)
 [ -e "$T/st/auto/bug-1492" ] && ok "no third retry: marker stays" || ko "third pass dropped the marker: $o"
-[ "$(ls "$T/st/cq"/1492-*.md 2>/dev/null | wc -l | tr -d ' ')" = 0 ] && ok "no third comment queued" || ko "third comment: $(ls "$T/st/cq")"
+[ "$(ls "$T/st/cq"/*#1492-*.md 2>/dev/null | wc -l | tr -d ' ')" = 0 ] && ok "no third comment queued" || ko "third comment: $(ls "$T/st/cq")"
 
 # 3. same shape for auto/disp-N (autofrontier)
 mkrun run-never-d 77
 echo frontier-x > "$T/st/auto/disp-77"
 o=$(runj)
 [ ! -e "$T/st/auto/disp-77" ] && ok "first never-started run drops auto/disp-N" || ko "disp marker kept: $o"
-/usr/bin/grep -q 'never started, dispatching again' "$T/st/cq"/77-*.md && ok "disp retry comment queued" || ko "no disp comment: $o"
+/usr/bin/grep -q 'never started, dispatching again' "$T/st/cq"/*#77-*.md && ok "disp retry comment queued" || ko "no disp comment: $o"
 
 rm -rf "$T"; exit $fail

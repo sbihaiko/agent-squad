@@ -21,7 +21,7 @@ Do not wait for a run to finish and do not batch issue updates for the end.
 
 For every such event:
 
-1. queue an issue comment through `$SG_STATE/cq/` (one state directory per profile);
+1. queue an issue comment through `$SG_STATE/cq/` (one state directory per profile), named for its repository: `$(sg_cq_file <issue>-<tag>.md)`;
 2. update the project card status when applicable;
 3. only then continue orchestration.
 
@@ -335,9 +335,9 @@ Never wait for CI, review, merge, e2e, another child, or a model retry when unre
 
 Any meaningful change goes to the issue immediately by writing:
 
-`$SG_STATE/cq/<issue>-<tag>.md` (`$SG_STATE` is `~/.cache/squad-goal/<profile>`)
+`$SG_STATE/cq/<owner>__<repo>#<issue>-<tag>.md` (`$SG_STATE` is `~/.cache/squad-goal/<profile>`; `sg_cq_file <issue>-<tag>.md` from `address.sh` prints the path for the repository in force)
 
-`cqflush` posts it with retries.
+`cqflush` posts it with retries, to the repository the name carries (a name no profile knows is retired as `.dead`, never posted).
 
 Move the board card on the same event:
 

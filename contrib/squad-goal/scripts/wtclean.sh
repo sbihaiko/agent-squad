@@ -24,7 +24,7 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
       pr=$(gh api "repos/$SG_REPO/pulls?state=open&head=${SG_REPO%%/*}:$own&per_page=1" -q '.[0].number // ""' 2>/dev/null)
       if [ -n "$pr" ] && $G -C "$w" merge-base --is-ancestor "origin/$own" "$sha" 2>/dev/null && $G -C "$w" push -q origin "$sha:refs/heads/$own" 2>/dev/null; then
         echo "WT PUSHED ${run##*/} ${sha:0:9} -> $own (PR #$pr): landed fix commits pushed as a fast-forward"; echo "$w" >> "$seen"
-        printf "Fix commits a run landed without pushing (%s) were pushed to %s as a fast-forward (head %s); review and CI restart on it.\n" "${run##*/}" "$own" "${sha:0:9}" > "$SG_STATE/cq/$pr-wtpush$$.md" 2>/dev/null; continue; fi   # a PR number posts on the PR (issues API)
+        printf "Fix commits a run landed without pushing (%s) were pushed to %s as a fast-forward (head %s); review and CI restart on it.\n" "${run##*/}" "$own" "${sha:0:9}" > "$(sg_cq_file "$pr-wtpush$$.md")" 2>/dev/null; continue; fi   # a PR number posts on the PR (issues API)
       if grep -lqx "${run##*/}" "$SG_STATE"/auto/runof-* 2>/dev/null; then
         bash "$(dirname "$0")/retryfix.sh" "${run##*/}"; echo "WT UNPUSHED ${run##*/} ${sha:0:9}: branch $own moved or has no open PR; fix re-armed (retryfix), tree kept"; echo "$w" >> "$seen"; continue; fi
     fi
