@@ -364,6 +364,11 @@ def reconcile_board():
     if oans:
         for n in sorted(olabels, key=int):
             set_expected(n, os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
+            # A spec is written and not scheduled, so it opens in its own column rather than in the loop's queue (#117's
+            # sibling ask). The rank sits above the floor and below every rule a run, a marker or a PR raises, so the day
+            # work starts on the spec the card leaves the column by the rule that names that work.
+            if "spec" in olabels[n]:
+                set_expected(n, "Open Specs", "issue carries the spec label", rank=15)
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(list(expected), key=int):
