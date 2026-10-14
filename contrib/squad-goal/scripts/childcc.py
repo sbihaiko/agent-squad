@@ -4,7 +4,7 @@ The child's issue is read from its own spawn prompt, first match wins: "GitHub i
 "GitHub issues N", "GitHub issue N", then a "gui/N" or "wt-as-N" branch/worktree name.
 A pass whose prompt names no issue is logged once (CHILDCC UNMAPPED <run> <child>) instead of being skipped silently.
 Live runs move at once; a run that already has its verdict (tiny and fork-only runs go pass -> verdict in under 1 s, so they are never seen live) is backfilled once,
-but only when the card is still in Todo/In Progress/Blocked, never past Code Complete. Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
+but only when the card is still in Todo/In Progress/Blocked, never past Code Complete. A run with more than one child also gets one parent issue naming the run, each child linked as a sub-issue through the seam (marker auto/parent-<run>). Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
 Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never overrides a later column: an issue already
 past it is left alone because the marker is written the first time the child is seen passing."""
 import json, os, pathlib, re, subprocess, sys
@@ -39,6 +39,10 @@ for r in (st / "active-runs.txt").read_text().split():
             done.append((d["node"], (d.get("reasons") or [""])[0]))
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             unmapped.append(d["node"])
+    mk = A / f"parent-{pathlib.Path(r).name}"
+    if not mk.exists() and len(set(issue.values())) > 1:   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
+        try: print(f"RUN PARENT #{state.group_run(pathlib.Path(r).name, issue.values())} ({pathlib.Path(r).name})"); mk.touch()
+        except RuntimeError as e: print(f"RUN PARENT FAILED {pathlib.Path(r).name}: {e}")   # no marker: the next pass asks again
     for child, why in done:
         mk = A / f"cc-{pathlib.Path(r).name}-{child}"
         if mk.exists(): continue
