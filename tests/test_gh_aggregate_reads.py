@@ -97,6 +97,7 @@ ISSUES_ENVELOPE = json.dumps(
                             "state": "OPEN",
                             "body": "## What to build\n\nOne query each.\n\n## Blocked by\n\n- #3\n- sbihaiko/agent-squad#4\n\n## Notes\n- #99 is not an edge\n",
                             "labels": {"nodes": [{"name": "community-pack"}, {"name": "bug"}]},
+                            "blockedBy": {"nodes": [{"number": 7, "state": "OPEN"}, {"number": 8, "state": "CLOSED"}]},
                         },
                         {
                             "number": 6,
@@ -253,17 +254,26 @@ def test_the_open_issues_of_a_repository_arrive_in_one_request():
     assert [i["number"] for i in out.answer] == [5, 6]
 
 
-def test_the_issue_fact_carries_the_labels_and_the_blocking_edges():
+def test_the_issue_fact_carries_the_labels_and_the_native_blocking_edges():
     issue = ghread.read(ISSUES_ROUTE, transport=stub(0, ISSUES_ENVELOPE)).answer[0]
     assert [label["name"] for label in issue["labels"]] == ["community-pack", "bug"]
-    assert issue["blocked_by"] == [3, 4], "the blocking edges are read off the body, not asked for one issue at a time"
+    assert issue["blocked_by"] == [7, 8], "the blocking edges come from GitHub's native relation"
     assert issue["state"] == "open"
 
 
-def test_the_blocking_edges_are_read_as_the_spec_reads_them():
-    """A list, not prose: a trailing line that merely names another issue is not an edge (#1803)."""
+def test_the_body_does_not_create_a_blocking_edge():
     issue = ghread.read(ISSUES_ROUTE, transport=stub(0, ISSUES_ENVELOPE)).answer[0]
-    assert 99 not in issue["blocked_by"], "the `## Notes` section is not the `## Blocked by` section"
+    assert 3 not in issue["blocked_by"] and 4 not in issue["blocked_by"]
+
+
+def test_a_single_issue_carries_its_native_blockers_in_one_request():
+    node = json.loads(ISSUES_ENVELOPE)["data"]["repository"]["issues"]["nodes"][0]
+    envelope = json.dumps({"data": {"repository": {"i5": node}}})
+    t = stub(0, envelope)
+    issue = ghread.read("repos/o/r/issues/5", transport=t)
+    assert issue.is_answer, issue.line()
+    assert issue.answer["blocked_by"] == [7, 8]
+    assert len(t.seen) == 1, "the relation rides the issue read"
 
 
 # --- a caller cannot tell which transport answered it -----------------------------------------------------------------

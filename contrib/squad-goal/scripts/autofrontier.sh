@@ -155,7 +155,9 @@ while [ $i -lt ${#cands[@]} ]; do
   [ -n "$skip" ] && continue
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   sg_not_startable "$n" && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
-  d=$("$here/stack.sh" "$n" 2>/dev/null | head -1)
+  stack_out=$("$here/stack.sh" "$n" 2>&1)
+  d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|STACK |WAIT )')
+  printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=
   case "$d" in READY*) g=base; nt="base origin/$SG_BASE";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body";; *) continue;; esac
   [ -z "$full" ] || joins "$g" "$n" || break

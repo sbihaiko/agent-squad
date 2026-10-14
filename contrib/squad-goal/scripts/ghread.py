@@ -300,7 +300,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 # What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
 # read of the issue's comments, which was one request per candidate (#45).
 _COMMENTS = 50
-_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} subIssuesSummary {{ total completed }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
+_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} subIssuesSummary {{ total completed }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
@@ -313,29 +313,8 @@ _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
 _FAILED_CONCLUSIONS = ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE")
 _PASSED_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
 _FAILED_STATES = ("FAILURE", "ERROR")
-_BLOCKED_SECTION = re.compile(r"^## Blocked by\s*\n(.*?)(?=^## |\Z)", re.S | re.M)
-_BULLET = re.compile(r"\s*([-*] |\d+\. )")
-_ISSUE_REF = re.compile(r"#(\d+)")
 _ROUTE = re.compile(r"^repos/(?P<owner>[^/?]+)/(?P<repo>[^/?]+)/(?P<rest>[^?]*)(?:\?(?P<params>.*))?$")
 _SINGLE_ISSUE = re.compile(r"^issues/\d+$")
-
-
-def blocked_by(body: Any) -> list[int]:
-    """The `## Blocked by` edges of an issue body (#1803): the section is a LIST, so reading stops at the first line that
-    is neither blank nor a bullet and a later prose line that merely names an issue is not an edge. The same parse the
-    shell it replaces did, address-qualified refs (`owner/repo#N`) included: the edge is resolved per address.
-    """
-    found = _BLOCKED_SECTION.search(body if isinstance(body, str) else "")
-    if found is None:
-        return []
-    listed: list[str] = []
-    for line in found.group(1).splitlines():
-        if not line.strip():
-            continue
-        if not _BULLET.match(line):
-            break
-        listed.append(line)
-    return [int(n) for n in _ISSUE_REF.findall("\n".join(listed))]
 
 
 def _connection(node: Any) -> dict[str, Any]:
@@ -418,7 +397,11 @@ def _issue(node: Any) -> dict[str, Any]:
         "body": node.get("body"),
         "state": state.lower() if isinstance(state, str) else None,
         "labels": _labels(node.get("labels")),
-        "blocked_by": blocked_by(node.get("body")),
+        "blocked_by": [
+            n.get("number")
+            for n in _connection(node.get("blockedBy")).get("nodes") or []
+            if isinstance(n, dict) and isinstance(n.get("number"), int)
+        ],
         "tdd_red": _tdd_red(node.get("comments")),
         "sub_issues_summary": _sub_issues(node.get("subIssuesSummary")),
     }
@@ -503,6 +486,8 @@ def aggregate(route: str) -> Fact | None:
     numbers = _numbers(route)
     if numbers is not None:
         return _numbers_fact(numbers) if numbers else None
+    if m is not None and _SINGLE_ISSUE.match(m.group("rest")) is not None and not m.group("params"):
+        return _numbers_fact([int(m.group("rest").split("/")[1])])
     if m is None or m.group("rest") not in _AGGREGATE:
         return None
     params = dict(p.split("=", 1) for p in (m.group("params") or "").split("&") if "=" in p)
@@ -554,7 +539,11 @@ def read(route: str, transport: TransportFn | None = None) -> Read:
     value, parsed = _decode(body)
     if parsed and isinstance(value, dict) and ("data" in value or "errors" in value):
         if fact is not None:
-            return _aggregate_read(fact, value, headers)
+            out = _aggregate_read(fact, value, headers)
+            if out.is_answer and _single_issue(route):
+                issue = out.answer[0] if isinstance(out.answer, list) and out.answer else {}
+                return Read(kind=ANSWER, answer=issue, body=json.dumps(issue), partial=out.partial)
+            return out
     kind, value, message, request_id, detail, raw = _verdict(res, ANSWER)
     if kind == ANSWER and isinstance(value, dict) and _single_issue(route):
         shaped = _issue(value)

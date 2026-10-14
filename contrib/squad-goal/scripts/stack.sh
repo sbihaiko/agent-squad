@@ -6,13 +6,14 @@
 #                             failing CI on its head: branch from origin/<branch>, open the PR with base <branch>, and put
 #                             "Merge after #<pr>" in the body (autopilot never merges it first and retargets it after)
 #   WAIT <reason>             anything else (two open blockers, a blocker with no PR, a parent that is itself stacked, red CI)
-. "$(dirname "$0")/env.sh"; iss=$1
-body=$(gh api repos/$SG_REPO/issues/$iss -q .body)
-# The blockers are a LIST: reading stops at the first line that is neither blank nor a bullet, so a prose line that
-# merely names another issue ("Blocks #1792: ...", information the author wrote for a human) cannot become an edge.
-# Taking the whole section made two issues that mention each other a cycle neither could ever leave -- both WAIT on
-# each other forever, and health.sh reports nothing, so the stall was silent (#1803).
-bl=$(printf '%s\n' "$body" | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '(^|[^/[:alnum:]])#[0-9]+' | grep -oE '[0-9]+' | sort -u)
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; iss=$1
+issue=$(gh_api "repos/$SG_REPO/issues/$iss") || { echo "WAIT issue #$iss is not readable"; exit 0; }
+body=$(printf '%s' "$issue" | jq -r '.body // ""')
+# GitHub's blocked-by relation is the dispatch fact. The body remains a human-facing mirror, so a stale body edge is named
+# once but never gates this decision.
+bl=$(printf '%s' "$issue" | jq -r '.blocked_by[]?' | sort -nu)
+body_bl=$(printf '%s\n' "$body" | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '(^|[^/[:alnum:]])#[0-9]+' | grep -oE '[0-9]+' | sort -nu)
+for b in $body_bl; do case " $bl " in *" $b "*) ;; *) echo "STACK NOTE #$iss: body names blocker #$b without a native blocked-by relation" >&2;; esac; done
 hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
 testing=" $(jq -r '.items[]?|select(.st=="Testing" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 cc=" $(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
