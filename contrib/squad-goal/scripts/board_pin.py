@@ -11,7 +11,8 @@ PUBLISHED = "repos/sbihaiko/squad-board/contents/board.json"
 ap = argparse.ArgumentParser(); ap.add_argument("--published"); a = ap.parse_args()
 if a.published: text = pathlib.Path(a.published).read_text()
 else:
-    r = subprocess.run(["gh", "api", PUBLISHED], capture_output=True, text=True)
+    door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).resolve().parent / "ghcall.sh"), "gh_api", PUBLISHED]
+    r = subprocess.run(door, capture_output=True, text=True)   # through the door's read (ADR-0277), never a call site of this script's
     if r.returncode: print(f"cannot read the published definition: {(r.stderr or r.stdout).strip()}"); sys.exit(2)
     text = base64.b64decode(json.loads(r.stdout)["content"]).decode()
 report = pin_drift(text)

@@ -455,7 +455,7 @@ def reconcile_board():
     for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does
         if expected.get(n, (0, ""))[1] in ("Closed", "Abandoned") or FREEZE_LABEL["owner"] in issue_labels(n): continue
         say(f"BOARD-FREEZE #{n}: {FREEZE_LABEL['owner']} (an owner label or a run needing a human holds it)")
-        if not dry: sh("gh", "api", "--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={FREEZE_LABEL['owner']}")
+        if not dry: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={FREEZE_LABEL['owner']}"])   # through the door's write (ADR-0277)
 reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
