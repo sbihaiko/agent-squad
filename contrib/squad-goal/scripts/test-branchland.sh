@@ -85,6 +85,13 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x"*"local gate"*) ok "gate fail: says why";
 /usr/bin/grep -qh "local gate, CI off" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "mypy: 3 errors" "$T/st/cq/"x__y#7-status~* && ok "gate fail: the failure is recorded on the issue" || ko "gate fail: no status comment: $(cat "$T/st/cq/"* 2>&1)"
 ! /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "gate fail: closes nothing, moves no card" || ko "gate fail wrote"
 [ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && [ -z "$r2" ] && ok "gate fail: runs once per head" || ko "gate fail reran: $(cat "$T/gate.log") '$r2'"
+# A failed gate reruns only what failed, once (SG_LOCAL_GATE_RERUN_CMD stubs it): a red that machine load caused passes alone and the
+# branch lands; a red that is real fails again and the branch waits.
+RERUN_OK="echo rerun >> $T/rerun.log; exit 0"; RERUN_KO="echo rerun >> $T/rerun.log; echo 'still red'; exit 1"
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
+[ -s "$T/rerun.log" ] && case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a red that passes on its rerun: the branch lands";; *) ko "a load red did not land: '$r'";; esac || ko "a failed gate ran no rerun: '$r'"
+reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="$RERUN_KO" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*"still red"*) ok "a red that fails its rerun: nothing lands, and the rerun says why";; *) ko "a real red: '$r'";; esac || ko "a real red landed"
 # The gate proves what lands: the tip rebased onto dev, never the bare tip. A red the branch inherited from an old base is fixed
 # on dev, so the branch lands once dev carries the fix, and a failed gate runs again when dev moves.
 GATE_FIXED="echo \"\$PWD \$(/usr/bin/git rev-parse HEAD)\" >> $T/gate.log; test -f fixed || { echo 'inherited red'; exit 1; }"
