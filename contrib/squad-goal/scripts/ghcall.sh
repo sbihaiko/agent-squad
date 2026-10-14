@@ -53,6 +53,29 @@ _gh_log() {
   $SG_GHREAD --log REST "$route" miss "$outcome" >/dev/null 2>&1 || true
 }
 
+# _gh_child_merge <gh args…>: 0 when a child session asks to merge a PR, by `pr merge` or by `PUT .../pulls/N/merge`. A child
+# session is a call the engine started (`SG_CHILD_SESSION`, exported by the call environment): the loop merges, so the door
+# refuses the merge there and names the refusal. The loop's own mergers run outside a call and never carry the marker.
+_gh_child_merge() {
+  [ -n "${SG_CHILD_SESSION:-}" ] || return 1
+  local words=() put=0 a
+  for a in "$@"; do
+    case "$a" in
+      -X=PUT|--method=PUT) put=1;;
+      PUT) put=1;;
+      -*) ;;
+      *) words+=("$a");;
+    esac
+  done
+  [ "${words[0]:-}" = pr ] && [ "${words[1]:-}" = merge ] && return 0
+  [ "$put" -eq 1 ] && [[ " ${words[*]} " =~ /pulls/[0-9]+/merge ]] && return 0
+  return 1
+}
+
+_gh_child_merge_line() {
+  printf 'refused: CHILD-MERGE-REFUSED: a child session never merges a PR; the loop merges it once review and CI pass\n'
+}
+
 _gh_refused() {
   printf '%s' "$1" | jq -e 'type == "object" and (.message | type == "string") and has("status")' >/dev/null 2>&1
 }
@@ -107,6 +130,7 @@ _gh_read() {   # _gh_read <reader command> <route> [-q <jq filter>]
 # passed through verbatim, and the three outcomes are the same: a caller can tell an empty diff from a refusal.
 gh_get() {
   local o rc
+  if _gh_child_merge "$@"; then _gh_log refused "$@"; _gh_child_merge_line; return 2; fi
   o=$(gh api "$@" 2>/dev/null); rc=$?
   if [ "$rc" -eq 0 ] && ! _gh_refused "$o"; then _gh_log answer "$@"; printf '%s' "$o"; return 0; fi
   if _gh_refused "$o"; then _gh_log refused "$@"; _gh_refusal_line "$o"; return 2; fi
@@ -126,6 +150,7 @@ gh_send() {
     esac
   done
   local o rc
+  if _gh_child_merge "${args[@]}"; then _gh_log refused "${args[@]}"; _gh_child_merge_line; return 2; fi
   o=$(gh api "${args[@]}" 2>/dev/null); rc=$?
   if _gh_refused "$o"; then _gh_log refused "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
   if [ "$rc" -ne 0 ]; then _gh_log failed "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi
