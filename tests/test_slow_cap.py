@@ -97,6 +97,44 @@ def test_a_heavy_marker_does_not_lift_the_cap(tmp_path):
     assert r.returncode == 1 and "over the 0.2 s cap" in r.stdout, r.stdout + r.stderr
 
 
+CONTENDED = (
+    "import time\nimport tests.slowcap as slowcap\n"
+    "def test_contended(monkeypatch):\n"
+    "    monkeypatch.setattr(slowcap, 'contention_factor', lambda: 4.0, raising=False)\n"
+    "    time.sleep(0.5)\n"
+)
+
+
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
+def test_wall_time_that_only_contention_grew_does_not_fail_the_cap(tmp_path):
+    """The cap guards the work a test does, not the runner's load. A call over the line whose excess one measured
+    scheduling slowdown explains is not named; the sleeping test above, at no slowdown, still is."""
+    r = run_inner(tmp_path, CONTENDED)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
+def test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line(tmp_path):
+    r = run_inner(tmp_path, CONTENDED, ini=("slow_cap_seconds=5", "heavy_cap_seconds=0.3"))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
+def test_a_test_far_past_the_line_fails_even_under_contention(tmp_path):
+    body = CONTENDED.replace("time.sleep(0.5)", "time.sleep(2.0)")
+    r = run_inner(tmp_path, body)
+    assert r.returncode == 1 and "test_inner.py::test_contended took" in r.stdout, r.stdout + r.stderr
+
+
+def test_the_contention_factor_is_measured_and_bounded():
+    import tests.slowcap as slowcap
+
+    assert 1.0 <= slowcap.contention_factor() <= slowcap.MAX_CONTENTION_FACTOR
+
+
 def test_the_repo_default_cap_is_20_seconds_and_durations_print():
     text = (ROOT / "pyproject.toml").read_text()
     assert "--durations=15" in text and 'slow_cap_seconds = "20"' in text and 'test_deadline_seconds = "60"' in text
@@ -121,6 +159,9 @@ def test_nested_pytest_checks_explain_their_slow_marker():
         test_an_unmarked_test_at_the_heavy_line_fails_and_is_named,
         test_a_heavy_marker_lets_a_test_past_the_heavy_line_pass,
         test_a_heavy_marker_does_not_lift_the_cap,
+        test_wall_time_that_only_contention_grew_does_not_fail_the_cap,
+        test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line,
+        test_a_test_far_past_the_line_fails_even_under_contention,
     )
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {
         "test_a_test_over_the_cap_fails_and_is_named": "starts a nested pytest subprocess",
@@ -132,4 +173,7 @@ def test_nested_pytest_checks_explain_their_slow_marker():
         "test_an_unmarked_test_at_the_heavy_line_fails_and_is_named": "starts a nested pytest subprocess",
         "test_a_heavy_marker_lets_a_test_past_the_heavy_line_pass": "starts a nested pytest subprocess",
         "test_a_heavy_marker_does_not_lift_the_cap": "starts a nested pytest subprocess",
+        "test_wall_time_that_only_contention_grew_does_not_fail_the_cap": "starts a nested pytest subprocess",
+        "test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line": "starts a nested pytest subprocess",
+        "test_a_test_far_past_the_line_fails_even_under_contention": "starts a nested pytest subprocess",
     }
