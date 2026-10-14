@@ -24,6 +24,24 @@ repo=${SG_CHECKOUT:-}/contrib/squad-goal
 [ -n "${SG_CHECKOUT:-}" ] && [ -f "$repo/SKILL.md" ] || exit 0                  # this checkout does not ship the skill
 [ -d "$live" ] || exit 0                                                       # no live copy on this machine: nothing to keep in step
 
+# The publish reads the main working tree, and nothing moved that tree to origin: it sat at an old commit while later PRs
+# merged, and the live loop ran old scripts. So the tree is fast-forwarded first (git only, no GitHub call), ff-only, and
+# only when it is clean and on its base. A dirty tree, another branch, a diverged tree and a failed fetch are named, and the
+# tree is never touched.
+if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
+  base=${SG_BASE:-main}; tree=$SG_CHECKOUT; cur=$(git -C "$tree" branch --show-current)
+  if [ "$cur" != "$base" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is on ${cur:-a detached head}, not $base"
+  elif [ -n "$(git -C "$tree" status --porcelain --untracked-files=no)" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is dirty"
+  elif ! GIT_TERMINAL_PROMPT=0 git -C "$tree" fetch --quiet origin "$base" >/dev/null 2>&1; then echo "LIVE-GUARD main tree $tree not fast-forwarded: git fetch origin $base failed"
+  else
+    from=$(git -C "$tree" rev-parse --short HEAD)
+    if git -C "$tree" merge --ff-only --quiet "origin/$base" >/dev/null 2>&1; then
+      to=$(git -C "$tree" rev-parse --short HEAD)
+      [ "$from" = "$to" ] || echo "LIVE-GUARD main tree $tree fast-forwarded $base $from..$to"
+    else echo "LIVE-GUARD main tree $tree not fast-forwarded: $base has diverged from origin/$base (not a fast-forward)"; fi
+  fi
+fi
+
 diff=$(bash "$here/publish-live.sh" --check "$repo" "$live")
 [ -z "$diff" ] && exit 0                                    # the two copies agree: nothing read, nothing to say
 echo "LIVE-GUARD the live skill differs from the repository copy: $(printf '%s' "$diff" | tr '\n' ' ')"
