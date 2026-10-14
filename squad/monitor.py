@@ -51,11 +51,12 @@ NO_PROGRESS_SECONDS = 300.0    # seconds the record may stay still, with no call
 class Watcher:
     """The run-scoped monitor: the record scan on a timer, for one run folder.
     `step(now)` reads the record and writes each new finding once (`stuck`, `abandoned`, `deadline_missed`, `no_progress`, `held`, `ended`), as one JSON line, to `monitor.log` in the folder and to `out`.
+    `out` is bound when the watcher is built (the output of the run that started it), so a timer that outlives its run never writes into a later stream.
     A condition that stays true is not written again. The watcher never calls a model, never writes to the record and never pauses a run.
     `step` returns False once the record holds a verdict, or after `stop()`; the timer then ends."""
 
     def __init__(self, folder, out=None, alive=_alive):
-        self.folder, self.alive, self.out = Path(folder), alive, out
+        self.folder, self.alive, self.out = Path(folder), alive, out or sys.stdout
         self.log = self.folder / "monitor.log"
         self.seen = set()
         self._stop = False
@@ -106,7 +107,8 @@ class Watcher:
         line = json.dumps(f)
         with open(self.log, "a") as fh:
             fh.write(line + "\n")
-        print(f"monitor: {line}", file=self.out or sys.stdout, flush=True)
+        if not self.out.closed:    # the run that built the watcher closed its output: monitor.log keeps the line
+            print(f"monitor: {line}", file=self.out, flush=True)
 
 
 def run_timer(watcher, seconds, clock=time.time, wait=time.sleep):
