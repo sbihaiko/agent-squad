@@ -67,7 +67,8 @@
       "allow": {
         "models": [
           "claude-gpt-5.6-terra",
-          "claude-deepseek-v4-flash[1m]"
+          "claude-deepseek-v4-flash[1m]",
+          "claude-opus-5-5"
         ],
         "efforts": [
           "low",

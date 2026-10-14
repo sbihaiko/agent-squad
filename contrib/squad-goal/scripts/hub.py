@@ -2545,11 +2545,16 @@ def router_known():
     return sorted({m for m in gateway_models() if MODEL_ID.match(m)})
 
 
+ANTHROPIC_ID = re.compile(r"^claude-(opus|sonnet|haiku|fable)-[0-9][0-9a-z.\-]*$")
+
+
 def router_resolve(mid, served):
     """The gateway's spelling of one queue entry, or None when the gateway does not serve it (#225).
 
     The box folds `claude-gpt-5.6-terra` onto `gpt-5.6-terra`, so a bare id is tried under the `claude-` prefix too; a
-    suffix such as `[1m]` is kept, because it is part of the id the gateway serves."""
+    suffix such as `[1m]` is kept, because it is part of the id the gateway serves. An Anthropic id is not in the
+    gateway's list and the gateway passes it through, so it resolves to itself."""
+    if ANTHROPIC_ID.match(mid): return mid
     b = bare_id(mid)
     for c in (b, "claude-" + b):
         if c in served: return c
