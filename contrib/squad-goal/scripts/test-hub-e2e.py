@@ -159,10 +159,10 @@ try:
         by = {r["m"]: r for r in rows}
         ck(by.get("claude-sonnet-5-5", {}).get("hr") == "19-07", "coding claude-sonnet-5-5 shows 19-07", by.get("claude-sonnet-5-5"))
         ck(by.get("claude-opus-5-5", {}).get("hr") == "19-07", "review claude-opus-5-5 shows 19-07", by.get("claude-opus-5-5"))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
-        ck(by.get("grok-4.5", {}).get("hr") == "", "grok-4.5 has no window (all day)", by.get("grok-4.5"))
+        ck(by.get("gemini-3.8-flash-high", {}).get("hr") == "", "gemini-3.8-flash-high has no window (all day)", by.get("gemini-3.8-flash-high"))
         ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
         ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
-        cur = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("grok-4.5", "")
+        cur = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("gemini-3.8-flash-high", "")
         want = "21-05" if cur != "21-05" else "20-04"
         pg.fill('input[data-hr="review_models|grok-4.5"]', want)
         pg.dispatch_event('input[data-hr="review_models|grok-4.5"]', "change")
@@ -170,7 +170,7 @@ try:
         ck(not pg.is_disabled("#msv"), "Save wakes up on an edit")
         pg.click("#msv")
         pg.wait_for_timeout(900)
-        saved = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("grok-4.5")
+        saved = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("gemini-3.8-flash-high")
         ck(saved == want, f"the browser's Save wrote {want} to models.json", saved)
         ck("saved" in pg.inner_text(".msave .st").lower(), "the panel says saved", pg.inner_text(".msave .st")[:60])
         pg.reload(wait_until="domcontentloaded"); pg.wait_for_timeout(1200)

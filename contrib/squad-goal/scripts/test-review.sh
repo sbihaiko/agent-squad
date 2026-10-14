@@ -119,13 +119,13 @@ unset CLAUDE_RESOLVED
 # outside its hours window and behind quota-guard; the survivor's own timeout (8 s) is longer than
 # the leash (2 s). A 4 s answer must be accepted, not killed at the leash.
 h=$((10#$(date +%H))); a=$(( (h+1)%24 )); b=$(( (h+2)%24 )); printf -v wa '%02d-%02d' $a $b
-printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-deepseek-v4-flash"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-deepseek-v4-flash":8}}' "$wa" > "$T/s/models.json"
+printf '{"review_models":["gemini-3.8-flash-high","claude:claude-opus-5-5","claude:claude-haiku-4-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:claude-opus-5-5"],"hours":{"review_models":{"claude:claude-opus-5-5":"%s"}},"review_timeout_seconds_by_model":{"claude:claude-haiku-4-5":8}}' "$wa" > "$T/s/models.json"
 echo $(( $(date +%s) + 3600 )) > "$T/st/agy-limited"; touch "$T/st/quota-guard"
 rm -f "$T/st/review-7".* "$T/st/cq/"*
 t=$(date +%s)
 out=$(SG_REVIEW_CHAIN_DEPTH=1 SG_REVIEW_RETRY_BUDGET=1 SG_REVIEW_TIMEOUT=2 CLAUDE_SLEEP=4 bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 el=$(( $(date +%s) - t ))
-case "$out" in model=claude:claude-deepseek-v4-flash*) [ $rc = 0 ] && [ $el -ge 4 ] && ok "leash + one reachable model: survivor uses its own timeout ($el s)" || ko "leash + one reachable: rc=$rc ${el}s '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null)";; *) ko "leash + one reachable: wanted deepseek, got '$out' rc=$rc ${el}s $(head -1 "$T/st/review-7.md" 2>/dev/null)";; esac
+case "$out" in model=claude:claude-haiku-4-5*) [ $rc = 0 ] && [ $el -ge 4 ] && ok "leash + one reachable model: survivor uses its own timeout ($el s)" || ko "leash + one reachable: rc=$rc ${el}s '$out' $(head -1 "$T/st/review-7.md" 2>/dev/null)";; *) ko "leash + one reachable: wanted the survivor, got '$out' rc=$rc ${el}s $(head -1 "$T/st/review-7.md" 2>/dev/null)";; esac
 # 8) with several reachable models the leash still applies: two healthy claude entries, 4 s answer, 2 s leash -> first dies, chain depth 1, BLOCKED
 printf '{"review_models":["claude:a","claude:b"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/agy-limited" "$T/st/quota-guard" "$T/st/review-7".* "$T/st/cq/"*

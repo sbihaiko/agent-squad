@@ -35,14 +35,14 @@ def graph(router="opus", allow=("opus", "sonnet", "haiku")):
     ]}
 
 
-def launch(tmp_path, doc, off=None, env=None, workflow_file="default"):
+def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=None):
     """Run launch.py from a throwaway checkout whose workflow is `doc`; return the finished process and the run folders."""
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
     models = {"coding_models": ["claude-sonnet-5-5", "test-model"], "review_models": ["claude:claude-opus-5-5"],
-              "vision_models": ["claude-sonnet-5-5"], "hours": {}}
+              "vision_models": ["claude-sonnet-5-5"], "hours": hours or {}}
     if off:
         models["off"] = off
     (s / "models.json").write_text(json.dumps(models))
@@ -117,3 +117,41 @@ def test_the_deliberate_exception_starts_a_run_on_an_off_model(tmp_path):
 def test_the_refusal_names_the_provider_id_an_alias_resolves_to(tmp_path, alias, resolved):
     r, _ = launch(tmp_path, graph(router=alias, allow=("haiku",)), off=OFF)
     assert f"{alias} -> {resolved}" in r.stdout + r.stderr
+
+
+def _window(offset):
+    """A one-hour local window that starts `offset` hours from now: offset 0 holds the current hour, 1 does not."""
+    h = (__import__("time").localtime().tm_hour + offset) % 24
+    return f"{h:02d}-{(h + 1) % 24:02d}"
+
+
+def test_a_node_model_outside_its_hours_window_is_refused(tmp_path):
+    hours = {"review_models": {"claude:claude-opus-5-5": _window(1)}}
+    r, runs = launch(tmp_path, graph(router="opus", allow=("haiku",)), hours=hours)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "router" in out and "claude-opus-5-5" in out and "hours" in out
+    assert runs == []
+
+
+def test_a_dispatch_default_child_outside_its_window_is_refused(tmp_path):
+    hours = {"review_models": {"claude:claude-opus-5-5": _window(1)}}
+    r, runs = launch(tmp_path, graph(router="haiku", allow=("opus", "haiku")), hours=hours)
+    assert r.returncode != 0 and "route" in r.stdout + r.stderr
+    assert runs == []
+
+
+@pytest.mark.heavy
+def test_a_node_model_inside_its_window_starts(tmp_path):
+    hours = {"review_models": {"claude:claude-opus-5-5": _window(0)}}
+    r, runs = launch(tmp_path, graph(router="opus", allow=("haiku",)), hours=hours)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert runs
+
+
+@pytest.mark.heavy
+def test_the_deliberate_exception_starts_a_run_outside_the_window(tmp_path):
+    hours = {"review_models": {"claude:claude-opus-5-5": _window(1)}}
+    r, runs = launch(tmp_path, graph(router="opus", allow=("haiku",)), hours=hours, env={"SG_ALLOW_MODEL": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert runs
