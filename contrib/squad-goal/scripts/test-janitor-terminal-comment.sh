@@ -32,8 +32,7 @@ case "$a" in
   *--include*issues/2202/events*) echo '[{"event":"labeled","label":{"name":"wontfix"},"actor":{"login":"rafael"}}]';;
   *--include*issues/2205/comments*) echo '[]';;
   *--include*issues/2206/comments*) echo '[{"body":"<!-- squad-goal:terminal -->\nClosed: earlier note"}]';;
-  *--include*issues/2202*) echo '{"number":2202,"state":"open","state_reason":null,"closed_by":null,"labels":[{"name":"wontfix"}]}';;
-  *--include*issues/2203*) echo '{"number":2203,"state":"closed","state_reason":"not_planned","closed_by":{"login":"owner1"},"labels":[]}';;
+  *--include*issues/2203/events*) echo '[{"event":"labeled","label":{"name":"bug"},"actor":{"login":"x"}},{"event":"closed","actor":{"login":"owner1"},"state_reason":"not_planned"}]';;
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
@@ -66,7 +65,7 @@ note 2202 | /usr/bin/grep -q 'wontfix' && note 2202 | /usr/bin/grep -q '@rafael'
 has '^STATUS o 4 Abandoned 2203$' && ok "an issue closed as not planned moves into Abandoned" || ko "#2203 not Abandoned: $(cat "$T/board.calls")"
 note 2203 | /usr/bin/grep -q 'not planned' && note 2203 | /usr/bin/grep -q '@owner1' && ok "the Abandoned comment names who closed it and why" || ko "#2203 comment: $(note 2203)"
 ! has ' 2204$' && ok "a terminal write whose condition cannot be read is not made" || ko "#2204 written with no comment: $(cat "$T/board.calls")"
-[ "$(count 2204)" = 0 ] && echo "$o" | /usr/bin/grep -q 'TERMINAL-NO-CONDITION #2204' && ok "the refused terminal write is named" || ko "#2204 not named: $o"
+[ "$(count 2204)" = 0 ] && /usr/bin/grep -q "TERMINAL-NO-CONDITION #2204" "$T/st/cycle.log" && ok "the refused terminal write is named" || ko "#2204 not named: $o"
 note 2205 | /usr/bin/grep -q '#305' && ok "a settled Closed card with no comment is backfilled" || ko "#2205 not backfilled: $(note 2205) $o"
 [ "$(count 2206)" = 0 ] && ok "a settled card that already carries its comment gets none" || ko "#2206 commented twice"
 for n in 2201 2202 2203 2205; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
