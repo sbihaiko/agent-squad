@@ -21,6 +21,8 @@ The seam answers two questions and only these:
     state.kinds()                       # every kind, one read: {"243": "bug", ...}
     state.set_kind(243, "bug")          # proven by the read that follows; a kind the binding cannot carry is a `KindGap`
     state.kind_gaps()                   # the kinds of the vocabulary the binding cannot carry, reported by name
+    state.record_pass(300, "pass", sha) # a finished test pass: one `test case` item (issue, result, merge commit, end time), proven by the read that follows
+    state.test_cases()                  # every test case item, one read: [{"issue", "result", "commit", "ended", "age"}]
 
 **A write is proven by the read that follows it.** The answer to the write is no proof -- a field write can
 be answered ok and never land (#105) -- so `write` reads the issue back and compares. A write the read does
@@ -86,6 +88,20 @@ class ReadFailure(RuntimeError):
     write, not the card gone."""
 
     def __init__(self, reads, count): super().__init__(f"the board read never carried it after {reads} reads ({count} items read); a read failure, not an absence")
+
+
+RESULTS = ("pass", "fail")   # how a test pass ends; a failed pass is never overwritten by a green one (#300)
+TEST_CASE_TITLE = re.compile(r"^test case #(\d+) \| (pass|fail) \| (\S+) \| (\S+)$")
+
+
+def _utc(stamp):
+    import datetime
+    return datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def _now():
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class State:
@@ -209,6 +225,43 @@ class State:
         m = re.match(r"^(?:(.+)#)?(\d+)$", str(issue))
         if not m: raise ValueError(f"an issue is a number or owner/repo#N, not {issue!r}")
         return (m[1] or self.binding.repo), int(m[2])
+
+    def test_cases(self, now=None):
+        """Every test case item, in one read: [{"issue", "result", "commit", "ended", "age"}], the age in seconds
+        at `now` (a UTC stamp; the clock when none is given). An item whose title is not a pass is not one."""
+        now = _utc(now or _now())
+        out = []
+        for _, title, kind in self.binding.test_case_rows():
+            m = TEST_CASE_TITLE.match(title)
+            if m and kind == "test case":
+                out.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": int((now - _utc(m[4])).total_seconds())})
+        return out
+
+    def record_pass(self, issue, result, commit, ended=None):
+        """Record a finished test pass as one `test case` item: the issue it tested, the result (`pass` or `fail`),
+        the merge commit the pass ran on and when it ended. The item is proven by the read that follows the write:
+        the items route is eventually consistent, so that read is bounded and retried, and an item no read carries
+        is `NotCarried`, named, never reported as written. A pass that ended failed stays failed: a later pass on the
+        same merge commit is answered with the failure and writes nothing; a pass on a new commit is its own item.
+        A binding that cannot carry the kind is a `KindGap`, raised before any write. Returns the item the read carries."""
+        if result not in RESULTS: raise ValueError(f"a pass ends {' or '.join(RESULTS)}, not {result!r}")
+        if not commit or not commit.strip(): raise ValueError("a test case names the merge commit the pass ran on")
+        ended = ended or _now()
+        _utc(ended)
+        if "test case" not in self.binding.kind_options(): raise KindGap(issue, "test case", sorted(self.binding.kind_options()))
+        held = [r for r in self.test_cases() if r["issue"] == int(issue) and r["commit"] == commit]
+        failed = next((r for r in held if r["result"] == "fail"), None)
+        if failed: return failed   # failed stays failed: a later pass does not overwrite it, and a second item would say the same twice
+        if result == "pass" and held: return held[0]
+        title = f"test case #{int(issue)} | {result} | {commit} | {ended}"
+        refused = ""
+        try: self.binding.write_test_case(title)
+        except RuntimeError as e: refused = str(e)
+        for k in range(self.binding.attempts):   # the proving read is bounded: the item is waited for, never written a second time
+            if k and self.binding.backoff: time.sleep(self.binding.backoff * (2 ** (k - 1)))
+            carried = next((r for r in self.test_cases() if (r["issue"], r["result"], r["commit"], r["ended"]) == (int(issue), result, commit, ended)), None)
+            if carried: return carried
+        raise NotCarried(issue, title, "no test case item", refused)
 
     def _write_holder(self, issue, run, started, wanted):
         refused = ""
@@ -437,6 +490,9 @@ class BoardBinding:
         if kind not in field["opt"]: raise KindGap(issue, kind, sorted(field["opt"]))
         iid = self.item_id(issue)
         if not iid: raise RuntimeError(f"#{issue} not on the board")
+        self._patch_kind(iid, field, kind)
+
+    def _patch_kind(self, iid, field, kind):
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][kind]}]}))
 
@@ -460,6 +516,25 @@ class BoardBinding:
     def drop_label(self, issue, label):
         """One DELETE of a label from an issue. The read that proves it is the seam's."""
         self.api("-X", "DELETE", f"repos/{self.repo}/issues/{issue}/labels/{urllib.parse.quote(label, safe='')}")
+
+    def test_case_rows(self):
+        """Every item that is not an issue, in ONE read: [(item id, title, kind)]. A test case is a draft item, so it has
+        no issue number; its title carries what the pass recorded. Never cached: it is the read that proves a write."""
+        fid = self.kind_field()["id"]
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={fid}", "--jq",
+                       '.[]|select(.content.number|not)|[.id,(.content.title//""),(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end))//"")]|@tsv')
+        rows = []
+        for l in out.splitlines():
+            i, t, k = (l.split("\t") + ["", "", ""])[:3]
+            if i: rows.append((i, t, k.lower()))
+        return rows
+
+    def write_test_case(self, title):
+        """One draft item titled `title`, then one PATCH of its Kind to `test case`. The read that proves it is the seam's."""
+        field = self.kind_field()
+        if "test case" not in field["opt"]: raise KindGap(title, "test case", sorted(field["opt"]))
+        iid = json.loads(self.api("-X", "POST", f"{self.base}/items", "--input", "-", inp=json.dumps({"type": "DraftIssue", "title": title})))["id"]
+        self._patch_kind(iid, field, "test case")
 
     def write_holder(self, issue, run, started):
         """One PATCH of the two Run fields. None is JSON null, the value that clears a field; an empty string is
