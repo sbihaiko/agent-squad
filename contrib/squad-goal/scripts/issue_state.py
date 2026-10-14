@@ -24,6 +24,10 @@ The seam answers two questions and only these:
     state.record_pass(300, "pass", sha) # a finished test pass: one `test case` item (issue, result, merge commit, end time), proven by the read that follows
     state.test_cases()                  # every test case item, one read: [{"issue", "result", "commit", "ended", "age"}]
 
+    state.group_run(run, [10, 11])      # the run's children as sub-issues of one parent that names the run; None for fewer than two
+    state.children(5)                   # the sub-issues of issue 5, one read: [10, 11]
+    state.link(5, 10)                   # issue 10 a sub-issue of issue 5, proven by the read that follows (asked again, bounded)
+
 **A write is proven by the read that follows it.** The answer to the write is no proof -- a field write can
 be answered ok and never land (#105) -- so `write` reads the issue back and compares. A write the read does
 not carry raises `NotCarried`, which names the issue, the state wanted and the state carried: the caller
@@ -262,6 +266,32 @@ class State:
             carried = next((r for r in self.test_cases() if (r["issue"], r["result"], r["commit"], r["ended"]) == (int(issue), result, commit, ended)), None)
             if carried: return carried
         raise NotCarried(issue, title, "no test case item", refused)
+
+    def children(self, parent):
+        """The numbers of the sub-issues of `parent`, in one read."""
+        return self.binding.children(parent)
+
+    def link(self, parent, child):
+        """Make `child` a sub-issue of `parent`, then read the sub-issues back. The read is the proof, and it can lag
+        the write, so it is asked again a bounded number of times with a growing delay: a link no read carries is
+        `NotCarried`, named, never reported as written. A child already linked is not written again."""
+        if int(child) in self.children(parent): return
+        refused = ""
+        try: self.binding.link(parent, child)
+        except RuntimeError as e: refused = str(e)   # kept, not raised: the read confirms the link or disproves it
+        carried = self.binding.await_child(parent, child)
+        if int(child) not in carried:
+            raise NotCarried(child, f"sub-issue of {parent}", f"sub-issue of {sorted(carried)}" if carried else "no parent link", refused)
+
+    def group_run(self, run, children):
+        """One parent issue that names `run`, with each of `children` linked to it as a sub-issue, so the platform
+        rolls the run's progress up. A run with fewer than two distinct children has no parent: None, and nothing
+        is written. The run's parent is found by its title and reused, never created twice. Returns its number."""
+        kids = sorted({int(c) for c in children})
+        if len(kids) < 2: return None
+        parent = self.binding.parent_of(run) or self.binding.create_parent(run)
+        for k in kids: self.link(parent, k)
+        return parent
 
     def _write_holder(self, issue, run, started, wanted):
         refused = ""
@@ -548,6 +578,47 @@ class BoardBinding:
         if missing: raise RuntimeError("no text field " + ", ".join(missing))
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))
+
+    @staticmethod
+    def parent_title(run):
+        return f"Squad run {run}"
+
+    def parent_of(self, run):
+        """The number of the issue titled for `run`, None when the run has none. Read off the issues route, which is
+        not the search index: the index lags a new issue, and a lag here would create a second parent."""
+        out = self.api("--paginate", f"repos/{self.repo}/issues?state=all&per_page=100", "--jq",
+                       '.[]|select(.pull_request==null)|[.number,.title]|@json')
+        title = self.parent_title(run)
+        for l in out.splitlines():
+            if l.strip():
+                n, t = json.loads(l)
+                if t == title: return n
+        return None
+
+    def create_parent(self, run):
+        """One POST of the parent issue, titled for the run. Returns its number."""
+        body = f"The children of squad run {run}. Each child is a sub-issue; the progress rolls up here."
+        return json.loads(self.api("-X", "POST", f"repos/{self.repo}/issues", "--input", "-",
+                                   inp=json.dumps({"title": self.parent_title(run), "body": body})))["number"]
+
+    def children(self, parent):
+        return [int(n) for n in self.api("--paginate", f"repos/{self.repo}/issues/{parent}/sub_issues?per_page=100", "--jq", ".[].number").split()]
+
+    def link(self, parent, child):
+        """One POST of the sub-issue. The route takes the child's id, never its number. The read that proves it is the seam's."""
+        cid = json.loads(self.api(f"repos/{self.repo}/issues/{child}"))["id"]
+        self.api("-X", "POST", f"repos/{self.repo}/issues/{parent}/sub_issues", "--input", "-", inp=json.dumps({"sub_issue_id": cid}))
+
+    def await_child(self, parent, child):
+        """The sub-issues of `parent` once one read carries `child`, or the last read after the bounded attempts: the
+        route can lag a write, as the items route does (#96)."""
+        carried = []
+        for k in range(self.attempts):
+            if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
+            try: carried = self.children(parent)
+            except RuntimeError: continue   # a read the carrier refuses is no proof, and is asked again
+            if int(child) in carried: break
+        return carried
 
     def write(self, issue, state):
         """One PATCH of the Status field, in one write. The option id is the field's, never the name: the

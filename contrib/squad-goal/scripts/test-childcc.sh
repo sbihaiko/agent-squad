@@ -9,6 +9,11 @@ cat > "$T/bin/gh" <<'GH'
 a="$*"
 case $a in
   *"-q .state"*) echo open;;
+  *"POST"*"/sub_issues"*) echo "link $a" >> "$GH_LOG"; cat >/dev/null;;
+  *"/sub_issues"*) echo $GH_KIDS | tr ' ' '\n' | head -n "$(cat "$GH_LOG" 2>/dev/null | grep -c '^link')" || true;;   # the sub-issues read: the children the carrier carries so far, one per link written
+  *"POST"*"repos/x/y/issues"*) echo "create" >> "$GH_LOG"; cat >/dev/null; echo '{"number":900}';;
+  *"issues?state=all"*) ;;
+  *"repos/x/y/issues/"*) echo '{"id":1}';;
   *"/fields?"*) echo 7;;
   *"/items?"*) for kv in $GH_NUMS; do printf '%s\t%s\n' "${kv%%:*}" "${kv#*:}"; done | tr '_' ' ';;   # the one Status read: number, the state the card carries
 esac
@@ -22,13 +27,15 @@ run_def() {
   python3 -c 'import json,sys; n,c,d,o=sys.argv[1:5]; open(sys.argv[5],"w").write(json.dumps({"event":"spawn_accepted","child":c,"definition":d})+"\n"+json.dumps({"event":"outcome","node":c,"outcome":o,"reasons":["ok"]})+"\n")' "$1" "$2" "$3" "$4" "$T/co/runs/$1/record.jsonl"
   echo "$1" >> "$T/st/active-runs.txt"
 }
-run live 1 n; run fin-todo 2 v; run fin-testing 3 v; run fin-prog 4 v
+run_two() { # name: a run of two children, issues 2000 and 2001, and a run of one child, issue 2002
+  mkdir -p "$T/co/runs/$1"; { echo '{"event": "spawn_accepted", "child": "a", "definition": "GitHub issue #2000"}'; echo '{"event": "spawn_accepted", "child": "b", "definition": "GitHub issue #2001"}'; } > "$T/co/runs/$1/record.jsonl"; echo "$1" >> "$T/st/active-runs.txt"; }
+run live 1 n; run_two two; run solo 2002 n; run fin-todo 2 v; run fin-testing 3 v; run fin-prog 4 v
 run_def nohash c "FORK-ONLY work for GitHub issue 1487 on the agent-squad local fork." pass
 run_def issues c "FORK-ONLY work for GitHub issues 1491 on the fork." pass
 run_def branch c "Create the worktree: git worktree add ~/wt-as-1492 -b gui/1492 local/next" pass
 run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
-export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress"
+export GH_LOG=$T/gh.log GH_KIDS="2000 2001"; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -44,4 +51,7 @@ echo "$m" | /usr/bin/grep -q ' 1492$' && ok "gui/N / wt-as-N: moved" || ko "gui/
 echo "$m" | /usr/bin/grep -q ' 1500$' && ok "hash pattern still wins first" || ko "hash pattern lost first-match"
 echo "$out" | /usr/bin/grep -q 'CHILDCC UNMAPPED unmapped c' && ok "unmapped child logged once" || ko "unmapped child not logged: $out"
 echo "$out" | /usr/bin/grep -c 'CHILDCC UNMAPPED unmapped c' | /usr/bin/grep -qx 1 && ok "unmapped child logged once only" || ko "unmapped child logged more than once"
+grep -c '^create' "$T/gh.log" | grep -qx 1 && ok "two children: one parent created, none for the one-child run" || ko "parent creates: $(cat "$T/gh.log" 2>/dev/null)"
+[ "$(grep -c '^link' "$T/gh.log")" = 2 ] && ok "two children: both linked as sub-issues" || ko "links: $(cat "$T/gh.log" 2>/dev/null)"
+echo "$out" | /usr/bin/grep -q 'RUN PARENT #900 (two)' && ok "the run's parent is reported" || ko "no parent report: $out"
 rm -rf "$T"; exit $fail
