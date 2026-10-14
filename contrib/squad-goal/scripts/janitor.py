@@ -366,6 +366,23 @@ def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's o
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip()
 def pr_merged_count(n):   # a merge is delivery only when it landed on the base (#127): a PR merged into its own parent branch carries the work nowhere, and a card in Done over it claims a change the base does not have (#125)
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged base:{base} \"Refs #{n}\"", "-q", ".total_count").strip()
+_opr = None
+def open_pulls():   # rule R reads the issues a PR names and its labels, rule G a PR's head and rule M its head branch and age: one read of the route answers all three
+    global _opr   # a line: `<pr> <sha> <base> <head ref> <updated_at>`, then a tab, the PR's labels (comma-joined), a tab, the issues its title and body name
+    if _opr is None: _opr = sh("gh", "api", f"repos/{repo0}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)\t\([.labels[].name]|join(","))\t\([((.title//"")+" "+(.body//""))|scan("(?i)\\b(?:refs|closes|fixes|resolves) #([0-9]+)")[]]|join(","))"').splitlines()
+    return _opr
+def pr_by_issue():   # issue -> (pr, head sha, labels) for every open PR on the base, from the open-PR list (#244): no read of its own
+    m = {}
+    for l in open_pulls():
+        f = (l.split("\t") + ["", ""])[:3]; h = (f[0].split() + ["", "", ""])[:3]
+        if not (h[0].isdigit() and h[2] == base): continue
+        for n in f[2].split(","):
+            if n.strip().isdigit(): m.setdefault(n.strip(), (h[0], h[1], set(x for x in f[1].split(",") if x)))
+    return m
+def review_line(pr, sha):   # the loop's own review line for the PR's current head (revci.sh's summary), "" when none
+    o = st / f"revci-{pr}.out"
+    try: return ([x for x in o.read_text().splitlines() if x.startswith(f"#{pr} {sha[:9]} ")] or [""])[-1]
+    except OSError: return ""
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
     if not (fd and fb): return "unknown"
@@ -397,11 +414,14 @@ def reconcile_board():
     if not (owner and proj and repo0): return
     shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
     SHIPPED_NAME = FREEZE_LABEL = {}
+    prs = {}
     if shipped:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
-        from board_columns import SHIPPED_NAME, FREEZE_LABEL
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL, PR_RED_BADGE, pr_green, pr_column
+        prs = pr_by_issue()
     doing = "Doing" if shipped else "In Progress"
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
+    badged = set()   # issues whose Merging card's PR turned red this pass: the card keeps Merging and carries the badge
     def set_expected(n, status, why, run_id="", run_ts="", rank=0):
         if shipped:   # the shipped vocabulary (ADR-0141): Blocked is no column, it is the owner freeze over the column the work reached
             status = SHIPPED_NAME.get(status, status)
@@ -474,6 +494,11 @@ def reconcile_board():
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         pc = pr_count(n)
         if pc.isdigit() and pc != "0": set_expected(n, "Code Complete", "PR names the issue and has not landed", "", "", 50)
+        if shipped and n in prs:   # the PR's own state sets Code Complete or Merging, from the open-PR list and the review line (#244)
+            pr, sha, plabels = prs[n]; green = pr_green(review_line(pr, sha), plabels)
+            col, badge = pr_column(green, cards(proj)[1].get(str(n), ""))
+            set_expected(n, col, f"open PR #{pr} is " + ("green, mergeable and unheld" if green else "not mergeable yet") + (", the card keeps Merging" if badge else ""), "", "", 55)
+            if badge: badged.add(n)
         mc = pr_merged_count(n)
         if mc.isdigit() and mc != "0": set_expected(n, "Done", "merged PR names the issue", "", "", 80)
     answered, have_all = cards(proj)
@@ -492,6 +517,16 @@ def reconcile_board():
         if expected.get(n, (0, ""))[1] in ("Closed", "Abandoned") or FREEZE_LABEL["owner"] in issue_labels(n): continue
         say(f"BOARD-FREEZE #{n}: {FREEZE_LABEL['owner']} (an owner label or a run needing a human holds it)")
         if not dry: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={FREEZE_LABEL['owner']}"])   # through the door's write (ADR-0277)
+    door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
+    for n in sorted(prs, key=int):   # the pr:red badge follows the PR: on while a Merging card's PR is red, off once it is green again (#244)
+        if n not in expected: continue
+        on = PR_RED_BADGE in issue_labels(n)
+        if n in badged and not on:
+            say(f"BOARD-BADGE #{n}: {PR_RED_BADGE} (open PR #{prs[n][0]} turned red; the card keeps Merging)")
+            if not dry: _run(door + ["--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={PR_RED_BADGE}"])
+        elif on and n not in badged:
+            say(f"BOARD-BADGE #{n}: {PR_RED_BADGE} cleared (open PR #{prs[n][0]} is no longer red in Merging)")
+            if not dry: _run(door + ["--method", "DELETE", f"repos/{repo0}/issues/{n}/labels/{PR_RED_BADGE}"])
 reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
@@ -630,11 +665,6 @@ if fd and fb:
                 (st / "cq" / f"{CQ}#{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
-_opr = None
-def open_pulls():   # rule G reads a PR's head and rule M its head branch and age: one read of the route answers both
-    global _opr
-    if _opr is None: _opr = sh("gh", "api", f"repos/{repo}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)"').splitlines()
-    return _opr
 for l in open_pulls():
     pr, sha, pb = (l.split() + ["", "", ""])[:3]; o = st / f"revci-{pr}.out"; mg = st / "auto" / f"merged-{pr}"
     if not (pr.isdigit() and pb == base and o.exists() and not mg.exists()): continue
