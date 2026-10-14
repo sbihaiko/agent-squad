@@ -7,8 +7,9 @@
 # #89, #93, #94 and #96 sat in Done with gui/89, gui/93, gui/94 and gui/96 each one commit ahead of main and no merge in
 # the history, and the close pass named none of them for over an hour.
 #
-# A branch that is ahead of the fork base keeps the card at Code Complete; a run whose work is on the base still reads
-# Done. Stubbed gh and board.sh, a temp fork repository, a temp state dir.
+# A run's own landing, whatever the fork base holds, keeps the card at Code Complete: only a merged pull request naming
+# the issue on the base, or a closed issue, makes it Done (#239). Stubbed gh and board.sh, a temp fork repository, a temp
+# state dir.
 # usage: bash test-janitor-unlanded-branch.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/home"; cp "$src" "$T/s/janitor.py"
@@ -77,8 +78,10 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
   || ko "#2101 not Code Complete: $(bc) $o"
 /usr/bin/grep -q '^STATUS o 4 Done 2101$' "$T/board.calls" 2>/dev/null \
   && ko "#2101 moved to Done over a branch the base never took" || ok "and it is never written to Done"
+/usr/bin/grep -q '^STATUS o 4 Code Complete 2102$' "$T/board.calls" 2>/dev/null \
+  && ok "a run whose work is on the base stops at Code Complete until a merge names it" || ko "#2102 not Code Complete: $(bc) $o"
 /usr/bin/grep -q '^STATUS o 4 Done 2102$' "$T/board.calls" 2>/dev/null \
-  && ok "a run whose work is on the base still reads Done" || ko "#2102 not Done: $(bc) $o"
+  && ko "#2102 moved to Done from the run's own landing" || ok "and #2102 never reads Done from the local landing"
 # #100: gui/2103 was merged and taken back. Its commits are ancestors of the base, so `branch_ahead` answers no and the
 # card read Done over work the base does not hold. The card belongs at Code Complete until the base takes the merge again.
 /usr/bin/grep -q '^STATUS o 4 Code Complete 2103$' "$T/board.calls" 2>/dev/null \
