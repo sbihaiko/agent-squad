@@ -66,8 +66,9 @@
       "join": "all",
       "allow": {
         "models": [
+          "claude-opus-5-5",
           "claude-gpt-5.6-terra",
-          "claude-deepseek-v4-flash[1m]"
+          "claude-gpt-5.6-sol"
         ],
         "efforts": [
           "low",
