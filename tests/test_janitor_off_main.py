@@ -57,7 +57,7 @@ def _write(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def sandbox(tmp_path: Path, *, open_prs: str = "", state: str = "closed", hits: int = 0, body: str = "Refs #%d" % N) -> Path:
+def sandbox(tmp_path: Path, *, open_prs: str = "", state: str = "closed", hits: int = 0, body: str = f"Refs #{N}") -> Path:
     """The janitor with the door beside it, a stub `gh` and one finished run for the issue. `hits` PRs name the issue
     (one, #77, merged into feat/parent); `open_prs` is the open-PR list as the janitor's projection prints it."""
     for name in ("janitor.py", "ghcall.sh", "ghthrottle.py", "ghread.py", "issue_state.py"):
@@ -165,7 +165,7 @@ def test_an_issue_closed_by_hand_with_no_loop_pr_stays_closed(tmp_path):
 @pytest.mark.heavy
 def test_a_pr_that_only_mentions_the_issue_does_not_reopen_it(tmp_path):
     """The merged PR names the issue in prose, not as `Refs #n` or `Closes #n`: it is no loop PR."""
-    sandbox(tmp_path, hits=1, body="see #%d for context" % N)
+    sandbox(tmp_path, hits=1, body=f"see #{N} for context")
     janitor(tmp_path)
     assert not patches(tmp_path, f"issues/{N}"), f"a mention reopened the issue: {calls(tmp_path)}"
 
