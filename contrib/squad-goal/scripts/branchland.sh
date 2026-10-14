@@ -33,8 +33,9 @@ say() { local m="$A/branchland-$1-$(printf '%s' "$2" | tr '/' '_')-${3:0:9}-$4";
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 gatecmd=${SG_LOCAL_GATE_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -m 'not heavy'"}
 # A failed gate reruns only what failed, once: a test that machine load slowed past a line, or that raced a busy port, passes
-# alone; a real red fails again. ruff and mypy do not depend on load, so a red of theirs fails the rerun as well.
-rerun=${SG_LOCAL_GATE_RERUN_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -m 'not heavy' --lf --lfnf=none"}
+# alone; a real red fails again. The suite runs with no cache provider, so --lf has nothing to read: the rerun gets the failed
+# node ids in SG_GATE_FAILED. A red of ruff or mypy names no test, so its rerun fails again.
+rerun=${SG_LOCAL_GATE_RERUN_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && [ -n \"\$SG_GATE_FAILED\" ] && '$py' -m pytest -p no:deepeval \$SG_GATE_FAILED"}
 # localgate <branch> <sha> <issue>: exit 0 when the gate passed at <sha> rebased onto $land, which is what lands: a red the branch
 # inherited from an old base is fixed on $land, never on the branch. A rebase that conflicts gates the bare tip (ffland refuses it).
 # The result goes to the status comment of the issue. A failed gate is run once per head and $land head: its wait marker stops a
@@ -49,7 +50,7 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base
   out=$(cd "$wt/tip" && PYTHONPATH=. bash -c "$gatecmd" 2>&1); rc=$?
   [ "$rc" = 0 ] || { out="$out
 --- the rerun of what failed ---
-$(cd "$wt/tip" && PYTHONPATH=. bash -c "$rerun" 2>&1)"; rc=$?; }
+$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. bash -c "$rerun" 2>&1)"; rc=$?; }
   /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
   if [ "$rc" = 0 ]; then
     printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy").\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"
