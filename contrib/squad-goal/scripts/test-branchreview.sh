@@ -39,6 +39,7 @@ head -1 "$T/st/review-$key.md" | /usr/bin/grep -q CHANGES && [ "$(cat "$T/st/rev
 # 2) the findings go to the status comment of the issue: a status-kind queue file, never a plain comment
 n1=$(ls "$T/st/cq/" | wc -l | tr -d ' '); ls "$T/st/cq/"x__y#7-status~* >/dev/null 2>&1 && ok "the findings are queued as the issue's status comment" || ko "no status file: $(ls "$T/st/cq")"
 /usr/bin/grep -q "a.cs:1" "$T/st/cq/"x__y#7-status~* && ok "the status comment carries the findings" || ko "findings missing from the status comment"
+/usr/bin/grep -q "@ aaa111" "$T/st/cq/"x__y#7-status~* && ok "the status comment names the reviewed sha" || ko "the status comment names no sha: $(head -1 "$T/st/cq/"x__y#7-status~*)"
 # 3) a fix round: a new commit on the same branch is reviewed as a delta, and the second round queues a status file again
 echo bbb222 > "$T/head"; rm -f "$T/st/cq/"*; : > "$T/gh.log"
 out=$(bash "$T/s/branchreview.sh" gui/7-x 7 2>&1)
