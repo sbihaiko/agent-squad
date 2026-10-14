@@ -3,7 +3,7 @@
 #  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
 #  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed) keeps card and marker,
 #      and the card stops at Code Complete (#239: a local landing is not a merge into the base, so it is not Done);
-#  (C) an issue an open PR names keeps its card and its marker.
+#  (C) an issue a work branch names keeps its card and its marker (#382: a branch, never a pull request).
 # The gh stub answers the same way the live API does, including its refusal of a POST to /search/issues:
 # `gh api search/issues -f q=...` returns "Not Found", `gh api -X GET search/issues -f q=...` answers the real count.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
@@ -23,6 +23,9 @@ case "$a" in
     esac
     echo "$a" >> "TMPDIR/search.calls"
     case "$a" in *"is:merged"*) echo 0;; *"Refs #803"*) echo 1;; *) echo 0;; esac;;
+  # a work branch names the issue (#382: the janitor reads branches, never pull requests): #803 has one, ahead of the landing branch
+  *repos/x/y/branches*) echo "$a" >> "TMPDIR/branch.calls"; printf 'fix/803-x sha803\n';;
+  *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) for n in 801 802 803; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
@@ -60,7 +63,7 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -l 'no_landed_change' "$T/st/cq/"*801* >/dev/null 2>&1 && /usr/bin/grep -q 'run-router' "$T/st/cq/"*801* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Code Complete 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Code Complete 803$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: an issue an open PR names moves to Code Complete and keeps its marker" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
-/usr/bin/grep -q 'Refs #803' "$T/search.calls" 2>/dev/null && ok "O: the PR lookup reached the API (GET, not a rejected POST)" || ko "O: no PR lookup answered: $(cat "$T/search.calls" 2>/dev/null)"
+/usr/bin/grep -q 'repos/x/y/branches' "$T/branch.calls" 2>/dev/null && ok "O: the work-branch lookup reached the API" || ko "O: no work-branch lookup answered: $(cat "$T/branch.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/bug-804" ] && ok "O: a deleted child-worktree run releases its bug marker" || ko "O bug-804 kept: $o"
 /usr/bin/grep -q 'MISSING.*#804.*bug-804.*dropped' "$T/st/cycle.log" 2>/dev/null && ok "O: the missing-run release is named in cycle.log" || ko "O missing-run cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -qx "$T/co/worktrees/child/autobug-20261013-224513" "$T/st/active-runs.txt" 2>/dev/null && ko "O: missing run stays active" || ok "O: a deleted run is dropped from active-runs"

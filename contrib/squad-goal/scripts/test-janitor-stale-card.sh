@@ -8,7 +8,7 @@
 #  (C) a bug marker: the loop card goes to Todo and the bug card to To triage;
 #  (D) a live run works the issue: card and marker stay;
 #  (E) a run in its launch window (no record.jsonl yet) names the issue: card and marker stay;
-#  (F) an open or merged PR names the issue: card and marker stay;
+#  (F) a work branch names the issue (#382): card and marker stay;
 #  (G) a marker younger than the grace stays;
 #  (H) a card another step moved past In Progress stays where it is;
 #  (I) a run that landed work and ended is reconciled to Code Complete (#239: a local landing is not Done);
@@ -26,6 +26,9 @@ case "$a" in
   *search/issues*)
     case "$a" in *"-X GET"*|*"--method GET"*) ;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac
     case "$a" in *"Refs #1006"*|*"Refs #1011"*) echo 1;; *) echo 0;; esac;;
+  # a work branch names the issue (#382: the janitor reads branches, never pull requests): #1006 and #1011 each have one
+  *repos/x/y/branches*) printf 'fix/1006-x sha1006\nfix/1011-x sha1011\n';;
+  *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) for n in 1007; do printf '%s\tCode Complete\n' "$n"; done; for n in 1001 1002 1003 1004 1005 1006 1008 1009 1010 1011; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
@@ -48,7 +51,7 @@ mark bug-1003 run-gone
 mk run-live 1004; printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #1004 on fix/1004-x"}\n' > "$T/co/runs/run-live/record.jsonl"; mark disp-1004 run-live
 # E: a run in its launch window: request.txt is fresh, no record.jsonl yet
 mk run-young 1005; mark disp-1005 run-young
-# F: an open PR names the issue
+# F: a work branch names the issue
 mark disp-1006 run-gone
 # G: the marker is fresh
 mark disp-1008 run-gone fresh
@@ -69,7 +72,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^o 4 Todo 1003$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 1003$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-1003" ] && ok "C: a bug marker releases the loop card and the bug card" || ko "C #1003: $(bc)"
 [ -e "$T/st/auto/disp-1004" ] && ! /usr/bin/grep -q ' 1004$' "$T/board.calls" 2>/dev/null && ok "D: a live run keeps its card and marker" || ko "D #1004 touched: $(bc)"
 [ -e "$T/st/auto/disp-1005" ] && ! /usr/bin/grep -q ' 1005$' "$T/board.calls" 2>/dev/null && ok "E: a run in its launch window keeps its card and marker" || ko "E #1005 touched: $(bc)"
-[ -e "$T/st/auto/disp-1006" ] && ! /usr/bin/grep -q ' 1006$' "$T/board.calls" 2>/dev/null && ok "F: an issue a PR names keeps its card and marker" || ko "F #1006 touched: $(bc)"
+[ -e "$T/st/auto/disp-1006" ] && ! /usr/bin/grep -q ' 1006$' "$T/board.calls" 2>/dev/null && ok "F: an issue a work branch names keeps its card and marker" || ko "F #1006 touched: $(bc)"
 [ -e "$T/st/auto/disp-1008" ] && ! /usr/bin/grep -q ' 1008$' "$T/board.calls" 2>/dev/null && ok "G: a fresh marker stays" || ko "G #1008 touched: $(bc)"
 ! /usr/bin/grep -q ' 1007$' "$T/board.calls" 2>/dev/null && ok "H: a card past In Progress is never downgraded" || ko "H #1007 moved: $(bc)"
 /usr/bin/grep -q '^o 4 Code Complete 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Code Complete, never Done" || ko "I #1009 not reconciled to Code Complete: $(bc)"
