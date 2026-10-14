@@ -365,6 +365,14 @@ def cards(p):   # every card of project p, read once per pass, asked of the seam
         try: _cards[p] = (bool(seam.binding.status_field()["id"]), seam.read_all())
         except (RuntimeError, ValueError): _cards[p] = (False, {})
     return _cards[p]
+_holders = {}
+def holders(p):   # the Run and Run started every card carries, read once per pass (never once per card), asked of the seam (#327): {issue: {"run", "started"}}; None when the read did not answer, and then every holder is written
+    if p not in _holders:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from issue_state import board_state
+        try: _holders[p] = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run).holders()
+        except Exception: _holders[p] = None
+    return _holders[p]
 def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""
     return cards(p)[1].get(str(n), "")
@@ -601,7 +609,9 @@ def reconcile_board():
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:
-            if run_id: board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
+            held = (holders(proj) or {}).get(str(n))
+            if run_id and held != {"run": run_id, "started": run_ts or ""}:   # only a holder or a start the card does not carry is written (#327)
+                if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
         elif have in ("In Progress", "Doing"):
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does

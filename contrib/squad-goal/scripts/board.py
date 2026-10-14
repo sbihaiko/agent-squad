@@ -22,6 +22,7 @@ A miss on the item map re-reads the items with the same bounded backoff (#96), a
 A test pass is recorded by `--test-case` through the seam (`record_pass`), proven by the read that follows: a write that read
 is behind is waited for with the same bounded backoff, and an item no read carries is named on stderr and exits non-zero,
 never reported as written. A pass that ended failed stays failed: a later pass on the same merge commit writes nothing.
+A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import os, pathlib, sys, time
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
@@ -46,14 +47,17 @@ status, nums = args[2], [int(x) for x in args[3:]]
 F = state.binding.status_field()
 if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True); F = state.binding.status_field()
 if status not in F["opt"]: sys.exit(f"no Status option {status!r}")
+try: carried, tries = state.read_all(), max(1, state.binding.attempts - 1)   # one read of the board for the whole move: a card that already carries the Status is not written (#327). It is one of the reads SG_BOARD_READ_ATTEMPTS bounds, so a write has one attempt fewer
+except (RuntimeError, ValueError): carried, tries = {}, state.binding.attempts   # a board that does not answer the read is written on, never blocked by it
 rc = 0
 for n in nums:
+    if carried.get(str(n)) == status: print(f"#{n} -> {status} (already carried, not written)"); continue   # no PATCH and no proving read: the read above is the proof
     try: iid = state.binding.item_id(n, add)
     except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the card is on the board and the read has not caught up: named, never "not on the board"
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the add GitHub refused twice, named: the caller logs it
     if not iid: print(f"#{n} not on the board", file=sys.stderr); rc = 1; continue
     refused, written = "", False
-    for k in range(state.binding.attempts):   # the write is written again, then read back: a PATCH answered ok can be a write the card never carries (#105)
+    for k in range(tries):   # the write is written again, then read back: a PATCH answered ok can be a write the card never carries (#105)
         if k and state.binding.backoff: time.sleep(state.binding.backoff * (2 ** (k - 1)))
         try:
             state.write(n, status)
@@ -69,5 +73,5 @@ for n in nums:
         print(f"#{n} -> {status}")
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
-        print(f"#{n}: the board carries no {status!r} on it after {state.binding.attempts} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
+        print(f"#{n}: the board carries no {status!r} on it after {tries} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
 (st / "board-dirty").touch(); sys.exit(rc)
