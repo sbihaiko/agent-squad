@@ -7,7 +7,8 @@ This is the board binding's command door (#236): the state it reads and writes i
 file holds the carrier's command line, never a second reach of its own. A field is set by sending its value
 and cleared by sending null -- "To clear the field, set this to null" -- and an empty string is a value the
 field refuses, answered "Invalid field values" (HTTP 400) (#101): a clear, and a Run field with nothing to
-carry, are written as null, beside the field id they read.
+carry, are written as null, beside the field id they read. The Run fields are the issue's holder, and the
+seam writes it: `--run-fields` is `hold`, `--clear-run` is `release`, each proven by the read that follows (#241).
 A Status write is proven by the card, never by the answer to its PATCH (#105): the seam reads the card back
 after the write, and the state it carries must be the state written. SG_BOARD_READ_ATTEMPTS and
 SG_BOARD_READ_BACKOFF bound the retries (a backoff of 0 sleeps for no read), and a card no read then carries
@@ -16,7 +17,7 @@ cache as one.
 A miss on the item map re-reads the items with the same bounded backoff (#96), and a card the board answered
 "already exists" for and no read then carried is a READ FAILURE, named by name, never "not on the board".
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
-import json, os, pathlib, sys, time
+import os, pathlib, sys, time
 from issue_state import NotCarried, ReadFailure, board_state
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]
 args = args[1:] if add or run_fields or clear_run else args
@@ -25,17 +26,10 @@ st = pathlib.Path(os.environ["SG_STATE"])
 state = board_state(owner=owner, project=num, kind=None)   # the move is asked for an owner the caller names, so the carrier says whether it is a user or an org (cached a month)
 if run_fields or clear_run:
     n = int(args[2])
-    try: iid = state.binding.item_id(n)
+    run = None if clear_run else args[3]; started = None if clear_run else (args[4] if len(args) > 4 else "")
+    try: state.release(n) if clear_run else state.hold(n, run, started)   # the seam writes the holder, then the next read proves it (#241)
     except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
-    if not iid: print(f"#{n} not on the board", file=sys.stderr); sys.exit(1)
-    tf = state.binding.text_fields()
-    if "Run" not in tf or "Run started" not in tf:
-        (st / f"rest-text-fields-{owner}-{num}.json").unlink(missing_ok=True); tf = state.binding.text_fields()
-    missing = [x for x in ("Run", "Run started") if x not in tf]
-    if missing: sys.exit("no text field " + ", ".join(missing))
-    run = None if clear_run else (args[3] or None); started = None if clear_run else ((args[4] if len(args) > 4 else "") or None)   # None is JSON null: the value that clears a field, where an empty string is one GitHub refuses (#101)
-    try: state.binding.api("-X", "PATCH", f"{state.binding.base}/items/{iid}", "--input", "-", inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))
-    except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)   # named on stderr, never swallowed: the caller logs the refusal it was given
+    except NotCarried as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)   # named on stderr, never swallowed: the caller logs what it was given
     (st / "board-dirty").touch(); sys.exit(0)
 status, nums = args[2], [int(x) for x in args[3:]]
 F = state.binding.status_field()
