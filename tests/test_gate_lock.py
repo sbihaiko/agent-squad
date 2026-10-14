@@ -65,3 +65,24 @@ def test_a_hand_gate_whose_holder_died_takes_the_lock(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert p.returncode == 7, p.stdout + p.stderr
     assert not lock.exists(), "the lock is left behind"
+
+
+@pytest.mark.heavy
+def test_a_cut_short_watchdog_sleep_is_not_a_deadline(tmp_path):
+    """The holder's cleanup TERMs its watchdog's process group when its command ends, and the sleep of that watchdog can be
+    the process that dies. A sleep cut short is not a deadline: the holder keeps its command's exit code, never 75.
+    SERIAL_HOLD_SECONDS=4242 puts the deadline hours away and names that one sleep, so the cut is what ends it."""
+    d = _tree(tmp_path)
+    p = subprocess.Popen(["bash", str(d / "gate.sh"), "sh", "-c", "sleep 3; exit 7"],
+                         env=_env(tmp_path / "st") | {"SERIAL_HOLD_SECONDS": "4242"},
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    watchdog_sleep = ""
+    for _ in range(50):
+        ps = subprocess.run(["/bin/ps", "-o", "pid=,command=", "-ax"], capture_output=True, text=True).stdout.splitlines()
+        watchdog_sleep = next((w[0] for w in map(str.split, ps) if len(w) > 1 and w[1] == "sleep" and w[-1] == "4242"), "")
+        if watchdog_sleep:
+            break
+        time.sleep(0.1)
+    assert watchdog_sleep, "the holder's watchdog sleep was not found"
+    subprocess.run(["kill", "-TERM", watchdog_sleep], check=False)
+    assert p.wait(timeout=60) == 7, "a cut-short sleep failed the holder"

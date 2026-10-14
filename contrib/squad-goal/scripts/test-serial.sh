@@ -44,4 +44,13 @@ echo $(( $(date +%s) - 300 )) > "$SG_STATE/locks/gate/due"
 out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gate true 2>&1); rc=$?
 [ "$rc" = 75 ] && ok "a held lock whose owner is alive is waited for, never reaped" || ko "an owned holder was reaped (rc=$rc)"
 rm -rf "$SG_STATE/locks/gate"
+
+# (#392) The holder's own cleanup TERMs its watchdog's process group when the command ends, and the sleep of that watchdog can
+# be the process that dies. A sleep cut short is not a deadline: the holder keeps its command's exit code. SERIAL_HOLD_SECONDS=4242
+# puts the deadline hours away and names that one sleep, so the cut is the only thing that can end it.
+SERIAL_HOLD_SECONDS=4242 bash "$src" gate sh -c 'sleep 3; exit 7' 2>/dev/null & hp=$!
+sp=""; for i in $(seq 1 50); do sp=$(/bin/ps -o pid=,command= -ax | awk '$NF=="4242" && $2 ~ /sleep/ {print $1}'); [ -n "$sp" ] && break; sleep 0.1; done
+[ -n "$sp" ] && ok "the holder's watchdog is found by the hold it sleeps" || ko "no watchdog sleep to cut short"
+kill -TERM "$sp" 2>/dev/null; wait "$hp"; rc=$?
+[ "$rc" = 7 ] && ok "a watchdog sleep cut short is not a deadline: the exit code passes through" || ko "a cut-short sleep failed the holder (rc=$rc)"
 rm -rf "$T"; exit $fail
