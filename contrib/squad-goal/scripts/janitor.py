@@ -39,6 +39,10 @@
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
+    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the merged PR and the checks on its
+    merge commit (or who closed it, when no merged PR names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
+    A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
+    gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
     Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
@@ -405,15 +409,51 @@ def board_write(args, n, why):   # the one writer of a card: a status write that
     a = args[1:] if args and args[0] == "--add" else args
     if len(a) == 4 and not a[0].startswith("--") and a[1] in _cards: _cards[a[1]][1][str(a[3])] = a[2]
     return True
+def door_read(route, q):   # one read through the door (gh_api, ADR-0277): (answered, the projection as text); a refusal or a deadline miss is not answered
+    r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_api", route, "-q", q])
+    return r == 0, out.strip()
+CLOSER = '[.[] | select(.event == "closed") | .actor.login] | last // ""'   # who closed the issue last, from its events (a single-issue read through the door carries no closed_by)
+def terminal_facts(n, col):   # the facts a terminal comment states (#245), or None when a read did not answer: nothing is claimed on a guess
+    from urllib.parse import quote
+    if col == "Closed":
+        ok, pr = door_read("search/issues?q=" + quote(f'repo:{repo0} is:pr is:merged base:{base} "Refs #{n}"'), '.items[0].number // ""')
+        if not ok: return None
+        if not pr:
+            ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
+            return {"base": base, "closed_by": who} if ok else None
+        ok, sha = door_read(f"repos/{repo0}/pulls/{pr}", '.merge_commit_sha // ""')
+        if not ok: return None
+        test = ""
+        if sha:
+            ok, test = door_read(f"repos/{repo0}/commits/{sha}/check-runs", '[.check_runs[] | .name + ": " + (.conclusion // .status)] | join(", ")')
+            if not ok: return None
+        return {"base": base, "pr": pr, "sha": sha, "test": test}
+    state, reason, _ = issue_info(n)   # the pass's one issue read: state, reason and labels
+    if "wontfix" in issue_labels(n):
+        ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", '[.[] | select(.event == "labeled" and .label.name == "wontfix") | .actor.login] | last // ""')
+        return {"who": who, "why": "labelled wontfix"} if ok else None
+    if state == "closed" and reason in ("not_planned", "duplicate"):
+        ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
+        return {"who": who, "why": "closed as a duplicate (superseded by another issue)" if reason == "duplicate" else "closed as not planned"} if ok else None
+    return None
+def queue_terminal(n, col, note):   # one comment per terminal entry, through the queue cqflush.sh posts from; the marker keeps a repeat pass from queuing it twice
+    mk = st / "auto" / f"janitor-terminal-{n}"
+    if mk.exists() and mk.read_text().strip() == col: return
+    say(f"TERMINAL-COMMENT #{n}: {col} -> {note.splitlines()[-1]}")
+    if dry: return
+    (st / "cq").mkdir(exist_ok=True)
+    (st / "cq" / f"{CQ}#{n}-terminal-{os.getpid()}.md").write_text(note)
+    mk.write_text(col + "\n")
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def reconcile_board():
     if not (owner and proj and repo0): return
     shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
     SHIPPED_NAME = FREEZE_LABEL = {}
+    TERMINAL = ()
     prs = {}
     if shipped:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
-        from board_columns import SHIPPED_NAME, FREEZE_LABEL, PR_RED_BADGE, pr_green, pr_column
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, PR_RED_BADGE, pr_green, pr_column
         prs = pr_by_issue()
     doing = "Doing" if shipped else "In Progress"
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
@@ -487,8 +527,9 @@ def reconcile_board():
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(list(expected), key=int):
-        state, _, _ = issue_info(n)
+        state, reason, _ = issue_info(n)
         if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
+        if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         pc = pr_count(n)
@@ -504,10 +545,19 @@ def reconcile_board():
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
         have = have_all.get(str(n))
+        note = None
+        if shipped and want in TERMINAL and have != want:   # the guard (#245): no terminal write without the comment that states its condition
+            note = terminal_comment(want, terminal_facts(n, want))
+            if note is None:
+                say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
+                continue
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
-        elif have != want and board_write([owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
+            if note: queue_terminal(n, want, note)
+        elif have != want and board_write([owner, str(proj), want, str(n)], n, why):
+            say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
+            if note: queue_terminal(n, want, note)
         if want == doing:
             board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
         elif have in ("In Progress", "Doing"):
@@ -526,6 +576,25 @@ def reconcile_board():
         elif on and n not in badged:
             say(f"BOARD-BADGE #{n}: {PR_RED_BADGE} cleared (open PR #{prs[n][0]} is no longer red in Merging)")
             if not dry: _run(door + ["--method", "DELETE", f"repos/{repo0}/issues/{n}/labels/{PR_RED_BADGE}"])
+    if not shipped: return
+    # A card that settled in a terminal column before the rule (#245) gets its comment once: a bounded number per pass, one
+    # comments read each, and the marker keeps a card from being read again.
+    budget = int(os.environ.get("JANITOR_TERMINAL_BACKFILL", "5") or 0)
+    for n, have in sorted(have_all.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+        if budget <= 0: break
+        if have not in TERMINAL or not str(n).isdigit() or (st / "auto" / f"janitor-terminal-{n}").exists(): continue
+        budget -= 1
+        ok, seen = door_read(f"repos/{repo0}/issues/{n}/comments?per_page=100", f'[.[] | select(.body | contains("{TERMINAL_TAG}"))] | length')
+        if not ok: continue
+        if seen not in ("", "0"):
+            if not dry: (st / "auto" / f"janitor-terminal-{n}").write_text(have + "\n")
+            continue
+        note = terminal_comment(have, terminal_facts(n, have))
+        if note is None:
+            say(f"TERMINAL-NO-CONDITION #{n}: settled in {have} with no comment, and its condition could not be read")
+            continue
+        say(f"TERMINAL-BACKFILL #{n}: settled in {have} with no comment; one queued")
+        queue_terminal(n, have, note)
 reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"

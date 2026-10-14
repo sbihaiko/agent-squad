@@ -67,6 +67,32 @@ def column_for(facts):
     return "Todo", None
 
 
+# Every terminal entry carries its condition in text on the issue (spec #132, #245). The tag is what a later pass reads to
+# know the comment is there, so a settled card is backfilled once and never twice.
+TERMINAL = ("Closed", "Abandoned")
+TERMINAL_TAG = "<!-- squad-goal:terminal -->"
+
+
+def terminal_comment(column, facts):
+    """The comment a move into a terminal column writes, or None when the facts do not state the condition.
+
+    None is the guard: the caller makes no terminal write it cannot explain. Closed facts: base, and pr with sha and test
+    (the checks on the merge commit, "" when none ran), or closed_by when no merged pull request names the issue.
+    Abandoned facts: who decided and why."""
+    facts = facts or {}
+    if column == "Closed" and facts.get("pr"):
+        sha = str(facts.get("sha") or "")[:7]
+        test = facts.get("test") or (f"no check ran on merge commit {sha}" if sha else "no merge commit to test")
+        body = f"Closed: pull request #{facts['pr']} merged into {facts.get('base') or 'the base'} carries this issue (merge commit {sha or 'unknown'}). Test on the merge: {test}."
+    elif column == "Closed" and facts.get("closed_by"):
+        body = f"Closed: @{facts['closed_by']} closed it as completed; no merged pull request into {facts.get('base') or 'the base'} names it."
+    elif column == "Abandoned" and facts.get("who") and facts.get("why"):
+        body = f"Abandoned: {facts['why']}, decided by @{facts['who']}."
+    else:
+        return None
+    return f"{TERMINAL_TAG}\n{body}\n"
+
+
 # A pull request's state, from the loop's own review line for its current head (revci.sh prints `#<pr> <sha9> <mergeable_state>
 # CI=<conclusion:count,...> <verdict>`), so the column costs no read of its own (#244).
 PR_RED_BADGE = "pr:red"   # a Merging card whose PR turned red keeps its column and carries this label: a marker, never a move back

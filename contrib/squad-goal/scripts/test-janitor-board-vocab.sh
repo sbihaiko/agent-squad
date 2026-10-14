@@ -22,6 +22,10 @@ cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in
+  *--include*search/issues*) echo '{"total_count":0,"items":[]}';;   # the terminal comment's reads (#245)
+  *--include*issues/2105/events*) echo '[{"event":"closed","actor":{"login":"o"}}]';;
+  *--include*issues/2106/events*) echo '[{"event":"labeled","label":{"name":"wontfix"},"actor":{"login":"o"}}]';;
+  *--include*issues/*/comments*) echo '[]';;
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
@@ -41,6 +45,7 @@ case "$a" in
   *issues/2103/labels*|*issues/2104/labels*) echo '[]';;
   *issues/2103*|*issues/2104*) echo $'open\t\tIssue\tneeds-owner';;
   *issues/2105*) echo $'closed\t\tIssue 2105';;
+  *issues/2106*) echo $'open\t\tIssue\twontfix';;
   *issues/21*) echo $'open\t\tIssue';;
 esac
 J
