@@ -45,7 +45,7 @@ ghspend = _load("ghspend")
 T0 = 1_760_000_000.0  # 2025-10-09T08:53:20Z
 RATE_LIMIT = json.dumps({"message": "API rate limit exceeded for user ID 1.", "status": "403"})
 LABELS = "repos/o/r/labels"  # a cheap fact: the snapshot may answer it
-ISSUE = "repos/o/r/issues/7"  # gates a write: always read live
+ISSUE = "repos/o/r/issues/7"  # gates a write: always read live, one GraphQL request with its blockers
 OPEN_PRS = "repos/o/r/pulls?state=open&per_page=100"  # an aggregate route: one GraphQL request
 
 
@@ -93,7 +93,7 @@ def test_each_call_appends_one_line_naming_transport_route_cache_outcome_and_pas
     assert _lines(tmp_path) == [
         "2025-10-09T08:53:20Z REST repos/o/r/labels miss answer landing",
         "2025-10-09T08:53:25Z REST repos/o/r/labels hit answer landing",
-        "2025-10-09T08:53:30Z REST repos/o/r/issues/7 miss answer landing",
+        "2025-10-09T08:53:30Z GraphQL repos/o/r/issues/7 miss answer landing",
         "2025-10-09T08:53:35Z GraphQL repos/o/r/pulls?state=open&per_page=100 miss answer landing",
     ]
 
