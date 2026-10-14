@@ -191,5 +191,15 @@ VERDICT: CHANGES
 M
 ); rc=$?
 [ $rc != 0 ] && ok "a bullet that names no file at all still fails" || ko "a bullet with no file passed"
+# a line range or an approximate line is still a place: path:N-M, path:~N, `path:N`, path:N, with a comma after it
+out=$(good --max-lines 60 <<'M'
+VERDICT: CHANGES
+## Blocking
+- .github/workflows/ci.yml:~14-19 — a landing can be cancelled — two pushes race — queue the runs
+- `tests/test_tooling.py:114-120` — the guard passes wrongly — a cancelled run goes unseen — assert the queue
+- squad/x.py:12, squad/y.py:9 — two writers — the record forks — keep one writer
+M
+); rc=$?
+[ $rc = 0 ] && ok "a line range or an approximate line passes" || ko "a line range was rejected: rc=$rc '$out'"
 
 rm -rf "$T"; exit $fail
