@@ -12,7 +12,15 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 
 
+@pytest.mark.slow(reason="mypy builds its cache from nothing in a fresh tree: about 9 s alone, and it waits for a CPU under load")
+@pytest.mark.heavy
 def test_mypy_squad_is_clean():
+    """Guard for the mypy rule: `mypy squad` finds no error.
+
+    The call carries `heavy` and a reason: a tree with no `.mypy_cache` makes mypy analyze the package from nothing,
+    and the suite's own line for an unmarked call (2 s) is measured on a warm cache only. The CI check job runs
+    `mypy squad` as its own step, so the rule keeps its gate there.
+    """
     r = subprocess.run(
         [sys.executable, "-m", "mypy", "squad"], cwd=ROOT, capture_output=True, text=True
     )
