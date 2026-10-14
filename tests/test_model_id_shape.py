@@ -124,3 +124,11 @@ def test_one_shape_answers_for_the_save_the_add_box_and_the_gateway(hub):
         assert [f"refuses {m!r}" for match in shapes if not match(m)] == []
     for m in REFUSED:
         assert [f"takes {m!r}" for match in shapes if match(m)] == []
+
+
+def test_the_served_page_declares_the_shape_as_one_string(hub):
+    """The served page's script runs only when the shape lands as one string literal: a placeholder quoted in the page
+    and quoted again by the substitution left `""..""`, a syntax error, and the hub showed an empty page."""
+    m = re.search(r"const MODELID_SRC=(.*?);   //", hub.served_page())
+    assert m, "the served page no longer declares the shape"
+    assert json.loads(m.group(1)) == hub.MODEL_ID_SRC
