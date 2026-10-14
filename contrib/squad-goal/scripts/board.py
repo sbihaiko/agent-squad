@@ -22,6 +22,8 @@ A miss on the item map re-reads the items with the same bounded backoff (#96), a
 A test pass is recorded by `--test-case` through the seam (`record_pass`), proven by the read that follows: a write that read
 is behind is waited for with the same bounded backoff, and an item no read carries is named on stderr and exits non-zero,
 never reported as written. A pass that ended failed stays failed: a later pass on the same merge commit writes nothing.
+A new card is eventually consistent (#403): when GitHub accepted the add or the write and the read carries no card or no
+Status yet, the read is repeated within SG_BOARD_SETTLE_SECONDS (default 60) before the READ FAILURE is named.
 A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import os, pathlib, sys, time
@@ -56,7 +58,7 @@ for n in nums:
     except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the card is on the board and the read has not caught up: named, never "not on the board"
     except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue   # the add GitHub refused twice, named: the caller logs it
     if not iid: print(f"#{n} not on the board", file=sys.stderr); rc = 1; continue
-    refused, written = "", False
+    refused, written, last, reads = "", False, None, tries
     for k in range(tries):   # the write is written again, then read back: a PATCH answered ok can be a write the card never carries (#105)
         if k and state.binding.backoff: time.sleep(state.binding.backoff * (2 ** (k - 1)))
         try:
@@ -64,14 +66,22 @@ for n in nums:
             written = True
             break
         except NotCarried as e:
+            last = e
             refused = e.refused or refused   # the seam carries the refusal it was given: the note names it, the read is the verdict
             if e.refused:   # a refused write can be an option id the cache kept and the board dropped or recreated: the next attempt reads the field again (#311)
                 (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True)
                 if status not in state.binding.status_field()["opt"]: sys.exit(f"no Status option {status!r}")
+    if not written and last is not None and not last.carried and not last.refused:   # GitHub accepted the write and the read carries no Status yet: a new card, read again within the settle bound (#403)
+        def probe(n=n):
+            global reads
+            reads += 1
+            try: return state.read(n) == status
+            except (RuntimeError, ValueError): return False
+        written = bool(state.binding.settle(probe, tries))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
         print(f"#{n} -> {status}")
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
-        print(f"#{n}: the board carries no {status!r} on it after {tries} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
+        print(f"#{n}: the board carries no {status!r} on it after {reads} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
 (st / "board-dirty").touch(); sys.exit(rc)

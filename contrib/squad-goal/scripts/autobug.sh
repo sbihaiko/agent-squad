@@ -63,6 +63,12 @@ sg_refused() {   # <refusal name> <address> <exit code> <error text> <concerns> 
     return 1
   }
   name=$(sg_refusal_name "$1" "$2" "$3" "$4"); fp=$(sg_refusal_fingerprint "$1" "$2" "$3" "$4")
+  # No recursion (#403): a refusal whose address holds an issue autobug filed itself is logged, never filed. Else the
+  # refusal bug is dispatched, its own card write fails, and the door files one more bug about it, without end.
+  if [ -n "${sg_self_filed:-}" ]; then
+    echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED $name: not filed, the address holds autobug-filed issue(s) #${sg_self_filed// / #}" >> "$SG_STATE/cycle.log"
+    return 0
+  fi
   echo "$(date +%T) ${SG_GH_PASS:-autobug} REFUSED $name" >> "$SG_STATE/cycle.log"
   body=$(mktemp); sg_refusal_body "$@" > "$body"
   # The filer counts the cause the pass files under, not the occurrence: the same fingerprint twice in one pass is one
@@ -232,6 +238,14 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
 # is added with its status, and a card it already carries is answered "already exists" and moved.
 cards="$(printf '#%s ' "${pick[@]}")"
 doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249)
+# The picked issues autobug filed itself (#403): a "[SQUAD] refused" title or a "Filed by autobug" body line. A refused
+# card write on one of them is logged by sg_refused, never filed (no recursion).
+sg_self_filed=$(printf '%s' "$cj" | python3 -c 'import json, sys
+pick = set(sys.argv[1:])
+try: items = json.load(sys.stdin)
+except Exception: items = []
+print(" ".join(str(i.get("number")) for i in items if isinstance(i, dict) and str(i.get("number")) in pick
+      and ((i.get("title") or "").startswith("[SQUAD] refused") or "Filed by autobug" in (i.get("body") or ""))))' "${pick[@]}" 2>/dev/null)
 sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${cards% } -> $doing" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \

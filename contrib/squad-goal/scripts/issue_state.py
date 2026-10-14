@@ -345,12 +345,27 @@ class BoardBinding:
         self.st.mkdir(parents=True, exist_ok=True)
         self.attempts = max(1, int(self._num("SG_BOARD_READ_ATTEMPTS", "4")))   # bounded: the items route is eventually consistent (#96)
         self.backoff = max(0.0, self._num("SG_BOARD_READ_BACKOFF", "1"))        # the base delay, doubled per retry; 0 sleeps for no read
+        self.settle_seconds = max(0.0, self._num("SG_BOARD_SETTLE_SECONDS", "60"))   # the sleep budget for a new card to reach the read (#403)
         self.server_error = re.compile(r"\bHTTP 5\d\d\b")
         self.items_map = None
 
     def _num(self, name, default):   # a bad value in the environment must not kill a card move
         try: return float(self.env.get(name, default))
         except ValueError: return float(default)
+
+    def settle(self, probe, reads):
+        """A new card is eventually consistent (#403): an add or a write GitHub accepted can be missing from reads for
+        longer than the bounded attempts. After `reads` reads that missed, read again with the doubling backoff (each
+        delay at most 16 s) while the sleeps fit in SG_BOARD_SETTLE_SECONDS. Returns the first truthy `probe()`, else
+        None. A backoff of 0 sleeps for no read, so it reads no more."""
+        slept, k = 0.0, max(1, reads)
+        while self.backoff:
+            d = min(self.backoff * (2 ** (k - 1)), 16.0)
+            if slept + d > self.settle_seconds: return None
+            time.sleep(d); slept += d; k += 1
+            got = probe()
+            if got: return got
+        return None
 
     @property
     def kind(self):
@@ -445,7 +460,14 @@ class BoardBinding:
             if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
             self.items_map = self.items(); self._save_items()
             if key in self.items_map: return self.items_map[key]
-        if wrote: raise ReadFailure(self.attempts, len(self.items_map))
+        if wrote:   # the card is on the board and the read lags: a new card, read within the settle bound before the failure (#403)
+            reads = [self.attempts]
+            def probe():
+                reads[0] += 1; self.items_map = self.items(); self._save_items()
+                return self.items_map.get(key)
+            iid = self.settle(probe, self.attempts)
+            if iid: return iid
+            raise ReadFailure(reads[0], len(self.items_map))
         return None   # a read that never carried it, and nothing was written for it here: genuinely absent
 
     def read_all(self):
