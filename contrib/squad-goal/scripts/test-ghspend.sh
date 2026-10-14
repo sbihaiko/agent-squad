@@ -52,7 +52,7 @@ tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/pulls\?state=open&per_page=100 mis
 echo "every door logs:"
 reset
 SG_GH_PASS=autobug $RD repos/o/r/issues/7 >/dev/null
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7 miss answer autobug$" && ok "ghread.py, the unthrottled door, logs its read" || bad "ghread: $(tail -1 "$LOG" 2>/dev/null)"
+tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/7 miss answer autobug$" && ok "ghread.py, the unthrottled door, logs its read (one issue is one GraphQL query, #256)" || bad "ghread: $(tail -1 "$LOG" 2>/dev/null)"
 SG_GH_PASS=autobug $RD --method PATCH repos/o/r/issues/7 -f state=closed >/dev/null
 tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7 miss done autobug$" && ok "a write through ghread.py logs, and names the outcome done" || bad "write: $(tail -1 "$LOG")"
 (. "$T/s/ghcall.sh"; SG_GH_PASS=frontier gh_get -H "Accept: application/vnd.github.diff" repos/o/r/pulls/7 >/dev/null)
@@ -62,7 +62,7 @@ tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/7/comments miss done board$" &
 $RD repos/o/r/issues/8 >/dev/null
 tail -1 "$LOG" | grep -Eq " unattributed$" && ok "a caller that names no pass is unattributed" || bad "no pass: $(tail -1 "$LOG")"
 touch "$T/ratelimited"; SG_GH_PASS=board $RD repos/o/r/issues/9 >/dev/null
-tail -1 "$LOG" | grep -Eq " REST repos/o/r/issues/9 miss refused board$" && ok "a refusal is a refused outcome" || bad "refusal: $(tail -1 "$LOG")"
+tail -1 "$LOG" | grep -Eq " GraphQL repos/o/r/issues/9 miss refused board$" && ok "a refusal is a refused outcome" || bad "refusal: $(tail -1 "$LOG")"
 
 echo "each pass names itself:"
 for pair in startability.sh:landing autofrontier.sh:frontier autobug.sh:autobug board.sh:board; do

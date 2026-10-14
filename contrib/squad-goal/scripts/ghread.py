@@ -740,7 +740,7 @@ def main(argv: list[str]) -> int:
             return _USAGE
         route, method, fields = parsed
         outw = write(route, method=method, fields=fields)
-        log_call(None, route, MISS, outw.kind)
+        log_call(None, route, MISS, outw.kind, transport="REST")   # a write is a REST request, whatever a read of its route uses (#393)
         if outw.is_done:
             sys.stdout.write(outw.body)
             return 0
