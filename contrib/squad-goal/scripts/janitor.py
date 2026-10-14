@@ -285,6 +285,11 @@ def issue_info(x):
     return issue_read(x)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
 _open = None
+def close_spec(n, why):   # the comment, then the close as completed, both through the door's write (gh_send)
+    door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
+    if _run(door + [f"repos/{repo0}/issues/{n}/comments", "-f", f"body={why}"])[0] == 0:
+        _run(door + ["-X", "PATCH", f"repos/{repo0}/issues/{n}", "-f", "state=closed", "-f", "state_reason=completed"])
+_subs = {}   # issue -> REST's sub_issues_summary, from the same one read as the labels
 def open_issues():   # every open issue of the repository, ONE read per pass through the door's aggregate route (#92): (answered, {number: labels}). answered is False when the list did not answer (a refusal, a deadline miss, no door beside this module), and then no card is added on a guess. No call per issue: the one list carries every issue's number and labels.
     global _open
     if _open is None:
@@ -293,7 +298,9 @@ def open_issues():   # every open issue of the repository, ONE read per pass thr
         except ValueError: items = None
         m = {}
         for i in items if isinstance(items, list) else []:
-            if isinstance(i, dict) and isinstance(i.get("number"), int): m[str(i["number"])] = set(l.get("name") for l in i.get("labels") or [] if isinstance(l, dict))
+            if isinstance(i, dict) and isinstance(i.get("number"), int):
+                m[str(i["number"])] = set(l.get("name") for l in i.get("labels") or [] if isinstance(l, dict))
+                if isinstance(i.get("sub_issues_summary"), dict): _subs[str(i["number"])] = i["sub_issues_summary"]
         _open = (isinstance(items, list), m)
     return _open
 for n, i in live.items():
@@ -416,6 +423,12 @@ def reconcile_board():
             # work starts on the spec the card leaves the column by the rule that names that work.
             if "spec" in olabels[n]:
                 set_expected(n, "Open Specs", "issue carries the spec label", rank=15)
+                # A spec whose tickets are all closed is done (the owner's rule): at least one sub-issue, every one closed.
+                # A spec with no sub-issue proves nothing and stays open; the closed rule moves the card next pass.
+                sub = _subs.get(n) or {}
+                if sub.get("total", 0) >= 1 and sub.get("completed") == sub["total"]:
+                    say(f"SPEC-CLOSED #{n}: every sub-issue ({sub['total']}) is closed")
+                    if not dry: close_spec(n, f"Closed by the loop: every sub-issue ({sub['total']}) is closed, so the spec is done.")
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
     for n in sorted(list(expected), key=int):

@@ -35,6 +35,10 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
    added in that column, in one write, on the loop's next pass. The column carries no blocking edge
    — a ticket whose blocker is still open waits on the dispatch's reading of that edge, not on a
    column of its own.
+6. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
+   tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
+   nothing and stays open. The close carries a comment that names the count, and the card follows
+   the issue to Done.
 
 ## Consequences
 
@@ -54,4 +58,5 @@ spec, one issue that waits on the owner and one plain ticket in the same walk, a
 becomes the child of the run. `tests/test_vendor_skills.py` guards the title prefix of a spec's
 child in the skill that cuts the tickets. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`
 proves the column: a spec with no card is added in Open Specs, and a child of it with an open
-blocker is added in Todo, each in one write.
+blocker is added in Todo, each in one write; a spec whose every sub-issue is closed is closed,
+and one with an open sub-issue or none stays open.
