@@ -43,7 +43,7 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    for n in 2002 2003 2005 2006 2009; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2002 2003 2005 2006 2009 2022 2023; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2001 2007 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
@@ -116,6 +116,18 @@ rec run-nostatus '{"event":"run_start","run_id":"run-nostatus","ts":"2026-10-13T
 mk run-stacked-pr 2018   # its PR names the issue, but it was merged into the parent branch, not the base
 rec run-stacked-pr '{"event":"run_start","run_id":"run-stacked-pr","ts":"2026-10-13T08:12:00Z"}
 {"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}'
+# ONE run, TWO children, and only one of them landed (#271): the run's `land` event names the child that made
+# it, and the failed child committed nothing -- no branch, no PR. The run's landing is that child's, never
+# every issue the run held, so #2022 leaves Todo and #2023 stays in the loop's queue.
+mk run-mixed 2022
+printf 'CHILD — GitHub issue(s) 2022, 2023:\n' > "$T/co/runs/run-mixed/request.txt"
+rec run-mixed '{"event":"run_start","run_id":"run-mixed","ts":"2026-10-13T08:13:00Z"}
+{"event":"spawn_accepted","child":"route.router.1","definition":"GitHub issue #2022 on fix/2022-x"}
+{"event":"spawn_accepted","child":"route.router.2","definition":"GitHub issue #2023 on fix/2023-x"}
+{"event":"outcome","node":"route.router.1","entry":1,"outcome":"pass","reasons":["tests green"]}
+{"event":"land","node":"route.router.1","parent":"route","entry":1,"outcome":"pass","reasons":[],"effect":{"name":"merge_land","head":"a7df8f1ecff77bdb5833721121a7a50be4066053","held_out":"pass"}}
+{"event":"outcome","node":"route.router.2","entry":1,"outcome":"fail","reasons":["red gate"]}
+{"event":"verdict","verdict":"failed","reasons":["child route.router.2 failed"],"exit_code":1}'
 printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
@@ -145,6 +157,13 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
   && ok "the comment carries the refusal's name and its error" || ko "comment body: $(cat "$cq" 2>/dev/null)"
 [ "$(ls "$T/st/cq" | /usr/bin/grep -c 'refusal')" = 1 ] && ok "one refused write is one comment" || ko "refusal comments: $(ls "$T/st/cq")"
 /usr/bin/grep -q '^STATUS o 4 Done 2010$' "$T/board.calls" 2>/dev/null && ok "closed issue: card moves to Done" || ko "#2010 not Done: $(bc)"
+# #271: a run that asked for children credits a landing to the child that made it, never to every issue it held.
+# #2022's child landed its own work, so that card leaves Todo; #2023's child failed and committed nothing, so it has
+# no branch and no PR and never reads Code Complete.
+/usr/bin/grep -q '^STATUS o 4 Code Complete 2022$' "$T/board.calls" 2>/dev/null && ok "the child that landed moves its own card to Code Complete" || ko "#2022 not Code Complete: $(bc) $o"
+! /usr/bin/grep -q 'Code Complete 2023' "$T/board.calls" 2>/dev/null && ok "a child that landed nothing is never credited the run's landing" || ko "#2023 read Code Complete over its sibling's landing: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Todo 2023$' "$T/board.calls" 2>/dev/null && ok "a failed child with no branch and no PR stays in the loop's queue" || ko "#2023 did not stay in Todo: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2023: card -> Todo (run run-mixed child route.router.2 fail with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the reason names the child and its own outcome" || ko "child reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone returns an open card to Todo" || ko "#2011 did not leave Code Complete: $(bc)"
 ! /usr/bin/grep -q 'Done 2011' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone is not Done" || ko "#2011 read Done from a landed branch marker: $(bc)"
 /usr/bin/grep -q '^ADD o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the item is created with its expected status in one write" || ko "#2013 not added: $(bc) $o"
