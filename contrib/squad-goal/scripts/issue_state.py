@@ -324,11 +324,14 @@ class BoardBinding:
         """The state one issue carries, "" when the carrier carries no card for it or no Status on it."""
         return self.read_all().get(str(issue), "")
 
-    def rows(self, jq, *, fields=True, timeout=120):
+    def rows(self, jq, *, fields=True, kind=False, timeout=120):
         """One paginated items read at the carrier, projected by the caller's jq program. The reach is the
         binding's, so a reader that needs more than the state (the pane, with its titles and labels) asks
         here and holds no call of its own. A read the carrier refuses raises, and the caller keeps its last rows."""
         fid = f"&fields[]={self.status_field()['id']}" if fields else ""
+        if fields and kind:   # the Kind field rides in the same read, so a pass that draws kinds adds no call (its field id is cached a day)
+            try: fid += f"&fields[]={self.kind_field()['id']}" if self.kind_field()["id"] else ""
+            except Exception: pass   # a carrier that cannot answer the field draws no kind: the rows are still read
         return self.api("--paginate", f"{self.base}/items?per_page=100{fid}", "--jq", jq, timeout=timeout)
 
     def holders(self):
