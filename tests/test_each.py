@@ -77,11 +77,15 @@ async def test_parallel_items_run_together_up_to_max_parallel(tmp_path):
     eng = run_engine(each_doc(mode="parallel", max_parallel=2),
                      {"decompose": plan(4), "worker": {"output": {"ok": 1}, "delay": 0.3, "spend": 0.1}}, tmp_path,
                      adapter={"repeat_last": True})
-    t0 = anyio.current_time()
     v = await eng.run()
-    took = anyio.current_time() - t0
     assert v.verdict == "completed"
-    assert 0.5 < took < 1.1      # four 0.3 s items, two at a time
+    # two at a time, read from the record and never from the clock: a wall-clock bound failed on a slow runner
+    live, most = 0, 0
+    for e in read(tmp_path / "record.jsonl"):
+        if e.get("node") == "worker" and e["event"] in ("call_start", "outcome"):
+            live += 1 if e["event"] == "call_start" else -1
+            most = max(most, live)
+    assert most == 2
 
 
 @pytest.mark.anyio
