@@ -30,17 +30,18 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
     for n in 2101 2102 2103 2104 2105 2107; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
-    printf '2108\tBacklog\thttps://api.github.com/repos/x/y\n'; printf '2106\tTodo\thttps://api.github.com/repos/x/y\n';;
+    printf '2108\tBacklog\thttps://api.github.com/repos/x/y\n'; printf '2110\tDoing\thttps://api.github.com/repos/x/y\n'; printf '2106\tTodo\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2101 2102 2103 2104 2106 2107 2108; do
-      case $n in
+    sep=""; for n in 2101 2102 2103 2104 2106 2107 2108 2109 2110; do
+      kids='[]'; case $n in
+        2109) labs='{"nodes":[{"name":"spec"}]}'; kids='[{"number":2110},{"number":2107}]';;   # a spec with a child in Doing folds to Doing
         2102|2108) labs='{"nodes":[{"name":"spec"}]}';;
         2103|2104) labs='{"nodes":[{"name":"needs-owner"}]}';;
         2106) labs='{"nodes":[{"name":"wontfix"}]}';;
         *) labs='{"nodes":[]}';;
       esac
-      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
+      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":%s},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs" "$kids"; sep=,; done
     printf ']}}}}';;
   *issues/2103/labels*|*issues/2104/labels*) echo '[]';;
   *issues/2103*|*issues/2104*) echo $'open\t\tIssue\tneeds-owner';;
@@ -61,6 +62,8 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Doing 2101$' && ok "a live run holds the card: Doing" || ko "#2101 not Doing: $(bc) $o"
 has '^RUN o 4 2101 run-live ' && ok "the Run fields are written while the card is Doing" || ko "#2101 Run fields missing: $(bc)"
+has '^ADD o 4 Doing 2109$' && ok "a spec with a child in Doing folds to Doing" || ko "#2109 not Doing: $(bc)"
+! has '^RUN o 4 2109 ' && ok "a spec folded to Doing gets no Run fields: no run holds it" || ko "#2109 Run written: $(bc)"
 has '^STATUS o 4 Backlog 2102$' && ok "a spec opens in Backlog, not Open Specs" || ko "#2102 not Backlog: $(bc)"
 has '^STATUS o 4 Backlog 2103$' && ok "an owner-label card with no work reached sits in Backlog" || ko "#2103 not Backlog: $(bc)"
 has '^STATUS o 4 Code Complete 2104$' && ok "an owner-label card keeps the column its work reached" || ko "#2104 lost its column: $(bc)"
