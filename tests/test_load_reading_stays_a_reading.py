@@ -10,6 +10,8 @@ blocks a run, which is the shape the rule is about.
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 SKIP = {".git", ".venv", "runs", "worktrees", ".worktrees", "vendor", "node_modules", "__pycache__", "tests", "docs", "bench"}
 # The names the machine load reading goes by: the hub's samplers, its thresholds and its served route. `json.loads` and a
@@ -55,6 +57,7 @@ def _code_files():
         yield rel
 
 
+@pytest.mark.heavy
 def test_the_hub_is_the_only_code_that_reads_the_machine_load():
     readers = {str(rel) for rel in _code_files() if LOAD_NAMES.search((ROOT / rel).read_text(errors="replace"))}
     assert readers == READS_THE_LOAD, (

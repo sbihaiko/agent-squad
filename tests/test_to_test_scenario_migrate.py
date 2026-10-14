@@ -62,6 +62,7 @@ def flat_scenario(gh, plan, path, known=KNOWN, ids=True):
     return scenario["number"]
 
 
+@pytest.mark.heavy
 def test_a_100_record_flat_map_migrates_100_reparented_the_rest_created_and_layout_written(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     scenario = flat_scenario(gh, plan, path)
@@ -91,6 +92,7 @@ def test_the_layout_is_written_last_so_an_interrupted_migration_is_still_flat(tm
 
 
 @pytest.mark.parametrize("flaky", ["create", "link"])
+@pytest.mark.heavy
 def test_an_interrupted_migration_resumes_with_no_duplicate_issue_or_link(tmp_path, flaky):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     flat_scenario(gh, plan, path)
@@ -109,6 +111,7 @@ def test_an_interrupted_migration_resumes_with_no_duplicate_issue_or_link(tmp_pa
     assert all(i["state"] == "open" for i in gh.issues.values())
 
 
+@pytest.mark.heavy
 def test_the_records_move_before_the_leftovers_are_created(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     flat_scenario(gh, plan, path)
@@ -130,6 +133,7 @@ def test_a_dry_run_of_a_flat_map_counts_the_move_and_the_create_and_writes_nothi
     assert out["counts"]["move"] == KNOWN and out["counts"]["create"] == 16 + 16 + (281 - KNOWN)
 
 
+@pytest.mark.heavy
 def test_a_full_parent_migrates_because_the_areas_are_linked_after_the_records_move(tmp_path):
     """#1286 as it is: the scenario holds the cap's 100 records, so an area link before the moves is a 422."""
     plan, gh, path = pad_plan(), CappedGitHub(), tmp_path / "m.json"
@@ -147,6 +151,7 @@ def test_a_full_parent_migrates_because_the_areas_are_linked_after_the_records_m
     assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
 
 
+@pytest.mark.heavy
 def test_an_interrupted_full_parent_migration_resumes_and_links_the_areas_last(tmp_path):
     plan, gh, path = pad_plan(), CappedGitHub(), tmp_path / "m.json"
     scenario = flat_scenario(gh, plan, path)

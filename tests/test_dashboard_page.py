@@ -63,6 +63,7 @@ def needs_ego(fn):
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_the_page_loads_the_five_phase_fixture_from_disk_and_shows_every_node(tmp_path):
     text = (DESIGN / "five-phases.graph.json").read_text()
     got = drive(tmp_path, f'put("f-graph",{json.dumps(text)},"five-phases.graph.json");await wait();'
@@ -72,6 +73,7 @@ def test_the_page_loads_the_five_phase_fixture_from_disk_and_shows_every_node(tm
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_the_page_marks_a_bad_node_never_blocks_save_and_refuses_a_gate_edit(tmp_path):
     d = five()
     del node(d, "scout")["budget"]

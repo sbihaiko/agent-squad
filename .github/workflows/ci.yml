@@ -10,7 +10,8 @@ on:
 # The group is the branch a push and the pull request of that branch both carry: `github.ref` is `refs/pull/<N>/merge`
 # on a pull request and `refs/heads/<branch>` on a push, so the two never met and a superseded head kept its slot. A
 # superseded pull request run is cancelled; a landing on main is never cancelled, so every landing keeps its evidence.
-# No job outlives the twenty minutes it gives itself (#128).
+# No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`; the full
+# suite runs before a merge.
 concurrency:
   group: ci-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -32,7 +33,7 @@ jobs:
       - run: python3 -m pip install -e '.[dev]'
       - run: ruff check squad tests
       - run: mypy squad
-      - run: python3 -m pytest -n auto
+      - run: python3 -m pytest -n auto -m "not heavy"
       - name: Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -41,7 +42,7 @@ jobs:
       - run: python3 -m pip install -e '.[dev]'
       - run: ruff check squad tests
       - run: mypy squad
-      - run: python3 -m pytest -n auto
+      - run: python3 -m pytest -n auto -m "not heavy"
       - name: GUI test squad e2e suite
         # No MesenAI checkout is on the runner: the host-bound tests are deselected (ADR-0139) and their removal is
         # reported by name. The host-free tests in the file still run. The gate steps above keep their own commands.

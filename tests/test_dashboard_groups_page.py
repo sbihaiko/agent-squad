@@ -1,6 +1,8 @@
 """In the real page (headless Chrome): grouping by status, expand and fold by double-press, a glyph on every card, the pan into view."""
 import json
 
+import pytest
+
 from tests.dashboard_helpers import ROOT
 from tests.test_dashboard_page import drive, needs_ego
 
@@ -17,6 +19,7 @@ LOAD = ('const q=(s)=>[...document.querySelectorAll(s)];'
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_a_double_press_expands_the_group_card_in_place_and_a_double_press_on_a_child_folds_it_back(tmp_path):
     steps = (LOAD + 'const start={groups:q(".card[data-group]").length,kids:q(".card.child").length,name:(q(".card[data-group] .nm")[0]||{}).textContent};'
              'press(q(".card[data-group]")[0]);press(q(".card[data-group]")[0]);await wait();'
@@ -31,6 +34,7 @@ def test_a_double_press_expands_the_group_card_in_place_and_a_double_press_on_a_
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_every_card_the_record_touched_carries_a_state_glyph(tmp_path):
     steps = (LOAD + 'press(q(".card[data-group]")[0]);press(q(".card[data-group]")[0]);await wait();'
              'const cards=q(".card[data-name]");'
@@ -40,6 +44,7 @@ def test_every_card_the_record_touched_carries_a_state_glyph(tmp_path):
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_selecting_a_node_under_the_drawer_pans_it_clear_without_changing_the_zoom(tmp_path):
     """The drawer covers the right edge: a zoomed graph puts a card under it, and pressing that card pans it clear."""
     steps = (LOAD + 'document.getElementById("b-panel").click();await wait();for(let i=0;i<8;i++)document.getElementById("b-in").click();await wait();'
@@ -60,6 +65,7 @@ def test_selecting_a_node_under_the_drawer_pans_it_clear_without_changing_the_zo
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_every_card_is_a_keyboard_stop_enter_selects_and_space_opens_and_folds_a_group_and_the_focus_stays(tmp_path):
     steps = (LOAD + 'const key=(el,k)=>el.dispatchEvent(new KeyboardEvent("keydown",{key:k,bubbles:true}));const act=()=>document.activeElement&&document.activeElement.dataset?document.activeElement.dataset.name:null;'
              'const stops=q(".card[data-name]").every(c=>c.getAttribute("tabindex")==="0"&&c.getAttribute("role")==="button"&&c.getAttribute("aria-label"));'
@@ -75,6 +81,7 @@ def test_every_card_is_a_keyboard_stop_enter_selects_and_space_opens_and_folds_a
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_fit_with_the_panel_open_keeps_every_card_left_of_the_drawer(tmp_path):
     """The drawer takes its width off the map, so a fit with it open is a different fit."""
     steps = (LOAD + 'const cards=()=>q(".card[data-name]").map(c=>c.getBoundingClientRect());'
@@ -88,6 +95,7 @@ def test_fit_with_the_panel_open_keeps_every_card_left_of_the_drawer(tmp_path):
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_fit_leaves_every_card_clear_of_the_replay_bar_in_the_panel_footer(tmp_path):
     """#1813: the bar is a row of #footer now, and the fit still has to leave every card above the row's own top."""
     steps = (LOAD + 'press(q(".card[data-group]")[0]);press(q(".card[data-group]")[0]);await wait();document.getElementById("b-fit").click();await wait();'
@@ -109,6 +117,7 @@ def _load_run(folder):
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_a_square_in_a_group_card_is_a_keyboard_stop_enter_selects_that_child_and_the_focus_ring_shows(tmp_path):
     steps = (LOAD + 'const key=(el,k)=>el.dispatchEvent(new KeyboardEvent("keydown",{key:k,bubbles:true}));'
              'const sqs=q("g.sq");const stops=sqs.every(s=>s.getAttribute("tabindex")==="0"&&s.getAttribute("role")==="button"&&s.getAttribute("aria-label"));'
@@ -123,6 +132,7 @@ def test_a_square_in_a_group_card_is_a_keyboard_stop_enter_selects_that_child_an
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_a_record_corrupt_mid_file_shows_its_valid_prefix_under_a_banner_that_names_the_bad_line(tmp_path):
     lines = (FIX / "run" / "record.jsonl").read_text().splitlines()
     bad = "\n".join(lines[:20] + ["{this is not json"] + lines[20:]) + "\n"
@@ -145,6 +155,7 @@ def test_a_record_with_no_valid_first_line_is_still_refused_and_shows_no_banner(
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_a_live_record_shows_no_banner_for_a_half_written_last_line_and_a_banner_for_a_completed_bad_line(tmp_path):
     lines = (FIX / "run" / "record.jsonl").read_text().splitlines()
     start = json.loads(lines[0])
@@ -170,6 +181,7 @@ def test_a_live_record_shows_no_banner_for_a_half_written_last_line_and_a_banner
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_150_children_expand_at_a_readable_zoom_with_the_first_cards_in_view(tmp_path):
     from tests.dashboard_helpers import synth_run
     run = synth_run(tmp_path / "n150", 150)
@@ -182,6 +194,7 @@ def test_150_children_expand_at_a_readable_zoom_with_the_first_cards_in_view(tmp
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_a_dispatch_with_no_children_and_a_dispatch_whose_children_all_failed_draw(tmp_path):
     from tests.dashboard_helpers import synth_run
     zero = _load_run(synth_run(tmp_path / "n0", 0)) + 'document.title="RESULT "+JSON.stringify({groups:q(".card[data-group]").length,kids:q(".card.child").length,cards:q(".card[data-name]").length,err:q(".card[data-name].err").length});'

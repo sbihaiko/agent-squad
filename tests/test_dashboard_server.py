@@ -214,6 +214,7 @@ def test_a_request_keeps_the_server_alive_past_the_first_idle_window(run):
     assert not t.is_alive()
 
 
+@pytest.mark.heavy
 def test_a_detached_server_is_reused_for_the_same_run_and_exits_when_idle(run, tmp_path, monkeypatch):
     monkeypatch.setenv("SQUAD_DASHBOARD_STATE_DIR", str(tmp_path / "state"))
     port = ds.start(run, idle=1.5)

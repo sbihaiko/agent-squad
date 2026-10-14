@@ -66,6 +66,7 @@ async def test_a_medium_input_runs_spec_and_skips_plan(tmp_path):
     assert not ran(tmp_path, "critic")          # review_required is false for a small diff in a medium tier
 
 
+@pytest.mark.heavy
 async def test_a_large_input_plans_and_runs_each_item_in_its_own_worktree(tmp_path):
     repo = make_repo(tmp_path / "repo")
     eng = engine(tmp_path, repo, script(LARGE, items=3))

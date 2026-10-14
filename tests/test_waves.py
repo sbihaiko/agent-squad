@@ -68,6 +68,7 @@ async def test_a_passing_write_child_is_landed_in_the_target_and_recorded(tmp_pa
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_two_write_children_land_in_request_order_and_the_final_gate_sees_both(tmp_path):
     repo = sibling_repo(tmp_path)
     cmd = "test -f a.txt && test -f b.txt"
@@ -118,6 +119,7 @@ async def test_a_landing_that_breaks_an_earlier_childs_held_out_command_is_undon
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_landing_that_leaves_every_command_where_it_was_stays_landed(tmp_path):
     """No false positive. The first child's command only passes once the second has landed, so it reads red at the
     baseline and green after: red to green is not a regression, and neither landing is undone."""
@@ -143,6 +145,7 @@ async def test_a_read_only_child_and_a_failed_child_are_not_landed(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_router_reads_only_the_ledger_and_the_stop_word_ends_the_waves(tmp_path):
     repo = sibling_repo(tmp_path)
     noise = "N" * 4000
@@ -201,6 +204,7 @@ async def test_a_resume_does_not_land_a_child_again(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_ledger_shows_a_conflict_and_keeps_the_conflict_text_out_of_the_router(tmp_path):
     repo = sibling_repo(tmp_path)
     script = {"router": [routed(req(), req("diagnosing-bugs")), routed(done=True)], "route.router.1": writer("same.txt", "one\n"),
@@ -257,6 +261,7 @@ async def test_waves_that_land_nothing_exit_stalled_well_before_the_loop_max(tmp
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_waves_that_keep_landing_never_trip_the_stall_exit(tmp_path):
     """#93: a wave that lands something resets the stall streak, so a run making real progress can run
     past the old hand-tuned default of 6 waves without an early `waves_stalled` cutoff."""

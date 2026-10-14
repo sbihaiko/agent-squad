@@ -64,6 +64,7 @@ def outcomes(prep, node):
     return [e for e in record.read(prep.run_dir / "record.jsonl") if e["event"] == "outcome" and e["node"] == node]
 
 
+@pytest.mark.heavy
 async def test_a_good_spec_still_completes_a_subject_run(tmp_path):
     prep, eng = engine(tmp_path)
     v = await eng.run()
@@ -71,6 +72,7 @@ async def test_a_good_spec_still_completes_a_subject_run(tmp_path):
     assert [e["outcome"] for e in outcomes(prep, "spec_gate")] == ["pass"]
 
 
+@pytest.mark.heavy
 async def test_a_spec_with_no_ac_commands_fails_the_gate_not_ac_verify_and_the_spec_runs_again(tmp_path):
     prep, eng = engine(tmp_path, {"output": {"spec": {"summary": "s"}}, "spend": 0.1, "turns": 2})
     v = await eng.run()
@@ -80,6 +82,7 @@ async def test_a_spec_with_no_ac_commands_fails_the_gate_not_ac_verify_and_the_s
     assert len(outcomes(prep, "spec_draft")) == 2 and [e["outcome"] for e in outcomes(prep, "ac_verify")] == ["pass"]
 
 
+@pytest.mark.heavy
 async def test_ac_commands_beside_spec_fails_with_a_finding_that_names_it(tmp_path):
     prep, eng = engine(tmp_path, {"output": {"status": "pass", "spec": {"summary": "s"}, "ac_commands": ["true"]}, "spend": 0.1, "turns": 2})
     v = await eng.run()

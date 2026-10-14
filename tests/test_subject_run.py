@@ -68,6 +68,7 @@ def test_prepare_takes_relative_paths_and_every_path_it_returns_is_absolute(tmp_
     assert prep.run_dir.is_absolute() and prep.target.is_absolute() and prep.graph_path.is_absolute()
 
 
+@pytest.mark.heavy
 async def test_a_correct_patch_passes_the_held_out_test_and_the_verdict_is_completed(tmp_path):
     repo, bench = fake_subject(tmp_path)
     before = sh(repo, "git", "rev-parse", "HEAD")
@@ -80,6 +81,7 @@ async def test_a_correct_patch_passes_the_held_out_test_and_the_verdict_is_compl
     assert (prep.target / "billing" / "calc.py").exists()   # merged into the clone
 
 
+@pytest.mark.heavy
 async def test_a_wrong_patch_fails_ac_verify_and_the_verdict_is_failed(tmp_path):
     repo, bench = fake_subject(tmp_path)
     prep = subject.prepare(1, repo, bench, tmp_path / "out")
@@ -144,6 +146,7 @@ async def complete_issue_1(repo, bench, runs):
     return prep
 
 
+@pytest.mark.heavy
 async def test_a_second_clone_holds_the_first_issues_change_and_the_fixture_is_unchanged(tmp_path):
     repo, bench = chain_subject(tmp_path)
     runs = tmp_path / "runs"
@@ -169,6 +172,7 @@ def test_a_blocker_the_tree_holds_needs_no_completed_run(tmp_path):
     assert prep.chain == [] and json.loads((prep.run_dir / "holds.json").read_text()) == {"held": [1]}
 
 
+@pytest.mark.heavy
 async def test_a_blocker_whose_run_failed_refuses(tmp_path):
     repo, bench = chain_subject(tmp_path)
     runs = tmp_path / "runs"
@@ -178,6 +182,7 @@ async def test_a_blocker_whose_run_failed_refuses(tmp_path):
         subject.prepare(2, repo, bench, tmp_path / "out", runs_dir=runs)
 
 
+@pytest.mark.heavy
 async def test_a_chain_applies_every_blocker_in_dependency_order(tmp_path):
     repo, bench = chain_subject(tmp_path)
     runs = tmp_path / "runs"
@@ -242,6 +247,7 @@ def test_delivery_is_judged_by_the_held_out_test_on_the_final_tree_not_by_the_ta
     assert subject.undelivered(folded, [13, 21]) == []
 
 
+@pytest.mark.heavy
 async def test_a_run_made_through_prepare_resumes_by_folder_name_with_no_run_dir(tmp_path):
     from squad import cli, launch
     from squad.engine_errors import ResumeRefused

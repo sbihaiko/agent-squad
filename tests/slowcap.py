@@ -4,6 +4,10 @@ The cap is read from the report, so it only judges a test that ended. A test tha
 worker spinning in a subprocess loop parks the whole suite and the machine with it (#130). The deadline is the cap's
 own rule read while the test runs -- it carries the same exemption, a `slow(reason=...)` marker -- and it fails the
 test by name instead of waiting for a return that never comes.
+
+The fast battery (`-m "not heavy"`, the one CI runs) stays fast by one more rule: a call over 1 s carries `heavy`. The
+guard fails an unmarked call only from `heavy_cap_seconds` (2 s), twice the line, so xdist and machine load do not
+fail a test that sits near 1 s; a call that really drifts past it is named.
 """
 import signal
 
@@ -11,16 +15,19 @@ import pytest
 
 DEFAULT_CAP_SECONDS = 20.0
 DEFAULT_DEADLINE_SECONDS = 60.0
+DEFAULT_HEAVY_CAP_SECONDS = 2.0
 
 
 def pytest_addoption(parser):
     parser.addini("slow_cap_seconds", "cap for one test call, in seconds", default=str(DEFAULT_CAP_SECONDS))
     parser.addini("test_deadline_seconds", "deadline for one test call, in seconds; 0 turns the deadline off",
                   default=str(DEFAULT_DEADLINE_SECONDS))
+    parser.addini("heavy_cap_seconds", "an unmarked test call at or over this fails; mark it heavy", default=str(DEFAULT_HEAVY_CAP_SECONDS))
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow(reason): this test may run past the cap; the reason is required")
+    config.addinivalue_line("markers", "heavy: this test call takes 1 s or more; the fast battery deselects it")
 
 
 def _slow_reason(item):
@@ -80,4 +87,12 @@ def pytest_runtest_makereport(item, call):
         report.longrepr = (
             f"{item.nodeid} took {report.duration:.1f} s, over the {cap:g} s cap. "
             "Investigate the cause; do not tune the test to sit under the cap."
+        )
+        return
+    heavy_cap = float(item.config.getini("heavy_cap_seconds"))
+    if report.duration >= heavy_cap and item.get_closest_marker("heavy") is None:
+        report.outcome = "failed"
+        report.longrepr = (
+            f"{item.nodeid} took {report.duration:.1f} s, at or over the {heavy_cap:g} s line for an unmarked call. "
+            "Mark it `@pytest.mark.heavy` so the fast battery leaves it out, or find why it is slow."
         )
