@@ -1,7 +1,6 @@
-"""Hub board: the header's refresh button forces a real board re-read, and the 60 s pass is untouched (#1810).
+"""Hub board: one pass re-reads the board every 60 s on its own; the TASKS header has no refresh button.
 
-The button is a control, so the seam under test is behaviour: the pass it triggers, the route that serves it, the
-state the page paints while it runs, and the failure path. Only the page's own busy/failure wiring is read as markup.
+A failed pass keeps the last good rows. No route runs a pass on request, so a click never adds GitHub reads.
 """
 import importlib.util
 import json
@@ -70,7 +69,7 @@ def _endpoints(calls):
     return [" ".join(c[3:] if c[:3] == ["gh", "api", "--paginate"] else c[2:]) for c in calls]
 
 
-def test_pressing_the_button_forces_a_real_pass_over_the_project_the_blockers_and_the_prs(hub, monkeypatch):
+def test_a_pass_reads_the_project_the_blockers_and_the_prs(hub, monkeypatch):
     calls = []
     monkeypatch.setattr(hub.subprocess, "run", _fake_gh(calls))
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "prev": [], "prev_n": 0, "lc": {}, "err": None})
@@ -85,42 +84,17 @@ def test_pressing_the_button_forces_a_real_pass_over_the_project_the_blockers_an
     assert [p["n"] for p in hub.board_cache["prs"]] == [7]
 
 
-def test_the_refresh_route_runs_the_pass_and_is_not_the_cached_board_route(hub):
-    """The route the button calls re-reads; the plain /api/board only re-serves what the last pass left."""
-    src = HUB_PY.read_text()
-    served = re.search(r'elif self\.path\.startswith\("/api/board/refresh"\):(.*?)\n\s+elif', src, re.S)
-    assert served, "no /api/board/refresh route: the button would re-read the cache and change nothing"
-    assert "board_pass()" in served.group(1), f"the route must run one pass: {served.group(1)!r}"
-    routes = re.search(r"def do_GET.*?(?=\n    def |\nclass )", src, re.S).group(0)
-    assert routes.index("/api/board/refresh") < routes.index('elif self.path.startswith("/api/board")'), \
-        "the refresh route is matched before the plain one, which would swallow it"
-
-
-def test_the_button_sits_beside_the_title_in_the_header(hub):
+def test_the_tasks_header_has_no_refresh_button(hub):
+    """The board re-reads itself every 60 s and within 2 s of a board move; a hand refresh only adds GitHub reads."""
     head = re.search(r"<div id=bhead>.*?</div>\n", hub.PAGE, re.S).group(0)
-    m = re.search(r"<b>TASKS <span id=bt class=m></span></b>(<button id=br\b[^>]*>)", head)
-    assert m, f"#br sits inline right after the title text: {head!r}"
-    assert head.index("id=br") < head.index("id=lf"), "it belongs to the title, not to the labels/maximize/collapse group"
+    assert "id=br" not in head, f"the TASKS header carries no refresh button: {head!r}"
+    assert '$("#br")' not in hub.PAGE, "no click handler is left for a button that is gone"
 
 
-def test_the_button_carries_a_title_and_an_accessible_name(hub):
-    m = re.search(r"<button id=br\b[^>]*>(.*?)</button>", hub.PAGE, re.S)
-    assert m, "no #br element in the served page"
-    assert re.search(r'title="[^"]+"', m.group(0)), f"no title: {m.group(0)!r}"
-    assert re.search(r'aria-label="[^"]+"', m.group(0)), f"the icon is not the only label: {m.group(0)!r}"
-    assert m.group(1).strip(), "the button paints an icon, not an empty box"
-
-
-def test_the_button_says_it_is_busy_while_the_pass_runs_and_clears_when_it_ends(hub):
-    h = re.search(r'\$\("#br"\)\.onclick=.*?;\n', hub.PAGE, re.S)
-    assert h, "no click handler on #br"
-    js = h.group(0)
-    assert 'fetch("/api/board/refresh")' in js, "the press asks for a pass, never a reload of the page"
-    assert "b.disabled=true" in js and 'b.setAttribute("aria-busy","true")' in js, f"the press shows it is busy: {js!r}"
-    assert "if(b.disabled)return" in js, "a second press cannot stack another pass"
-    assert re.search(r"finally\{.*b\.disabled=false.*\}", js), f"a finished or failed pass clears the busy state: {js!r}"
-    assert 'b.setAttribute("aria-busy","false")' in js
-    assert "pollBoard()" in js, "the fresh data is on screen when the pass ends"
+def test_no_route_runs_a_board_pass_on_request(hub):
+    """Only the timer runs a pass: no GET route spends the GitHub reads of a pass on a click."""
+    routes = re.search(r"def do_GET.*?(?=\n    def |\nclass )", HUB_PY.read_text(), re.S).group(0)
+    assert "/api/board/refresh" not in routes and "board_pass()" not in routes, "a GET route still runs a board pass"
 
 
 def test_a_failed_pass_keeps_the_last_good_board_and_surfaces_the_error(hub, monkeypatch):
@@ -136,8 +110,8 @@ def test_a_failed_pass_keeps_the_last_good_board_and_surfaces_the_error(hub, mon
         "the served board returns the last good data with the error beside it, which the page already renders"
 
 
-def test_the_sixty_second_pass_is_unchanged_and_is_not_replaced_by_the_button(hub, monkeypatch):
-    """The button adds a way to ask; the automatic pass keeps running on its own, one every 60 s."""
+def test_the_board_passes_on_its_own_every_sixty_seconds(hub, monkeypatch):
+    """The automatic pass runs on its own, one every 60 s."""
     passes, sleeps = [], []
 
     def fake_sleep(s):
@@ -150,5 +124,5 @@ def test_the_sixty_second_pass_is_unchanged_and_is_not_replaced_by_the_button(hu
     monkeypatch.setattr(hub, "STATE", Path(tempfile.mkdtemp()))   # no board-dirty flag of a live loop on this machine
     with pytest.raises(StopIteration):
         hub.refresh_board()
-    assert len(passes) == 2, "the loop keeps passing on its own, not only when the button is pressed"
+    assert len(passes) == 2, "the loop keeps passing on its own"
     assert sleeps[:30] == [2] * 30, "one pass every 60 s: 30 waits of 2 s between passes"
