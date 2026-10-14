@@ -47,12 +47,13 @@ reset() { rm -f "$T/gh.log" "$T/st/auto"/prland-*; mkorigin; }
 
 r=$(CHECKS="$GREEN" pl); merged && ok "green: merged" || ko "green not merged: '$r'"
 sha_main=$($G -C "$T/origin.git" rev-parse main)
-case "$r" in *"PRLAND MERGED #41 as $sha_main"*"fast-forward"*"#7"*) ok "the merge line names the PR, the landed sha and the issue";; *) ko "no merge line: '$r'";; esac
-# The landing: a fast-forward push, no merge API call, no close API call, the issue closed by the landed commit.
+case "$r" in *"PRLAND MERGED #41 as $sha_main"*"fast-forward"*"closed #7"*) ok "the merge line names the PR, the landed sha and the issue";; *) ko "no merge line: '$r'";; esac
+# The landing: a fast-forward push and no merge API call. The commit keeps Refs and carries no closing keyword (owner, #330):
+# the issue is closed by the API call and its one comment, as before.
 O="$G -C $T/origin.git"
 ! /usr/bin/grep -qE "^pr merge|pulls/41/merge" "$T/gh.log" && ok "a landed PR made no merge API call" || ko "merge API used: $(cat "$T/gh.log")"
-! /usr/bin/grep -qE "issues/7( |/comments)" "$T/gh.log" && ok "the issue made no close or comment API call" || ko "close API used: $(cat "$T/gh.log")"
-$O log -1 --format=%B main | /usr/bin/grep -qx "Closes #7" && ok "the landed commit carries Closes #7" || ko "no Closes #7: $($O log -1 --format=%B main)"
+/usr/bin/grep -qE "issues/7 " "$T/gh.log" && ok "the issue is closed by the API" || ko "no close API call: $(cat "$T/gh.log")"
+$O log -1 --format=%B main | /usr/bin/grep -qiE "^(close[sd]?|fix(e[sd])?|resolve[sd]?) #" && ko "the landed commit carries a closing keyword: $($O log -1 --format=%B main)" || ok "the landed commit carries no closing keyword"
 [ "$($O rev-parse main)" = "$($O rev-parse fix/7-x 2>/dev/null || echo gone)" ] && ko "branch not deleted" || { $O rev-parse -q --verify refs/heads/fix/7-x >/dev/null && ko "branch not deleted" || ok "the branch is deleted by push"; }
 $O rev-list --merges main | /usr/bin/grep -q . && ko "a merge commit landed" || ok "history stays linear (fast-forward)"
 # main moved after the PR was cut: the branch is rebased, then lands
