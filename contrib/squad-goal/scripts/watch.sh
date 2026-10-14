@@ -89,7 +89,7 @@ if v:
   # PR Code Complete (#83): a pull request nothing holds, whose check failed on the known baseline only, is squash-merged and
   # its issue closed. Under single.sh, so two passes never overlap; the job logs it reads can take seconds
   [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" prland "$(dirname "$0")/prland.sh" 2>&1 & ) 2>/dev/null
-  fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc, autopilot and both dispatch passes every 30 s outside this cycle
+  fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc, autopilot and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autopilot, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up
   # to ~6 min late, which is what frontier-idle kept reporting (#1845). Every step moved here keeps its own single.sh lock, so a pass
@@ -110,4 +110,4 @@ if v:
   boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1; tm "$(dirname "$0")/autopilot.sh" 2>&1; }; done; sleep 30
   # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains
   x=$(gh_stretch 90); [ "$x" -gt 0 ] 2>/dev/null && { echo "$(date +%T) QUOTA low: this cycle waits ${x}s more" >> "$SG_STATE/cycle.log"; sleep "$x"; }
-  echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc, autopilot and both dispatches every 30 s (fastloop.sh when watchd runs it), the rest every 90 s
+  echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc, autopilot and both dispatches every SG_FAST_INTERVAL s (fastloop.sh when watchd runs it), the rest every 90 s

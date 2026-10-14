@@ -58,6 +58,22 @@ KINDS = ("bug", "task", "spec", "test case")
 WAVE = re.compile(r"^wave:\d+$")   # the ordering label, and the title of the milestone that carries a delivery
 
 
+RUN_PARENT_TITLE = re.compile(r"^Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+$")   # the shell passes (frontier, bug) filter on the same pattern, in jq
+
+
+def is_run_parent(title):
+    """A run parent is a roll-up of its children, never a unit of work and never a child of another run parent (#340)."""
+    return bool(RUN_PARENT_TITLE.match(title or ""))
+
+
+class RunParentChild(RuntimeError):
+    """`group_run` was asked to link a run parent as a child. Not a carrier failure: asking again can not change it."""
+
+    def __init__(self, issue):
+        self.issue = issue
+        super().__init__(f"#{issue} is a run parent, never a child of another run parent")
+
+
 class NotCarried(RuntimeError):
     """The write is not carried by the read that follows it: the named failure, never a written card.
 
@@ -286,9 +302,11 @@ class State:
     def group_run(self, run, children):
         """One parent issue that names `run`, with each of `children` linked to it as a sub-issue, so the platform
         rolls the run's progress up. A run with fewer than two distinct children has no parent: None, and nothing
-        is written. The run's parent is found by its title and reused, never created twice. Returns its number."""
+        is written. A child that is itself a run parent is refused (`RunParentChild`), before anything is written. The run's parent is found by its title and reused, never created twice. Returns its number."""
         kids = sorted({int(c) for c in children})
         if len(kids) < 2: return None
+        for k in kids:
+            if is_run_parent(self.binding.title(k)): raise RunParentChild(k)
         parent = self.binding.parent_of(run) or self.binding.create_parent(run)
         for k in kids: self.link(parent, k)
         return parent
@@ -584,22 +602,35 @@ class BoardBinding:
         return f"Squad run {run}"
 
     def parent_of(self, run):
-        """The number of the issue titled for `run`, None when the run has none. Read off the issues route, which is
-        not the search index: the index lags a new issue, and a lag here would create a second parent."""
+        """The number of the issue titled for `run`, None when the run has none. A parent this seam made or found is
+        remembered under $SG_STATE and read back by number, so a retry never pages every issue. Otherwise read off the
+        issues route, which is not the search index: the index lags a new issue, and a lag here would create a second parent."""
+        title = self.parent_title(run)
+        known = self.st / f"run-parent-{run}"
+        if known.exists():
+            n = known.read_text().strip()
+            try:
+                if n.isdigit() and json.loads(self.api(f"repos/{self.repo}/issues/{n}")).get("title") == title: return int(n)
+            except (RuntimeError, ValueError): pass   # a read that fails or does not match: the page below decides
         out = self.api("--paginate", f"repos/{self.repo}/issues?state=all&per_page=100", "--jq",
                        '.[]|select(.pull_request==null)|[.number,.title]|@json')
-        title = self.parent_title(run)
         for l in out.splitlines():
             if l.strip():
                 n, t = json.loads(l)
-                if t == title: return n
+                if t == title: known.write_text(str(n)); return n
         return None
 
+    def title(self, issue):
+        """The title of `issue`, in one read."""
+        return json.loads(self.api(f"repos/{self.repo}/issues/{issue}")).get("title") or ""
+
     def create_parent(self, run):
-        """One POST of the parent issue, titled for the run. Returns its number."""
+        """One POST of the parent issue, titled for the run. Returns its number, which is remembered for `parent_of`."""
         body = f"The children of squad run {run}. Each child is a sub-issue; the progress rolls up here."
-        return json.loads(self.api("-X", "POST", f"repos/{self.repo}/issues", "--input", "-",
-                                   inp=json.dumps({"title": self.parent_title(run), "body": body})))["number"]
+        n = json.loads(self.api("-X", "POST", f"repos/{self.repo}/issues", "--input", "-",
+                                inp=json.dumps({"title": self.parent_title(run), "body": body, "labels": ["run-parent"]})))["number"]   # the label keeps it out of dispatch (#340)
+        (self.st / f"run-parent-{run}").write_text(str(n))
+        return n
 
     def children(self, parent):
         return [int(n) for n in self.api("--paginate", f"repos/{self.repo}/issues/{parent}/sub_issues?per_page=100", "--jq", ".[].number").split()]

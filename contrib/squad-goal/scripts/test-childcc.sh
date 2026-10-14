@@ -11,7 +11,7 @@ case $a in
   *"-q .state"*) echo open;;
   *"POST"*"/sub_issues"*) echo "link $a" >> "$GH_LOG"; cat >/dev/null;;
   *"/sub_issues"*) echo $GH_KIDS | tr ' ' '\n' | head -n "$(cat "$GH_LOG" 2>/dev/null | grep -c '^link')" || true;;   # the sub-issues read: the children the carrier carries so far, one per link written
-  *"POST"*"repos/x/y/issues"*) echo "create" >> "$GH_LOG"; cat >/dev/null; echo '{"number":900}';;
+  *"POST"*"repos/x/y/issues"*) echo "create $(cat)" >> "$GH_LOG"; echo '{"number":900}';;
   *"issues?state=all"*) ;;
   *"repos/x/y/issues/"*) echo '{"id":1}';;
   *"/fields?"*) echo 7;;
@@ -29,7 +29,7 @@ run_def() {
 }
 run_two() { # name: a run of two children, issues 2000 and 2001, and a run of one child, issue 2002
   mkdir -p "$T/co/runs/$1"; { echo '{"event": "spawn_accepted", "child": "a", "definition": "GitHub issue #2000"}'; echo '{"event": "spawn_accepted", "child": "b", "definition": "GitHub issue #2001"}'; } > "$T/co/runs/$1/record.jsonl"; echo "$1" >> "$T/st/active-runs.txt"; }
-run live 1 n; run_two two; run solo 2002 n; run fin-todo 2 v; run fin-testing 3 v; run fin-prog 4 v
+run live 1 n; run_two two; run_two fin-two; echo '{"event": "verdict"}' >> "$T/co/runs/fin-two/record.jsonl"; run solo 2002 n; run fin-todo 2 v; run fin-testing 3 v; run fin-prog 4 v
 run_def nohash c "FORK-ONLY work for GitHub issue 1487 on the agent-squad local fork." pass
 run_def issues c "FORK-ONLY work for GitHub issues 1491 on the fork." pass
 run_def branch c "Create the worktree: git worktree add ~/wt-as-1492 -b gui/1492 local/next" pass
@@ -54,4 +54,6 @@ echo "$out" | /usr/bin/grep -c 'CHILDCC UNMAPPED unmapped c' | /usr/bin/grep -qx
 grep -c '^create' "$T/gh.log" | grep -qx 1 && ok "two children: one parent created, none for the one-child run" || ko "parent creates: $(cat "$T/gh.log" 2>/dev/null)"
 [ "$(grep -c '^link' "$T/gh.log")" = 2 ] && ok "two children: both linked as sub-issues" || ko "links: $(cat "$T/gh.log" 2>/dev/null)"
 echo "$out" | /usr/bin/grep -q 'RUN PARENT #900 (two)' && ok "the run's parent is reported" || ko "no parent report: $out"
+grep '^create' "$T/gh.log" | grep -q '"labels": \["run-parent"\]' && ok "the parent carries the run-parent label, so no pass dispatches it (#340)" || ko "parent create body: $(grep '^create' "$T/gh.log")"
+echo "$out" | /usr/bin/grep -q 'RUN PARENT .*(fin-two)' && ko "a finished run got a parent (#340)" || ok "a finished run gets no parent (#340)"
 rm -rf "$T"; exit $fail

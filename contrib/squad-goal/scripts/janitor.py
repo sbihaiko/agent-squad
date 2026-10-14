@@ -314,6 +314,11 @@ def issue_info(x):
     return issue_read(x)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
 _open = None
+def close_spec(n, why):   # the comment, then the close as completed, both through the door's write (gh_send)
+    door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
+    if _run(door + [f"repos/{repo0}/issues/{n}/comments", "-f", f"body={why}"])[0] == 0:
+        _run(door + ["-X", "PATCH", f"repos/{repo0}/issues/{n}", "-f", "state=closed", "-f", "state_reason=completed"])
+_subs = {}   # issue -> REST's sub_issues_summary, from the same one read as the labels
 _kids = {}   # spec -> its sub-issues' numbers (the native relation), from the same one read as the labels
 def open_issues():   # every open issue of the repository, ONE read per pass through the door's aggregate route (#92): (answered, {number: labels}). answered is False when the list did not answer (a refusal, a deadline miss, no door beside this module), and then no card is added on a guess. No call per issue: the one list carries every issue's number and labels.
     global _open
@@ -325,6 +330,7 @@ def open_issues():   # every open issue of the repository, ONE read per pass thr
         for i in items if isinstance(items, list) else []:
             if isinstance(i, dict) and isinstance(i.get("number"), int):
                 m[str(i["number"])] = set(l.get("name") for l in i.get("labels") or [] if isinstance(l, dict))
+                if isinstance(i.get("sub_issues_summary"), dict): _subs[str(i["number"])] = i["sub_issues_summary"]
                 if isinstance(i.get("sub_issues"), list): _kids[str(i["number"])] = [str(k) for k in i["sub_issues"] if isinstance(k, int)]
         _open = (isinstance(items, list), m)
     return _open
@@ -359,6 +365,14 @@ def cards(p):   # every card of project p, read once per pass, asked of the seam
         try: _cards[p] = (bool(seam.binding.status_field()["id"]), seam.read_all())
         except (RuntimeError, ValueError): _cards[p] = (False, {})
     return _cards[p]
+_holders = {}
+def holders(p):   # the Run and Run started every card carries, read once per pass (never once per card), asked of the seam (#327): {issue: {"run", "started"}}; None when the read did not answer, and then every holder is written
+    if p not in _holders:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from issue_state import board_state
+        try: _holders[p] = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run).holders()
+        except Exception: _holders[p] = None
+    return _holders[p]
 def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""
     return cards(p)[1].get(str(n), "")
@@ -542,12 +556,18 @@ def reconcile_board():
             # work starts on the spec the card leaves the column by the rule that names that work.
             if "spec" in olabels[n]:
                 # A spec's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
-                # the cards are read once per pass, so the fold adds no call. It replaces the rule that closed the spec issue.
+                # the cards are read once per pass, so the fold adds no call. The close rule below closes the spec issue itself.
                 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the fold sits beside this script; -I keeps the script's directory off sys.path
                 import spec_fold
                 have_cards = cards(proj)[1]
                 col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""))
                 set_expected(n, col, "spec folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)
+                # A spec with at least one sub-issue, every one closed, is done (the owner's rule): the loop closes it with one comment.
+                # A spec with no sub-issue proves nothing and stays open.
+                sub = _subs.get(n) or {}
+                if sub.get("total", 0) >= 1 and sub.get("completed") == sub["total"]:
+                    say(f"SPEC-CLOSED #{n}: every sub-issue ({sub['total']}) is closed")
+                    if not dry: close_spec(n, f"Closed by the loop: every sub-issue ({sub['total']}) is closed, so the spec is done.")
                 if reverted:
                     say(f"SPEC-REVERTED #{n}: a child reopened, the card keeps {col} and carries the tag {spec_fold.TAG}")
                     if not dry and spec_fold.TAG not in olabels[n]: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={spec_fold.TAG}"])
@@ -589,7 +609,9 @@ def reconcile_board():
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:
-            if run_id: board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
+            held = (holders(proj) or {}).get(str(n))
+            if run_id and held != {"run": run_id, "started": run_ts or ""}:   # only a holder or a start the card does not carry is written (#327)
+                if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
         elif have in ("In Progress", "Doing"):
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does

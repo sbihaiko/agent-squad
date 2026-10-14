@@ -17,6 +17,11 @@ sg_cq_file() {
   case "${SG_REPO:-}" in ?*/?*) ;; *) echo "sg_cq_file: no repository in force for $leaf" >&2; return 1;; esac
   printf '%s/cq/%s#%s\n' "${SG_STATE:?sg_cq_file: no state directory}" "${SG_REPO/\//__}" "$leaf"
 }
+# One loop comment of a kind per issue or PR (#328): `sg_cq_status <n> <tag>` and `sg_cq_delivery <n> <tag>` name a queue file that
+# cqflush.sh does not post blindly. It finds the comment carrying the hidden marker of that kind (status or delivery), edits it when the body
+# differs, and writes nothing when it is the same. Every writer of a status or a delivery comment names its file through these two.
+sg_cq_status() { sg_cq_file "$1-status~$2.md"; }
+sg_cq_delivery() { sg_cq_file "$1-delivery~$2.md"; }
 # The repositories the profile works, one per line, the primary first, each once. A profile names them in SG_REPOS. A
 # profile that still names the retired SG_TOOLING_REPO has that repository read as one more entry after SG_REPO.
 sg_repos() {
@@ -114,6 +119,10 @@ _sg_ctx_of() { local slug=$1 issue=$2 f out op; f="$(sg_profiles_dir)/$slug.sh"
   op=$(eval "$out"; printf '%s %s' "$SG_OWNER" "$SG_PROJECT")
   printf '%s\n' "$out"
   printf '%s=%q\n' SG_STATE "$(sg_state_dir "$slug")" SG_SHARED "$(sg_shared_dir)" SG_BOARD_CACHE "$(sg_board_cache "${op% *}" "${op#* }")"; }
+# sg_profile_setting <slug> <KEY> <default>: the value one profile gives KEY, else <default>; the profile is read on its own, as _sg_ctx_of reads it.
+sg_profile_setting() { local f; f="$(sg_profiles_dir)/$1.sh"; [ -f "$f" ] || { echo "$3"; return; }
+  env $(compgen -e | /usr/bin/grep '^SG_' | /usr/bin/grep -vx 'SG_PROFILES_DIR\|SG_STATE_BASE' | sed 's/^/-u /') \
+    bash -c 'here=$1; . "$2" >/dev/null 2>&1; eval "v=\${$3:-$4}"; echo "$v"' _ "$_sg_ctx_here" "$f" "$2" "$3"; }
 _sg_repo_of() { _sg_ctx_of "$1" "" 2>/dev/null | sed -n 's/^SG_REPO=//p'; }
 _sg_real() { (cd "$1" 2>/dev/null && pwd -P); }
 # repoctx <input>: print the context, or refuse (return 2) naming what it could not resolve.

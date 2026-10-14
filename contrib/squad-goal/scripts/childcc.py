@@ -9,7 +9,7 @@ Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never ov
 past it is left alone because the marker is written the first time the child is seen passing."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-from issue_state import board_state
+from issue_state import board_state, RunParentChild
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -40,8 +40,9 @@ for r in (st / "active-runs.txt").read_text().split():
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             unmapped.append(d["node"])
     mk = A / f"parent-{pathlib.Path(r).name}"
-    if not mk.exists() and len(set(issue.values())) > 1:   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
+    if not finished and not mk.exists() and len(set(issue.values())) > 1:   # a finished run gets no parent: no backfill (#340)   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
         try: print(f"RUN PARENT #{state.group_run(pathlib.Path(r).name, issue.values())} ({pathlib.Path(r).name})"); mk.touch()
+        except RunParentChild as e: print(f"RUN PARENT REFUSED {pathlib.Path(r).name}: {e}"); mk.touch()   # asking again can not change it
         except RuntimeError as e: print(f"RUN PARENT FAILED {pathlib.Path(r).name}: {e}")   # no marker: the next pass asks again
     for child, why in done:
         mk = A / f"cc-{pathlib.Path(r).name}-{child}"
