@@ -34,6 +34,11 @@ case "$*" in
   *"issues/"*)
     [ -e "${GHREFUSE:-/nonexistent}" ] && { cat "$GHTEXT"; exit 1; }
     printf '{"state":"%s"}\n' "$(cat "${GHSTATE:-/nonexistent}" 2>/dev/null || echo open)";;
+  *graphql*"issue(number:"*)   # a single-issue read goes through one GraphQL request since #256; GitHub spells the state in capitals
+    [ -e "${GHREFUSE:-/nonexistent}" ] && { cat "$GHTEXT"; exit 1; }
+    n=$(printf '%s' "$*" | grep -o 'issue(number: [0-9]*' | head -1 | tr -dc 0-9)
+    st=$(cat "${GHSTATE:-/nonexistent}" 2>/dev/null || echo open)
+    printf '{"data":{"repository":{"i%s":{"number":%s,"state":"%s"}}}}\n' "$n" "$n" "$(printf '%s' "$st" | tr a-z A-Z)";;
   *) printf '{}\n';;
 esac
 GH
