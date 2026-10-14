@@ -1073,8 +1073,7 @@ def task_count(i):
     return f"{c}/{t}" if t > 0 else None
 def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open and closed PRs of
-    every repository the hub is told to read (#1820). The 60 s loop and the header's refresh button both run exactly
-    this, so a press reads the board the same way the timer does (#1810).
+    every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
 
     The two reads are independent: the issues are the profile repository's board, the PR columns span every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
@@ -1110,8 +1109,7 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
     _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
     return board_cache
 def refresh_board():
-    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag). The header's
-    refresh button asks for the same pass by hand; it never replaces this timer (#1810)."""
+    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag)."""
     while True:
         board_pass()
         for _ in range(30):
@@ -1711,9 +1709,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .cell{display:flex;flex-direction:column;min-height:0;min-width:0}.cell small{color:var(--mute);padding:2px 4px;display:flex;justify-content:space-between}.cell .snap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:12px;overflow:hidden;color:var(--mute);border:1px solid var(--line);background:#0f1115}.cell[tabindex]{cursor:pointer}.cell[tabindex]:hover .snap,.cell[tabindex]:focus-visible .snap{border-color:var(--pin);color:var(--fg,inherit)}
 #board{position:relative;width:360px;border-left:1px solid var(--line);overflow:auto;background:var(--panel);flex:none}
 #board.off{width:26px;overflow:hidden}#board.off #bbody{display:none}#bhead{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:2}
-#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}#board.off #br{display:none}
-#br{margin-left:8px;margin-right:auto;padding:0 6px;font-weight:400;line-height:1.4}   /* beside the title, so it reads as part of it and never as the labels / maximize / collapse group (#1810) */
-#br[aria-busy=true]{opacity:.55;cursor:progress}#br.busy>span{display:inline-block;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+#board.off #bhead b{display:none}#board.off #bhead{padding:8px 3px}
 #bbody .ah{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-weight:600;position:sticky;top:34px;background:#1b212b;z-index:1}   /* the same gap as the docked header: `Todo0` is never a reading, in either rendering (#1809) */
 #bbody .ah .n{background:#2a303b;border-radius:9px;padding:0 8px;font-weight:400}
 #bbody .ah i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;background:var(--mute)}
@@ -1773,7 +1769,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 body.dockb #win{display:grid;grid-template-columns:300px 1fr;grid-template-rows:minmax(0,1fr) auto}
 body.dockb #side{grid-row:1/3}body.dockb #main{grid-column:2;grid-row:1}
 body.dockb #board{grid-column:2;grid-row:2;width:auto;height:320px;border-left:0;border-top:1px solid var(--line);display:flex;flex-direction:column}
-body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}body.dockb #board.off #br{display:inline-block}
+body.dockb #board.off{height:34px;width:auto}body.dockb #board.off #bhead b{display:inline}body.dockb #board.off #bhead{padding:8px 10px}
 body.dockb #bbody{flex:none;height:calc(100% - 41px);min-height:0;display:flex;overflow-x:auto;overflow-y:hidden}
 
 body.dockb #bhead{position:static}
@@ -1834,7 +1830,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><button id=br title="re-read the board now: the Project statuses, the blockers and the open PRs" aria-label="refresh the board now" aria-busy=false><span>&#8635;</span></button><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
@@ -2296,7 +2292,6 @@ $("#bsp").onclick=()=>{bo.specs=!bo.specs;saveB();pollBoard()};
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
 $("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
 document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});
-$("#br").onclick=async()=>{const b=$("#br");if(b.disabled)return;b.disabled=true;b.setAttribute("aria-busy","true");b.classList.add("busy");try{await fetch("/api/board/refresh")}catch(e){}try{await pollBoard()}finally{b.disabled=false;b.setAttribute("aria-busy","false");b.classList.remove("busy")}};   // one real pass, asked for by hand; the button says it is busy while it runs and clears when it ends, failure included (#1810)
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
@@ -2853,8 +2848,6 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
-        elif self.path.startswith("/api/board/refresh"):
-            board_pass(); body, ct = json.dumps(board()).encode(), "application/json"   # the header's refresh button: one real pass, not another read of the cache (#1810)
         elif self.path.startswith("/api/board"): body, ct = json.dumps(board()).encode(), "application/json"
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
