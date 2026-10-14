@@ -104,6 +104,14 @@ def _now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def test_case_row(title, now=None):
+    """The row one test case item's title states: {"issue", "result", "commit", "ended", "age"}, the age in seconds at
+    `now` (a UTC stamp; the clock when none is given). None when the title is not a pass."""
+    m = TEST_CASE_TITLE.match(title or "")
+    if not m: return None
+    return {"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": int((_utc(now or _now()) - _utc(m[4])).total_seconds())}
+
+
 class State:
     """The seam: what state issue N carries, and a write proven by the read that follows it."""
 
@@ -229,13 +237,9 @@ class State:
     def test_cases(self, now=None):
         """Every test case item, in one read: [{"issue", "result", "commit", "ended", "age"}], the age in seconds
         at `now` (a UTC stamp; the clock when none is given). An item whose title is not a pass is not one."""
-        now = _utc(now or _now())
-        out = []
-        for _, title, kind in self.binding.test_case_rows():
-            m = TEST_CASE_TITLE.match(title)
-            if m and kind == "test case":
-                out.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": int((now - _utc(m[4])).total_seconds())})
-        return out
+        now = now or _now()
+        rows = (test_case_row(title, now) if kind == "test case" else None for _, title, kind in self.binding.test_case_rows())
+        return [r for r in rows if r]
 
     def record_pass(self, issue, result, commit, ended=None):
         """Record a finished test pass as one `test case` item: the issue it tested, the result (`pass` or `fail`),

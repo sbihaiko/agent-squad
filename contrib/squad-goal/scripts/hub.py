@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-from issue_state import board_state, KINDS
+from issue_state import board_state, KINDS, test_case_row
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__file__).resolve().parent / "board_columns.py")
@@ -1083,12 +1083,14 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
     The two reads are independent: the issues are the profile repository's board, the PR columns span every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
     repository's own error on the column), so a failed pass never writes a fresh empty board (#1772, #1820)."""
-    items = lc = None
+    items = lc = cases = None
     try:
             out = board_seam().rows(
-                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}',
+                '.[]|(select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}),(select(.content.number|not)|{dt:(.content.title//""),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end)})',
                 kind=True, timeout=120)
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
+            cases = [i["dt"] for i in items if "dt" in i and i.get("k") == "test case"]   # a draft item of the kind test case: one row beside the axis, read in this same call (#306)
+            items = [i for i in items if "dt" not in i]
             oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
                 '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name],si:{total:.sub_issues_summary.total,completed:.sub_issues_summary.completed}}'], capture_output=True, text=True, timeout=120).stdout
             have = {i["n"] for i in items}   # open issues that never reached the board have no state either
@@ -1102,7 +1104,7 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
     except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
     if items: apply_holders(items)
-    if items: board_cache.update(t=time.time(), items=items, lc=lc or board_cache.get("lc", {}), err=None)
+    if items: board_cache.update(t=time.time(), items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
     rs = REPOS if repos is None else repos
     try:
             prs, prev, prev_n, errs = prs_pass(fetch_open, fetch_closed, fetch_total, rs)
@@ -1542,6 +1544,7 @@ def pr_badge(x):
     if "APPROVE" in (summary_lines(x["n"], (x.get("h") or "")[:9]) or [""])[-1]: return "approved"
     if ci and x.get("rollup") == "pass": return "green"
     return None
+def _now_stamp(): return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 def board():
     by = {}; kind_rows = []
     for i in board_cache["items"]:
@@ -1570,7 +1573,7 @@ def board():
     kind_rows += [{"kd": _columns_module.PR_KIND, "closed": False, "n": p["n"], "t": p["t"], "c": None, "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]
     kind_rows += [{"kd": _columns_module.PR_KIND, "closed": True, "n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]
     perr = "; ".join(board_cache.get("errs") or [])   # the repositories this pass could not read, named on the column
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": COLUMN["pr_closed"], "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": COLUMN["pr_open"], "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "kinds": _columns_module.kind_groups(KINDS, kind_rows), "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": COLUMN["pr_closed"], "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": COLUMN["pr_open"], "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "kinds": _columns_module.kind_groups(KINDS, kind_rows), "cases": [r for r in (test_case_row(t, _now_stamp()) for t in board_cache.get("cases") or []) if r], "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -1808,6 +1811,7 @@ body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;over
 #bbody .prs .it .rpo{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the tag naming the card's repository (#1820) */
 #bbody .perr{margin:0 0 6px;padding:4px 6px;font-size:10px;line-height:1.35;border-radius:8px;overflow-wrap:anywhere;color:#ffb4b4;background:color-mix(in srgb,#ff6b6b 12%,#10141a);border:1px solid color-mix(in srgb,#ff6b6b 40%,transparent)}   /* the unreadable repository, on the column (#1820) */
 body.dockb #bbody>.col.prs{box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
+#bcases:empty{display:none}body.dockb #bcases{position:absolute;right:8px;bottom:4px;z-index:2;display:flex;gap:6px;background:#1c222c}#bcases .tcr{display:flex;gap:8px;align-items:center;padding:3px 8px;margin:2px 0;border-left:3px solid var(--mute);font-size:12px}#bcases .tcr.fail{border-left-color:#ff6b6b}#bcases .tcr.fail .tcs{color:#ff6b6b}#bcases .tcr.pass{border-left-color:#3ecf8e}   /* a test pass is a row beside the axis, never a column (#306) */
 body.dockb #bbody>.col.lane+.col:not(.lane){border-left:3px double var(--line)}#bbody .acc.lane+.acc:not(.lane){margin-top:10px}   /* the PR lanes sit ahead of the axis: a rule marks where the columns start (#247) */
 body.dockb #bbody>.col.prcol{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent));box-shadow:inset 0 2px 0 var(--cc);flex:1.15 1 0}
 body.dockb .sec{display:flex;flex-direction:column;min-height:0;flex:none}body.dockb .sec.open{flex:1 1 0}body.dockb .sec:not(.open)>.sc{display:none}
@@ -1839,7 +1843,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bk title="group the items by kind and status, one open and one closed group for each kind" aria-pressed=false>Kinds</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bk title="group the items by kind and status, one open and one closed group for each kind" aria-pressed=false>Kinds</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bbody></div><div id=bcases></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
@@ -2254,6 +2258,7 @@ const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
+const caseRows=cs=>cs.map(c=>`<div class="tcr ${esc(c.result)}" data-case="${c.issue}" title="a test pass: a result beside the axis, never a column"><span class=tcs>${c.result==="fail"?"failed":"passed"}</span> <a class=id target=_blank href="https://github.com/__REPO__/issues/${c.issue}">#${c.issue}</a> <span class=tca>${c.age>=86400?Math.floor(c.age/86400)+"d "+Math.floor(c.age%86400/3600)+"h":c.age>=3600?Math.floor(c.age/3600)+"h "+String(Math.floor(c.age%3600/60)).padStart(2,"0")+"m":Math.floor(c.age/60)+"m"} ago</span> <code class=tcc title="${esc(c.commit)}">${esc(c.commit.slice(0,7))}</code></div>`).join("");   // one row for each test pass, painted as the model gives it: no call of its own, and no column
 const kindGroups=gs=>gs.map(g=>`<div class="acc open kgrp" data-g="${esc(g.name)}" data-kind="${esc(g.kind)}" data-state="${esc(g.state)}"><div class=ah><span>${esc(g.name)}</span><span><span class=n>${g.n}</span></span></div><div class=sc data-g="${esc(g.name)}">${g.items.map(x=>`<div class=it data-key="${esc(x.key)}" data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${x.k==="pr"?"pull":"issues"}/${x.n}">${x.k==="pr"?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo>${esc(x.rt)}</span>`:""}<span class=tt>${esc(x.t)}</span></div>`).join("")}</div></div>`).join("");   // one group per kind and state, painted as the model names it and keyed (kind, number): the pane holds no group name and reads no cache of its own
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,b.prev,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
@@ -2296,6 +2301,7 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
+{const ch=caseRows(b.cases||[]),cb=$("#bcases");if(cb.dataset.h!==ch){cb.dataset.h=ch;cb.innerHTML=ch}}   // the test pass rows sit beside the axis in their own strip: never a column, never a card of one
 if(bo.kinds){const kh=kindGroups(b.kinds);if($("#bbody").dataset.h!==kh){$("#bbody").dataset.h=kh;$("#bbody").innerHTML=kh;restore()}}else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
 $("#bk").onclick=()=>{bo.kinds=!bo.kinds;saveB();pollBoard()};
