@@ -134,5 +134,15 @@ um=""
 while read -r n; do [ -n "$n" ] && { fingerprint "$n" "$ADDR" "$E1" >/dev/null 2>&1 || um="$um $n"; }; done <<< "$set"
 [ -z "$um" ] && ok "every name in the set is a name the filer takes" || ko "the filer refused a member:$um"
 
+# 9. a chain is one cause (#308, #311, #315): each link names the previous bug's number in the address and in the error,
+# and the error's text starts with the seam's "items read N" diagnostic. Neither the number nor the count is the cause,
+# so two links of one chain share one fingerprint, and a different column is still a different cause.
+C1=$'issue_state.py: items read 170; project total: none on the REST items route\n#307: the board carries no \'In Progress\' on it after 4 reads (gh: Invalid field values (HTTP 400)); a read failure, not a written card'
+C2=$'issue_state.py: items read 172; project total: none on the REST items route\n#308: the board carries no \'In Progress\' on it after 4 reads (gh: Invalid field values (HTTP 400)); a read failure, not a written card'
+f1=$(fingerprint BOARD-WRITE-FAILED "sbihaiko/4 #307 -> In Progress" "$C1"); f2=$(fingerprint BOARD-WRITE-FAILED "sbihaiko/4 #308 -> In Progress" "$C2")
+[ -n "$f1" ] && [ "$f1" = "$f2" ] && ok "two links of one chain share one fingerprint" || ko "the links differ: '$f1' '$f2'"
+f3=$(fingerprint BOARD-WRITE-FAILED "sbihaiko/4 #308 -> Doing" "${C2//In Progress/Doing}")
+[ "$f3" != "$f2" ] && ok "another column is another cause" || ko "the column did not enter the fingerprint"
+
 echo "--- shell suite: test-autorefuse.sh $([ "$fail" = 0 ] && echo green || echo RED)"
 exit $fail
