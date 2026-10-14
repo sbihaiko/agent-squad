@@ -3,11 +3,11 @@
 The task key is content, not identity: a model may supply it, and it narrows nothing, so it has no limit rule.
 """
 from squad.envelope import validate_request
-from tests.helpers import node, router
+from tests.helpers import route
 
 
 def disp():
-    return node(router(), "route")
+    return route()
 
 
 def test_a_task_key_normalizes_and_survives():

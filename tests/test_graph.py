@@ -5,7 +5,7 @@ import pytest
 
 from squad import graph, skills
 from squad.envelope import validate_request
-from tests.helpers import DESIGN, five, load_doc, node, router
+from tests.helpers import DESIGN, five, load_doc, node, route, router
 
 
 def errors(doc):
@@ -263,7 +263,7 @@ def test_refuses_a_dispatch_with_no_checks():
 
 
 def test_a_spawn_value_outside_allow_is_rejected_whole_with_its_rule():
-    disp = node(router(), "route")
+    disp = route()
     ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": node(router(), "route")["allow"]["models"][0], "tools": ["Read"]}
     _, errs = validate_request(disp, ok, 1, None, 10.0)
     assert errs == []
@@ -283,7 +283,7 @@ def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
     The rule read the value as a string, so an allowed envelope rejected every child that named the directory it works in:
     three children of one frontier run, and the run folded to fail `no_dispatch, spawn_rejected:workspace_outside_allow`
     with nothing delivered (#55)."""
-    disp = node(router(), "route")
+    disp = route()
     ok = {"prompt": "go", "skill": {"name": "tdd"}, "model": node(router(), "route")["allow"]["models"][0], "tools": ["Read"]}
     for w in ("worktrees/child", "worktrees/child/gui-26", "worktrees/child/gui-26/", "worktrees/child/a/b"):
         _, errs = validate_request(disp, {**ok, "workspace": w}, 1, None, 10.0)
@@ -295,14 +295,14 @@ def test_a_workspace_inside_an_allowed_one_is_inside_the_envelope():
 
 
 def test_a_model_supplied_identity_in_a_spawn_request_is_refused():
-    disp = node(router(), "route")
+    disp = route()
     for key in ("id", "child", "request_key", "name"):
         _, errs = validate_request(disp, {"prompt": "go", "skill": "tdd", key: "x"}, 1, None, 10.0)
         assert f"model_supplied_identity:{key}" in errs
 
 
 def test_skill_name_alone_floats_to_the_current_hash():
-    disp = node(router(), "route")
+    disp = route()
     req, errs = validate_request(disp, {"prompt": "go", "skill": "tdd"}, 1, None, 10.0)
     assert errs == [] and req["skill"] == {"name": "tdd", "version": skills.load()["tdd"]["hash"]}
 
