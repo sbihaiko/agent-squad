@@ -59,6 +59,10 @@ def _off_ids():   # {bare model id: chain}: hub.py's model_off (the switch count
     for chain, row in (mdoc.get("off") or {}).items():
         for mid, v in (row or {}).items():
             if v and mid in (mdoc.get(chain) or []): out.setdefault(mid.removeprefix("claude:"), chain)
+    # a model outside its `hours` window is closed the same way: the router and the dispatch fallbacks must not pick it
+    for chain in mdoc.get("hours") or {}:
+        for mid in (mdoc.get("hours") or {}).get(chain) or {}:
+            if mid in (mdoc.get(chain) or []) and not _in_hours(chain, mid): out.setdefault(mid.removeprefix("claude:"), chain + " hours window")
     return out
 def _graph_path(workflow):   # mirrors squad/workflows.py resolve: no id, `default` or `dynamic` is the owner's default file, else the dynamic seed
     folder = cwd / "docs" / "squad" / "workflows"; sq = pathlib.Path(squad)
@@ -76,7 +80,7 @@ if off_ids:
     try: gdoc = json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text())
     except (OSError, ValueError): gdoc = {}   # an absent or malformed graph is the squad's own refusal to make, not this gate's
     hits = [(nm, m, ALIASES.get(m, m), off_ids[ALIASES.get(m, m)], first) for nm, m, first in _run_models(gdoc) if ALIASES.get(m, m) in off_ids]
-    said = lambda h: f"node {h[0]!r} runs {h[1]}{'' if h[1] == h[2] else f' -> {h[2]}'}, which the models panel switched off in models.json ({h[3]})"
+    said = lambda h: f"node {h[0]!r} runs {h[1]}{'' if h[1] == h[2] else f' -> {h[2]}'}, which the models panel switched off, or whose hours window excludes now, in models.json ({h[3]})"
     for h in hits:
         if not h[4] or os.environ.get("SG_ALLOW_MODEL"): print(f"warning: {said(h)}" + ("" if h[4] else " (a fallback of the dispatch)"), file=sys.stderr)
     if any(h[4] for h in hits) and not os.environ.get("SG_ALLOW_MODEL"):

@@ -18,7 +18,7 @@ chmod +x "$T/bin/gh" "$T/s/autofix.sh" "$T/s/revci.sh"; export PATH="$T/bin:$PAT
 echo $(( $(date +%s) - 3600 )) > "$T/st/auto/seen-10"
 echo "#10 aaaaaaaaa clean CI=success:9 VERDICT: BLOCKED (every review model failed)" > "$T/st/revci-10.out"
 echo "VERDICT: BLOCKED (every review model failed)" > "$T/st/review-10.md"
-printf '%s\t%s\t%s\t%s\t%s\n' "2026-10-11T00:00:00" 10 "claude:claude-deepseek-v4-flash" 120 142 > "$T/st/review-times.tsv"
+printf '%s\t%s\t%s\t%s\t%s\n' "2026-10-11T00:00:00" 10 "claude:claude-haiku-4-5" 120 142 > "$T/st/review-times.tsv"
 # hermetic: a live profile exporting SG_REVIEW_TIMEOUT (the coordinator workaround sets 360) must not reach the case
 run() { env -u SG_REVIEW_TIMEOUT -u SG_REVIEW_CHAIN_DEPTH -u SG_REVIEW_RETRY_BUDGET bash "$T/s/autopilot.sh" 2>/dev/null; }
 r=$(run)
@@ -32,7 +32,7 @@ case "$envl" in
   *) ko "revci env not recorded: r='$r' env='$envl'";; esac
 # a BLOCKED that is not a leash timeout still carries the aging leash
 : > "$T/st/revci-env.log"; rm -f "$T/st/auto/rereview-10-aaaaaaaaa"
-printf '%s\t%s\t%s\t%s\t%s\n' "2026-10-11T00:00:00" 10 "claude:claude-deepseek-v4-flash" 8 1 > "$T/st/review-times.tsv"
+printf '%s\t%s\t%s\t%s\t%s\n' "2026-10-11T00:00:00" 10 "claude:claude-haiku-4-5" 8 1 > "$T/st/review-times.tsv"
 r=$(run)
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$T/st/revci-env.log" ] && break; sleep 0.1; done
 envl=$(cat "$T/st/revci-env.log" 2>/dev/null)
