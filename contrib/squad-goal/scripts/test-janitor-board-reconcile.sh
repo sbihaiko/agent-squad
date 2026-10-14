@@ -12,7 +12,7 @@
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
 here="$(cd "$(dirname "$src")" && pwd)"; cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$T/s/"   # the janitor reaches the open-issue list through the door beside it (ghcall.sh)
-cp "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141), and names it from the closed set (#142)
+cp "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$here/spec_fold.py" "$T/s/"   # a refused card write queues its comment through the helper beside it (#141), and names it from the closed set (#142)
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$*" in
@@ -47,25 +47,30 @@ case "$a" in
     for n in 2001 2007 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
+    printf '2030\tDone\thttps://api.github.com/repos/x/y\n2031\tAbandoned\thttps://api.github.com/repos/x/y\n2029\tClosed\thttps://api.github.com/repos/x/y\n'   # spec children, and a spec card already Closed
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021; do
-      body=""; subs='{"total":0,"completed":0}'
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029; do
+      body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
         2012) labs='{"nodes":[{"name":"needs-ratification"}]}';;
         # #2017 is a spec and #2019 one of its children, published the way /to-tickets publishes them (#117): the parent
         # carries the spec label, the child carries its wave beside the triage label and names its blocker in its body.
-        2017) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}';;
+        2017) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2019},{"number":2011}]';;
         # #2020 is a spec whose every sub-issue is closed: it is done, and the pass closes it. #2021 is a spec with no
         # sub-issue: nothing proves it done, so it stays open.
-        2020) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":2}';;
+        2020) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":2}'; kids='[{"number":2030},{"number":2031}]';;
+        # the fold's other cases: every child abandoned, a child still queued, and a Closed spec whose child reopened
+        2027) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2031}]';;
+        2028) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2030},{"number":2012}]';;
+        2029) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2030},{"number":2002}]';;
         2021) labs='{"nodes":[{"name":"spec"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
       esac
-      printf '%s{"number":%s,"title":"Issue %s","body":"%s","state":"OPEN","labels":%s,"subIssuesSummary":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$body" "$labs" "$subs"; sep=,; done
+      printf '%s{"number":%s,"title":"Issue %s","body":"%s","state":"OPEN","labels":%s,"subIssuesSummary":%s,"subIssues":{"nodes":%s},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$body" "$labs" "$subs" "$kids"; sep=,; done
     printf ']}}}}';;
   *issues/2007*) echo $'open\t\tIssue 2007\tneeds-owner';;
   *issues/2010*) echo $'closed\t\tIssue 2010';;
@@ -182,17 +187,27 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 # so every child opens in the loop's queue column, Todo, in ONE write when the card is missing (#86). The child's wave and
 # its `## Blocked by` line do not move it off Todo: the column carries the loop floor, and the gate that holds a wave-2
 # ticket back until its blocker lands is the dispatch's own reading of those edges, never the column (#142).
-/usr/bin/grep -q '^ADD o 4 Open Specs 2017$' "$T/board.calls" 2>/dev/null && ok "a spec with no card is created in Open Specs" || ko "#2017 not added Open Specs: $(bc) $o"
+/usr/bin/grep -q '^ADD o 4 Doing 2017$' "$T/board.calls" 2>/dev/null && ok "a spec with no card is created in Doing, a child of it is in flight" || ko "#2017 not added Open Specs: $(bc) $o"
 ! /usr/bin/grep -q 'Todo 2017' "$T/board.calls" 2>/dev/null && ok "a spec is never created in the queue column" || ko "#2017 read as work: $(bc)"
-/usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Open Specs (issue carries the spec label)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Doing (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Todo 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Todo" || ko "#2019 not added Todo: $(bc) $o"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
-# A spec with at least one sub-issue, every one of them closed, is done: the pass closes it as completed and names the
-# close. A spec with an open sub-issue, or with none, stays open (the owner's rule).
-/usr/bin/grep -q '^api -X PATCH repos/x/y/issues/2020 -f state=closed -f state_reason=completed$' "$T/gh.calls" 2>/dev/null && ok "a spec whose every sub-issue is closed is closed" || ko "#2020 not closed: $(/usr/bin/grep 'issues/2020' "$T/gh.calls") $o"
-/usr/bin/grep -q '^api repos/x/y/issues/2020/comments -f body=Closed by the loop' "$T/gh.calls" 2>/dev/null && ok "the close carries a comment that names why" || ko "#2020 no comment: $(/usr/bin/grep 'issues/2020' "$T/gh.calls")"
-/usr/bin/grep -q 'SPEC-CLOSED #2020: every sub-issue (2) is closed' "$T/st/cycle.log" 2>/dev/null && ok "the close is named in cycle.log" || ko "#2020 close not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
-! /usr/bin/grep -q 'issues/\(2017\|2021\)\(/comments\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a spec with an open sub-issue, or none, stays open" || ko "a spec closed early: $(/usr/bin/grep -E 'issues/(2017|2021)' "$T/gh.calls")"
+# A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
+# cards the pass already holds: Backlog with none (or none past the queue), Doing once a child reached Doing, Closed when
+# every child is terminal and one is Closed, Abandoned when every child is terminal and none is Closed. The pass no longer
+# closes the spec issue itself.
+for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Backlog 2028"; do
+  /usr/bin/grep -q "^$w\$" "$T/board.calls" 2>/dev/null && ok "spec fold: $w" || ko "spec fold: no '$w': $(/usr/bin/grep -E ' 20(20|21|27|28)$' "$T/board.calls")"
+done
+! /usr/bin/grep -q 'Open Specs' "$T/board.calls" 2>/dev/null && ok "no spec is written to the old Open Specs column" || ko "Open Specs written: $(/usr/bin/grep 'Open Specs' "$T/board.calls")"
+! /usr/bin/grep -q 'issues/20\(17\|20\|21\|27\|28\|29\)\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "the fold replaces the close rule: no spec issue is closed or commented" || ko "a spec issue was written: $(/usr/bin/grep -E 'issues/20(17|20|21|27|28|29)' "$T/gh.calls")"
+# A spec card already Closed whose child reopened keeps Closed (#246) and gains the tag instead of a move back.
+! /usr/bin/grep -q ' 2029$' "$T/board.calls" 2>/dev/null && ok "a Closed spec whose child reopened keeps its column" || ko "#2029 moved: $(/usr/bin/grep ' 2029$' "$T/board.calls")"
+/usr/bin/grep -q '^api -X POST repos/x/y/issues/2029/labels -f labels\[\]=reverted$' "$T/gh.calls" 2>/dev/null && ok "it gains the reverted tag" || ko "#2029 not tagged: $(/usr/bin/grep 'issues/2029' "$T/gh.calls")"
+/usr/bin/grep -q 'SPEC-REVERTED #2029' "$T/st/cycle.log" 2>/dev/null && ok "the kept column is named in cycle.log" || ko "#2029 not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
+! /usr/bin/grep -q 'sub_issues' "$T/gh.calls" 2>/dev/null && ok "no sub-issues route is called" || ko "a sub-issues call: $(/usr/bin/grep sub_issues "$T/gh.calls")"
+[ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c graphql "$T/gh.calls")"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
