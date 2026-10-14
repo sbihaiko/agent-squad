@@ -7,7 +7,8 @@
 # card moves to Done. It runs beside prland.sh until the pull request path is removed: a branch with an open pull request is
 # prland's and is left alone here.
 #
-# A branch is landed when, and only when, it names an open issue, has no open pull request, and every check run on its tip finished
+# A branch is landed when, and only when, it names an open issue, has no open pull request, the review of its tip approved (#357),
+# and every check run on its tip finished
 # in success, skipped or neutral. A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
 # marker under $SG_STATE/auto, so it is said once per head and reason, and a refused push lands nothing.
@@ -43,6 +44,10 @@ while read -r sha ref; do
   [ "$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.status!="completed")]|length')" = 0 ] || { say wait "$br" "$sha" running "the check on ${sha:0:9} is still running"; continue; }
   bad=$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")|"\(.name) ended \(.conclusion)"]|first // ""')
   [ -z "$bad" ] || { say wait "$br" "$sha" red "the check on ${sha:0:9} is not green: $bad"; continue; }
+  # The review must have approved this tip as well (#357): branchreview.sh keeps its verdict and the sha it read under the branch key.
+  rk="$SG_STATE/review-$(printf '%s' "$br" | tr '/' '_')"
+  if [ "$(cat "$rk.sha" 2>/dev/null)" != "$sha" ] || [ ! -s "$rk.md" ]; then say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue; fi
+  head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
   fl=$(SG_BASE=$land bash "$here/ffland.sh" 0 "$br" "$i" 2>/dev/null | tail -1)
   case "$fl" in
     "FFLAND "*) ms=${fl#FFLAND };;
