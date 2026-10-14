@@ -300,7 +300,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 # What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
 # read of the issue's comments, which was one request per candidate (#45).
 _COMMENTS = 50
-_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
+_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} subIssuesSummary {{ total completed }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
@@ -420,7 +420,16 @@ def _issue(node: Any) -> dict[str, Any]:
         "labels": _labels(node.get("labels")),
         "blocked_by": blocked_by(node.get("body")),
         "tdd_red": _tdd_red(node.get("comments")),
+        "sub_issues_summary": _sub_issues(node.get("subIssuesSummary")),
     }
+
+
+def _sub_issues(summary: Any) -> dict[str, int] | None:
+    """REST's `sub_issues_summary`: how many sub-issues the issue has and how many are closed. `None` when the answer
+    carried no summary, so a reader never takes a missing count for zero."""
+    if not isinstance(summary, dict) or not all(isinstance(summary.get(k), int) for k in ("total", "completed")):
+        return None
+    return {"total": summary["total"], "completed": summary["completed"]}
 
 
 def _tdd_red(comments: Any) -> bool | None:

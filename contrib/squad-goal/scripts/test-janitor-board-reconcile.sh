@@ -50,18 +50,22 @@ case "$a" in
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019; do
-      body=""
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021; do
+      body=""; subs='{"total":0,"completed":0}'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
         2012) labs='{"nodes":[{"name":"needs-ratification"}]}';;
         # #2017 is a spec and #2019 one of its children, published the way /to-tickets publishes them (#117): the parent
         # carries the spec label, the child carries its wave beside the triage label and names its blocker in its body.
-        2017) labs='{"nodes":[{"name":"spec"}]}';;
+        2017) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}';;
+        # #2020 is a spec whose every sub-issue is closed: it is done, and the pass closes it. #2021 is a spec with no
+        # sub-issue: nothing proves it done, so it stays open.
+        2020) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":2}';;
+        2021) labs='{"nodes":[{"name":"spec"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
       esac
-      printf '%s{"number":%s,"title":"Issue %s","body":"%s","state":"OPEN","labels":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$body" "$labs"; sep=,; done
+      printf '%s{"number":%s,"title":"Issue %s","body":"%s","state":"OPEN","labels":%s,"subIssuesSummary":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$body" "$labs" "$subs"; sep=,; done
     printf ']}}}}';;
   *issues/2007*) echo $'open\t\tIssue 2007\tneeds-owner';;
   *issues/2010*) echo $'closed\t\tIssue 2010';;
@@ -162,6 +166,12 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Open Specs (issue carries the spec label)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Todo 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Todo" || ko "#2019 not added Todo: $(bc) $o"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
+# A spec with at least one sub-issue, every one of them closed, is done: the pass closes it as completed and names the
+# close. A spec with an open sub-issue, or with none, stays open (the owner's rule).
+/usr/bin/grep -q '^api -X PATCH repos/x/y/issues/2020 -f state=closed -f state_reason=completed$' "$T/gh.calls" 2>/dev/null && ok "a spec whose every sub-issue is closed is closed" || ko "#2020 not closed: $(/usr/bin/grep 'issues/2020' "$T/gh.calls") $o"
+/usr/bin/grep -q '^api repos/x/y/issues/2020/comments -f body=Closed by the loop' "$T/gh.calls" 2>/dev/null && ok "the close carries a comment that names why" || ko "#2020 no comment: $(/usr/bin/grep 'issues/2020' "$T/gh.calls")"
+/usr/bin/grep -q 'SPEC-CLOSED #2020: every sub-issue (2) is closed' "$T/st/cycle.log" 2>/dev/null && ok "the close is named in cycle.log" || ko "#2020 close not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'issues/\(2017\|2021\)\(/comments\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a spec with an open sub-issue, or none, stays open" || ko "a spec closed early: $(/usr/bin/grep -E 'issues/(2017|2021)' "$T/gh.calls")"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
