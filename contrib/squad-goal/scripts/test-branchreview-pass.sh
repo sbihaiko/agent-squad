@@ -15,6 +15,7 @@ J
 cat > "$T/s/review.sh" <<J
 #!/bin/bash
 br=\$3; key=\$(printf '%s' "\$br" | tr / _); echo "\$br \$4" >> "$T/review.log"
+[ -n "\${FAILREV:-}" ] && { echo "model failed"; exit 1; }   # a failed review keeps no verdict and no sha
 echo "VERDICT: APPROVE" > "$T/st/review-\$key.md"; $G -C "$T/origin.git" rev-parse "\$br" > "$T/st/review-\$key.sha"
 echo "model=stub"
 J
@@ -63,7 +64,13 @@ r=$(OPEN="7 8 10 11 12 13" SG_REVIEW_PASS_MAX=2 rp)
 : > "$T/review.log"; push gui/7-x; r=$(SG_LAND_REMOTE=$T/none.git rp)
 [ ! -s "$T/review.log" ] && ok "an unreadable branch list reviews nothing" || ko "a review ran with no branch list"
 case "$r" in *"BRANCHREVIEW: the remote branch list is not readable"*) ok "the failed read is named";; *) ko "no read failure line: '$r'";; esac
-# 6) the cycle runs the pass under its own single.sh lock, gated like the landers
+# 6) a failed review is retried, but at most 3 failed tries at one tip (ADR-0134); the stop is said once; a new tip resets the count
+: > "$T/review.log"; o=; for _ in 1 2 3 4 5; do o+=$(FAILREV=1 rp)$'\n'; done
+[ "$(n gui/7-x)" = 3 ] && ok "a failed review is retried, and stops after 3 failed tries at one tip" || ko "failed tip tried $(n gui/7-x) times"
+[ "$(printf '%s' "$o" | /usr/bin/grep -c '^BRANCHREVIEW STOP gui/7-x: ')" = 1 ] && ok "the stop is said once" || ko "stop lines: '$o'"
+push gui/7-x; r=$(FAILREV=1 rp)
+[ "$(n gui/7-x)" = 4 ] && ok "a new tip resets the failed-try count" || ko "after a new tip gui/7-x tried $(n gui/7-x) times"
+# 7) the cycle runs the pass under its own single.sh lock, gated like the landers
 w=$(/usr/bin/grep -n 'single.sh" branchreview ' "$d/watch.sh")
 case "$w" in *'SG_PRLAND_PAUSED'*'branchreviewpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_PRLAND_PAUSED";; *) ko "watch.sh does not run the review pass: '$w'";; esac
 exit $fail

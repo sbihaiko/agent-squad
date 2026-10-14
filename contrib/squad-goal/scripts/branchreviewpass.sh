@@ -14,11 +14,20 @@ remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; max=${SG_REVIEW_PASS_
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
 sg_work_branches "$remote" || { echo "BRANCHREVIEW: $wb_err"; exit 0; }
+A="$SG_STATE/auto"; mkdir -p "$A"; tries=${SG_REVIEW_TRIES:-3}
 done=0
 while read -r sha br i; do
   [ -n "$br" ] && [ "$done" -lt "$max" ] || continue
-  [ "$(cat "$SG_STATE/review-$(printf '%s' "$br" | tr '/' '_').sha" 2>/dev/null)" = "$sha" ] && continue
-  echo "BRANCHREVIEW $(bash "$here/branchreview.sh" "$br" "$i" 2>&1 | tail -1)"; done=$((done+1))
+  key=$(printf '%s' "$br" | tr '/' '_'); [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ] && continue
+  # A review that keeps no sha at the tip failed. Its count is kept per tip (ADR-0134): after $tries failed tries at one tip the
+  # branch stops, said once; a new tip has a new count, and the old tip's files go.
+  c="$A/branchreview-tries-$key-${sha:0:9}"; n=$(cat "$c" 2>/dev/null || echo 0); [ "$n" -ge "$tries" ] && continue
+  find "$A" -maxdepth 1 -name "branchreview-*-$key-*" ! -name "*-${sha:0:9}" -delete 2>/dev/null
+  out=$(bash "$here/branchreview.sh" "$br" "$i" 2>&1 | tail -1); done=$((done+1))
+  if [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ]; then rm -f "$c"; echo "BRANCHREVIEW $out"; continue; fi
+  n=$((n+1)); echo "$n" > "$c"; echo "BRANCHREVIEW FAILED $br ${sha:0:9} (try $n of $tries): $out"
+  [ "$n" -ge "$tries" ] && [ ! -e "$A/branchreview-stop-$key-${sha:0:9}" ] && { touch "$A/branchreview-stop-$key-${sha:0:9}"
+    echo "BRANCHREVIEW STOP $br: the review of ${sha:0:9} failed $n times; a new push starts a new count"; }
 done <<EOT
 $wb_list
 EOT
