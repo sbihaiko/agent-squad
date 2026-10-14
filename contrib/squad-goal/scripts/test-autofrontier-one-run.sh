@@ -191,6 +191,14 @@ issues '[{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"nu
 r=$(run)
 [ "$(marked 43 44)" = 2 ] && ok "removing either freeze makes the item startable" || ko "removing a freeze did not start both items: '$r'"
 
+# 10) #340: a run parent issue is a roll-up of a run's children, never work. It carries the run-parent label, and the pass
+#     skips it whatever SG_FRONTIER_SKIP_LABELS says.
+scene parent
+issues '[{"number":48,"title":"Squad run run-1","body":"b","labels":[{"name":"run-parent"}]},{"number":49,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 48)" = 0 ] && ok "a run parent is never dispatched" || ko "the run parent #48 was dispatched: '$r'"
+[ "$(marked 49)" = 1 ] && ok "an issue beside a run parent is dispatched" || ko "the issue beside the run parent was not dispatched: '$r'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
