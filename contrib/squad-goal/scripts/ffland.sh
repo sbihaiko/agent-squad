@@ -1,5 +1,6 @@
 #!/bin/bash
 # usage: ffland.sh <pr> <branch> <issue>      land one pull request by a git fast-forward push (no merge API call).
+# A <pr> of 0 is a work branch with no pull request (branchland.sh): the branch itself is not rewritten, only $SG_BASE moves.
 #
 # A git push counts against no REST, GraphQL or secondary write limit; the merge API and the close/comment writes that
 # followed it did. So: rebase the PR branch on $SG_BASE, push that head to the PR branch, then push the same sha to
@@ -24,7 +25,7 @@ g checkout -q -B land "origin/$br" 2>/dev/null || fb "checkout failed"
 o=$(g rebase "origin/$base" 2>&1) || { g rebase --abort >/dev/null 2>&1; fb "rebase on $base conflicts: $(printf '%s' "$o" | tail -1)"; }
 [ "$(g rev-list --count "origin/$base..HEAD")" -gt 0 ] || fb "nothing ahead of $base"
 head=$(g rev-parse HEAD)
-if [ "$head" != "$orig" ]; then   # the PR head must equal the pushed sha, or GitHub would not see the PR as merged
+if [ "$pr" != 0 ] && [ "$head" != "$orig" ]; then   # the PR head must equal the pushed sha, or GitHub would not see the PR as merged
   o=$(g push -q --force-with-lease="refs/heads/$br:$orig" origin "HEAD:refs/heads/$br" 2>&1) || fb "the PR branch push was refused: $(printf '%s' "$o" | tail -1)"
 fi
 o=$(g push -q origin "HEAD:refs/heads/$base" 2>&1) || {

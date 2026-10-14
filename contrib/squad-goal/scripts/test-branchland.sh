@@ -54,7 +54,7 @@ reset; r=$(CHECKS="$RUNNING" bl); r2=$(CHECKS="$RUNNING" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*running*) ok "running: waits and says why";; *) ko "running silent: '$r'";; esac || ko "running landed"
 [ -z "$r2" ] && ok "running: says it once per head" || ko "running repeated: '$r2'"
 # no check yet
-reset; r=$(bl); case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run: waits and says why";; *) ko "no check silent: '$r'";; esac
+reset; r=$(CHECKS='{"check_runs":[]}' bl); case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run: waits and says why";; *) ko "no check silent: '$r'";; esac
 # a red check never closes the issue or moves the card
 ! /usr/bin/grep -q "issues/7" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "a waiting branch closes nothing and moves no card" || ko "a waiting branch wrote"
 
