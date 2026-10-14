@@ -95,6 +95,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **The live copy follows the repository copy in the cycle, and the difference is read** ([ADR-0140](docs/adr/0140-the-live-copy-follows-in-the-cycle.md)). Guard: `contrib/squad-goal/scripts/test-live-guard.sh`, `contrib/squad-goal/scripts/test-watch-cycle.sh`.
 - **The board is a shipped definition, applied by one command; the definition names the vocabulary and the repository binds it to a carrier** ([ADR-0141](docs/adr/0141-the-board-is-a-shipped-definition.md)). Guard: none yet; a draft.
 - **A spec is a document, never work; only its tickets are, and the owner starts it** ([ADR-0142](docs/adr/0142-a-spec-is-never-work.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `tests/test_vendor_skills.py`, `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`.
+- **A card only moves forward, and an old option is removed only after its cards moved** ([ADR-0143](docs/adr/0143-a-card-only-moves-forward.md)). Guard: `contrib/squad-goal/scripts/test-board-migrate.sh`, `tests/test_board_migrate.py`.
 
 ## Where decisions go
 

@@ -42,6 +42,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0140](0140-the-live-copy-follows-in-the-cycle.md) | The live copy follows the repository copy in the cycle, and the difference is read |
 | [0141](0141-the-board-is-a-shipped-definition.md) | The board is a shipped definition, applied by one command; the definition names the vocabulary and the repository binds it to a carrier |
 | [0142](0142-a-spec-is-never-work.md) | A spec is a document, never a unit of work: the dispatch skips every label a profile names as not-work, and only its tickets are children of a run |
+| [0143](0143-a-card-only-moves-forward.md) | A card only moves forward along the axis, Closed and Abandoned are terminal, and an old Status option is removed only once the migration plan has emptied it |
 
 ## Adding an ADR
 
