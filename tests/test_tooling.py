@@ -73,12 +73,17 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
 
 
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
-    """Guard for the CI rule: push to dev, stg and main, pull requests, Python 3.11 and 3.13 inside one job, read-only token."""
+    """Guard for the CI rule: push to dev, stg, main and every work branch, no pull request trigger (#354).
+
+    Python 3.11 and 3.13 run inside one job, with a read-only token. `**` matches every branch, so dev, stg, main and a
+    work branch all start one run on a push; a pull request starts none.
+    """
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert on["push"]["branches"] == ["dev", "stg", "main"] and "pull_request" in on
+    assert on["push"]["branches"] == ["**"], "a push to dev, stg, main or a work branch starts the run"
+    assert "pull_request" not in on and "pull_request_target" not in on, "a pull request starts no run"
     assert wf["permissions"] == {"contents": "read"}
     job = next(iter(wf["jobs"].values()))
     assert job["timeout-minutes"] == 20, "the job keeps the twenty minutes it gives itself"
@@ -89,11 +94,11 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
 
 
 def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
-    """Guard for the CI rule: no matrix (one commit, one job), and one concurrency group per branch (#149).
+    """Guard for the CI rule: no matrix (one commit, one job), and one concurrency group per branch (#149, #354).
 
     A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
-    up answers nothing. The group is the branch, so a push and the pull request of that branch share it; `github.ref`
-    would not, because a pull request carries `refs/pull/<N>/merge` and a push `refs/heads/<branch>`.
+    up answers nothing. The group is the branch a push carries, so one branch's pushes share it. No pull request
+    triggers the run, so the group needs no `github.head_ref`.
     """
     import yaml
 
@@ -102,9 +107,11 @@ def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
     job = next(iter(wf["jobs"].values()))
     assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
     group = wf["concurrency"]["group"]
-    assert "github.head_ref" in group and "github.ref_name" in group, group
-    assert not re.search(r"github\.ref\b", group), f"{group}: github.ref names a pull request by its merge ref"
-    assert "pull_request" in wf["concurrency"]["cancel-in-progress"], "a superseded pull request run is cancelled"
+    assert "github.ref_name" in group and "github.head_ref" not in group, group
+    assert not re.search(r"github\.ref\b", group), f"{group}: the group names the branch, not the full ref"
+    cancel = wf["concurrency"]["cancel-in-progress"]
+    assert "pull_request" not in cancel, "no pull request run exists to cancel"
+    assert all(f'"{b}"' in cancel for b in ("main", "dev", "stg")), "a long-lived branch landing keeps its evidence"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
