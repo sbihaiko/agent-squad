@@ -181,6 +181,6 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     fi
     grep -q 'VERDICT' "$out" 2>/dev/null && [ $rc = 0 ] && { echo "$head" > "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
   done
-  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on PR #%s: exit %s, %s\n" "$m" "$pr" "$rc" "$(tail -c 300 "$SG_STATE/review-$pr.err" | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$i")"; prev=$m
+  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on PR #%s: exit %s, %s\n" "$m" "$pr" "$rc" "$({ tail -c 300 "$SG_STATE/review-$pr.err"; [ "$rc" != 0 ] && tail -c 300 "$out"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$i")"   # claude -p prints its API error on stdout, the answer file; prev=$m
 done
 echo "VERDICT: BLOCKED (every review model failed)" > "$out"; exit 1

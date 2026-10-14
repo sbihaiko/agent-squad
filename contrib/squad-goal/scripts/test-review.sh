@@ -26,7 +26,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_FAIL" ] && { echo "API Error: 529 overloaded_error"; exit 1; }; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 out=$(bash "$T/s/review.sh" 7 8); rc=$?
@@ -42,6 +42,12 @@ out=$(bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
 [ $rc != 0 ] && head -1 "$T/st/review-7.md" | grep -q BLOCKED && ok "a prose review is a format failure (BLOCKED, not saved)" || ko "prose review: rc=$rc '$(head -1 "$T/st/review-7.md")'"
 /usr/bin/grep -q 'line 2' "$T/st/cq/x__y#"*mformat* 2>/dev/null && ok "the format failure names the first line that is not the shape" || ko "no format reason: $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
 unset CLAUDE_NARRATE
+# A model that fails writes its reason where its CLI puts it: claude -p prints an API error on stdout, not stderr. The MODEL_FAIL
+# status names that reason, never an empty one (the saved review file is then overwritten with BLOCKED, so it is the only trace).
+export CLAUDE_FAIL=1; rm -f "$T/st/review-7.sha" "$T/st/cq/"*mfail*
+out=$(bash "$T/s/review.sh" 7 8 2>/dev/null); rc=$?
+/usr/bin/grep -q '529 overloaded_error' "$T/st/cq/x__y#"*mfail* 2>/dev/null && ok "a failed model: MODEL_FAIL names the error it printed on stdout" || ko "a failed model: the reason is lost: $(cat "$T/st/cq/"*mfail* 2>/dev/null)"
+unset CLAUDE_FAIL
 # 4) fast lane: a docs/tests-only PR goes to the fastest model by measured latency, at low effort. Product code is not a
 # fast lane -- it keeps its own effort -- but the order is the same measured one there too (#1846, block 10 below).
 unset CLAUDE_NARRATE; export CLAUDE_ARGS="$T/args"
