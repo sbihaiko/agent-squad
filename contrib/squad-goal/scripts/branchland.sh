@@ -9,7 +9,7 @@
 #
 # A branch is landed when, and only when, it names an open issue, has no open pull request, the review of its tip approved (#357),
 # and every check run on its tip finished
-# in success, skipped or neutral. A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
+# in success, skipped or neutral, or, with zero check runs while CI is off, the local gate passed at the tip (#385). A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
 # marker under $SG_STATE/auto, so it is said once per head and reason, and a refused push lands nothing.
 #
@@ -27,6 +27,26 @@ cd "$SG_STATE" || exit 0
 # say <wait|refuse> <branch> <head> <kind> <reason>: one line per head and kind, kept as a marker so it is never repeated.
 say() { local m="$A/branchland-$1-$(printf '%s' "$2" | tr '/' '_')-${3:0:9}-$4"; [ -e "$m" ] && return; touch "$m"
   case "$1" in wait) echo "BRANCHLAND WAIT $2: $5";; *) echo "BRANCHLAND REFUSE $2: $5";; esac; }
+# While GitHub Actions is off, a tip has zero check runs (#385). The local gate is then the green signal: ruff, mypy and the fast
+# battery in a clean worktree of the tip. SG_LOCAL_GATE=no turns it off (default yes while Actions is off); SG_LOCAL_GATE_CMD
+# replaces the gate command (tests stub it). A red or running check never starts it.
+py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
+gatecmd=${SG_LOCAL_GATE_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -m 'not heavy'"}
+# localgate <branch> <sha> <issue>: exit 0 when the gate passed at <sha>. The result goes to the status comment of the issue. A failed
+# gate is run once per head: its wait marker stops a second run.
+localgate() { local br=$1 sha=$2 i=$3 wt out rc
+  [ -e "$A/branchland-wait-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}-gate" ] && return 1
+  wt=$(mktemp -d "${TMPDIR:-/tmp}/sg-gate.XXXXXX")
+  if ! /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "refs/heads/$br" >/dev/null 2>&1 || ! /usr/bin/git -C "$SG_CHECKOUT" worktree add -q --detach "$wt/tip" "$sha" >/dev/null 2>&1; then
+    rm -rf "$wt"; say wait "$br" "$sha" gateco "the local gate has no clean checkout of ${sha:0:9}"; return 1; fi
+  out=$(cd "$wt/tip" && PYTHONPATH=. bash -c "$gatecmd" 2>&1); rc=$?
+  /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
+  if [ "$rc" = 0 ]; then
+    printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy").\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"
+    return 0; fi
+  { printf 'Status update — branch %s @ %s: local gate, CI off: failed at %s (exit %s). The branch does not land.\n\n```\n' "$br" "${sha:0:9}" "$sha" "$rc"
+    printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
+  say wait "$br" "$sha" gate "the local gate (CI off) failed on ${sha:0:9}: $(printf '%s' "$out" | tail -1)"; return 1; }
 
 heads=$(/usr/bin/git ls-remote --heads "$remote" 2>&1) || { echo "BRANCHLAND: the remote branch list is not readable: $(printf '%s' "$heads" | tail -1)"; exit 0; }
 pl=$(gh_api "repos/$SG_REPO/pulls?per_page=100") || { echo "BRANCHLAND: the open-PR list is not readable: $pl"; exit 0; }
@@ -42,14 +62,22 @@ while read -r sha ref; do
   case "$prbranches" in *" $br "*) continue;; esac
   case "$openiss" in *" $i "*) ;; *) continue;; esac
   cr=$(gh_api "repos/$SG_REPO/commits/$sha/check-runs") || { echo "BRANCHLAND: the checks of $br are not readable: $cr"; continue; }
-  total=$(printf '%s' "$cr" | jq -r '.check_runs|length' 2>/dev/null); [ "${total:-0}" -gt 0 ] 2>/dev/null || { say wait "$br" "$sha" nocheck "no check run on ${sha:0:9} yet"; continue; }
-  [ "$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.status!="completed")]|length')" = 0 ] || { say wait "$br" "$sha" running "the check on ${sha:0:9} is still running"; continue; }
-  bad=$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")|"\(.name) ended \(.conclusion)"]|first // ""')
-  [ -z "$bad" ] || { say wait "$br" "$sha" red "the check on ${sha:0:9} is not green: $bad"; continue; }
+  total=$(printf '%s' "$cr" | jq -er '.check_runs|length' 2>/dev/null) || { echo "BRANCHLAND: the checks of $br are not a check-run list"; continue; }
+  gate=
+  if [ "$total" = 0 ]; then
+    [ "${SG_LOCAL_GATE:-yes}" = yes ] || { say wait "$br" "$sha" nocheck "no check run on ${sha:0:9} yet"; continue; }
+    gate=1   # zero check runs: CI is off, and the local gate runs once the review approved
+  else
+    [ "$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.status!="completed")]|length')" = 0 ] || { say wait "$br" "$sha" running "the check on ${sha:0:9} is still running"; continue; }
+    bad=$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")|"\(.name) ended \(.conclusion)"]|first // ""')
+    [ -z "$bad" ] || { say wait "$br" "$sha" red "the check on ${sha:0:9} is not green: $bad"; continue; }
+  fi
   # The review must have approved this tip as well (#357): branchreview.sh keeps its verdict and the sha it read under the branch key.
   rk="$SG_STATE/review-$(printf '%s' "$br" | tr '/' '_')"
   if [ "$(cat "$rk.sha" 2>/dev/null)" != "$sha" ] || [ ! -s "$rk.md" ]; then say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue; fi
   head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
+  if [ -n "$gate" ]; then localgate "$br" "$sha" "$i" || continue; green="The local gate (CI off) passed on ${sha:0:9}."
+  else green="The check on ${sha:0:9} was green."; fi
   fl=$(SG_BASE=$land bash "$here/ffland.sh" 0 "$br" "$i" 2>/dev/null | tail -1)
   case "$fl" in
     "FFLAND "*) ms=${fl#FFLAND };;
@@ -59,7 +87,7 @@ while read -r sha ref; do
   gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || echo "BRANCHLAND: #$i did not close after the landing of $br"
   mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
   cat > "$(sg_cq_delivery "$i" "branchland$$")" <<EOT
-Closed #$i after landing $br in $land as $ms (fast-forward push, $br deleted). The check on ${sha:0:9} was green. Refs #$i
+Closed #$i after landing $br in $land as $ms (fast-forward push, $br deleted). $green Refs #$i
 EOT
   $BOARD "$SG_OWNER" "$SG_PROJECT" "Done" "$i" >/dev/null
   printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$i" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads: the landed branch is deleted by the push, so the remote no longer names it
