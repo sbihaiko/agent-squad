@@ -11,7 +11,7 @@
 #  (F) an open or merged PR names the issue: card and marker stay;
 #  (G) a marker younger than the grace stays;
 #  (H) a card another step moved past In Progress stays where it is;
-#  (I) a run that landed work and ended is reconciled to Done;
+#  (I) a run that landed work and ended is reconciled to Code Complete (#239: a local landing is not Done);
 #  (J) a GitHub refusal is not an answer: nothing is touched, and the next pass (the API back) releases the card.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-stale-card.sh [janitor.py]
@@ -72,7 +72,7 @@ o=$(pass); bc() { cat "$T/board.calls" 2>/dev/null; }
 [ -e "$T/st/auto/disp-1006" ] && ! /usr/bin/grep -q ' 1006$' "$T/board.calls" 2>/dev/null && ok "F: an issue a PR names keeps its card and marker" || ko "F #1006 touched: $(bc)"
 [ -e "$T/st/auto/disp-1008" ] && ! /usr/bin/grep -q ' 1008$' "$T/board.calls" 2>/dev/null && ok "G: a fresh marker stays" || ko "G #1008 touched: $(bc)"
 ! /usr/bin/grep -q ' 1007$' "$T/board.calls" 2>/dev/null && ok "H: a card past In Progress is never downgraded" || ko "H #1007 moved: $(bc)"
-/usr/bin/grep -q '^o 4 Done 1009$' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Done" || ko "I #1009 not reconciled to Done: $(bc)"
+/usr/bin/grep -q '^o 4 Code Complete 1009$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 1009' "$T/board.calls" 2>/dev/null && ok "I: a run that landed is reconciled to Code Complete, never Done" || ko "I #1009 not reconciled to Code Complete: $(bc)"
 [ -e "$T/st/auto/disp-1010" ] && ! /usr/bin/grep -q ' 1010$' "$T/board.calls" 2>/dev/null && ok "J: a refused read touches nothing" || ko "J #1010 touched on a refusal: $(bc)"
 rm -f "$T/refuse"; o=$(pass)
 /usr/bin/grep -q '^o 4 Todo 1010$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/disp-1010" ] && ok "J: the next pass, API back, releases it (a refusal leaves no once-only marker behind)" || ko "J #1010 not released after the refusal: $(bc) $o"

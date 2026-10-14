@@ -4,8 +4,9 @@
 # only merge a branch that is ahead of the base. The card goes back to the dispatchable column and the markers are
 # dropped, so the frontier picks the issue up again.
 #  (A) the marked commit left the base and its change is gone from the base -> card Todo, fork/disp/bug markers dropped;
-#  (B) the healthy post-land state: the marked commit is IN the base -> rule P leaves it, the board pass derives Done from the honest marker;
-#  (C) a rebased head: the marked commit is not in the base but the base holds its content -> rule P leaves it (no false positive), the board pass derives Done;
+#  (B) the healthy post-land state: the marked commit is IN the base -> rule P leaves it, and the board pass writes no card
+#      for it (#239: a landed-branch marker is not a merged pull request naming the issue on the base, so it is not Done);
+#  (C) a rebased head: the marked commit is not in the base but the base holds its content -> rule P leaves it (no false positive), no card written;
 #  (D) a fix is coming: the branch is still ahead of the base -> untouched by both, the close retries on the new head.
 # Stubbed gh/board; a throwaway fork repo and state dir, so the live fork, markers and board are never read or written.
 # usage: bash test-janitor-rule-p.sh [janitor.py]
@@ -55,10 +56,10 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q 'UNWOUND #901' "$T/st/cycle.log" 2>/dev/null && ok "P: reported the unwound landing" || ko "P cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'UNWOUND\|unwound' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q "${sha901:0:9}" "$T/st/cq/"*901* \
   && ok "P: comment names the commit that left the base" || ko "P comment: $(ls "$T/st/cq" 2>/dev/null)"
-[ -e "$T/st/auto/disp-902" ] && [ -e "$T/st/auto/fork-902-${sha902:0:9}" ] && /usr/bin/grep -q '^o 4 Done 902$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q '^o 4 Todo 902$' "$T/board.calls" 2>/dev/null \
-  && ok "P: a landed marker whose commit is in the base is reconciled to Done, never released" || ko "P #902 wrong: $(cat "$T/board.calls" 2>/dev/null) $o"
-[ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q '^o 4 Done 903$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q '^o 4 Todo 903$' "$T/board.calls" 2>/dev/null \
-  && ok "P: a rebased head whose change is in the base is reconciled to Done, never released" || ko "P #903 released by mistake: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-902" ] && [ -e "$T/st/auto/fork-902-${sha902:0:9}" ] && ! /usr/bin/grep -q '^o 4 [A-Za-z ]* 902$' "$T/board.calls" 2>/dev/null \
+  && ok "P: a landed marker whose commit is in the base writes no card, so it is never Done" || ko "P #902 wrong: $(cat "$T/board.calls" 2>/dev/null) $o"
+[ -e "$T/st/auto/disp-903" ] && ! /usr/bin/grep -q '^o 4 [A-Za-z ]* 903$' "$T/board.calls" 2>/dev/null \
+  && ok "P: a rebased head whose change is in the base writes no card, so it is never Done" || ko "P #903 released by mistake: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-904" ] && ! /usr/bin/grep -q ' 904$' "$T/board.calls" 2>/dev/null \
   && ok "P: a branch still ahead of the base is left to the close pass" || ko "P #904 released by mistake: $(cat "$T/board.calls" 2>/dev/null)"
 rm -rf "$T"; exit $fail

@@ -1,10 +1,12 @@
-"""Issue #127: a card is Done only over work the base carries.
+"""A card is Done over a merged pull request on the base, or a closed issue, and nothing else.
 
 A pull request that names the issue and is merged into a *parent* branch delivers nothing to the base: the merge lands on
 that branch alone, and the change is stranded once the parent is squash-merged (#125). The pass read any merge naming the
-issue as delivery, so the card left Code Complete for Done over work the base never took. The merged-PR hold is now
-scoped to the base: only a merge whose base is the loop's base counts, beside the two other holds -- a landed branch and
-a closed issue.
+issue as delivery, so the card left Code Complete for Done over work the base never took (#127). The merged-PR hold is
+scoped to the base: only a merge whose base is the loop's base counts.
+
+A run's own landing is not a merge into the base (#97), so it no longer makes the card Done (#239); the landed-branch
+marker does not either. The two remaining holds are a merged PR on the base and a closed issue.
 
 These cases drive janitor.py end to end with a stub `gh` on PATH and a temp state dir. No case touches the network, the
 live loop state or the live board.
@@ -58,9 +60,9 @@ def _write(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def sandbox(tmp_path: Path, scoped: str) -> Path:
+def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False) -> Path:
     """The janitor with the throttle and the reader beside it, a stub `gh` (the merge scoped to the base answers
-    `scoped`), a stub board.sh, and one finished run that delivered issue #2030 by a pull request naming it."""
+    `scoped`), a stub board.sh, and one finished run for issue #2030."""
     for name in ("janitor.py", "ghthrottle.py", "ghread.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
@@ -70,10 +72,11 @@ def sandbox(tmp_path: Path, scoped: str) -> Path:
     run = tmp_path / "co/runs/run-stacked"
     run.mkdir(parents=True)
     (run / "request.txt").write_text(f"CHILD — GitHub issue(s) {N}:\n")
-    (run / "record.jsonl").write_text(
-        '{"event":"run_start","run_id":"run-stacked","ts":"2026-10-13T08:12:00Z"}\n'
-        '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}\n'
-    )
+    events = '{"event":"run_start","run_id":"run-stacked","ts":"2026-10-13T08:12:00Z"}\n'
+    if landed:
+        events += '{"event":"land","outcome":"pass"}\n'
+    events += '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}\n'
+    (run / "record.jsonl").write_text(events)
     (tmp_path / "st/auto").mkdir(parents=True)
     (tmp_path / "st/active-runs.txt").write_text("run-stacked\n")
     return tmp_path
@@ -99,6 +102,16 @@ def janitor(tmp_path: Path) -> subprocess.CompletedProcess[str]:
 def writes(tmp_path: Path) -> str:
     f = tmp_path / "calls"
     return f.read_text() if f.exists() else ""
+
+
+@pytest.mark.heavy
+def test_a_locally_landed_run_without_a_merged_pr_stops_at_code_complete(tmp_path):
+    """A run's own landing is not a merge into the base, so it does not make an open issue Done."""
+    sandbox(tmp_path, "echo 0", landed=True)
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not stop at Code Complete: {log}"
+    assert f"Done {N}" not in log, f"the card read Done from a local landing: {log}"
 
 
 @pytest.mark.heavy

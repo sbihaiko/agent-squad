@@ -43,9 +43,9 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
-    for n in 2002 2005 2006 2009; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2002 2003 2005 2006 2009; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2001 2007 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
-    for n in 2003 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
@@ -104,11 +104,11 @@ rec run-write-fails '{"event":"run_start","run_id":"run-write-fails","ts":"2026-
 {"event":"verdict","verdict":"failed","reasons":["red gate"],"exit_code":1}'
 mk run-closed 2010
 rec run-closed '{"event":"run_start","run_id":"run-closed","ts":"2026-10-13T08:07:00Z"}'
-mk run-fork 2011
-rec run-fork '{"event":"run_start","run_id":"run-fork","ts":"2026-10-13T08:08:00Z"}'
+# #2011 carries a landed-branch marker and nothing else: the marker is not a merged PR into the base, so it does not
+# make the card Done (#239). The card falls to the loop floor.
+touch "$T/st/auto/fork-2011-abcdef123"
 mk run-ratify 2012
 rec run-ratify '{"event":"run_start","run_id":"run-ratify","ts":"2026-10-13T08:09:00Z"}'
-touch "$T/st/auto/fork-2011-abcdef123"
 mk run-nocard 2013   # created while the loop runs: no card on the board yet
 rec run-nocard '{"event":"run_start","run_id":"run-nocard","ts":"2026-10-13T08:10:00Z"}'
 mk run-nostatus 2014   # on the board, with no Status
@@ -122,7 +122,8 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^STATUS o 4 In Progress 2001$' "$T/board.calls" 2>/dev/null && ok "dispatch marker: live run card moves to In Progress" || ko "#2001 status not reconciled: $(bc) $o"
 /usr/bin/grep -q '^RUN o 4 2001 run-dispatch ' "$T/board.calls" 2>/dev/null && ok "dispatch marker: Run fields are written" || ko "#2001 Run fields missing: $(bc)"
 /usr/bin/grep -q '^RUN o 4 2002 run-accepted 2026-10-13T08:00:00Z$' "$T/board.calls" 2>/dev/null && ok "accepted child: Run fields carry run id and start time" || ko "#2002 Run fields wrong: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Done 2003$' "$T/board.calls" 2>/dev/null && ok "land event: card moves to Done" || ko "#2003 not Done: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Code Complete 2003$' "$T/board.calls" 2>/dev/null && ok "local land event: card moves to Code Complete" || ko "#2003 not Code Complete: $(bc)"
+! /usr/bin/grep -q 'Done 2003' "$T/board.calls" 2>/dev/null && ok "local land event does not move the card to Done" || ko "#2003 read Done from a local landing: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "merged PR: card moves to Done" || ko "#2004 not Done: $(bc)"
 # #127: a PR that names the issue but was merged into its parent branch carries the work nowhere, so the card stops at
 # Code Complete -- Done over a merge the base never took is the false delivery #125 showed.
@@ -144,7 +145,8 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
   && ok "the comment carries the refusal's name and its error" || ko "comment body: $(cat "$cq" 2>/dev/null)"
 [ "$(ls "$T/st/cq" | /usr/bin/grep -c 'refusal')" = 1 ] && ok "one refused write is one comment" || ko "refusal comments: $(ls "$T/st/cq")"
 /usr/bin/grep -q '^STATUS o 4 Done 2010$' "$T/board.calls" 2>/dev/null && ok "closed issue: card moves to Done" || ko "#2010 not Done: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Done 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker: card moves to Done" || ko "#2011 not Done: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Todo 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone returns an open card to Todo" || ko "#2011 did not leave Code Complete: $(bc)"
+! /usr/bin/grep -q 'Done 2011' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone is not Done" || ko "#2011 read Done from a landed branch marker: $(bc)"
 /usr/bin/grep -q '^ADD o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the item is created with its expected status in one write" || ko "#2013 not added: $(bc) $o"
 ! /usr/bin/grep -q '^STATUS o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the status is not written a second time" || ko "#2013 written twice: $(bc)"
 /usr/bin/grep -q 'BOARD-RECONCILE #2013: card added -> In Progress (run run-nocard is live)' "$T/st/cycle.log" 2>/dev/null && ok "the add is named in cycle.log" || ko "add not named: $(cat "$T/st/cycle.log")"

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Rule O (#1811): `landed` is the pass of the stage that lands the work, and the release must actually happen.
 #  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
-#  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed) keeps card and marker;
+#  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed) keeps card and marker,
+#      and the card stops at Code Complete (#239: a local landing is not a merge into the base, so it is not Done);
 #  (C) an issue an open PR names keeps its card and its marker.
 # The gh stub answers the same way the live API does, including its refusal of a POST to /search/issues:
 # `gh api search/issues -f q=...` returns "Not Found", `gh api -X GET search/issues -f q=...` answers the real count.
@@ -49,7 +50,7 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 [ ! -e "$T/st/auto/disp-801" ] && ok "O: failed run whose only pass is the router's -> marker dropped" || ko "O disp-801 kept: $o"
 /usr/bin/grep -q 'DISPATCH-FAILED #801' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'no_landed_change' "$T/st/cq/"*801* >/dev/null 2>&1 && /usr/bin/grep -q 'run-router' "$T/st/cq/"*801* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Done 802$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed is reconciled to Done and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Code Complete 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Code Complete 803$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: an issue an open PR names moves to Code Complete and keeps its marker" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q 'Refs #803' "$T/search.calls" 2>/dev/null && ok "O: the PR lookup reached the API (GET, not a rejected POST)" || ko "O: no PR lookup answered: $(cat "$T/search.calls" 2>/dev/null)"
 rm -rf "$T"; exit $fail
