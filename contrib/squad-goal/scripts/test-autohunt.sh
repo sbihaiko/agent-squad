@@ -229,7 +229,8 @@ skipped "$r" && ok "next hunt waits 60 minutes after a hunt-fix dispatch" || ko 
 # is the one the card is proven by (#105).
 scene filed
 f=$T/filed
-cp "$(dirname "$src")/board.sh" "$(dirname "$src")/board.py" "$S/"
+# board.py imports issue_state.py, the one seam for an issue's state (#236): the copy needs it beside board.py (#393)
+cp "$(dirname "$src")/board.sh" "$(dirname "$src")/board.py" "$(dirname "$src")/issue_state.py" "$S/"
 printf 'export SG_REPO SG_OWNER SG_PROJECT SG_STATE SG_CHECKOUT\nexport SG_BOARD_READ_BACKOFF=0\nexport BOARD="%s/board.sh"\n' "$S" >> "$S/env.sh"
 export SGH_TMP=$f
 cat > "$T/bin/gh" <<'J'
@@ -240,8 +241,8 @@ case "$a" in *"--input -"*) cat > "$D/last.in";; esac
 case "$a" in
   *users/o) echo '{"type":"User"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"In Progress"}}]}]';;
-  *items?per_page=100\&fields*)   # the Status read: what the card carries, "" when it carries none
-    [ -e "$D/seen" ] && printf '[1228,"%s"]\n' "$(cat "$D/carried" 2>/dev/null)"; exit 0;;
+  *items?per_page=100\&fields*)   # the Status read: what the card carries, "" when it carries none; the reader's --jq ends in @tsv (#393)
+    [ -e "$D/seen" ] && printf '1228\t%s\t\n' "$(cat "$D/carried" 2>/dev/null)"; exit 0;;
   *items?per_page=100*)   # the items route is a bare array with no total, read through gh's --jq
     [ -e "$D/seen" ] && printf '[1228,"ITEM1228","https://api.github.com/repos/o/r"]\n'; exit 0;;
   *"-X POST"*items*)   # the add: an item already on the board is refused, exactly as GitHub refuses it
