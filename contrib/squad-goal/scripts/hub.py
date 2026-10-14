@@ -34,6 +34,7 @@ def _profile():
     ctx = {k: v for k, _, v in (ln.partition("=") for ln in shlex.split(p.stdout))} if p.returncode == 0 else {}
     return {k: os.environ.get(k) or ctx.get(k, "") for k in keys}
 PROF = _profile(); REPO, OWNER, PROJECT_NO = PROF["SG_REPO"], PROF["SG_OWNER"], PROF["SG_PROJECT"]
+_PROFILE_ENV = {**os.environ, "SG_REPO": REPO, "SG_OWNER": OWNER, "SG_PROJECT": PROJECT_NO}   # the environment the hub was loaded in, kept for the seam
 if not REPO: sys.exit("hub: no SG_REPO (set SG_PROFILE to a profile address.sh knows)")
 CHECKOUT = PROF["SG_CHECKOUT"]
 if not CHECKOUT: sys.exit("hub: no SG_CHECKOUT (the profile in force names no checkout)")
@@ -58,7 +59,9 @@ def board_seam():
     its field ids and its retries are the binding's; here the pane projects the rows it draws."""
     global _board_state
     if _board_state is None:   # the binding's caches sit in the hub's own folder; each call goes through subprocess.run as the pass looks it up
-        _board_state = board_state(state_dir=HUBDIR, run=lambda a, **kw: subprocess.run(a, **kw))
+        # The profile is the one this hub was loaded for (PROF), never the environment of the first pass: hubmux pins a
+        # profile's SG_* only while it imports its hub, so a seam built later from os.environ binds another board.
+        _board_state = board_state(OWNER, PROJECT_NO, REPO, env=_PROFILE_ENV, state_dir=HUBDIR, run=lambda a, **kw: subprocess.run(a, **kw))
     return _board_state
 HOME = pathlib.Path.home()
 def state_dir():
