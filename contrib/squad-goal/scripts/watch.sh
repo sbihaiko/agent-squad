@@ -93,6 +93,8 @@ if v:
   [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchland "$(dirname "$0")/branchland.sh" 2>&1 & ) 2>/dev/null
   # Work-branch review (#397): each pushed work branch is reviewed once per tip, so branchland finds the verdict it waits for.
   [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchreview bash "$(dirname "$0")/branchreviewpass.sh" 2>&1 & ) 2>/dev/null
+  # Work-branch fix round (#401): a reviewed tip whose review says CHANGES gets one fix run on the same branch.
+  [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
   fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc, autopilot and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
   # The fast lane owns childcc, autopilot, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up
