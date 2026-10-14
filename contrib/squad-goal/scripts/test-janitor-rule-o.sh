@@ -43,6 +43,14 @@ echo run-land > "$T/st/auto/disp-802"
 mk run-pr 803
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #803 on fix/803-x"}\n{"event": "outcome", "node": "router", "entry": 1, "outcome": "pass", "routed": "continue", "reasons": [], "pos": 3}\n{"event": "verdict", "verdict": "failed", "reasons": ["adapter_error"], "exit_code": 1}\n' > "$T/co/runs/run-pr/record.jsonl"
 echo run-pr > "$T/st/auto/disp-803"
+# D: a child worktree took this run folder with it. Its marker still names the deleted run, so Rule O must release it.
+echo "$T/co/worktrees/child/autobug-20261013-224513" >> "$T/st/active-runs.txt"
+echo autobug-20261013-224513 > "$T/st/auto/bug-804"
+# E: a run folder still present inside a child worktree remains its issue's owner.
+mkdir -p "$T/co/worktrees/child/autobug-live"
+printf '{"event": "spawn_accepted", "definition": "GitHub issue #805"}\n' > "$T/co/worktrees/child/autobug-live/record.jsonl"
+echo "$T/co/worktrees/child/autobug-live" >> "$T/st/active-runs.txt"
+echo autobug-live > "$T/st/auto/bug-805"
 touch -t 202001010000 "$T/co/runs"/run-*/record.jsonl
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 801$' "$T/board.calls" 2>/dev/null && ok "O: failed run whose only pass is the router's -> card back to Todo" || ko "O #801 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
@@ -52,4 +60,8 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q '^o 4 Done 802$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed is reconciled to Done and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Code Complete 803$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: an issue an open PR names moves to Code Complete and keeps its marker" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q 'Refs #803' "$T/search.calls" 2>/dev/null && ok "O: the PR lookup reached the API (GET, not a rejected POST)" || ko "O: no PR lookup answered: $(cat "$T/search.calls" 2>/dev/null)"
+[ ! -e "$T/st/auto/bug-804" ] && ok "O: a deleted child-worktree run releases its bug marker" || ko "O bug-804 kept: $o"
+/usr/bin/grep -q 'MISSING.*#804.*bug-804.*dropped' "$T/st/cycle.log" 2>/dev/null && ok "O: the missing-run release is named in cycle.log" || ko "O missing-run cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -qx "$T/co/worktrees/child/autobug-20261013-224513" "$T/st/active-runs.txt" 2>/dev/null && ko "O: missing run stays active" || ok "O: a deleted run is dropped from active-runs"
+[ -e "$T/st/auto/bug-805" ] && /usr/bin/grep -qx "$T/co/worktrees/child/autobug-live" "$T/st/active-runs.txt" 2>/dev/null && ok "O: a live child-worktree run keeps its marker" || ko "O bug-805 not kept with live run: $o"
 rm -rf "$T"; exit $fail
