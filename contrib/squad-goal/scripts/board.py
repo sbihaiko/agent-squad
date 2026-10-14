@@ -13,7 +13,8 @@ A Status write is proven by the card, never by the answer to its PATCH (#105): t
 after the write, and the state it carries must be the state written. SG_BOARD_READ_ATTEMPTS and
 SG_BOARD_READ_BACKOFF bound the retries (a backoff of 0 sleeps for no read), and a card no read then carries
 the Status is a READ FAILURE, named and exiting non-zero, never a card written and never left in the state
-cache as one.
+cache as one. A write the board refused is named as refused, never as a read failure, and it drops the cached
+Status options (cached a day), so the next attempt sends the option id the board carries now (#308).
 A miss on the item map re-reads the items with the same bounded backoff (#96), and a card the board answered
 "already exists" for and no read then carried is a READ FAILURE, named by name, never "not on the board".
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
@@ -50,10 +51,11 @@ for n in nums:
             break
         except NotCarried as e:
             refused = e.refused or refused   # the seam carries the refusal it was given: the note names it, the read is the verdict
+            if e.refused: (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True)   # a refusal can be an option id the board changed (#308): the next write reads the options again, never the cached day-old id
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
         print(f"#{n} -> {status}")
     else:
         state.binding.items_map.pop(str(n), None); state.binding._save_items()   # a card whose write is unproven is never cached as written
-        print(f"#{n}: the board carries no {status!r} on it after {state.binding.attempts} reads" + (f" ({refused})" if refused else "") + "; a read failure, not a written card", file=sys.stderr); rc = 1
+        print(f"#{n}: the board carries no {status!r} on it after {state.binding.attempts} reads" + (f" ({refused}); the write was refused, not a written card" if refused else "; a read failure, not a written card"), file=sys.stderr); rc = 1
 (st / "board-dirty").touch(); sys.exit(rc)

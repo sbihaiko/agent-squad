@@ -19,10 +19,10 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; D="TMPDIR"
 echo "$a" >> "$D/gh.calls"
 case "$a" in *"--input -"*) cat > "$D/last.in";; esac
-cards="2001 2002 2003 2004 2006 2007 2008 2009"
+cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013"
 case "$a" in
   *users/o*) echo '{"type":"Organization"}';;
-  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}}]}]';;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"Doing"}}]}]';;
   *items?per_page=100\&fields*)   # the one Status read: number, the state the card carries (its option id), the repository url
     for n in $cards; do [ -e "$D/seen-$n" ] && printf '%s\t%s\t%s\n' "$n" "$(cat "$D/st-$n" 2>/dev/null)" "https://api.github.com/repos/x/y"; done; exit 0;;
   *items?per_page=100*)   # the items route is eventually consistent: the read is counted, and #2002 is only carried from the second read (#96)
@@ -40,6 +40,8 @@ case "$a" in
   *repos/x/y/issues/2007*) echo '{"id":3007}';;
   *repos/x/y/issues/2008*) echo '{"id":3008}';;
   *repos/x/y/issues/2009*) echo '{"id":3009}';;
+  *repos/x/y/issues/2012*) echo '{"id":3012}';;
+  *repos/x/y/issues/2013*) echo '{"id":3013}';;
   *repos/x/y/issues/2011*) echo '{"id":3011}';;
   *"-X POST"*items*)
     case "$(cat "$D/last.in")" in
@@ -50,6 +52,8 @@ case "$a" in
       *3007*) touch "$D/seen-2007"; echo '{"id":"ITEM7"}';;
       *3008*) touch "$D/seen-2008"; echo '{"id":"ITEM8"}';;
       *3009*) touch "$D/seen-2009"; echo '{"id":"ITEM9"}';;
+      *3012*) touch "$D/seen-2012"; echo '{"id":"ITEM12"}';;
+      *3013*) touch "$D/seen-2013"; echo '{"id":"ITEM13"}';;
       *) echo '{"message":"Resource not accessible by integration"}' >&2; exit 1;;
     esac;;
   *"-X PATCH"*items/ITEM*)
@@ -58,6 +62,7 @@ case "$a" in
       2006) echo '{"id":"ITEM6"}';;   # the write is answered ok and the card never carries it: the lost write of #105
       2008) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # the field write is refused, and no card carries it
       2009) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # refused, but the card already carries the Status
+      2012|2013) if [ "$w" = O_TODO ]; then echo "$w" > "$D/st-$n"; echo '{"id":"ITEM'"$i"'"}'; else echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1; fi;;   # an option id the board no longer has is refused
       2007) if [ -e "$D/dropped-2007" ]; then echo "$w" > "$D/st-2007"; echo '{"id":"ITEM7"}';   # the retry lands
             else touch "$D/dropped-2007"; echo '{"id":"ITEM7"}'; fi;;   # the first write is dropped, never carried
       *) echo "$w" > "$D/st-$n"; echo '{"id":"ITEM'"$i"'}';;   # the write lands: the card carries it
@@ -97,7 +102,8 @@ case $o in *"#2007 -> Todo"*) ok "the card the read carries is reported as writt
 /usr/bin/grep -q '"2007"' "$T/st/rest-items-o-4.json" && ok "a proven card stays in the cache" || ko "cache: $(cat "$T/st/rest-items-o-4.json")"
 : > "$T/gh.calls"; o=$(run --add o 4 Todo 2008 2>&1); rc=$?
 [ "$rc" -eq 1 ] && ok "a field write the board refuses and the card never carries is not a success" || ko "refused write exit $rc: $o"
-case $o in *"#2008"*"Invalid field values"*"read failure"*) ok "the refusal and the read failure are both named";; *) ko "refused write message: $o";; esac
+case $o in *"#2008"*"Invalid field values"*"write was refused"*) ok "the refusal is named, and it is a refused write";; *) ko "refused write message: $o";; esac
+case $o in *"read failure"*) ko "a refused write is labelled a read failure: $o";; *) ok "a refused write is never labelled a read failure";; esac
 case $o in *"-> Todo"*) ko "the refused write is reported as written: $o";; *) ok "it never claims the card was written";; esac
 /usr/bin/grep -q '"2008"' "$T/st/rest-items-o-4.json" && ko "the cache records a refused card: $(cat "$T/st/rest-items-o-4.json")" || ok "the cache does not record the refused card"
 echo O_TODO > "$T/st-2009"; : > "$T/gh.calls"; o=$(run --add o 4 Todo 2009 2>&1); rc=$?
@@ -116,4 +122,14 @@ case $o in *"not on the board"*) ko "a card a later read carries is reported as 
 case $o in *"#2011"*"read failure"*) ok "it is named as a read failure";; *) ko "read-failure message: $o";; esac
 case $o in *"not on the board"*) ko "a card the write proved is reported as absent: $o";; *) ok "it is never reported as absent";; esac
 [ "$(/usr/bin/grep -c 'items?per_page=100 ' "$T/gh.calls")" -le 5 ] && ok "the re-read is bounded" || ko "items reads: $(cat "$T/gh.calls")"
+# the Status options are cached a day (#308): a board that changed an option id or renamed a column leaves the cache stale, and the write must not send the old id again and again
+seed() { echo "{\"id\":\"F_STATUS\",\"opt\":$1}" > "$T/st/rest-fields-o-4.json"; }
+seed '{"Todo":"O_OLD_TODO","In Progress":"O_OLD_IP"}'; : > "$T/gh.calls"; o=$(run --add o 4 Todo 2012 2>&1); rc=$?
+[ "$rc" -eq 0 ] && ok "a write refused for a stale option id is repaired by a fresh read of the options" || ko "stale option id exit $rc: $o"
+case $o in *"#2012 -> Todo"*) ok "the card the read carries is reported as written";; *) ko "stale option id message: $o";; esac
+seed '{"Todo":"O_OLD_TODO","In Progress":"O_OLD_IP"}'; : > "$T/gh.calls"; o=$(run --add o 4 "In Progress" 2013 2>&1); rc=$?
+[ "$rc" -eq 1 ] && ok "a Status the board no longer carries is not a success" || ko "renamed option exit $rc: $o"
+case $o in *"#2013"*"no Status option 'In Progress'"*) ok "the missing option is named";; *) ko "renamed option message: $o";; esac
+case $o in *"read failure"*|*"-> In Progress"*) ko "a missing option is labelled a read failure or a written card: $o";; *) ok "it is neither a read failure nor a written card";; esac
+/usr/bin/grep -qs 'O_OLD' "$T/st/rest-fields-o-4.json" && ko "the stale options stay cached: $(cat "$T/st/rest-fields-o-4.json")" || ok "the stale options are not kept in the cache"
 rm -rf "$T"; exit $fail

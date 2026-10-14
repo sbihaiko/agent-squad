@@ -407,6 +407,7 @@ class BoardBinding:
         iid = self.item_id(issue)
         if not iid: raise RuntimeError(f"#{issue} not on the board")
         field = self.status_field()
+        if state not in field["opt"]: raise RuntimeError(f"no Status option {state!r}")   # a board that renamed the column: named, never a KeyError
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][state]}]}))
 
