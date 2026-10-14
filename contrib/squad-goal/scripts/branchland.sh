@@ -20,7 +20,7 @@
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=branchland
-SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"
+SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"; . "$here/workbranches.sh"
 A="$SG_STATE/auto"; mkdir -p "$A"; land=${SG_LAND_BRANCH:-dev}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
@@ -48,19 +48,11 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc
     printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
   say wait "$br" "$sha" gate "the local gate (CI off) failed on ${sha:0:9}: $(printf '%s' "$out" | tail -1)"; return 1; }
 
-heads=$(/usr/bin/git ls-remote --heads "$remote" 2>&1) || { echo "BRANCHLAND: the remote branch list is not readable: $(printf '%s' "$heads" | tail -1)"; exit 0; }
-pl=$(gh_api "repos/$SG_REPO/pulls?per_page=100") || { echo "BRANCHLAND: the open-PR list is not readable: $pl"; exit 0; }
-printf '%s' "$pl" | jq -e 'type=="array"' >/dev/null 2>&1 || { echo "BRANCHLAND: the open-PR list is not a list"; exit 0; }
-prbranches=" $(printf '%s' "$pl" | jq -r '.[].head.ref' | tr '\n' ' ') "
-# Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose issue closed under a pull
-# request or was dropped, and one of those would land its old commits in dev again.
-oi=$(gh_api "repos/$SG_REPO/issues?state=open") || { echo "BRANCHLAND: the open-issue list is not readable: $oi"; exit 0; }
-openiss=" $(printf '%s' "$oi" | jq -r '.[].number' 2>/dev/null | tr '\n' ' ') "
-while read -r sha ref; do
-  br=${ref#refs/heads/}
-  i=$(printf '%s' "$br" | sed -nE 's#^(fix|gui)/([0-9]+)([^0-9].*)?$#\2#p'); [ -n "$i" ] || continue
-  case "$prbranches" in *" $br "*) continue;; esac
-  case "$openiss" in *" $i "*) ;; *) continue;; esac
+# The work branches (workbranches.sh). Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose
+# issue closed under a pull request or was dropped, and one of those would land its old commits in dev again.
+sg_work_branches "$remote" || { echo "BRANCHLAND: $wb_err"; exit 0; }
+while read -r sha br i; do
+  [ -n "$br" ] || continue
   cr=$(gh_api "repos/$SG_REPO/commits/$sha/check-runs") || { echo "BRANCHLAND: the checks of $br are not readable: $cr"; continue; }
   total=$(printf '%s' "$cr" | jq -er '.check_runs|length' 2>/dev/null) || { echo "BRANCHLAND: the checks of $br are not a check-run list"; continue; }
   gate=
@@ -93,6 +85,6 @@ EOT
   printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$i" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
   echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"
 done <<EOT
-$(printf '%s\n' "$heads" | awk '{print $1, $2}')
+$wb_list
 EOT
 exit 0
