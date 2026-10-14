@@ -19,7 +19,7 @@ def test_mypy_squad_is_clean():
 
     The call carries `heavy` and a reason: a tree with no `.mypy_cache` makes mypy analyze the package from nothing,
     and the suite's own line for an unmarked call (2 s) is measured on a warm cache only. The CI check job runs
-    `mypy squad` as its own step, so the rule keeps its gate there.
+    `mypy squad` as its own step, which `test_ci_check_job_runs_mypy_squad_as_its_own_step` proves in the default run.
     """
     r = subprocess.run(
         [sys.executable, "-m", "mypy", "squad"], cwd=ROOT, capture_output=True, text=True
@@ -49,6 +49,15 @@ def test_ci_workflow_runs_ruff_mypy_and_pytest_in_order():
     idx = [next((i for i, r in enumerate(runs) if w in r), None) for w in want]
     assert None not in idx, f"ci.yml misses a step; found {runs}"
     assert idx == sorted(idx), "ci.yml must run ruff, mypy, pytest in that order"
+
+
+def test_ci_check_job_runs_mypy_squad_as_its_own_step():
+    """Guard for the mypy rule: the CI check job runs `mypy squad` as a step of its own, once for each supported
+    Python. The tree's own mypy call carries `heavy`, so the rule keeps this fast gate in the default run (ADR-0018)."""
+    runs = _ci_run_lines()
+    assert runs.count("mypy squad") == 2, (
+        f"the CI check job runs `mypy squad` as its own step, once per supported Python; found {runs}"
+    )
 
 
 def test_no_script_invokes_lsof_by_a_platform_specific_path():
@@ -102,26 +111,23 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
 
 
-QUEUE_CAP = {"single": 1, "max": 100}  # GitHub Actions `concurrency.queue`: the pending runs a group holds
+# The sentence the workflow states for its landing group. A group that names the commit holds one run and nothing
+# pending, so no queue cap applies and GitHub cancels no landing.
+LANDING_GROUP_RULE = "The group names the commit, so no queue holds a landing behind another and GitHub cancels none."
 
 
-def test_one_commit_starts_one_job_and_a_landing_group_keeps_what_its_queue_holds():
-    """Guard for the CI rule: no matrix (one commit, one job), one group per branch, and a landing is never cancelled (#149, #398).
+def test_one_commit_starts_one_job_and_a_landing_waits_in_no_queue():
+    """Guard for the CI rule: no matrix (one commit, one job), a landing gets a concurrency group of its own, and a
+    landing on dev, stg or main is never cancelled (#149, #398).
 
     A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
-    up answers nothing. The group names the branch a push carries, so one branch's pushes share it. A key that names
-    the run would give every landing a group of its own, and no group would span one branch's pushes.
+    up answers nothing.
 
-    Only a landing pushes, so no work-branch push is superseded and none needs cancelling: `on.push` names the three
-    long-lived branches, and a work-branch push starts no run at all. The workflow cancels no run either
-    (`cancel-in-progress: false`), so a landing that started keeps its run.
-
-    The group queues the landings that arrive behind it: its default queue holds one pending run, so a second pending
-    landing replaces the first, and `queue: max` is GitHub's largest queue, which waits in the order the landings
-    arrived. GitHub caps that queue at `QUEUE_CAP` and cancels the runs past the cap. One group per branch cannot
-    raise that cap: only a key that names the run holds nothing waiting, and such a key breaks "one concurrency group
-    spans one branch's pushes". So the guard checks the group, the queue GitHub gives it, and the workflow's own
-    account of the cap.
+    A group shared by one branch's pushes cannot keep that promise: GitHub queues the group's pending runs and cancels
+    the runs past the queue's cap (`queue: single` holds one pending run, `queue: max` holds 100), so a burst of
+    landings on one branch cancels a landing. A group that names the commit holds one run and nothing pending, so no
+    cap applies and GitHub cancels none. The guard checks the group, the cancel semantics, and the workflow's own
+    sentence for the rule.
     """
     import yaml
 
@@ -132,23 +138,20 @@ def test_one_commit_starts_one_job_and_a_landing_group_keeps_what_its_queue_hold
     assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
     con = wf["concurrency"]
     group = con["group"]
-    assert "github.ref_name" in group and "github.head_ref" not in group, group
+    assert "github.sha" in group, (
+        f"{group}: a group shared by a branch's pushes queues them, and GitHub cancels a run past the queue's cap, so a "
+        "landing on dev, stg or main can be cancelled; the group names the commit instead"
+    )
+    assert "github.ref_name" in group, f"{group}: the group still names the branch the commit belongs to"
     assert not re.search(r"github\.ref\b", group), f"{group}: the group names the branch, not the full ref"
-    assert not re.search(r"github\.(sha|run_id|run_number|run_attempt)\b", group), (
-        f"{group}: a key that names the run gives every landing a group of its own, so no group spans one branch's "
-        "pushes"
-    )
     assert con["cancel-in-progress"] is False, "a landing on dev, stg or main is never cancelled, and no other push starts a run"
-    assert con.get("queue") == "max", (
-        "the group's default queue holds one pending run, so the next landing replaces a pending one; `queue: max` "
-        "keeps the pending landings and runs them in order"
+    assert "queue" not in con, (
+        f"the group holds nothing pending, so no queue cap can cancel a landing; found queue={con.get('queue')!r}"
     )
-    cap = QUEUE_CAP[con["queue"]]
-    stated = text.split("concurrency:", 1)[0]  # the workflow's own account of the group, above the block
-    assert str(cap) in stated and "cancel" in stated, (
-        f"the group's queue holds {cap} pending runs and GitHub cancels the runs past the cap; the workflow states the "
-        f"cap it takes, so its account of the group matches the queue GitHub gives it"
+    stated = " ".join(
+        line.lstrip("#").strip() for line in text.split("concurrency:", 1)[0].splitlines() if line.startswith("#")
     )
+    assert LANDING_GROUP_RULE in stated, f"the workflow states the rule its group carries: {LANDING_GROUP_RULE}"
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
