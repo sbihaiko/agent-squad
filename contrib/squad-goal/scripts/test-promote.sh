@@ -10,7 +10,7 @@ git init -q --bare "$R"; git init -q "$T/w"; W="$G -C $T/w"
 $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin "$R"
 for b in dev stg main; do $W push -q origin "main:refs/heads/$b"; done
 tip() { git -C "$R" rev-parse "refs/heads/$1"; }
-adv() { $W checkout -q -B "$1" "origin/$1" 2>/dev/null || $W checkout -q "$1"; $W commit -q --allow-empty -m "$2"; $W push -q origin "$1"; }
+adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --allow-empty -m "$2"; $W push -q origin "$1"; }
 ci() { printf '#!/bin/bash\necho %s\n' "$1" > "$T/ci.sh"; chmod +x "$T/ci.sh"; export SG_CI_STATE_CMD=$T/ci.sh; }
 base=$(tip main)
 
@@ -38,7 +38,7 @@ $W checkout -q -B stg origin/dev; $W push -q -f origin stg   # fixture: realign 
 # The owner command.
 bash "$d/promote-main.sh" >/dev/null 2>&1; rc=$?
 [ $rc = 0 ] && [ "$(tip main)" = "$(tip stg)" ] && ok "the owner command promotes stg to main" || ko "owner: rc $rc, main $(tip main), stg $(tip stg)"
-$W checkout -q -B main origin/main; $W commit -q --allow-empty -m main-only; $W push -q origin main; before=$(tip main)
+adv main main-only; before=$(tip main)
 out=$(bash "$d/promote-main.sh" 2>&1); rc=$?
 [ $rc -ne 0 ] && [ "$(tip main)" = "$before" ] && case "$out" in *ancestor*) true;; *) false;; esac && ok "the owner command refuses when main is not an ancestor of stg" || ko "owner divergence: rc $rc, out '$out'"
 
