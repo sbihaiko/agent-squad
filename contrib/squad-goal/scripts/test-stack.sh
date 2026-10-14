@@ -8,6 +8,7 @@ echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub
 # The body still names #1791, but only the native relation can block dispatch. #1800 has two open native blockers.
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
+[ -n "${GHLOG:-}" ] && echo "$*" >> "$GHLOG"
 case "$*" in
   *"i1792: issue(number: 1792)"*) echo '{"data":{"repository":{"i1792":{"number":1792,"state":"OPEN","body":"Fix the colour map.\n\n## Blocked by\n\n- #1791","labels":{"nodes":[]},"blockedBy":{"nodes":[]}}}}}';;
   *"i1793: issue(number: 1793)"*) echo '{"data":{"repository":{"i1793":{"number":1793,"state":"OPEN","body":"Fix the strip.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1791,"state":"CLOSED"}]}}}}}';;
@@ -16,7 +17,7 @@ case "$*" in
   *"i1802: issue(number: 1802)"*) echo '{"data":{"repository":{"i1802":{"number":1802,"state":"OPEN","body":"Work.\n\n## Blocked by\n\n- #1797\n- #1798","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1797,"state":"OPEN"},{"number":1798,"state":"OPEN"}]}}}}}';;
   *"i1803: issue(number: 1803)"*) echo '{"data":{"repository":{"i1803":{"number":1803,"state":"OPEN","body":"Work.","labels":{"nodes":[]}}}}}';;
   *"i1804: issue(number: 1804)"*) echo '{"data":{"repository":{"i1804":null}}}';;
-  *"i1805: issue(number: 1805)"*) echo '{"data":{"repository":{"i1805":{"number":1805,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1799,"state":"OPEN"}]}}}}}';;
+  *"i1805: issue(number: 1805)"*) echo '{"data":{"repository":{"i1805":{"number":1805,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1799}]}}}}}';;   # no state beside the edge: it is read alone
   *"issues/1799 -q .state"*) echo 'gh: API rate limit exceeded' >&2; exit 1;;
   *"i1806: issue(number: 1806)"*) echo '{"data":{"repository":{"i1806":{"number":1806,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1796,"state":"OPEN"}]}}}}}';;
   *"issues/1796 -q .state"*) echo open;;
@@ -47,4 +48,13 @@ r=$(run 1805)
 case "$r" in *WAIT*"#1799"*) ok "#1805: a blocker whose state cannot be read gates dispatch";; *) ko "#1805 did not WAIT on #1799: '$r'";; esac
 r=$(run 1806)
 case "$r" in *WAIT*"#1796"*) ok "#1806: a Code Complete blocker with no open PR gates dispatch";; *) ko "#1806 did not WAIT on #1796: '$r'";; esac
+# #383: the frontier hands over the issue's entry of its open-issue list and its open-PR list. The blocker's state beside the
+# edge decides (#1797 reads open alone, closed in the entry), and no GitHub request is sent.
+printf '{"number":1810,"body":"Work.","blocked_by":[1797],"blocked_by_read":true,"blockers":[{"number":1797,"state":"closed"}]}' > "$T/e1810.json"; printf '[]' > "$T/pulls.json"; : > "$T/gh.log"
+r=$(GHLOG=$T/gh.log SG_STACK_ISSUE=$T/e1810.json SG_STACK_PULLS=$T/pulls.json run 1810)
+case "$r" in READY*) ok "#1810: the entry's closed blocker state decides";; *) ko "#1810 did not read READY from its entry: '$r'";; esac
+[ ! -s "$T/gh.log" ] && ok "#1810: a handed-over entry and PR list cost no GitHub request" || ko "#1810 sent requests: $(cat "$T/gh.log")"
+printf '{"number":1811,"body":"Work.","blocked_by":[1797],"blocked_by_read":true,"blockers":[{"number":1797,"state":"open"}]}' > "$T/e1811.json"
+r=$(SG_STACK_ISSUE=$T/e1811.json SG_STACK_PULLS=$T/pulls.json run 1811)
+case "$r" in *"WAIT blocker #1797 has no open PR"*) ok "#1811: an open blocker in the entry gates dispatch";; *) ko "#1811 did not WAIT on #1797: '$r'";; esac
 rm -rf "$T"; exit $fail

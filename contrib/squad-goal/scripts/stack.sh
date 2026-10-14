@@ -6,8 +6,12 @@
 #                             failing CI on its head: branch from origin/<branch>, open the PR with base <branch>, and put
 #                             "Merge after #<pr>" in the body (autopilot never merges it first and retargets it after)
 #   WAIT <reason>             anything else (two open blockers, a blocker with no PR, a parent that is itself stacked, red CI)
+# A caller that already holds the facts hands them over and saves the reads (#383): SG_STACK_ISSUE names a file with the
+# issue's entry of the open-issue list (ghread.py's shape, each blocker's state beside it), SG_STACK_PULLS a file with
+# the open-PR list. Without them, or for a blocker whose state the entry lacks, the issue, the list and the state are read.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; iss=$1
-issue=$(gh_api "repos/$SG_REPO/issues/$iss") || { echo "WAIT issue #$iss is not readable"; exit 0; }
+if [ -n "${SG_STACK_ISSUE:-}" ] && [ -s "$SG_STACK_ISSUE" ]; then issue=$(cat "$SG_STACK_ISSUE")
+else issue=$(gh_api "repos/$SG_REPO/issues/$iss") || { echo "WAIT issue #$iss is not readable"; exit 0; }; fi
 # An answer that does not carry the relation (no issue, a REST shape) is not "no blockers": dispatch waits until it is read.
 printf '%s' "$issue" | jq -e '.blocked_by_read == true' >/dev/null 2>&1 || { echo "WAIT the blocked-by relation of #$iss is not readable"; exit 0; }
 body=$(printf '%s' "$issue" | jq -r '.body // ""')
@@ -19,9 +23,10 @@ for b in $body_bl; do case " $(echo $bl) " in *" $b "*) ;; *) echo "STACK NOTE #
 hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
 testing=" $(jq -r '.items[]?|select(.st=="Testing" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 cc=" $(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
-prs=$(gh api "repos/$SG_REPO/pulls?state=open&per_page=100")
+if [ -n "${SG_STACK_PULLS:-}" ] && [ -f "$SG_STACK_PULLS" ]; then prs=$(cat "$SG_STACK_PULLS"); else prs=$(gh api "repos/$SG_REPO/pulls?state=open&per_page=100"); fi
 prof() { printf '%s' "$prs" | jq -r --arg b "$1" '[.[]|select(((.title+" "+(.body//""))|test("Refs #"+$b+"\\b")))][0]|select(.)|"\(.number) \(.head.ref) \(.base.ref) \(.head.sha)"'; }
-open=(); for b in $bl; do st=$(gh api repos/$SG_REPO/issues/$b -q .state 2>/dev/null)
+open=(); for b in $bl; do st=$(printf '%s' "$issue" | jq -r --argjson b "$b" '[.blockers[]?|select(.number==$b)|.state|select(.)][0] // empty' 2>/dev/null)
+  [ -n "$st" ] || st=$(gh api repos/$SG_REPO/issues/$b -q .state 2>/dev/null)
   [ "$st" = closed ] && continue
   [ "$st" = open ] || { echo "WAIT blocker #$b is not readable"; exit 0; }   # an unread state never counts as closed
   case "$testing" in *" $b "*) continue;; esac   # its card is in Testing (code merged, test pass running): does not gate

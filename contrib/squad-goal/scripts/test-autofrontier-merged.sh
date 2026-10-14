@@ -22,6 +22,8 @@ for a in "$@"; do
   case "$a" in repos/*) p="$a";; esac
   prev="$a"
 done
+case "$*" in *"issues(states: OPEN"*)   # the open-issue list is one GraphQL request through the door (#383): the REST fixture in its shape
+  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  [ -n "${GH_CLOSED_FAIL:-}" ] && exit 1; f=$GH_CLOSED;;
@@ -36,7 +38,7 @@ export PATH="$T/bin:$PATH"
 printf '#!/bin/bash\necho READY\n' > "$T/scripts/stack.sh"
 printf '#!/bin/bash\nsg_fork_only() { return 1; }\nsg_fork_preamble() { :; }\nsg_fork_branch() { echo "gui/$1"; }\nsg_fork_branch_pattern() { echo "gui/%n"; }\nsg_issue_worktree_note() { :; }\n' > "$T/scripts/startability.sh"
 chmod +x "$T/scripts/stack.sh"
-cp "$src" "$T/scripts/autofrontier.sh"
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py} "$T/scripts/"   # the pass reads the open-issue list through the door
 scene() { # <name>: fresh temp state, its own env.sh, empty gh log
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"
@@ -44,6 +46,7 @@ scene() { # <name>: fresh temp state, its own env.sh, empty gh log
 SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BASE=main
 SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=true
 E
+  export SG_GH_AGGREGATE_WINDOW=0   # a case rewrites the list between passes: no snapshot answers the second one
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier GHLOG=$d/gh.log
   export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"
