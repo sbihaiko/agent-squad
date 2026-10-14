@@ -67,7 +67,7 @@ async def test_a_provider_error_on_the_router_falls_through_to_the_next_model(tm
 async def test_a_provider_error_on_a_child_falls_through_to_the_next_model(tmp_path):
     eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": [{"error": PROVIDER_ERROR}, CHILD]})
     v = await eng.run()
-    assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == CHILD_CHAIN   # the request's pick, then the chain
+    assert [c.model for c in eng.adapter.calls if c.node == "route.router.1"] == CHILD_CHAIN[:2]   # the request's pick, then the next entry, which answers
     assert v.verdict == "completed" and outcomes(tmp_path, "route.router.1")[0]["outcome"] == "pass"
 
 
