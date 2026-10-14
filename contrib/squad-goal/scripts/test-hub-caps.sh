@@ -4,7 +4,7 @@
 # (no network, no server). usage: bash test-hub-caps.sh
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/panes.js" "$d/board_columns.py" "$live/"   # hub.py reads panes.js and board_columns.py beside itself
+live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/panes.js" "$d/board_columns.py" "$d/issue_state.py" "$live/"   # hub.py reads panes.js, board_columns.py and issue_state.py beside itself
 
 # probe <env...> : load the copied hub.py in a fresh process, call loop_caps() twice; stdout is one JSON line, stderr is the hub's log.
 cat >"$T/probe.py" <<'PY'
@@ -39,7 +39,7 @@ spec = importlib.util.spec_from_file_location("hub", sys.argv[1]); hub = importl
 m = re.search(r"const COLNAME=(\{.*?\});", hub.PAGE)
 print(m.group(1) if m else "(the page names no column)")
 PY
-( cd "$T/bare" && env -u PYTHONPATH -u SG_SQUAD SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 \
+( cd "$T/bare" && env -u PYTHONPATH -u SG_SQUAD SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_CHECKOUT="$T/bare" \
     SG_HUB_DIR="$T/hub2" SG_STATE="$T/st2" HOME="$T/home" python3 "$T/board.py" "$live/hub.py" >"$T/names" 2>"$T/names.err" )
 /usr/bin/grep -q '"unclaimed":"Todo"' "$T/names" && ok "the live copy names its board columns from the table beside it" \
   || ko "the live copy names no board column: $(cat "$T/names") ($(head -2 "$T/names.err" | tr '\n' ' '))"
