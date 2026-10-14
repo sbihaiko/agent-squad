@@ -45,7 +45,7 @@ def hub():
 
 def _cache(items):
     """One board cache as board_pass leaves it."""
-    return {"t": 1.0, "items": items, "prs": [], "prev": [], "prev_n": 0, "lc": {}, "err": None}
+    return {"t": 1.0, "items": items, "prs": [], "lc": {}, "err": None}
 
 
 def _item(n, title, status, si=None, state="open"):

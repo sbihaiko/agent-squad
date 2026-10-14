@@ -38,7 +38,7 @@ def hub():
 
 def _cache(hub, monkeypatch, cases):
     items = [{"n": 10, "t": "a task", "s": "open", "c": None, "st": "Todo", "l": [], "k": "task"}]
-    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": items, "cases": cases, "prs": [], "prev": [], "prev_n": 0,
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": items, "cases": cases, "prs": [], 
                                              "lc": {}, "err": None, "errs": []})
     monkeypatch.setattr(hub.time, "time", lambda: NOW)
 
@@ -74,7 +74,7 @@ def test_the_pass_reads_a_test_case_in_the_one_items_read_it_already_makes(hub, 
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     monkeypatch.setattr(hub.subprocess, "run", run)
-    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "prev": [], "prev_n": 0, "lc": {}, "err": None})
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
     hub.board_pass()
     reads = [c for c in calls if "/items" in c and "projectsV2" in c]
     assert len(reads) == 1 and "DraftIssue" in reads[0]

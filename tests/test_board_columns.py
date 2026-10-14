@@ -14,7 +14,7 @@ COLUMNS_PY = SCRIPTS / "board_columns.py"
 HUB_PY = SCRIPTS / "hub.py"
 RECONCILE_PY = SCRIPTS / "reconcile.py"
 NAMES = ("No status", "Todo", "Open Specs", "In Progress", "Code Complete", "Testing", "Blocked", "Done",
-         "Open branches", "Landed branches")
+         "Open branches")
 
 
 def _module(name, path):
@@ -43,7 +43,7 @@ def test_each_column_declares_its_fact_actor_and_terminal_state(columns):
     assert all(isinstance(column["fact"], str) and column["fact"] for column in columns)
     assert all(isinstance(column["actor"], str) and column["actor"] for column in columns)
     assert all(isinstance(column["terminal"], bool) for column in columns)
-    assert {column["name"] for column in columns if column["terminal"]} == {"Done", "Landed branches"}
+    assert {column["name"] for column in columns if column["terminal"]} == {"Done"}
 
 
 def test_every_column_has_a_distinct_fact(columns):
@@ -89,3 +89,37 @@ def test_the_reconciler_names_no_column_literal_of_its_own(columns):
     for column in columns:
         assert f'"{column["name"]}"' not in source, \
             f"reconcile.py names the column {column['name']!r} itself; the name comes from the table"
+
+
+def test_the_table_has_no_closed_branch_lane(table):
+    """The owner removed the closed lane: a landed branch is read from its issue card (Done = in dev), never from a
+    lane of its own. The open lane is the only one the table names."""
+    assert [lane["name"] for lane in table.LANES] == ["Open branches"], "the table names a lane that is not the open one"
+    assert all(lane["key"] != "pr_closed" for lane in table.LANES), "the table still holds a closed-branch lane"
+    assert "Landed branches" not in {column["name"] for column in table.COLUMNS}, \
+        "the column table still holds the landed-branch column"
+    states = [g["state"] for g in table.kind_groups(("bug",), []) if g["kind"] == table.PR_KIND]
+    assert states == ["open"], "the pull request kind still carries a closed group"
+
+
+def test_the_open_branch_lane_is_tracking_only(table):
+    """The lane is drawn beside the axis and read by no writer as state: a card never moves because a branch is open."""
+    lane = table.LANES[0]
+
+    assert lane.get("tracking") is True, "the table does not say the open-branch lane is for tracking only"
+    for name in ("janitor.py", "reconcile.py", "branchland.sh", "ffland.sh", "wtclean.sh"):
+        source = (SCRIPTS / name).read_text()
+        assert lane["name"] not in source and lane["key"] not in source, \
+            f"{name} reads or writes the tracking lane; the lane moves no card and gates nothing"
+
+
+def test_the_hub_renders_no_closed_branch_lane(table, hub, monkeypatch):
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "err": None, "errs": []})
+    board = hub.board()
+
+    assert tuple(hub.BOARD_LANES) == tuple(table.LANES), "the hub draws a lane the table does not name"
+    assert "prev" not in board, "the board still serves a closed-branch lane"
+    assert not [g for g in board["kinds"] if g["kind"] == "pr" and g["state"] == "closed"], \
+        "the board still draws a closed-branch group"
+    assert "pr_closed" not in hub.COLUMN, "the hub still reads a lane by a role the table does not name"
+    assert '"pr_closed"' not in hub.PAGE, "the page still holds a name for the closed-branch lane"

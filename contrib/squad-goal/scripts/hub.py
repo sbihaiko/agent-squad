@@ -8,8 +8,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__file__).resolve().parent / "board_columns.py")
 _columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
-# The board draws the shipped definition (#247): its statuses, in its order, with their colours. A pull request is a lane
-# beside the axis, never a column. Every name comes from the table; COLUMN reads a column or a lane by its role.
+# The board draws the shipped definition (#247): its statuses, in its order, with their colours. An open work branch is a
+# lane beside the axis, never a column, and it is for tracking only (#384); a landed branch has no lane at all. Every name
+# comes from the table; COLUMN reads a column or a lane by its role.
 BOARD_COLUMNS = _columns_module.view_columns()
 BOARD_LANES = _columns_module.LANES
 COLUMN = {**_columns_module.ROLE, **{lane["key"]: lane["name"] for lane in BOARD_LANES}}
@@ -875,14 +876,14 @@ def _json(p):
     except Exception: return None
 
 def _last_landing():
-    """The newest merged pull request the board pass has read: `{"issue", "ts"}`, naming the PR, or None.
+    """The newest landed branch the board pass has read: `{"issue", "ts"}`, naming the issue it carries, or None.
 
-    Delivery is a pull request (#75): the merge is the landing, and the board pass already holds every closed PR of every
-    configured repository with its merge time and whether it merged. A closed pull request that was NOT merged is not a
-    landing, and a row whose time the hub cannot read is skipped rather than counted as now.
+    Delivery is a work branch landed in the landing branch (#358), and the board pass already holds the landing ledger of
+    every configured repository with its landing time. A row the ledger does not mark as landed is not a landing, and a
+    row whose time the hub cannot read is skipped rather than counted as now.
     """
     best = None
-    for p in board_cache.get("prev") or []:
+    for p in board_cache.get("landed") or []:
         if not p.get("m"): continue
         try: ts = dt.datetime.fromisoformat(str(p.get("c") or "").replace("Z", "+00:00")).timestamp()
         except ValueError: continue
@@ -973,7 +974,7 @@ def runs():
         except OSError: request = None
         gone = run_gone(r, age, ps_lines, d, request)   # killed: no verdict will come, so it is not live whatever its age
         st = demoted(st, r, {i["n"] for i in board_cache.get("items", []) if i.get("s") == "closed"})
-        merged = {p["n"] for p in board_cache.get("prev", []) if p.get("m")}
+        merged = {p["n"] for p in board_cache.get("landed", []) if p.get("m")}
         st = handled_of(st, {**r, "merged": r.get("fix") in merged or any(int(n) in merged for n in r["issues"])})
         b = badge_of(st, r)
         if gone: b = gone_badge(b)
@@ -1035,7 +1036,7 @@ try: board_cache = json.loads(BOARD.read_text())
 except Exception: board_cache = {"t": 0, "items": [], "prs": [], "err": None}
 # A cache written before the board read more than one repository (#1820) has rows with no repository on them: they are
 # the profile repository's, which is the only one that pass read.
-for _k in ("prs", "prev"):
+for _k in ("prs", "landed"):
     for _x in board_cache.get(_k) or []: _x.setdefault("r", REPO)
 board_cache.setdefault("errs", [])
 def apply_open_blockers(items, nodes):
@@ -1076,13 +1077,13 @@ def task_count(i):
     t, c = s.get("total"), s.get("completed")
     if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
     return f"{c}/{t}" if t > 0 else None
-def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
-    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open and closed PRs of
-    every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
+def board_pass(fetch_open=None, fetch_landed=None, repos=None):
+    """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open work branches and the
+    landing ledger of every repository the hub is told to read (#1820). The 60 s loop runs exactly this.
 
-    The two reads are independent: the issues are the profile repository's board, the PR columns span every configured
+    The two reads are independent: the issues are the profile repository's board, the branch lane spans every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
-    repository's own error on the column), so a failed pass never writes a fresh empty board (#1772, #1820)."""
+    repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
     items = lc = cases = None
     try:
             out = board_seam().rows(
@@ -1107,8 +1108,8 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
     if items: board_cache.update(t=time.time(), items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
     rs = REPOS if repos is None else repos
     try:
-            prs, prev, prev_n, errs = prs_pass(fetch_open, fetch_closed, fetch_total, rs)
-            board_cache.update(prs=prs, prev=prev, prev_n=prev_n, errs=errs)
+            prs, landed, errs = prs_pass(fetch_open, fetch_landed, rs)
+            board_cache.update(prs=prs, landed=landed, errs=errs)
             # a pass no repository answered is not a refresh: `t` keeps saying when the board last really moved, which
             # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
             if len(errs) < len(rs): board_cache["t"] = time.time()
@@ -1326,45 +1327,38 @@ def _landed_ledger():
 
 def landed_branches_of(repo):
     """The latest page of the branches landed in the landing branch, from the ledger (a landed branch is deleted, so the
-    remote no longer lists it). Each row names the branch and the landed sha, and carries the landing time as `c`."""
+    remote no longer lists it). Each row names the branch and the landed sha, and carries the landing time as `c`.
+
+    The board draws no lane for these rows (#384): a landed branch is read from its issue card, Done in dev. The pass
+    keeps them for its own last-landing fact and for the run a merge already delivered."""
     return [{"n": int(f[3]), "t": f"{f[1]} · {f[2][:7]}", "c": dt.datetime.fromtimestamp(int(f[0]), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              "m": True, "r": repo} for f in _landed_ledger()[-100:]]
 
-def landed_total_of(repo):
-    """How many branches the ledger says landed."""
-    return len(_landed_ledger())
-
-def prs_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
-    """One read of the open and landed branch lanes for EVERY repository the hub is told to read (#1820), in place
-    of the single-repository read the column carried before it. Each repository is read on its own, through the three
-    fetchers it is given (the seam the tests stub), and contributes its own rows -- each row named by `r`.
+def prs_pass(fetch_open=None, fetch_landed=None, repos=None):
+    """One read of the open branch lane and of the landing ledger for EVERY repository the hub is told to read (#1820),
+    in place of the single-repository read the column carried before it. Each repository is read on its own, through the
+    two fetchers it is given (the seam the tests stub), and contributes its own rows -- each row named by `r`.
 
     A repository the hub cannot read adds its error to the returned `errs` and keeps the last good rows of ITS OWN from
-    the cache: an unreachable repository is an error on the column, never a silently empty one, and never a reason to
-    drop the rows of the repository that answered. Returns (rows, prev, prev_n, errs)."""
+    the cache: an unreachable repository is an error on the lane, never a silently empty one, and never a reason to
+    drop the rows of the repository that answered. Returns (rows, landed, errs)."""
     fetch_open = fetch_open or open_branches_of
-    fetch_closed = fetch_closed or landed_branches_of
-    fetch_total = fetch_total or landed_total_of
+    fetch_landed = fetch_landed or landed_branches_of
     repos = REPOS if repos is None else repos
-    last_prs, last_prev = board_cache.get("prs") or [], board_cache.get("prev") or []
-    last_n = dict(board_cache.get("prev_n_of") or {})
-    if not last_n and board_cache.get("prev_n"): last_n[REPO] = board_cache["prev_n"]   # a cache written before #1820 has one total, and it is the profile repo's
-    prs, prev, prev_n, errs, n_of = [], [], 0, [], {}
+    last_prs, last_landed = board_cache.get("prs") or [], board_cache.get("landed") or []
+    prs, landed, errs = [], [], []
     for r in repos:
         try:
             rows = fetch_open(r)
-            if rows is None: raise ValueError("the open-PR query returned nothing; the last good rows stay in place")
-            closed = fetch_closed(r) or []
-            total = fetch_total(r)
-            total = last_n.get(r, 0) if total is None else total
+            if rows is None: raise ValueError("the open-branch query returned nothing; the last good rows stay in place")
+            rows_landed = fetch_landed(r) or []
         except Exception as e:
             errs.append(f"{r}: {str(e)}")   # the whole message: the door's refusal line carries GitHub's own words (#252)
             prs += [x for x in last_prs if x.get("r") == r]     # this repository's own last good rows, and no other's
-            prev += [x for x in last_prev if x.get("r") == r]
-            n_of[r] = last_n.get(r, 0); prev_n += n_of[r]
+            landed += [x for x in last_landed if x.get("r") == r]
             continue
-        prs += rows; prev += closed; n_of[r] = max(total, len(closed)); prev_n += n_of[r]
-    return prs, prev, prev_n, errs
+        prs += rows; landed += rows_landed
+    return prs, landed, errs
 
 def _ci_state(tok):
     """The coarse state of a `CI=` snapshot (`success:9`, `failure:1,success:8`, `none`, `skipped`): pass, fail, pending, none."""
@@ -1575,18 +1569,16 @@ def board(kind=None, outcome=None):
     for x in prs:
         if x.get("br"): x.setdefault("gs", None); x.setdefault("pb", None); continue   # a work branch has no review strip and no badge: its chip is its standing against dev
         x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t")); x["pb"] = pr_badge(x)   # the chip, the R C T B H strip under it (#1772), the lane's badge (#247)
-    prev = sorted(board_cache.get("prev", []), key=lambda p: p["c"] or "", reverse=True)
     # Every card names its repository (#1820): `r` is the full owner/name (what a link and the popup read), `rt` the tag
     # the card wears (MesenAI / agent-squad, or owner/repo when the short name names more than one repository).
     kind_rows += [{"kd": _columns_module.PR_KIND, "closed": False, "n": p["n"], "t": p["t"], "c": None, "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]
-    kind_rows += [{"kd": _columns_module.PR_KIND, "closed": True, "oc": _columns_module.outcome_of(True, merged=bool(p["m"])), "n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]
     all_kinds = _columns_module.kind_groups(KINDS, kind_rows)
     cases = []   # the rows beside the axis, from the draft items the pass already read: the age is the pass's own clock against the pass's end
     for title in board_cache.get("cases") or []:
         m = TEST_CASE_TITLE.match(title)
         if m: cases.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": max(0, int(time.time() - _utc(m[4]).timestamp()))})
     perr = "; ".join(board_cache.get("errs") or [])   # the repositories this pass could not read, named on the column
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": COLUMN["pr_closed"], "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": COLUMN["pr_open"], "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "kinds": _columns_module.filter_groups(all_kinds, kind, outcome), "cases": cases, "gaps": _columns_module.outcome_gaps(all_kinds), "filters": {"kinds": [_columns_module.PR_KIND, *KINDS], "outcomes": _columns_module.shipped_outcomes()}, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prs": {"name": COLUMN["pr_open"], "tracking": True, "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "kinds": _columns_module.filter_groups(all_kinds, kind, outcome), "cases": cases, "gaps": _columns_module.outcome_gaps(all_kinds), "filters": {"kinds": [_columns_module.PR_KIND, *KINDS], "outcomes": _columns_module.shipped_outcomes()}, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -1816,7 +1808,7 @@ body:not(.dockb.max) #pip{visibility:hidden}
 body.dockb #bbody>.col{flex:1 1 0;min-width:var(--col-w);display:flex;flex-direction:column;height:100%;border-right:1px solid var(--line);min-height:0}
 body.dockb .ch{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;background:#1b212b;flex:none}   /* the gap is stated: without it a header that is asked to pack its spans reads `Todo0` (#1809) */
 body.dockb .col>.sc{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
-.prs{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent))}   /* a PR column wears the colour colOf gave it, faint, so the archive stops looking like the live queue */
+.prs{background:linear-gradient(color-mix(in srgb,var(--cc) 8%,transparent),color-mix(in srgb,var(--cc) 3%,transparent))}   /* the open-branch lane wears the colour colOf gave it, faint, so a tracking lane never looks like a column of work */
 #bbody .acc.prs{border-bottom:2px solid var(--cc);margin-bottom:4px}
 #bbody .prs>.ah,#bbody .prs>.ch{background:color-mix(in srgb,var(--cc) 12%,#0f1115);color:var(--cc);border-bottom:1px solid color-mix(in srgb,var(--cc) 40%,transparent);letter-spacing:.04em;text-transform:uppercase}
 #bbody .prs .it{border:1px solid color-mix(in srgb,var(--cc) 33%,transparent);border-left:4px solid var(--cc);background:color-mix(in srgb,var(--cc) 8%,#10141a);border-radius:10px}
@@ -1837,7 +1829,7 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .chip b{flex:none;font-size:20px;line-height:20px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--pin)}   /* the number is what the tile is for, and it is never the element that gets cut. --pin is the fallback for a column the table below does not name. These rules are scoped to .hidbar on purpose: a bare .chip would also repaint the sidebar's .sub .chip */
 /* The strip's own mapping from column to category, one rule per category: the colour says what the count means and
    never how big it is, because magnitude would light up the two archival piles. The hexes are #1793's, under the
-   names the table gives them; the closed PRs' #5aa9ff is --pin, so it is written as the token it is. */
+   names the table gives them; the open branch lane's #5aa9ff is --pin, so it is written as the token it is. */
 /*HID_CHIP_RULES*/
 .hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
 .hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:#6f7987;font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
@@ -2141,7 +2133,7 @@ const escBoard=()=>{if(bo.max)setMax(false)};
 paintBoard();
 $("#bx").onclick=()=>setOff(!bo.off);
 $("#bz").onclick=()=>setMax(!bo.max);
-const isPR=n=>n===COLNAME.pr_open||n===COLNAME.pr_closed;
+const isPR=n=>n===COLNAME.pr_open;   // the one lane beside the axis: open work branches, for tracking only (#384)
 const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const OKTAG=new Set("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td h1 h2 h3 h4 h5 h6 blockquote pre a img del s u".split(" ")),VOID=new Set(["br","hr","img"]);
 const OKATTR={a:["href"],img:["src","alt","width","height"],td:["colspan","rowspan","align"],th:["colspan","rowspan","align"],details:["open"]};
@@ -2186,7 +2178,7 @@ $("#px").onclick=()=>pop.classList.remove("on");$("#pprev").onclick=()=>step(-1)
 document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||c.classList.contains("m"))return;window.open("https://github.com/"+(c.dataset.r||"__REPO__")+"/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
 nav=[...c.closest(".sc").querySelectorAll(".it[data-n]")].map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"]);showIssue(c.dataset.n,c.dataset.r)});
 const hm=location.hash.match(/issue=(\d+)/);if(hm)showIssue(+hm[1]);   // deep link: /#issue=1171
-document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g===COLNAME.pr_open)bo.prOpen=bo.prOpen===false;else if(g===COLNAME.pr_closed)bo.prevOpen=!bo.prevOpen;else bo.open=g;saveB();pollBoard()});
+document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g===COLNAME.pr_open)bo.prOpen=bo.prOpen===false;else bo.open=g;saveB();pollBoard()});
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
 const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
 g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
@@ -2260,13 +2252,13 @@ document.addEventListener("click",e=>{const t=e.target.closest("[data-eye]");if(
 const lim={},scr={};
 function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollTop=scr[e.dataset.g]||0;e.onscroll=()=>{scr[e.dataset.g]=e.scrollTop;if(e.scrollTop+e.clientHeight>=e.scrollHeight-40&&e.querySelector(".it.m")&&!lim.busy){const g=e.dataset.g;lim[g]=(lim[g]||25)+25;pollBoard()}}})}
 // One colour per board column, resolved here and nowhere else: the header's dot, the card's --cc border and the
-// hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the seven
-// Project statuses plus the two PR columns — and the flow reads left to right: grey (not started), yellow (being
+// hidden: strip's number all call colOf(name, columnNames). The nine named columns are the board's own — the eight
+// shipped statuses plus the one open-branch lane — and the flow reads left to right: grey (not started), yellow (being
 // coded), violet (built), teal (verified), green (finished), amber for the pile nobody has triaged, red for the one
-// colour that means look here, blue for a PR in review, and the same blue with its chroma spent for the PR that is
-// retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
-// the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
-// (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
+// colour that means look here, and blue for the open branch lane. Any other name is a Status option the Project gained
+// later — a user column — and takes the next colour of the reserved ring, by its alphabetical position among those user
+// columns. The name always stands beside the colour (column header, chip label), so the colour is a second cue and never
+// the only one — which is what lets the ring cycle.
 const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
@@ -2276,7 +2268,7 @@ const gapNote=gs=>gs.length?`<div class=m title="the outcome set does not name t
 const kindGroups=gs=>gs.map(g=>`<div class="acc open kgrp" data-g="${esc(g.name)}" data-kind="${esc(g.kind)}" data-state="${esc(g.state)}"><div class=ah><span>${esc(g.name)}</span><span><span class=n>${g.n}</span></span></div><div class=sc data-g="${esc(g.name)}">${g.items.map(x=>`<div class=it data-key="${esc(x.key)}" data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${x.k==="pr"?"pull":"issues"}/${x.n}">${x.k==="pr"?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo>${esc(x.rt)}</span>`:""}<span class=tt>${esc(x.t)}</span></div>`).join("")}</div></div>`).join("");   // one group per kind and state, painted as the model names it and keyed (kind, number): the pane holds no group name and reads no cache of its own
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board"+(bo.kinds?"?"+new URLSearchParams({...(bo.kind?{kind:bo.kind}:{}),...(bo.outcome?{outcome:bo.outcome}:{})}):""))).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
-all=[b.prs,b.prev,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
+all=[b.prs,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 $("#bcases").innerHTML=caseRows(b.cases);$("#bt").textContent=b.err?"(stale)":"";$("#bsp").setAttribute("aria-pressed",String(!!bo.specs));$("#bk").setAttribute("aria-pressed",String(!!bo.kinds));
@@ -2307,7 +2299,7 @@ const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
 const badge=g=>`<span class=n>${f||sel.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
-const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:g.name===COLNAME.pr_closed?!!bo.prevOpen:bo.open===g.name;
+const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs lane":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs lane":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
@@ -2330,7 +2322,7 @@ let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version
 </script>"""
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
 # The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
-HID_CHIP_TOKENS = (("abandoned", "err"), ("merged", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_closed", "pin"))
+HID_CHIP_TOKENS = (("abandoned", "err"), ("merged", "run"), ("unscheduled", "warn"), ("issue_closed", "ok"), ("pr_open", "pin"))
 PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
 PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON)
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))

@@ -67,7 +67,7 @@ def board(hub, monkeypatch):
            {"n": 103, "t": "green", "u": "2", "ms": "clean", "ci": ["success"], "rollup": "pass", "h": "c" * 40},
            {"n": 104, "t": "approved", "u": "1", "ms": "clean", "ci": ["success"], "rollup": "pass", "h": "d" * 40}]
     monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "err": None, "items": [c[0] for c in CARDS], "prs": prs,
-                                             "prev": [], "prev_n": 0, "lc": {}})
+                                             "lc": {}})
     monkeypatch.setattr(hub, "summary_lines", lambda n, sha9: [f"#{n} {sha9} CI=pass APPROVE"] if n == 104 else [])
     monkeypatch.setattr(hub, "pr_state", lambda x: ["idle", "awaiting review"])
     monkeypatch.setattr(hub, "gate_strip", lambda x, t=None: None)
@@ -92,17 +92,18 @@ def test_each_card_sits_in_the_column_the_table_names(board, item, column, freez
     assert where[0][1].get("fz") == freeze, f"#{item['n']} wears the wrong freeze marker"
 
 
-def test_a_pull_request_is_a_lane_beside_the_axis_with_its_badge(table, hub, board):
+def test_a_work_branch_is_a_lane_beside_the_axis_with_its_badge(table, hub, board):
     lanes = {lane["name"] for lane in table.LANES}
-    assert not lanes & {g["name"] for g in board["groups"]}, "a pull request lane is drawn as a column"
-    assert not lanes & set(hub.ORDER), "a pull request lane is in the board's column order"
+    assert not lanes & {g["name"] for g in board["groups"]}, "a branch lane is drawn as a column"
+    assert not lanes & set(hub.ORDER), "a branch lane is in the board's column order"
     flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
-    assert not lanes & set(flow), "a pull request lane is on the axis"
-    assert board["prs"]["name"] in lanes and board["prev"]["name"] in lanes
+    assert not lanes & set(flow), "a branch lane is on the axis"
+    assert [lane["name"] for lane in table.LANES] == ["Open branches"], "the table names a second lane"
+    assert board["prs"]["name"] in lanes and "prev" not in board, "a closed lane is still served"
     assert {p["n"]: p.get("pb") for p in board["prs"]["items"]} == \
         {101: "conflict", 102: "checks red", 103: "green", 104: "approved"}
     page = hub.PAGE
-    assert re.search(r"all=\[b\.prs,b\.prev,\.\.\.b\.groups\.sort\(", page), "the lanes are not drawn ahead of the axis"
+    assert re.search(r"all=\[b\.prs,\.\.\.b\.groups\.sort\(", page), "the lane is not drawn ahead of the axis"
     assert "class=pbg" in page or 'class="pbg' in page, "the page does not draw the pull request's badge"
     assert re.search(r"isPR\(g\.name\)\?\" prs lane\"", page), "a lane does not wear its own look"
 

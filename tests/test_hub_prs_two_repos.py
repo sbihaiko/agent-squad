@@ -1,11 +1,11 @@
-"""Hub board: the OPEN PRs and Closed PRs columns carry every repository the squad works in (#1820).
+"""Hub board: the Open branches lane carries every repository the squad works in (#1820).
 
 The squad works in two repositories -- the emulator (`SG_REPO`, sbihaiko/MesenAI) and its own tooling
-(sbihaiko/agent-squad) -- and the column read only the first, so a tooling PR was invisible to the hub and to the loop.
+(sbihaiko/agent-squad) -- and the lane read only the first, so a tooling branch was invisible to the hub and to the loop.
 
-Every assertion names its seam: the repositories the hub is told to read, `prs_pass` (the one read of both PR columns,
-with its fetchers injected so no test touches the network), the payload `board()` serves, the issue panel's read, and
-the declarations the served page paints.
+Every assertion names its seam: the repositories the hub is told to read, `prs_pass` (the one read of the open lane and
+of the landing ledger, with its fetchers injected so no test touches the network), the payload `board()` serves, the
+issue panel's read, and the declarations the served page paints.
 """
 import importlib.util
 import json
@@ -61,10 +61,10 @@ def _payload(numbers, title="a PR"):
 
 @pytest.fixture
 def reads(hub):
-    """The three fetchers `prs_pass` reads a repository through, stubbed: open PRs, closed PRs, closed total."""
+    """The two fetchers `prs_pass` reads a repository through, stubbed: the open work branches, and the landing ledger."""
     class Reads:
         def __init__(self):
-            self.open, self.closed, self.total, self.seen = {}, {}, {}, []
+            self.open, self.landed, self.seen = {}, {}, []
             self.boom = set()
 
         def fetch_open(self, repo):
@@ -73,16 +73,11 @@ def reads(hub):
                 raise RuntimeError(f"{repo} is unreachable")
             return hub.prs_from_graphql(_payload(self.open.get(repo, [])), repo)
 
-        def fetch_closed(self, repo):
+        def fetch_landed(self, repo):
             if repo in self.boom:
                 raise RuntimeError(f"{repo} is unreachable")
-            return [{"n": n, "t": "a closed PR", "c": "2026-10-11T07:00:00Z", "m": True, "r": repo}
-                    for n in self.closed.get(repo, [])]
-
-        def fetch_total(self, repo):
-            if repo in self.boom:
-                raise RuntimeError(f"{repo} is unreachable")
-            return len(self.closed.get(repo, []))
+            return [{"n": n, "t": "a landed branch", "c": "2026-10-11T07:00:00Z", "m": True, "r": repo}
+                    for n in self.landed.get(repo, [])]
     return Reads()
 
 
@@ -105,38 +100,37 @@ def test_a_tag_that_does_not_fit_is_the_full_owner_and_name(hub):
 
 # --- the read itself ---------------------------------------------------------------------------------------------
 
-def test_every_open_pr_of_both_repositories_reaches_the_column_with_its_own_tag(hub, reads):
+def test_every_open_branch_of_both_repositories_reaches_the_lane_with_its_own_tag(hub, reads):
     reads.open = {EMU: [1512], TOOL: [1821]}
-    prs, prev, prev_n, errs = hub.prs_pass(reads.fetch_open, reads.fetch_closed, reads.fetch_total, repos=[EMU, TOOL])
+    prs, _, errs = hub.prs_pass(reads.fetch_open, reads.fetch_landed, repos=[EMU, TOOL])
     assert sorted(reads.seen) == sorted([EMU, TOOL]), "both repositories are read"
     assert {p["r"] for p in prs} == {EMU, TOOL}, "each row names the repository it came from"
     assert {p["n"] for p in prs} == {1512, 1821} and errs == []
 
 
-def test_a_repository_the_hub_cannot_read_is_an_error_on_the_column(hub, reads):
+def test_a_repository_the_hub_cannot_read_is_an_error_on_the_lane(hub, reads):
     """An unreachable repository is named as an error, never silently dropped from the read."""
     reads.boom = {TOOL}; reads.open = {EMU: [1512]}
-    prs, prev, prev_n, errs = hub.prs_pass(reads.fetch_open, reads.fetch_closed, reads.fetch_total, repos=[EMU, TOOL])
+    prs, _, errs = hub.prs_pass(reads.fetch_open, reads.fetch_landed, repos=[EMU, TOOL])
     assert any(TOOL in e for e in errs), f"the unreadable repository is reported: {errs}"
-    assert {p["r"] for p in prs} == {EMU}, "the repository that answered still fills the column"
+    assert {p["r"] for p in prs} == {EMU}, "the repository that answered still fills the lane"
 
 
 def test_a_repository_the_hub_cannot_read_keeps_the_last_good_rows_of_that_repository(hub, reads, monkeypatch):
     reads.open = {EMU: [1512], TOOL: [1821]}
-    prs, _, _, _ = hub.prs_pass(reads.fetch_open, reads.fetch_closed, reads.fetch_total, repos=[EMU, TOOL])
-    monkeypatch.setattr(hub, "board_cache", {"prs": prs, "prev": [], "prev_n": 0, "prev_n_of": {EMU: 0, TOOL: 0}})
+    prs, landed, _ = hub.prs_pass(reads.fetch_open, reads.fetch_landed, repos=[EMU, TOOL])
+    monkeypatch.setattr(hub, "board_cache", {"prs": prs, "landed": landed})
     reads.boom = {TOOL}
-    prs, prev, prev_n, errs = hub.prs_pass(reads.fetch_open, reads.fetch_closed, reads.fetch_total, repos=[EMU, TOOL])
+    prs, landed, errs = hub.prs_pass(reads.fetch_open, reads.fetch_landed, repos=[EMU, TOOL])
     assert {p["r"] for p in prs} == {EMU, TOOL}, "the failed repository keeps the rows the last good pass left"
     assert any(TOOL in e for e in errs)
 
 
-def test_the_closed_prs_column_carries_both_repositories_and_their_total(hub, reads):
+def test_the_landed_rows_carry_both_repositories(hub, reads):
     reads.open = {EMU: [], TOOL: []}
-    reads.closed = {EMU: [1, 2], TOOL: [3]}
-    prs, prev, prev_n, errs = hub.prs_pass(reads.fetch_open, reads.fetch_closed, reads.fetch_total, repos=[EMU, TOOL])
-    assert {p["r"] for p in prev} == {EMU, TOOL}, "a closed PR of either repository lands in Closed PRs"
-    assert prev_n == 3, "the total counts both repositories"
+    reads.landed = {EMU: [1, 2], TOOL: [3]}
+    prs, landed, errs = hub.prs_pass(reads.fetch_open, reads.fetch_landed, repos=[EMU, TOOL])
+    assert {p["r"] for p in landed} == {EMU, TOOL}, "a landed branch of either repository is read"
     assert errs == []
 
 
@@ -170,7 +164,7 @@ def _stub_gh(monkeypatch, tmp_path, routes):
 # --- what the column serves --------------------------------------------------------------------------------------
 
 def _served(hub, monkeypatch, rows, errs=()):
-    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": rows, "prev": [], "prev_n": 0, "errs": list(errs), "err": None, "lc": {}})
+    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": rows, "errs": list(errs), "err": None, "lc": {}})
     return hub.board()["prs"]
 
 

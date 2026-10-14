@@ -1,7 +1,8 @@
 """Hub board pane: one open and one closed group for each kind, keyed by (kind, number) (ADR-0141, ADR-0137).
 
 The groups come from the column table and the kinds; the pane holds no group name. board() builds the groups off
-the local board cache and the page paints what they carry, so no call is added to a pass.
+the local board cache and the page paints what they carry, so no call is added to a pass. The pull request kind is the
+one exception: it carries the open lane's group only, because a landed branch is read from its issue card (#384).
 
 Fixture style follows tests/test_hub_board_holder.py.
 """
@@ -34,7 +35,7 @@ def hub():
 
 
 def _cache(hub, monkeypatch):
-    """A stubbed board cache that holds every kind, open and closed, and a PR sharing an issue's number."""
+    """A stubbed board cache that holds every kind, open and closed, and an open work branch sharing an issue's number."""
     def issue(n, kind, state, st, labels=()):
         return {"n": n, "t": f"{kind} {n}", "s": state, "c": "2026-10-01T00:00:00Z" if state == "closed" else None,
                 "st": st, "l": list(labels), "k": kind}
@@ -43,9 +44,8 @@ def _cache(hub, monkeypatch):
              issue(30, "spec", "open", "Todo", ["spec"]), issue(31, "spec", "closed", "Done", ["spec"]),
              issue(40, "test case", "open", "Todo"), issue(41, "test case", "closed", "Done"),
              issue(50, "task", "open", "Todo")]
-    pr = {"n": 50, "t": "pr 50", "u": "2026-10-02T00:00:00Z", "r": hub.REPO}
-    prev = {"n": 12, "t": "pr 12", "c": "2026-10-01T00:00:00Z", "m": True, "r": hub.REPO}
-    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": items, "prs": [pr], "prev": [prev], "prev_n": 1, "lc": {}, "err": None, "errs": []})
+    pr = {"n": 50, "t": "fix/50-a-branch", "u": "2026-10-02T00:00:00Z", "r": hub.REPO, "br": True, "ps": "ahead 2"}
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": items, "prs": [pr], "lc": {}, "err": None, "errs": []})
     monkeypatch.setattr(hub, "pr_state", lambda x: None)
     monkeypatch.setattr(hub, "gate_strip", lambda x, t=None: None)
     monkeypatch.setattr(hub, "pr_badge", lambda x: None)
@@ -54,13 +54,14 @@ def _cache(hub, monkeypatch):
 def test_the_page_model_holds_an_open_and_a_closed_group_for_each_kind(hub, monkeypatch):
     _cache(hub, monkeypatch)
     groups = hub.board()["kinds"]
-    assert [(g["kind"], g["state"]) for g in groups] == [(k, s) for k in KINDS for s in ("open", "closed")]
+    # every kind but the pull request one: it carries the open lane's group only, there being no closed-branch lane (#384)
+    assert [(g["kind"], g["state"]) for g in groups] == [("pr", "open")] + [(k, s) for k in KINDS[1:] for s in ("open", "closed")]
     by = {(g["kind"], g["state"]): [x["n"] for x in g["items"]] for g in groups}
     assert by[("bug", "open")] == [10] and by[("bug", "closed")] == [11]
     assert by[("task", "open")] == [20, 50] and by[("task", "closed")] == [21]
     assert by[("spec", "open")] == [30] and by[("spec", "closed")] == [31]
     assert by[("test case", "open")] == [40] and by[("test case", "closed")] == [41]
-    assert by[("pr", "open")] == [50] and by[("pr", "closed")] == [12]
+    assert by[("pr", "open")] == [50] and ("pr", "closed") not in by, "a closed-branch group is still drawn"
 
 
 def test_a_pr_and_an_issue_with_one_number_are_two_items(hub, monkeypatch):
@@ -73,7 +74,7 @@ def test_a_pr_and_an_issue_with_one_number_are_two_items(hub, monkeypatch):
 def test_a_group_is_named_by_the_table_and_the_kind(hub, monkeypatch):
     _cache(hub, monkeypatch)
     names = {(g["kind"], g["state"]): g["name"] for g in hub.board()["kinds"]}
-    assert names[("pr", "open")] == hub.COLUMN["pr_open"] and names[("pr", "closed")] == hub.COLUMN["pr_closed"]
+    assert names[("pr", "open")] == hub.COLUMN["pr_open"]
     assert names[("test case", "closed")] == "Closed Test Cases"
     assert names[("bug", "open")] == "Open Bugs"
 

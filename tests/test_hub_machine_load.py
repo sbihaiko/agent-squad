@@ -565,8 +565,8 @@ def _iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
 
 
-def _closed_pr(n, age, now, merged=True, at=None, repo="o/r"):
-    """One row of the closed-PR read the board pass holds, in the shape `closed_prs_of` builds."""
+def _landed_row(n, age, now, merged=True, at=None, repo="o/r"):
+    """One row of the landing ledger the board pass holds, in the shape `landed_branches_of` builds."""
     return {"n": n, "t": f"landing {n}", "c": _iso(now - age if at is None else at), "m": merged, "r": repo}
 
 
@@ -574,11 +574,11 @@ def test_the_last_landing_is_the_newest_merged_pull_request(hub, monkeypatch):
     """Delivery is a pull request (#75): the merge is the landing. The newest merge names the bar and its merge time is
     the age; an older merge still names its own age."""
     now = time.time()
-    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(42, 5 * 3600, now)]})
+    monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(42, 5 * 3600, now)]})
     assert hub.foot_sources(now)["landing"] == {"issue": 42, "ts": pytest.approx(now - 5 * 3600, abs=2)}
     assert "last landing · PR #42 5h 0m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
-    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(42, 5 * 3600, now),
-                                                      _closed_pr(73, 2 * 3600 + 14 * 60, now)]})
+    monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(42, 5 * 3600, now),
+                                                      _landed_row(73, 2 * 3600 + 14 * 60, now)]})
     assert hub.foot_sources(now)["landing"]["issue"] == 73                      # the newest merge wins
     assert "last landing · PR #73 2h 14m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
 
@@ -586,17 +586,17 @@ def test_the_last_landing_is_the_newest_merged_pull_request(hub, monkeypatch):
 def test_a_closed_pull_request_that_never_merged_is_not_a_landing(hub, monkeypatch):
     """A pull request closed without a merge landed nothing: it is named by its own column, never by this fact."""
     now = time.time()
-    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(12, 60, now, merged=False)]})
+    monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(12, 60, now, merged=False)]})
     assert hub.foot_sources(now)["landing"] is None
     assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
-    monkeypatch.setattr(hub, "board_cache", {"prev": [_closed_pr(12, 60, now, merged=False),
-                                                      _closed_pr(9, 3 * 86400 + 2 * 3600, now)]})
+    monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(12, 60, now, merged=False),
+                                                      _landed_row(9, 3 * 86400 + 2 * 3600, now)]})
     assert "last landing · PR #9 3d 2h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
 
 
 def test_a_merge_time_the_hub_cannot_read_is_not_a_landing(hub, monkeypatch):
     now = time.time()
-    monkeypatch.setattr(hub, "board_cache", {"prev": [{"n": 7, "t": "landing", "c": "soon", "m": True, "r": "o/r"},
+    monkeypatch.setattr(hub, "board_cache", {"landed": [{"n": 7, "t": "landing", "c": "soon", "m": True, "r": "o/r"},
                                                       {"n": 8, "t": "landing", "m": True, "r": "o/r"}]})
     assert hub.foot_sources(now)["landing"] is None
     assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))

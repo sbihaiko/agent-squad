@@ -72,7 +72,7 @@ def _endpoints(calls):
 def test_a_pass_reads_the_project_the_blockers_and_the_prs(hub, monkeypatch):
     calls = []
     monkeypatch.setattr(hub.subprocess, "run", _fake_gh(calls))
-    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "prev": [], "prev_n": 0, "lc": {}, "err": None})
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
     hub.board_pass()
     ep = " | ".join(_endpoints(calls))
     assert f"/users/{hub.OWNER}/projectsV2/{hub.PROJECT_NO}/items" in ep      # the Project statuses
@@ -98,7 +98,7 @@ def test_no_route_runs_a_board_pass_on_request(hub):
 
 
 def test_a_failed_pass_keeps_the_last_good_board_and_surfaces_the_error(hub, monkeypatch):
-    good = {"t": 99.0, "items": [{"n": 11, "t": "a card", "s": "OPEN", "c": None, "st": "Todo", "l": []}], "prs": [], "prev": [], "prev_n": 0, "lc": {}, "err": None}
+    good = {"t": 99.0, "items": [{"n": 11, "t": "a card", "s": "OPEN", "c": None, "st": "Todo", "l": []}], "prs": [], "lc": {}, "err": None}
     monkeypatch.setattr(hub, "board_cache", dict(good))
     monkeypatch.setattr(hub.subprocess, "run", _fake_gh([], fail=True))
     hub.board_pass()

@@ -1,8 +1,9 @@
-"""Hub board: the lanes beside the axis show work branches, never pull requests (#358).
+"""Hub board: the lane beside the axis shows open work branches, and it is for tracking only (#358, #384).
 
 An open work branch is a remote `fix|gui/<n>-...` branch with commits the landing branch (dev) lacks. A landed branch is
-one `branchland.sh` put in dev: its pass keeps a ledger row (`landed.tsv`: epoch, branch, landed sha, issue). Every
-assertion names its seam: the lane names, the two reads, and the payload `board()` serves.
+one `branchland.sh` put in dev, and it is read from its issue card (Done = in dev): the board draws no lane for it, so
+the hub keeps the ledger rows only for its own last-landing fact. Every assertion names its seam: the lane names, the
+read, and the payload `board()` serves.
 """
 import importlib.util
 import json
@@ -44,11 +45,12 @@ def _door(answers):
     return read
 
 
-def test_the_lanes_are_named_for_branches_and_no_name_says_pull_request(hub):
+def test_the_one_lane_is_named_for_branches_and_no_name_says_pull_request(hub):
     assert hub.COLUMN["pr_open"] == "Open branches"
-    assert hub.COLUMN["pr_closed"] == "Landed branches"
+    assert "pr_closed" not in hub.COLUMN, "the hub still reads a closed-branch lane by a role"
     names = [g["name"] for g in hub._columns_module.kind_groups(hub.KINDS, [])]
     assert not [n for n in names if "PR" in n or "pull" in n.lower()], names
+    assert not [n for n in names if "Landed" in n or "Closed Branches" in n], names
 
 
 def test_open_branches_are_the_work_branches_ahead_of_dev(hub, monkeypatch):
@@ -72,13 +74,14 @@ def test_landed_branches_come_from_the_landing_ledger(hub, monkeypatch, tmp_path
     rows = hub.landed_branches_of(REPO)
     assert [(r["n"], r["m"]) for r in rows] == [(355, True), (358, True)]
     assert "fix/355-lander" in rows[0]["t"] and "abc1234" in rows[0]["t"], "a row names the branch and the landed sha"
-    assert hub.landed_total_of(REPO) == 2
 
 
 def test_the_board_serves_branch_rows_without_a_pull_request_state(hub, monkeypatch):
     row = {"n": 358, "t": "fix/358-board", "u": "2026-10-14T09:00:00Z", "o": "", "r": REPO, "ps": "ahead 2", "br": True}
-    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [row], "prev": [], "prev_n": 0, "errs": [], "err": None, "lc": {}})
+    landed = {"n": 355, "t": "fix/355-lander · abc1234", "c": "2026-10-14T08:00:00Z", "m": True, "r": REPO}
+    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [row], "landed": [landed], "errs": [], "err": None, "lc": {}})
     served = hub.board()
-    assert served["prs"]["name"] == "Open branches" and served["prev"]["name"] == "Landed branches"
+    assert served["prs"]["name"] == "Open branches", "the open lane is not the one the table names"
+    assert "prev" not in served, "a landed branch is read from its issue card, so no closed lane is served"
     item = served["prs"]["items"][0]
     assert item["ps"] == "ahead 2" and not item.get("gs") and not item.get("pb"), "no review strip or badge: it is a branch"

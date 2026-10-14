@@ -48,10 +48,8 @@ def _cache(hub, monkeypatch):
              issue(41, "test case", "closed", "Done", ["outcome:failed"]),
              issue(42, "task", "closed", "Done", ["outcome:reverted"]),
              issue(43, "task", "closed", "Done", ["outcome:shelved"])]
-    prs = [{"n": 50, "t": "pr 50", "u": "2026-10-02T00:00:00Z", "r": hub.REPO}]
-    prev = [{"n": 51, "t": "merged pr", "c": "2026-10-01T00:00:00Z", "m": True, "r": hub.REPO},
-            {"n": 52, "t": "abandoned pr", "c": "2026-10-01T00:00:00Z", "m": False, "r": hub.REPO}]
-    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": items, "prs": prs, "prev": prev, "prev_n": 2, "lc": {}, "err": None, "errs": []})
+    prs = [{"n": 50, "t": "fix/50-a-branch", "u": "2026-10-02T00:00:00Z", "r": hub.REPO, "br": True, "ps": "ahead 2"}]
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": items, "prs": prs, "lc": {}, "err": None, "errs": []})
     monkeypatch.setattr(hub, "pr_state", lambda x: None)
     monkeypatch.setattr(hub, "gate_strip", lambda x, t=None: None)
     monkeypatch.setattr(hub, "pr_badge", lambda x: None)
@@ -68,16 +66,16 @@ def test_the_outcome_set_is_the_shipped_definitions(cols):
 def test_each_outcome_filter_shows_only_the_closed_items_with_that_outcome(hub, monkeypatch):
     _cache(hub, monkeypatch)
     got = {o: _keys(hub.board(outcome=o)) for o in OUTCOMES}
-    assert got["Merged"] == ["bug:11", "pr:51"]
-    assert got["Abandoned"] == ["bug:12", "pr:52"]
+    assert got["Merged"] == ["bug:11"]
+    assert got["Abandoned"] == ["bug:12"]
     assert got["Failed"] == ["test case:41"]
     assert got["Reverted"] == ["task:42"]
 
 
-def test_a_merged_pr_an_abandoned_pr_and_a_failed_test_never_read_as_one_thing(hub, monkeypatch):
+def test_a_merged_issue_an_abandoned_one_and_a_failed_test_never_read_as_one_thing(hub, monkeypatch):
     _cache(hub, monkeypatch)
     oc = {x["key"]: x["oc"] for g in hub.board()["kinds"] for x in g["items"] if g["state"] == "closed"}
-    assert len({oc["pr:51"], oc["pr:52"], oc["test case:41"]}) == 3
+    assert len({oc["bug:11"], oc["bug:12"], oc["test case:41"]}) == 3
 
 
 def test_an_outcome_filter_leaves_no_open_item(hub, monkeypatch):

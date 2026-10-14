@@ -60,7 +60,7 @@ ST = S / "squadstate"; (ST / "auto").mkdir(parents=True)
 (S / "hubdir").mkdir()
 NOW = time.time()
 (S / "hubdir/hub-board.json").write_text(json.dumps(
-    {"t": NOW, "items": [], "prev": [], "prev_n": 0, "lc": {}, "err": None,
+    {"t": NOW, "items": [], "landed": [], "lc": {}, "err": None,
      "prs": [{"n": 1491, "t": "Hub: the OPEN PRS card says why a review is late", "d": False, "ci": [], "ms": "clean",
               "u": "2026-10-11T09:00:00Z", "h": PR_SHA, "o": "2026-10-11T08:00:00Z"},
              {"n": 1492, "t": "Hub: the card reports the loop's own reason", "d": False, "ci": [], "ms": "clean",

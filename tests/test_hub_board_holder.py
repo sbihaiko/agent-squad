@@ -55,7 +55,7 @@ def _pass(hub, monkeypatch, holders, cache=None):
     seam = hub.board_seam()
     monkeypatch.setattr(seam.binding, "status_field", lambda: {"id": "PVTSSF_status", "opt": {}})
     monkeypatch.setattr(seam, "holders", holders)
-    monkeypatch.setattr(hub, "board_cache", cache or {"t": 1.0, "items": [], "prs": [], "prev": [], "prev_n": 0, "lc": {}, "err": None})
+    monkeypatch.setattr(hub, "board_cache", cache or {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
     monkeypatch.setattr(hub.subprocess, "run", _fake_gh([{"n": 241, "t": "held", "s": "open", "st": "In Progress", "l": []},
                                                          {"n": 242, "t": "free", "s": "open", "st": "Todo", "l": []}]))
     hub.board_pass()
