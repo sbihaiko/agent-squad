@@ -8,20 +8,16 @@ on:
 # starts none; a work branch is proven by the local fast gate before it lands.
 # One commit starts one job, and that job runs both supported Pythons in order (#149). A matrix split one commit into
 # two jobs that waited behind each other for two runners, and a check no runner picks up answers nothing.
-# The group is the branch, so one branch's pushes share it, and no landing cancels another: `cancel-in-progress` is
-# false, so a running landing keeps its run.
-# `cancel-in-progress: false` alone is not enough: the group's default queue holds one pending run, so a third landing
-# would replace the pending second one. `queue: max` is GitHub's largest queue: it holds up to 100 pending runs and runs
-# them in the order they arrived. GitHub cancels the runs past that cap (GitHub Actions workflow syntax,
-# `concurrency.queue`: `single` holds one, `max` holds 100; `max` takes no `cancel-in-progress: true`).
-# One group per branch cannot raise that cap: a key that names the run would give every landing a group of its own, and
-# no group would span one branch's pushes. That rule leaves the cap, so the group keeps its landings only within it.
+# The group names the commit, so no queue holds a landing behind another and GitHub cancels none.
+# A group shared by one branch's pushes cannot say that: GitHub queues the group's pending runs and cancels the runs
+# past the queue's cap, which is one pending run by default and 100 with `queue: max` (GitHub Actions workflow syntax,
+# `concurrency.queue`). A burst of landings on one branch cancels a landing there. A group that names the commit holds
+# one run and nothing pending, so no cap applies and a landing keeps its run.
 # No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`; the full
 # suite runs before a merge.
 concurrency:
-  group: ci-${{ github.ref_name }}
+  group: ci-${{ github.ref_name }}-${{ github.sha }}
   cancel-in-progress: false
-  queue: max
 
 permissions:
   contents: read
