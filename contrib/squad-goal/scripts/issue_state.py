@@ -17,6 +17,10 @@ The seam answers two questions and only these:
     state.holders()                     # every holder, one read: {"236": {"run": ..., "started": ...}}
     state.hold(236, run, started)       # name the run on the issue, proven by the read that follows
     state.release(236)                  # clear the holder when the run ends, proven by the read that follows
+    state.kind(243)                     # the repository's own kind the item carries: bug, task, spec, test case; "" when none
+    state.kinds()                       # every kind, one read: {"243": "bug", ...}
+    state.set_kind(243, "bug")          # proven by the read that follows; a kind the binding cannot carry is a `KindGap`
+    state.kind_gaps()                   # the kinds of the vocabulary the binding cannot carry, reported by name
 
 **A write is proven by the read that follows it.** The answer to the write is no proof -- a field write can
 be answered ok and never land (#105) -- so `write` reads the issue back and compares. A write the read does
@@ -31,11 +35,19 @@ Shell callers reach the same seam through this module's door:
 
     issue_state.py [--repo R]              print one `<issue>\t<state>` a line, the state the carrier answers
     issue_state.py --state <issue>         print the state one issue carries
+    issue_state.py --kinds                 print one `<issue>\t<kind>` a line, the kind the carrier answers
+    issue_state.py --kind-gaps             print one kind a line, each the binding cannot carry
+
+A **kind** is the repository's own normalized name for what an item is, and never the platform's issue type: a
+caller names `bug`, and only the binding knows which field and option carry it (#243).
 """
 import json, os, pathlib, re, subprocess, sys, time
 
 # The binding a repository binds the vocabulary to. A carrier is named here, and a run records the name.
 BOARD = "board"
+
+# The kinds an item carries, as the repository names them. A binding that cannot carry one reports it as a gap.
+KINDS = ("bug", "task", "spec", "test case")
 
 
 class NotCarried(RuntimeError):
@@ -48,6 +60,14 @@ class NotCarried(RuntimeError):
     def __init__(self, issue, wanted, carried, refused=""):
         self.issue, self.wanted, self.carried, self.refused = issue, wanted, carried, refused
         super().__init__(f"issue {issue} does not carry {wanted!r} after the write; it carries {carried!r}" + (f" ({refused})" if refused else ""))
+
+
+class KindGap(RuntimeError):
+    """The binding cannot carry the kind: a reported gap, raised before any write, never a dropped kind."""
+
+    def __init__(self, issue, wanted, carried):
+        self.issue, self.wanted, self.carried = issue, wanted, carried
+        super().__init__(f"the binding cannot carry kind {wanted!r} for issue {issue}; it carries {', '.join(carried) or 'no kind'}")
 
 
 class ReadFailure(RuntimeError):
@@ -115,6 +135,31 @@ class State:
         """Clear the holder when the run ends, then read it back: a holder the next read still carries is
         `NotCarried`, never a clear. Returns None, the holder the issue then carries."""
         return self._write_holder(issue, None, None, None)
+
+    def kinds(self):
+        """Every kind the carrier answers, in one read: {issue: kind}. An item with no kind is absent."""
+        return self.binding.kinds()
+
+    def kind(self, issue):
+        """The kind one item carries, "" when it carries none."""
+        return self.kinds().get(str(issue), "")
+
+    def kind_gaps(self):
+        """The kinds of the vocabulary the binding cannot carry, in the vocabulary's order."""
+        carried = self.binding.kind_options()
+        return [k for k in KINDS if k not in carried]
+
+    def set_kind(self, issue, wanted):
+        """Write `wanted` on `issue`, then read it back, as for a state. A kind the binding cannot carry is a `KindGap`
+        and nothing is written; a write no read carries is `NotCarried`. Returns the kind the item then carries."""
+        refused = ""
+        try: self.binding.write_kind(issue, wanted)
+        except KindGap: raise
+        except RuntimeError as e: refused = str(e)
+        carried = self.kind(issue)
+        if carried != wanted:
+            raise NotCarried(issue, wanted, carried, refused)
+        return carried
 
     def _write_holder(self, issue, run, started, wanted):
         refused = ""
@@ -302,6 +347,47 @@ class BoardBinding:
             if n.isdigit() and run and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = {"run": run, "started": started}
         return m
 
+    def kind_field(self):
+        """The Kind field: `{"id", "opt"}`, the field's id and its option ids by normalized name. Cached a day, as Status."""
+        def read_field():
+            fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
+            k = next((x for x in fs if isinstance(x, dict) and x.get("name") == "Kind"), None)
+            if not k: return {"id": "", "opt": {}}
+            return {"id": k["id"], "opt": {self._text(o["name"]).lower(): o["id"] for o in k.get("options", [])}}
+        return self._cached(f"rest-kind-field-{self.owner}-{self.project}.json", 86400, read_field)
+
+    @staticmethod
+    def _text(v):
+        return v.get("raw", "") if isinstance(v, dict) else (v or "")
+
+    def kind_options(self):
+        """{normalized kind: option id} the carrier can carry."""
+        return self.kind_field()["opt"]
+
+    def kinds(self):
+        """Every card's kind, in ONE read: {issue: kind}, normalized, a card with no Kind absent. The field is asked for by id,
+        and the repository url filters as in `read_all`. A carrier with no Kind field answers no kind."""
+        fid = self.kind_field()["id"]
+        if not fid: return {}
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={fid}", "--jq",
+                       '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end))//""),'
+                       ' (.content.repository_url//"")]|@tsv')
+        m = {}
+        for l in out.splitlines():
+            n, k, u = (l.split("\t") + ["", "", ""])[:3]
+            n = n.strip()
+            if n.isdigit() and k and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = k.lower()
+        return m
+
+    def write_kind(self, issue, kind):
+        """One PATCH of the Kind field. The option id is the field's, never the name. A kind with no option is a `KindGap`."""
+        field = self.kind_field()
+        if kind not in field["opt"]: raise KindGap(issue, kind, sorted(field["opt"]))
+        iid = self.item_id(issue)
+        if not iid: raise RuntimeError(f"#{issue} not on the board")
+        self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
+                 inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][kind]}]}))
+
     def write_holder(self, issue, run, started):
         """One PATCH of the two Run fields. None is JSON null, the value that clears a field; an empty string is
         one GitHub refuses (#101). The read that proves it is the seam's."""
@@ -340,6 +426,12 @@ def main(argv):
     args = argv[1:]
     repo = ""
     if args[:1] == ["--repo"]: repo = args[1]; args = args[2:]
+    if args[:1] == ["--kinds"]:
+        for n, k in sorted(board_state(repo=repo).kinds().items(), key=lambda kv: int(kv[0])): print(f"{n}\t{k}")
+        return 0
+    if args[:1] == ["--kind-gaps"]:
+        for k in board_state(repo=repo).kind_gaps(): print(k)
+        return 0
     if not args or args[0] not in ("--state",):
         state = board_state(repo=repo)
         for n, s in sorted(state.read_all().items(), key=lambda kv: int(kv[0])): print(f"{n}\t{s}")
