@@ -4,7 +4,7 @@
 # 2) the PR head moving during the review kills the reviewer and ends BLOCKED (superseded), not a hang.
 # 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$T/s/"; : > "$T/s/codex-reset.py"
 cat > "$T/s/models.json" <<J
 {"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}
 J
@@ -17,8 +17,8 @@ cat > "$T/bin/gh" <<'J'
 printf '%s\n' "gh $*" >> "${GHLOG:-/dev/null}"
 case "$*" in
   *'.head.sha+" "+.base.ref'*) echo "aaa111 main";;
-  *compare*'-q .status'*|*compare*'.status'*) echo ahead;;
-  *compare*) printf 'diff --git a/f b/f\n+x\n';;
+  *Accept*compare*) printf 'diff --git a/f b/f\n+x\n';;
+  *compare*) echo '{"status":"ahead"}';;   # the door reads the JSON and applies -q itself
   *pulls/7/files*) printf '%s\n' ${GH_FILES:-UI/a.cs};;
   *'.head.sha'*) if [ -n "$GH_MOVE" ] && [ -e "$GH_MOVE" ]; then echo bbb222; else echo aaa111; fi;;
   *) echo "stub";;

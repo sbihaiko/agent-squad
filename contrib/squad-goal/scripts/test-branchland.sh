@@ -28,9 +28,13 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 GREEN='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
 RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
+# The review verdict of the branch tip, which the lander waits for beside the check (#357): VERDICT=APPROVE|CHANGES|none, kept
+# the way branchreview.sh keeps it (review-<key>.md and review-<key>.sha under the state directory).
+rev() { rm -f "$T/st/review-gui_7-x".*; [ "${1:-}" = none ] && return; printf 'VERDICT: %s\n' "${1:-APPROVE}" > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"; }
 bl() { bash "$T/s/branchland.sh" 2>&1; }
 O="$G -C $T/origin.git"
-reset() { rm -f "$T/st/cq"/* "$T/gh.log" "$T/board.log" "$T/st/auto"/branchland-*; mkorigin; }
+reset() { rm -f "$T/st/cq"/* "$T/gh.log" "$T/board.log" "$T/st/auto"/branchland-*; mkorigin; rev APPROVE; }
+rev APPROVE
 
 r=$(CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ko "dev did not move: '$r'" || ok "green: the branch landed in dev"
@@ -60,6 +64,15 @@ reset; r=$(CHECKS="$RUNNING" bl); r2=$(CHECKS="$RUNNING" bl)
 [ -z "$r2" ] && ok "running: says it once per head" || ko "running repeated: '$r2'"
 # no check yet
 reset; r=$(CHECKS='{"check_runs":[]}' bl); case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run: waits and says why";; *) ko "no check silent: '$r'";; esac
+# a green check is not enough: the review must have approved the tip (#357)
+reset; rev CHANGES; r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review that asked for changes: nothing lands on a green check" || ko "landed over a CHANGES verdict"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*"changes"*) ok "CHANGES: waits and says why";; *) ko "CHANGES silent: '$r'";; esac
+! /usr/bin/grep -q "issues/7" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "a branch under CHANGES closes nothing" || ko "CHANGES branch wrote"
+reset; rev none; r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*"review"*) ok "no review yet: waits and says why";; *) ko "no-review silent: '$r'";; esac || ko "landed with no review"
+reset; echo 0000000000000000000000000000000000000000 > "$T/st/review-gui_7-x.sha"; r=$(CHECKS="$GREEN" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review of an older tip does not approve the new one" || ko "landed on a stale review"
 # a red check never closes the issue or moves the card
 ! /usr/bin/grep -q "issues/7" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "a waiting branch closes nothing and moves no card" || ko "a waiting branch wrote"
 
