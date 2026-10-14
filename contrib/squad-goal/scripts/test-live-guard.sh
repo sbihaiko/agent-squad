@@ -52,26 +52,26 @@ chmod 755 "$live"
 case "$out" in *LIVE-GUARD*"copy SKILL.md"*) ok "the unresolved difference is read and named";; *) ko "the unresolved difference is silent: $out";; esac
 case "$out" in *LIVE-GUARD*"could not resolve"*"copy SKILL.md"*) ok "the pass names the difference the publish left";; *) ko "the pass does not name what the publish left: $out";; esac
 
-# --- the main tree follows origin before the publish (issue #292) ---------------------------------
-# The live copy is published from the main working tree, and nothing moved that tree to origin/main: it stayed at an old
-# commit while later PRs merged. Before the publish the pass fast-forwards it (ff-only), and only a clean tree on its base.
+# --- the main tree follows origin/stg before the publish (issue #292, #359) ---------------------------------
+# The live copy is published from the main working tree, and nothing moved that tree to origin/stg: it stayed at an old
+# commit while later PRs merged. The base is stg, never dev or main: a commit that landed in dev and not in stg never publishes. Before the publish the pass fast-forwards it (ff-only), and only a clean tree on its base.
 # Each case is a bare origin, a clone that is the checkout, and a live skill a version behind. No network, no GitHub call.
 G() { git -c user.name=t -c user.email=t@t "$@"; }
 mk() { # mk NAME: bare origin $T/NAME.git, a clone at $T/NAME carrying contrib/squad-goal v1, a live skill at v1
   local n=$1; local w=$T/$n.work
-  G init -q --bare -b main "$T/$n.git"; G clone -q "$T/$n.git" "$w" 2>/dev/null
+  G init -q --bare -b stg "$T/$n.git"; G clone -q "$T/$n.git" "$w" 2>/dev/null
   mkdir -p "$w/contrib/squad-goal/scripts"; printf 'skill v1\n' > "$w/contrib/squad-goal/SKILL.md"; printf 'hub\n' > "$w/contrib/squad-goal/scripts/hub.py"
-  G -C "$w" add -A; G -C "$w" commit -qm v1; G -C "$w" push -q origin HEAD:main
-  G clone -q -b main "$T/$n.git" "$T/$n" 2>/dev/null
+  G -C "$w" add -A; G -C "$w" commit -qm v1; G -C "$w" push -q origin HEAD:stg
+  G clone -q -b stg "$T/$n.git" "$T/$n" 2>/dev/null
   mkdir -p "$T/$n.live/scripts"; printf 'skill v1\n' > "$T/$n.live/SKILL.md"
   printf 'new file\n' > "$w/contrib/squad-goal/board-definition.json"; printf 'skill v2\n' > "$w/contrib/squad-goal/SKILL.md"
-  G -C "$w" add -A; G -C "$w" commit -qm v2; G -C "$w" push -q origin HEAD:main     # origin is now a commit ahead of $T/$n
+  G -C "$w" add -A; G -C "$w" commit -qm v2; G -C "$w" push -q origin HEAD:stg     # origin/stg is now a commit ahead of $T/$n
 }
 ffpass() { SG_CHECKOUT=$T/$1 SG_LIVE_DIR=$T/$1.live bash "$S/live-guard.sh" 2>&1; }
 
 mk behind; head0=$(G -C "$T/behind" rev-parse HEAD)
 out=$(ffpass behind)
-[ "$(G -C "$T/behind" rev-parse HEAD)" = "$(G -C "$T/behind" rev-parse origin/main)" ] && [ "$(G -C "$T/behind" rev-parse HEAD)" != "$head0" ] && ok "a clean tree behind origin is fast-forwarded" || ko "the tree was not fast-forwarded: $out"
+[ "$(G -C "$T/behind" rev-parse HEAD)" = "$(G -C "$T/behind" rev-parse origin/stg)" ] && [ "$(G -C "$T/behind" rev-parse HEAD)" != "$head0" ] && ok "a clean tree behind origin is fast-forwarded" || ko "the tree was not fast-forwarded: $out"
 case "$out" in *LIVE-GUARD*"fast-forwarded"*) ok "the fast-forward is named";; *) ko "the fast-forward is silent: $out";; esac
 [ "$(cat "$T/behind.live/SKILL.md")" = "skill v2" ] && [ -f "$T/behind.live/board-definition.json" ] && ok "the publish carries the files the fast-forward brought" || ko "the publish did not carry the new files: $out"
 
@@ -89,6 +89,20 @@ mk diverged; printf 'local\n' > "$T/diverged/local.txt"; G -C "$T/diverged" add 
 out=$(ffpass diverged)
 [ "$(G -C "$T/diverged" rev-parse HEAD)" = "$h" ] && ok "a diverged tree is left alone" || ko "the diverged tree was touched: $out"
 case "$out" in *LIVE-GUARD*"not fast-forwarded"*"fast-forward"*) ok "the divergence is reported by name";; *) ko "the divergence is not reported: $out";; esac
+
+# A commit in dev that is not in stg is never published: the tree sits on stg, origin/dev is a commit ahead of it.
+mk devonly; w=$T/devonly.work; G -C "$w" checkout -q -b dev origin/stg~1 2>/dev/null; G -C "$w" checkout -q -B dev origin/stg
+printf 'dev only\n' > "$w/contrib/squad-goal/dev-defect.txt"; G -C "$w" add -A; G -C "$w" commit -qm devonly; G -C "$w" push -q origin dev
+out=$(ffpass devonly)
+[ ! -e "$T/devonly.live/dev-defect.txt" ] && [ ! -e "$T/devonly/contrib/squad-goal/dev-defect.txt" ] && ok "a commit in dev that is not in stg is not published" || ko "a dev-only commit reached the live copy: $out"
+[ "$(cat "$T/devonly.live/SKILL.md")" = "skill v2" ] && ok "the publish still carries what stg holds" || ko "the stg content was not published: $out"
+
+# A checkout on dev or main publishes nothing: only stg is a source.
+for br in dev main; do
+  mk "on$br"; G -C "$T/on$br" checkout -q -b "$br"; out=$(ffpass "on$br")
+  [ "$(cat "$T/on$br.live/SKILL.md")" = "skill v1" ] && ok "a tree on $br is not published" || ko "a tree on $br was published: $out"
+  case "$out" in *LIVE-GUARD*"not fast-forwarded"*"not stg"*) ok "the $br tree is reported as not on stg";; *) ko "the $br tree is not reported: $out";; esac
+done
 
 # --- a checkout that ships no copy of the skill: nothing to read, nothing to publish --------------
 out=$(SG_CHECKOUT=$T/elsewhere bash "$S/live-guard.sh" 2>&1); rc=$?

@@ -25,12 +25,14 @@ repo=${SG_CHECKOUT:-}/contrib/squad-goal
 [ -d "$live" ] || exit 0                                                       # no live copy on this machine: nothing to keep in step
 
 # The publish reads the main working tree, and nothing moved that tree to origin: it sat at an old commit while later PRs
-# merged, and the live loop ran old scripts. So the tree is fast-forwarded first (git only, no GitHub call), ff-only, and
-# only when it is clean and on its base. A dirty tree, another branch, a diverged tree and a failed fetch are named, and the
-# tree is never touched.
+# merged, and the live loop ran old scripts. The source is stg and only stg (ADR-0145): a work branch lands in dev, the loop
+# promotes dev to stg on a green CI, so a defect in dev and not in stg never reaches the running loop. The tree is
+# fast-forwarded first (git only, no GitHub call), ff-only, from origin/stg, and only when it is clean and on stg. A tree on
+# any other branch is not a source: it is named and nothing is published. A dirty tree, a diverged tree and a failed fetch are
+# named, and the tree is never touched. The base here is stg, never $SG_BASE: that one names where work branches start.
 if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
-  base=${SG_BASE:-main}; tree=$SG_CHECKOUT; cur=$(git -C "$tree" branch --show-current)
-  if [ "$cur" != "$base" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is on ${cur:-a detached head}, not $base"
+  base=stg; tree=$SG_CHECKOUT; cur=$(git -C "$tree" branch --show-current)
+  if [ "$cur" != "$base" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is on ${cur:-a detached head}, not $base; nothing is published"; exit 0
   elif [ -n "$(git -C "$tree" status --porcelain --untracked-files=no)" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is dirty"
   elif ! GIT_TERMINAL_PROMPT=0 git -C "$tree" fetch --quiet origin "$base" >/dev/null 2>&1; then echo "LIVE-GUARD main tree $tree not fast-forwarded: git fetch origin $base failed"
   else
