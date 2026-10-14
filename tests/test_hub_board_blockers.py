@@ -47,7 +47,8 @@ def test_card_with_open_blocker_exposes_blocked_by_numbers(hub):
         _item(1496, "the blocker", "In Progress"),
     ]
     data = hub.board()
-    blocked = next(x for g in data["groups"] if g["name"] == "Blocked" for x in g["items"] if x["n"] == 1506)
+    blocked = next(x for g in data["groups"] if g["name"] == "Backlog" for x in g["items"] if x["n"] == 1506)   # Blocked is the owner freeze over Backlog (#247)
+    assert blocked["fz"] == "frozen:owner"
     clear = next(x for g in data["groups"] if g["name"] == "Todo" for x in g["items"] if x["n"] == 1500)
     assert blocked["b"] == [1496]
     assert not clear.get("b")
@@ -143,12 +144,11 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 
 # ---- one colour per board column (#1793) -----------------------------------------------------------
 
-# The decision, not a starting point: the seven Project statuses and the two PR columns, each with the
+# The decision, not a starting point: the eight shipped statuses and the two PR lanes (#247), each with the
 # one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "No status": "#f5b041", "Todo": "#c9d1d9", "Open Specs": "#f78fb3", "In Progress": "#e8d44d",
-    "Code Complete": "#b087f9", "Testing": "#2dd4bf", "Blocked": "#ff6b6b", "Done": "#3ecf8e",
-    "Open PRs": "#5aa9ff", "Closed PRs": "#8b9bb3",
+    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Merging": "#b087f9",
+    "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff", "Closed PRs": "#8b9bb3",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
@@ -229,7 +229,7 @@ def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
 
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
     got = _col(hub, "Object.fromEntries(Object.keys(COLORS).map(n=>[n,colOf(n,[])]))")
-    assert got == NAMED, "the ten named columns carry colours the table does not"
+    assert got == NAMED, "the named columns and lanes carry colours the table does not"
     assert got["Open PRs"] != got["Closed PRs"], "the archive must not look like the live queue"
     assert _mute(hub) not in (got["Open PRs"], got["Closed PRs"]), "a muted PR column is a caption, not a column"
 
@@ -322,7 +322,7 @@ def test_each_row_stacks_the_name_over_the_number_and_centres_both(hub):
     assert "flex-direction:column" in chip, "the name and the number are still side by side"
     assert "justify-content:space-between" not in chip, "a row spread across the chip is a row, not a tile"
     assert "align-items:center" in chip and "text-align:center" in chip, "the row is not centred"
-    assert "<span class=lbl>" in _chip(hub, "Blocked", 2).split("<b")[0], \
+    assert "<span class=lbl>" in _chip(hub, "Abandoned", 2).split("<b")[0], \
         "the name must come before the number in the chip"
 
 
@@ -379,11 +379,11 @@ def test_the_name_is_the_caption_and_the_number_is_never_the_clipped_one(hub):
 
 
 def test_the_chip_names_the_column_and_the_count_it_stands_for(hub):
-    chip = _chip(hub, "Blocked", 728)
-    assert 'class=chip' in chip and 'data-eye="Blocked"' in chip, "the chip still toggles its column"
-    assert 'data-col="Blocked"' in chip, "the chip does not say which column it counts"
-    assert 'title="Blocked — 728"' in chip, "the full name is not one hover away"
-    assert "<span class=lbl>Blocked</span><b>728</b>" in chip, "the number is not stacked under its name"
+    chip = _chip(hub, "Abandoned", 728)
+    assert 'class=chip' in chip and 'data-eye="Abandoned"' in chip, "the chip still toggles its column"
+    assert 'data-col="Abandoned"' in chip, "the chip does not say which column it counts"
+    assert 'title="Abandoned — 728"' in chip, "the full name is not one hover away"
+    assert "<span class=lbl>Abandoned</span><b>728</b>" in chip, "the number is not stacked under its name"
 
 
 def test_counts_of_a_thousand_and_over_carry_a_thousands_separator(hub):
@@ -397,12 +397,12 @@ def test_counts_of_a_thousand_and_over_carry_a_thousands_separator(hub):
 # ---- the strip's numbers are coloured by category, not by magnitude (#1792) --------------------------
 
 # The decision, not a starting point: the strip's own mapping from column to category, with the hexes
-# #1793 owns. Magnitude would light up the two archival piles (688, 522) and bury the Blocked 2.
+# #1793 owns. Magnitude would light up the two archival piles (688, 522) and bury the Abandoned 2.
 HID_COL = {
-    "Blocked": "#ff6b6b",        # --err
+    "Abandoned": "#ff6b6b",      # --err
     "Testing": "#2dd4bf",        # --run
-    "No status": "#f5b041",      # --warn
-    "Done": "#3ecf8e",           # --ok
+    "Backlog": "#f5b041",        # --warn
+    "Closed": "#3ecf8e",         # --ok
     "Closed PRs": "#5aa9ff",     # what #1793 gives the retired pair, and what --pin is
 }
 
@@ -430,10 +430,10 @@ def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
 
 def test_a_category_is_not_a_magnitude(hub):
     """The two archival piles are the biggest numbers on the board and must not be the loudest."""
-    counts = {"Closed PRs": 688, "Done": 522, "Blocked": 2}
+    counts = {"Closed PRs": 688, "Closed": 522, "Abandoned": 2}
     loud = [_hid_rule(hub, c) for c in counts]
     assert len(set(loud)) == len(counts), "two categories share a colour, so the colour says nothing"
-    assert _hid_rule(hub, "Blocked") != _hid_rule(hub, "Closed PRs"), \
+    assert _hid_rule(hub, "Abandoned") != _hid_rule(hub, "Closed PRs"), \
         "the pile nobody is reading and the one that wants eyes wear the same colour"
     for c, n in counts.items():
         assert re.search(r"data-col", _chip(hub, c, n)), "the chip carries no data-col, so no rule can reach it"
@@ -444,7 +444,7 @@ def test_a_column_the_map_does_not_name_keeps_the_colour_its_header_dot_wears(hu
     assert _col(hub, f'colOf("Stale",{json.dumps(names)})') == RING[0]
     assert f'style="color:{RING[0]}"' in _chip(hub, "Stale", 5, names), \
         "a user column's number must take the ring colour, which only colOf can give it"
-    assert "color:" not in _chip(hub, "Blocked", 2), \
+    assert "color:" not in _chip(hub, "Abandoned", 2), \
         "a category with a rule of its own must not also carry an inline colour: that is the second copy"
 
 

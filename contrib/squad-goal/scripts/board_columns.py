@@ -65,3 +65,33 @@ def column_for(facts):
     if facts.get("run_live"): return "Doing", freeze
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
+
+
+# The hub's view of the shipped definition (#247). The definition names a GitHub colour; the page needs a hex that reads
+# at AA on the hub's chip. A pull request is a lane beside the axis, never a column: the lanes are named here, so the hub
+# holds no name of its own. A role names the column a reader looks up by meaning, never by a literal.
+HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
+       "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
+LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff"},
+         {"key": "pr_closed", "name": "Closed PRs", "color": "#8b9bb3"})
+ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "merged": "Testing"}
+SPEC_LABEL = "spec"
+
+
+def view_columns():
+    """The shipped columns in the definition's order, each with the hex the hub draws it in."""
+    return [{"name": s["name"], "terminal": s["terminal"], "color": HEX[s["color"]]}
+            for s in json.loads(_pinned_text())["statuses"]]
+
+
+def view_column(status, closed, labels=()):
+    """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
+
+    Blocked is no column: it is the owner freeze over the column the work reached, Backlog when the Status names none.
+    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned."""
+    labels = set(labels or ())
+    owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
+    freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
+    name = SHIPPED_NAME.get(status, status) if status else None
+    if closed: return (name if name == ROLE["abandoned"] else ROLE["issue_closed"]), None
+    return (name or ROLE["unscheduled"]), freeze
