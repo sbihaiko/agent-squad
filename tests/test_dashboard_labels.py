@@ -55,6 +55,7 @@ def test_an_agent_card_shows_its_skill_and_a_skillless_agent_keeps_its_name():
     assert _label(node(five(), "scout")) == "scout"          # an agent with no skill falls back to its own name
 
 
+@pytest.mark.heavy   # a page render that crosses 2 s on a loaded CI runner
 def test_a_loop_an_each_and_a_dispatch_keep_their_own_name():
     d = five()
     assert _label(node(d, "main")) == "main"                 # a root loop, no role field
