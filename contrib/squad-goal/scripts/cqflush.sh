@@ -12,6 +12,8 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # moves to <name>.dead and is reported once, so a permanently rejected comment cannot retry forever. --once: one pass, no sleep.
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"
 base=$(sg_state_base)
+# Seconds between two passes, empty queue or not: SG_FLUSH_INTERVAL from the environment, else the profile in force, else 120. --interval prints it and exits (tests).
+iv=${SG_FLUSH_INTERVAL:-$(sg_profile_setting "${SG_PROFILE:-}" SG_FLUSH_INTERVAL 120)}; [ "${1:-}" = --interval ] && { echo "$iv"; exit 0; }
 while :; do left=0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue
     [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }
@@ -28,4 +30,4 @@ while :; do left=0
     if gh api "repos/$repo/issues/$n/comments" -F body=@"$f.posting" -q .id >/dev/null 2>&1; then echo "posted $repo#$n $b"; mv "$f.posting" "$f.done"
     else mv "$f.posting" "$f";  c=$(( $(cat "$f.tries" 2>/dev/null || echo 0) + 1 )); echo $c > "$f.tries"; left=1
       [ $c -ge 5 ] && { mv "$f" "$f.dead"; rm -f "$f.tries"; echo "DEAD $repo#$n $b after 5 failures"; }; fi
-  done; [ "${1:-}" = --once ] && exit 0; [ $left = 0 ] && sleep 60 || sleep 30; done
+  done; [ "${1:-}" = --once ] && exit 0; sleep "$iv"; done
