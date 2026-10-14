@@ -15,7 +15,7 @@ p=$(mktemp); out="$SG_STATE/panel-$pr-$s9.md"
 For each finding: is it real (file:line evidence)? what exact fix is right (it may differ from the reviewer's; name every code path the fix must cover so another round does not reopen it)? Is ONE more fix round safe without the owner (it only aligns text/code with decisions already taken), or does a person have to decide (owner-only: money, credentials, access, permanent deletion, external publication, or a new design decision)?
 Last line of your answer: one JSON object {\"one_more_round\":bool,\"needs_owner\":\"question or empty\",\"brief\":\"the exact fix instructions for the next round\"}."
   echo "=== REVIEW"; sed -n '/VERDICT/,$p' "$SG_STATE/review-$pr.md"; } > "$p"
-(cd "$SG_CHECKOUT" && claude -p --model claude-deepseek-v4-flash --effort medium --tools Read Grep Glob Bash \
+(cd "$SG_CHECKOUT" && claude -p --model claude-opus-5-5 --effort medium --tools Read Grep Glob Bash \
   --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" "Bash(gh pr view:*)" "Bash(gh pr diff:*)" "Bash(gh issue view:*)" "Bash(grep:*)" \
   --disallowedTools Skill Edit Write NotebookEdit WebFetch < "$p") > "$out" 2>"$out.err"; rm -f "$p"
 j=$(python3 -c "import json,sys
