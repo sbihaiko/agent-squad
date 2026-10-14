@@ -45,6 +45,11 @@ export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"
 set -m   # each background job leads its own process group, so the watchdog stops the command and its children together
 "$@" & c=$!
 ( sleep "$hold"; : > "$L/timed-out"; kill -TERM -- -"$c" 2>/dev/null; sleep 5; kill -KILL -- -"$c" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+# The command leads a process group of its own, so a signal to this holder's group does not reach it: a holder that is stopped
+# (a pass past its deadline, #130) stops its command's whole tree and its watchdog before it releases the lock (#393).
+stop() {   # stderr goes first: the shell's job notices would land in the stopped pass's log, over the line that names its deadline
+  exec 2>/dev/null; kill -TERM -- -"$c"; kill -- -"$wd"; kill "$wd"; rm -rf "$L"; exit "$1"; }
+trap 'stop 143' TERM; trap 'stop 130' INT
 wait "$c"; rc=$?
 kill -- -"$wd" 2>/dev/null; kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
 [ -e "$L/timed-out" ] && exit 75
