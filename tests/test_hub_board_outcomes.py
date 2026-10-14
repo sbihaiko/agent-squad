@@ -4,7 +4,6 @@ The outcome set is the shipped definition's, read through board_columns; the rul
 reader's choice and paints the answer. Fixture style follows tests/test_hub_board_kinds.py.
 """
 import importlib.util
-import json
 import os
 import re
 import tempfile
