@@ -96,15 +96,17 @@ $G worktree add -q worktrees/child/c-merged -b gui/c1 HEAD
 $G worktree add -q worktrees/child/c-ahead -b gui/c2 HEAD; $G -C worktrees/child/c-ahead -c user.email=a@b -c user.name=t commit -q --allow-empty -m work
 $G worktree add -q worktrees/child/c-dirty -b gui/c3 HEAD; echo x > worktrees/child/c-dirty/f
 $G worktree add -q worktrees/child/c-busy -b gui/c4 HEAD
+$G worktree add -q worktrees/child/c-run -b gui/c5 HEAD; echo runs/ >> "$T/co/.git/info/exclude"; mkdir -p worktrees/child/c-run/runs/autobug-live; echo '{"event": "call_start"}' > worktrees/child/c-run/runs/autobug-live/record.jsonl; echo "$T/co/worktrees/child/c-run/runs/autobug-live" > "$T/st/active-runs.txt"
 ( cd worktrees/child/c-busy && exec sleep 90 ) & cpid=$!; sleep 1
 out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ ! -d worktrees/child/c-merged ] && ok "C: merged, clean, unused child tree removed" || ko "C: c-merged kept: $out"
 [ -d worktrees/child/c-ahead ] && ok "C: child tree ahead of the base kept" || ko "C: c-ahead was removed: $out"
 [ -d worktrees/child/c-dirty ] && ok "C: dirty child tree kept" || ko "C: c-dirty was removed: $out"
 [ -d worktrees/child/c-busy ] && ok "C: child tree with a live process kept" || ko "C: c-busy was removed: $out"
+[ -d worktrees/child/c-run ] && ok "C: child tree with a live run folder kept" || ko "C: c-run was removed: $out"
 case "$out" in *"WT CLEAN child c-merged"*) ok "C: the decision line names the class and the tree";; *) ko "C: no child decision line: $out";; esac
-[ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 4 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "C: tally 1/4, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
-kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
+[ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 5 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "C: tally 1/5, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
+kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy c-run; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
 # S: a tree whose submodules are CHECKED OUT. `git worktree remove` refuses the whole tree — `fatal: working trees containing
 # submodules cannot be moved or removed` — a line git prints with no run id and no class, so the tree was never freed and the
 # footer's count never dropped for it (#102). The pass answers the class itself: it adds the flag git needs, after the tree is

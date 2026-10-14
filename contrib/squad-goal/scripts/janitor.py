@@ -179,7 +179,7 @@ def mark_killed(f):
     _run(["python3", "-m", "squad.killed", str(f)], env=env)
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
-live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 pending = []   # markers of a reaped run, dropped after rule Q has read them
 def free_reaped(f, i):
@@ -203,7 +203,11 @@ def free_reaped(f, i):
         for p in leases: p.unlink(missing_ok=True)
     return marks
 for r in names:
-    f = folder(r); i = read(f)
+    f = folder(r)
+    if not f.exists():   # a child worktree can take its run folder with it; no missing folder owns an issue
+        missing.append((r, f))
+        continue
+    i = read(f)
     if i is None:   # J: no record.jsonl = the start was refused (e.g. vendor/skills drift); after 5 min stop its dashboard and drop it
         age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
         if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
@@ -493,6 +497,18 @@ if owner and proj and repo0:
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
+    # O: a missing child-worktree run has no record to read, but its marker still identifies the issue it claimed.
+    for r, f in missing:
+        marks = {}
+        for p in (st / "auto").glob("*"):
+            mo = re.fullmatch(r"(disp|bug)-(\d+)", p.name)
+            if mo and p.read_text().strip() in (r, f.name): marks.setdefault(mo.group(2), []).append((mo.group(1), p))
+        for n in sorted(marks, key=int):
+            if n in byissue or issue_info(n)[0] != "open" or pr_count(n) != "0": continue
+            mks = " and ".join("auto/" + kind + "-" + n for kind, _ in marks[n])
+            say(f"DISPATCH-MISSING #{n}: run {f.name} folder missing; {mks} marker dropped so it dispatches again")
+            if not dry:
+                for _, p in marks[n]: p.unlink()
     # Q: a marker and an In Progress card with no run behind them. Only a definite answer counts: a refused read (not "open", not a digit, no status)
     # touches nothing and leaves no once-only marker, so the next pass decides. A definite "no" is remembered for 10 min, so a landed issue's old marker is not re-read every pass.
     qm = {}

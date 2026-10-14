@@ -79,15 +79,21 @@ for rel in worktrees/child .worktrees; do
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
     [ -n "$SG_BASE" ] || continue
     $G -C "$w" merge-base --is-ancestor HEAD "origin/$SG_BASE" 2>/dev/null || continue
-    # A run in flight that names this tree is the one case a merged tree is still in use: the child may not have started, so
-    # no process sits inside it yet. Same test as the fork rule below, and the same lesson (gui/1227).
+    # An active run folder inside the child itself owns this tree, even before it starts a process. The janitor drops a
+    # missing folder from active-runs, so this pass only preserves a folder that still exists and has no verdict.
     live=0
-    for r in "$SG_CHECKOUT"/runs/run-*; do
+    if [ -f "$SG_STATE/active-runs.txt" ]; then while read -r r; do
+      rf=$(cd "$r" 2>/dev/null && pwd -P) || continue
+      case $rf in "$w"/*) f="$rf/record.jsonl"; [ -f "$f" ] && ! grep -q '"event": *"verdict"' "$f" 2>/dev/null && { live=1; break; };; esac
+    done < "$SG_STATE/active-runs.txt"; fi
+    # A run in flight that names this tree is the other case a merged tree is still in use: the child may not have started, so
+    # no process sits inside it yet. Same test as the fork rule below, and the same lesson (gui/1227).
+    if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
       f="$r/record.jsonl"; [ -f "$f" ] || continue
       grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue
       [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
       grep -qF "${w##*/}" "$f" "$r/request.txt" 2>/dev/null && { live=1; break; }
-    done
+    done; fi
     [ $live = 0 ] || continue
     b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
     wt_remove "$SG_CHECKOUT" "$w"; rc=$?
