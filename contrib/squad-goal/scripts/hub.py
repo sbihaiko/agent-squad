@@ -10,7 +10,7 @@ _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.
 _columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
 BOARD_COLUMNS = _columns_module.COLUMNS
 COLUMN = _columns_module.BY_FACT
-BOARD_COLUMNS_JSON = json.dumps(BOARD_COLUMNS, separators=(",", ":"))
+BOARD_NAMES_JSON = json.dumps(COLUMN, separators=(",", ":"))
 BOARD_COLORS_JSON = json.dumps({column["name"]: column["color"] for column in BOARD_COLUMNS}, separators=(",", ":"))
 BOARD_FLOW_JSON = json.dumps([column["name"] for column in sorted(BOARD_COLUMNS, key=lambda column: column["flow"])], separators=(",", ":"))
 
@@ -1529,7 +1529,7 @@ def board():
     # Every card names its repository (#1820): `r` is the full owner/name (what a link and the popup read), `rt` the tag
     # the card wears (MesenAI / agent-squad, or owner/repo when the short name names more than one repository).
     perr = "; ".join(board_cache.get("errs") or [])   # the repositories this pass could not read, named on the column
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": "Closed PRs", "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": "Open PRs", "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": COLUMN["pr_closed"], "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": COLUMN["pr_open"], "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -1777,12 +1777,8 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .chip b{flex:none;font-size:20px;line-height:20px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;color:var(--pin)}   /* the number is what the tile is for, and it is never the element that gets cut. --pin is the fallback for a column the table below does not name. These rules are scoped to .hidbar on purpose: a bare .chip would also repaint the sidebar's .sub .chip */
 /* The strip's own mapping from column to category, one rule per category: the colour says what the count means and
    never how big it is, because magnitude would light up the two archival piles. The hexes are #1793's, under the
-   names the page already uses for them; Closed PRs' #5aa9ff is --pin, so it is written as the token it is. */
-.hidbar .chip[data-col="Blocked"] b{color:var(--err)}
-.hidbar .chip[data-col="Testing"] b{color:var(--run)}
-.hidbar .chip[data-col="No status"] b{color:var(--warn)}
-.hidbar .chip[data-col="Done"] b{color:var(--ok)}
-.hidbar .chip[data-col="Closed PRs"] b{color:var(--pin)}
+   names the table gives them; the closed PRs' #5aa9ff is --pin, so it is written as the token it is. */
+/*HID_CHIP_RULES*/
 .hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
 .hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:#6f7987;font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
@@ -2085,7 +2081,7 @@ const escBoard=()=>{if(bo.max)setMax(false)};
 paintBoard();
 $("#bx").onclick=()=>setOff(!bo.off);
 $("#bz").onclick=()=>setMax(!bo.max);
-const isPR=n=>n==="Open PRs"||n==="Closed PRs";
+const isPR=n=>n===COLNAME.pr_open||n===COLNAME.pr_closed;
 const esc=t=>String(t).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 const OKTAG=new Set("details summary hr br b i strong em code kbd sub sup p div span ul ol li table thead tbody tr th td h1 h2 h3 h4 h5 h6 blockquote pre a img del s u".split(" ")),VOID=new Set(["br","hr","img"]);
 const OKATTR={a:["href"],img:["src","alt","width","height"],td:["colspan","rowspan","align"],th:["colspan","rowspan","align"],details:["open"]};
@@ -2130,7 +2126,7 @@ $("#px").onclick=()=>pop.classList.remove("on");$("#pprev").onclick=()=>step(-1)
 document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||c.classList.contains("m"))return;window.open("https://github.com/"+(c.dataset.r||"__REPO__")+"/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
 nav=[...c.closest(".sc").querySelectorAll(".it[data-n]")].map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"]);showIssue(c.dataset.n,c.dataset.r)});
 const hm=location.hash.match(/issue=(\d+)/);if(hm)showIssue(+hm[1]);   // deep link: /#issue=1171
-document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g==="Open PRs")bo.prOpen=bo.prOpen===false;else if(g==="Closed PRs")bo.prevOpen=!bo.prevOpen;else bo.open=g;saveB();pollBoard()});
+document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g===COLNAME.pr_open)bo.prOpen=bo.prOpen===false;else if(g===COLNAME.pr_closed)bo.prevOpen=!bo.prevOpen;else bo.open=g;saveB();pollBoard()});
 $("#grip").onpointerdown=e=>{e.preventDefault();document.body.classList.remove("dragging");const g=e.currentTarget;g.setPointerCapture(e.pointerId);g.classList.add("drag");document.body.classList.add("dragging");
 const mv=ev=>{if(!ev.buttons){up();return}bo.h=Math.round(Math.min(innerHeight-160,Math.max(90,innerHeight-ev.clientY)));sizeBoard()},up=()=>{g.classList.remove("drag");document.body.classList.remove("dragging");g.removeEventListener("pointermove",mv);g.removeEventListener("pointerup",up);g.removeEventListener("pointercancel",up);g.removeEventListener("lostpointercapture",up);saveB()};
 g.addEventListener("pointermove",mv);g.addEventListener("pointerup",up);g.addEventListener("pointercancel",up);g.addEventListener("lostpointercapture",up)};
@@ -2212,11 +2208,12 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
 // (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
 const COLORS=/*BOARD_COLORS*/;
+const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
 async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
-if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
+if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
 $("#bt").textContent=b.err?"(stale)":"";
 const fam=ls=>ls.reduce((o,l)=>{const k=l.includes(":")?l.split(":")[0]:"";(o[k]=o[k]||[]).push(l);return o},{});   // label group = prefix before ":"
@@ -2246,7 +2243,7 @@ const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
 const badge=g=>`<span class=n>${f||sel.length?fits[g.name].length+"/":""}${g.n}</span>`;   // the number the header shows, and the number the strip's line repeats
-const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name==="Open PRs"?bo.prOpen!==false:g.name==="Closed PRs"?!!bo.prevOpen:bo.open===g.name;
+const one=g=>{const it=fits[g.name],shown=it.slice(0,lim[g.name]||25),dot=`<i style="background:${colOf(g.name,CN)}"></i>`,cnt=badge(g),isOpen=g.name===COLNAME.pr_open?bo.prOpen!==false:g.name===COLNAME.pr_closed?!!bo.prevOpen:bo.open===g.name;
 if(bottom)return `<div class="col${isPR(g.name)?" prs":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ch><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div></div>`;
 return `<div class="acc${isPR(g.name)?" prs":""} ${hid.has(g.name)?"hidcol":""} ${isOpen?"open":""}" style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><div class=ah><span>${dot}${esc(g.name)}</span><span>${cnt} ${eye(g)}</span></div><div class=sc data-g="${esc(g.name)}">${perr(g)}${cards(g,it,shown)}</div><div class=pad></div></div>`};
 const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; only 1000 and over needs separators
@@ -2265,7 +2262,10 @@ pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
-PAGE = PAGE.replace("/*BOARD_COLUMNS*/", BOARD_COLUMNS_JSON).replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON)
+# The strip paints one rule per category, keyed by the fact that sets the column: the name comes from the table.
+HID_CHIP_TOKENS = (("blocked", "err"), ("merged", "run"), ("missing_status", "warn"), ("issue_closed", "ok"), ("pr_closed", "pin"))
+PAGE = PAGE.replace("/*HID_CHIP_RULES*/", "\n".join('.hidbar .chip[data-col="%s"] b{color:var(--%s)}' % (COLUMN[fact], token) for fact, token in HID_CHIP_TOKENS))
+PAGE = PAGE.replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON).replace("/*BOARD_NAMES*/", BOARD_NAMES_JSON)
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 

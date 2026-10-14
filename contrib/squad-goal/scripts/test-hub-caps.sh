@@ -4,7 +4,7 @@
 # (no network, no server). usage: bash test-hub-caps.sh
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/panes.js" "$live/"   # hub.py reads panes.js beside itself
+live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/panes.js" "$d/board_columns.py" "$live/"   # hub.py reads panes.js and board_columns.py beside itself
 
 # probe <env...> : load the copied hub.py in a fresh process, call loop_caps() twice; stdout is one JSON line, stderr is the hub's log.
 cat >"$T/probe.py" <<'PY'
@@ -31,5 +31,17 @@ probe "$T/bare" ""
 [ "$(cat "$T/out")" = 'null' ] && ok "no source resolves: no ceiling" || ko "no source: got $(cat "$T/out")"
 n=$(/usr/bin/grep -c . "$T/err"); [ "$n" = 1 ] && ok "one log line for two failed calls" || ko "log lines: $n ($(tr '\n' ' ' <"$T/err"))"
 /usr/bin/grep -q "ModuleNotFoundError" "$T/err" && ok "the log line names the exception" || ko "the log line never names the exception ($(tr '\n' ' ' <"$T/err"))"
+
+# 4. the copy carries what the page needs too: a live hub.py serves its board only with the column table beside it
+cat >"$T/board.py" <<'PY'
+import importlib.util, re, sys
+spec = importlib.util.spec_from_file_location("hub", sys.argv[1]); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)
+m = re.search(r"const COLNAME=(\{.*?\});", hub.PAGE)
+print(m.group(1) if m else "(the page names no column)")
+PY
+( cd "$T/bare" && env -u PYTHONPATH -u SG_SQUAD SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 \
+    SG_HUB_DIR="$T/hub2" SG_STATE="$T/st2" HOME="$T/home" python3 "$T/board.py" "$live/hub.py" >"$T/names" 2>"$T/names.err" )
+/usr/bin/grep -q '"unclaimed":"Todo"' "$T/names" && ok "the live copy names its board columns from the table beside it" \
+  || ko "the live copy names no board column: $(cat "$T/names") ($(head -2 "$T/names.err" | tr '\n' ' '))"
 
 exit $fail
