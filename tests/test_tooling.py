@@ -94,20 +94,31 @@ def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_tok
     assert uses and all("@v" in u and u.rsplit("@v", 1)[1].isdigit() for u in uses)
 
 
-def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
-    """Guard for the CI rule: no matrix (one commit, one job), and a landing is never cancelled (#149, #398).
+QUEUE_CAP = {"single": 1, "max": 100}  # GitHub Actions `concurrency.queue`: the pending runs a group holds
+
+
+def test_one_commit_starts_one_job_and_a_landing_group_keeps_what_its_queue_holds():
+    """Guard for the CI rule: no matrix (one commit, one job), one group per branch, and a landing is never cancelled (#149, #398).
 
     A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
-    up answers nothing. The group is the branch a push carries, so one branch's pushes share it. Only a landing pushes,
-    and a landing keeps its evidence, so the group needs no `github.head_ref`.
+    up answers nothing. The group names the branch a push carries, so one branch's pushes share it. A key that names
+    the run would give every landing a group of its own, and no group would span one branch's pushes.
 
-    `cancel-in-progress: false` alone is not enough. The group's default queue holds one pending run, so the arrival of
-    a third landing cancels the pending second one and the middle landing loses its evidence (GitHub Actions workflow
-    syntax, `concurrency.queue`, default `single`). `queue: max` holds every pending landing until it runs, in order.
+    Only a landing pushes, so no work-branch push is superseded and none needs cancelling: `on.push` names the three
+    long-lived branches, and a work-branch push starts no run at all. The workflow cancels no run either
+    (`cancel-in-progress: false`), so a landing that started keeps its run.
+
+    The group queues the landings that arrive behind it: its default queue holds one pending run, so a second pending
+    landing replaces the first, and `queue: max` is GitHub's largest queue, which waits in the order the landings
+    arrived. GitHub caps that queue at `QUEUE_CAP` and cancels the runs past the cap. One group per branch cannot
+    raise that cap: only a key that names the run holds nothing waiting, and such a key breaks "one concurrency group
+    spans one branch's pushes". So the guard checks the group, the queue GitHub gives it, and the workflow's own
+    account of the cap.
     """
     import yaml
 
-    wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    wf = yaml.safe_load(text)
     assert len(wf["jobs"]) == 1, "one commit starts one job"
     job = next(iter(wf["jobs"].values()))
     assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
@@ -115,10 +126,20 @@ def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
     group = con["group"]
     assert "github.ref_name" in group and "github.head_ref" not in group, group
     assert not re.search(r"github\.ref\b", group), f"{group}: the group names the branch, not the full ref"
+    assert not re.search(r"github\.(sha|run_id|run_number|run_attempt)\b", group), (
+        f"{group}: a key that names the run gives every landing a group of its own, so no group spans one branch's "
+        "pushes"
+    )
     assert con["cancel-in-progress"] is False, "a landing on dev, stg or main is never cancelled, and no other push starts a run"
     assert con.get("queue") == "max", (
-        "the group's default queue holds one pending run, so the next landing cancels a pending one and the middle "
-        "landing loses its evidence; `queue: max` holds every pending landing until it runs"
+        "the group's default queue holds one pending run, so the next landing replaces a pending one; `queue: max` "
+        "keeps the pending landings and runs them in order"
+    )
+    cap = QUEUE_CAP[con["queue"]]
+    stated = text.split("concurrency:", 1)[0]  # the workflow's own account of the group, above the block
+    assert str(cap) in stated and "cancel" in stated, (
+        f"the group's queue holds {cap} pending runs and GitHub cancels the runs past the cap; the workflow states the "
+        f"cap it takes, so its account of the group matches the queue GitHub gives it"
     )
 
 

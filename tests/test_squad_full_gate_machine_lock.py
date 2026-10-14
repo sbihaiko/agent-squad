@@ -5,8 +5,8 @@ suites in its own worktree: eight cores take one of them, both finish later, and
 gate's pytest half therefore held the machine-wide `gate` lock `serial.sh` owns (#81), and never held it across the shell
 suites (#94). The local land path retired (#115): `forkclose.sh` and the gate script it ran are gone, and the landing pass
 `prland.sh` gates the landed head by reading the CI check job's failed-test set. So the one full gate of a landing runs in
-CI, on the pushed commit, and its pending queue holds every landing until it runs: only a landing pushes, no run is
-cancelled, and `queue: max` keeps a pending landing instead of replacing it, so every landing keeps its evidence.
+CI, on the pushed commit, and only a landing pushes, so the run the gate reads is one the branch carries. The group and
+its queue belong to the CI rule, and `tests/test_tooling.py` guards them.
 Nothing on the machine takes the `gate` lock any more, and the shell suites still run unlocked.
 
 Host-free: the surviving scripts run in a throwaway tree with a throwaway SG_STATE, and the workflow file is read, never run.
@@ -105,22 +105,15 @@ def test_the_shell_suites_take_no_gate_lock_and_run_beside_a_holder(tmp_path):
     assert not WAIT_LINE.findall(p.stdout + p.stderr), p.stdout + p.stderr
 
 
-def test_the_gate_of_a_landing_is_the_ci_check_job_and_its_pending_queue_keeps_every_landing():
-    """#81 where the gate runs now: only a landing pushes, so the CI suite runs once per branch a landing carries
-    (#398), one branch's landings queue behind each other until they run, and no run is cancelled, so every landing
-    keeps its evidence. A work branch starts none: the local fast gate proves it before it lands."""
+def test_the_gate_of_a_landing_is_the_ci_check_job():
+    """#81 where the gate runs now: the CI check job runs the suite, and only a landing reaches it (#398). A work
+    branch starts no run: the local fast gate proves it before it lands. The concurrency group and its queue belong to
+    the CI rule, and `tests/test_tooling.py` guards that rule in one place."""
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     runs = [step["run"] for job in wf["jobs"].values() for step in job["steps"] if "run" in step]
     assert any("pytest" in r for r in runs), runs
-    con = wf["concurrency"]
-    assert "github.ref_name" in con["group"] and "github.head_ref" not in con["group"], con
-    assert con.get("cancel-in-progress") is False, "a landing keeps its evidence: no run is cancelled"
-    assert con.get("queue") == "max", (
-        "`cancel-in-progress: false` leaves the group's default queue of one pending run, so a third landing cancels "
-        "the pending second one; `queue: max` holds every pending landing until it runs"
-    )
 
 
 def test_the_landing_pass_reads_that_check_before_it_merges():
