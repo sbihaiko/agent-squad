@@ -97,6 +97,32 @@ def view_column(status, closed, labels=()):
     return (name or ROLE["unscheduled"]), freeze
 
 
+PR_KIND = "pr"
+
+
+def kind_label(kind):
+    """The plural a kind's groups are named with: the kind's own words, never a list the hub keeps (`test case` -> Test Cases)."""
+    return ("PRs" if kind == PR_KIND else kind.title() + "s")
+
+
+def kind_groups(kinds, rows):
+    """One open and one closed group for the pull request kind and for each kind, in that order, named by the table.
+
+    The pull request lanes name their groups (LANES); every other kind takes the lanes' own open and closed words. A row is
+    `{"kd": kind, "closed": bool, ...}`, and its key is (kind, number), so a pull request and an issue with one number are
+    two items. A row of a kind not named here is not grouped: the pane draws what the kinds and the table name."""
+    words = {"open": LANES[0]["name"].split()[0], "closed": LANES[1]["name"].split()[0]}
+    names = {PR_KIND: {"open": LANES[0]["name"], "closed": LANES[1]["name"]}}
+    out = []
+    for kind in (PR_KIND, *kinds):
+        for state in ("open", "closed"):
+            items = [{**{k: v for k, v in r.items() if k not in ("kd", "closed")}, "k": kind, "key": f"{kind}:{r['n']}"}
+                     for r in rows if r.get("kd") == kind and bool(r.get("closed")) == (state == "closed")]
+            name = names.get(kind, {}).get(state) or f"{words[state]} {kind_label(kind)}"
+            out.append({"kind": kind, "state": state, "name": name, "n": len(items), "items": items})
+    return out
+
+
 # Every terminal entry carries its condition in text on the issue (spec #132, #245). The tag is what a later pass reads to
 # know the comment is there, so a settled card is backfilled once and never twice.
 TERMINAL = ("Closed", "Abandoned")

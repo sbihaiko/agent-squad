@@ -93,3 +93,24 @@ def test_the_pane_paints_the_groups_it_is_given_keyed_by_kind_and_number(hub):
     assert out.returncode == 0, out.stderr
     assert 'data-g="G1"' in out.stdout and 'data-g="G2"' in out.stdout
     assert 'data-key="pr:50"' in out.stdout and 'data-key="task:50"' in out.stdout
+
+
+def test_the_kind_rides_in_the_one_items_read_the_pass_already_makes(tmp_path):
+    spec = importlib.util.spec_from_file_location("issue_state_rows_kind", ROOT / "contrib/squad-goal/scripts/issue_state.py")
+    seam_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(seam_mod)
+    calls = []
+
+    def run(cmd, input=None, **kw):
+        s = " ".join(cmd)
+        calls.append(s)
+        out = ""
+        if "/fields?" in s:
+            out = json.dumps([{"id": "F_STATUS", "name": "Status", "options": []},
+                              {"id": "F_KIND", "name": "Kind", "options": [{"id": "O_BUG", "name": {"raw": "Bug"}}]}])
+        return subprocess.CompletedProcess(cmd, 0, out, "")
+
+    seam = seam_mod.board_state("o", "4", "x/y", kind="users", state_dir=tmp_path, run=run, env={"SG_BOARD_READ_BACKOFF": "0"})
+    seam.rows(".[]", kind=True)
+    reads = [c for c in calls if "/items?" in c]
+    assert len(reads) == 1 and "F_STATUS" in reads[0] and "F_KIND" in reads[0]
