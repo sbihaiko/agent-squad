@@ -52,7 +52,9 @@ rm -rf "$SG_STATE/locks/gate"
 rc=1; cut=0
 for attempt in 1 2 3; do
   SERIAL_HOLD_SECONDS=4242 bash "$src" gate sh -c 'sleep 3; exit 7' 2>/dev/null & hp=$!
-  sp=""; for i in $(seq 1 30); do sp=$(/bin/ps -ww -o pid=,command= -ax | awk '$NF=="4242" && $2 ~ /sleep/ {print $1}'); [ -n "$sp" ] && break; sleep 0.1; done
+  # The sleep is found by its place in this holder's tree (holder -> watchdog subshell -> sleep), never by its command name alone:
+  # a parallel run's sleep, or an unrelated one, is not this test's to cut.
+  sp=""; for i in $(seq 1 30); do sp=$(/bin/ps -ww -o pid=,ppid=,command= -ax | awk '$NF=="4242" && $3 ~ /sleep/ {print $1, $2}' | while read -r p pp; do [ "$(/bin/ps -o ppid= -p "$pp" 2>/dev/null | tr -d ' ')" = "$hp" ] && echo "$p"; done); [ -n "$sp" ] && break; sleep 0.1; done
   [ -n "$sp" ] && { cut=1; kill -TERM "$sp" 2>/dev/null; }
   wait "$hp"; rc=$?
   [ "$cut" = 1 ] && break
@@ -78,4 +80,20 @@ echo "$reused" > "$SG_STATE/locks/gui/pid"; printf '%s\n' "$rec" > "$SG_STATE/lo
 out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$out" = ran ] && ok "a lock whose recorded pid was reused is stale and is taken over" || ko "the reused-pid lock blocked the gate (rc=$rc out=$out)"
 kill -9 "$prior" "$reused" 2>/dev/null
+
+# (#392) An empty reading of a pid's start time is no evidence of a reused pid: a ps that fails (a pid of another user, another pid
+# namespace, a transient error) names nothing. A live holder whose token cannot be read back is waited for, never reaped; only a
+# non-empty token that differs from the recorded one is a reused pid. SG_PS names the ps, so the test makes the reading empty.
+printf '#!/bin/bash\ncase "$*" in *lstart*) exit 1;; esac\nexec /bin/ps "$@"\n' > "$T/ps-blind"; chmod +x "$T/ps-blind"
+rm -rf "$SG_STATE/locks/gui"; mkdir -p "$SG_STATE/locks/gui"; echo $$ > "$SG_STATE/locks/gui/pid"; echo "Mon Jan  1 00:00:00 2001" > "$SG_STATE/locks/gui/inc"
+out=$(SG_PS="$T/ps-blind" SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>&1); rc=$?
+[ "$rc" = 75 ] && [ "$(cat "$SG_STATE/locks/gui/pid" 2>/dev/null)" = "$$" ] && ok "an empty start-time reading does not reap a live holder" || ko "a live holder was reaped on an empty reading (rc=$rc out=$out)"
+rm -rf "$SG_STATE/locks/gui"
+
+# (#392) The lock directory is one machine-wide path when SG_STATE is not set: TMPDIR is per user on macOS, so two users or a
+# launchd job would otherwise resolve two lock directories and two gates would run together.
+mkdir -p "$T/ta" "$T/tb"
+a=$(env -u SG_STATE TMPDIR="$T/ta" bash "$src" tmpdir-probe sh -c 'ls -d /tmp/sg-state/locks/tmpdir-probe 2>&1')
+b=$(env -u SG_STATE TMPDIR="$T/tb" bash "$src" tmpdir-probe sh -c 'ls -d /tmp/sg-state/locks/tmpdir-probe 2>&1')
+[ "$a" = /tmp/sg-state/locks/tmpdir-probe ] && [ "$b" = "$a" ] && [ ! -e "$T/ta/sg-state" ] && [ ! -e "$T/tb/sg-state" ] && ok "the lock directory does not depend on TMPDIR" || ko "the lock directory follows TMPDIR ('$a' / '$b')"
 rm -rf "$T"; exit $fail

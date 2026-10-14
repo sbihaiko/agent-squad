@@ -21,7 +21,8 @@
 # Exit: 0 entered (or the wave branch was cut), 1 not entered (requeued after a failed gate, a conflict or a refused push;
 # held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
 # Guards: `test-wave.sh`.
-. "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
+here="$(cd "$(dirname "$0")" && pwd)"   # fixed at the start: a relative $0 means nothing once the work moves to a child's worktree
+. "$here/env.sh" 2>/dev/null || exit 0
 G=/usr/bin/git; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; base=${SG_BASE:-dev}
 export GIT_TERMINAL_PROMPT=0
 wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' "$1";; esac; }
@@ -76,7 +77,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   # They run under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on.
-  out=$(bash "$(dirname "$0")/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
+  out=$(bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
   [ $grc = 0 ] || {
     requeue "$iss" "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
   # A push that is not a fast-forward is refused by git itself, so the entry is the rebase below and nothing else. The wave

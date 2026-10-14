@@ -5,6 +5,7 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # Why: Mesen's SingleInstance (global named mutex) makes a second emulator pass its args to the first and exit 0, so concurrent suites fail with
 # "application exited (0) before the hook came up". The lock is a directory with the holder's pid; a lock whose pid is gone is stale and taken over.
 # Re-entrant: a command already running under this lock (SG_SERIAL_HELD names it) that asks for it again just runs, so a gate inside a gui-suite holder cannot deadlock.
+# SERIAL_POLL_SECONDS (default 3) is the pause between a waiter's looks at the lock; a test lowers it to a fraction of a second.
 # SERIAL_WAIT_SECONDS (default 1800) bounds the wait, and a waiter prints one line naming its holder before it waits, so a gate
 # held up by another gate says so instead of reading as a hang; the command's exit code is passed through (75 when the wait ran out).
 #
@@ -19,7 +20,8 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # token does not name the process alive now is stale (#392). An old-format lock, a pid alone, keeps the older reading: a live
 # pid is trusted, so a reader never deletes a lock a live holder may still need.
 
-st=${SG_STATE:-${TMPDIR:-/tmp}/sg-state}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
+st=${SG_STATE:-/tmp/sg-state};   # one machine-wide path: TMPDIR is per user on macOS, so a TMPDIR default would split the lock
+ps_=${SG_PS:-/bin/ps}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
 # Mesen GUI run takes -- the fork gate, the e2e and a hand-run suite -- so one marker stops them all without touching a caller. It
 # exits 0, never non-zero: a suite deliberately not run is not a failure, and a red gate would revert every branch in flight.
 case "$n" in gui-suite)
@@ -28,17 +30,19 @@ case "$n" in gui-suite)
   [ -n "$k" ] && { echo "serial: gui-suite NOT run ($k); re-enable with scripts/gui-tests.sh on" >&2; exit 0; };; esac
 case ":${SG_SERIAL_HELD:-}:" in *":$n:"*) exec "$@";; esac; L="$st/locks/$n"; mkdir -p "$st/locks"; w=${SERIAL_WAIT_SECONDS:-1800}; t0=$(date +%s); said=0
 hold=${SERIAL_HOLD_SECONDS:-${SG_CALL_DEADLINE_SECONDS:-1800}}; cmdn=$(basename "${1:-command}")
-ppid_of() { /bin/ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
-runs_as() { /bin/ps -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
+ppid_of() { $ps_ -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
+runs_as() { $ps_ -ww -o command= -p "$1" 2>/dev/null | grep -qF -- "$2"; }
 # The incarnation of a pid: its start time, which GNU ps and BSD ps both print. The token is only ever read back against the pid
 # it was written for, so one stable form of it is enough: the fields are squeezed to one space apiece.
-inc_of() { /bin/ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1};1'; }
+inc_of() { $ps_ -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1};1'; }
 until mkdir "$L" 2>/dev/null; do
   h=$(cat "$L/pid" 2>/dev/null); hi=$(cat "$L/inc" 2>/dev/null | awk '{$1=$1};1')
   if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; continue; fi
   # The pid lives, but the process wearing it may have started after the lock was written: the token settles that. A lock in the
   # old form, a pid with no token, is left to the reading above, where a live pid is trusted.
-  if [ -n "$h" ] && [ -n "$hi" ] && [ "$hi" != "$(inc_of "$h")" ]; then rm -rf "$L"; continue; fi
+  # A token that cannot be read back (ps failed: another user's pid, another pid namespace) names nothing, so it is no proof of
+  # a reused pid: the lock then keeps the live-pid reading above and the deadline reap below.
+  if [ -n "$h" ] && [ -n "$hi" ]; then now=$(inc_of "$h"); if [ -n "$now" ] && [ "$hi" != "$now" ]; then rm -rf "$L"; continue; fi; fi
   [ -z "$h" ] && [ -d "$L" ] && [ $(( $(date +%s) - $(mtime "$L") )) -gt 10 ] && { rm -rf "$L"; continue; }   # a lock with no pid after 10 s: its owner died before writing it
   # The holder is alive. Past its recorded deadline with no owner left (its parent is pid 1: its run is gone), it is a stop
   # with nobody behind it, so reap it -- matched by the name it recorded, never by a bare pid that may have been reused.
@@ -50,7 +54,7 @@ until mkdir "$L" 2>/dev/null; do
   # once -- silence reads as a hang. `said` keeps it to one line however long the wait runs.
   [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; }
   [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n held by pid ${h:-?}" >&2; exit 75; }
-  sleep 3; done
+  sleep "${SERIAL_POLL_SECONDS:-3}"; done
 hpid=$$; due=$(( $(date +%s) + hold ))
 echo "$hpid" > "$L/pid"; printf '%s\n' "$cmdn" > "$L/cmd"; echo "$due" > "$L/due"; inc_of "$hpid" > "$L/inc"
 export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"' EXIT INT TERM

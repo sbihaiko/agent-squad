@@ -100,7 +100,9 @@ case "$r" in *"#23"*review*) ok "H: the missing review is said";; *) ko "H: the 
 hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
 # I (#392): the entry gate takes the machine-wide gate lock: it waits for a holder, says so on one line, and then runs.
 printf 'run-1\n' > "$T/st/auto/disp-24"; child 24 g24; rev 24; rm -f "$T/gl"; hold
-r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "$T/s/wave.sh" enter run-1 24 2>&1); wait
+# The runner is started by a path relative to another cwd, as the loop does (`bash scripts/wave.sh` from the repository root), and
+# enter works in the child's worktree: the gate.sh beside wave.sh is found by wave.sh's own folder, never by a path after the cd.
+r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter run-1 24 2>&1); wait
 [ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "I: the entry gate waits for the holder of the gate lock, then runs" || ko "I: gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "I: the wait shows on one line" || ko "I: wait lines: '$r'"
 [ "$(entered 24)" = yes ] && ok "I: the waiting gate is not dropped: the child enters" || ko "I: #24 did not enter"

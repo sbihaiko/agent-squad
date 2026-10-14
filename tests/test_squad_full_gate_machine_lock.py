@@ -7,7 +7,9 @@ suites (#94). The local land path retired (#115): `forkclose.sh` and the gate sc
 `prland.sh` gates the landed head by reading the CI check job's failed-test set. So the one full gate of a landing runs in
 CI, on the pushed commit, and only a landing pushes, so the run the gate reads is one the branch carries. The group and
 its queue belong to the CI rule, and `tests/test_tooling.py` guards them.
-Nothing on the machine takes the `gate` lock any more, and the shell suites still run unlocked.
+The gates that still run on this machine -- the branchland local gate, the wave entry gate, the promotion gate and a hand
+gate -- queue behind the `gate` lock again (#392); no other script takes it, and the shell suites still run unlocked.
+No accepted ADR records the earlier rule that no script takes the lock, so no ADR is superseded here.
 
 Host-free: the surviving scripts run in a throwaway tree with a throwaway SG_STATE, and the workflow file is read, never run.
 """

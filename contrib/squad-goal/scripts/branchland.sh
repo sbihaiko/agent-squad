@@ -35,7 +35,9 @@ py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 gatecmd=${SG_LOCAL_GATE_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -o heavy_cap_seconds=20 -m 'not heavy'"}
 # The gate runs with none of the loop's SG_* variables, so a test reads its own fixture and never the live loop state, and with the
 # 2 s line lifted to the 20 s cap: that line is the CI speed rule, and this machine's load is not a defect of the branch.
-noloop=$(env | sed -n 's/^\(SG_[A-Za-z0-9_]*\)=.*/-u \1/p' | tr '\n' ' ')
+# SG_SERIAL_HELD stays: it is not loop state but the guard of the lock the gate holds, and a gate nested in the gate command
+# (promote-stg.sh) must find it, or it waits for its own parent.
+noloop=$(env | sed -n 's/^\(SG_[A-Za-z0-9_]*\)=.*/-u \1/p' | /usr/bin/grep -v -x -- '-u SG_SERIAL_HELD' | tr '\n' ' ')
 # A failed gate reruns only what failed, once: a test that machine load slowed past a line, or that raced a busy port, passes
 # alone; a real red fails again. The suite runs with no cache provider, so --lf has nothing to read: the rerun gets the failed
 # node ids in SG_GATE_FAILED. A red of ruff or mypy names no test, so its rerun fails again.
@@ -44,6 +46,9 @@ rerun=${SG_LOCAL_GATE_RERUN_CMD:-"'$py' -m ruff check squad tests && '$py' -m my
 # inherited from an old base is fixed on $land, never on the branch. A rebase that conflicts gates the bare tip (ffland refuses it).
 # The result goes to the status comment of the issue. A failed gate is run once per head and $land head: its wait marker stops a
 # second run until $land moves.
+# unwait <output>: the output without serial's wait lines, which it passes on to stderr. The wait is said once, there; the failure
+# record and the log that quote the output do not carry it a second time.
+unwait() { printf '%s\n' "$1" | /usr/bin/grep '^serial: waiting for lock' >&2; printf '%s' "$1" | /usr/bin/grep -v '^serial: waiting for lock'; }
 localgate() { local br=$1 sha=$2 i=$3 wt out rc base
   base=$(/usr/bin/git ls-remote "$remote" "refs/heads/$land" 2>/dev/null | awk '{print substr($1,1,7)}')
   [ -e "$A/branchland-wait-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}-gate$base" ] && return 1
@@ -53,10 +58,10 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base
   /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate rebase -q "refs/sg-gate/$land" >/dev/null 2>&1 || /usr/bin/git -C "$wt/tip" rebase --abort >/dev/null 2>&1
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
-  out=$(cd "$wt/tip" && PYTHONPATH=. bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
+  out=$(cd "$wt/tip" && PYTHONPATH=. bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
   [ "$rc" = 0 ] || { out="$out
 --- the rerun of what failed ---
-$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; }
+$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); }
   /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
   if [ "$rc" = 0 ]; then
     printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy").\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"

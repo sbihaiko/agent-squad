@@ -163,4 +163,15 @@ r=$(SG_LOCAL_GATE_CMD="echo gate >> $T/gl" CHECKS='{"check_runs":[]}' bl 2>&1); 
 [ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "the local gate waits for the holder of the gate lock, then runs" || ko "gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "the local gate's wait shows on one line" || ko "wait lines: '$r'"
 case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "the waiting local gate is not dropped: the branch lands";; *) ko "the waiting gate did not land: '$r'";; esac
+# (#392) A gate command that starts a gate of its own (promote-stg.sh does) runs inside the lock its parent holds: SG_SERIAL_HELD
+# survives the drop of the loop's SG_* variables, or the nested gate waits for its own parent. The nested gate reads the loop's
+# state directory, which the gate command's env does not carry, so the test names it there.
+reset; rm -f "$T/nest.log"; r=$(SG_SERIAL_HELD=other SG_LOCAL_GATE_CMD="SG_STATE=$T/st SERIAL_WAIT_SECONDS=4 bash $T/s/gate.sh echo nested >> $T/nest.log" CHECKS='{"check_runs":[]}' bl)
+[ "$(cat "$T/nest.log" 2>/dev/null)" = nested ] && ok "a gate nested in the local gate runs at once, under its parent's lock" || ko "the nested gate waited for its own parent: '$(cat "$T/nest.log" 2>&1)' '$r'"
+# (#392) The wait line is said once. The gate's output carries it, and it is passed on to stderr, so the failure record that quotes
+# the output must not carry it a second time.
+reset; rm -f "$T/gl"; hold
+r=$(SG_LOCAL_GATE_CMD="echo 'mypy: 3 errors'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" CHECKS='{"check_runs":[]}' bl); wait
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "a failed gate that waited: the wait shows once on stderr" || ko "wait lines: '$r'"
+/usr/bin/grep -qh "mypy: 3 errors" "$T/st/cq/"x__y#7-status~* && ! /usr/bin/grep -qh "serial: waiting for lock" "$T/st/cq/"x__y#7-status~* && ok "the failure record does not repeat the wait line" || ko "the failure record: $(cat "$T/st/cq/"x__y#7-status~* 2>&1)"
 rm -rf "$T"; exit $fail

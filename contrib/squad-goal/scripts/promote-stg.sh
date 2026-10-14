@@ -10,7 +10,8 @@ d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com
 export GIT_TERMINAL_PROMPT=0
 # The promotion gate takes the machine-wide gate lock (#392); a pass already inside it just runs.
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) exec bash "$d/gate.sh" bash "$0" "$@";; esac
-state=${SG_STATE:-${TMPDIR:-/tmp}/sg-state}; mkdir -p "$state"; log=$state/promote.log
+state=${SG_STATE:-/tmp/sg-state};   # the machine-wide default serial.sh uses: never TMPDIR, which is per user
+mkdir -p "$state"; log=$state/promote.log
 W=$(mktemp -d) || exit 1; trap 'rm -rf "$W"' EXIT
 g() { /usr/bin/git -C "$W" "$@"; }
 say() {  # sha, reason: one line per tip and reason
