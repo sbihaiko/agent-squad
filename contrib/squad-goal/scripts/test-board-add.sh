@@ -19,18 +19,21 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; D="TMPDIR"
 echo "$a" >> "$D/gh.calls"
 case "$a" in *"--input -"*) cat > "$D/last.in";; esac
-cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013"
+cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013 2014 2015"
 case "$a" in
   *users/o*) echo '{"type":"Organization"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}}]}]';;
   *items?per_page=100\&fields*)   # the one Status read: number, the state the card carries (its option id), the repository url
-    for n in $cards; do [ -e "$D/seen-$n" ] && printf '%s\t%s\t%s\n' "$n" "$(cat "$D/st-$n" 2>/dev/null)" "https://api.github.com/repos/x/y"; done; exit 0;;
+    s15=$(( $(cat "$D/sreads15" 2>/dev/null || echo 0) + 1 )); echo "$s15" > "$D/sreads15"
+    for n in $cards; do [ "$n" = 2015 ] && [ "$s15" -lt 6 ] && continue   # #2015 is carried from the sixth Status read only (#403)
+      [ -e "$D/seen-$n" ] && printf '%s\t%s\t%s\n' "$n" "$(cat "$D/st-$n" 2>/dev/null)" "https://api.github.com/repos/x/y"; done; exit 0;;
   *items?per_page=100*)   # the items route is eventually consistent: the read is counted, and #2002 is only carried from the second read (#96)
     r=$(( $(cat "$D/reads" 2>/dev/null || echo 0) + 1 )); echo "$r" > "$D/reads"
     for n in $cards; do
       [ -e "$D/seen-$n" ] || continue
       [ "$n" = 2002 ] && [ "$r" -lt 2 ] && continue
-      printf '[%s,"ITEM%s","https://api.github.com/repos/x/y"]\n' "$n" "${n#200}"
+      if [ "$n" = 2014 ]; then r14=$(( $(cat "$D/reads14" 2>/dev/null || echo 0) + 1 )); echo "$r14" > "$D/reads14"; [ "$r14" -lt 7 ] && continue; fi   # #2014 is carried from its seventh read only (#403)
+      printf '[%s,"ITEM%s","https://api.github.com/repos/x/y"]\n' "$n" "$((n - 2000))"
     done; exit 0;;
   *repos/x/y/issues/2002*) echo '{"id":3002}';;
   *repos/x/y/issues/2003*) echo '{"id":3003}';;
@@ -41,10 +44,12 @@ case "$a" in
   *repos/x/y/issues/2008*) echo '{"id":3008}';;
   *repos/x/y/issues/2009*) echo '{"id":3009}';;
   *repos/x/y/issues/2011*) echo '{"id":3011}';;
+  *repos/x/y/issues/2014*) echo '{"id":3014}';;
   *"-X POST"*items*)
     case "$(cat "$D/last.in")" in
       *3003*) touch "$D/seen-2003"; echo '{"message":"Validation Failed: item already exists"}' >&2; exit 1;;   # the cache was stale: the item was there
       *3011*) echo '{"message":"Validation Failed: Content already exists in this project"}' >&2; exit 1;;   # the refusal proves the card is on the board; no read ever carries it
+      *3014*) touch "$D/seen-2014"; echo '{"message":"Validation Failed: Content already exists in this project"}' >&2; exit 1;;   # a new card the items read lags behind (#403)
       *3004*) touch "$D/seen-2004"; echo '{"id":"ITEM4"}';;
       *3006*) touch "$D/seen-2006"; echo '{"id":"ITEM6"}';;
       *3007*) touch "$D/seen-2007"; echo '{"id":"ITEM7"}';;
@@ -130,4 +135,15 @@ echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD","Gone":"O_GONE"}}' > "$T/st/rest-fi
 o=$(run o 4 Gone 2013 2>&1); rc=$?
 [ "$rc" -eq 1 ] && case $o in *"no Status option 'Gone'"*) ok "an option the board dropped is named, exit 1";; *) ko "dropped option message: $o";; esac || ko "dropped option exit $rc: $o"
 case $o in *Traceback*) ko "a traceback: $o";; *) ok "no traceback";; esac
+# (#403) a new card is eventually consistent: a card the add proved, or a write the PATCH accepted, can be missing from
+# reads for longer than the bounded attempts. The read-back keeps reading within SG_BOARD_SETTLE_SECONDS before it names a
+# READ FAILURE, so the first move of a new issue is not a refusal that autobug files as one more bug.
+settle() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0.01 SG_BOARD_SETTLE_SECONDS=3 python3 "$T/s-board.py" "$@"; }
+: > "$T/gh.calls"; o=$(settle --add o 4 Todo 2014 2>&1); rc=$?
+[ "$rc" -eq 0 ] && case $o in *"#2014 -> Todo"*) ok "a card the add proved, carried only after the bounded attempts, is written within the settle bound";; *) ko "settle add message: $o";; esac || ko "settle add exit $rc: $o"
+echo '{"2015":"ITEM15"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2015"; rm -f "$T/sreads15"; : > "$T/gh.calls"
+o=$(settle o 4 Todo 2015 2>&1); rc=$?
+[ "$rc" -eq 0 ] && case $o in *"#2015 -> Todo"*) ok "a write whose card the read carries only after the bounded attempts is proven within the settle bound";; *) ko "settle write message: $o";; esac || ko "settle write exit $rc: $o"
+: > "$T/gh.calls"; o=$(settle --add o 4 Todo 2011 2>&1); rc=$?
+[ "$rc" -eq 1 ] && case $o in *"#2011"*"read failure"*) ok "a card no read carries within the settle bound is still a read failure";; *) ko "settle failure message: $o";; esac || ko "settle failure exit $rc: $o"
 rm -rf "$T"; exit $fail

@@ -255,6 +255,33 @@ if [ -n "$led" ]; then
   fpbare=${FP#[}; fpbare=${fpbare%]}
   $G -qF "$fpbare" "$led" && ok "8b the ledger counts the cause's fingerprint, from the one helper" || ko "8b ledger lacks '$fpbare': $(cat "$led")"
 else ko "8b the refused write left no ledger for the pass: $(ls "$T/st/auto" 2>/dev/null | tr '\n' ' ')"; fi
+# 8c) (#403) a refused write whose address is an issue autobug itself filed is never filed again. The chain: autobug files
+# a refusal bug, dispatches it, its card write fails, and the door files one more bug about that bug, about every 5 min.
+# Both marks of an autobug issue are read: the "[SQUAD] refused" title and the "Filed by autobug" body line.
+for mark in title body; do
+  rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"; : > "$T/filed"; : > "$T/st/cycle.log"; : > "$T/board.calls"
+  if [ "$mark" = title ]; then tt='[SQUAD] refused BOARD-WRITE-FAILED o/4 #1227 -> In Progress [0123456789ab]'; bb='step a.py'
+  else tt='Core: null deref'; bb='The loop could not prove a write. Filed by autobug'; fi
+  cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"; echo '{"number":901}' ;;
+  *issues/*) printf '{"number":1228,"title":"$tt","body":"$bb"}\n' ;;
+  *) echo "" ;;
+esac
+J
+  chmod +x "$T/bin/gh"
+  r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+  [ "$rc" = 0 ] && ok "8c ($mark) the pass finishes" || ko "8c ($mark) the pass exited $rc: '$r'"
+  [ -s "$T/board.calls" ] && ok "8c ($mark) the card write is still tried" || ko "8c ($mark) no card write"
+  [ "$($G -c '^title=' "$T/filed")" = 0 ] && ok "8c ($mark) a refused write on an autobug issue files no bug" || ko "8c ($mark) filed: $(cat "$T/filed")"
+  [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 1 ] && $G -q 'autobug-filed' "$T/st/cycle.log" \
+    && ok "8c ($mark) one cycle-log line names it instead" || ko "8c ($mark) cycle.log: $(cat "$T/st/cycle.log")"
+done
 
 # 9) (#188) the dispatch moves the cards of the issues it just requested, and an issue the loop filed itself carries no
 # card until the board pass adds one. A plain move for a card the board does not carry is refused ("#N not on the
