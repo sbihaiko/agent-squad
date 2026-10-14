@@ -1927,6 +1927,8 @@ let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_model
 function mdlEff(k,m){return (mdl.efforts&&mdl.efforts[k]&&mdl.efforts[k][m])||""}
 function mdlSetEff(k,m,v){mdl.efforts=mdl.efforts||{};mdl.efforts[k]=mdl.efforts[k]||{};if(EFF.includes(v)&&v!=="medium")mdl.efforts[k][m]=v;else delete mdl.efforts[k][m]}
 const HRP=["22-07","07-22","20-08","18-06"],HRX=/^([01]\d|2[0-3])-([01]\d|2[0-3])$/;
+/* The one model-id shape, injected from MODEL_ID_SRC in hub.py (#221): a save and the Add boxes agree on it. */
+const MID=/^/*MODEL_ID*/$/;
 function mdlHrs(k,m){return (mdl.hours&&mdl.hours[k]&&mdl.hours[k][m])||""}
 function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=mdl.hours[k]||{};if(HRX.test(v)&&v.slice(0,2)!==v.slice(3))mdl.hours[k][m]=v;else delete mdl.hours[k][m]}
 /* The row's switch (#1819): a state, not an action. Out of the chain the model keeps its place, its rank, its effort
@@ -1960,8 +1962,8 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
  else if(t.dataset.rv){const[i,d]=t.dataset.rv.split("|"),a=mdl.router_models,j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.rrm){mdl.router_models.splice(+t.dataset.rrm,1)}
- else if(t.dataset.raddb){const v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
- else if(t.dataset.addb){const k=t.dataset.addb,v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
+ else if(t.dataset.raddb){const v=t.parentElement.querySelector("input").value.trim();if(!MID.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
+ else if(t.dataset.addb){const k=t.dataset.addb,v=t.parentElement.querySelector("input").value.trim();if(!MID.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
@@ -2448,7 +2450,12 @@ MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
 ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
 READONLY = ("known", "last_coding", "envelope")   # fields models_get() adds for the panel: posted back, never stored
-MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
+# One model-id shape, in one place: the Save validates with MODEL_ID and the page's Add boxes test with `MID`, which
+# carries this same source (injected into PAGE below). A copy made the gateway's context suffix -- `[1m]` on
+# `claude-deepseek-v4-flash[1m]`, the id the shipped run graph already names -- untypeable and unsavable (#221).
+MODEL_ID_SRC = r"[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}(?:\[[A-Za-z0-9]+\])?"
+MODEL_ID = re.compile("^" + MODEL_ID_SRC + "$")
+PAGE = PAGE.replace("/*MODEL_ID*/", MODEL_ID_SRC)   # the Add boxes validate with the one shape, never a copy
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
 # The add box carries the provider catalogues as they are, minus the two things that made it unreadable: the
 # workflow graph's prose (see known_models) and the same model under two spellings (the alias fold below). The
