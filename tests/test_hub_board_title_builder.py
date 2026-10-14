@@ -5,6 +5,7 @@ neighbours the rename must leave alone: the group key `running`, the running hea
 spend tooltip, the `hidden:` strip, the column names, the footer, and the other five run groups.
 """
 import importlib.util
+import json
 import os
 import re
 import tempfile
@@ -119,11 +120,12 @@ def test_the_hidden_strip_is_unchanged(hub):
 def test_the_column_names_are_unchanged(hub):
     m = re.search(r"const COLORS=\{(.*?)\};", hub.PAGE)
     assert m, "COLORS missing"
-    assert m.group(1) == (
-        '"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d",'
-        '"Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff",'
-        '"Closed PRs":"#8b9bb3"'
-    )
+    # The map is written from the column table, so its key order and quoting are not the guard; its names and colours are.
+    assert json.loads("{" + m.group(1) + "}") == {
+        "No status": "#f5b041", "Todo": "#c9d1d9", "Open Specs": "#f78fb3", "In Progress": "#e8d44d",
+        "Code Complete": "#b087f9", "Testing": "#2dd4bf", "Blocked": "#ff6b6b", "Done": "#3ecf8e", "Open PRs": "#5aa9ff",
+        "Closed PRs": "#8b9bb3",
+    }
 
 
 def test_the_footer_is_unchanged(hub):
