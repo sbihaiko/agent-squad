@@ -8,6 +8,7 @@ with its fetchers injected so no test touches the network), the payload `board()
 the declarations the served page paints.
 """
 import importlib.util
+import json
 import os
 import re
 import tempfile
@@ -137,6 +138,87 @@ def test_the_closed_prs_column_carries_both_repositories_and_their_total(hub, re
     assert {p["r"] for p in prev} == {EMU, TOOL}, "a closed PR of either repository lands in Closed PRs"
     assert prev_n == 3, "the total counts both repositories"
     assert errs == []
+
+
+# --- a failed PR read is GitHub's message, never a parser's (#252) -----------------------------------------------
+
+# GitHub's own refusal, as `gh` writes it to stdout with a non-zero exit: pretty-printed, so the closed read's line one
+# is the bare `{` that `json.loads` refused with "Expecting property name enclosed in double quotes: line 1 column 2".
+REFUSAL = json.dumps({"message": "HTTP 403 API rate limit exceeded",
+                      "documentation_url": "https://docs.github.com/rest",
+                      "status": "403"}, indent=2)
+
+
+def _stub_gh(monkeypatch, tmp_path, routes):
+    """A stub `gh` first on PATH, the first route pattern that matches the call winning, with the body and exit code
+    that route carries. The reads run through the real door (`ghcall.sh` and the module beside it), so a case here
+    proves the caller's path and not the stub's shape; no case touches the network."""
+    bindir = tmp_path / "bin"; bindir.mkdir(parents=True)
+    arms = []
+    for k, (pattern, (body, rc)) in enumerate(routes.items()):
+        (tmp_path / f"body{k}").write_text(body)
+        arms.append(f"  *{pattern}*) cat {tmp_path}/body{k}; exit {rc};;")
+    gh = bindir / "gh"
+    gh.write_text("#!/bin/bash\ncase \"$*\" in\n" + "\n".join(arms) + "\nesac\n")
+    gh.chmod(0o755)
+    state = tmp_path / "state"; state.mkdir()
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ['PATH']}")
+    monkeypatch.setenv("SG_STATE", str(state))
+    return state
+
+
+def test_a_refused_closed_pr_read_names_githubs_message_and_keeps_the_last_good_rows(hub, monkeypatch, tmp_path):
+    """#252 seen from the column: the closed read parsed line one of a pretty-printed error body, so the column read
+    "Expecting property name enclosed in double quotes" where GitHub had said why the read failed."""
+    prior = hub.prs_from_graphql(_payload([1512]), EMU)
+    monkeypatch.setattr(hub, "board_cache", {"prs": prior, "prev": [], "prev_n": 0, "prev_n_of": {EMU: 0}})
+    _stub_gh(monkeypatch, tmp_path, {
+        "graphql": (json.dumps(_payload([1512])), 0),                  # the open read answers
+        "search/issues": (REFUSAL, 1),
+        "pulls?state=closed": (REFUSAL, 1)})                           # the closed read is refused
+
+    prs, _, _, errs = hub.prs_pass(repos=[EMU])
+
+    assert prs == prior, "the repository keeps the rows the last good pass left (#1772)"
+    assert len(errs) == 1, f"one error for the one read that failed: {errs}"
+    assert errs[0].startswith(f"{EMU}: "), f"the error names the repository: {errs[0]!r}"
+    assert "HTTP 403 API rate limit exceeded" in errs[0], f"the column names GitHub's message: {errs[0]!r}"
+    assert "Expecting" not in errs[0] and "JSONDecodeError" not in errs[0], f"never a parser's message: {errs[0]!r}"
+
+
+def test_a_refused_open_pr_read_names_githubs_message_and_keeps_the_last_good_rows(hub, monkeypatch, tmp_path):
+    """The open read parses the whole unchecked body: GitHub's error body is not the query's answer, so the column must
+    say what GitHub said instead of that the query returned nothing."""
+    prior = hub.prs_from_graphql(_payload([1512]), EMU)
+    monkeypatch.setattr(hub, "board_cache", {"prs": prior, "prev": [], "prev_n": 0, "prev_n_of": {EMU: 0}})
+    _stub_gh(monkeypatch, tmp_path, {"graphql": (REFUSAL, 1), "search/issues": (REFUSAL, 1), "pulls?state=closed": (REFUSAL, 1)})
+
+    prs, _, _, errs = hub.prs_pass(repos=[EMU])
+
+    assert prs == prior, "the repository keeps the rows the last good pass left (#1772)"
+    assert len(errs) == 1, f"the reads stop at the first one that failed: {errs}"
+    assert "HTTP 403 API rate limit exceeded" in errs[0], f"the column names GitHub's message: {errs[0]!r}"
+
+
+def test_the_three_pr_reads_still_parse_as_they_did_and_go_through_the_door(hub, monkeypatch, tmp_path):
+    """A read that answered keeps today's rows -- the batched query's own row, the closed projection and the total --
+    and every read is one the door logged, which is what "through the door" means for a caller (ADR-0277)."""
+    state = _stub_gh(monkeypatch, tmp_path, {
+        "graphql": (json.dumps(_payload([1512])), 0),
+        "search/issues": (json.dumps({"total_count": 4}), 0),
+        "pulls?state=closed": (json.dumps([{"number": 3, "title": "closed", "closed_at": "2026-10-11T07:00:00Z", "merged_at": None},
+                                           {"number": 4, "title": "landed", "closed_at": "2026-10-11T06:00:00Z",
+                                            "merged_at": "2026-10-11T06:30:00Z"}]), 0)})
+
+    assert hub.open_prs_of(EMU) == hub.prs_from_graphql(_payload([1512]), EMU), "the batched query's row, unchanged"
+    assert hub.closed_prs_of(EMU) == [{"n": 3, "t": "closed", "c": "2026-10-11T07:00:00Z", "m": False, "r": EMU},
+                                      {"n": 4, "t": "landed", "c": "2026-10-11T06:30:00Z", "m": True, "r": EMU}], \
+        "a merged PR carries its merge time, a closed one its close time -- the projection the read used to ask gh for"
+    assert hub.closed_total_of(EMU) == 4, "the total comes from the search answer, not from the page it already read"
+
+    log = (state / "api.log").read_text()
+    for route in ("graphql", "pulls?state=closed", "search/issues"):
+        assert route in log, f"the door logged the read of {route}, which is how a caller knows it went through it: {log}"
 
 
 # --- what the column serves --------------------------------------------------------------------------------------
