@@ -18,7 +18,7 @@ cat > "$T/bin/gh" <<J
 echo "\$*" >> "$T/gh.log"
 case "\$*" in
   *"pulls?per_page"*) echo "\${PRS:-[]}";;
-  *"issues?state=open"*) echo "\${OPEN:-[{\"number\":7}]}";;
+  *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
   *"/check-runs"*) echo "\${CHECKS:-{\"check_runs\":[]\}}";;
   *"issues/7/comments"*) cat > "$T/comment.body"; echo '{"id":1}';;
   *"issues/7"*) echo '{"number":7,"state":"closed"}';;
@@ -45,7 +45,7 @@ ls "$T/st/cq/"x__y#7-delivery~* >/dev/null 2>&1 && ok "the one delivery comment 
 /usr/bin/grep -q "o 3 Done 7" "$T/board.log" 2>/dev/null && ok "the card moves to Done" || ko "no Done move: $(cat "$T/board.log" 2>&1)"
 /usr/bin/grep -qE "pulls/[0-9]+/merge|pr merge" "$T/gh.log" && ko "a merge API call was made" || ok "no merge API call"
 # A branch whose issue is closed is old work (merged under a pull request, or dropped): it never lands again (#367).
-reset; r=$(OPEN='[{"number":8}]' CHECKS="$GREEN" bl)
+reset; r=$(OPEN=8 CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a branch whose issue is closed does not land" || ko "a closed issue's branch landed: '$r'"
 ! /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "a closed issue's branch writes nothing" || ko "a closed issue's branch wrote"
 

@@ -31,8 +31,8 @@ printf '%s' "$pl" | jq -e 'type=="array"' >/dev/null 2>&1 || { echo "BRANCHLAND:
 prbranches=" $(printf '%s' "$pl" | jq -r '.[].head.ref' | tr '\n' ' ') "
 # Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose issue closed under a pull
 # request or was dropped, and one of those would land its old commits in dev again.
-oi=$(gh_api "repos/$SG_REPO/issues?state=open&per_page=100") || { echo "BRANCHLAND: the open-issue list is not readable: $oi"; exit 0; }
-openiss=" $(printf '%s' "$oi" | jq -r '.[]|select(.pull_request|not)|.number' 2>/dev/null | tr '\n' ' ') "
+oi=$(gh_api "repos/$SG_REPO/issues?state=open") || { echo "BRANCHLAND: the open-issue list is not readable: $oi"; exit 0; }
+openiss=" $(printf '%s' "$oi" | jq -r '.[].number' 2>/dev/null | tr '\n' ' ') "
 while read -r sha ref; do
   br=${ref#refs/heads/}
   i=$(printf '%s' "$br" | sed -nE 's#^(fix|gui)/([0-9]+)([^0-9].*)?$#\2#p'); [ -n "$i" ] || continue
