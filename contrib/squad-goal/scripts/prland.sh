@@ -10,7 +10,9 @@
 #
 # A PR is merged when, and only when: it is open, not a draft, on $SG_BASE, and names its issue (fix/<n>-… or Refs #n);
 # no live run names its head branch and no worktree holds that branch with uncommitted changes (the pass does: active-runs.txt, the recent run records, `git worktree list`); its check run finished; every failed test is in
-# the baseline; GitHub reports it mergeable. Then: `gh pr merge --squash --delete-branch`, the issue closed, and one closing comment that names
+# the baseline; GitHub reports it mergeable. Then ffland.sh rebases the branch on $SG_BASE and pushes it as a fast-forward: no merge API call, the commit keeps Refs (owner, #330),
+# and `git push origin :<branch>` deletes the branch; the issue is then closed through the API. A push a ruleset refuses prints
+# `PRLAND FALLBACK` and falls back to `gh pr merge --squash --delete-branch`, the issue closed, and one closing comment that names
 # the pull request and merge sha. Anything else is one `PRLAND WAIT #<n>` (it may resolve on its own) or one
 # `PRLAND REFUSE #<n>` (a person decides) per head and reason, kept as a marker under $SG_STATE/auto so it is never
 # repeated for the same head (a per-head marker pattern).
@@ -91,14 +93,21 @@ for n in $(printf '%s' "$pl" | jq -r '.[].number'); do
   st=$(printf '%s' "$live" | jq -r '"\(.state) \(.draft) \(.mergeable_state)"')
   case "$st" in "open false clean"|"open false unstable"|"open false has_hooks"|"open false unknown") ;;
     *) say refuse "$n" "$sha" merge "not mergeable as it stands (state, draft, mergeable_state: $st)"; continue;; esac
-  out=$(gh pr merge "$n" --repo "$SG_REPO" --squash --delete-branch 2>&1) || { say refuse "$n" "$sha" merged "GitHub did not merge it: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; continue; }
-  ms=$(gh_api "repos/$SG_REPO/pulls/$n" -q '.merge_commit_sha // ""') || ms=""
+  # the landing: a git fast-forward push (no merge API call). A refused push falls back to the API merge. Either way the commit keeps
+  # Refs and the issue is closed by the API with one comment (owner, #330).
+  fl=$(bash "$here/ffland.sh" "$n" "$br" "$i" 2>/dev/null | tail -1)
+  case "$fl" in
+    "FFLAND "*) ms=${fl#FFLAND }; how="fast-forward push";;
+    *) echo "PRLAND FALLBACK #$n: ${fl#FFLAND-FALLBACK }; merging through the API instead"; how=squash
+      out=$(gh pr merge "$n" --repo "$SG_REPO" --squash --delete-branch 2>&1) || { say refuse "$n" "$sha" merged "GitHub did not merge it: $(printf '%s' "$out" | tail -2 | tr '\n' ' ')"; continue; }
+      ms=$(gh_api "repos/$SG_REPO/pulls/$n" -q '.merge_commit_sha // ""') || ms="";;
+  esac
   rm -f "$A"/prland-*-"$n"-*
   gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || { echo "PRLAND: #$i did not close after the merge of #$n"; continue; }
   mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
   cat > "$(sg_cq_delivery "$i" "land$$")" <<EOT
-Closed #$i after merging PR #$n into ${SG_BASE:-main} as ${ms:-(sha not readable)} (squash, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
+Closed #$i after merging PR #$n into ${SG_BASE:-main} as ${ms:-(sha not readable)} ($how, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
 EOT
-  echo "PRLAND MERGED #$n as ${ms:-?} into ${SG_BASE:-main}, closed #$i"
+  echo "PRLAND MERGED #$n as ${ms:-?} into ${SG_BASE:-main} by $how, closed #$i"
 done
 exit 0
