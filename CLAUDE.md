@@ -75,7 +75,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A loop outcome follows control flow; the verdict module folds the record** ([ADR-0105](docs/adr/0105-loop-outcome-and-verdict.md)). Guard: `tests/test_verdict.py`, `tests/test_record.py`, `tests/test_engine_skeleton.py`.
 - **A run option is graph data or an engine option recorded at run start** ([ADR-0106](docs/adr/0106-run-option-graph-or-engine.md)). Guard: `tests/test_graph.py`, `tests/test_facts.py`, `tests/test_cli.py`.
 - **A resume replays the record from one restart point** ([ADR-0107](docs/adr/0107-resume-replays-the-record.md)). Guard: `tests/test_resume.py`, `tests/test_verdict.py`, `tests/test_adapt.py`.
-- **Run spend is a measured fact; a cap never starts an entry it cannot fund** ([ADR-0108](docs/adr/0108-run-spend-and-caps.md)). Guard: `tests/test_spend.py`, `tests/test_graph.py`, `tests/test_each.py`.
+- **Run spend is a measured fact; a cap never starts an entry it cannot fund** ([ADR-0108](docs/adr/0108-run-spend-and-caps.md)). Guard: `tests/test_spend.py`, `tests/test_graph.py`, `tests/test_each.py`, `tests/test_gateway_price.py`.
 - **An adaptation is a read-only report; round one has no cross-run input** ([ADR-0109](docs/adr/0109-adaptation-report-no-cross-run.md)). Guard: `tests/test_graph.py`, `tests/test_report.py`.
 - **A dispatch node requests children inside an author-fixed envelope** ([ADR-0113](docs/adr/0113-dispatch-envelope.md)). Guard: `tests/test_dispatch.py`, `tests/test_waves.py`, `tests/test_graph.py`.
 

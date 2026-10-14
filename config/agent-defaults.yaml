@@ -89,7 +89,12 @@ auth:
 
 log:                                # record these in every run (G14, section 12.2)
   record_init_fields: [model, claude_code_version, apiKeySource]
-  spend_source: total_cost_usd      # a client estimate, not billing; do not sum across resumes
+  spend_source: total_cost_usd      # a client estimate, not billing; do not sum across resumes. A model in `prices` spends price_table; the outcome names its source.
+
+prices:                             # USD per 1M tokens. One place for the price of a gateway model the SDK cannot price (squad/prices.py).
+  client: {input: 3.0, cache_read: 0.30, cache_write: 3.75, output: 15.0}   # the Claude rates the SDK borrows for a model it does not know (Sonnet); they scale the SDK budget of a priced call
+  models:                           # keyed by the model id the run records; a model with no entry keeps total_cost_usd
+    claude-deepseek-v4-flash: {input: 0.30, cache_read: 0.006, cache_write: 0.30, output: 1.20}   # DeepSeek V4.1 Flash, peak price, so a cap never under-counts; cache write is the miss price
 
 roles:                              # per-role overrides; a key here replaces the same key above. Read-only roles drop the write tools.
   scout:         {allowed_tools: [Read, Grep, Glob, Bash], disallowed_tools: [WebFetch, WebSearch, Task, Agent, Edit, Write, NotebookEdit]}

@@ -2,6 +2,8 @@
 
 Spend is the `total_cost_usd` of the session's own `ResultMessage` (origin empty). A call with no
 `ResultMessage` raises AdapterError, so the engine keeps the node cap reserved and never counts zero.
+A gateway model with an entry in the price table (squad/prices.py) spends its tokens at the table rates instead,
+and the SDK gets a budget scaled so its borrowed Claude price never stops the call before the true cap.
 A deadline cancels the task; the stream is closed in `finally`, which stops the CLI child (docs/research/sdk-live-smoke.md).
 
 A call in flight writes a `progress` event through the sink, at most once per `progress_seconds`. The
@@ -16,7 +18,7 @@ import time
 
 import anyio
 
-from squad import workcmd
+from squad import prices, workcmd
 from squad.adapter import AdapterError, CallResult, MessageOverCeiling
 from squad.stall import StallWatch
 
@@ -152,7 +154,8 @@ class SdkAdapter:
     """`query` and `options_cls` are injectable so a test runs with no SDK and no spend."""
 
     def __init__(self, query=None, options_cls=None, setting_sources=("project",), extra_options=None, hook_cls=None, log_compaction=False,
-                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS):
+                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS, prices=None):
+        self.prices = prices      # the `prices` block of agent-defaults.yaml: {client, models}; None prices no model
         self._query, self._options_cls, self._hook_cls = query, options_cls, hook_cls
         self.setting_sources = list(setting_sources)
         self.extra_options = dict(extra_options or {})
@@ -166,7 +169,7 @@ class SdkAdapter:
         opts = defaults.sdk_kwargs(cfg, root or defaults.ROOT)
         progress = (cfg.get("progress") or {}).get("seconds", PROGRESS_SECONDS)
         return cls(setting_sources=opts.pop("setting_sources"), extra_options=opts, log_compaction=cfg["hooks"]["log_compaction"],
-                   hook_timeout=cfg["hooks"]["timeout_seconds"], progress_seconds=progress, **kw)
+                   hook_timeout=cfg["hooks"]["timeout_seconds"], progress_seconds=progress, prices=cfg.get("prices"), **kw)
 
     def bind(self, sink):
         """The engine hands over a function that appends an event to the run record."""
@@ -196,7 +199,7 @@ class SdkAdapter:
     def options(self, req):
         _, cls = self._sdk()
         kw: dict[str, object] = dict(cwd=req.workspace, model=req.model, tools=list(req.tools),
-                                     max_budget_usd=req.max_spend, permission_mode="bypassPermissions",
+                                     max_budget_usd=prices.sdk_budget(self.prices, req.model, req.max_spend), permission_mode="bypassPermissions",
                                      setting_sources=self.setting_sources)
         kw.update(self.extra_options)   # the engine's defaults land first: the node's own pick has the last word
         if req.effort:
@@ -271,7 +274,11 @@ class SdkAdapter:
             raise AdapterError("the stream ended with no ResultMessage")
         subtype = getattr(result, "subtype", None)
         reason = "output_cap" if output_cap else (STOP_REASONS.get(subtype) if isinstance(subtype, str) else None)
-        return CallResult(extract_json(getattr(result, "result", None)), getattr(result, "total_cost_usd", None),
+        usage, spend, source = usage_of(result), getattr(result, "total_cost_usd", None), prices.SDK_SOURCE
+        rates = prices.rates(self.prices, req.model)
+        if rates is not None and usage is not None:     # a priced gateway model: its own price, never the borrowed one
+            spend, source = prices.spend(rates, usage), prices.TABLE_SOURCE
+        return CallResult(extract_json(getattr(result, "result", None)), spend,
                           getattr(result, "num_turns", None), reason,
                           subagents, getattr(result, "session_id", None) or req.session_id,
-                          ended=ended_of(result, subtype), usage=usage_of(result))
+                          ended=ended_of(result, subtype), usage=usage, spend_source=source if spend is not None else None)

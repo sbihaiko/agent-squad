@@ -58,6 +58,8 @@ def check(cfg):
             bad.append("watch.monitor")         # ticket #184: the run-scoped monitor
         if "monitor_seconds" in w and (isinstance(w["monitor_seconds"], bool) or not isinstance(w["monitor_seconds"], (int, float)) or not 5 <= w["monitor_seconds"] <= 600):
             bad.append("watch.monitor_seconds")
+    from squad import prices
+    bad += prices.defects(cfg.get("prices"))
     bad += [f"roles.{r}.{k}" for r, v in cfg.get("roles", {}).items() for k in v if k not in o]
     return bad
 
@@ -105,6 +107,8 @@ def engine_view(cfg):
     o = cfg["options"]
     view = {"options": {k: o[k] for k in ENGINE_OPTIONS if k in o}, "limits": {k: cfg["limits"][k] for k in ("max_output_tokens", "context_tokens")},
             "env": call_env(cfg), "hooks": cfg["hooks"], "auth": cfg["auth"], "log": cfg["log"]}
+    if "prices" in cfg:
+        view["prices"] = cfg["prices"]       # run_start records the rates a priced call was charged at
     if "dashboard" in cfg:
         view["dashboard"] = {k: cfg["dashboard"][k] for k in ("reread_seconds", "watch_seconds") if k in cfg["dashboard"]}   # the page reads the re-read interval; a record from before ticket #105 lacks the watch step and the server uses its own default
     if "progress" in cfg:
