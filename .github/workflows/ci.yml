@@ -9,11 +9,15 @@ on:
 # One commit starts one job, and that job runs both supported Pythons in order (#149). A matrix split one commit into
 # two jobs that waited behind each other for two runners, and a check no runner picks up answers nothing.
 # The group is the branch, so one branch's pushes share it, and nothing is cancelled: a landing keeps its evidence.
+# `cancel-in-progress: false` alone is not enough: the group's default queue holds one pending run, so a third landing
+# cancels the pending second one. `queue: max` holds every pending landing until it runs, in order, so each landing
+# keeps its own run (GitHub Actions workflow syntax, `concurrency.queue`; default `single`).
 # No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`; the full
 # suite runs before a merge.
 concurrency:
   group: ci-${{ github.ref_name }}
   cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: read
