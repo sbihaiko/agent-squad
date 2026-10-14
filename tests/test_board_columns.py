@@ -1,8 +1,6 @@
 """The board column vocabulary has one host-free source of truth."""
 import importlib.util
 import json
-import os
-import re
 import tempfile
 from pathlib import Path
 
