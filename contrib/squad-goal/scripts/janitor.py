@@ -374,7 +374,17 @@ def board_write(args, n, why):   # the one writer of a card: a status write that
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def reconcile_board():
     if not (owner and proj and repo0): return
+    shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
+    SHIPPED_NAME = FREEZE_LABEL = {}
+    if shipped:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL
+    doing = "Doing" if shipped else "In Progress"
+    frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     def set_expected(n, status, why, run_id="", run_ts="", rank=0):
+        if shipped:   # the shipped vocabulary (ADR-0141): Blocked is no column, it is the owner freeze over the column the work reached
+            status = SHIPPED_NAME.get(status, status)
+            if status is None: frozen.add(n); return
         old = expected.get(n)
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
@@ -405,7 +415,9 @@ def reconcile_board():
     oans, olabels = open_issues()
     if oans:
         for n in sorted(olabels, key=int):
-            set_expected(n, os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
+            hold = shipped and bool(olabels[n] & {"needs-owner", "needs-ratification"})   # frozen by the owner: not startable, so Backlog by the floor (the definition: Todo is startable)
+            set_expected(n, "Backlog" if hold else os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
+            if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so it opens in its own column rather than in the loop's queue (#117's
             # sibling ask). The rank sits above the floor and below every rule a run, a marker or a PR raises, so the day
             # work starts on the spec the card leaves the column by the rule that names that work.
@@ -436,10 +448,14 @@ def reconcile_board():
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
         elif have != want and board_write([owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
-        if want == "In Progress":
+        if want == doing:
             board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
-        elif have == "In Progress":
-            board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left In Progress for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
+        elif have in ("In Progress", "Doing"):
+            board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
+    for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does
+        if expected.get(n, (0, ""))[1] in ("Closed", "Abandoned") or FREEZE_LABEL["owner"] in issue_labels(n): continue
+        say(f"BOARD-FREEZE #{n}: {FREEZE_LABEL['owner']} (an owner label or a run needing a human holds it)")
+        if not dry: sh("gh", "api", "--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={FREEZE_LABEL['owner']}")
 reconcile_board()
 for d in (st / "auto").glob("disp-*"):
     req = d.read_text().strip(); lg = st / f"{req}.log"
@@ -515,7 +531,7 @@ if owner and proj and repo0:
         if c != "0": no(); continue
         cs = card_status(proj, n); bs = card_status(bproj, n) if bproj and "bug" in ms else ""
         if not cs and not bs: continue
-        moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if cs == "In Progress" else []
+        moves = [[proj, os.environ.get("SG_TODO", "Todo")]] if cs in ("In Progress", "Doing") else []
         if bs == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
         if not moves: no(); continue
         mks = " and ".join("auto/" + k + "-" + n for k in sorted(ms))
@@ -562,7 +578,7 @@ if fd and fb:
             if n in byissue: continue                        # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
-            if card_status(proj, n) not in ("In Progress", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
+            if card_status(proj, n) not in ("In Progress", "Doing", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
             marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
@@ -622,16 +638,16 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     for it in items:
         n = it.get("n"); stt = it.get("st"); op = it.get("s") == "open"
         if not (isinstance(n, int) and n >= 1102): continue
-        if stt == "Done" and op:
+        if stt in ("Done", "Closed") and op:
             want = expected.get(str(n), (0, "", "", "", ""))[1]
-            if want != "Done":
+            if want not in ("Done", "Closed"):
                 mk = st / "auto" / f"janitor-regress-{n}-done-open"
                 if not mk.exists():
                     repair = f"; repaired to {want}" if want else ""
                     say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open{repair}")
                     if not dry: mk.touch()
             continue
-        if not (op and stt in ("Todo", "Blocked", "In Progress", "Code Complete")): continue
+        if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Complete")): continue
         cm = [x.split("\t", 1) for x in sh("gh", "api", f"repos/{repo}/issues/{n}/comments?per_page=100", "--paginate", "--jq", r'.[]|[.created_at,(.body|gsub("\n";" "))]|join("\t")').splitlines() if "\t" in x]
         reds = 0
         for _, b in cm:
