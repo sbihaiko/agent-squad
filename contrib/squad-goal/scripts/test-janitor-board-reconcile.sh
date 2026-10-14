@@ -73,6 +73,7 @@ case "$a" in
       printf '%s{"number":%s,"title":"Issue %s","body":"%s","state":"OPEN","labels":%s,"subIssuesSummary":%s,"subIssues":{"nodes":%s},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$body" "$labs" "$subs" "$kids"; sep=,; done
     printf ']}}}}';;
   *issues/2007*) echo $'open\t\tIssue 2007\tneeds-owner';;
+  *issues/2004*) echo $'closed\t\tIssue 2004';;   # a merged PR moves the card to Done only once the issue is closed (#307)
   *issues/2010*) echo $'closed\t\tIssue 2010';;
   *issues/2012*) echo $'open\t\tIssue 2012\tneeds-ratification';;
   *issues/20*) echo $'open\t\tIssue';;
