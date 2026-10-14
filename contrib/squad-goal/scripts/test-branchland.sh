@@ -28,6 +28,11 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 GREEN='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"success"}]}'
 RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclusion":"failure"}]}'
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
+# The local gate (#385): with CI off a tip that has no check run gets ruff, mypy and the fast pytest battery in a clean
+# checkout of that exact sha. SG_LOCAL_GATE_CMD is the command it runs, so a stub proves the pass, the fail and the
+# suppression. GATEPASS records the head of the checkout it ran in, so the test can prove it was the exact tip.
+GATEPASS="git rev-parse HEAD > $T/gate.head"
+GATEFAIL=false
 # The review verdict of the branch tip, which the lander waits for beside the check (#357): VERDICT=APPROVE|CHANGES|none, kept
 # the way branchreview.sh keeps it (review-<key>.md and review-<key>.sha under the state directory).
 rev() { rm -f "$T/st/review-gui_7-x".*; [ "${1:-}" = none ] && return; printf 'VERDICT: %s\n' "${1:-APPROVE}" > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"; }
@@ -64,8 +69,35 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x"*"check"*"failure"*) ok "red: says why";;
 reset; r=$(CHECKS="$RUNNING" bl); r2=$(CHECKS="$RUNNING" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*running*) ok "running: waits and says why";; *) ko "running silent: '$r'";; esac || ko "running landed"
 [ -z "$r2" ] && ok "running: says it once per head" || ko "running repeated: '$r2'"
-# no check yet
-reset; r=$(CHECKS='{"check_runs":[]}' bl); case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run: waits and says why";; *) ko "no check silent: '$r'";; esac
+# no check yet: with the local path off, the tip still waits (SG_LOCAL_GATE=0 turns the local gate off)
+reset; rm -f "$T/gate.head"; r=$(SG_LOCAL_GATE=0 CHECKS='{"check_runs":[]}' SG_LOCAL_GATE_CMD="$GATEPASS" bl)
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run with the local path off: waits and says why";; *) ko "no check silent: '$r'";; esac
+[ ! -e "$T/gate.head" ] && ok "the setting turns the local path off: no gate runs" || ko "the gate ran with the local path off"
+# A red check never runs the local gate and never lands (#385): only a tip with zero check runs reaches the gate.
+reset; rm -f "$T/gate.head"; r=$(CHECKS="$RED" SG_LOCAL_GATE_CMD="$GATEPASS" bl)
+[ ! -e "$T/gate.head" ] && ok "a red check does not run the local gate" || ko "the local gate ran on a red check"
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a red check lands nothing" || ko "a red check landed"
+# A running check never runs the local gate either.
+reset; rm -f "$T/gate.head"; r=$(CHECKS="$RUNNING" SG_LOCAL_GATE_CMD="$GATEPASS" bl)
+[ ! -e "$T/gate.head" ] && ok "a running check does not run the local gate" || ko "the local gate ran on a running check"
+# Zero check runs with the local path on (its default): the local gate decides, and a pass lands as a green check would.
+reset; rm -f "$T/gate.head"; tip=$($O rev-parse gui/7-x)
+r=$(CHECKS='{"check_runs":[]}' SG_LOCAL_GATE_CMD="$GATEPASS" bl)
+[ "$($O rev-parse dev)" = "$tip" ] && ok "no check run: the local gate passes and the branch lands in dev" || ko "the local gate did not land: '$r'"
+[ "$(cat "$T/gate.head" 2>/dev/null)" = "$tip" ] && ok "the local gate ran in a clean checkout of the exact tip" || ko "the gate ran at '$(cat "$T/gate.head" 2>/dev/null)', not the tip $tip"
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*"closed #7"*) ok "the local-gate landing names the branch and the issue";; *) ko "no landed line: '$r'";; esac
+$O merge-base --is-ancestor main dev && ok "the local-gate landing is a fast-forward of dev" || ko "the local-gate landing is not a fast-forward"
+/usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "the local-gate landing closes the issue" || ko "no close call: $(cat "$T/gh.log")"
+/usr/bin/grep -q "o 3 Done 7" "$T/board.log" 2>/dev/null && ok "the local-gate landing moves the card to Done" || ko "no Done move"
+f=$(ls "$T/st/cq/"*status~* 2>/dev/null | head -1)
+{ [ -n "$f" ] && /usr/bin/grep -q "local gate, CI off" "$f" && /usr/bin/grep -q "$tip" "$f"; } && ok 'the status comment names "local gate, CI off" and the sha it ran at' || ko "no local-gate status comment: '$(cat "$f" 2>/dev/null)'"
+# Zero check runs and a failed local gate: nothing lands, and the failure is recorded on the issue.
+reset; r=$(CHECKS='{"check_runs":[]}' SG_LOCAL_GATE_CMD="$GATEFAIL" bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "no check run, a failed local gate: nothing lands" || ko "the branch landed on a failed local gate: '$r'"
+! /usr/bin/grep -q "issues/7" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "a failed local gate closes nothing and moves no card" || ko "a failed gate wrote"
+failsha=$($O rev-parse gui/7-x); f=$(ls "$T/st/cq/"*status~* 2>/dev/null | head -1)
+{ [ -n "$f" ] && /usr/bin/grep -q "local gate, CI off" "$f" && /usr/bin/grep -q "$failsha" "$f"; } && ok "a failed local gate records the failure and its sha on the issue" || ko "no failure record: '$(cat "$f" 2>/dev/null)'"
+r2=$(CHECKS='{"check_runs":[]}' SG_LOCAL_GATE_CMD="$GATEFAIL" bl); [ -z "$r2" ] && ok "a failed local gate is said once per head" || ko "the gate failure repeated: '$r2'"
 # a green check is not enough: the review must have approved the tip (#357)
 reset; rev CHANGES; r=$(CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review that asked for changes: nothing lands on a green check" || ko "landed over a CHANGES verdict"
