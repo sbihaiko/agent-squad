@@ -403,7 +403,13 @@ def _issue(node: Any) -> dict[str, Any]:
             if isinstance(n, dict) and isinstance(n.get("number"), int)
         ],
         "blocked_by_read": isinstance(node.get("blockedBy"), dict),   # False: the answer carried no relation, so [] proves nothing
+        "blockers": [   # each blocker's own state, so a stacking decision needs no read per blocker (#383); a missing state is unread
+            {"number": n.get("number"), "state": n.get("state").lower() if isinstance(n.get("state"), str) else None}
+            for n in _connection(node.get("blockedBy")).get("nodes") or []
+            if isinstance(n, dict) and isinstance(n.get("number"), int)
+        ],
         "tdd_red": _tdd_red(node.get("comments")),
+        "not_startable": _not_startable(node.get("comments")),
         "sub_issues_summary": _sub_issues(node.get("subIssuesSummary")),
         "sub_issues": [   # the native relation's children, numbers only: the spec's column folds over their cards (spec_fold.py)
             n.get("number")
@@ -426,6 +432,18 @@ def _tdd_red(comments: Any) -> bool | None:
     if not isinstance(comments, dict):
         return None
     return any("TDD RED" in str(c.get("body") or "") for c in _connection(comments).get("nodes") or [] if isinstance(c, dict))
+
+
+def _not_startable(comments: Any) -> bool | None:
+    """Does a comment line start with the loop's `SQUAD-NOT-STARTABLE:` marker (health.sh writes it)? `None` when the
+    answer carried no comments to look in, so a reader never takes a missing read for "startable"."""
+    if not isinstance(comments, dict):
+        return None
+    return any(
+        line.startswith("SQUAD-NOT-STARTABLE:")
+        for c in _connection(comments).get("nodes") or [] if isinstance(c, dict)
+        for line in str(c.get("body") or "").splitlines()
+    )
 
 
 @dataclass(frozen=True)

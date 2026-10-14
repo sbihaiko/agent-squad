@@ -103,6 +103,48 @@ mkdir -p "$T/q"; ( . "$d/ghcall.sh"; export SG_STATE=$T/q
   [ "$(gh_stretch 90)" = 0 ] && echo "ok   a healthy quota adds no wait to the cycle" || echo "FAIL a healthy quota lengthened the cycle" ) | tee "$T/q.out"; /usr/bin/grep -q '^FAIL' "$T/q.out" && fail=1
 SEED_QUOTA=100 watch_pass 1 > /dev/null; /usr/bin/grep -qx 630 "$T/watch.sleeps" && ok "under 20 percent of the limit left the cycle waits longer" || ko "no longer wait with 2 percent left: $(cat "$T/watch.sleeps")"
 
+# --- autofrontier: the frontier's candidate walk (#383) ------------------------------------------------------------------
+# frontier_pass <n issues>   one dry pass (AF_DRY) of the real autofrontier.sh, stack.sh and startability.sh over n open
+# issues with no blocker and no open PR; prints the number of gh requests. The pass read each candidate's comments
+# (sg_not_startable) and the issue again (stack.sh), every 120 s: 915 requests an hour, and GitHub refused the rest.
+frontier_pass() {
+  local n=$1 t; t=$(mktemp -d -p "$T")
+  mkdir -p "$t/s" "$t/st/auto" "$t/bin" "$t/co/docs/squad/workflows" "$t/fix"
+  for f in autofrontier.sh stack.sh startability.sh ghcall.sh ghread.py ghthrottle.py single.sh cluster.py address.sh; do cp "$d/$f" "$t/s/"; done
+  printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$t/st" "$t/co" > "$t/s/env.sh"
+  printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":24,"max_parallel":2}]}]}' > "$t/co/docs/squad/workflows/dynamic.graph.json"
+  printf 'caps:\n  runs: 10\n' > "$t/co/docs/squad/defaults.yaml"
+  : > "$t/st/active-runs.txt"
+  jq -n --argjson n "$n" '[range(1;$n+1)|{number:.,title:"work \(.)",body:"Work \(.).",labels:[{name:"wave:01"}]}]' > "$t/fix/rest.json"
+  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:.labels},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$t/fix/rest.json" > "$t/fix/issues.json"
+  cat > "$t/bin/gh" <<'J'
+#!/bin/bash
+a="${*//$'\n'/ }"
+printf '%s\n' "$a" >> "$GHLOG"
+q=""; p=""; prev=""
+for x in "$@"; do [ "$prev" = "-q" ] && q="$x"; case "$x" in repos/*) p="$x";; esac; prev="$x"; done
+case "$a" in
+  *"issues(states: OPEN"*) cat "$FIX/issues.json"; exit 0;;
+  *"issue(number:"*) n=$(printf '%s' "$a" | /usr/bin/grep -oE 'issue\(number: [0-9]+' | /usr/bin/grep -oE '[0-9]+$' | head -1)
+    jq --argjson n "$n" '{data:{repository:{("i\($n)"):(.data.repository.issues.nodes[]|select(.number==$n))}}}' "$FIX/issues.json"; exit 0;;
+esac
+case "$p" in
+  */issues?state=open*) f=$FIX/rest.json;;
+  */issues/*/comments*|*/pulls?*) echo '[]'; exit 0;;
+  */issues/*) n=${p##*/}; jq --argjson n "$n" '.[]|select(.number==$n)' "$FIX/rest.json"; exit 0;;
+  *) echo '{}'; exit 0;;
+esac
+if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
+J
+  chmod +x "$t/bin/gh"; : > "$t/gh.log"
+  ( cd "$t" && env SG_SINGLE_AUTOFRONTIER=1 AF_DRY=1 SG_GH_AGGREGATE_WINDOW=0 SG_SQUAD="$(cd "$d/../../.." && pwd)" SQUAD_CAPS_DIR="$t/caps" \
+      PATH="$t/bin:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" bash "$t/s/autofrontier.sh" > "$t/out" 2>&1 )
+  cp "$t/out" "$T/frontier.out"; [ -n "${DBG:-}" ] && { echo "--- out:" >&2; cat "$t/out" >&2; echo "--- log:" >&2; cut -c1-120 "$t/gh.log" >&2; }; wc -l < "$t/gh.log" | tr -d ' '; }
+c1=$(frontier_pass 1); o1=$(cat "$T/frontier.out"); cm=$(frontier_pass $MANY); om=$(cat "$T/frontier.out")
+[ "$c1" = "$cm" ] && [ "$c1" -gt 0 ] && ok "autofrontier, one pass: $c1 requests for 1 open issue, $cm for $MANY" || ko "autofrontier, one pass: $c1 requests for 1 open issue, $cm for $MANY"
+case "$o1" in *"FRONTIER would dispatch #1 "*) ok "the one open issue is picked";; *) ko "the one open issue: $o1";; esac
+case "$om" in *"FRONTIER would dispatch #1 #2 #3 #4 #5 #6 "*) ok "every open issue is picked";; *) ko "the $MANY open issues: $om";; esac
+
 # --- the budget file only shrinks ----------------------------------------------------------------------------------------
 for s in startability.sh watch.sh; do
   /usr/bin/grep -qE "^$s " "$d/gh-direct-calls.txt" && ko "$s is still on the migration budget" || ok "$s is off the migration budget"

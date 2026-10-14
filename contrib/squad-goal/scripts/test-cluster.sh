@@ -4,6 +4,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 # The free slots come from the machine-wide caps (squad/caps.py) of this checkout, with leases in the sandbox, never the real ones.
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
+export SG_GH_AGGREGATE_WINDOW=0   # the frontier's open-issue list changes between passes below: no snapshot answers a later one
 I='[{"number":1228,"title":"play-pad-only-home: A on Open a ROM never reaches the library","body":"step home.open-library","created_at":"2026-10-10T15:00:00Z"},
 {"number":1233,"title":"play-pad-only-home: A on Open a ROM never reaches the library","body":"same","created_at":"2026-10-10T15:20:00Z"},
 {"number":1300,"title":"play-pad-only-home: old batch","body":"x","created_at":"2026-10-09T01:00:00Z"},
@@ -19,7 +20,7 @@ r=$(CL_MODE=files python3 "$d/cluster.py" <<<"$I"); echo "$r" | /usr/bin/grep -q
 # autobug: clusters become children. single.sh and startability.sh travel with the dispatchers: both run the pass under
 # single.sh (#1514) and source startability.sh (which sources ghcall.sh beside it), so a sandbox without them cannot start
 # a pass at all. envelope-spend.sh is what the request builder reads its child's spend from; address.sh is the seam.
-mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/address.sh" "$d/envelope-spend.sh" "$T/s/"; : > "$T/st/active-runs.txt"
+mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$d/envelope-spend.sh" "$T/s/"; : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"   # exported, as the real env.sh does: a pass re-execs itself under single.sh, and an unexported SG_STATE is lost there
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
@@ -27,6 +28,7 @@ cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[{name:"ready-for-agent"}])},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;   # the frontier's one list read (#383)
   *"issues?state=open"*wave*) python3 -c 'import json;[print("wave:01\x1f"+str(i["number"])+"\x1fready-for-agent") for i in json.load(open("$T/issues.json"))]' ;;
   *"issues?state=open"*) python3 -c 'import json;[print(str(i["number"])+"\x1f"+"bug") for i in json.load(open("$T/issues.json"))]' ;;
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;

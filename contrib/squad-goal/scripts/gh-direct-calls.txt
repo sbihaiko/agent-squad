@@ -13,7 +13,7 @@
 # 2026-10-12, at the base of slice #8: 95 reaches in 22 scripts.
 autobug.sh 1
 autofix.sh 3
-autofrontier.sh 4
+autofrontier.sh 2
 autohunt.sh 2
 autopanel.sh 1
 autopilot.sh 13
@@ -30,4 +30,4 @@ revci.sh 7
 review.sh 5
 speed.py 1
 stack.sh 3
-wtclean.sh 3
+wtclean.sh 2
