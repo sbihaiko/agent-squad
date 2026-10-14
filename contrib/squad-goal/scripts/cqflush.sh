@@ -29,6 +29,8 @@ cq_send() { local repo=$1 n=$2 b=$3 file=$4 t mk cid
 here="$(cd "$(dirname "$0")" && pwd)"; . "$here/address.sh"
 export SG_GH_PASS=cqflush; . "$here/ghcall.sh"   # every comment read and write goes through the door (ADR-0277)
 base=$(sg_state_base)
+# Seconds between two passes, empty queue or not: SG_FLUSH_INTERVAL from the environment, else the profile in force, else 120. --interval prints it and exits (tests).
+iv=${SG_FLUSH_INTERVAL:-$(sg_profile_setting "${SG_PROFILE:-}" SG_FLUSH_INTERVAL 120)}; [ "${1:-}" = --interval ] && { echo "$iv"; exit 0; }
 while :; do left=0
   for f in "$base"/*/cq/*.md; do [ -e "$f" ] || continue
     [ $(( $(date +%s) - $(mtime "$f") )) -lt 5 ] && { left=1; continue; }
@@ -45,4 +47,4 @@ while :; do left=0
     if cq_send "$repo" "$n" "$b" "$f.posting"; then echo "$(cat "$f.posting.did") $repo#$n $b"; rm -f "$f.posting.did"; mv "$f.posting" "$f.done"
     else mv "$f.posting" "$f";  c=$(( $(cat "$f.tries" 2>/dev/null || echo 0) + 1 )); echo $c > "$f.tries"; left=1
       [ $c -ge 5 ] && { mv "$f" "$f.dead"; rm -f "$f.tries"; echo "DEAD $repo#$n $b after 5 failures"; }; fi
-  done; [ "${1:-}" = --once ] && exit 0; [ $left = 0 ] && sleep 60 || sleep 30; done
+  done; [ "${1:-}" = --once ] && exit 0; sleep "$iv"; done

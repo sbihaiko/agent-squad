@@ -14,7 +14,7 @@ alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | 
 causes=(); detail=(); briefs=()
 add() { causes+=("$1"); detail+=("$2"); briefs+=("${3:-}"); }
 alive "$SG_STATE/watchd.pid" 'watchd.sh run' || add watchd-down "watchd is not running: no merges, dispatch or cleanup until it is restarted (watchd.sh start)"
-alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every 30 s) is not running"
+alive "$SG_STATE/fastloop.pid" 'fastloop.sh' || add fastloop-down "fastloop (autopilot every SG_FAST_INTERVAL s) is not running"
 c="$SG_STATE/cycle.log"; [ -e "$c" ] && [ $((now - $(mtime "$c"))) -gt 360 ] && alive "$SG_STATE/watchd.pid" 'watchd.sh run' && add watch-stalled "cycle.log silent for $(( (now - $(mtime "$c")) / 60 )) min while watchd is up"
 nv=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "$r" ] && f="$SG_CHECKOUT/runs/$r"
   [ -e "$f/record.jsonl" ] || { [ -e "$f/request.txt" ] && [ $((now - $(mtime "$f/request.txt"))) -gt 300 ] && nv=$((nv+1)); }; done
