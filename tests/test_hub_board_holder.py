@@ -90,3 +90,8 @@ def test_the_card_paints_the_holder_the_row_carries(hub):
     out = subprocess.run(["node", "-"], input=script, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "<div class=hld>held by run-x since then</div>" in out.stdout
+
+
+def test_an_epoch_start_is_shown_as_a_utc_date(hub):
+    h = {"h": {"run": "run-x", "started": "1791928601.68213"}}
+    assert hub.holder_text(h) == "held by run-x since 2026-10-13 21:56 UTC"

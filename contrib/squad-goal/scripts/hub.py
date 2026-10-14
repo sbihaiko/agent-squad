@@ -1063,7 +1063,9 @@ def holder_text(i):
     """The text a held card wears: `held by <run> since <start> UTC`, or `held by <run>` when no start was named."""
     h = i.get("h") or {}
     if not h.get("run"): return None
-    t = (h.get("started") or "")[:16].replace("T", " ")
+    t = str(h.get("started") or "")
+    try: t = dt.datetime.fromtimestamp(float(t), dt.timezone.utc).strftime("%Y-%m-%d %H:%M")   # an epoch start
+    except (ValueError, OverflowError, OSError): t = t[:16].replace("T", " ")   # an ISO start
     return f"held by {h['run']}" + (f" since {t} UTC" if t else "")
 def task_count(i):
     """How far a card's own work got, `completed` over `total` (`3/5`), off the sub-issue summary the items route the

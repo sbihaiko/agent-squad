@@ -193,10 +193,10 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q '^ADD o 4 Todo 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Todo" || ko "#2019 not added Todo: $(bc) $o"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
-# cards the pass already holds: Backlog with none (or none past the queue), Doing once a child reached Doing, Closed when
-# every child is terminal and one is Closed, Abandoned when every child is terminal and none is Closed. The pass no longer
-# closes the spec issue itself.
-for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Backlog 2028"; do
+# cards the pass already holds: Backlog with none (or none past the queue), Doing once a child reached Doing or a child was
+# delivered while another is open (#2028), Closed when every child is terminal and one is Closed, Abandoned when every
+# child is terminal and none is Closed. The pass no longer closes the spec issue itself.
+for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Doing 2028"; do
   /usr/bin/grep -q "^$w\$" "$T/board.calls" 2>/dev/null && ok "spec fold: $w" || ko "spec fold: no '$w': $(/usr/bin/grep -E ' 20(20|21|27|28)$' "$T/board.calls")"
 done
 ! /usr/bin/grep -q 'Open Specs' "$T/board.calls" 2>/dev/null && ok "no spec is written to the old Open Specs column" || ko "Open Specs written: $(/usr/bin/grep 'Open Specs' "$T/board.calls")"

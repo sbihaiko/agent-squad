@@ -528,7 +528,7 @@ def reconcile_board():
     for m in sorted((st / "auto").glob("disp-*")):
         n = m.name[5:]; holder = m.read_text().strip()
         if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
-            set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder or n, "", 30)
+            set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder, "", 30)
     # Every open issue starts at the loop floor. This rank is below every rule above, so current run, marker, PR, landing,
     # closure, or owner-label evidence wins; a Blocked card never preserves a blocking cause that has disappeared.
     oans, olabels = open_issues()
@@ -588,7 +588,7 @@ def reconcile_board():
             say(f"BOARD-RECONCILE #{n}: card -> {want} ({why})")
             if note: queue_terminal(n, want, note)
         if want == doing:
-            board_write(["--run-fields", owner, str(proj), str(n), run_id or n, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now
+            if run_id: board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}")   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
         elif have in ("In Progress", "Doing"):
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does
