@@ -8,18 +8,22 @@
 #   WAIT <reason>             anything else (two open blockers, a blocker with no PR, a parent that is itself stacked, red CI)
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; iss=$1
 issue=$(gh_api "repos/$SG_REPO/issues/$iss") || { echo "WAIT issue #$iss is not readable"; exit 0; }
+# An answer that does not carry the relation (no issue, a REST shape) is not "no blockers": dispatch waits until it is read.
+printf '%s' "$issue" | jq -e '.blocked_by_read == true' >/dev/null 2>&1 || { echo "WAIT the blocked-by relation of #$iss is not readable"; exit 0; }
 body=$(printf '%s' "$issue" | jq -r '.body // ""')
 # GitHub's blocked-by relation is the dispatch fact. The body remains a human-facing mirror, so a stale body edge is named
 # once but never gates this decision.
 bl=$(printf '%s' "$issue" | jq -r '.blocked_by[]?' | sort -nu)
 body_bl=$(printf '%s\n' "$body" | awk '/^## Blocked by/{f=1;next} f&&/^## /{exit} f&&/^[[:space:]]*$/{next} f&&!/^[[:space:]]*([-*] |[0-9]+\. )/{exit} f' | grep -oE '(^|[^/[:alnum:]])#[0-9]+' | grep -oE '[0-9]+' | sort -nu)
-for b in $body_bl; do case " $bl " in *" $b "*) ;; *) echo "STACK NOTE #$iss: body names blocker #$b without a native blocked-by relation" >&2;; esac; done
+for b in $body_bl; do case " $(echo $bl) " in *" $b "*) ;; *) echo "STACK NOTE #$iss: body names blocker #$b without a native blocked-by relation" >&2;; esac; done
 hb="${SG_HUB_DIR:-$SG_CHECKOUT/runs/.hub}/hub-board.json"   # hub's board cache
 testing=" $(jq -r '.items[]?|select(.st=="Testing" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 cc=" $(jq -r '.items[]?|select(.st=="Code Complete" and .s=="open")|.n' "$hb" 2>/dev/null | tr '\n' ' ') "
 prs=$(gh api "repos/$SG_REPO/pulls?state=open&per_page=100")
 prof() { printf '%s' "$prs" | jq -r --arg b "$1" '[.[]|select(((.title+" "+(.body//""))|test("Refs #"+$b+"\\b")))][0]|select(.)|"\(.number) \(.head.ref) \(.base.ref) \(.head.sha)"'; }
-open=(); for b in $bl; do [ "$(gh api repos/$SG_REPO/issues/$b -q .state)" = open ] || continue
+open=(); for b in $bl; do st=$(gh api repos/$SG_REPO/issues/$b -q .state 2>/dev/null)
+  [ "$st" = closed ] && continue
+  [ "$st" = open ] || { echo "WAIT blocker #$b is not readable"; exit 0; }   # an unread state never counts as closed
   case "$testing" in *" $b "*) continue;; esac   # its card is in Testing (code merged, test pass running): does not gate
   case "$cc" in *" $b "*)   # Code Complete: a PR stacks like an open blocker; fork-only work is merged into the child's fork branch
     br=$(sg_fork_branch "$b")   # an issue can carry both a PR and fork work: hand over both

@@ -402,6 +402,7 @@ def _issue(node: Any) -> dict[str, Any]:
             for n in _connection(node.get("blockedBy")).get("nodes") or []
             if isinstance(n, dict) and isinstance(n.get("number"), int)
         ],
+        "blocked_by_read": isinstance(node.get("blockedBy"), dict),   # False: the answer carried no relation, so [] proves nothing
         "tdd_red": _tdd_red(node.get("comments")),
         "sub_issues_summary": _sub_issues(node.get("subIssuesSummary")),
     }
