@@ -198,12 +198,17 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
 # cards the pass already holds: Backlog with none (or none past the queue), Doing once a child reached Doing or a child was
 # delivered while another is open (#2028), Closed when every child is terminal and one is Closed, Abandoned when every
-# child is terminal and none is Closed. The pass no longer closes the spec issue itself.
+# child is terminal and none is Closed. The pass also closes the spec issue when every child is closed.
 for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Doing 2028"; do
   /usr/bin/grep -q "^$w\$" "$T/board.calls" 2>/dev/null && ok "spec fold: $w" || ko "spec fold: no '$w': $(/usr/bin/grep -E ' 20(20|21|27|28)$' "$T/board.calls")"
 done
 ! /usr/bin/grep -q 'Open Specs' "$T/board.calls" 2>/dev/null && ok "no spec is written to the old Open Specs column" || ko "Open Specs written: $(/usr/bin/grep 'Open Specs' "$T/board.calls")"
-! /usr/bin/grep -q 'issues/20\(17\|20\|21\|27\|28\|29\)\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "the fold replaces the close rule: no spec issue is closed or commented" || ko "a spec issue was written: $(/usr/bin/grep -E 'issues/20(17|20|21|27|28|29)' "$T/gh.calls")"
+# A spec with at least one sub-issue, every one closed, is closed by the loop with one comment that names the condition.
+# A spec with an open sub-issue (#2017, #2027, #2028, #2029), or with none (#2021), stays open (the owner's rule).
+/usr/bin/grep -q '^api -X PATCH repos/x/y/issues/2020 -f state=closed -f state_reason=completed$' "$T/gh.calls" 2>/dev/null && ok "a spec whose every sub-issue is closed is closed" || ko "#2020 not closed: $(/usr/bin/grep 'issues/2020' "$T/gh.calls")"
+[ "$(/usr/bin/grep -c '^api repos/x/y/issues/2020/comments -f body=Closed by the loop: every sub-issue (2) is closed' "$T/gh.calls")" = 1 ] && ok "the close carries one comment that names the condition" || ko "#2020 comment: $(/usr/bin/grep 'issues/2020' "$T/gh.calls")"
+/usr/bin/grep -q 'SPEC-CLOSED #2020: every sub-issue (2) is closed' "$T/st/cycle.log" 2>/dev/null && ok "the close is named in cycle.log" || ko "#2020 close not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'issues/20\(17\|21\|27\|28\)\(/comments\| -X PATCH\| -f state\)' "$T/gh.calls" 2>/dev/null && ok "a spec with an open sub-issue, or with none, stays open" || ko "a spec closed early: $(/usr/bin/grep -E 'issues/20(17|21|27|28)' "$T/gh.calls")"
 # A spec card already Closed whose child reopened keeps Closed (#246) and gains the tag instead of a move back.
 ! /usr/bin/grep -q ' 2029$' "$T/board.calls" 2>/dev/null && ok "a Closed spec whose child reopened keeps its column" || ko "#2029 moved: $(/usr/bin/grep ' 2029$' "$T/board.calls")"
 /usr/bin/grep -q '^api -X POST repos/x/y/issues/2029/labels -f labels\[\]=reverted$' "$T/gh.calls" 2>/dev/null && ok "it gains the reverted tag" || ko "#2029 not tagged: $(/usr/bin/grep 'issues/2029' "$T/gh.calls")"
