@@ -13,6 +13,11 @@ case "$*" in
   *"i1793: issue(number: 1793)"*) echo '{"data":{"repository":{"i1793":{"number":1793,"state":"OPEN","body":"Fix the strip.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1791,"state":"CLOSED"}]}}}}}';;
   *"i1800: issue(number: 1800)"*) echo '{"data":{"repository":{"i1800":{"number":1800,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1797,"state":"OPEN"},{"number":1798,"state":"OPEN"}]}}}}}';;
   *"i1801: issue(number: 1801)"*) echo '{"data":{"repository":{"i1801":{"number":1801,"state":"OPEN","body":"Work.\n\n## Blocked by\n\n- #1797","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1791,"state":"CLOSED"}]}}}}}';;
+  *"i1802: issue(number: 1802)"*) echo '{"data":{"repository":{"i1802":{"number":1802,"state":"OPEN","body":"Work.\n\n## Blocked by\n\n- #1797\n- #1798","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1797,"state":"OPEN"},{"number":1798,"state":"OPEN"}]}}}}}';;
+  *"i1803: issue(number: 1803)"*) echo '{"data":{"repository":{"i1803":{"number":1803,"state":"OPEN","body":"Work.","labels":{"nodes":[]}}}}}';;
+  *"i1804: issue(number: 1804)"*) echo '{"data":{"repository":{"i1804":null}}}';;
+  *"i1805: issue(number: 1805)"*) echo '{"data":{"repository":{"i1805":{"number":1805,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1799,"state":"OPEN"}]}}}}}';;
+  *"issues/1799 -q .state"*) echo 'gh: API rate limit exceeded' >&2; exit 1;;
   *"issues/1791 -q .state"*) echo closed;;
   *"issues/1797 -q .state"*|*"issues/1798 -q .state"*) echo open;;
   *"pulls?state=open"*) echo '[]';;
@@ -30,4 +35,12 @@ r=$(run 1800)
 case "$r" in *"2 open blockers: #1797 #1798"*) ok "#1800: every open native blocker gates dispatch";; *) ko "#1800 did not read its native blockers: '$r'";; esac
 r=$(run 1801)
 case "$r" in *READY*) ok "#1801: a body-only blocker does not override the native relation";; *) ko "#1801 did not read READY: '$r'";; esac
+r=$(run 1802)
+case "$r" in *"STACK NOTE"*) ko "#1802: a body blocker that is also native was reported as body-only: '$r'";; *) ok "#1802: a body blocker the native relation carries is not reported";; esac
+r=$(run 1803)
+case "$r" in WAIT*) ok "#1803: an answer with no blocked-by relation is not read as no blockers";; *) ko "#1803 did not WAIT: '$r'";; esac
+r=$(run 1804)
+case "$r" in WAIT*) ok "#1804: an issue the answer does not carry is not read as no blockers";; *) ko "#1804 did not WAIT: '$r'";; esac
+r=$(run 1805)
+case "$r" in *WAIT*"#1799"*) ok "#1805: a blocker whose state cannot be read gates dispatch";; *) ko "#1805 did not WAIT on #1799: '$r'";; esac
 rm -rf "$T"; exit $fail
