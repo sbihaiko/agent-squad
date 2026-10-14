@@ -1251,23 +1251,44 @@ def prs_from_graphql(payload, repo=None):
                      "facts": not (states is None or threads is None or labels is None or not ms or not base)})
     return rows
 
+def gh_door_read(*args):
+    """One GitHub read through the door, `ghcall.sh` (ADR-0277): the answer on stdout, or an error carrying the door's
+    own line -- GitHub's refusal, or a local failure before GitHub reached a verdict (#252). A read that did not answer
+    never reaches a parser, so the column names GitHub's message instead of the first line of its error body."""
+    door = pathlib.Path(__file__).resolve().parent / "ghcall.sh"
+    try:
+        p = subprocess.run(["bash", "-c", '. "$0"; "$@"', str(door), *args], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"the GitHub read did not finish: {e}") from e
+    if p.returncode: raise RuntimeError(" ".join(p.stdout.split()) or f"the GitHub read exited {p.returncode}")
+    return p.stdout
+
 def open_prs_of(repo):
-    """The open PRs of ONE repository, out of the batched OPEN_PR_QUERY: its rows each carry the repository as `r`,
-    or None when the read returned nothing usable (the caller keeps the last good rows, #1772)."""
+    """The open PRs of ONE repository, out of the batched OPEN_PR_QUERY, read through the door: its rows each carry the
+    repository as `r`, or None when the read returned nothing usable (the caller keeps the last good rows, #1772).
+
+    The batched query stays the read. The door's aggregate route for the open PRs (`repos/<o>/<r>/pulls?state=open`)
+    carries the head, the draft flag, the labels, the review-thread count and the check rollup, and not the merge state,
+    the base ref, the head commit date or a check's own id, which the strip and the chip read (#1772); ADR-0277 puts a
+    read behind the interface and never changes which facts it reads. So the read keeps its query and takes the door's
+    `gh_get`, the one function that carries a document `gh_api` cannot: its route is a path, and this is a query."""
     own, name = repo.split("/", 1)
-    po = subprocess.run(["gh", "api", "graphql", "-f", "query=" + OPEN_PR_QUERY % (own, name)], capture_output=True, text=True, timeout=60).stdout
+    po = gh_door_read("gh_get", "graphql", "-f", "query=" + OPEN_PR_QUERY % (own, name))
     return prs_from_graphql(json.loads(po), repo) if po.strip() else None
 
 def closed_prs_of(repo):
-    """The latest page of ONE repository's closed PRs, each row tagged with its repository."""
-    pc = subprocess.run(["gh", "api", f"repos/{repo}/pulls?state=closed&per_page=100&sort=updated&direction=desc", "--jq",
-        '.[]|{n:.number,t:.title,c:(.merged_at//.closed_at),m:(.merged_at!=null)}'], capture_output=True, text=True, timeout=60).stdout
-    return [dict(json.loads(l), r=repo) for l in pc.splitlines() if l.strip()]
+    """The latest page of ONE repository's closed PRs, each row tagged with its repository. The door answers the route's
+    JSON and the projection the call used to hand `gh` is taken here, on the answer it verified (ADR-0277)."""
+    pc = gh_door_read("gh_api", f"repos/{repo}/pulls?state=closed&per_page=100&sort=updated&direction=desc")
+    return [{"n": x["number"], "t": x["title"], "c": x.get("merged_at") or x.get("closed_at"),
+             "m": x.get("merged_at") is not None, "r": repo} for x in (json.loads(pc) if pc.strip() else [])]
 
 def closed_total_of(repo):
-    """The real number of closed PRs of ONE repository: the list itself is only the latest page (None when unreadable)."""
-    pt = subprocess.run(["gh", "api", f"search/issues?q=repo:{repo}+is:pr+is:closed&per_page=1", "--jq", ".total_count"], capture_output=True, text=True, timeout=60).stdout.strip()
-    return int(pt) if pt.isdigit() else None
+    """The real number of closed PRs of ONE repository: the list itself is only the latest page (None when the answer
+    carries no count a reader may act on)."""
+    pt = gh_door_read("gh_api", f"search/issues?q=repo:{repo}+is:pr+is:closed&per_page=1")
+    try: return int((json.loads(pt) or {}).get("total_count"))
+    except (AttributeError, TypeError, ValueError): return None
 
 def prs_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
     """One read of the OPEN PRs and Closed PRs columns for EVERY repository the hub is told to read (#1820), in place
@@ -1293,7 +1314,7 @@ def prs_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
             total = fetch_total(r)
             total = last_n.get(r, 0) if total is None else total
         except Exception as e:
-            errs.append(f"{r}: {str(e)[:70]}")
+            errs.append(f"{r}: {str(e)}")   # the whole message: the door's refusal line carries GitHub's own words (#252)
             prs += [x for x in last_prs if x.get("r") == r]     # this repository's own last good rows, and no other's
             prev += [x for x in last_prev if x.get("r") == r]
             n_of[r] = last_n.get(r, 0); prev_n += n_of[r]

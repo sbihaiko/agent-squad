@@ -20,7 +20,7 @@ autopilot.sh 13
 board.py 1
 childcc.py 2
 health.sh 5
-hub.py 11
+hub.py 8
 janitor.py 14
 mkreq.sh 2
 prepush.sh 3
