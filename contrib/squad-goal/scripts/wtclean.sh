@@ -27,11 +27,11 @@ has_sub() { $G -C "$1" submodule status 2>/dev/null | grep -qE '^[ +U]'; }
 # populated case needs loses nothing. The class is read BEFORE the attempt: a removal that fails can take the worktree's own
 # registration with it, and then the tree can no longer say what it is. Returns 0 when the tree is gone, 2 when a tree
 # holding a checked out submodule would not go even with that flag, 1 otherwise; wt_forced says the flag was used.
-wt_remove() { wt_forced=0; wt_sub=0; has_sub "$2" && wt_sub=1
+wt_remove() { wt_forced=; wt_sub=0; has_sub "$2" && wt_sub=1
   $G -C "$1" worktree remove "$2" 2>/dev/null && return 0
   [ $wt_sub = 1 ] || return 1
   $G -C "$1" worktree remove --force "$2" 2>/dev/null || return 2
-  wt_forced=1; return 0; }
+  wt_forced=1; return 0; }   # empty unless the flag was used: the lines test it with ${wt_forced:+...}
 now=$(date +%s)
 cd "$SG_CHECKOUT" || exit 0
 SG_CHECKOUT=$(pwd -P)   # resolved: every liveness test below compares a path with a process cwd, and lsof answers with the resolved one. Under a symlinked checkout (/var -> /private/var, a linked home) the unresolved form never matched, so a tree a live process was working in read as unused.

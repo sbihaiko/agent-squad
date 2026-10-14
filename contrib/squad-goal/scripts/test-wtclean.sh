@@ -3,6 +3,9 @@
 # A run with no verdict is cleaned only when it is a zombie: record.jsonl idle >20 min AND no process inside its folder; the tree must be clean and HEAD on a remote branch.
 src=${1:-$(dirname "$0")/wtclean.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/st"; cp "$src" "$T/s/wtclean.sh"; printf 'export SG_CHECKOUT=%s SG_STATE=%s SG_FORK_DIR= SG_REPO=x/y SG_OWNER=x\n' "$T/co" "$T/st" > "$T/s/env.sh"
+# the suite resolves lsof as the real env.sh does (#393): wtclean.sh reads every live cwd through SG_LSOF, and with it unset
+# the read answers nothing, so a tree a live process works in reads as unused. The loop's shell exports it; a cleared shell does not.
+export SG_LSOF=${SG_LSOF:-$(PATH="$PATH:/usr/sbin:/usr/bin" command -v lsof 2>/dev/null)}   # exported, so every stub env.sh below keeps it
 G=/usr/bin/git; $G init -q --bare "$T/remote.git"; $G init -q -b main "$T/co"; cd "$T/co"
 $G -c user.email=a@b -c user.name=t commit -q --allow-empty -m init; $G remote add origin "$T/remote.git"; $G push -q -u origin main 2>/dev/null
 mk() { mkdir -p "$T/co/runs/run-$1/ws"; $G worktree add -q --detach "$T/co/runs/run-$1/ws/w" HEAD; echo '{"event": "call_start"}' > "$T/co/runs/run-$1/record.jsonl"; [ "$2" = old ] && touch -t 202001010000 "$T/co/runs/run-$1/record.jsonl"; }
@@ -81,6 +84,8 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 [ -d worktrees/child/c-busy ] && ok "C: child tree with a live process kept" || ko "C: c-busy was removed: $out"
 [ -d worktrees/child/c-run ] && ok "C: child tree with a live run folder kept" || ko "C: c-run was removed: $out"
 case "$out" in *"WT CLEAN child c-merged"*) ok "C: the decision line names the class and the tree";; *) ko "C: no child decision line: $out";; esac
+# a tree with no submodule is removed with no flag, and its line says no more (#393: every line claimed the --force removal)
+case "$out" in *"WT CLEAN child c-merged"*"submodule tree"*) ko "C: a tree with no submodule is named a submodule tree: $out";; *) ok "C: a plain tree's line names no submodule";; esac
 [ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 5 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "C: tally 1/5, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
 kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy c-run; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
 # S: a tree whose submodules are CHECKED OUT. `git worktree remove` refuses the whole tree — `fatal: working trees containing
