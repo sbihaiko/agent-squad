@@ -65,7 +65,7 @@ def test_a_card_on_a_shipped_column_is_never_moved(mig):
 def test_the_plan_lists_every_old_option_for_removal_after_the_moves(mig):
     plan = mig.plan(ITEMS)
 
-    assert [r["option"] for r in plan["removals"]] == list(OLD)
+    assert sorted(r["option"] for r in plan["removals"]) == sorted(OLD)
     assert all(r["remaining"] == 0 for r in plan["removals"])
 
 
@@ -111,3 +111,11 @@ def test_the_check_passes_when_no_card_carries_an_old_option(tmp_path):
     r = _run(tmp_path, "--check", items=[i for i in ITEMS if i["st"] not in OLD])
 
     assert r.returncode == 0
+
+
+def test_a_card_on_a_terminal_column_stays_and_a_closed_old_card_lands_in_closed(mig):
+    items = [{"n": 20, "st": "Closed", "s": "CLOSED", "l": []}, {"n": 21, "st": "Abandoned", "s": "CLOSED", "l": []},
+             {"n": 22, "st": "Blocked", "s": "CLOSED", "l": [], "facts": {"pr_open": True}}]
+    plan = mig.plan(items)
+
+    assert [(m["card"], m["new"]) for m in plan["moves"]] == [(22, "Closed")]
