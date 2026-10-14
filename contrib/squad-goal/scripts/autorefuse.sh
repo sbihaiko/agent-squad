@@ -29,11 +29,16 @@ export SG_GH_PASS=autorefuse   # the call log names the pass that spends the sta
 
 # digest: the sha256 of stdin, whichever tool this machine has (GNU sha256sum, BSD shasum).
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
-# first_line <text>: the error's own first line, without its carriage return or trailing blanks.
-first_line() { printf '%s\n' "$1" | head -n 1 | tr -d '\r' | sed 's/[[:space:]]*$//'; }
+# first_line <text>: the error's own first line, without its carriage return or trailing blanks. The seam's count
+# diagnostic ("issue_state.py: items read N; ...") comes before the error on stderr and is no part of it, so it is skipped.
+first_line() { printf '%s\n' "$1" | tr -d '\r' | grep -v '^issue_state\.py: items read ' | head -n 1 | sed 's/[[:space:]]*$//'; }
+# no_numbers <text>: the text with each issue number "#N" read as "#N": the issue a refusal concerns is the occurrence.
+no_numbers() { printf '%s' "$1" | sed -E 's/#[0-9]+/#N/g'; }
 # refusal_fingerprint <operation> <address> <error>: the cause's key. Three lines, one per field, so no field's text can
 # read as another's; the error enters as its first line alone. Nothing else is an input, so no occurrence can drift in.
-refusal_fingerprint() { printf '%s\n%s\n%s\n' "$1" "$2" "$(first_line "$3")" | digest | cut -d' ' -f1 | cut -c1-16; }
+# An issue number is no part of the cause: a chain (a refusal bug whose own dispatch is refused) names a new number at
+# each link, and it is still one cause (#308).
+refusal_fingerprint() { printf '%s\n%s\n%s\n' "$1" "$(no_numbers "$2")" "$(no_numbers "$(first_line "$3")")" | digest | cut -d' ' -f1 | cut -c1-16; }
 # refusal_title <operation> <address> <error>: the issue's title, before the primitive prefixes it with [SQUAD].
 refusal_title() { local line; line=$(first_line "$3"); printf 'refused write %s %s: %s' "$1" "$2" "${line:0:80}"; }
 # refusal_body <operation> <address> <error> <exit> <context> <key>: the evidence, in one fence. GitHub's words are

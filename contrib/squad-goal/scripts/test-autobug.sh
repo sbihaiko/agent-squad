@@ -292,7 +292,7 @@ case "\$*" in
 esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
-export BOARD="$T/s/board.sh" SG_BUG_PROJECT=4 SG_BUG_DOING="In Progress"   # both dispatch writes: the loop board and the bug board
+export BOARD="$T/s/board.sh" SG_BUG_PROJECT=4 SG_BOARD_VOCAB=shipped   # both dispatch writes: the loop board and the bug board; SG_BUG_DOING unset, so the default writes
 r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "9 the dispatch whose cards the board does not carry finishes" || ko "9 the pass exited $rc: '$r'"
 case "$r" in *"AUTOBUG dispatched"*) ok "9 the dispatch still happens" ;; *) ko "9 no dispatch: '$r'";; esac
@@ -303,7 +303,10 @@ filed=$($G -c '^title=' "$T/filed")
 # both writes reached the door through the add path: a bug board that does not carry the card is repaired the same way
 [ "$($G -c '^--add ' "$T/board.calls")" = 2 ] && ok "9 both card moves go through the add path" \
   || ko "9 the door was called: $(cat "$T/board.calls")"
-unset SG_BUG_PROJECT SG_BUG_DOING
+# on the shipped vocabulary both writes name Doing, the column the janitor reads back: "In Progress" is no column there,
+# so a write of it was refused on every dispatch
+[ "$($G -c -- '--add o 4 Doing ' "$T/board.calls")" = 2 ] && ok "9 both writes name Doing on the shipped vocabulary" || ko "9 the door was called: $(cat "$T/board.calls")"
+unset SG_BUG_PROJECT SG_BUG_DOING SG_BOARD_VOCAB
 
 # 10) (#142) the refusal names are a closed set in code. Every writer this pass owns names its refusal through the one
 # write door, the name it gives is a member of the set the helper owns, and the cycle log repeats that same name. A
