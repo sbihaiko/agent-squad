@@ -36,8 +36,9 @@ ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${SG_GHREAD:=python3 $ghcall_here/ghread.py}"   # the interface module: one place to point at another build of it
 : "${SG_GHSNAP:=python3 $ghcall_here/ghthrottle.py}"   # the throttled, snapshotting reader behind gh_snapshot
 
-# _gh_refused <body>: 0 when the body is GitHub's own refusal shape (a message beside a status). Any body that is not
-# JSON, or is JSON without that shape, is not a refusal -- `jq -e` exits non-zero for both.
+# _gh_refused <body>: 0 when the body is GitHub's own refusal shape: a REST message beside a status, or a GraphQL `errors[]`
+# list with no `data` (a rate limit comes back that way, with gh exit 0 or 1). Any body that is not JSON, or is JSON without
+# either shape, is not a refusal -- `jq -e` exits non-zero for both.
 # _gh_log <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument that is
 # neither a flag nor the value of one; the transport is REST (a write, a diff and a Project v2 read are all REST).
 _gh_log() {
@@ -54,11 +55,12 @@ _gh_log() {
 }
 
 _gh_refused() {
-  printf '%s' "$1" | jq -e 'type == "object" and (.message | type == "string") and has("status")' >/dev/null 2>&1
+  printf '%s' "$1" | jq -e 'type == "object" and (((.message | type == "string") and has("status"))
+    or ((.errors | type == "array") and (.errors | length > 0) and (.data == null)))' >/dev/null 2>&1
 }
 
 _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub's own words, and nothing invented
-  printf 'refused: GitHub refused: %s\n' "$(printf '%s' "$1" | jq -r '.message // "no message"' 2>/dev/null)"
+  printf 'refused: GitHub refused: %s\n' "$(printf '%s' "$1" | jq -r '.message // .errors[0].message // "no message"' 2>/dev/null)"
 }
 
 # gh_api <route> [-q <jq filter>]   A read. Answers on stdout with exit 0; a refusal is exit 2 and its line is not an

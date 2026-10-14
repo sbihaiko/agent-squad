@@ -200,6 +200,26 @@ def test_a_refused_open_pr_read_names_githubs_message_and_keeps_the_last_good_ro
     assert "HTTP 403 API rate limit exceeded" in errs[0], f"the column names GitHub's message: {errs[0]!r}"
 
 
+GQL_REFUSAL = json.dumps({"errors": [{"type": "RATE_LIMIT", "code": "graphql_rate_limit",
+                                      "message": "API rate limit already exceeded for user ID 1."}]})
+
+
+@pytest.mark.parametrize("rc", [0, 1])
+def test_a_graphql_rate_limit_names_githubs_message_and_keeps_the_last_good_rows(hub, monkeypatch, tmp_path, rc):
+    """The batched query is refused with a GraphQL `errors[]` body and no `data`: the column must say what GitHub said,
+    never that the query returned nothing, and the repository keeps its last good rows."""
+    prior = hub.prs_from_graphql(_payload([1512]), EMU)
+    monkeypatch.setattr(hub, "board_cache", {"prs": prior, "prev": [], "prev_n": 0, "prev_n_of": {EMU: 0}})
+    _stub_gh(monkeypatch, tmp_path, {"graphql": (GQL_REFUSAL, rc)})
+
+    prs, _, _, errs = hub.prs_pass(repos=[EMU])
+
+    assert prs == prior, "the repository keeps the rows the last good pass left"
+    assert len(errs) == 1, errs
+    assert "API rate limit already exceeded for user ID 1." in errs[0], f"the column names GitHub's message: {errs[0]!r}"
+    assert "returned nothing" not in errs[0] and "no verdict" not in errs[0], errs[0]
+
+
 def test_the_three_pr_reads_still_parse_as_they_did_and_go_through_the_door(hub, monkeypatch, tmp_path):
     """A read that answered keeps today's rows -- the batched query's own row, the closed projection and the total --
     and every read is one the door logged, which is what "through the door" means for a caller (ADR-0277)."""
