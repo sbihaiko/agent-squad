@@ -52,6 +52,24 @@ def test_a_stuck_call_is_one_line_however_many_looks(tmp_path, capsys):
     assert capsys.readouterr().out.count("monitor:") == 1
 
 
+def test_a_timer_left_by_an_earlier_run_never_prints_into_a_later_capture(tmp_path, capsys, monkeypatch):
+    """A watcher writes to the output of the process step that built it, so a daemon timer that outlives its run
+    (an earlier test on the same worker) never adds a `monitor:` line to the output another test reads."""
+    import io
+    earlier = io.StringIO()
+    monkeypatch.setattr("sys.stdout", earlier)
+    t = Ticker()
+    started(tmp_path / "earlier", t)
+    monkeypatch.undo()
+    record.Record(tmp_path / "earlier" / "r" / "record.jsonl").append("call_start", **CALL)
+    t.watcher.step(1015.0)
+    assert capsys.readouterr().out.count("monitor:") == 0 and earlier.getvalue().count("monitor:") == 1
+    earlier.close()
+    record.Record(tmp_path / "earlier" / "r" / "record.jsonl").append("call_start", **{**CALL, "node": "b"})
+    t.watcher.step(1015.0)
+    assert capsys.readouterr() == ("", "") and [x["node"] for x in lines(tmp_path / "earlier")] == ["a", "b"]
+
+
 def test_a_dead_process_is_one_abandoned_line(tmp_path):
     t = Ticker()
     started(tmp_path, t)
