@@ -17,13 +17,13 @@ if [ "${1:-}" = --local ]; then
   if [ -n "$br" ] && $G rev-parse -q --verify "origin/$br" >/dev/null; then
     n=$($G rev-list --count "origin/$br..HEAD" 2>/dev/null); [ "${n:-0}" -gt 0 ] && fails+=("unpushed: $n commit(s) on HEAD not on origin/$br; git push origin HEAD:$br")
   fi
-  base=$($G merge-base HEAD "origin/${SG_BASE:-main}" 2>/dev/null)
+  base=$($G merge-base HEAD "origin/${SG_BASE:-dev}" 2>/dev/null)
 else
   pr=$1; dir=${2:-$SG_CHECKOUT}
   read -r br sha < <(gh api repos/$SG_REPO/pulls/$pr -q '.head.ref+" "+.head.sha' 2>/dev/null) || { echo "- prepush: PR #$pr not readable"; exit 0; }
   title=$(gh api repos/$SG_REPO/pulls/$pr -q .title 2>/dev/null); body=$(gh api repos/$SG_REPO/pulls/$pr -q '.body // ""' 2>/dev/null)
   $G -C "$dir" cat-file -e "$sha^{commit}" 2>/dev/null || $G -C "$dir" fetch -q origin "$br" 2>/dev/null
-  head=$sha; base=$($G -C "$dir" merge-base "$sha" "origin/${SG_BASE:-main}" 2>/dev/null)
+  head=$sha; base=$($G -C "$dir" merge-base "$sha" "origin/${SG_BASE:-dev}" 2>/dev/null)
 fi
 kw=$(printf '%s\n%s' "$title" "$body" | grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' | sort -u | tr '\n' ' ')
 [ -n "$kw" ] && fails+=("refs: closing keyword(s) ${kw% } in the title/body; use \"Refs #N\" (the loop closes the issue after e2e)")
