@@ -126,8 +126,9 @@ def test_a_merge_into_a_parent_branch_does_not_move_the_card_to_done(tmp_path):
 
 
 def test_a_merge_into_the_base_still_moves_the_card_to_done(tmp_path):
-    """The control: when the same merge landed on the base, the card is Done."""
+    """The control: when the same merge landed on the base, the merge counts. The issue is still open, so the card goes to
+    Testing, the column the work reached; Done follows the issue's close (#307)."""
     sandbox(tmp_path, "echo 1")
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"ADD o 4 Done {N}" in log, f"a merge into the base did not move the card to Done: {log}"
+    assert f"ADD o 4 Testing {N}" in log, f"a merge into the base did not move the open issue's card to Testing: {log}"

@@ -567,7 +567,8 @@ def reconcile_board():
             set_expected(n, col, f"open PR #{pr} is " + ("green, mergeable and unheld" if green else "not mergeable yet") + (", the card keeps Merging" if badge else ""), "", "", 55)
             if badge: badged.add(n)
         mc = pr_merged_count(n)
-        if mc.isdigit() and mc != "0": set_expected(n, "Done", "merged PR names the issue", "", "", 80)
+        if mc.isdigit() and mc != "0":   # a merge delivers the issue only once the issue is closed; an open one keeps the column the work reached (#307)
+            set_expected(n, "Done" if state == "closed" else "Testing", "merged PR names the issue" + ("" if state == "closed" else "; the issue is still open"), "", "", 80)
         if state == "closed" and mc == "0" and pc.isdigit() and pc != "0" and reopen_off_main(n):   # closed over a PR the base never took: the issue is open again, so the card is Code Complete
             expected[n] = (50, "Code Complete", "issue reopened: its loop PR merged off the base", "", "", "")
     answered, have_all = cards(proj)
