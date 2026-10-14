@@ -16,6 +16,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 
@@ -88,6 +90,7 @@ def test_a_read_that_reached_no_verdict_is_a_failure(tmp_path: Path) -> None:
     assert "rc=1" in p.stdout, f"no verdict is its own outcome: {p.stdout!r} {p.stderr}"
 
 
+@pytest.mark.heavy
 def test_a_write_through_the_door_reports_success_only_when_github_accepted_it(tmp_path: Path) -> None:
     """A refused write must never look like success: `gh_send … && touch moved` may not mark a card GitHub refused."""
     refused = sandbox(tmp_path / "refused", json.dumps(RATE_LIMIT), 1)
@@ -98,6 +101,7 @@ def test_a_write_through_the_door_reports_success_only_when_github_accepted_it(t
     assert q.stdout.strip() == "42", f"an accepted write answers, projected: {q.stdout!r} {q.stderr}"
 
 
+@pytest.mark.heavy
 def test_a_read_of_another_representation_still_tells_refusal_from_answer(tmp_path: Path) -> None:
     """The diff the review reads is not JSON: the body passes through, and a refusal is still exit 2, not an empty diff."""
     answer = sandbox(tmp_path / "answer", "diff --git a/x b/x\n+one line\n", 0)
@@ -108,6 +112,7 @@ def test_a_read_of_another_representation_still_tells_refusal_from_answer(tmp_pa
     assert "rc=2" in q.stdout, f"a refused diff is not an empty diff: {q.stdout!r} {q.stderr}"
 
 
+@pytest.mark.heavy
 def test_the_migrated_caller_reads_through_the_door_and_keeps_a_refusal_out_of_the_brief(tmp_path: Path) -> None:
     """`acscan.sh`, end to end: the brief carries the issue it read, and a refusal stops it instead of filling the file.
 

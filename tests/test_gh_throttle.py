@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 MODULE = SCRIPTS / "ghthrottle.py"
@@ -126,6 +128,7 @@ def test_a_doubled_landing_pass_burst_is_bounded_by_the_budget(tmp_path):
     )
 
 
+@pytest.mark.heavy
 def test_a_doubled_reader_cannot_double_the_shared_rate(tmp_path):
     """The rate belongs to the bucket, not to the reader: the same work costs the same wall time for two readers."""
     total = 4 * ghthrottle.DEFAULT_BUDGET
@@ -296,6 +299,7 @@ def _cli(tmp_path: Path, body: str, rc: int, *args: str):
     )
 
 
+@pytest.mark.heavy
 def test_the_cli_keeps_ghreads_three_outcomes_and_their_exit_codes(tmp_path):
     # Each case gets its own state: the refusal case writes a cooldown, and a cooldown from one case would answer the next.
     ok = _cli(tmp_path / "a", '[{"number": 7}]', 0, "repos/o/r/pulls?state=open")

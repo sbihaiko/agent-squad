@@ -18,6 +18,8 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 HUB = ROOT / "contrib" / "squad-goal" / "scripts" / "hub.py"
 # The ids the CLI resolves to an Anthropic leg: the local proxy serves every other id the chains name.
@@ -116,6 +118,7 @@ def test_the_envelope_comes_back_on_a_save_and_is_never_stored():
     assert "envelope" in ro and "router_models" not in ro, "the envelope is read-only; the router chain is writable"
 
 
+@pytest.mark.heavy
 def test_the_stamp_script_reports_the_record_current():
     """The write path restamps through this script; a stale record breaks check_record.py, so the script is the seam."""
     r = subprocess.run([sys.executable, str(ROOT / "scripts" / "stamp_router_record.py"), "--check"],

@@ -103,6 +103,7 @@ def _bodies(tmp_path):
     return sorted(p.name for p in (tmp_path / "state" / "req").glob("*.body"))
 
 
+@pytest.mark.heavy
 def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
     """The second pass starts inside the first one's pick: it must see the claim and dispatch nothing."""
     d, _ = _scripts(tmp_path, cluster_sleep=3)
@@ -119,6 +120,7 @@ def test_two_overlapping_autobug_passes_dispatch_once(tmp_path):
     assert len(_bodies(tmp_path)) == 1, f"two requests were built: {_bodies(tmp_path)}"
 
 
+@pytest.mark.heavy
 def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
     """A crash between the pick and the launch must still leave the issue claimed (#1514)."""
     d, _ = _scripts(tmp_path, cluster_sleep=0)
@@ -133,6 +135,7 @@ def test_autobug_claims_the_issue_before_it_builds_the_request(tmp_path):
     assert marker.exists() and marker.read_text().strip().startswith("autobug-"), marker.read_text()
 
 
+@pytest.mark.heavy
 def test_autofrontier_claims_the_issue_before_it_builds_the_request(tmp_path):
     """The same claim-before-build rule holds for the frontier dispatcher (#1514)."""
     d, _ = _scripts(tmp_path, cluster_sleep=0)

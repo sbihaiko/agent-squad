@@ -68,6 +68,7 @@ def test_run_start_records_the_defaults_file_hash_and_the_engine_level_keys(tmp_
     assert "model" not in start["defaults"]["engine"]["options"]       # a node-level key never rides the engine load
 
 
+@pytest.mark.heavy
 def test_run_start_carries_the_dashboard_reread_interval_from_the_defaults_file(tmp_path):
     assert CFG["dashboard"]["reread_seconds"] == 1
     g, s = write(tmp_path, two_agents())

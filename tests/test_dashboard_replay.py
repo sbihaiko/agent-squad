@@ -1,6 +1,8 @@
 """The replay cursor, unresolved children, and the hash mismatch."""
 
 
+import pytest
+
 from tests.dashboard_helpers import _run22, run_node
 
 
@@ -42,6 +44,7 @@ def test_a_cursor_outside_the_record_or_between_two_positions_lands_on_a_real_ev
     assert _replay(gap, 55)["cursor"] == 50 and _replay(gap, 140)["at_end"] is True
 
 
+@pytest.mark.heavy
 def test_a_step_moves_one_event_and_a_step_to_the_end_pins_the_cursor():
     _, events = _run22()
     assert _move(events, 5, "forward") == 6 and _move(events, 5, "back") == 4
