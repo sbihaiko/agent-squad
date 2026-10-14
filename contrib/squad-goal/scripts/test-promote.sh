@@ -45,5 +45,11 @@ out=$(bash "$d/promote-main.sh" 2>&1); rc=$?
 # No loop script pushes to main: only promote-main.sh names it, and a test fixture is no loop script.
 bad=$(cd "$d" && grep -lE 'push[^#]*(refs/heads/main|origin main|HEAD:main)' *.sh *.py 2>/dev/null | grep -v -e '^test-' -e '^promote-main.sh$')
 [ -z "$bad" ] && ok "no loop script pushes to main" || ko "pushes to main: $bad"
+# (#392) The promotion gate takes the machine-wide gate lock: with a holder it waits, says so on one line, then promotes.
+adv dev three; ci green; rm -f "$T/gl"
+(bash "$d/serial.sh" gate sh -c "sleep 3; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/gate/pid" ] && break; sleep 0.1; done
+out=$(bash "$d/promote-stg.sh" 2>&1); wait
+[ "$(printf '%s\n' "$out" | grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "the promotion gate waits for the holder, on one line" || ko "promotion wait lines: '$out'"
+[ "$(tip stg)" = "$(tip dev)" ] && ok "the waiting promotion gate is not dropped: stg is promoted" || ko "the waiting promotion did not promote"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

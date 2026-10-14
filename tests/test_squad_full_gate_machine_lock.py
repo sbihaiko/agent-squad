@@ -23,7 +23,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 ROOT = SCRIPTS.parent.parent.parent
 WAIT_LINE = re.compile(r"^serial: waiting for lock gate held by pid [0-9]+$", re.M)
-GATE_LOCK = re.compile(r"serial\.sh\s+gate\b|locks/gate\b")
+GATE_LOCK = re.compile(r"serial\.sh\"?\s+gate\b|locks/gate\b|(?<![\w-])gate\.sh\"?\s")
 RETIRED = ("fork-gate.sh", "forkclose.sh", "forkonly.sh", "sync-to-fork.sh", "refresh-from-fork.sh")
 
 
@@ -71,14 +71,12 @@ def _holder(d, cwd, log, seconds):
     raise AssertionError("the holder never took the gate lock")
 
 
-def test_the_loop_takes_the_machine_wide_gate_lock_nowhere():
-    """#81 where it lives now: the gate of a landing runs in CI, so no script of the loop takes that lock -- two full
-    gates cannot overlap on this machine because it starts none. A comment never counts as a call."""
-    offenders = [f"{p.name}: {line.strip()}"
-                 for p in _scripts()
-                 for line in p.read_text().splitlines()
-                 if GATE_LOCK.search(line.split("#", 1)[0])]
-    assert offenders == [], "a script of the loop takes the machine-wide gate lock again: " + " | ".join(offenders)
+def test_only_the_gate_runners_take_the_machine_wide_gate_lock():
+    """#81 and #392: the gate of a landing runs in CI, and the gates that still run here -- the branchland local gate, the wave
+    entry gate, the promotion gate and a hand gate -- queue behind one lock. No other script takes it. A comment never counts."""
+    takers = sorted(p.name for p in _scripts()
+                    if GATE_LOCK.search("\n".join(line.split("#", 1)[0] for line in p.read_text().splitlines())))
+    assert takers == ["branchland.sh", "gate.sh", "promote-stg.sh", "wave.sh"], takers
 
 
 def test_the_local_gate_and_the_land_path_that_ran_it_are_retired():

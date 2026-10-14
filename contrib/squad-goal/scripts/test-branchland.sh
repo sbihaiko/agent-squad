@@ -4,7 +4,7 @@
 # usage: bash test-branchland.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/gate.sh" "$d/serial.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q dev)
@@ -154,4 +154,12 @@ reset; r=$(PRS='[{"number":41,"head":{"ref":"gui/7-x"}}]' CHECKS="$GREEN" bl)
 reset; (cd "$T/w" && $G push -q origin gui/7-x:refs/heads/scratch 2>/dev/null; $G push -q origin :gui/7-x 2>/dev/null)
 r=$(CHECKS="$GREEN" bl); [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a branch naming no issue is ignored" || ko "landed scratch: '$r'"
 
+# (#392) A holder of the machine-wide `gate` lock for 3 s; the runner's gate then waits for it, and runs after it, never beside it.
+hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 3; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
+# (#392) The local gate takes the machine-wide gate lock: with a holder it waits, says so on one line, runs after it, and lands.
+reset; rm -f "$T/gl"; hold
+r=$(SG_LOCAL_GATE_CMD="echo gate >> $T/gl" CHECKS='{"check_runs":[]}' bl 2>&1); wait
+[ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "the local gate waits for the holder of the gate lock, then runs" || ko "gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "the local gate's wait shows on one line" || ko "wait lines: '$r'"
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "the waiting local gate is not dropped: the branch lands";; *) ko "the waiting gate did not land: '$r'";; esac
 rm -rf "$T"; exit $fail

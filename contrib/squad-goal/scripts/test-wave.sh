@@ -7,7 +7,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from a live loop must not
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/co"
-cp "$d/wave.sh" "$d/address.sh" "$T/s/" 2>/dev/null
+cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b dev "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init)
@@ -95,4 +95,12 @@ before=$($O rev-parse $W); printf 'run-1\n' > "$T/st/auto/disp-23"; child 23 g23
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 23)" = no ] && ok "H: a child never enters a wave unreviewed" || ko "H: #23 entered with no review: '$r'"
 case "$r" in *"#23"*review*) ok "H: the missing review is said";; *) ko "H: the missing review is silent: '$r'";; esac
 
+# (#392) A holder of the machine-wide `gate` lock for 3 s; the runner's gate then waits for it, and runs after it, never beside it.
+hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 3; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
+# I (#392): the entry gate takes the machine-wide gate lock: it waits for a holder, says so on one line, and then runs.
+printf 'run-1\n' > "$T/st/auto/disp-24"; child 24 g24; rev 24; rm -f "$T/gl"; hold
+r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "$T/s/wave.sh" enter run-1 24 2>&1); wait
+[ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "I: the entry gate waits for the holder of the gate lock, then runs" || ko "I: gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "I: the wait shows on one line" || ko "I: wait lines: '$r'"
+[ "$(entered 24)" = yes ] && ok "I: the waiting gate is not dropped: the child enters" || ko "I: #24 did not enter"
 rm -rf "$T"; exit $fail
