@@ -9,7 +9,7 @@
 #
 # A branch is landed when, and only when, it names an open issue, has no open pull request, the review of its tip approved (#357),
 # and every check run on its tip finished
-# in success, skipped or neutral, or, with zero check runs while CI is off, the local gate passed at the tip (#385). A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
+# in success, skipped or neutral, or, with zero check runs while CI is off, the local gate passed at the tip rebased onto $SG_LAND_BRANCH (#385). A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
 # marker under $SG_STATE/auto, so it is said once per head and reason, and a refused push lands nothing.
 #
@@ -32,13 +32,17 @@ say() { local m="$A/branchland-$1-$(printf '%s' "$2" | tr '/' '_')-${3:0:9}-$4";
 # replaces the gate command (tests stub it). A red or running check never starts it.
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 gatecmd=${SG_LOCAL_GATE_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -m 'not heavy'"}
-# localgate <branch> <sha> <issue>: exit 0 when the gate passed at <sha>. The result goes to the status comment of the issue. A failed
-# gate is run once per head: its wait marker stops a second run.
-localgate() { local br=$1 sha=$2 i=$3 wt out rc
-  [ -e "$A/branchland-wait-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}-gate" ] && return 1
+# localgate <branch> <sha> <issue>: exit 0 when the gate passed at <sha> rebased onto $land, which is what lands: a red the branch
+# inherited from an old base is fixed on $land, never on the branch. A rebase that conflicts gates the bare tip (ffland refuses it).
+# The result goes to the status comment of the issue. A failed gate is run once per head and $land head: its wait marker stops a
+# second run until $land moves.
+localgate() { local br=$1 sha=$2 i=$3 wt out rc base
+  base=$(/usr/bin/git ls-remote "$remote" "refs/heads/$land" 2>/dev/null | awk '{print substr($1,1,7)}')
+  [ -e "$A/branchland-wait-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}-gate$base" ] && return 1
   wt=$(mktemp -d "${TMPDIR:-/tmp}/sg-gate.XXXXXX")
-  if ! /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "refs/heads/$br" >/dev/null 2>&1 || ! /usr/bin/git -C "$SG_CHECKOUT" worktree add -q --detach "$wt/tip" "$sha" >/dev/null 2>&1; then
+  if ! /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "refs/heads/$br" "+refs/heads/$land:refs/sg-gate/$land" >/dev/null 2>&1 || ! /usr/bin/git -C "$SG_CHECKOUT" worktree add -q --detach "$wt/tip" "$sha" >/dev/null 2>&1; then
     rm -rf "$wt"; say wait "$br" "$sha" gateco "the local gate has no clean checkout of ${sha:0:9}"; return 1; fi
+  /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate rebase -q "refs/sg-gate/$land" >/dev/null 2>&1 || /usr/bin/git -C "$wt/tip" rebase --abort >/dev/null 2>&1
   out=$(cd "$wt/tip" && PYTHONPATH=. bash -c "$gatecmd" 2>&1); rc=$?
   /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
   if [ "$rc" = 0 ]; then
@@ -46,7 +50,7 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc
     return 0; fi
   { printf 'Status update — branch %s @ %s: local gate, CI off: failed at %s (exit %s). The branch does not land.\n\n```\n' "$br" "${sha:0:9}" "$sha" "$rc"
     printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
-  say wait "$br" "$sha" gate "the local gate (CI off) failed on ${sha:0:9}: $(printf '%s' "$out" | tail -1)"; return 1; }
+  say wait "$br" "$sha" "gate$base" "the local gate (CI off) failed on ${sha:0:9} rebased onto $land ${base:-?}: $(printf '%s' "$out" | tail -1)"; return 1; }
 
 # The work branches (workbranches.sh). Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose
 # issue closed under a pull request or was dropped, and one of those would land its old commits in dev again.
