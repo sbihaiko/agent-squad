@@ -2835,8 +2835,9 @@ def models_set(new):
     return models_get()
 
 def served_page():
-    """The page as the hub serves it, every placeholder substituted."""
-    return PAGE.replace("__REPO__", REPO).replace("__MODELID__", json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
+    """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
+    json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
+    return PAGE.replace("__REPO__", REPO).replace('"__MODELID__"', json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
 
 
 class H(BaseHTTPRequestHandler):

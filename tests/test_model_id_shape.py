@@ -74,7 +74,7 @@ def _panel_shape(hub):
     a test that spells it again would agree with the source by construction."""
     src = HUB_PY.read_text()
     assert 'const MODELID_SRC="__MODELID__";' in src, "the page no longer carries the one shape"
-    assert '.replace("__MODELID__", json.dumps(MODEL_ID_SRC))' in src, "the served page never substitutes the shape"
+    assert '.replace(\'"__MODELID__"\', json.dumps(MODEL_ID_SRC))' in src, "the served page never substitutes the shape"
     assert src.count("MODELRE.test(v)") == 2, "both Add boxes test it"
     assert src.count("MODELID_SRC") == 2, "the shape is declared once and used once"
     assert not re.search(r"!/\(\^\[A-Za-z0-9\]\S*?\)\.test\(v\)\)", src), "a copy of the shape survives in the page"
