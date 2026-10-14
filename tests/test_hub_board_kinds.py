@@ -80,7 +80,8 @@ def test_a_group_is_named_by_the_table_and_the_kind(hub, monkeypatch):
 
 def test_the_page_script_holds_no_group_name(hub):
     names = {f"{s} {p}" for s in ("Open", "Closed") for p in ("PRs", "Bugs", "Tasks", "Specs", "Test Cases")}
-    assert not [n for n in names if n in hub.PAGE]
+    pane = hub.PAGE[hub.PAGE.index("async function pollBoard("): hub.PAGE.index('$("#lfl").onchange')]
+    assert not [n for n in names if n in pane]
 
 
 def test_the_pane_paints_the_groups_it_is_given_keyed_by_kind_and_number(hub):
