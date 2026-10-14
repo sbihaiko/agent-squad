@@ -5,8 +5,9 @@ suites in its own worktree: eight cores take one of them, both finish later, and
 gate's pytest half therefore held the machine-wide `gate` lock `serial.sh` owns (#81), and never held it across the shell
 suites (#94). The local land path retired (#115): `forkclose.sh` and the gate script it ran are gone, and the landing pass
 `prland.sh` gates the landed head by reading the CI check job's failed-test set. So the one full gate of a landing runs in
-CI, on the pushed commit, and its queue is capped per ref: a superseded pull-request run is cancelled. Nothing on the
-machine takes the `gate` lock any more, and the shell suites still run unlocked.
+CI, on the pushed commit, and its queue is capped per ref: only a landing pushes, and no run is cancelled, so every
+landing keeps its evidence. Nothing on the machine takes the `gate` lock any more, and the shell suites still run
+unlocked.
 
 Host-free: the surviving scripts run in a throwaway tree with a throwaway SG_STATE, and the workflow file is read, never run.
 """
@@ -105,19 +106,17 @@ def test_the_shell_suites_take_no_gate_lock_and_run_beside_a_holder(tmp_path):
 
 
 def test_the_gate_of_a_landing_is_the_ci_check_job_and_its_queue_is_capped():
-    """#81 where the gate runs now: CI runs the suite once per push, in one concurrency group per branch (#354). A
-    superseded work-branch run is cancelled, so two gates of one branch never run side by side; a landing on dev, stg
-    or main is never cancelled, so every landing keeps its evidence."""
+    """#81 where the gate runs now: only a landing pushes, so the CI suite runs once per branch a landing carries
+    (#398), one branch's landings queue behind each other, and no run is cancelled, so every landing keeps its
+    evidence. A work branch starts none: the local fast gate proves it before it lands."""
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     runs = [step["run"] for job in wf["jobs"].values() for step in job["steps"] if "run" in step]
     assert any("pytest" in r for r in runs), runs
     con = wf["concurrency"]
-    assert "github.ref_name" in con["group"], con
-    cancel = str(con.get("cancel-in-progress"))
-    assert "github.ref_name" in cancel and all(b in cancel for b in ("main", "dev", "stg")), (
-        f"a superseded work-branch run must be cancelled, and a landing never: {cancel!r}")
+    assert "github.ref_name" in con["group"] and "github.head_ref" not in con["group"], con
+    assert con.get("cancel-in-progress") is False, "a landing keeps its evidence: no run is cancelled"
 
 
 def test_the_landing_pass_reads_that_check_before_it_merges():
