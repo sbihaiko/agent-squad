@@ -3,6 +3,7 @@
        board.py --add <owner> <project> "<Status>" <issue#>...   add the issues to the board first (when missing); idempotent: a refused add is re-read once
        board.py --run-fields <owner> <project> <issue#> <run> <run-started>
        board.py --clear-run <owner> <project> <issue#>
+       board.py --test-case <owner> <project> <issue#> <pass|fail> <merge-commit> [ended]   record a finished test pass as one `test case` item (#300)
 This is the board binding's command door (#236): the state it reads and writes is issue_state's, and this
 file holds the carrier's command line, never a second reach of its own. A field is set by sending its value
 and cleared by sending null -- "To clear the field, set this to null" -- and an empty string is a value the
@@ -16,14 +17,22 @@ the Status is a READ FAILURE, named and exiting non-zero, never a card written a
 cache as one.
 A miss on the item map re-reads the items with the same bounded backoff (#96), and a card the board answered
 "already exists" for and no read then carried is a READ FAILURE, named by name, never "not on the board".
+A test pass is recorded by `--test-case` through the seam (`record_pass`), proven by the read that follows: a write that read
+is behind is waited for with the same bounded backoff, and an item no read carries is named on stderr and exits non-zero,
+never reported as written. A pass that ended failed stays failed: a later pass on the same merge commit writes nothing.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import os, pathlib, sys, time
-from issue_state import NotCarried, ReadFailure, board_state
-args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]
-args = args[1:] if add or run_fields or clear_run else args
+from issue_state import KindGap, NotCarried, ReadFailure, board_state
+args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]
+args = args[1:] if add or run_fields or clear_run or test_case else args
 owner, num = args[0], args[1]
 st = pathlib.Path(os.environ["SG_STATE"])
 state = board_state(owner=owner, project=num, kind=None)   # the move is asked for an owner the caller names, so the carrier says whether it is a user or an org (cached a month)
+if test_case:
+    n = int(args[2])
+    try: item = state.record_pass(n, args[3], args[4], args[5] if len(args) > 5 else None)   # one item, then the read that proves it (#300)
+    except (ValueError, KindGap, NotCarried, ReadFailure) as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
+    print(f"#{n} test case {item['result']} @ {item['commit']}"); (st / "board-dirty").touch(); sys.exit(0)
 if run_fields or clear_run:
     n = int(args[2])
     run = None if clear_run else args[3]; started = None if clear_run else (args[4] if len(args) > 4 else "")
