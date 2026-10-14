@@ -174,4 +174,22 @@ for mode in full fix; do
   case "$p" in *'Unrecognized arguments'*|*'unrecognized arguments'*) ko "$mode: the prompt carries an argparse error instead of the shape";; *) : ;; esac
 done
 
+# file-level findings: a defect about code that is missing has no line to cite, so a path alone (bare, in backticks, or with a
+# parenthetical) names its place; a bullet with no path at all is still a format failure
+out=$(good --max-lines 60 <<'M'
+VERDICT: CHANGES
+## Blocking
+- .github/workflows/ci.yml (concurrency) — a landing can be cancelled — two pushes to dev race — set cancel-in-progress false
+- `contrib/squad-goal/scripts/wave.sh` — no caller runs `land` — a finished run never lands its wave — call it at the end of the run
+M
+); rc=$?
+[ $rc = 0 ] && ok "a file-level bullet (a path with no line) passes" || ko "a file-level bullet was rejected: rc=$rc '$out'"
+out=$(good --max-lines 60 <<'M'
+VERDICT: CHANGES
+## Blocking
+- the wave land step — no caller runs it — a finished run never lands — call it
+M
+); rc=$?
+[ $rc != 0 ] && ok "a bullet that names no file at all still fails" || ko "a bullet with no file passed"
+
 rm -rf "$T"; exit $fail

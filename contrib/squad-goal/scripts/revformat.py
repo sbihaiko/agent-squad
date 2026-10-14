@@ -39,7 +39,7 @@ VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES)$")
 SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
 THEME = re.compile(r"^#{3,}\s*(\S.*?)\s*$")
 BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
-LOC = re.compile(r"^[^\s:]+:\d+")            # path:line, the first field of a bullet (or the second)
+LOC = re.compile(r"^`?(?:[^\s:`]+:\d+|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`]*)`?(?:\s|$)")  # path:line, or a path alone for a file-level finding; the first field of a bullet (or the second)
 SEP = re.compile(r"\s+[—–-]\s+")             # the " — " between the fields
 # the fix-round answer to a previous finding, the third field of a bullet (#1832): "fixed: <reason>", a bare "fixed",
 # or "fixed — <check>". "not fixed: <reason>" is not the answer, and neither is prose that merely opens with the word
@@ -134,7 +134,7 @@ def survey(review, max_lines=0, fix_round=False):
             return (f"line {n}: {text[0][:40]!r} is not 'file:line — defect — concrete failure — fix'"
                     " (three fields at least)")
         if not any(LOC.match(f.strip()) for f in fields[:2]):
-            return f"line {n}: the bullet names no file:line ({fields[0].strip()[:30]!r})"
+            return f"line {n}: the bullet names no file or file:line ({fields[0].strip()[:30]!r})"
         if is_finding(section, joined):            # a bullet that answers a previous finding is not a finding
             counts[section] += 1
         return None
