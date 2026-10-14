@@ -872,6 +872,7 @@ def _verdicts(out):
     return {r["id"]: r["verdict"] for r in out["results"]}
 
 
+@pytest.mark.heavy
 def test_a_crash_mid_batch_fails_that_batch_and_the_next_batch_runs_in_a_fresh_process(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()
