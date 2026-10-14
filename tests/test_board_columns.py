@@ -52,26 +52,27 @@ def test_every_column_has_a_distinct_fact(columns):
     assert len(facts) == len(set(facts))
 
 
-def test_every_column_is_reachable_on_the_board(columns, hub):
-    """A column the board never draws, or a fact the script never reads, is a column the table must not carry."""
-    names = [column["name"] for column in columns]
-    assert set(hub.ORDER) == set(names), "the board's own order leaves a column of the table out"
+@pytest.fixture(scope="module")
+def table():
+    return _module("board_columns_view", COLUMNS_PY)
+
+
+def test_every_shipped_column_is_reachable_on_the_board(table, hub):
+    """The hub draws the shipped definition (#247): a column it never draws, or a role it never reads, is dead."""
+    names = [column["name"] for column in table.view_columns()]
+    assert hub.ORDER == names, "the board's own order is not the definition's"
     flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
-    assert set(flow) == set(names), "the flow leaves a column out, so no reader can reach it"
-    by_fact = json.loads(re.search(r"const COLNAME=(\{.*?\});", hub.PAGE).group(1))
-    assert set(by_fact) == {column["fact"] for column in columns}, \
-        "the script reads a column by its fact: a fact it does not know is a column it cannot name"
+    assert flow == names, "the flow leaves a column out, so no reader can reach it"
+    by_role = json.loads(re.search(r"const COLNAME=(\{.*?\});", hub.PAGE).group(1))
+    assert set(by_role.values()) <= set(names) | {lane["name"] for lane in table.LANES}, \
+        "the script reads a name by its role: a role naming no column or lane is a name it cannot draw"
 
 
-def test_the_hub_vocabulary_is_the_table(columns, hub):
-    assert hub.BOARD_COLUMNS == columns, "the hub holds a vocabulary of its own"
-    assert hub.ORDER == [column["name"] for column in sorted(columns, key=lambda column: column["order"])], \
-        "the board's order is not the table's"
+def test_the_hub_vocabulary_is_the_table(table, hub):
+    assert hub.BOARD_COLUMNS == table.view_columns(), "the hub holds a vocabulary of its own"
     colours = re.findall(r'"?([A-Za-z ]+)"?:"(#[0-9a-f]{6})"', re.search(r"const COLORS=\{(.*?)\};", hub.PAGE).group(1))
-    assert colours == [(column["name"], column["color"]) for column in columns], \
+    assert colours == [(c["name"], c["color"]) for c in [*table.view_columns(), *table.LANES]], \
         "the page's colour map is not the table's, so a column wears a colour of its own"
-    assert json.dumps({column["fact"]: column["name"] for column in columns}, separators=(",", ":")) in hub.PAGE, \
-        "the page does not read the table's names by fact"
 
 
 def test_the_hub_names_no_column_literal_of_its_own(columns):
