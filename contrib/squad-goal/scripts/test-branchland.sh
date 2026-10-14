@@ -96,6 +96,12 @@ reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_L
 GATE_KO_IDS="echo 'FAILED tests/test_a.py::test_one - boom'; echo 'FAILED tests/test_b.py::test_two'; exit 1"
 reset; rm -f "$T/gate.log" "$T/rerun.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO_IDS" SG_LOCAL_GATE_RERUN_CMD="$RERUN_OK" CHECKS='{"check_runs":[]}' bl)
 [ "$(cat "$T/rerun.log" 2>/dev/null)" = "rerun tests/test_a.py::test_one tests/test_b.py::test_two" ] && ok "the rerun gets exactly the failed node ids" || ko "the rerun ids: '$(cat "$T/rerun.log" 2>&1)'"
+# The default gate runs with none of the loop's SG_* variables (a test that reads one would see the live loop state) and with the
+# 2 s line off: that line is the CI speed rule, and this machine's load is not a defect of the branch; the 20 s cap stays.
+printf '#!/bin/bash\necho "SG_STATE=${SG_STATE:-unset} $*" >> %s/py.log\n' "$T" > "$T/py"; chmod +x "$T/py"
+reset; rm -f "$T/py.log"; r=$(SG_STATE="$T/st" SG_GATE_PY="$T/py" CHECKS='{"check_runs":[]}' bl)
+/usr/bin/grep -q 'pytest' "$T/py.log" 2>/dev/null && ! /usr/bin/grep -q 'SG_STATE=/' "$T/py.log" && ok "the default gate runs with no SG_* variable" || ko "the gate saw the loop env: $(cat "$T/py.log" 2>&1)"
+/usr/bin/grep 'pytest' "$T/py.log" 2>/dev/null | /usr/bin/grep -q -- '-o heavy_cap_seconds=20' && ok "the default gate lifts the 2 s line to the 20 s cap" || ko "the gate keeps the 2 s line: $(grep pytest "$T/py.log" 2>&1)"
 # The gate proves what lands: the tip rebased onto dev, never the bare tip. A red the branch inherited from an old base is fixed
 # on dev, so the branch lands once dev carries the fix, and a failed gate runs again when dev moves.
 GATE_FIXED="echo \"\$PWD \$(/usr/bin/git rev-parse HEAD)\" >> $T/gate.log; test -f fixed || { echo 'inherited red'; exit 1; }"
