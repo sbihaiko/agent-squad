@@ -12,6 +12,10 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # else the run's own SG_CALL_DEADLINE_SECONDS, else 1800) and its command name beside its pid, stops its own command at that
 # deadline (exit 75), and a waiter reaps a holder that is past its deadline AND orphaned (its parent is pid 1: its run is gone),
 # matching the holder by the name recorded in the lock so a reused pid is never killed. A live, owned holder is only waited for.
+# The stop is proved by the wall clock and by the lock: the holder stops on a marker that names it, written by its own watchdog
+# only while that holder still owns the lock and only past the recorded deadline (#392). The holder's own cleanup TERMs the
+# watchdog's process group, and the sleep of that watchdog can be the process that dies: a sleep cut short is not a deadline.
+
 st=${SG_STATE:-${TMPDIR:-/tmp}/sg-state}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
 # Mesen GUI run takes -- the fork gate, the e2e and a hand-run suite -- so one marker stops them all without touching a caller. It
 # exits 0, never non-zero: a suite deliberately not run is not a failure, and a red gate would revert every branch in flight.
@@ -38,13 +42,17 @@ until mkdir "$L" 2>/dev/null; do
   [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; }
   [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n held by pid ${h:-?}" >&2; exit 75; }
   sleep 3; done
-echo $$ > "$L/pid"; printf '%s\n' "$cmdn" > "$L/cmd"; echo $(( $(date +%s) + hold )) > "$L/due"
+hpid=$$; due=$(( $(date +%s) + hold ))
+echo "$hpid" > "$L/pid"; printf '%s\n' "$cmdn" > "$L/cmd"; echo "$due" > "$L/due"
 export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"' EXIT INT TERM
 # The deadline reaches the command itself: past it the holder stops the command's whole process tree and releases the lock
 # (exit 75). Without this the cap lives only in the waiter's head, where an orphaned holder can never read it.
 set -m   # each background job leads its own process group, so the watchdog stops the command and its children together
 "$@" & c=$!
-( sleep "$hold"; : > "$L/timed-out"; kill -TERM -- -"$c" 2>/dev/null; sleep 5; kill -KILL -- -"$c" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
+( sleep "$hold"
+  [ "$(cat "$L/pid" 2>/dev/null)" = "$hpid" ] || exit 0   # the lock moved on: this watchdog has no command left to stop
+  [ "$(date +%s)" -ge "$due" ] || exit 0                  # its sleep was cut short: the deadline has not come
+  printf '%s\n' "$hpid" > "$L/timed-out"; kill -TERM -- -"$c" 2>/dev/null; sleep 5; kill -KILL -- -"$c" 2>/dev/null ) >/dev/null 2>&1 & wd=$!
 # The command leads a process group of its own, so a signal to this holder's group does not reach it: a holder that is stopped
 # (a pass past its deadline, #130) stops its command's whole tree and its watchdog before it releases the lock (#393).
 stop() {   # stderr goes first: the shell's job notices would land in the stopped pass's log, over the line that names its deadline
@@ -52,5 +60,5 @@ stop() {   # stderr goes first: the shell's job notices would land in the stoppe
 trap 'stop 143' TERM; trap 'stop 130' INT
 wait "$c"; rc=$?
 kill -- -"$wd" 2>/dev/null; kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
-[ -e "$L/timed-out" ] && exit 75
+[ "$(cat "$L/timed-out" 2>/dev/null)" = "$hpid" ] && exit 75
 exit "$rc"

@@ -95,8 +95,9 @@ before=$($O rev-parse $W); printf 'run-1\n' > "$T/st/auto/disp-23"; child 23 g23
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 23)" = no ] && ok "H: a child never enters a wave unreviewed" || ko "H: #23 entered with no review: '$r'"
 case "$r" in *"#23"*review*) ok "H: the missing review is said";; *) ko "H: the missing review is silent: '$r'";; esac
 
-# (#392) A holder of the machine-wide `gate` lock for 3 s; the runner's gate then waits for it, and runs after it, never beside it.
-hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 3; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
+# (#392) A holder of the machine-wide `gate` lock; the runner's gate then waits for it, and runs after it, never beside it. The hold
+# outlasts the runner's own startup, so the wait is proved on a busy machine.
+hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
 # I (#392): the entry gate takes the machine-wide gate lock: it waits for a holder, says so on one line, and then runs.
 printf 'run-1\n' > "$T/st/auto/disp-24"; child 24 g24; rev 24; rm -f "$T/gl"; hold
 r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "$T/s/wave.sh" enter run-1 24 2>&1); wait

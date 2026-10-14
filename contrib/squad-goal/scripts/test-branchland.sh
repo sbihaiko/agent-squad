@@ -154,8 +154,9 @@ reset; r=$(PRS='[{"number":41,"head":{"ref":"gui/7-x"}}]' CHECKS="$GREEN" bl)
 reset; (cd "$T/w" && $G push -q origin gui/7-x:refs/heads/scratch 2>/dev/null; $G push -q origin :gui/7-x 2>/dev/null)
 r=$(CHECKS="$GREEN" bl); [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a branch naming no issue is ignored" || ko "landed scratch: '$r'"
 
-# (#392) A holder of the machine-wide `gate` lock for 3 s; the runner's gate then waits for it, and runs after it, never beside it.
-hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 3; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
+# (#392) A holder of the machine-wide `gate` lock; the runner's gate then waits for it, and runs after it, never beside it. The hold
+# outlasts the runner's own startup -- the fetch and the clean-checkout work before the gate -- so the wait is proved on a busy machine.
+hold() { (SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$T/st/locks/gate/pid" ] && break; sleep 0.1; done; }
 # (#392) The local gate takes the machine-wide gate lock: with a holder it waits, says so on one line, runs after it, and lands.
 reset; rm -f "$T/gl"; hold
 r=$(SG_LOCAL_GATE_CMD="echo gate >> $T/gl" CHECKS='{"check_runs":[]}' bl 2>&1); wait
