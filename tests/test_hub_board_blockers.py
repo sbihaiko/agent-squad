@@ -148,7 +148,7 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 # one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
     "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Merging": "#b087f9",
-    "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff", "Closed PRs": "#8b9bb3",
+    "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open branches": "#5aa9ff", "Landed branches": "#8b9bb3",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
@@ -230,12 +230,12 @@ def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
     got = _col(hub, "Object.fromEntries(Object.keys(COLORS).map(n=>[n,colOf(n,[])]))")
     assert got == NAMED, "the named columns and lanes carry colours the table does not"
-    assert got["Open PRs"] != got["Closed PRs"], "the archive must not look like the live queue"
-    assert _mute(hub) not in (got["Open PRs"], got["Closed PRs"]), "a muted PR column is a caption, not a column"
+    assert got["Open branches"] != got["Landed branches"], "the archive must not look like the live queue"
+    assert _mute(hub) not in (got["Open branches"], got["Landed branches"]), "a muted PR column is a caption, not a column"
 
 
 def test_the_pr_pair_keeps_the_blue_and_loses_the_chroma(hub):
-    open_pr, closed_pr = _col(hub, 'colOf("Open PRs",[])'), _col(hub, 'colOf("Closed PRs",[])')
+    open_pr, closed_pr = _col(hub, 'colOf("Open branches",[])'), _col(hub, 'colOf("Landed branches",[])')
     def hue(h):
         return [int(h[i:i + 2], 16) for i in (1, 3, 5)]
     live, retired = hue(open_pr), hue(closed_pr)
@@ -390,7 +390,7 @@ def test_counts_of_a_thousand_and_over_carry_a_thousands_separator(hub):
     for n, want in ((0, "0"), (27, "27"), (688, "688"), (999, "999"),
                     (1000, "1,000"), (12345, "12,345")):
         assert _fmt(hub, n) == want, f"{n} renders as {_fmt(hub, n)}"
-    assert 'title="Closed PRs — 1,234"' in _chip(hub, "Closed PRs", 1234), \
+    assert 'title="Landed branches — 1,234"' in _chip(hub, "Landed branches", 1234), \
         "the hover text reads the count the same way the number does"
 
 
@@ -403,7 +403,7 @@ HID_COL = {
     "Testing": "#2dd4bf",        # --run
     "Backlog": "#f5b041",        # --warn
     "Closed": "#3ecf8e",         # --ok
-    "Closed PRs": "#5aa9ff",     # what #1793 gives the retired pair, and what --pin is
+    "Landed branches": "#5aa9ff",     # what #1793 gives the retired pair, and what --pin is
 }
 
 
@@ -422,7 +422,7 @@ def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
     fallback = _rule(hub, ".hidbar .chip b")
     assert re.search(r"color:var\(--pin\)", fallback), \
         "a column the table does not name must fall back to --pin"
-    assert _token(hub, "--pin") == HID_COL["Closed PRs"], "the archive's blue and the fallback are not one colour"
+    assert _token(hub, "--pin") == HID_COL["Landed branches"], "the archive's blue and the fallback are not one colour"
     for name in list(HID_COL) + [""]:
         sel = f'.hidbar .chip[data-col="{name}"] b' if name else ".hidbar .chip b"
         assert "var(--mute)" not in _rule(hub, sel), f"{name or 'the fallback'} draws a number in the caption colour"
@@ -430,10 +430,10 @@ def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
 
 def test_a_category_is_not_a_magnitude(hub):
     """The two archival piles are the biggest numbers on the board and must not be the loudest."""
-    counts = {"Closed PRs": 688, "Closed": 522, "Abandoned": 2}
+    counts = {"Landed branches": 688, "Closed": 522, "Abandoned": 2}
     loud = [_hid_rule(hub, c) for c in counts]
     assert len(set(loud)) == len(counts), "two categories share a colour, so the colour says nothing"
-    assert _hid_rule(hub, "Abandoned") != _hid_rule(hub, "Closed PRs"), \
+    assert _hid_rule(hub, "Abandoned") != _hid_rule(hub, "Landed branches"), \
         "the pile nobody is reading and the one that wants eyes wear the same colour"
     for c, n in counts.items():
         assert re.search(r"data-col", _chip(hub, c, n)), "the chip carries no data-col, so no rule can reach it"

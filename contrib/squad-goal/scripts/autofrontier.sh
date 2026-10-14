@@ -5,7 +5,7 @@
 # A run takes as many children as its envelope allows: the dispatch node's max_children, and run.max_children less the children the
 # live runs already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
 # it wait for the next run, and the pass says so. Without a readable envelope the free run slots bound the picks, as before.
-# READY issues naming a common file share one child and one PR (cluster.py). The profile's
+# READY issues naming a common file share one child and one branch (cluster.py). The profile's
 # $SG_FRONTIER_PREAMBLE (shared rules) heads the request. The dispatcher never removes the marker; delete auto/disp-<n>
 # to dispatch again, or let the janitor drop it when the run never starts (rule J, at most twice) or ends without
 # landing anything, whatever its verdict (janitor rule O; rule R sets the card: Todo after a failed run, Blocked after needs-human). Empty SG_FRONTIER_LABEL turns it off.
@@ -123,7 +123,7 @@ if [ $(( $(date +%s) - mt )) -ge "$ttl" ]; then
 fi
 refs="$refs $(cat "$merged" 2>/dev/null) "
 pick=(); notes=(); ready=(); kids=(); full=""
-# Issues whose bodies name a common file share one child and one pull request.
+# Issues whose bodies name a common file share one child and one branch.
 cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
   local n lines=() cj cl
   for n in "$@"; do lines+=("$n"); done
@@ -170,7 +170,7 @@ while [ $i -lt ${#cands[@]} ]; do
   d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|STACK |WAIT )')
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=
-  case "$d" in READY*) g=base; nt="base origin/$SG_BASE";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on PR #$2 (branch $3, still open): branch from origin/$3, open the PR with base $3, put \"Merge after #$2\" in the body";; *) continue;; esac
+  case "$d" in READY*) g=base; nt="cut your branch from origin/$SG_BASE";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on the branch $3 (PR #$2, still open): cut your branch from origin/$3";; *) continue;; esac
   [ -z "$full" ] || joins "$g" "$n" || break
   pick+=("$n"); notes+=("$nt"); case "$g" in base) ready+=("$n");; *) kids+=("$n");; esac
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
@@ -191,8 +191,8 @@ child_block() { local c=$1 n; set -- $c; echo; echo "CHILD — GitHub issue(s) $
   for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; sg_issue_worktree_note "$n"; jq -r --argjson n "$n" '.[]|select(.number==$n)|"\"" + .title + "\"\n" + (.body // "")' "$F/issues.json"; done; }
 build_body() { local c
   { echo "PANEL: $name"
-    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one PR each; a block with several issues touches one shared slice: ONE PR with one \"Refs #N\" line per issue. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
-    echo "Before every push and before opening the PR, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
+    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one branch each: cut it from origin/$SG_BASE, push your branch, and open no pull request. A block with several issues touches one shared slice: ONE branch, one \"Refs #N\" line per issue in the commit message. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+    echo "Before every push, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
     echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
     for c in "${kids[@]}"; do child_block "$c"; done
   } > "$body"

@@ -43,6 +43,8 @@ $O rev-list --merges dev | /usr/bin/grep -q . && ko "a merge commit landed" || o
 [ "$($O rev-parse main)" = "$($G -C "$T/co" rev-parse main)" ] && ok "main did not move" || ko "main moved"
 $O rev-parse -q --verify refs/heads/gui/7-x >/dev/null && ko "branch not deleted" || ok "the landed branch is deleted by push"
 case "$r" in *"BRANCHLAND LANDED gui/7-x as $($O rev-parse dev)"*"closed #7"*) ok "the line names the branch, the sha and the issue";; *) ko "no landed line: '$r'";; esac
+# the landing ledger the hub's Landed branches lane reads (#358): epoch, branch, landed sha, issue; the branch itself is gone from the remote
+[ "$(awk -F'\t' '$2=="gui/7-x"{print $3 "/" $4}' "$T/st/landed.tsv" 2>/dev/null)" = "$($O rev-parse dev)/7" ] && ok "the landing is kept as a ledger row: branch, landed sha, issue" || ko "no ledger row: '$(cat "$T/st/landed.tsv" 2>/dev/null)'"
 /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "the issue is closed by the API" || ko "no close call: $(cat "$T/gh.log")"
 ls "$T/st/cq/"x__y#7-delivery~* >/dev/null 2>&1 && ok "the one delivery comment is queued" || ko "no delivery file: $(ls "$T/st/cq" 2>&1)"
 /usr/bin/grep -q "issues/7/comments" "$T/gh.log" && ko "the pass posted the comment itself" || ok "the pass posts no comment itself (the flush does)"
@@ -62,8 +64,31 @@ case "$r" in *"BRANCHLAND WAIT gui/7-x"*"check"*"failure"*) ok "red: says why";;
 reset; r=$(CHECKS="$RUNNING" bl); r2=$(CHECKS="$RUNNING" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*running*) ok "running: waits and says why";; *) ko "running silent: '$r'";; esac || ko "running landed"
 [ -z "$r2" ] && ok "running: says it once per head" || ko "running repeated: '$r2'"
-# no check yet
-reset; r=$(CHECKS='{"check_runs":[]}' bl); case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run: waits and says why";; *) ko "no check silent: '$r'";; esac
+# no check yet, with the local gate off: it waits as before
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE=no CHECKS='{"check_runs":[]}' bl); case "$r" in *"BRANCHLAND WAIT gui/7-x"*"no check run"*) ok "no check run, gate off: waits and says why";; *) ko "no check silent: '$r'";; esac
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && [ ! -e "$T/gate.log" ] && ok "gate off: no gate runs, nothing lands" || ko "gate off: the gate ran or the branch landed"
+# Zero check runs while CI is off (#385): the local gate runs in a clean checkout of the tip. SG_LOCAL_GATE_CMD stubs it and logs
+# the directory and the sha it ran at.
+GATE_OK="echo \"\$PWD \$(/usr/bin/git rev-parse HEAD)\" >> $T/gate.log; exit 0"
+GATE_KO="echo \"\$PWD \$(/usr/bin/git rev-parse HEAD)\" >> $T/gate.log; echo 'mypy: 3 errors'; exit 1"
+reset; rm -f "$T/gate.log"; tip=$($O rev-parse gui/7-x); r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+[ "$(awk '{print $2}' "$T/gate.log" 2>/dev/null)" = "$tip" ] && ok "zero checks: the gate runs at the branch tip" || ko "zero checks: no gate at $tip: '$(cat "$T/gate.log" 2>&1)' '$r'"
+case "$(awk '{print $1}' "$T/gate.log" 2>/dev/null)" in ""|"$T/co"|"$T/w") ko "the gate did not run in a clean checkout";; *) ok "the gate runs in a clean checkout";; esac
+[ "$($O rev-parse dev)" = "$tip" ] && ok "zero checks + gate pass: the branch lands in dev by fast-forward" || ko "gate pass did not land: '$r'"
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*"closed #7"*) ok "gate pass: the landed line";; *) ko "gate pass: no landed line: '$r'";; esac
+/usr/bin/grep -qh "local gate, CI off" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "${tip:0:9}" "$T/st/cq/"x__y#7-status~* && ok "gate pass: the status comment names the local gate and the sha" || ko "gate pass: no status comment: $(cat "$T/st/cq/"* 2>&1)"
+/usr/bin/grep -q "o 3 Done 7" "$T/board.log" 2>/dev/null && /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "gate pass: the issue closes and the card moves to Done" || ko "gate pass: no close or no Done"
+[ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && ok "the gate checkout is removed" || ko "a gate worktree is left: $($G -C "$T/co" worktree list)"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_KO" CHECKS='{"check_runs":[]}' bl)
+[ -s "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "zero checks + gate fail: nothing lands" || ko "gate fail landed or no gate ran: '$r'"
+case "$r" in *"BRANCHLAND WAIT gui/7-x"*"local gate"*) ok "gate fail: says why";; *) ko "gate fail silent: '$r'";; esac
+/usr/bin/grep -qh "local gate, CI off" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "mypy: 3 errors" "$T/st/cq/"x__y#7-status~* && ok "gate fail: the failure is recorded on the issue" || ko "gate fail: no status comment: $(cat "$T/st/cq/"* 2>&1)"
+! /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && [ ! -e "$T/board.log" ] && ok "gate fail: closes nothing, moves no card" || ko "gate fail wrote"
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && [ -z "$r2" ] && ok "gate fail: runs once per head" || ko "gate fail reran: $(cat "$T/gate.log") '$r2'"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$RED" bl)
+[ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a red check runs no gate and lands nothing" || ko "a red check ran the gate or landed"
+reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$RUNNING" bl)
+[ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a running check runs no gate and lands nothing" || ko "a running check ran the gate or landed"
 # a green check is not enough: the review must have approved the tip (#357)
 reset; rev CHANGES; r=$(CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review that asked for changes: nothing lands on a green check" || ko "landed over a CHANGES verdict"

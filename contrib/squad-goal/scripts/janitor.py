@@ -376,10 +376,22 @@ def holders(p):   # the Run and Run started every card carries, read once per pa
 def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""
     return cards(p)[1].get(str(n), "")
-def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's own text: a refusal is not a digit string. -X GET is load-bearing: a bare `-f` makes gh POST, /search/issues answers Not Found, and its body is not "0" -- which read as a PR forever and left the marker (#1981).
-    return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr \"Refs #{n}\"", "-q", ".total_count").strip()
-def pr_merged_count(n):   # a merge is delivery only when it landed on the base (#127): a PR merged into its own parent branch carries the work nowhere, and a card in Done over it claims a change the base does not have (#125)
-    return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged base:{base} \"Refs #{n}\"", "-q", ".total_count").strip()
+_wb = None
+def work_branches():   # {issue: [(branch, standing)]} for every remote work branch `fix|gui/<n>-...`, read once a pass (a branch read, never a pull request). standing is the compare of the branch tip with the landing branch: `ahead` or `diverged` (commits dev lacks), `behind` or `identical` (the tip is in dev)
+    global _wb
+    if _wb is None:
+        _wb = {}
+        land = os.environ.get("SG_LAND_BRANCH") or "dev"
+        for l in sh("gh", "api", f"repos/{repo0}/branches?per_page=100", "--paginate", "--jq", r'.[]|"\(.name) \(.commit.sha)"').splitlines():
+            m = re.match(r"(?:fix|gui)/(\d+)(?:\D\S*)? (\S+)$", l)
+            if m: _wb.setdefault(m.group(1), []).append((l.split()[0], sh("gh", "api", f"repos/{repo0}/compare/{land}...{m.group(2)}", "-q", ".status").strip()))
+    return _wb
+def pr_count(n):   # how many remote work branches name the issue: one exists once the issue is past dispatch. The name is kept for its callers; no pull request is read
+    return str(len(work_branches().get(str(n), [])))
+def branch_ahead_count(n):   # how many of its work branches hold commits the landing branch lacks
+    return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("ahead", "diverged")))
+def pr_merged_count(n):   # how many of its work branches are in the landing branch (the delivery, #355): the tip is an ancestor of dev
+    return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("behind", "identical")))
 _opr = None
 def all_pulls():   # the one read of the open-PR route, drafts included (a draft's branch is a live parent for the retarget rule, #285)
     global _opr   # a line: `<pr> <sha> <base> <head ref> <updated_at>`, then a tab, the PR's labels (comma-joined), a tab, the issues its title and body name, a tab, `draft` or `ready`
@@ -387,14 +399,6 @@ def all_pulls():   # the one read of the open-PR route, drafts included (a draft
     return _opr
 def open_pulls():   # rule R reads the issues a PR names and its labels, rule G a PR's head and rule M its head branch and age: one read of the route answers all three, and a draft is none of theirs (a line with no fourth field is ready)
     return [l for l in all_pulls() if (l.split("\t") + ["", "", "", ""])[3] != "draft"]
-def pr_by_issue():   # issue -> (pr, head sha, labels) for every open PR on the base, from the open-PR list (#244): no read of its own
-    m = {}
-    for l in open_pulls():
-        f = (l.split("\t") + ["", ""])[:3]; h = (f[0].split() + ["", "", ""])[:3]
-        if not (h[0].isdigit() and h[2] == base): continue
-        for n in f[2].split(","):
-            if n.strip().isdigit(): m.setdefault(n.strip(), (h[0], h[1], set(x for x in f[1].split(",") if x)))
-    return m
 def review_line(pr, sha):   # the loop's own review line for the PR's current head (revci.sh's summary), "" when none
     o = st / f"revci-{pr}.out"
     try: return ([x for x in o.read_text().splitlines() if x.startswith(f"#{pr} {sha[:9]} ")] or [""])[-1]
@@ -432,18 +436,18 @@ CLOSER = '[.[] | select(.event == "closed") | .actor.login] | last // ""'   # wh
 def terminal_facts(n, col):   # the facts a terminal comment states (#245), or None when a read did not answer: nothing is claimed on a guess
     from urllib.parse import quote
     if col == "Closed":
-        ok, pr = door_read("search/issues?q=" + quote(f'repo:{repo0} is:pr is:merged base:{base} "Refs #{n}"'), '.items[0].number // ""')
-        if not ok: return None
-        if not pr:
+        land = os.environ.get("SG_LAND_BRANCH") or "dev"
+        landed = [b for b, g in work_branches().get(str(n), []) if g in ("behind", "identical")]   # the branch is the delivery (#358): no pull request is read
+        if not landed:
             ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
-            return {"base": base, "closed_by": who} if ok else None
-        ok, sha = door_read(f"repos/{repo0}/pulls/{pr}", '.merge_commit_sha // ""')
+            return {"base": land, "closed_by": who} if ok else None
+        ok, sha = door_read(f"repos/{repo0}/branches/{quote(landed[0], safe='')}", '.commit.sha // ""')
         if not ok: return None
         test = ""
         if sha:
             ok, test = door_read(f"repos/{repo0}/commits/{sha}/check-runs", '[.check_runs[] | .name + ": " + (.conclusion // .status)] | join(", ")')
             if not ok: return None
-        return {"base": base, "pr": pr, "sha": sha, "test": test}
+        return {"base": land, "branch": landed[0], "sha": sha, "test": test}
     state, reason, _ = issue_info(n)   # the pass's one issue read: state, reason and labels
     if "wontfix" in issue_labels(n):
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", '[.[] | select(.event == "labeled" and .label.name == "wontfix") | .actor.login] | last // ""')
@@ -463,42 +467,16 @@ def queue_terminal(n, col, note):   # one comment per terminal entry, through th
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def door(fn, *a):   # one call through ghcall.sh: (exit code, output). A read is gh_api, a write gh_send (ADR-0277), so this module's own call sites stay as they were
     return _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), fn, *a])
-def reopen_off_main(n):   # an issue closed with its code off the base (#285): reopen it only when a loop PR (`Refs #n` or `Closes #n`) merged into another base and no PR that names the issue merged into the base. The caller has read both facts already; the merged PRs are asked only here, in that case. One comment names the PR and the base, and the marker makes it run once. An issue closed by hand with no such PR is never reopened.
-    mk = st / "auto" / f"janitor-offmain-{n}"
-    if mk.exists(): return False
-    r, out = door("gh_api", "search/issues?q=" + urllib.parse.quote(f'repo:{repo0} is:pr is:merged "#{n}"'))
-    try: items = json.loads(out)["items"] if r == 0 else []
-    except (ValueError, KeyError, TypeError): items = []
-    for it in items if isinstance(items, list) else []:
-        num = it.get("number") if isinstance(it, dict) else None
-        if not isinstance(num, int): continue
-        r, out = door("gh_api", f"repos/{repo0}/pulls/{num}")
-        try: pr = json.loads(out) if r == 0 else {}
-        except ValueError: pr = {}
-        pb = (pr.get("base") or {}).get("ref") if isinstance(pr, dict) else None
-        if not (pb and pb != base and pr.get("merged_at") and re.search(rf"\b(?:Refs|Closes) #{n}\b", pr.get("body") or "")): continue
-        say(f"REOPEN #{n}: closed over PR #{num}, which merged into {pb} and not {base}")
-        if dry: return False
-        r, out = door("gh_send", "-X", "PATCH", f"repos/{repo0}/issues/{n}", "-f", "state=open")
-        if r: say(f"REOPEN-FAILED #{n}: {out.strip().splitlines()[0] if out.strip() else 'no output'}"); return False
-        mk.touch()
-        (st / "cq" / f"{CQ}#{n}-offmain.md").write_text(f"REOPENED #{n}: the issue was closed, but its PR #{num} merged into {pb}, not {base}, so the change is not on {base}. The janitor reopened it so the work lands. Retarget or re-open the work against {base}.\n")
-        _is[n] = ["open"] + _is[n][1:]
-        return True
-    return False
 def reconcile_board():
     if not (owner and proj and repo0): return
     shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
     SHIPPED_NAME = FREEZE_LABEL = {}
     TERMINAL = ()
-    prs = {}
     if shipped:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
-        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, PR_RED_BADGE, pr_green, pr_column
-        prs = pr_by_issue()
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment
     doing = "Doing" if shipped else "In Progress"
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
-    badged = set()   # issues whose Merging card's PR turned red this pass: the card keeps Merging and carries the badge
     def set_expected(n, status, why, run_id="", run_ts="", rank=0):
         if shipped:   # the shipped vocabulary (ADR-0141): Blocked is no column, it is the owner freeze over the column the work reached
             status = SHIPPED_NAME.get(status, status)
@@ -579,18 +557,9 @@ def reconcile_board():
         if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
-        pc = pr_count(n)
-        if pc.isdigit() and pc != "0": set_expected(n, "Code Complete", "PR names the issue and has not landed", "", "", 50)
-        if shipped and n in prs:   # the PR's own state sets Code Complete or Merging, from the open-PR list and the review line (#244)
-            pr, sha, plabels = prs[n]; green = pr_green(review_line(pr, sha), plabels)
-            col, badge = pr_column(green, cards(proj)[1].get(str(n), ""))
-            set_expected(n, col, f"open PR #{pr} is " + ("green, mergeable and unheld" if green else "not mergeable yet") + (", the card keeps Merging" if badge else ""), "", "", 55)
-            if badge: badged.add(n)
-        mc = pr_merged_count(n)
-        if mc.isdigit() and mc != "0":   # a merge delivers the issue only once the issue is closed; an open one keeps the column the work reached (#307)
-            set_expected(n, "Done" if state == "closed" else "Testing", "merged PR names the issue" + ("" if state == "closed" else "; the issue is still open"), "", "", 80)
-        if state == "closed" and mc == "0" and pc.isdigit() and pc != "0" and reopen_off_main(n):   # closed over a PR the base never took: the issue is open again, so the card is Code Complete
-            expected[n] = (50, "Code Complete", "issue reopened: its loop PR merged off the base", "", "", "")
+        if branch_ahead_count(n) != "0": set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)   # the branch's own state sets the column (#358): no pull request is read
+        if pr_merged_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Merging", "Testing"):   # a fresh branch is in dev too, so only a card that reached review is delivered by it
+            set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
@@ -618,16 +587,6 @@ def reconcile_board():
         if expected.get(n, (0, ""))[1] in ("Closed", "Abandoned") or FREEZE_LABEL["owner"] in issue_labels(n): continue
         say(f"BOARD-FREEZE #{n}: {FREEZE_LABEL['owner']} (an owner label or a run needing a human holds it)")
         if not dry: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={FREEZE_LABEL['owner']}"])   # through the door's write (ADR-0277)
-    door = ["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send"]
-    for n in sorted(prs, key=int):   # the pr:red badge follows the PR: on while a Merging card's PR is red, off once it is green again (#244)
-        if n not in expected: continue
-        on = PR_RED_BADGE in issue_labels(n)
-        if n in badged and not on:
-            say(f"BOARD-BADGE #{n}: {PR_RED_BADGE} (open PR #{prs[n][0]} turned red; the card keeps Merging)")
-            if not dry: _run(door + ["--method", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={PR_RED_BADGE}"])
-        elif on and n not in badged:
-            say(f"BOARD-BADGE #{n}: {PR_RED_BADGE} cleared (open PR #{prs[n][0]} is no longer red in Merging)")
-            if not dry: _run(door + ["--method", "DELETE", f"repos/{repo0}/issues/{n}/labels/{PR_RED_BADGE}"])
     if not shipped: return
     # A card that settled in a terminal column before the rule (#245) gets its comment once: a bounded number per pass, one
     # comments read each, and the marker keeps a card from being read again.

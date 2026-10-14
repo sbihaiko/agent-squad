@@ -16,8 +16,8 @@ COLUMNS = (
     {"name": "Testing", "fact": "merged", "actor": "tester", "terminal": False, "order": 2, "flow": 8, "color": "#2dd4bf"},
     {"name": "Blocked", "fact": "blocked", "actor": "owner", "terminal": False, "order": 5, "flow": 4, "color": "#ff6b6b"},
     {"name": "Done", "fact": "issue_closed", "actor": "none", "terminal": True, "order": 7, "flow": 9, "color": "#3ecf8e"},
-    {"name": "Open PRs", "fact": "pr_open", "actor": "reviewer", "terminal": False, "order": 8, "flow": 0, "color": "#5aa9ff"},
-    {"name": "Closed PRs", "fact": "pr_closed", "actor": "none", "terminal": True, "order": 9, "flow": 1, "color": "#8b9bb3"},
+    {"name": "Open branches", "fact": "pr_open", "actor": "reviewer", "terminal": False, "order": 8, "flow": 0, "color": "#5aa9ff"},
+    {"name": "Landed branches", "fact": "pr_closed", "actor": "none", "terminal": True, "order": 9, "flow": 1, "color": "#8b9bb3"},
 )
 
 BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
@@ -72,8 +72,8 @@ def column_for(facts):
 # holds no name of its own. A role names the column a reader looks up by meaning, never by a literal.
 HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
        "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
-LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff"},
-         {"key": "pr_closed", "name": "Closed PRs", "color": "#8b9bb3"})
+LANES = ({"key": "pr_open", "name": "Open branches", "color": "#5aa9ff"},
+         {"key": "pr_closed", "name": "Landed branches", "color": "#8b9bb3"})
 ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "merged": "Testing"}
 SPEC_LABEL = "spec"
 
@@ -102,7 +102,7 @@ PR_KIND = "pr"
 
 def kind_label(kind):
     """The plural a kind's groups are named with: the kind's own words, never a list the hub keeps (`test case` -> Test Cases)."""
-    return ("PRs" if kind == PR_KIND else kind.title() + "s")
+    return ("Branches" if kind == PR_KIND else kind.title() + "s")
 
 
 def kind_groups(kinds, rows):
@@ -111,7 +111,7 @@ def kind_groups(kinds, rows):
     The pull request lanes name their groups (LANES); every other kind takes the lanes' own open and closed words. A row is
     `{"kd": kind, "closed": bool, ...}`, and its key is (kind, number), so a pull request and an issue with one number are
     two items. A row of a kind not named here is not grouped: the pane draws what the kinds and the table name."""
-    words = {"open": LANES[0]["name"].split()[0], "closed": LANES[1]["name"].split()[0]}
+    words = {"open": "Open", "closed": "Closed"}
     names = {PR_KIND: {"open": LANES[0]["name"], "closed": LANES[1]["name"]}}
     out = []
     for kind in (PR_KIND, *kinds):
@@ -180,11 +180,15 @@ TERMINAL_TAG = "<!-- squad-goal:terminal -->"
 def terminal_comment(column, facts):
     """The comment a move into a terminal column writes, or None when the facts do not state the condition.
 
-    None is the guard: the caller makes no terminal write it cannot explain. Closed facts: base, and pr with sha and test
+    None is the guard: the caller makes no terminal write it cannot explain. Closed facts: base, and branch with sha and test (the checks on the branch tip that is in the base), or pr with sha and test
     (the checks on the merge commit, "" when none ran), or closed_by when no merged pull request names the issue.
     Abandoned facts: who decided and why."""
     facts = facts or {}
-    if column == "Closed" and facts.get("pr"):
+    if column == "Closed" and facts.get("branch"):
+        sha = str(facts.get("sha") or "")[:7]
+        test = facts.get("test") or (f"no check ran on {sha}" if sha else "no tip to test")
+        body = f"Closed: branch {facts['branch']} is in {facts.get('base') or 'the base'} and carries this issue (tip {sha or 'unknown'}). Test on the tip: {test}."
+    elif column == "Closed" and facts.get("pr"):
         sha = str(facts.get("sha") or "")[:7]
         test = facts.get("test") or (f"no check ran on merge commit {sha}" if sha else "no merge commit to test")
         body = f"Closed: pull request #{facts['pr']} merged into {facts.get('base') or 'the base'} carries this issue (merge commit {sha or 'unknown'}). Test on the merge: {test}."

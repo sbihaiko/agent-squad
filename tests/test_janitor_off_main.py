@@ -140,38 +140,3 @@ def test_a_pr_on_the_base_is_never_retargeted(tmp_path):
     sandbox(tmp_path, open_prs="14 ccc333333 main feat/live 2026-10-14T00:00:00Z\n")
     janitor(tmp_path)
     assert not patches(tmp_path, "pulls/"), f"a PR already on the base was patched: {calls(tmp_path)}"
-
-
-@pytest.mark.heavy
-def test_an_issue_closed_over_a_loop_pr_merged_off_the_base_is_reopened_once(tmp_path):
-    sandbox(tmp_path, hits=1)
-    janitor(tmp_path)
-    assert len(patches(tmp_path, f"issues/{N}")) == 1 and "state=open" in patches(tmp_path, f"issues/{N}")[0], f"the issue was not reopened: {calls(tmp_path)}"
-    cm = comments(tmp_path)
-    assert len(cm) == 1 and "#77" in cm[0] and "feat/parent" in cm[0], f"one comment must name the PR and the base: {cm}"
-    janitor(tmp_path)
-    assert len(patches(tmp_path, f"issues/{N}")) == 1, f"a second pass reopened again: {calls(tmp_path)}"
-    assert len(comments(tmp_path)) == 1, "a second pass wrote another comment"
-
-
-@pytest.mark.heavy
-def test_an_issue_closed_by_hand_with_no_loop_pr_stays_closed(tmp_path):
-    sandbox(tmp_path, hits=0)
-    janitor(tmp_path)
-    assert not patches(tmp_path, f"issues/{N}"), f"an issue with no PR was reopened: {calls(tmp_path)}"
-    assert not comments(tmp_path)
-
-
-@pytest.mark.heavy
-def test_a_pr_that_only_mentions_the_issue_does_not_reopen_it(tmp_path):
-    """The merged PR names the issue in prose, not as `Refs #n` or `Closes #n`: it is no loop PR."""
-    sandbox(tmp_path, hits=1, body=f"see #{N} for context")
-    janitor(tmp_path)
-    assert not patches(tmp_path, f"issues/{N}"), f"a mention reopened the issue: {calls(tmp_path)}"
-
-
-@pytest.mark.heavy
-def test_an_open_issue_is_never_reopened(tmp_path):
-    sandbox(tmp_path, state="open", hits=1)
-    janitor(tmp_path)
-    assert not patches(tmp_path, f"issues/{N}")

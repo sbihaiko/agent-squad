@@ -11,7 +11,7 @@ cat > "$T/bin/gh" <<'J'
 case "$*" in
   "api users/x") echo '{"type":"User"}';;
   *"/fields"*) echo '[{"id":7,"name":"Status"}]';;
-  *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
+  *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
   *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
   *"issues/1090") echo '{"state":"closed","body":""}';;
@@ -22,7 +22,11 @@ case "$*" in
   *"issues/1120") echo '{"state":"open","body":"## Blocked by\n\n- #1093\n"}';;
   *"issues/1130") echo '{"state":"closed","body":""}';;
   *"issues/1140") echo '{"state":"open","body":""}';;
-  *"pulls?state=open"*) echo '[]';;
+  *"pulls?state=open"*) echo "$*" >> "TMPDIR/pullreads"; echo '[{"number":9,"title":"x","body":"Refs #1160"}]';;   # an open PR names #1160: it must move no card
+  *"repos/x/y/branches"*) echo '[{"name":"fix/1150-x","commit":{"sha":"sha1150"}},{"name":"main","commit":{"sha":"shamain"}}]';;   # a work branch names #1150 and is ahead of dev
+  *"compare/dev...sha1150"*) echo '{"status":"ahead"}';;
+  *"issues/1150") echo '{"state":"open","body":""}';;
+  *"issues/1160") echo '{"state":"open","body":""}';;
   *"issues?state=open&labels=bug"*) echo '[]';;
 esac
 J
@@ -50,4 +54,8 @@ case "$(cat "$T/tagreads" 2>/dev/null)" in *"issues/1140/labels"*) ok "the label
 [ ! -s "$T/tags" ] && ok "an issue that already has the tag gets no label write" || ko "a label write was sent for a tagged issue: '$(cat "$T/tags")'"
 rm -f "$T/tags"; r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1)
 [ "$(grep -c 'issues/1140/labels' "$T/tags" 2>/dev/null)" = 1 ] && ok "an issue without the tag still gets it" || ko "the tag was not added to an untagged issue: '$(cat "$T/tags" 2>/dev/null)'"
+# The branch is the fact (#358): an open work branch ahead of dev moves its card to Code Complete; an open pull request moves none, and no pull request is read.
+case "$m" in *"Code Complete 1150"*) ok "an open work branch ahead of dev moves its card to Code Complete";; *) ko "#1150 not moved on its branch: '$m' '$r'";; esac
+case "$m" in *1160*) ko "an open pull request moved #1160: '$m'";; *) ok "an open pull request moves no card";; esac
+[ ! -s "$T/pullreads" ] && ok "no pull request is read" || ko "a pull request route was read: $(cat "$T/pullreads")"
 rm -rf "$T"; exit $fail
