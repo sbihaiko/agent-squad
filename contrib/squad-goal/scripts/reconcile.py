@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Board reconciler: derive each tracked issue's Status from GitHub facts and move the card.
-Facts only (no comment-text inference): issue closed -> Done; an open PR naming the issue as "Refs #N" -> Code Complete (Testing = e2e on the merge, set by the loop)
-(only from Todo/In Progress/Blocked); an open issue whose `## Blocked by` lists an open #M -> Blocked (only from Todo), back to Todo when all are closed; an open `bug` issue absent from the board -> added as Todo.
-Never downgrades (Done stays Done, Code Complete/Testing never go back). Dry run by default: RECONCILE=apply writes.
-Scope: issues already on board 4 (open ones only from number >= RECONCILE_MIN, default 1102; a closed issue of any number is derived to Done) plus new `bug` issues."""
+Facts only (no comment-text inference): the table defines every destination from the fact that earns it. Dry run by default: RECONCILE=apply writes.
+Scope: issues already on board 4 (open ones only from number >= RECONCILE_MIN, default 1102; a closed issue of any number is derived to its terminal column) plus new `bug` issues."""
 import json, os, re, subprocess, sys
+from board_columns import BY_FACT
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
 MIN = int(os.environ.get("RECONCILE_MIN", "1102")); APPLY = os.environ.get("RECONCILE") == "apply"
@@ -55,15 +54,15 @@ for n, it in sorted(items.items()):
     if not st: continue
     if st["state"] != "closed" and n < MIN: continue
     deps = blockers(st.get("body"))
-    if st["state"] == "closed" and cur != "Done": move(n, "Done", "issue closed")
-    elif st["state"] == "open" and n in refs and cur in ("Todo", "In Progress", "Blocked", None): move(n, "Code Complete", f"open PR #{refs[n]}")
+    if st["state"] == "closed" and cur != BY_FACT["issue_closed"]: move(n, BY_FACT["issue_closed"], "issue closed")
+    elif st["state"] == "open" and n in refs and cur in (BY_FACT["unclaimed"], BY_FACT["claimed"], BY_FACT["blocked"], None): move(n, BY_FACT["open_pr"], f"open PR #{refs[n]}")
     elif st["state"] == "open" and deps:
         open_deps = [d for d in deps if is_open(d)]
-        if open_deps and cur in ("Todo", None): move(n, "Blocked", "blocked by open " + ", ".join(f"#{d}" for d in open_deps))
-        elif not open_deps and cur == "Blocked": move(n, "Todo", "all blockers closed")
-    elif st["state"] == "open" and cur in ("Todo", None) and has_freetext_blocker(st.get("body")): print(f"BOARD NOTE #{n}: 'Blocked by' names no #N, fix the issue body")
+        if open_deps and cur in (BY_FACT["unclaimed"], None): move(n, BY_FACT["blocked"], "blocked by open " + ", ".join(f"#{d}" for d in open_deps))
+        elif not open_deps and cur == BY_FACT["blocked"]: move(n, BY_FACT["unclaimed"], "all blockers closed")
+    elif st["state"] == "open" and cur in (BY_FACT["unclaimed"], None) and has_freetext_blocker(st.get("body")): print(f"BOARD NOTE #{n}: 'Blocked by' names no #N, fix the issue body")
 for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or []:
     if "pull_request" in i or i["number"] < MIN or i["number"] in items: continue
-    to = "Code Complete" if i["number"] in refs else "Todo"
+    to = BY_FACT["open_pr"] if i["number"] in refs else BY_FACT["unclaimed"]
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {to} (new bug)")
     if APPLY: subprocess.run([MOVE, "--add", OWNER, str(BOARD), to, str(i["number"])], capture_output=True)
