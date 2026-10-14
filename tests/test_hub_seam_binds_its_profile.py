@@ -25,8 +25,10 @@ def _load():
         spec.loader.exec_module(mod)
     finally:   # what hubmux does after the import: the pinned profile is gone from the environment
         for k, v in before.items():
-            if v is None: os.environ.pop(k, None)
-            else: os.environ[k] = v
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     return mod
 
 
