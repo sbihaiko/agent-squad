@@ -9,6 +9,7 @@ G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co"
 cp "$d/branchfixpass.sh" "$d/branchfix.sh" "$d/workbranches.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git} SG_CODING_RULES=rules
+export SG_FRONTIER_SKIP_LABELS=spec,needs-ratification,frozen:owner
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
 . "$T/s/address.sh"; . "$T/s/ghcall.sh"
 J
@@ -34,7 +35,7 @@ cat > "$T/bin/gh" <<J
 a="\${*//\$'\n'/ }"; echo "\$a" >> "$T/gh.log"
 case "\$a" in
   *"pulls?per_page"*) echo "\${PRS:-[]}";;
-  *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7 8 9}; do printf '{"number":%s,"title":"t","body":"","state":"OPEN"},' "\$x"; done); echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
+  *"issues(states: OPEN"*) n=\$(for x in \${OPEN:-7 8 9}; do l=; for p in \${LABELED:-}; do [ "\${p%%=*}" = "\$x" ] && l="{\\"name\\":\\"\${p#*=}\\"}"; done; printf '{"number":%s,"title":"t","body":"","state":"OPEN","labels":{"nodes":[%s]}},' "\$x" "\$l"; done); echo "{\"data\":{\"repository\":{\"issues\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[\${n%,}]}}}}";;
   *"/labels"*) echo '[{"name":"frozen:owner"}]';;
   *) echo '{}';;
 esac
@@ -82,7 +83,13 @@ r=$(OPEN="10 11 12" SG_FIX_PASS_MAX=2 fp)
 case "$r" in *"BRANCHFIX: the remote branch list is not readable"*) ok "the failed read is named";; *) ko "no read failure line: '$r'";; esac
 # 8) every GitHub call goes through the door: no bare gh in the pass
 /usr/bin/grep -nE '(^|[^_])gh api' "$d/branchfixpass.sh" | /usr/bin/grep -v '^[0-9]*:#' >/dev/null && ko "branchfixpass.sh calls gh api directly" || ok "the pass calls GitHub only through ghcall.sh"
-# 9) the cycle runs the pass under its own single.sh lock, gated like the landers
+# 9) an issue that carries a label of SG_FRONTIER_SKIP_LABELS is skipped, read from the open-issue list with no other call
+: > "$T/launch.log"; for i in 13 14; do push "gui/$i-l"; rev "gui/$i-l" CHANGES "g.sh:$i fix"; done; : > "$T/gh.log"
+r=$(OPEN="13 14" LABELED="13=needs-ratification 14=other" fp)
+[ "$(n gui/13-l)" = 0 ] && ok "an issue with a frontier skip label gets no fix run" || ko "the skip-labelled issue was dispatched: '$r'"
+[ "$(n gui/14-l)" = 1 ] && ok "an issue with another label gets its fix run" || ko "gui/14-l dispatched $(n gui/14-l) times: '$r'"
+/usr/bin/grep -q "issues/1[34]" "$T/gh.log" && ko "the labels were read with an extra call: $(/usr/bin/grep 'issues/1[34]' "$T/gh.log")" || ok "the labels come from the open-issue list, with no extra call"
+# 10) the cycle runs the pass under its own single.sh lock, gated like the landers
 w=$(/usr/bin/grep -n 'single.sh" branchfix ' "$d/watch.sh")
 case "$w" in *'SG_PRLAND_PAUSED'*'branchfixpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_PRLAND_PAUSED";; *) ko "watch.sh does not run the fix pass: '$w'";; esac
 exit $fail

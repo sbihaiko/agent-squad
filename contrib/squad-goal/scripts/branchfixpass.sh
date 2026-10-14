@@ -20,11 +20,16 @@ export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
 sg_work_branches "$remote" || { echo "BRANCHFIX: $wb_err"; exit 0; }
 A="$SG_STATE/auto"; mkdir -p "$A"
+# An issue that carries a label the frontier skips (SG_FRONTIER_SKIP_LABELS: frozen:owner, needs-ratification, spec, ...) gets no fix
+# run. The labels come from the open-issue list sg_work_branches already read, so this costs no call.
+held=" $(printf '%s' "$wb_issues" | jq -r --arg s "${SG_FRONTIER_SKIP_LABELS:-}" '($s|split(",")|map(select(.!=""))) as $k
+  | .[] | select([.labels[]?.name] | any(. as $l | $k | index($l))) | .number' 2>/dev/null | tr '\n' ' ') "
 # The findings of a review, read so that a moved line or a new sha is not a change.
 findings() { tail -n +2 "$1" | sed -E 's/:[0-9]+/:/g; s/[0-9a-f]{7,40}//g' | tr -s ' \t\n' ' ' | shasum | cut -c1-16; }
 done=0
 while read -r sha br i; do
   [ -n "$br" ] && [ "$done" -lt "$max" ] || continue
+  case "$held" in *" $i "*) continue;; esac
   key=$(printf '%s' "$br" | tr '/' '_'); s9=${sha:0:9}; f="$SG_STATE/review-$key.md"
   [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ] || continue
   head -1 "$f" 2>/dev/null | grep -q CHANGES || continue
