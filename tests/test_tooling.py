@@ -73,12 +73,12 @@ def test_every_process_table_read_of_a_command_asks_for_the_full_one():
 
 
 def test_ci_workflow_triggers_one_job_that_covers_both_pythons_and_keeps_the_token_read_only():
-    """Guard for the CI rule: push to main, pull requests, Python 3.11 and 3.13 inside one job, read-only token."""
+    """Guard for the CI rule: push to dev, stg and main, pull requests, Python 3.11 and 3.13 inside one job, read-only token."""
     import yaml
 
     wf = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
     on = wf.get("on", wf.get(True))  # PyYAML reads a bare `on` as True
-    assert on["push"]["branches"] == ["main"] and "pull_request" in on
+    assert on["push"]["branches"] == ["dev", "stg", "main"] and "pull_request" in on
     assert wf["permissions"] == {"contents": "read"}
     job = next(iter(wf["jobs"].values()))
     assert job["timeout-minutes"] == 20, "the job keeps the twenty minutes it gives itself"

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended by the owner decision ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)), verbatim: "three long-lived branches (`dev`, `stg`, `main`); a work branch lands in `dev` by a fast-forward push, with no pull request; the loop promotes `dev` to `stg` when the CI of the `dev` tip is green; the owner promotes `stg` to `main` with one command; the live copy publishes from `stg`; a card is Done when its branch is in `dev`."
 
 ## Context
 
@@ -44,7 +44,9 @@ be adding a profile, not adding a special case.
    - `local`: the repository that the fork checkout (`SG_FORK_DIR`) resolves
      to. Its branch merges into `SG_FORK_BASE` in that checkout.
    - `pr`: the profile's repository. Its land is the merge of the pull request
-     into `SG_BASE`, so no branch is named.
+     into `SG_BASE`, so no branch is named. A repository that lands by a fast-forward push
+     to `dev` ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)) has no pull request,
+     and its `SG_BASE` is `dev`.
    - Any other repository: refused, with the address named on stderr.
      `sg_land_base` reads the same table.
    - A bare number names no repository. One that came with a board row is a

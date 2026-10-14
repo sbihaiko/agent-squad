@@ -29,8 +29,8 @@ ADRs and this file are never ledgers (see Design rules): no dates, counts, statu
 - **Everything written is US English, Concise STE100.** Rafael may talk in Portuguese; the record is English. Guard: none yet; a draft.
 - **The full suite is `python3 -m pytest -n auto`; serial is `-p no:xdist`. Both must pass before a merge, and a test never relies on the worker count.** CI runs the fast battery, `-m "not heavy"`. A test call over 1 s carries `heavy`. Guard: `tests/test_slow_cap.py`, `tests/test_tooling.py`.
 - **One test call over 20 seconds fails the suite, unless it carries a reason.** Guard: `tests/test_slow_cap.py`.
-- **CI runs ruff, mypy and the fast battery on every push to `main` and every pull request** (`.github/workflows/ci.yml`, Python 3.11 and 3.13; no secret). Guard: `tests/test_tooling.py`.
-- **One commit starts one CI job, and one concurrency group spans a branch's pushes and its pull requests** (`.github/workflows/ci.yml`; a superseded head is cancelled). Guard: `tests/test_tooling.py`.
+- **CI runs ruff, mypy and the fast battery on every push to `dev`, `stg` and `main` and every pull request** (`.github/workflows/ci.yml`, Python 3.11 and 3.13; no secret). Guard: `tests/test_tooling.py`.
+- **One commit starts one CI job, and one concurrency group spans a branch's pushes and its pull requests; a landing on `dev`, `stg` or `main` is never cancelled** (`.github/workflows/ci.yml`; a superseded head is cancelled). Guard: `tests/test_tooling.py`.
 - **A run records the autonomy setting** (`autonomy.enabled`, default on; `autonomy.max_resumes`, default 3, range 0 to 10; `config/agent-defaults.yaml`) in `run_start`, and a resume refuses when it differs. Guard: `tests/test_defaults.py`, `tests/test_launch.py`.
 - **The repo is a Claude Code plugin** (`agent-squad`): `/agent-squad:editor [id]` opens the editor, `/agent-squad:work <request>` and `/agent-squad:task <task>` start a run, `/agent-squad:dashboard [run]` opens a run's page, `/agent-squad:skill-update` checks the skills,
   `/agent-squad:config` edits the project settings file, `/agent-squad:setup` prepares a project.
@@ -57,7 +57,8 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A red test is fixed, whoever broke it** ([ADR-0062](docs/adr/0062-red-test-is-fixed.md)). Guard: The full suite, run in both modes (ADR-0018).
 - **A test whose fixture repository the runner does not own is deselected there, never skipped** ([ADR-0139](docs/adr/0139-a-test-without-its-fixture-repo-is-deselected.md)). Guard: `tests/test_tooling.py`.
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
-- **`/implement` works in its own worktree and merges to main; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
+- **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
+- **Three long-lived branches: `dev` takes landings, the loop promotes to `stg`, the owner to `main`; the live copy publishes from `stg`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_tooling.py`; the rest is a draft.
 
 ### Run engine
 

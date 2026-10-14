@@ -27,7 +27,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0109](0109-adaptation-report-no-cross-run.md) | An adaptation is judged by a read-only report; round one has no cross-run input |
 | [0111](0111-editor-contract.md) | The editor writes what a person authors, reads the record, and shows an adaptation as a run-only overlay |
 | [0113](0113-dispatch-envelope.md) | A dispatch node lets an agent request children inside an author-fixed envelope; code validates each request |
-| [0116](0116-implement-in-a-worktree.md) | Every `/implement` works in its own worktree and merges back into main when it finishes |
+| [0116](0116-implement-in-a-worktree.md) | Every `/implement` works in its own worktree and lands in `dev` when it finishes |
 | [0117](0117-editor-prepares-never-launches.md) | The editor prepares a run and never launches it; approval is a person's act outside the graph; the page makes no model call |
 | [0118](0118-dashboard-server.md) | `squad dashboard` serves one run folder over a loopback server with one write route |
 | [0119](0119-subject-answer-key.md) | The subject's answer key asserts what its issue text states, and the 24-issue set can pass together |
@@ -44,6 +44,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0142](0142-a-spec-is-never-work.md) | A spec is a document, never a unit of work: the dispatch skips every label a profile names as not-work, and only its tickets are children of a run |
 | [0143](0143-a-card-only-moves-forward.md) | A card only moves forward along the axis, Closed and Abandoned are terminal, and an old Status option is removed only once the migration plan has emptied it |
 | [0144](0144-the-carrier-is-the-project-field.md) | The state of a card stays on the Project Status field; a write is sent only when the value changes |
+| [0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) | A work branch lands in `dev` by a fast-forward push, with no pull request; the loop promotes `dev` to `stg`, the owner promotes `stg` to `main`, and the live copy publishes from `stg` |
 
 ## Adding an ADR
 
