@@ -1,6 +1,8 @@
 """#143: the Harness panel lists each run's skill hashes (short; full on hover) and the vendor commit. An old record reads "unrecorded"."""
 import json
 
+import pytest
+
 from tests.dashboard_helpers import _run22, run_node
 from tests.test_dashboard_page import drive, needs_ego
 
@@ -32,6 +34,7 @@ def _panel(tmp_path, events, doc):
 
 
 @needs_ego
+@pytest.mark.heavy
 def test_the_page_shows_short_hashes_with_the_full_hash_on_hover_and_unrecorded_for_an_old_record(tmp_path):
     doc, old, new = _with_skills()
     got = _panel(tmp_path, new, doc)

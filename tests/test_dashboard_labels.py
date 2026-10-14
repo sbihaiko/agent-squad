@@ -9,6 +9,8 @@ four-wave run; its child `route.router.1` ran issue 1 with the `tdd` skill.
 """
 import json
 
+import pytest
+
 from tests.dashboard_helpers import ROOT, run_node
 from tests.helpers import five, node, router
 
@@ -85,6 +87,7 @@ def test_no_two_cards_in_the_router_graph_share_a_title_and_none_is_empty():
     assert len(set(labels)) == len(labels), labels               # no two cards share a title
 
 
+@pytest.mark.heavy
 def test_no_node_of_either_fixture_and_no_degenerate_node_yields_an_empty_label():
     for d in (five(), router()):
         for n in d["nodes"]:

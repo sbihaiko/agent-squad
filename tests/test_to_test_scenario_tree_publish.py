@@ -76,6 +76,7 @@ def case_numbers(gh, plan):
     return {i["cases"][0]: by_title[i["title"]] for i in plan["issues"]}
 
 
+@pytest.mark.heavy
 def test_a_281_case_plan_publishes_16_areas_and_their_containers_top_down(tmp_path):
     plan, gh = pad_plan(), TreeGitHub()
     out = tts.publish(plan, gh, map_path=tmp_path / "m.json")
@@ -94,6 +95,7 @@ def test_a_281_case_plan_publishes_16_areas_and_their_containers_top_down(tmp_pa
     assert len(gh.of("board")) == 1 and gh.of("board") == [{"number": scenario}]
 
 
+@pytest.mark.heavy
 def test_the_map_gains_layout_areas_and_each_cases_area_and_container(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     out = tts.publish(plan, gh, map_path=path)
@@ -121,6 +123,7 @@ def test_read_issues_and_read_map_keep_every_key_of_the_map(tmp_path):
 
 
 @pytest.mark.parametrize("flaky", [{"fail_on_create": 60}, {"fail_on_link": 60}])
+@pytest.mark.heavy
 def test_an_interrupted_publish_resumes_with_no_duplicate_issue_or_link(tmp_path, flaky):
     plan, path = pad_plan(), tmp_path / "m.json"
     gh = TreeGitHub(**flaky)
@@ -134,6 +137,7 @@ def test_an_interrupted_publish_resumes_with_no_duplicate_issue_or_link(tmp_path
     assert sum(len(v) for v in gh.kids.values()) == 16 + 16 + 281
 
 
+@pytest.mark.heavy
 def test_a_republish_keeps_emoji_dashboards_and_record_state(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     out = tts.publish(plan, gh, map_path=path)
@@ -177,6 +181,7 @@ def test_an_area_dropped_from_the_plan_is_reported_and_left_open(tmp_path):
     assert "k02" in out["map"]["areas"] and out["removed"] == ["K02Y-001"]
 
 
+@pytest.mark.heavy
 def test_a_lost_map_adopts_the_existing_containers_and_cases_instead_of_creating_them(tmp_path):
     plan, gh, path = pad_plan(), TreeGitHub(), tmp_path / "m.json"
     first = tts.publish(plan, gh, map_path=path)

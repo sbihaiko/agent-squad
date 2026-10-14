@@ -8,6 +8,8 @@ import io
 import os
 import signal
 
+import pytest
+
 from squad import heartbeat, record
 
 MIN = 60.0
@@ -55,6 +57,7 @@ def pass_once(tmp_path, events, rows, now, mtime, stamps=None, kills=None, **kw)
                           mark=lambda folder, reason: (kills or []).append(("mark", str(folder), reason)) or True, **kw)
 
 
+@pytest.mark.heavy
 def test_a_flat_tree_and_a_frozen_record_kill_the_run_and_name_the_reason(tmp_path):
     """Case one: both signals hold. The kill goes through squad.killed, the one writer, with the reason the issue names."""
     folder = tmp_path / "run-x"
@@ -107,6 +110,7 @@ def test_a_run_with_no_live_call_is_read_on_nothing(tmp_path):
     assert pass_once(tmp_path, [], one_row(), T0 + 9 * MIN, T0) == []
 
 
+@pytest.mark.heavy
 def test_the_watchdog_stands_down_at_the_half_minute_it_is_told_to(tmp_path):
     """HB_FLAT_MIN and HB_RECORD_MIN are the knobs heartbeat.sh already passes to its own host check."""
     os.environ["HB_FLAT_MIN"] = "1"

@@ -106,6 +106,7 @@ async def test_zero_accepted_children_fold_to_fail_no_dispatch(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_spend_is_reserved_at_acceptance_before_any_launch(tmp_path):
     seen = {}
     eng = make(tmp_path, {})
@@ -181,6 +182,7 @@ async def test_a_grandchild_gets_no_more_than_its_parents_remaining_spend(tmp_pa
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_max_children_per_entry_is_enforced(tmp_path):
     reqs = [req(f) for f in ("tdd", "diagnosing-bugs", "codebase-design", "tdd", "tdd")]
     eng = make(tmp_path, {"router": routed(*reqs), "route.router.1": CHILD}, adapter={"repeat_last": True, "default": CHILD})
@@ -190,6 +192,7 @@ async def test_max_children_per_entry_is_enforced(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_one_request_for_three_children_records_three_accepted_children_and_no_rejection(tmp_path):   # #33 acceptance 1: one run carries the issues
     reqs = [req(f) for f in ("tdd", "diagnosing-bugs", "codebase-design")]
     eng = make(tmp_path, {"router": routed(*reqs), "route.router.1": CHILD}, adapter={"repeat_last": True, "default": CHILD})
@@ -199,6 +202,7 @@ async def test_one_request_for_three_children_records_three_accepted_children_an
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_children_run_in_parallel_up_to_max_parallel(tmp_path):
     slow = dict(CHILD, delay=0.6)
     ro = {"tools": ["Read"]}    # read-only children get no worktree, so the timing shows the fan-out alone
@@ -224,6 +228,7 @@ async def test_the_dispatch_folds_under_its_join_rule(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_deadline_child_folds_the_dispatch_as_deadline_not_a_new_exit_code(tmp_path):
     def short(d):
         node(d, "route")["deadline"] = 10
@@ -296,6 +301,7 @@ async def two_children(tmp_path, **kw):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_resume_runs_only_the_frontier_and_never_a_passed_sibling(tmp_path):
     await two_children(tmp_path / "a")
     kept = crash_after_first_child(tmp_path / "a", tmp_path / "b")
@@ -309,6 +315,7 @@ async def test_a_resume_runs_only_the_frontier_and_never_a_passed_sibling(tmp_pa
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_child_with_accept_and_no_entry_is_funded_again_and_unknown_spend_is_not_zero(tmp_path):
     await two_children(tmp_path / "a")
     crash_after_first_child(tmp_path / "a", tmp_path / "b")
@@ -323,6 +330,7 @@ async def test_a_child_with_accept_and_no_entry_is_funded_again_and_unknown_spen
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_an_unmeasured_child_keeps_its_grant_out_of_measured_spend_on_resume(tmp_path):
     def short(d):
         node(d, "route")["deadline"] = 10
@@ -335,6 +343,7 @@ async def test_an_unmeasured_child_keeps_its_grant_out_of_measured_spend_on_resu
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_the_workspace_preflight_applies_to_a_frontier_child(tmp_path):
     repo = make_repo(tmp_path / "repo")
 
@@ -393,6 +402,7 @@ async def test_the_router_fixture_record_yields_the_frontier_of_one_child_and_on
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_crash_before_any_request_is_decided_replays_the_entry_artifact(tmp_path):
     await two_children(tmp_path / "a")
     shutil.copytree(tmp_path / "a", tmp_path / "b")
@@ -433,6 +443,7 @@ async def test_a_request_never_picks_its_workspace_and_each_child_worktree_start
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_resume_checks_a_child_worktree_by_its_own_path(tmp_path):
     await two_children(tmp_path / "a")
     crash_after_first_child(tmp_path / "a", tmp_path / "b")
@@ -444,6 +455,7 @@ async def test_a_resume_checks_a_child_worktree_by_its_own_path(tmp_path):
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_a_child_whose_worktree_path_exists_is_refused_not_reused(tmp_path):
     await two_children(tmp_path / "a")
     shutil.copytree(tmp_path / "a", tmp_path / "b")

@@ -3,6 +3,8 @@ import copy
 import json
 import re
 
+import pytest
+
 from squad import graph
 from squad.gates import GATE_REGISTRY
 from tests.dashboard_helpers import js_pairs, page_bundle, page_template, py_pairs, run_node
@@ -211,6 +213,7 @@ def test_disconnecting_a_dispatch_check_works_and_an_entry_is_replaced_never_cut
     assert "error" in disc(d, "main" if "main" in {n["name"] for n in d["nodes"]} else d["root"], "ghost")
 
 
+@pytest.mark.heavy
 def test_connect_and_disconnect_results_match_the_engine_for_every_pair_of_nodes():
     """Parity sweep: for each ordered pair, the (node, rule) pairs of the result equal the engine's. Never skips."""
     for d in (five(), router()):
@@ -250,6 +253,7 @@ def with_outcome_refs(doc):
     return d
 
 
+@pytest.mark.heavy
 def test_a_rename_leaves_no_stale_reference_on_either_fixture():
     """Rename each node of both valid fixtures: the graph stays valid, the old name is gone, and the dashboard and the engine agree."""
     for make_doc in (five, router):
@@ -312,6 +316,7 @@ def changed(doc, name, kind, **opts):
     return run_node([{"op": "kind", "doc": doc, "name": name, "kind": kind, "opts": opts}])[0]
 
 
+@pytest.mark.heavy
 def test_a_kind_change_keeps_the_name_the_place_and_the_fields_and_shows_the_engine_rules_on_the_node():
     """Every non-gate node to every other kind: the dashboard and the engine report the same (node, rule) pairs."""
     cases = []
@@ -397,6 +402,7 @@ def set_field(doc, name, key, text):
     return run_node([{"op": "setfield", "doc": doc, "name": name, "key": key, "text": text}])[0]
 
 
+@pytest.mark.heavy
 def test_every_field_of_every_node_sits_in_exactly_one_group_and_every_kind_offers_its_schema_fields():
     for make_doc in (five, router):
         for n in make_doc()["nodes"]:
@@ -449,6 +455,7 @@ def test_an_unknown_field_is_a_node_error_in_both_and_a_field_edit_keeps_it_unch
     assert list(node(r["doc"], agent)) == list(node(d, agent))   # key order, so the hash moves only for the value
 
 
+@pytest.mark.heavy
 def test_a_field_shown_and_set_back_unchanged_leaves_the_graph_byte_identical():
     cases = []
     for make_doc in (five, router):

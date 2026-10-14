@@ -26,6 +26,8 @@ testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider --durations=15"
 slow_cap_seconds = "20"
 test_deadline_seconds = "60"
+heavy_cap_seconds = "2"
+markers = ["heavy: this test call takes 1 s or more; the fast battery (-m \"not heavy\") deselects it"]
 
 [tool.mypy]
 files = ["squad"]

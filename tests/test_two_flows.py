@@ -29,6 +29,7 @@ async def test_the_router_picks_a_different_skill_child_for_two_inputs(tmp_path)
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_an_over_limit_spawn_is_rejected_and_a_crash_resumes_from_the_frontier(tmp_path):
     await two_children(tmp_path / "a")
     over = make(tmp_path / "over", {"router": routed(req(model="gpt-x"))})
@@ -41,6 +42,7 @@ async def test_an_over_limit_spawn_is_rejected_and_a_crash_resumes_from_the_fron
 
 
 @pytest.mark.anyio
+@pytest.mark.heavy
 async def test_both_flows_use_one_engine_one_verdict_module_and_the_same_event_kinds(tmp_path):
     repo = make_repo(tmp_path / "repo")
     authored = five_engine(tmp_path, repo, five_script(MEDIUM))

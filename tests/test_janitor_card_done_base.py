@@ -18,6 +18,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 N = 2030  # the issue a finished run delivered, whose pull request names it
@@ -99,6 +101,7 @@ def writes(tmp_path: Path) -> str:
     return f.read_text() if f.exists() else ""
 
 
+@pytest.mark.heavy
 def test_a_merge_into_a_parent_branch_does_not_move_the_card_to_done(tmp_path):
     """The measured defect (#127, the #125 strand): the PR names the issue but its base is a parent branch, so the base
     never carries the change. The card stops at Code Complete; a merge the base did not take is not Done."""

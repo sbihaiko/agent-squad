@@ -118,6 +118,7 @@ def _field_cases():
 
 
 @pytest.mark.slow(reason="about 1500 documents through node and the engine: 9 s alone, and parallel workers share the CPU")
+@pytest.mark.heavy
 def test_dashboard_validation_parity():
     """The dashboard and the engine give the same (node, rule) pairs and the same hash on both fixtures, one mutation per rule, and every node-field mutation."""
     rules, fields = _rule_cases(), _field_cases()

@@ -17,6 +17,8 @@ import subprocess
 import time
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 ROOT = SCRIPTS.parent.parent.parent
 WAIT_LINE = re.compile(r"^serial: waiting for lock gate held by pid [0-9]+$", re.M)
@@ -85,6 +87,7 @@ def test_the_local_gate_and_the_land_path_that_ran_it_are_retired():
     assert (SCRIPTS / "shell-suites.sh").exists(), "the shell suites are the half that stays"
 
 
+@pytest.mark.heavy
 def test_the_shell_suites_take_no_gate_lock_and_run_beside_a_holder(tmp_path):
     """#94: whoever holds the machine-wide lock, the shell suites run at once, print no wait line, and leave it alone."""
     log = tmp_path / "log"
