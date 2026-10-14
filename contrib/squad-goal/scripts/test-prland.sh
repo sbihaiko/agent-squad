@@ -4,7 +4,7 @@
 # usage: bash test-prland.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/prland.sh" "$d/ci_state.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/prland.sh" "$d/address.sh" "$d/ci_state.py" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_CHECKOUT=%s SG_CI_BASELINE=%s/baseline.txt\n' "$T/st" "$T/co" "$T" > "$T/s/env.sh"
 printf 'tests/test_e2e.py::test_a  # needs MESENAI_REPO\ntests/test_e2e.py::test_b  # needs MESENAI_REPO\ntests/test_guard.py::test_reap  # macOS only\n' > "$T/baseline.txt"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q fix/7-x)
@@ -38,14 +38,15 @@ export JOB CHECK_DETAIL
 BASE_LOG='2026-10-13T11:44:53.4Z FAILED tests/test_e2e.py::test_a - AssertionError: set MESENAI_REPO\n2026-10-13T11:44:53.5Z FAILED tests/test_e2e.py::test_b - AssertionError\n'
 pl() { bash "$T/s/prland.sh" 2>&1; }
 merged() { /usr/bin/grep -q "^pr merge 41 " "$T/gh.log" 2>/dev/null; }
-reset() { rm -f "$T/gh.log" "$T/st/auto"/prland-*; }
+reset() { rm -f "$T/st/cq"/*; rm -f "$T/gh.log" "$T/st/auto"/prland-*; }
 
 r=$(CHECKS="$GREEN" pl); merged && ok "green: merged" || ko "green not merged: '$r'"
 case "$r" in *"PRLAND MERGED #41"*abcdef123*"#7"*) ok "the merge line names the PR, the sha and the issue";; *) ko "no merge line: '$r'";; esac
 /usr/bin/grep -q "pr merge 41 --repo x/y --squash --delete-branch" "$T/gh.log" && ok "squash merge, branch deleted" || ko "merge flags: $(cat "$T/gh.log")"
-/usr/bin/grep -q "issues/7/comments" "$T/gh.log" && /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "the issue got its comment and closed" || ko "no comment/close: $(cat "$T/gh.log")"
-close_line=$(/usr/bin/grep -n "issues/7 -f state=closed" "$T/gh.log" | cut -d: -f1); comment_line=$(/usr/bin/grep -n "issues/7/comments" "$T/gh.log" | cut -d: -f1)
-[ "$close_line" -lt "$comment_line" ] && /usr/bin/grep -q "Closed #7 after merging PR #41" "$T/comment.body" && ok "the closing comment names the merged PR" || ko "the close did not precede a PR-naming closing comment: $(cat "$T/comment.body" 2>/dev/null)"
+dq=$(ls "$T/st/cq/"x__y#7-delivery~* 2>/dev/null)
+/usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && [ -n "$dq" ] && ok "the issue closed and its delivery comment is queued" || ko "no close or delivery comment: $(cat "$T/gh.log") / $(ls "$T/st/cq")"
+/usr/bin/grep -q "issues/7/comments" "$T/gh.log" && ko "prland posted the delivery comment itself: $(cat "$T/gh.log")" || ok "prland posts no comment itself: the one writer of the delivery comment is the flush (#328)"
+/usr/bin/grep -q "Closed #7 after merging PR #41" "$dq" && ok "the closing comment names the merged PR" || ko "the delivery comment does not name the merged PR: $(cat "$dq" 2>/dev/null)"
 reset; r=$(CHECKS="$RED" LOG="$BASE_LOG" pl); merged && ok "red on the baseline only: merged" || ko "baseline red not merged: '$r'"
 reset; r=$(CHECKS="$RED" LOG="${BASE_LOG}2026-10-13T11:44:53.6Z FAILED tests/test_new.py::test_c - boom\n" pl)
 merged && ko "a failure outside the baseline was merged" || ok "a failure outside the baseline is not merged"

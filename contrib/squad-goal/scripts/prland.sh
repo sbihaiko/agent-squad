@@ -24,7 +24,7 @@
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 here="$(cd "$(dirname "$0")" && pwd)"
 export SG_GH_PASS=prland
-SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"
+SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.sh"
 G="/usr/bin/git -C $SG_CHECKOUT"; A="$SG_STATE/auto"; mkdir -p "$A"; now=$(date +%s)
 cd "$SG_STATE" || exit 0   # the pass runs outside every checkout: `gh pr merge --delete-branch` then touches the remote branch only
 BL=${SG_CI_BASELINE:-$SG_CHECKOUT/contrib/squad-goal/ci-baseline.txt}
@@ -95,7 +95,8 @@ for n in $(printf '%s' "$pl" | jq -r '.[].number'); do
   ms=$(gh_api "repos/$SG_REPO/pulls/$n" -q '.merge_commit_sha // ""') || ms=""
   rm -f "$A"/prland-*-"$n"-*
   gh_send -X PATCH "repos/$SG_REPO/issues/$i" -f state=closed -f state_reason=completed >/dev/null || { echo "PRLAND: #$i did not close after the merge of #$n"; continue; }
-  gh_send -X POST "repos/$SG_REPO/issues/$i/comments" -F body=@- >/dev/null <<EOT
+  mkdir -p "$SG_STATE/cq"   # the delivery comment goes through the queue: cqflush.sh keeps one per issue, edited in place (#328)
+  cat > "$(sg_cq_delivery "$i" "land$$")" <<EOT
 Closed #$i after merging PR #$n into ${SG_BASE:-main} as ${ms:-(sha not readable)} (squash, $br deleted). The check failed on the known baseline only (contrib/squad-goal/ci-baseline.txt, #36). Refs #$i
 EOT
   echo "PRLAND MERGED #$n as ${ms:-?} into ${SG_BASE:-main}, closed #$i"

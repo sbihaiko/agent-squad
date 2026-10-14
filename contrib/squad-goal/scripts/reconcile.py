@@ -28,6 +28,7 @@ prs = js("api", f"repos/{REPO}/pulls?state=open&per_page=100") or []
 refs = {}
 for p in prs:
     for n in re.findall(r"[Rr]efs #(\d+)", (p.get("title") or "") + "\n" + (p.get("body") or "")): refs.setdefault(int(n), p["number"])
+def labels_of(n): return [x.get("name") for x in js("api", f"repos/{REPO}/issues/{n}/labels") or []]
 def move(n, to, why):
     cur = items.get(str(n)) or None
     if cur in FLOW and FLOW[to] < FLOW[cur]:   # the card itself is the watermark: its column is the furthest the work reached, and the shipped flow order fixes which way is back
@@ -35,7 +36,7 @@ def move(n, to, why):
         print(f"BACKWARD #{n}: {cur} -> {to} refused, the card keeps {cur}" + (f" and carries the tag {TAG}" if tag else "") + f" ({why})")
         if tag:
             print(f"{'TAG' if APPLY else 'WOULD TAG'} #{n} {TAG}")
-            if APPLY: gh("api", "--method", "POST", f"repos/{REPO}/issues/{n}/labels", "-f", f"labels[]={TAG}")
+            if APPLY and TAG not in labels_of(n): gh("api", "--method", "POST", f"repos/{REPO}/issues/{n}/labels", "-f", f"labels[]={TAG}")   # the tag is written once: a card that carries it already gets no write (#328)
         return
     print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {to} ({why})")
     if APPLY: subprocess.run([MOVE, OWNER, str(BOARD), to, str(n)], capture_output=True)

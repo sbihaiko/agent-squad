@@ -132,11 +132,11 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
-  off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on PR #%s: switched off in models.json.\n" "$m" "$pr" > "$(sg_cq_file "$iss-moff$$.md")"; continue; }
-  hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$(sg_cq_file "$iss-mhours$$.md")"; continue; }
+  off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on PR #%s: switched off in models.json.\n" "$m" "$pr" > "$(sg_cq_status "$iss" "moff$$")"; continue; }
+  hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on PR #%s: outside its window in models.json.\n" "$m" "$pr" > "$(sg_cq_status "$iss" "mhours$$")"; continue; }
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
-  [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s for PR #%s (previous model failed %s times).\n" "$prev" "$m" "$pr" "$tries" > "$(sg_cq_file "$iss-mswitch$$.md")"
+  [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s for PR #%s (previous model failed %s times).\n" "$prev" "$m" "$pr" "$tries" > "$(sg_cq_status "$iss" "mswitch$$")"
   tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for an aging PR, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   for i in $(seq 1 $tries); do
@@ -155,9 +155,9 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_SHARED/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
     if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$SG_STATE/review-$pr.err" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
       python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_SHARED/agy-limited"
-      printf "MODEL_QUOTA review %s skipped until %s for PR #%s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$pr" > "$(sg_cq_file "$iss-mquota$$.md")"
+      printf "MODEL_QUOTA review %s skipped until %s for PR #%s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$pr" > "$(sg_cq_status "$iss" "mquota$$")"
       rc=99; break; fi
-    [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on PR #%s after %ss; next model.\n" "$m" "$pr" "$tmo" > "$(sg_cq_file "$iss-mtimeout$$.md")"; break; }
+    [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on PR #%s after %ss; next model.\n" "$m" "$pr" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$")"; break; }
     # the verdict goes on line 1 in the exact form the loop parses (revci/autopilot/hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
     if [ $rc = 0 ] && [ -s "$out" ] && [ -f "$(dirname "$0")/revformat.py" ]; then
@@ -166,12 +166,12 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       # closes with a summary is a FORMAT failure of this try (#1777) -- the chain moves on and the issue says so,
       # instead of the prose passing silently as a review.
       if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out" 2>/dev/null); then
-        printf "MODEL_FORMAT review %s on PR #%s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$pr" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$(sg_cq_file "$iss-mformat$$.md")"
+        printf "MODEL_FORMAT review %s on PR #%s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$pr" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$(sg_cq_status "$iss" "mformat$$")"
         fmt=1; rc=1; break
       fi
     fi
     grep -q 'VERDICT' "$out" 2>/dev/null && [ $rc = 0 ] && { echo "$head" > "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
   done
-  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on PR #%s: exit %s, %s\n" "$m" "$pr" "$rc" "$(tail -c 300 "$SG_STATE/review-$pr.err" | tr '\n' ' ')" > "$(sg_cq_file "$iss-mfail$$-$i.md")"; prev=$m
+  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on PR #%s: exit %s, %s\n" "$m" "$pr" "$rc" "$(tail -c 300 "$SG_STATE/review-$pr.err" | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$i")"; prev=$m
 done
 echo "VERDICT: BLOCKED (every review model failed)" > "$out"; exit 1

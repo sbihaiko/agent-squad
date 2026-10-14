@@ -17,6 +17,11 @@ sg_cq_file() {
   case "${SG_REPO:-}" in ?*/?*) ;; *) echo "sg_cq_file: no repository in force for $leaf" >&2; return 1;; esac
   printf '%s/cq/%s#%s\n' "${SG_STATE:?sg_cq_file: no state directory}" "${SG_REPO/\//__}" "$leaf"
 }
+# One loop comment of a kind per issue or PR (#328): `sg_cq_status <n> <tag>` and `sg_cq_delivery <n> <tag>` name a queue file that
+# cqflush.sh does not post blindly. It finds the comment carrying the hidden marker of that kind (status or delivery), edits it when the body
+# differs, and writes nothing when it is the same. Every writer of a status or a delivery comment names its file through these two.
+sg_cq_status() { sg_cq_file "$1-status~$2.md"; }
+sg_cq_delivery() { sg_cq_file "$1-delivery~$2.md"; }
 # The repositories the profile works, one per line, the primary first, each once. A profile names them in SG_REPOS. A
 # profile that still names the retired SG_TOOLING_REPO has that repository read as one more entry after SG_REPO.
 sg_repos() {
