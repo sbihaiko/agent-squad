@@ -59,4 +59,23 @@ for attempt in 1 2 3; do
 done
 [ "$cut" = 1 ] && ok "the holder's watchdog is found by the hold it sleeps, and its sleep is cut" || ko "no watchdog sleep to cut short"
 [ "$rc" = 7 ] && ok "a watchdog sleep cut short is not a deadline: the exit code passes through" || ko "a cut-short sleep failed the holder (rc=$rc)"
+
+# (#392) A pid is not an identity: the system reuses one. The holder records the start time of its own pid beside it, and a lock
+# whose token does not name the process alive now is stale -- another process wears that number. The gate takes that lock and
+# runs; it never waits for a holder that is gone. The token is read back against the pid the lock names.
+rm -rf "$SG_STATE/locks/gui"
+bash "$src" gui sh -c 'sleep 2' & hp=$!
+for i in $(seq 1 30); do [ -s "$SG_STATE/locks/gui/inc" ] && break; sleep 0.1; done
+lp=$(cat "$SG_STATE/locks/gui/pid" 2>/dev/null)
+[ -n "$lp" ] && [ "$(cat "$SG_STATE/locks/gui/inc" 2>/dev/null | tr -d ' ')" = "$(/bin/ps -o lstart= -p "$lp" 2>/dev/null | tr -d ' ')" ] && ok "the holder records the incarnation of its pid" || ko "no incarnation recorded for holder pid ${lp:-?}"
+wait "$hp"
+prior=$(mkorphan "$T/prior"); rec=$(/bin/ps -o lstart= -p "$prior" 2>/dev/null | tr -s ' ')   # the incarnation the lock records
+sleep 1.1   # the next process starts in another wall second: its start time is provably another incarnation
+reused=$(mkorphan "$T/reused"); now=$(/bin/ps -o lstart= -p "$reused" 2>/dev/null | tr -s ' ')   # the incarnation that wears the number now
+[ -n "$rec" ] && [ -n "$now" ] && [ "$rec" != "$now" ] && ok "the fixture holds two incarnations of one pid number" || ko "the fixture holds one incarnation ('$rec' / '$now')"
+rm -rf "$SG_STATE/locks/gui"; mkdir -p "$SG_STATE/locks/gui"
+echo "$reused" > "$SG_STATE/locks/gui/pid"; printf '%s\n' "$rec" > "$SG_STATE/locks/gui/inc"
+out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo ran' 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$out" = ran ] && ok "a lock whose recorded pid was reused is stale and is taken over" || ko "the reused-pid lock blocked the gate (rc=$rc out=$out)"
+kill -9 "$prior" "$reused" 2>/dev/null
 rm -rf "$T"; exit $fail
