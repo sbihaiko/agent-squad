@@ -1300,44 +1300,51 @@ def gh_door_read(*args):
     if p.returncode: raise RuntimeError(" ".join(p.stdout.split()) or f"the GitHub read exited {p.returncode}")
     return p.stdout
 
-def open_prs_of(repo):
-    """The open PRs of ONE repository, out of the batched OPEN_PR_QUERY, read through the door: its rows each carry the
-    repository as `r`, or None when the read returned nothing usable (the caller keeps the last good rows, #1772).
+LAND = os.environ.get("SG_LAND_BRANCH") or "dev"   # the branch a work branch lands in: a branch is open while it holds commits this one lacks
+WORK_BRANCH = re.compile(r"(?:fix|gui)/(\d+)(?:\D.*)?$")
 
-    The batched query stays the read. The door's aggregate route for the open PRs (`repos/<o>/<r>/pulls?state=open`)
-    carries the head, the draft flag, the labels, the review-thread count and the check rollup, and not the merge state,
-    the base ref, the head commit date or a check's own id, which the strip and the chip read (#1772); ADR-0277 puts a
-    read behind the interface and never changes which facts it reads. So the read keeps its query and takes the door's
-    `gh_get`, the one function that carries a document `gh_api` cannot: its route is a path, and this is a query."""
-    own, name = repo.split("/", 1)
-    po = gh_door_read("gh_get", "graphql", "-f", "query=" + OPEN_PR_QUERY % (own, name))
-    return prs_from_graphql(json.loads(po), repo) if po.strip() else None
+def open_branches_of(repo):
+    """The open work branches of ONE repository: every remote `fix|gui/<n>-...` branch with commits the landing branch lacks.
+    A row is `{"n": issue, "t": branch, "u": date of its newest commit, "ps": "ahead N", "br": True, "r": repo}`. No pull
+    request is read: the branch list and one compare per work branch, through the door."""
+    rows = []
+    for b in json.loads(gh_door_read("gh_api", f"repos/{repo}/branches?per_page=100") or "[]"):
+        m = WORK_BRANCH.match(b.get("name") or "")
+        if not m: continue
+        cmp = json.loads(gh_door_read("gh_api", f"repos/{repo}/compare/{LAND}...{b['commit']['sha']}") or "{}")
+        if cmp.get("status") not in ("ahead", "diverged"): continue   # the tip is in the landing branch: the branch is landed, not open
+        last = ((cmp.get("commits") or [{}])[-1].get("commit") or {}).get("committer") or {}
+        rows.append({"n": int(m.group(1)), "t": b["name"], "u": last.get("date") or "", "o": "", "h": b["commit"]["sha"],
+                     "ps": f"ahead {cmp.get('ahead_by', 0)}", "br": True, "r": repo})
+    return rows
 
-def closed_prs_of(repo):
-    """The latest page of ONE repository's closed PRs, each row tagged with its repository. The door answers the route's
-    JSON and the projection the call used to hand `gh` is taken here, on the answer it verified (ADR-0277)."""
-    pc = gh_door_read("gh_api", f"repos/{repo}/pulls?state=closed&per_page=100&sort=updated&direction=desc")
-    return [{"n": x["number"], "t": x["title"], "c": x.get("merged_at") or x.get("closed_at"),
-             "m": x.get("merged_at") is not None, "r": repo} for x in (json.loads(pc) if pc.strip() else [])]
+def _landed_ledger():
+    """The rows `branchland.sh` keeps for each branch it put in the landing branch: epoch, branch, landed sha, issue."""
+    try: lines = (STATE / "landed.tsv").read_text().splitlines()
+    except OSError: return []
+    return [f for f in (l.split("\t") for l in lines) if len(f) >= 4 and f[0].isdigit() and f[3].isdigit()]
 
-def closed_total_of(repo):
-    """The real number of closed PRs of ONE repository: the list itself is only the latest page (None when the answer
-    carries no count a reader may act on)."""
-    pt = gh_door_read("gh_api", f"search/issues?q=repo:{repo}+is:pr+is:closed&per_page=1")
-    try: return int((json.loads(pt) or {}).get("total_count"))
-    except (AttributeError, TypeError, ValueError): return None
+def landed_branches_of(repo):
+    """The latest page of the branches landed in the landing branch, from the ledger (a landed branch is deleted, so the
+    remote no longer lists it). Each row names the branch and the landed sha, and carries the landing time as `c`."""
+    return [{"n": int(f[3]), "t": f"{f[1]} · {f[2][:7]}", "c": dt.datetime.fromtimestamp(int(f[0]), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "m": True, "r": repo} for f in _landed_ledger()[-100:]]
+
+def landed_total_of(repo):
+    """How many branches the ledger says landed."""
+    return len(_landed_ledger())
 
 def prs_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
-    """One read of the OPEN PRs and Closed PRs columns for EVERY repository the hub is told to read (#1820), in place
+    """One read of the open and landed branch lanes for EVERY repository the hub is told to read (#1820), in place
     of the single-repository read the column carried before it. Each repository is read on its own, through the three
     fetchers it is given (the seam the tests stub), and contributes its own rows -- each row named by `r`.
 
     A repository the hub cannot read adds its error to the returned `errs` and keeps the last good rows of ITS OWN from
     the cache: an unreachable repository is an error on the column, never a silently empty one, and never a reason to
     drop the rows of the repository that answered. Returns (rows, prev, prev_n, errs)."""
-    fetch_open = fetch_open or open_prs_of
-    fetch_closed = fetch_closed or closed_prs_of
-    fetch_total = fetch_total or closed_total_of
+    fetch_open = fetch_open or open_branches_of
+    fetch_closed = fetch_closed or landed_branches_of
+    fetch_total = fetch_total or landed_total_of
     repos = REPOS if repos is None else repos
     last_prs, last_prev = board_cache.get("prs") or [], board_cache.get("prev") or []
     last_n = dict(board_cache.get("prev_n_of") or {})
@@ -1565,7 +1572,9 @@ def board(kind=None, outcome=None):
         return (min(w) if w else 10**9, x["n"])
     groups = [{"name": n, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == COLUMN["issue_closed"] else sorted(by.get(n, []), key=wave)} for n in names]
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
-    for x in prs: x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t")); x["pb"] = pr_badge(x)   # the chip, the R C T B H strip under it (#1772), the lane's badge (#247)
+    for x in prs:
+        if x.get("br"): x.setdefault("gs", None); x.setdefault("pb", None); continue   # a work branch has no review strip and no badge: its chip is its standing against dev
+        x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t")); x["pb"] = pr_badge(x)   # the chip, the R C T B H strip under it (#1772), the lane's badge (#247)
     prev = sorted(board_cache.get("prev", []), key=lambda p: p["c"] or "", reverse=True)
     # Every card names its repository (#1820): `r` is the full owner/name (what a link and the popup read), `rt` the tag
     # the card wears (MesenAI / agent-squad, or owner/repo when the short name names more than one repository).
@@ -2001,7 +2010,7 @@ function kr(label,sub,v,unit,base,lowerBetter=true){if(v==null)return`<div class
     const pct=`<span class="${good?"good":"bad"}">${Math.abs(d)}% ${lowerBetter?(d<0?"faster":"slower"):(d>0?"more":"fewer")}</span>`;
     chip=d===0?`<span class=d>was ${base}${u?" "+u:""}</span>`:`<span class=d>was ${base}${u?" "+u:""} · ${pct}</span>`}
   return `<div class=kr><span class=l>${label}${sub?`<small>${sub}</small>`:""}</span><b${v===0?" class=m":""}>${v}${u?`<small>${u}</small>`:""}</b>${chip}</div>`}
-function openRows(o){return `<h4>Open PRs <small>oldest first</small></h4>`
+function openRows(o){return `<h4>Open branches <small>oldest first</small></h4>`
   +(o&&o.length?o.map((x,i)=>`<div class=kr><span class=l>#${x.n} · <b${x.min>=30?" class=w":""}>${x.min}</b> min${i===0?" (warns at 30)":""}</span></div>`).join("")
    :`<div class=kr><span class=l>none open</span></div>`)}
 let mdl=null,mdlSrv="",mdlMsg="";const MLAB={coding_models:"Coding",review_models:"Review",vision_models:"Vision"},MDESC={coding_models:"Writes the code in squad runs.",review_models:"Reviews each PR independently.",vision_models:"Looks at screenshots and images."},EFF=["low","medium","high","max"];

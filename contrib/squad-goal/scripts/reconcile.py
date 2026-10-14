@@ -24,10 +24,13 @@ def js(*a):
 _here = os.path.dirname(os.path.abspath(__file__)); MOVE = os.path.join(_here, "board.sh")
 try: items = board_state(owner=OWNER, project=BOARD, repo=REPO, kind=None).read_all()   # the state each card carries, asked of the seam (a user or an org owner, cached a month); the carrier is the binding's business (#236)
 except RuntimeError: sys.exit("board unreadable")
-prs = js("api", f"repos/{REPO}/pulls?state=open&per_page=100") or []
-refs = {}
-for p in prs:
-    for n in re.findall(r"[Rr]efs #(\d+)", (p.get("title") or "") + "\n" + (p.get("body") or "")): refs.setdefault(int(n), p["number"])
+LAND = os.environ.get("SG_LAND_BRANCH") or "dev"   # the branch a work branch lands in: a card is Done when its branch is in it
+refs = {}   # issue -> its work branch, for a branch that holds commits the landing branch lacks (the branch read, never a pull request, #358)
+for b in js("api", f"repos/{REPO}/branches?per_page=100") or []:
+    m = re.match(r"(?:fix|gui)/(\d+)(?:\D.*)?$", b.get("name") or "")
+    if not m: continue
+    cmp = js("api", f"repos/{REPO}/compare/{LAND}...{b['commit']['sha']}") or {}
+    if cmp.get("status") in ("ahead", "diverged"): refs.setdefault(int(m.group(1)), b["name"])
 def labels_of(n): return [x.get("name") for x in js("api", f"repos/{REPO}/issues/{n}/labels") or []]
 def move(n, to, why):
     cur = items.get(str(n)) or None
@@ -66,7 +69,7 @@ for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[
     deps = blockers(st.get("body"))
     if st["state"] == "closed" and cur != BY_FACT["issue_closed"]: move(n, BY_FACT["issue_closed"], "issue closed")
     elif st["state"] == "open" and cur == BY_FACT["issue_closed"]: move(n, BY_FACT["unclaimed"], "the issue is open again, so the work was taken back")   # the facts earn the floor; `move` refuses to walk the card back and tags it instead
-    elif st["state"] == "open" and i in refs and cur in (BY_FACT["unclaimed"], BY_FACT["claimed"], BY_FACT["blocked"], None): move(n, BY_FACT["open_pr"], f"open PR #{refs[i]}")
+    elif st["state"] == "open" and i in refs and cur in (BY_FACT["unclaimed"], BY_FACT["claimed"], BY_FACT["blocked"], None): move(n, BY_FACT["open_pr"], f"work branch {refs[i]} is ahead of {LAND}")
     elif st["state"] == "open" and deps:
         open_deps = [d for d in deps if is_open(d)]
         if open_deps and cur in (BY_FACT["unclaimed"], None): move(n, BY_FACT["blocked"], "blocked by open " + ", ".join(f"#{d}" for d in open_deps))
