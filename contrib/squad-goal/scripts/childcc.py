@@ -40,7 +40,7 @@ for r in (st / "active-runs.txt").read_text().split():
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             unmapped.append(d["node"])
     mk = A / f"parent-{pathlib.Path(r).name}"
-    if not mk.exists() and len(set(issue.values())) > 1:   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
+    if not finished and not mk.exists() and len(set(issue.values())) > 1:   # a finished run gets no parent: no backfill (#340)   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
         try: print(f"RUN PARENT #{state.group_run(pathlib.Path(r).name, issue.values())} ({pathlib.Path(r).name})"); mk.touch()
         except RuntimeError as e: print(f"RUN PARENT FAILED {pathlib.Path(r).name}: {e}")   # no marker: the next pass asks again
     for child, why in done:
