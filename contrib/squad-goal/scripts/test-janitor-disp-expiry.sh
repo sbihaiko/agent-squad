@@ -15,6 +15,10 @@
 #  the suite names, never a pass: with a stub that always answers In Progress, R's own Code Complete write stays hidden.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
 # usage: bash test-janitor-disp-expiry.sh [janitor.py]
+# The suite declares its own world (#393): the loop's own shell exports SG_* (SG_BOARD_VOCAB=shipped, SG_FORK_DIR, SG_LAND_BRANCH,
+# ...), and those reached the janitor below, which then took the shipped path and its fork rules instead of the fixture's. A hand
+# run went red on the owner's machine where shell-suites.sh -- which clears every SG_* for the gate -- stayed green.
+for v in $(env | /usr/bin/grep -o '^SG_[A-Za-z0-9_]*'); do unset "$v"; done
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
 cat > "$T/s/board.sh" <<'B'
@@ -34,6 +38,9 @@ cat > "$T/bin/gh" <<'J'
 case "$*" in
   # the live API answers a POST to /search/issues with Not Found and a non-zero body, which a caller reading `.total_count` sees as "a PR exists" (#1981): the stub refuses it the same way
   *search/issues*) case "$*" in *"-X GET"*|*"--method GET"*) case "$*" in *"is:merged"*) echo 0;; *"Refs #904"*|*"Refs #908"*) echo 1;; *) echo 0;; esac;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac;;
+  # a work branch names the issue (#382: the janitor reads branches, never pull requests): #904 and #908 each have one, ahead of the landing branch
+  *repos/x/y/branches*) printf 'fix/904-x sha904\nfix/908-x sha908\n';;
+  *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) for n in 901 902 903 904; do s=$(/usr/bin/grep "^o 4 .* $n\$" "TMPDIR/board.calls" 2>/dev/null | tail -1 | sed "s/^o 4 \(.*\) $n\$/\1/"); printf '%s\t%s\n' "$n" "${s:-In Progress}"; done;;   # one read, every card: the column the pass last wrote, In Progress before any write

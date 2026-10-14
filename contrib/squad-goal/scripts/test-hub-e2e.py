@@ -7,7 +7,7 @@ copy of the skill on its own port, so the live hub and the real models.json are 
 touched. Needs playwright (python) and Chrome; without either it prints SKIP and exits 0.
 Port: SG_HUB_E2E_PORT (7799). Artifacts: SG_HUB_E2E_ARTIFACTS (default a temp dir).
 """
-import json, os, pathlib, shutil, signal, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import json, os, pathlib, re, shutil, signal, subprocess, sys, tempfile, time, urllib.error, urllib.request
 
 SKILL = pathlib.Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get("SG_HUB_E2E_PORT", "7799"))
@@ -16,6 +16,11 @@ REPO = os.getcwd()
 S = pathlib.Path(os.environ.get("SG_HUB_E2E_ARTIFACTS") or tempfile.mkdtemp(prefix="hub-e2e-"))
 shutil.copytree(SKILL, S / "skill", ignore=shutil.ignore_patterns("__pycache__"))
 MODELS = S / "skill/scripts/models.json"
+# The panel checks below read one row that carries a window, so the copy's review chain head is given one: the shipped
+# chain follows the owner's tuning, and a suite that pinned a model id went red the day that chain changed (#393).
+_m = json.loads(MODELS.read_text())
+_m.setdefault("hours", {}).setdefault("review_models", {})[_m["review_models"][0]] = "19-07"   # merged: the shipped windows stay
+MODELS.write_text(json.dumps(_m, indent=2) + "\n")
 def browser_ok():
     """Probe in a child process: a sync playwright session started here would keep its event loop alive."""
     code = "from playwright.sync_api import sync_playwright\nwith sync_playwright() as p: p.chromium.launch(channel='chrome').close()"
@@ -72,14 +77,20 @@ def gate(at, sha9, reason, text):
 def stamp(at):
     """auto/.pass: the epoch of the loop's last pass."""
     (ST / "auto/.pass").write_text(f"{int(at)}\n")
-for kind, at in (("launched", NOW - 1500), ("rereview", NOW - 240)):
+REREVIEW_MK = NOW - 240   # the re-queue marker's age: the card's retry line counts down from it (#393)
+REREVIEW_MIN = 20         # the hub's own window: the throwaway hub is started with no SG_REREVIEW_MINUTES of its own
+for kind, at in (("launched", NOW - 1500), ("rereview", REREVIEW_MK)):
     mk = ST / f"auto/{kind}-1491-{PR9}"
     mk.write_text(""); os.utime(mk, (at, at))
 with (ST / "review-times.tsv").open("a") as f:
     f.write("%s\t1491\tdeepseek-v4-flash\t120\t142\n" % time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(NOW - 30)))
 p = subprocess.Popen([sys.executable, str(S / "skill/scripts/hub.py"), str(PORT)], cwd=REPO,
                      stdout=open(S / "hub.log", "w"), stderr=subprocess.STDOUT, start_new_session=True,
-                     env=dict(os.environ, SG_HUB_DIR=str(S / "hubdir"), SG_STATE=str(ST),
+                     # the caller's SG_* never reaches the throwaway hub (#393): the loop's own shell exports SG_BOARD_CACHE
+                     # (the live board), so the OPEN PRS lane served the live cards and held none of this fixture's. Every
+                     # variable under test is pinned here, and nothing of the caller but the platform is passed on.
+                     env=dict({k: v for k, v in os.environ.items() if not k.startswith("SG_")},
+                              SG_HUB_DIR=str(S / "hubdir"), SG_STATE=str(ST),
                               SG_REPO="squad-hub-e2e/none", SG_OWNER="squad-hub-e2e", SG_PROJECT="0", SG_CHECKOUT=REPO))
 try:
     ck(wait_up(), "hub answers /api/version")
@@ -149,38 +160,47 @@ try:
         card = next((x for x in pv if x["n"] == "1491"), None)
         ck(card is not None, "the OPEN PRS column renders the timed-out PR's card", pv)
         ck(card and card["chip"] == "review timed out · deepseek-v4-flash · 120 s", "the chip names the model and the seconds it burned", card)
-        ck(card and card["line"] == "retry in 16 min", "the muted line says when the loop retries", card)
+        # the retry line counts down from the marker's age (#393), and the page is read seconds after the fixture built it,
+        # so a hardcoded minute was a race that went red whenever the read crossed 60 s: the test recomputes the hub's own
+        # countdown and allows the page the minute it was rendered on, or the one after it
+        left = REREVIEW_MK + REREVIEW_MIN * 60 - time.time()
+        want = int(-(-left // 60))
+        retry = re.fullmatch(r"retry in (\d+) min", card["line"] if card else "")
+        ck(bool(card) and retry is not None and want <= int(retry.group(1)) <= want + 1, "the muted line says when the loop retries", card)
         ck(card and "deepseek-v4-flash 120 s · timed out" in card["tip"], "the chip's tooltip lists the attempt for this head", card and card["tip"])
         ck(card and card["over"] <= 1 and card["cover"] <= 1 and card["rover"] <= 1, "the card does not overflow the column", card)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
         pg.wait_for_selector('#mbody input[data-hr="coding_models|claude-sonnet-5-5"]', timeout=15000)
-        rows = pg.eval_on_selector_all("#mbody .mr", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
+        # the Router queue's rows are `.mr` too and carry no hours input (#393): read only the rows that have one
+        rows = pg.eval_on_selector_all("#mbody .mr:has(input.hr)", "els=>els.map(e=>({m:e.querySelector('.mn').textContent,hr:e.querySelector('input.hr').value,ph:e.querySelector('input.hr').placeholder}))")
         ck(len(rows) >= 6, f"panel renders the chains' rows ({len(rows)})", rows)
         by = {r["m"]: r for r in rows}
+        head = json.loads(MODELS.read_text())["review_models"][0]   # the chain's head, the review row this copy gave a window to
         ck(by.get("claude-sonnet-5-5", {}).get("hr") == "19-07", "coding claude-sonnet-5-5 shows 19-07", by.get("claude-sonnet-5-5"))
-        ck(by.get("claude-opus-5-5", {}).get("hr") == "19-07", "review claude-opus-5-5 shows 19-07", by.get("claude-opus-5-5"))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
-        ck(by.get("gemini-3.8-flash-high", {}).get("hr") == "", "gemini-3.8-flash-high has no window (all day)", by.get("gemini-3.8-flash-high"))
+        ck(by.get(head, {}).get("hr") == "19-07", f"review {head} shows 19-07", by.get(head))   # the panel shows bare ids; review.sh's `claude:` prefix is added on the way into models.json
+        idle = next(m for m in json.loads(MODELS.read_text())["review_models"] if m != head and not json.loads(MODELS.read_text()).get("hours", {}).get("review_models", {}).get(m))   # a chain member with no window
+        ck(by.get(idle, {}).get("hr") == "", f"{idle} has no window (all day)", by.get(idle))
         ck(all(r["ph"] == "always" for r in rows), "empty rows read 'always'", [r for r in rows if r['ph']!='always'])
         ck(pg.is_disabled("#msv"), "Save starts disabled (nothing dirty)")
-        cur = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("gemini-3.8-flash-high", "")
+        cur = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get(idle, "")
         want = "21-05" if cur != "21-05" else "20-04"
-        pg.fill('input[data-hr="review_models|grok-4.5"]', want)
-        pg.dispatch_event('input[data-hr="review_models|grok-4.5"]', "change")
+        pg.fill(f'input[data-hr="review_models|{idle}"]', want)
+        pg.dispatch_event(f'input[data-hr="review_models|{idle}"]', "change")
         pg.wait_for_timeout(300)
         ck(not pg.is_disabled("#msv"), "Save wakes up on an edit")
         pg.click("#msv")
         pg.wait_for_timeout(900)
-        saved = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get("gemini-3.8-flash-high")
+        saved = json.loads(MODELS.read_text())["hours"].get("review_models", {}).get(idle)
         ck(saved == want, f"the browser's Save wrote {want} to models.json", saved)
         ck("saved" in pg.inner_text(".msave .st").lower(), "the panel says saved", pg.inner_text(".msave .st")[:60])
         pg.reload(wait_until="domcontentloaded"); pg.wait_for_timeout(1200)
         if not pg.eval_on_selector("details#mdl", "e=>e.open"): pg.click("details#mdl > summary")
-        pg.wait_for_selector('input[data-hr="review_models|grok-4.5"]', timeout=15000)
-        ck(pg.input_value('input[data-hr="review_models|grok-4.5"]') == want, "survives a reload", pg.input_value('input[data-hr="review_models|grok-4.5"]'))
-        pg.fill('input[data-hr="review_models|grok-4.5"]', "99-99")
-        pg.dispatch_event('input[data-hr="review_models|grok-4.5"]', "change")
+        pg.wait_for_selector(f'input[data-hr="review_models|{idle}"]', timeout=15000)
+        ck(pg.input_value(f'input[data-hr="review_models|{idle}"]') == want, "survives a reload", pg.input_value(f'input[data-hr="review_models|{idle}"]'))
+        pg.fill(f'input[data-hr="review_models|{idle}"]', "99-99")
+        pg.dispatch_event(f'input[data-hr="review_models|{idle}"]', "change")
         pg.wait_for_timeout(300)
-        ck(pg.input_value('input[data-hr="review_models|grok-4.5"]') == "", "a garbage window never enters the field", pg.input_value('input[data-hr="review_models|grok-4.5"]'))
+        ck(pg.input_value(f'input[data-hr="review_models|{idle}"]') == "", "a garbage window never enters the field", pg.input_value(f'input[data-hr="review_models|{idle}"]'))
         ov = pg.eval_on_selector("#side", "e=>({sw:e.scrollWidth,cw:e.clientWidth})")
         ck(ov["sw"] <= ov["cw"] + 1, "the sidebar has no horizontal overflow", ov)
         wide = pg.eval_on_selector_all("#mbody .mr", "els=>els.map(e=>[e.querySelector('.mn').textContent, e.scrollWidth-e.clientWidth]).filter(x=>x[1]>1)")
