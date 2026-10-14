@@ -52,7 +52,7 @@ rm -rf "$SG_STATE/locks/gate"
 rc=1; cut=0
 for attempt in 1 2 3; do
   SERIAL_HOLD_SECONDS=4242 bash "$src" gate sh -c 'sleep 3; exit 7' 2>/dev/null & hp=$!
-  sp=""; for i in $(seq 1 30); do sp=$(/bin/ps -o pid=,command= -ax | awk '$NF=="4242" && $2 ~ /sleep/ {print $1}'); [ -n "$sp" ] && break; sleep 0.1; done
+  sp=""; for i in $(seq 1 30); do sp=$(/bin/ps -ww -o pid=,command= -ax | awk '$NF=="4242" && $2 ~ /sleep/ {print $1}'); [ -n "$sp" ] && break; sleep 0.1; done
   [ -n "$sp" ] && { cut=1; kill -TERM "$sp" 2>/dev/null; }
   wait "$hp"; rc=$?
   [ "$cut" = 1 ] && break
