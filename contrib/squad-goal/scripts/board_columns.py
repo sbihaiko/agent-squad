@@ -123,6 +123,54 @@ def kind_groups(kinds, rows):
     return out
 
 
+OUTCOME_LABEL = "outcome:"
+OUTCOME_ROLE = {"merged": "Merged", "abandoned": "Abandoned"}   # the outcome a merged and a given-up item take; both are entries of the set
+
+
+def shipped_outcomes():
+    """The outcomes of the shipped definition, in its order: the one closed set a filter or a gap is judged against."""
+    return [o["name"] for o in json.loads(_pinned_text())["outcomes"]]
+
+
+def outcome_of(closed, merged=None, column=None, labels=()):
+    """The outcome one closed item carries, None for an open one.
+
+    An `outcome:<name>` label says it outright (a failed test, a reverted change). Otherwise a pull request is merged or not
+    (`merged` is set only for a pull request), and an issue is abandoned when its column says so and merged into main when
+    it is Closed. A name the set does not hold is returned as written, so the caller reports it as a gap."""
+    if not closed: return None
+    named = {o.lower(): o for o in shipped_outcomes()}
+    for l in labels or ():
+        if l.startswith(OUTCOME_LABEL):
+            word = l[len(OUTCOME_LABEL):]
+            return named.get(word.lower(), word)
+    if merged is not None: return OUTCOME_ROLE["merged"] if merged else OUTCOME_ROLE["abandoned"]
+    return OUTCOME_ROLE["abandoned"] if column == ROLE["abandoned"] else OUTCOME_ROLE["merged"]
+
+
+def filter_groups(groups, kind=None, outcome=None):
+    """The kind groups the reader's filters keep. A kind keeps that kind's groups; an outcome keeps the closed items with it.
+
+    An outcome the set does not name raises: a filter is never made from a value the definition does not hold."""
+    if outcome is not None and outcome not in shipped_outcomes():
+        raise ValueError(f"{outcome!r} is not an outcome of the shipped definition")
+    out = []
+    for g in groups:
+        if kind is not None and g["kind"] != kind: continue
+        if outcome is not None:
+            if g["state"] != "closed": continue
+            items = [x for x in g["items"] if x.get("oc") == outcome]
+            g = {**g, "items": items, "n": len(items)}
+        out.append(g)
+    return out
+
+
+def outcome_gaps(groups):
+    """The closed items whose outcome the set does not name, as `{"key", "oc"}`: reported, never turned into a filter."""
+    known = set(shipped_outcomes())
+    return [{"key": x["key"], "oc": x.get("oc")} for g in groups if g["state"] == "closed" for x in g["items"] if x.get("oc") not in known]
+
+
 # Every terminal entry carries its condition in text on the issue (spec #132, #245). The tag is what a later pass reads to
 # know the comment is there, so a settled card is backfilled once and never twice.
 TERMINAL = ("Closed", "Abandoned")
