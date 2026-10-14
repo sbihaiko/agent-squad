@@ -12,6 +12,7 @@
 : "${SG_REVIEW_RULES:=the repo's AGENTS.md/CLAUDE.md rules; a view constructs, binds and delegates - it never reaches a file, a client, application state or a domain service, and each rule lives where no host is needed to test it (ADR-0137)}"
 : "${SG_CODING_RULES:=follow AGENTS.md; bug fixes in TDD with the RED output in the issue status comment; a view constructs, binds and delegates - keep the rule in the layer the host-free test project compiles, never read a file, open a client, mutate application state or instantiate a domain service from a view (ADR-0137)}"
 : "${SG_ROOT_NAME:=repo}"
+# : "${SG_WAVE_GATES:=uv run --extra dev ruff check . && uv run --extra dev mypy && uv run --extra dev pytest -n auto -m \"not heavy\"}"   # wave.sh: the local gates a child runs in its own worktree before it enters the wave branch (env.sh's default is this repository's; an empty value refuses the entry)
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
 : "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)
 : "${SG_BUG_LABEL:=bug}"

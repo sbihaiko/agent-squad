@@ -11,6 +11,10 @@ SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
 # A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
 # the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
 : "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
+# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types and the fast
+# battery. A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
+# enters a wave ungated (ADR-0145 rule 9).
+: "${SG_WAVE_GATES:=uv run --extra dev ruff check . && uv run --extra dev mypy && uv run --extra dev pytest -n auto -m \"not heavy\" -p no:deepeval}"
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. One resolution here, and every script reads it from SG_LSOF.
 SG_LSOF="${SG_LSOF:-}"; [ -n "$SG_LSOF" ] || SG_LSOF="$(command -v lsof 2>/dev/null)"
@@ -42,7 +46,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
     echo "env.sh: profile $SG_PROFILE sets SG_TOOLING_REPO, which is retired: it is mapped into SG_REPOS for now; name $SG_TOOLING_REPO in SG_REPOS and remove SG_TOOLING_REPO from the profile" >&2; }
   unset SG_TOOLING_REPO
 fi
-export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL
+export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"
