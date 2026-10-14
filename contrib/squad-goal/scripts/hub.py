@@ -1811,6 +1811,7 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 // ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
 // a missing reading is not a high one. Red sits above the older, machine-wide amber of `#foot.warn`, and never replaces it.
 const LOAD_ERR=Number("__LOADERR__");
+const MODELRE=new RegExp("^"+__MODELID__+"$");   // the one model-id shape, substituted when the page is served (#221): the Add boxes test it, never a copy of it
 function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")return null;const f=Number(v);return(f!==f||f<0)?null:Math.min(f,100)}
 function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
 function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}
@@ -1960,8 +1961,8 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.dataset.rm){const[k,i]=t.dataset.rm.split("|");const[m]=mdl[k].splice(+i,1);mdlSetEff(k,m,"");mdlSetOff(k,m,false)}
  else if(t.dataset.rv){const[i,d]=t.dataset.rv.split("|"),a=mdl.router_models,j=+i+ +d;[a[i],a[j]]=[a[j],a[i]]}
  else if(t.dataset.rrm){mdl.router_models.splice(+t.dataset.rrm,1)}
- else if(t.dataset.raddb){const v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
- else if(t.dataset.addb){const k=t.dataset.addb,v=t.parentElement.querySelector("input").value.trim();if(!/^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$/.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
+ else if(t.dataset.raddb){const v=t.parentElement.querySelector("input").value.trim();if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl.router_models.includes(v))mdlMsg="!already in the envelope";else mdl.router_models.push(v)}
+ else if(t.dataset.addb){const k=t.dataset.addb,v=t.parentElement.querySelector("input").value.trim();if(!MODELRE.test(v))mdlMsg="!invalid model id";else if(mdl[k].includes(v))mdlMsg="!already in the chain";else mdl[k].push(v)}
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
@@ -2448,7 +2449,12 @@ MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
 ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
 READONLY = ("known", "last_coding", "envelope")   # fields models_get() adds for the panel: posted back, never stored
-MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}$")
+# One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
+# (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
+# substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
+# bracket refused every Save of the Router queue, because the queue always carries the `[1m]` id.
+MODEL_ID_SRC = r"[A-Za-z0-9][A-Za-z0-9._:\-]{0,79}(\[[A-Za-z0-9]{1,8}\])?"
+MODEL_ID = re.compile("^" + MODEL_ID_SRC + "$")
 # What /model offers that no file lists: the Claude 5 family from the session, the review (codex) ids and the Antigravity ids from `agy models`.
 # The add box carries the provider catalogues as they are, minus the two things that made it unreadable: the
 # workflow graph's prose (see known_models) and the same model under two spellings (the alias fold below). The
@@ -2749,7 +2755,7 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
-        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).encode(), "text/html; charset=utf-8"
+        else: body, ct = PAGE.replace("__REPO__", REPO).replace("__MODELID__", json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT)).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):

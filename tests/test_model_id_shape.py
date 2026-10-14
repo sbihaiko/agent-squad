@@ -67,14 +67,17 @@ def checkout(hub, monkeypatch, tmp_path):
     return graph, models
 
 
-def _panel_shapes(hub):
-    """The shapes the panel's Add boxes test with: the `/^...$/` literals of the source that serves the page.
+def _panel_shape(hub):
+    """The shape the panel's Add boxes test: the one the save validates with, substituted into the page when it is served.
 
-    Read, never copied: the defect was a second copy of the save's shape, and a copy written again in the test would
-    agree with the source by construction."""
-    pats = set(re.findall(r"if\(!/(\^[^/]*\$/)[^)]*\.test\(v\)\)mdlMsg=\"!invalid model id\"", HUB_PY.read_text()))
-    assert pats, "the panel's Add boxes no longer test an id shape"
-    return [(p, re.compile(p.strip("/"))) for p in pats]
+    Read from the source that serves it, never copied into this test: the defect was a second spelling of the shape, and
+    a test that spells it again would agree with the source by construction."""
+    src = HUB_PY.read_text()
+    assert 'const MODELRE=new RegExp("^"+__MODELID__+"$");' in src, "the page no longer carries the one shape"
+    assert '.replace("__MODELID__", json.dumps(MODEL_ID_SRC))' in src, "the served page never substitutes the shape"
+    assert src.count("MODELRE.test(v)") == 2, "both Add boxes test it"
+    assert not re.search(r"!/\(\^\[A-Za-z0-9\]\S*?\)\.test\(v\)\)", src), "a copy of the shape survives in the page"
+    return re.compile("^" + hub.MODEL_ID_SRC + "$")
 
 
 def _graph_ids():
@@ -112,8 +115,8 @@ def test_the_add_box_offers_the_ids_the_gateway_serves_with_a_context_suffix(hub
 
 
 def test_one_shape_answers_for_the_save_the_add_box_and_the_gateway(hub):
-    """MODEL_ID and every shape the panel carries agree on the ids the gateway serves and on the ones no shape takes."""
-    shapes = [hub.MODEL_ID.match] + [m.match for _, m in _panel_shapes(hub)]
+    """The save's shape and the shape the page tests agree on the ids the gateway serves and on the ones neither takes."""
+    shapes = [hub.MODEL_ID.match, _panel_shape(hub).match]
     for m in SUFFIXED + _graph_ids():
         assert [f"refuses {m!r}" for match in shapes if not match(m)] == []
     for m in REFUSED:
