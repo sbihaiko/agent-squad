@@ -7,7 +7,7 @@
 # card moves to Done. It runs beside prland.sh until the pull request path is removed: a branch with an open pull request is
 # prland's and is left alone here.
 #
-# A branch is landed when, and only when, it names an issue, has no open pull request, and every check run on its tip finished
+# A branch is landed when, and only when, it names an open issue, has no open pull request, and every check run on its tip finished
 # in success, skipped or neutral. A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
 # marker under $SG_STATE/auto, so it is said once per head and reason, and a refused push lands nothing.
@@ -29,10 +29,15 @@ heads=$(/usr/bin/git ls-remote --heads "$remote" 2>&1) || { echo "BRANCHLAND: th
 pl=$(gh_api "repos/$SG_REPO/pulls?per_page=100") || { echo "BRANCHLAND: the open-PR list is not readable: $pl"; exit 0; }
 printf '%s' "$pl" | jq -e 'type=="array"' >/dev/null 2>&1 || { echo "BRANCHLAND: the open-PR list is not a list"; exit 0; }
 prbranches=" $(printf '%s' "$pl" | jq -r '.[].head.ref' | tr '\n' ' ') "
+# Only a branch whose issue is open lands (#367): the remote keeps many old work branches whose issue closed under a pull
+# request or was dropped, and one of those would land its old commits in dev again.
+oi=$(gh_api "repos/$SG_REPO/issues?state=open&per_page=100") || { echo "BRANCHLAND: the open-issue list is not readable: $oi"; exit 0; }
+openiss=" $(printf '%s' "$oi" | jq -r '.[]|select(.pull_request|not)|.number' 2>/dev/null | tr '\n' ' ') "
 while read -r sha ref; do
   br=${ref#refs/heads/}
   i=$(printf '%s' "$br" | sed -nE 's#^(fix|gui)/([0-9]+)([^0-9].*)?$#\2#p'); [ -n "$i" ] || continue
   case "$prbranches" in *" $br "*) continue;; esac
+  case "$openiss" in *" $i "*) ;; *) continue;; esac
   cr=$(gh_api "repos/$SG_REPO/commits/$sha/check-runs") || { echo "BRANCHLAND: the checks of $br are not readable: $cr"; continue; }
   total=$(printf '%s' "$cr" | jq -r '.check_runs|length' 2>/dev/null); [ "${total:-0}" -gt 0 ] 2>/dev/null || { say wait "$br" "$sha" nocheck "no check run on ${sha:0:9} yet"; continue; }
   [ "$(printf '%s' "$cr" | jq -r '[.check_runs[]|select(.status!="completed")]|length')" = 0 ] || { say wait "$br" "$sha" running "the check on ${sha:0:9} is still running"; continue; }
