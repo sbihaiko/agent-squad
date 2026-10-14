@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
+import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1544,7 +1544,7 @@ def pr_badge(x):
     if "APPROVE" in (summary_lines(x["n"], (x.get("h") or "")[:9]) or [""])[-1]: return "approved"
     if ci and x.get("rollup") == "pass": return "green"
     return None
-def board():
+def board(kind=None, outcome=None):
     by = {}; kind_rows = []
     for i in board_cache["items"]:
         st, fz = _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))   # the column the table names, and the freeze over it
@@ -1558,7 +1558,7 @@ def board():
         if ho: row["ho"] = ho
         by.setdefault(st, []).append(row)
         kd = i.get("k") if i.get("k") in KINDS else "spec" if row.get("sp") else None   # the kind the card carries (the Kind field, read in the pass's own call), a spec by its label otherwise
-        if kd: kind_rows.append({"kd": kd, "closed": st in _columns_module.TERMINAL, "n": i["n"], "t": i["t"], "c": i.get("c"), "r": REPO, "rt": repo_tag(REPO)})
+        if kd: kind_rows.append({"kd": kd, "closed": st in _columns_module.TERMINAL, "oc": _columns_module.outcome_of(st in _columns_module.TERMINAL, column=st, labels=i.get("l")), "n": i["n"], "t": i["t"], "c": i.get("c"), "r": REPO, "rt": repo_tag(REPO)})
     names = ORDER + sorted(n for n in by if n not in ORDER)   # every shipped column shows, even at 0; a user column follows
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
@@ -1570,13 +1570,14 @@ def board():
     # Every card names its repository (#1820): `r` is the full owner/name (what a link and the popup read), `rt` the tag
     # the card wears (MesenAI / agent-squad, or owner/repo when the short name names more than one repository).
     kind_rows += [{"kd": _columns_module.PR_KIND, "closed": False, "n": p["n"], "t": p["t"], "c": None, "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]
-    kind_rows += [{"kd": _columns_module.PR_KIND, "closed": True, "n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]
+    kind_rows += [{"kd": _columns_module.PR_KIND, "closed": True, "oc": _columns_module.outcome_of(True, merged=bool(p["m"])), "n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]
+    all_kinds = _columns_module.kind_groups(KINDS, kind_rows)
     cases = []   # the rows beside the axis, from the draft items the pass already read: the age is the pass's own clock against the pass's end
     for title in board_cache.get("cases") or []:
         m = TEST_CASE_TITLE.match(title)
         if m: cases.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": max(0, int(time.time() - _utc(m[4]).timestamp()))})
     perr = "; ".join(board_cache.get("errs") or [])   # the repositories this pass could not read, named on the column
-    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": COLUMN["pr_closed"], "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": COLUMN["pr_open"], "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "kinds": _columns_module.kind_groups(KINDS, kind_rows), "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+    return {"t": board_cache["t"], "err": board_cache["err"], "prev": {"name": COLUMN["pr_closed"], "n": max(board_cache.get("prev_n") or 0, len(prev)), "items": [{"n": p["n"], "t": p["t"] + ("" if p["m"] else " (closed, not merged)"), "c": p["c"], "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prev]}, "prs": {"name": COLUMN["pr_open"], "n": len(prs), "err": perr or None, "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"), "o": p.get("o"), "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO)} for p in prs]}, "groups": groups, "kinds": _columns_module.filter_groups(all_kinds, kind, outcome), "cases": cases, "gaps": _columns_module.outcome_gaps(all_kinds), "filters": {"kinds": [_columns_module.PR_KIND, *KINDS], "outcomes": _columns_module.shipped_outcomes()}, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -1846,7 +1847,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bk title="group the items by kind and status, one open and one closed group for each kind" aria-pressed=false>Kinds</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bk title="group the items by kind and status, one open and one closed group for each kind" aria-pressed=false>Kinds</button> <select id=bkf title="show one kind only" hidden></select> <select id=bof title="show the closed items with one outcome only" hidden></select> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
@@ -2261,9 +2262,11 @@ const COLORS=/*BOARD_COLORS*/;
 const COLNAME=/*BOARD_NAMES*/;   // the columns' names by the fact that sets them: the board's script holds no column name of its own
 const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
+const filterOpts=(el,label,vals,cur)=>{el.hidden=!vals.length;el.innerHTML=`<option value="">${esc(label)}</option>`+vals.map(v=>`<option${v===cur?" selected":""}>${esc(v)}</option>`).join("")};   // the choices are the model's list, never one the pane keeps
+const gapNote=gs=>gs.length?`<div class=m title="the outcome set does not name these items">${gs.length} closed item(s) outside the outcome set: ${gs.map(g=>esc(g.key+" ("+(g.oc||"none")+")")).join(", ")}</div>`:"";
 const kindGroups=gs=>gs.map(g=>`<div class="acc open kgrp" data-g="${esc(g.name)}" data-kind="${esc(g.kind)}" data-state="${esc(g.state)}"><div class=ah><span>${esc(g.name)}</span><span><span class=n>${g.n}</span></span></div><div class=sc data-g="${esc(g.name)}">${g.items.map(x=>`<div class=it data-key="${esc(x.key)}" data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${x.k==="pr"?"pull":"issues"}/${x.n}">${x.k==="pr"?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo>${esc(x.rt)}</span>`:""}<span class=tt>${esc(x.t)}</span></div>`).join("")}</div></div>`).join("");   // one group per kind and state, painted as the model names it and keyed (kind, number): the pane holds no group name and reads no cache of its own
 const caseRows=cs=>(cs||[]).map(c=>{const a=c.age<3600?Math.max(1,Math.round(c.age/60))+"m":c.age<172800?Math.round(c.age/3600)+"h":Math.round(c.age/86400)+"d";return `<div class="tcrow ${c.result==="fail"?"fail":"pass"}" data-key="test case:${c.issue}@${esc(c.commit)}"><span class=tr>${esc(c.result)}</span><span class=id>#${c.issue}</span><span class=ta>${a}</span><code class=tm>${esc(c.commit)}</code></div>`}).join("");   // one row for each test case item, in the model's order: a strip beside the axis, never a column, and the pane reads no cache of its own
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board"+(bo.kinds?"?"+new URLSearchParams({...(bo.kind?{kind:bo.kind}:{}),...(bo.outcome?{outcome:bo.outcome}:{})}):""))).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,b.prev,...b.groups.sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length:k};return i(x.name)-i(y.name)})],f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!==COLNAME.issue_closed&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
@@ -2304,8 +2307,10 @@ const fmtN=n=>n>=1000?n.toLocaleString("en-US"):""+n;   // "688" is one token; o
 // exception is a column #1793's map does not name, which takes the ring colour and can only come from colOf here.
 const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);return `<span class=chip data-eye="${esc(g.name)}" data-col="${esc(g.name)}" title="${esc(g.name+" — "+fmtN(g.n))}"><span class=lbl>${esc(g.name)}</span><b${ring?` style="color:${c}"`:""}>${fmtN(g.n)}</b></span>`};
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
-if(bo.kinds){const kh=kindGroups(b.kinds);if($("#bbody").dataset.h!==kh){$("#bbody").dataset.h=kh;$("#bbody").innerHTML=kh;restore()}}else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
+if(bo.kinds&&b.filters){filterOpts($("#bkf"),"all kinds",b.filters.kinds,bo.kind);filterOpts($("#bof"),"all outcomes",b.filters.outcomes,bo.outcome)}else{$("#bkf").hidden=$("#bof").hidden=true}
+if(bo.kinds){const kh=gapNote(b.gaps||[])+kindGroups(b.kinds);if($("#bbody").dataset.h!==kh){$("#bbody").dataset.h=kh;$("#bbody").innerHTML=kh;restore()}}else if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
+$("#bkf").onchange=e=>{bo.kind=e.target.value;saveB();pollBoard()};$("#bof").onchange=e=>{bo.outcome=e.target.value;saveB();pollBoard()};
 $("#bk").onclick=()=>{bo.kinds=!bo.kinds;saveB();pollBoard()};
 $("#bsp").onclick=()=>{bo.specs=!bo.specs;saveB();pollBoard()};
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
@@ -2873,7 +2878,10 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
             body, ct = json.dumps(issue_detail(int(m[1]), rr[1] if rr else None) if m else {"err": "bad n"}).encode(), "application/json"
-        elif self.path.startswith("/api/board"): body, ct = json.dumps(board()).encode(), "application/json"
+        elif self.path.startswith("/api/board"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)   # the reader's filters; the rule that applies them is the board module's
+            try: body, ct = json.dumps(board(kind=(q.get("kind") or [None])[0], outcome=(q.get("outcome") or [None])[0])).encode(), "application/json"
+            except ValueError as e: body, ct = json.dumps({"error": str(e)}).encode(), "application/json"
         elif self.path.startswith("/api/version"): body, ct = json.dumps({"v": BOOT}).encode(), "application/json"
         elif self.path.startswith("/api/subs"): body, ct = json.dumps({**subs_month(), "presets": {k: {i: {"name": n, "usd": p} for i, (n, p) in v.items()} for k, v in PRESETS.items()}}).encode(), "application/json"
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
