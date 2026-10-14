@@ -4,6 +4,14 @@ usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers serv
 import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+_columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__file__).resolve().parent / "board_columns.py")
+_columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
+BOARD_COLUMNS = _columns_module.COLUMNS
+COLUMN = _columns_module.BY_FACT
+BOARD_COLUMNS_JSON = json.dumps(BOARD_COLUMNS, separators=(",", ":"))
+BOARD_COLORS_JSON = json.dumps({column["name"]: column["color"] for column in BOARD_COLUMNS}, separators=(",", ":"))
+BOARD_FLOW_JSON = json.dumps([column["name"] for column in sorted(BOARD_COLUMNS, key=lambda column: column["flow"])], separators=(",", ":"))
+
 def sh(*a): return subprocess.run(a, capture_output=True, text=True).stdout
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. env.sh resolves it into SG_LSOF; the last entry keeps a tool
@@ -1087,7 +1095,7 @@ def refresh_board():
             try:
                 if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
             except OSError: pass
-ORDER = ["In Progress", "Code Complete", "Testing", "Todo", "Open Specs", "Blocked", "No status", "Done"]
+ORDER = [column["name"] for column in sorted(BOARD_COLUMNS, key=lambda column: column["order"])]
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
     try: return (STATE / "auto" / f"{kind}-{pr}-{sha9}").stat().st_mtime
@@ -1480,17 +1488,17 @@ def pr_state(x):
 def board():
     by = {}
     for i in board_cache["items"]:
-        st = "Done" if i["s"] == "closed" else (i["st"] or "No status")   # a closed issue is Done whatever the card still says
+        st = COLUMN["issue_closed"] if i["s"] == "closed" else (i["st"] or COLUMN["missing_status"])   # a closed issue belongs in its terminal column
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if i.get("b"): row["b"] = i["b"]
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
         by.setdefault(st, []).append(row)
-    names = [n for n in ORDER if n in by or n != "No status"] + sorted(n for n in by if n not in ORDER)   # the working states always show, even at 0
+    names = [n for n in ORDER if n in by or n != COLUMN["missing_status"]] + sorted(n for n in by if n not in ORDER)   # the working states always show, even at 0
     def wave(x):   # `wave:NN` label first, then issue number; cards with no wave go last
         w = [int(m.group(1)) for l in x["l"] for m in [re.match(r"wave:(\d+)$", l)] if m]
         return (min(w) if w else 10**9, x["n"])
-    groups = [{"name": n, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == "Done" else sorted(by.get(n, []), key=wave)} for n in names]
+    groups = [{"name": n, "n": len(by.get(n, [])), "items": sorted(by.get(n, []), key=lambda x: (x["c"] or "", x["n"]), reverse=True) if n == COLUMN["issue_closed"] else sorted(by.get(n, []), key=wave)} for n in names]
     prs = sorted(board_cache["prs"], key=lambda p: p["u"], reverse=True)
     for x in prs: x["ps"] = pr_state(x); x["gs"] = gate_strip(x, t=board_cache.get("t"))   # the chip, then the R C T B H strip under it (#1772)
     prev = sorted(board_cache.get("prev", []), key=lambda p: p["c"] or "", reverse=True)
@@ -2179,10 +2187,10 @@ function restore(){document.querySelectorAll("#bbody .sc").forEach(e=>{e.scrollT
 // retired. Any other name is a Status option the Project gained later — a user column — and takes the next colour of
 // the reserved ring, by its alphabetical position among those user columns. The name always stands beside the colour
 // (column header, chip label), so the colour is a second cue and never the only one — which is what lets the ring cycle.
-const COLORS={"No status":"#f5b041",Todo:"#c9d1d9","Open Specs":"#f78fb3","In Progress":"#e8d44d","Code Complete":"#b087f9",Testing:"#2dd4bf",Blocked:"#ff6b6b",Done:"#3ecf8e","Open PRs":"#5aa9ff","Closed PRs":"#8b9bb3"};
-const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the nine
+const COLORS=/*BOARD_COLORS*/;
+const RING=["#a3e635","#d8b4fe","#ff9ecd","#7dd3fc"];   // reserved for the columns the user creates, and never one of the named columns
 const colOf=(n,names)=>{const u=(names||[]).filter(x=>!Object.hasOwn(COLORS,x)).sort(),i=u.indexOf(n);return COLORS[n]||RING[(i<0?0:i)%RING.length]};
-async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=["Open PRs","Closed PRs","Open Specs","No status","Blocked","Todo","In Progress","Code Complete","Testing","Done"],   // development flow, left to right
+async function pollBoard(){lim.busy=1;try{const b=await (await fetch("/api/board")).json(),FLOW=/*BOARD_FLOW*/,   // development flow, left to right
 all=[b.prs,b.prev,...b.groups].sort((x,y)=>{const i=n=>{const k=FLOW.indexOf(n);return k<0?FLOW.length-1.5:k};return i(x.name)-i(y.name)}),f=q.trim().replace(/^#/,"");
 if(bo.open===undefined||!all.some(g=>g.name===bo.open))bo.open=(all.find(g=>g.n&&g.name!=="Done"&&!isPR(g.name))||all[2]).name;
 const CN=all.map(g=>g.name);   // every column of this board: what colOf reads the user columns out of, never a colour of its own
@@ -2233,6 +2241,7 @@ pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
 </script>"""
 PAGE = PAGE.replace("/*PANES_JS*/", (pathlib.Path(__file__).resolve().parent / "panes.js").read_text())
+PAGE = PAGE.replace("/*BOARD_COLUMNS*/", BOARD_COLUMNS_JSON).replace("/*BOARD_COLORS*/", BOARD_COLORS_JSON).replace("/*BOARD_FLOW*/", BOARD_FLOW_JSON)
 PAGE = PAGE.replace("/*RUN_STATE_CSS*/", "".join(".b.%s{color:var(--%s);%s}" % (r["state"].replace(" ", "-"), r["color"], r["css"]) for r in RUN_STATES))
 
 
