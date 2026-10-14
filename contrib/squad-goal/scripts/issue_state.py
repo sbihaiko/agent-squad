@@ -21,6 +21,12 @@ The seam answers two questions and only these:
     state.kinds()                       # every kind, one read: {"243": "bug", ...}
     state.set_kind(243, "bug")          # proven by the read that follows; a kind the binding cannot carry is a `KindGap`
     state.kind_gaps()                   # the kinds of the vocabulary the binding cannot carry, reported by name
+    state.record_pass(300, "pass", sha) # a finished test pass: one `test case` item (issue, result, merge commit, end time), proven by the read that follows
+    state.test_cases()                  # every test case item, one read: [{"issue", "result", "commit", "ended", "age"}]
+
+    state.group_run(run, [10, 11])      # the run's children as sub-issues of one parent that names the run; None for fewer than two
+    state.children(5)                   # the sub-issues of issue 5, one read: [10, 11]
+    state.link(5, 10)                   # issue 10 a sub-issue of issue 5, proven by the read that follows (asked again, bounded)
 
 **A write is proven by the read that follows it.** The answer to the write is no proof -- a field write can
 be answered ok and never land (#105) -- so `write` reads the issue back and compares. A write the read does
@@ -41,13 +47,15 @@ Shell callers reach the same seam through this module's door:
 A **kind** is the repository's own normalized name for what an item is, and never the platform's issue type: a
 caller names `bug`, and only the binding knows which field and option carry it (#243).
 """
-import json, os, pathlib, re, subprocess, sys, time
+import json, os, pathlib, re, subprocess, sys, time, urllib.parse
 
 # The binding a repository binds the vocabulary to. A carrier is named here, and a run records the name.
 BOARD = "board"
 
 # The kinds an item carries, as the repository names them. A binding that cannot carry one reports it as a gap.
 KINDS = ("bug", "task", "spec", "test case")
+
+WAVE = re.compile(r"^wave:\d+$")   # the ordering label, and the title of the milestone that carries a delivery
 
 
 class NotCarried(RuntimeError):
@@ -70,11 +78,34 @@ class KindGap(RuntimeError):
         super().__init__(f"the binding cannot carry kind {wanted!r} for issue {issue}; it carries {', '.join(carried) or 'no kind'}")
 
 
+class WaveSpansRepositories(RuntimeError):
+    """A wave whose issues sit in more than one repository: refused before any write, because a milestone belongs to one
+    repository. The wave stays an ordering label."""
+
+    def __init__(self, wave, repos):
+        self.wave, self.repos = wave, sorted(repos)
+        super().__init__(f"{wave} spans {', '.join(self.repos)}; a milestone belongs to one repository, so the wave stays a label")
+
+
 class ReadFailure(RuntimeError):
     """A card the board answered "already there" for, which no read then carried: the read is behind the
     write, not the card gone."""
 
     def __init__(self, reads, count): super().__init__(f"the board read never carried it after {reads} reads ({count} items read); a read failure, not an absence")
+
+
+RESULTS = ("pass", "fail")   # how a test pass ends; a failed pass is never overwritten by a green one (#300)
+TEST_CASE_TITLE = re.compile(r"^test case #(\d+) \| (pass|fail) \| (\S+) \| (\S+)$")
+
+
+def _utc(stamp):
+    import datetime
+    return datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def _now():
+    import datetime
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class State:
@@ -160,6 +191,107 @@ class State:
         if carried != wanted:
             raise NotCarried(issue, wanted, carried, refused)
         return carried
+
+    def wave(self, issue):
+        """The wave one issue carries, "" when it carries none. A milestone that carries a wave answers it, and the label
+        is read only where no milestone does: the label is derived from the milestone, never a second source."""
+        milestone, labels = self.binding.issue_wave(self._ref(issue)[1])
+        if WAVE.match(milestone): return milestone
+        return next((l for l in labels if WAVE.match(l)), "")
+
+    def deliver_wave(self, wave, issues, due=None):
+        """The owner marks `wave` as a delivery: one milestone carries it, each issue is set on it, and the stored wave label
+        is removed so the label is only what the milestone derives. `issues` are numbers in this binding's repository or
+        `owner/repo#N`; a set that spans repositories is `WaveSpansRepositories`, raised before any write. A milestone the
+        owner did not date gets no due date: `due` is an ISO stamp the owner gave, and is the only way one is set.
+        Every write is proven by the read that follows it: a milestone or a label removal that read does not carry is
+        `NotCarried`, and the label is removed only after the read carried the milestone. Returns {"milestone", "number", "issues"}."""
+        if not WAVE.match(wave): raise ValueError(f"a wave is named wave:NN, not {wave!r}")
+        refs = [self._ref(i) for i in issues]
+        repos = {r for r, _ in refs}
+        if len(repos) > 1: raise WaveSpansRepositories(wave, repos)
+        number = self.binding.milestone(wave, due)
+        for _, n in refs:
+            refused = ""
+            try: self.binding.write_milestone(n, number)
+            except RuntimeError as e: refused = str(e)
+            carried = self.binding.issue_wave(n)[0]
+            if carried != wave: raise NotCarried(n, wave, carried, refused)
+            if wave in self.binding.issue_wave(n)[1]:
+                refused = ""
+                try: self.binding.drop_label(n, wave)
+                except RuntimeError as e: refused = str(e)
+                if wave in self.binding.issue_wave(n)[1]: raise NotCarried(n, f"no {wave} label beside the milestone", wave, refused)
+        return {"milestone": wave, "number": number, "issues": [n for _, n in refs]}
+
+    def _ref(self, issue):
+        """(repository, number) of an issue named as a number or `owner/repo#N`."""
+        m = re.match(r"^(?:(.+)#)?(\d+)$", str(issue))
+        if not m: raise ValueError(f"an issue is a number or owner/repo#N, not {issue!r}")
+        return (m[1] or self.binding.repo), int(m[2])
+
+    def test_cases(self, now=None):
+        """Every test case item, in one read: [{"issue", "result", "commit", "ended", "age"}], the age in seconds
+        at `now` (a UTC stamp; the clock when none is given). An item whose title is not a pass is not one."""
+        now = _utc(now or _now())
+        out = []
+        for _, title, kind in self.binding.test_case_rows():
+            m = TEST_CASE_TITLE.match(title)
+            if m and kind == "test case":
+                out.append({"issue": int(m[1]), "result": m[2], "commit": m[3], "ended": m[4], "age": int((now - _utc(m[4])).total_seconds())})
+        return out
+
+    def record_pass(self, issue, result, commit, ended=None):
+        """Record a finished test pass as one `test case` item: the issue it tested, the result (`pass` or `fail`),
+        the merge commit the pass ran on and when it ended. The item is proven by the read that follows the write:
+        the items route is eventually consistent, so that read is bounded and retried, and an item no read carries
+        is `NotCarried`, named, never reported as written. A pass that ended failed stays failed: a later pass on the
+        same merge commit is answered with the failure and writes nothing; a pass on a new commit is its own item.
+        A binding that cannot carry the kind is a `KindGap`, raised before any write. Returns the item the read carries."""
+        if result not in RESULTS: raise ValueError(f"a pass ends {' or '.join(RESULTS)}, not {result!r}")
+        if not commit or not commit.strip(): raise ValueError("a test case names the merge commit the pass ran on")
+        ended = ended or _now()
+        _utc(ended)
+        if "test case" not in self.binding.kind_options(): raise KindGap(issue, "test case", sorted(self.binding.kind_options()))
+        held = [r for r in self.test_cases() if r["issue"] == int(issue) and r["commit"] == commit]
+        failed = next((r for r in held if r["result"] == "fail"), None)
+        if failed: return failed   # failed stays failed: a later pass does not overwrite it, and a second item would say the same twice
+        if result == "pass" and held: return held[0]
+        title = f"test case #{int(issue)} | {result} | {commit} | {ended}"
+        refused = ""
+        try: self.binding.write_test_case(title)
+        except RuntimeError as e: refused = str(e)
+        for k in range(self.binding.attempts):   # the proving read is bounded: the item is waited for, never written a second time
+            if k and self.binding.backoff: time.sleep(self.binding.backoff * (2 ** (k - 1)))
+            carried = next((r for r in self.test_cases() if (r["issue"], r["result"], r["commit"], r["ended"]) == (int(issue), result, commit, ended)), None)
+            if carried: return carried
+        raise NotCarried(issue, title, "no test case item", refused)
+
+    def children(self, parent):
+        """The numbers of the sub-issues of `parent`, in one read."""
+        return self.binding.children(parent)
+
+    def link(self, parent, child):
+        """Make `child` a sub-issue of `parent`, then read the sub-issues back. The read is the proof, and it can lag
+        the write, so it is asked again a bounded number of times with a growing delay: a link no read carries is
+        `NotCarried`, named, never reported as written. A child already linked is not written again."""
+        if int(child) in self.children(parent): return
+        refused = ""
+        try: self.binding.link(parent, child)
+        except RuntimeError as e: refused = str(e)   # kept, not raised: the read confirms the link or disproves it
+        carried = self.binding.await_child(parent, child)
+        if int(child) not in carried:
+            raise NotCarried(child, f"sub-issue of {parent}", f"sub-issue of {sorted(carried)}" if carried else "no parent link", refused)
+
+    def group_run(self, run, children):
+        """One parent issue that names `run`, with each of `children` linked to it as a sub-issue, so the platform
+        rolls the run's progress up. A run with fewer than two distinct children has no parent: None, and nothing
+        is written. The run's parent is found by its title and reused, never created twice. Returns its number."""
+        kids = sorted({int(c) for c in children})
+        if len(kids) < 2: return None
+        parent = self.binding.parent_of(run) or self.binding.create_parent(run)
+        for k in kids: self.link(parent, k)
+        return parent
 
     def _write_holder(self, issue, run, started, wanted):
         refused = ""
@@ -324,11 +456,14 @@ class BoardBinding:
         """The state one issue carries, "" when the carrier carries no card for it or no Status on it."""
         return self.read_all().get(str(issue), "")
 
-    def rows(self, jq, *, fields=True, timeout=120):
+    def rows(self, jq, *, fields=True, kind=False, timeout=120):
         """One paginated items read at the carrier, projected by the caller's jq program. The reach is the
         binding's, so a reader that needs more than the state (the pane, with its titles and labels) asks
         here and holds no call of its own. A read the carrier refuses raises, and the caller keeps its last rows."""
         fid = f"&fields[]={self.status_field()['id']}" if fields else ""
+        if fields and kind:   # the Kind field rides in the same read, so a pass that draws kinds adds no call (its field id is cached a day)
+            try: fid += f"&fields[]={self.kind_field()['id']}" if self.kind_field()["id"] else ""
+            except Exception: pass   # a carrier that cannot answer the field draws no kind: the rows are still read
         return self.api("--paginate", f"{self.base}/items?per_page=100{fid}", "--jq", jq, timeout=timeout)
 
     def holders(self):
@@ -385,8 +520,51 @@ class BoardBinding:
         if kind not in field["opt"]: raise KindGap(issue, kind, sorted(field["opt"]))
         iid = self.item_id(issue)
         if not iid: raise RuntimeError(f"#{issue} not on the board")
+        self._patch_kind(iid, field, kind)
+
+    def _patch_kind(self, iid, field, kind):
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": field["id"], "value": field["opt"][kind]}]}))
+
+    def issue_wave(self, issue):
+        """(milestone title, label names) one issue carries, in one read. Never cached: it is the read that proves a write."""
+        d = json.loads(self.api(f"repos/{self.repo}/issues/{issue}"))
+        return ((d.get("milestone") or {}).get("title") or ""), [l["name"] for l in d.get("labels", []) if isinstance(l, dict)]
+
+    def milestone(self, title, due=None):
+        """The number of the one milestone titled `title`: found when it exists (open or closed), created when it does not.
+        A create sends no due date unless the owner gave one."""
+        found = next((m for m in json.loads(self.api("--paginate", f"repos/{self.repo}/milestones?state=all&per_page=100")) if m.get("title") == title), None)
+        if found: return found["number"]
+        body = {"title": title, **({"due_on": due} if due else {})}
+        return json.loads(self.api("-X", "POST", f"repos/{self.repo}/milestones", "--input", "-", inp=json.dumps(body)))["number"]
+
+    def write_milestone(self, issue, number):
+        """One PATCH of the issue's milestone. The read that proves it is the seam's."""
+        self.api("-X", "PATCH", f"repos/{self.repo}/issues/{issue}", "--input", "-", inp=json.dumps({"milestone": number}))
+
+    def drop_label(self, issue, label):
+        """One DELETE of a label from an issue. The read that proves it is the seam's."""
+        self.api("-X", "DELETE", f"repos/{self.repo}/issues/{issue}/labels/{urllib.parse.quote(label, safe='')}")
+
+    def test_case_rows(self):
+        """Every item that is not an issue, in ONE read: [(item id, title, kind)]. A test case is a draft item, so it has
+        no issue number; its title carries what the pass recorded. Never cached: it is the read that proves a write."""
+        fid = self.kind_field()["id"]
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={fid}", "--jq",
+                       '.[]|select(.content.number|not)|[.id,(.content.title//""),(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end))//"")]|@tsv')
+        rows = []
+        for l in out.splitlines():
+            i, t, k = (l.split("\t") + ["", "", ""])[:3]
+            if i: rows.append((i, t, k.lower()))
+        return rows
+
+    def write_test_case(self, title):
+        """One draft item titled `title`, then one PATCH of its Kind to `test case`. The read that proves it is the seam's."""
+        field = self.kind_field()
+        if "test case" not in field["opt"]: raise KindGap(title, "test case", sorted(field["opt"]))
+        iid = json.loads(self.api("-X", "POST", f"{self.base}/items", "--input", "-", inp=json.dumps({"type": "DraftIssue", "title": title})))["id"]
+        self._patch_kind(iid, field, "test case")
 
     def write_holder(self, issue, run, started):
         """One PATCH of the two Run fields. None is JSON null, the value that clears a field; an empty string is
@@ -400,6 +578,47 @@ class BoardBinding:
         if missing: raise RuntimeError("no text field " + ", ".join(missing))
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))
+
+    @staticmethod
+    def parent_title(run):
+        return f"Squad run {run}"
+
+    def parent_of(self, run):
+        """The number of the issue titled for `run`, None when the run has none. Read off the issues route, which is
+        not the search index: the index lags a new issue, and a lag here would create a second parent."""
+        out = self.api("--paginate", f"repos/{self.repo}/issues?state=all&per_page=100", "--jq",
+                       '.[]|select(.pull_request==null)|[.number,.title]|@json')
+        title = self.parent_title(run)
+        for l in out.splitlines():
+            if l.strip():
+                n, t = json.loads(l)
+                if t == title: return n
+        return None
+
+    def create_parent(self, run):
+        """One POST of the parent issue, titled for the run. Returns its number."""
+        body = f"The children of squad run {run}. Each child is a sub-issue; the progress rolls up here."
+        return json.loads(self.api("-X", "POST", f"repos/{self.repo}/issues", "--input", "-",
+                                   inp=json.dumps({"title": self.parent_title(run), "body": body})))["number"]
+
+    def children(self, parent):
+        return [int(n) for n in self.api("--paginate", f"repos/{self.repo}/issues/{parent}/sub_issues?per_page=100", "--jq", ".[].number").split()]
+
+    def link(self, parent, child):
+        """One POST of the sub-issue. The route takes the child's id, never its number. The read that proves it is the seam's."""
+        cid = json.loads(self.api(f"repos/{self.repo}/issues/{child}"))["id"]
+        self.api("-X", "POST", f"repos/{self.repo}/issues/{parent}/sub_issues", "--input", "-", inp=json.dumps({"sub_issue_id": cid}))
+
+    def await_child(self, parent, child):
+        """The sub-issues of `parent` once one read carries `child`, or the last read after the bounded attempts: the
+        route can lag a write, as the items route does (#96)."""
+        carried = []
+        for k in range(self.attempts):
+            if k and self.backoff: time.sleep(self.backoff * (2 ** (k - 1)))
+            try: carried = self.children(parent)
+            except RuntimeError: continue   # a read the carrier refuses is no proof, and is asked again
+            if int(child) in carried: break
+        return carried
 
     def write(self, issue, state):
         """One PATCH of the Status field, in one write. The option id is the field's, never the name: the

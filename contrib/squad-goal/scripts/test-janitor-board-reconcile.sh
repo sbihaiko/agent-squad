@@ -141,7 +141,10 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 /usr/bin/grep -q '^RUN o 4 2002 run-accepted 2026-10-13T08:00:00Z$' "$T/board.calls" 2>/dev/null && ok "accepted child: Run fields carry run id and start time" || ko "#2002 Run fields wrong: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Code Complete 2003$' "$T/board.calls" 2>/dev/null && ok "local land event: card moves to Code Complete" || ko "#2003 not Code Complete: $(bc)"
 ! /usr/bin/grep -q 'Done 2003' "$T/board.calls" 2>/dev/null && ok "local land event does not move the card to Done" || ko "#2003 read Done from a local landing: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "merged PR: card moves to Done" || ko "#2004 not Done: $(bc)"
+# #307: #2004 is still open. A merged PR that names an open issue delivered a part of it, so the card goes to Testing,
+# the column the work reached, and never to a terminal column: Done follows the issue's close.
+/usr/bin/grep -q '^STATUS o 4 Testing 2004$' "$T/board.calls" 2>/dev/null && ok "merged PR on an open issue: card moves to Testing" || ko "#2004 not Testing: $(bc)"
+! /usr/bin/grep -q '^STATUS o 4 Done 2004$' "$T/board.calls" 2>/dev/null && ok "an open issue is never written to Done" || ko "#2004 written to Done while open"
 # #127: a PR that names the issue but was merged into its parent branch carries the work nowhere, so the card stops at
 # Code Complete -- Done over a merge the base never took is the false delivery #125 showed.
 /usr/bin/grep -q '^ADD o 4 Code Complete 2018$' "$T/board.calls" 2>/dev/null && ok "a merge into a parent branch leaves the card at Code Complete" || ko "#2018 left the dispatch column: $(bc)"

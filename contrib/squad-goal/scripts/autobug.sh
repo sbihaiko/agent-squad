@@ -231,12 +231,13 @@ for c in "${clusters[@]}"; do set -- $c; p=$1
 # other board writer uses (board.py, janitor rule R, reconcile.py, the frontier dispatch): a card the board does not carry
 # is added with its status, and a card it already carries is answered "already exists" and moved.
 cards="$(printf '#%s ' "${pick[@]}")"
-sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${cards% } -> In Progress" \
+doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249)
+sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_PROJECT ${cards% } -> $doing" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD --add $SG_OWNER $SG_PROJECT "In Progress" "${pick[@]}"
-[ -n "${SG_BUG_PROJECT:-}" ] && sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-In Progress}" \
+  -- $BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${pick[@]}"
+[ -n "${SG_BUG_PROJECT:-}" ] && sg_write BOARD-WRITE-FAILED "$SG_OWNER/$SG_BUG_PROJECT ${cards% } -> ${SG_BUG_DOING:-$doing}" \
   "the cards ${cards% } of the run this pass requested ($name)" \
   "contrib/squad-goal/scripts/test-autobug.sh (a refused write opens one bug)" \
-  -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-In Progress}" "${pick[@]}"
+  -- $BOARD --add $SG_OWNER $SG_BUG_PROJECT "${SG_BUG_DOING:-$doing}" "${pick[@]}"
 echo "AUTOBUG dispatched $(printf '[%s] ' "${clusters[@]}")in one run ($name, log ${log##*/})"
