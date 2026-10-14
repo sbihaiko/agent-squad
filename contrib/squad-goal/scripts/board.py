@@ -15,6 +15,8 @@ after the write, and the state it carries must be the state written. SG_BOARD_RE
 SG_BOARD_READ_BACKOFF bound the retries (a backoff of 0 sleeps for no read), and a card no read then carries
 the Status is a READ FAILURE, named and exiting non-zero, never a card written and never left in the state
 cache as one.
+A refused Status write drops the cached field and reads it again, so an option the board recreated is written by its
+new id and one it dropped is named "no Status option", never retried on the dead id (#311).
 A miss on the item map re-reads the items with the same bounded backoff (#96), and a card the board answered
 "already exists" for and no read then carried is a READ FAILURE, named by name, never "not on the board".
 A test pass is recorded by `--test-case` through the seam (`record_pass`), proven by the read that follows: a write that read
@@ -59,6 +61,9 @@ for n in nums:
             break
         except NotCarried as e:
             refused = e.refused or refused   # the seam carries the refusal it was given: the note names it, the read is the verdict
+            if e.refused:   # a refused write can be an option id the cache kept and the board dropped or recreated: the next attempt reads the field again (#311)
+                (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True)
+                if status not in state.binding.status_field()["opt"]: sys.exit(f"no Status option {status!r}")
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
         print(f"#{n} -> {status}")

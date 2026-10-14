@@ -19,7 +19,7 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; D="TMPDIR"
 echo "$a" >> "$D/gh.calls"
 case "$a" in *"--input -"*) cat > "$D/last.in";; esac
-cards="2001 2002 2003 2004 2006 2007 2008 2009"
+cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013"
 case "$a" in
   *users/o*) echo '{"type":"Organization"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}}]}]';;
@@ -57,6 +57,10 @@ case "$a" in
     case "$n" in
       2006) echo '{"id":"ITEM6"}';;   # the write is answered ok and the card never carries it: the lost write of #105
       2008) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # the field write is refused, and no card carries it
+      2012|2013) case "$(cat "$D/last.in")" in
+          *O_OLD*|*O_GONE*) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # the option id the cache holds is not the board's any more
+          *) echo "$w" > "$D/st-$n"; echo '{"id":"ITEM'"$i"'}';;
+        esac;;
       2009) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # refused, but the card already carries the Status
       2007) if [ -e "$D/dropped-2007" ]; then echo "$w" > "$D/st-2007"; echo '{"id":"ITEM7"}';   # the retry lands
             else touch "$D/dropped-2007"; echo '{"id":"ITEM7"}'; fi;;   # the first write is dropped, never carried
@@ -116,4 +120,14 @@ case $o in *"not on the board"*) ko "a card a later read carries is reported as 
 case $o in *"#2011"*"read failure"*) ok "it is named as a read failure";; *) ko "read-failure message: $o";; esac
 case $o in *"not on the board"*) ko "a card the write proved is reported as absent: $o";; *) ok "it is never reported as absent";; esac
 [ "$(/usr/bin/grep -c 'items?per_page=100 ' "$T/gh.calls")" -le 5 ] && ok "the re-read is bounded" || ko "items reads: $(cat "$T/gh.calls")"
+# a cached Status option id the board no longer carries (a migrated or recreated option) is refused "Invalid field values":
+# the refusal drops the cached fields, the next attempt reads them again and sends the id the board carries now
+echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD"}}' > "$T/st/rest-fields-o-4.json"; touch "$T/seen-2012"; echo '{"2012":"ITEM12"}' > "$T/st/rest-items-o-4.json"; : > "$T/gh.calls"
+o=$(run o 4 Todo 2012 2>&1); rc=$?
+[ "$rc" -eq 0 ] && case $o in *"#2012 -> Todo"*) ok "a stale cached option id is re-read after the refusal and the write lands";; *) ko "stale id message: $o";; esac || ko "stale option id exit $rc: $o"
+# an option the board dropped for good: named as no option, never a traceback and never a write of the dead id
+echo '{"id":"F_STATUS","opt":{"Todo":"O_OLD","Gone":"O_GONE"}}' > "$T/st/rest-fields-o-4.json"; touch "$T/seen-2013"; echo '{"2013":"ITEM13"}' > "$T/st/rest-items-o-4.json"; : > "$T/gh.calls"
+o=$(run o 4 Gone 2013 2>&1); rc=$?
+[ "$rc" -eq 1 ] && case $o in *"no Status option 'Gone'"*) ok "an option the board dropped is named, exit 1";; *) ko "dropped option message: $o";; esac || ko "dropped option exit $rc: $o"
+case $o in *Traceback*) ko "a traceback: $o";; *) ok "no traceback";; esac
 rm -rf "$T"; exit $fail
