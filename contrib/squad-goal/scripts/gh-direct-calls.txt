@@ -30,4 +30,4 @@ revci.sh 7
 review.sh 5
 speed.py 1
 stack.sh 3
-wtclean.sh 3
+wtclean.sh 2
