@@ -13,6 +13,10 @@ The seam answers two questions and only these:
     state.read(236)                     # the state issue 236 carries, "" when it carries none
     state.read_all()                    # every card, one read: {236: "Todo", ...}
     state.write(236, "Testing")         # proven by the read that follows; returns the state the issue then carries
+    state.holder(236)                   # the run that holds issue 236: {"run": id, "started": time}, None when none does
+    state.holders()                     # every holder, one read: {"236": {"run": ..., "started": ...}}
+    state.hold(236, run, started)       # name the run on the issue, proven by the read that follows
+    state.release(236)                  # clear the holder when the run ends, proven by the read that follows
 
 **A write is proven by the read that follows it.** The answer to the write is no proof -- a field write can
 be answered ok and never land (#105) -- so `write` reads the issue back and compares. A write the read does
@@ -89,6 +93,34 @@ class State:
         try: self.binding.write(issue, wanted)
         except RuntimeError as e: refused = str(e)   # the refusal is kept, not raised: the read then confirms it or disproves it
         carried = self.read(issue)
+        if carried != wanted:
+            raise NotCarried(issue, wanted, carried, refused)
+        return carried
+
+    def holders(self):
+        """Every issue a run holds, in one read: {issue: {"run": id, "started": time}}. An issue no run holds is absent."""
+        return self.binding.holders()
+
+    def holder(self, issue):
+        """The run that holds `issue`, {"run": id, "started": time}; None when no run holds it."""
+        return self.holders().get(str(issue))
+
+    def hold(self, issue, run, started):
+        """Name the run that holds `issue` on the issue, then read it back: the read is the proof, as for a state.
+        An empty value is written as no value (#101). Returns the holder the issue then carries."""
+        wanted = {"run": run, "started": started or ""} if run else None
+        return self._write_holder(issue, run or None, started or None, wanted)
+
+    def release(self, issue):
+        """Clear the holder when the run ends, then read it back: a holder the next read still carries is
+        `NotCarried`, never a clear. Returns None, the holder the issue then carries."""
+        return self._write_holder(issue, None, None, None)
+
+    def _write_holder(self, issue, run, started, wanted):
+        refused = ""
+        try: self.binding.write_holder(issue, run, started)
+        except RuntimeError as e: refused = str(e)
+        carried = self.holder(issue)
         if carried != wanted:
             raise NotCarried(issue, wanted, carried, refused)
         return carried
@@ -253,6 +285,35 @@ class BoardBinding:
         here and holds no call of its own. A read the carrier refuses raises, and the caller keeps its last rows."""
         fid = f"&fields[]={self.status_field()['id']}" if fields else ""
         return self.api("--paginate", f"{self.base}/items?per_page=100{fid}", "--jq", jq, timeout=timeout)
+
+    def holders(self):
+        """Every card a run holds, in ONE read: {issue: {"run", "started"}}, off the Run and Run started text
+        fields, asked for by id like Status. A card with no Run value is absent; the repository url filters as in `read_all`."""
+        tf = self.text_fields()
+        if "Run" not in tf or "Run started" not in tf: return {}
+        val = 'if type=="object" then (.raw//.text//"") else (.//"") end'
+        out = self.api("--paginate", f"{self.base}/items?per_page=100&fields[]={tf['Run']},{tf['Run started']}", "--jq",
+                       '.[]|select(.content.number)|[.content.number,(((.fields[]?|select(.name=="Run")|.value|%s))//""),'
+                       '(((.fields[]?|select(.name=="Run started")|.value|%s))//""),(.content.repository_url//"")]|@tsv' % (val, val))
+        m = {}
+        for l in out.splitlines():
+            n, run, started, u = (l.split("\t") + ["", "", "", ""])[:4]
+            n = n.strip()
+            if n.isdigit() and run and (not self.repo or not u or u.endswith("/" + self.repo)): m[n] = {"run": run, "started": started}
+        return m
+
+    def write_holder(self, issue, run, started):
+        """One PATCH of the two Run fields. None is JSON null, the value that clears a field; an empty string is
+        one GitHub refuses (#101). The read that proves it is the seam's."""
+        iid = self.item_id(issue)
+        if not iid: raise RuntimeError(f"#{issue} not on the board")
+        tf = self.text_fields()
+        if "Run" not in tf or "Run started" not in tf:
+            (self.st / f"rest-text-fields-{self.owner}-{self.project}.json").unlink(missing_ok=True); tf = self.text_fields()
+        missing = [x for x in ("Run", "Run started") if x not in tf]
+        if missing: raise RuntimeError("no text field " + ", ".join(missing))
+        self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
+                 inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))
 
     def write(self, issue, state):
         """One PATCH of the Status field, in one write. The option id is the field's, never the name: the
