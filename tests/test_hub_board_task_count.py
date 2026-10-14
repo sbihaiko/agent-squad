@@ -183,15 +183,17 @@ def _render(hub, rows):
     return out.stdout.rstrip("\n")
 
 
-def test_the_card_draws_the_count_beside_the_label_pills(hub):
+def test_the_card_draws_the_count_in_its_bottom_right_footer(hub):
+    """The count sits in the card's footer, bottom right, as a PR card's age pill does: the last thing on the card."""
     html = _render(hub, [{"n": 1, "t": "a spec", "l": ["gui"], "sc": "3/5"}])
-    assert re.search(r'<span class=lbs><span class="">gui</span><span class=tsk[^>]*>3/5</span></span>', html), \
-        f"the counter is not drawn beside the pills, inside the label block: {html}"
-    assert html.index(">gui<") < html.index(">3/5<"), "the pills identify the card: the counter follows them"
+    assert re.search(r'<div class=ft><span class=tsk[^>]*>3/5</span></div></div>$', html), \
+        f"the counter is not the card's bottom-right footer: {html}"
+    assert "<span class=lbs><span class=\"\">gui</span></span>" in html, "the label pills keep their own row, without the counter"
     assert re.search(r'<span class=tsk[^>]*>7/9</span>', _render(hub, [{"n": 1, "t": "a spec", "l": ["gui"], "sc": "7/9"}])), \
         "the page must paint the value the row carries and compute none of its own"
-    assert "<span class=tsk" in _render(hub, [{"n": 1, "t": "a card with tasks and no label", "l": [], "sc": "3/5"}]), \
-        "a card whose issue has tasks wears the counter even with no label to sit beside"
+    bare = _render(hub, [{"n": 1, "t": "a card with tasks and no label", "l": [], "sc": "3/5"}])
+    assert "<div class=ft><span class=tsk" in bare and "lbs" not in bare, \
+        "a card whose issue has tasks wears the counter even with no label, and draws no empty label row"
 
 
 def test_a_card_with_no_count_is_the_markup_it_always_was(hub):
@@ -202,12 +204,10 @@ def test_a_card_with_no_count_is_the_markup_it_always_was(hub):
         "nothing at all is drawn for a card with no count and no label"
 
 
-def test_the_counter_wears_the_pill_treatment_and_only_the_muted_colour_is_its_own(hub):
+def test_the_counter_wears_the_age_pill_treatment_of_a_pr_card(hub):
     css = hub.PAGE[hub.PAGE.index("<style>"): hub.PAGE.index("</style>")]
-    assert re.search(r"#bbody \.it \.lbs span\{[^}]*background:var\(--lb,#2a303b\)[^}]*border-radius:9px", css), \
-        "the label pill rule is gone, so the counter would not wear the pill"
-    rule = re.search(r"#bbody \.it \.lbs span\.tsk\{([^}]*)\}", css)
-    assert rule, "the counter has no rule of its own, so nothing makes it the muted one beside the pills"
-    assert "color:var(--mute)" in rule.group(1), f"the counter is not the muted treatment: {rule.group(1)}"
-    for echo in ("background", "border-radius", "padding", "font-size"):
-        assert echo not in rule.group(1), f"the counter restates {echo}: it is the pill, drawn muted, and nothing else"
+    rule = re.search(r"#bbody \.age,#bbody \.tsk\{([^}]*)\}", css)
+    assert rule, "the counter does not share the age pill's rule, so it would not read as the PR card's footer pill"
+    for part in ("border-radius:9px", "color:var(--mute)", "border:1px solid var(--line)", "font-variant-numeric:tabular-nums"):
+        assert part in rule.group(1), f"the shared pill rule lost {part}: {rule.group(1)}"
+    assert re.search(r"#bbody \.it \.ft\{[^}]*justify-content:flex-end", css), "the footer no longer pushes its pills to the right"
