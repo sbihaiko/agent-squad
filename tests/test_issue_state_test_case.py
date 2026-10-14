@@ -48,7 +48,8 @@ class Board:
             iid = cmd[cmd.index("-X") + 2].rsplit("/", 1)[1]
             self.patches.append((iid, body))
             item = next((i for i in self.items if i["id"] == iid), None)
-            if item is None: return subprocess.CompletedProcess(cmd, 1, "", "HTTP 404: Not Found")   # a draft that never landed has no item to patch
+            if item is None:   # a draft that never landed has no item to patch
+                return subprocess.CompletedProcess(cmd, 1, "", "HTTP 404: Not Found")
             value = body["fields"][0]["value"]
             item["fields"] = [{"id": "F_KIND", "name": "Kind", "value": {"id": value, "name": {"raw": self.options[value]}}}]
             out = json.dumps({"id": item["id"]})
