@@ -2,19 +2,18 @@ name: ci
 
 on:
   push:
-    branches: [dev, stg, main]
-  pull_request:
+    branches: ["**"]
 
 # One commit starts one job, and that job runs both supported Pythons in order (#149). A matrix split one commit into
 # two jobs that waited behind each other for two runners, and a check no runner picks up answers nothing.
-# The group is the branch a push and the pull request of that branch both carry: `github.ref` is `refs/pull/<N>/merge`
-# on a pull request and `refs/heads/<branch>` on a push, so the two never met and a superseded head kept its slot. A
-# superseded pull request run is cancelled; a landing on `dev`, `stg` or `main` is never cancelled, so every landing keeps its evidence.
+# A push to dev, stg, main or a work branch starts the run; a pull request starts none (#354). The group is the branch,
+# so one branch's pushes share it. A superseded work-branch push is cancelled; a landing on dev, stg or main is never
+# cancelled, so every landing keeps its evidence.
 # No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`; the full
 # suite runs before a merge.
 concurrency:
-  group: ci-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.ref_name }}
+  cancel-in-progress: ${{ !contains(fromJSON('["main", "dev", "stg"]'), github.ref_name) }}
 
 permissions:
   contents: read
