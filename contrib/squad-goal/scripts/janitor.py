@@ -32,6 +32,8 @@
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open; R repairs a Done card to the supported column.
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
     A live run holds the issue (dispatch marker or accepted child) -> In Progress; an issue that is closed or carries a merged PR into $SG_BASE naming it -> Done, so a PR merged into a parent branch (#127) and a merge naming an issue never delivered to the base are not Done;
+    a landing is credited to the child that made it, never to every issue the run held (#271): an issue a child's own accept line names follows that child's own `land` event and its own outcome, so a child that
+    committed nothing keeps the loop's queue however many of its siblings landed, and only an issue no child of the run names takes the run's landing as its own;
     a completed run, whether or not it landed work, whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
@@ -148,6 +150,10 @@ def kill(pidv, why):
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
+    # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
+    # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
+    # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
+    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}
     if not t.exists(): return None
     for l in t.read_text().splitlines():
         try: d = json.loads(l)
@@ -159,15 +165,30 @@ def read(f):
             v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
         if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing
             landed = landed or d.get("outcome") == "pass"
+            # The node that landed: a dispatch child's own name (`dispatch.py` writes node=child), or the run's own stage.
+            # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
+            if d.get("outcome") == "pass" and (d.get("effect") or {}).get("held_out") != "fail" and d.get("node") is not None:
+                land_nodes.add(str(d["node"]))
+        if ev == "outcome":   # the outcome the node itself recorded, child or run stage: the fact rule R reads per child (#271)
+            if d.get("node") is not None:
+                outs[str(d["node"])] = (str(d.get("outcome") or ""), [str(x) for x in (d.get("reasons") or [])])
         if ev == "call_start":
             pidc = d.get("pid") or pidc; started_at = d.get("started_at") or started_at
         if ev == "spawn_accepted" or '"spawn_accepted"' in l:
             # The router writes the issue down without the hash ("Fix GitHub issue 11 in the repository"), and a child that
             # took several writes them as a list. A hashed-only read lost the run's own issues: rule I and free_reaped read
             # this set (#66).
+            found = set()
             for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)", l):
-                acc.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or "") if x)
-    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime, "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts}
+                found.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or "") if x)
+            acc |= found
+            if d.get("child") is not None:   # the issues one accept line names belong to the child that line accepted, never to the whole run (#271)
+                kids.add(str(d["child"]))
+                kid_issue.setdefault(str(d["child"]), set()).update(found)
+    kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
+    return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
+            "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts,
+            "kid_issue": kid_issue, "kid_landed": kid_landed, "kid_out": outs}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
         return pidc in procs
@@ -381,11 +402,26 @@ def reconcile_board():
     for r in keep:
         f = folder(r); i = read(f); nums = req_issues(f)
         if i: nums |= i["acc"]
+        by_issue = {}   # issue -> the children whose own accept line named it: that child's outcome decides its card (#271)
+        if i:
+            for ch in sorted(i["kid_issue"]):
+                for x in i["kid_issue"][ch]: by_issue.setdefault(x, []).append(ch)
         for n in nums:
+            mine = by_issue.get(n, [])
+            landed_kid = next((c for c in mine if c in i["kid_landed"]), None) if i else None   # a child that landed its own work: the run's landing is that child's, never every issue the run held (#271)
             if i is None:
                 set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
+            elif landed_kid:
+                set_expected(n, "Code Complete", f"run {i['run_id']} child {landed_kid} landed work locally", i["run_id"], i["run_ts"], 60)
+            elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
+                c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
+                why = "; ".join(ors) or "no reason recorded"
+                if oc == "needs-human" or i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor
+                    set_expected(n, "Blocked", f"run {i['run_id']} child {c} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
+                else:
+                    set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["landed"]:
                 set_expected(n, "Code Complete", f"run {i['run_id']} landed work locally", i["run_id"], i["run_ts"], 60)
             elif i["failed"]:
