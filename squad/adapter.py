@@ -55,6 +55,7 @@ class CallResult:
     session_id: str | None = None
     usage: dict | None = None        # {"tokens_in", "tokens_out", optional "cache_read", "cache_write"} when the result reports them; None means unknown, never zero
     ended: dict | None = None        # {"subtype", "is_error", "last"}: how the session ended and its last text, kept on an artifact_missing outcome
+    spend_source: str | None = None  # "price_table" | "total_cost_usd": where `spend` came from (squad/prices.py); None when spend is unknown
 
 
 class ScriptedAdapter:
@@ -97,7 +98,7 @@ class ScriptedAdapter:
         if step.get("effect"):
             step["effect"](req)
         return CallResult(step.get("output"), step.get("spend"), step.get("turns"), step.get("stop_reason"),
-                          step.get("subagents", 0), req.session_id, step.get("usage"))
+                          step.get("subagents", 0), req.session_id, step.get("usage"), spend_source=step.get("spend_source"))
 
 
 _session = itertools.count(1)

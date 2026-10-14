@@ -216,7 +216,7 @@ class Children:
         """Derive the outcome from the artifact, run the checks, snapshot the worktree, and lift the child's own spawns."""
         e, disp, r, res = self.e, ctx.node, out.result, out.res
         outcome, reasons, diag_cap = session.agent_outcome({}, r, session.cap_reason(r.stop_reason, res.amount))
-        rel, extra = None, {"model": model, "effort": d["effort"], **(r.usage or {})}   # the model that answered, not the one the request named first
+        rel, extra = None, {"model": model, "effort": d["effort"], **(r.usage or {}), **({"spend_source": r.spend_source} if r.spend_source else {})}   # the model that answered, not the one the request named first
         if not isinstance(r.output, dict) and r.ended:      # an artifact_missing outcome says how the session ended
             extra["diagnostic"] = {"ended": r.ended}
         if isinstance(r.output, dict):
