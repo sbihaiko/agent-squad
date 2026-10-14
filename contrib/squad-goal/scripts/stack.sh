@@ -28,7 +28,7 @@ open=(); for b in $bl; do st=$(gh api repos/$SG_REPO/issues/$b -q .state 2>/dev/
   case "$cc" in *" $b "*)   # Code Complete: a PR stacks like an open blocker; fork-only work is merged into the child's fork branch
     br=$(sg_fork_branch "$b")   # an issue can carry both a PR and fork work: hand over both
     [ -n "${SG_FORK_DIR:-}" ] && [ -n "$(/usr/bin/git -C "$SG_FORK_DIR" rev-list -1 "${SG_FORK_BASE:-main}..$br" 2>/dev/null)" ] && fork+=("$br")
-    [ -n "$(prof "$b")" ] && open+=("$b")
+    open+=("$b")   # with no open PR it gates (WAIT below): a column is not proof that the work exists
     continue;; esac
   open+=("$b"); done
 fx=""; [ ${#fork[@]} -gt 0 ] && fx=" FORK ${fork[*]}"

@@ -4,7 +4,7 @@
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{startability.sh,ghcall.sh,ghread.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
 printf 'export SG_REPO=x/y SG_CHECKOUT=%s SG_HUB_DIR=%s SG_BASE=main SG_STATE=%s/st\n' "$T/co" "$T/co/runs/.hub" "$T" > "$T/s/env.sh"
-echo '{"items":[]}' > "$T/co/runs/.hub/hub-board.json"
+echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"   # #1796: a card in Code Complete with no PR
 # The body still names #1791, but only the native relation can block dispatch. #1800 has two open native blockers.
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -18,6 +18,8 @@ case "$*" in
   *"i1804: issue(number: 1804)"*) echo '{"data":{"repository":{"i1804":null}}}';;
   *"i1805: issue(number: 1805)"*) echo '{"data":{"repository":{"i1805":{"number":1805,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1799,"state":"OPEN"}]}}}}}';;
   *"issues/1799 -q .state"*) echo 'gh: API rate limit exceeded' >&2; exit 1;;
+  *"i1806: issue(number: 1806)"*) echo '{"data":{"repository":{"i1806":{"number":1806,"state":"OPEN","body":"Work.","labels":{"nodes":[]},"blockedBy":{"nodes":[{"number":1796,"state":"OPEN"}]}}}}}';;
+  *"issues/1796 -q .state"*) echo open;;
   *"issues/1791 -q .state"*) echo closed;;
   *"issues/1797 -q .state"*|*"issues/1798 -q .state"*) echo open;;
   *"pulls?state=open"*) echo '[]';;
@@ -43,4 +45,6 @@ r=$(run 1804)
 case "$r" in WAIT*) ok "#1804: an issue the answer does not carry is not read as no blockers";; *) ko "#1804 did not WAIT: '$r'";; esac
 r=$(run 1805)
 case "$r" in *WAIT*"#1799"*) ok "#1805: a blocker whose state cannot be read gates dispatch";; *) ko "#1805 did not WAIT on #1799: '$r'";; esac
+r=$(run 1806)
+case "$r" in *WAIT*"#1796"*) ok "#1806: a Code Complete blocker with no open PR gates dispatch";; *) ko "#1806 did not WAIT on #1796: '$r'";; esac
 rm -rf "$T"; exit $fail
