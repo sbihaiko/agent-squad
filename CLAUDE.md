@@ -58,7 +58,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A test whose fixture repository the runner does not own is deselected there, never skipped** ([ADR-0139](docs/adr/0139-a-test-without-its-fixture-repo-is-deselected.md)). Guard: `tests/test_tooling.py`.
 - **A defect an agent finds is its own, whoever caused it and whenever it began** ([ADR-0133](docs/adr/0133-a-defect-an-agent-finds-is-its-own.md)). Guard: none yet; a draft.
 - **`/implement` works in its own worktree and lands in `dev` by a fast-forward push, with no pull request; commit and push are automatic** ([ADR-0116](docs/adr/0116-implement-in-a-worktree.md)). Guard: `tests/test_repo_hygiene.py`.
-- **Three long-lived branches: `dev` takes landings, the loop promotes to `stg`, the owner to `main`; the live copy publishes from `stg`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_tooling.py`; the rest is a draft.
+- **Three long-lived branches: `dev` takes landings, the loop promotes to `stg`, the owner to `main`; a wave is one branch with one CI run, at its landing in `dev`** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `tests/test_tooling.py`; the rest is a draft.
 
 ### Run engine
 
