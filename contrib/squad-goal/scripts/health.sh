@@ -80,18 +80,11 @@ for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/}" = "
 done
 slots=$((nlive+nyoung)); nboard=-1; ip=""
 if [ -n "${SG_OWNER:-}" ] && [ -n "${SG_PROJECT:-}" ]; then
-  sf="$A/status-field-$SG_OWNER-$SG_PROJECT"; fid=""
-  [ -e "$sf" ] && [ $((now - $(mtime "$sf"))) -lt 86400 ] && fid=$(cat "$sf")
-  if [ -z "$fid" ]; then   # the Status field id, the same lookup board.py caches: the items read takes field ids, not names
-    fid=$(gh api --paginate "users/$SG_OWNER/projectsV2/$SG_PROJECT/fields?per_page=100" --jq '[.[]|select(.name=="Status")][0].id' 2>/dev/null)
-    [ -n "$fid" ] && [ -z "${HEALTH_DRY:-}" ] && printf '%s\n' "$fid" > "$sf"
-  fi
-  if [ -n "$fid" ]; then
-    raw=$(gh api --paginate "users/$SG_OWNER/projectsV2/$SG_PROJECT/items?per_page=100&fields=$fid" --jq '.[]|select(.content.number)|[(.content.number|tostring),((([.fields[]?|select(.id=='"$fid"')|(.value.name|if type=="object" then .raw else . end)][0])//"-"))]|@tsv' 2>/dev/null); brc=$?
-    # an unreadable board is not a drift: leave the counts unknown (-1) and let the next readable pass decide
-    [ $brc = 0 ] && { nboard=$(printf '%s\n' "$raw" | awk -F'\t' '$2=="In Progress"' | wc -l | tr -d ' ')
-      ip="$(printf '%s\n' "$raw" | awk -F'\t' '$2=="In Progress"{printf " #%s",$1}')"; }
-  fi
+  # the state each card carries, asked of the seam (#236): one items read, the Status field id cached by the binding
+  raw=$(python3 -I "$(dirname "$0")/issue_state.py" 2>/dev/null); brc=$?
+  # an unreadable board is not a drift: leave the counts unknown (-1) and let the next readable pass decide
+  [ $brc = 0 ] && { nboard=$(printf '%s\n' "$raw" | awk -F'\t' '$2=="In Progress"' | wc -l | tr -d ' ')
+    ip="$(printf '%s\n' "$raw" | awk -F'\t' '$2=="In Progress"{printf " #%s",$1}')"; }
 fi
 if [ "$nboard" -ge 0 ] 2>/dev/null; then
   cn=""; for c in $ip; do case " $li " in *" ${c#\#} "*) ;; *) cn="$cn $c";; esac; done      # cards with no live run

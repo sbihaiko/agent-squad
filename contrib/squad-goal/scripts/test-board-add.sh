@@ -13,7 +13,7 @@
 # the board". SG_BOARD_READ_BACKOFF is 0 here, so the retries sleep for no read and the suite stays fast.
 # usage: bash test-board-add.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"
+mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; D="TMPDIR"
@@ -23,8 +23,8 @@ cards="2001 2002 2003 2004 2006 2007 2008 2009"
 case "$a" in
   *users/o*) echo '{"type":"Organization"}';;
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}}]}]';;
-  *items?per_page=100\&fields*)   # the Status read: the option id the card carries, "" when it carries none (the write was lost or refused)
-    for n in $cards; do [ -e "$D/seen-$n" ] && printf '[%s,"%s"]\n' "$n" "$(cat "$D/st-$n" 2>/dev/null)"; done; exit 0;;
+  *items?per_page=100\&fields*)   # the one Status read: number, the state the card carries (its option id), the repository url
+    for n in $cards; do [ -e "$D/seen-$n" ] && printf '%s\t%s\t%s\n' "$n" "$(cat "$D/st-$n" 2>/dev/null)" "https://api.github.com/repos/x/y"; done; exit 0;;
   *items?per_page=100*)   # the items route is eventually consistent: the read is counted, and #2002 is only carried from the second read (#96)
     r=$(( $(cat "$D/reads" 2>/dev/null || echo 0) + 1 )); echo "$r" > "$D/reads"
     for n in $cards; do

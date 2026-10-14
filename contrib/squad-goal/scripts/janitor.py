@@ -326,16 +326,17 @@ for n, i in live.items():
         if not dry: mk.touch()
 owner = os.environ.get("SG_OWNER"); proj = os.environ.get("SG_PROJECT"); bproj = os.environ.get("SG_BUG_PROJECT")
 _cards = {}
-def cards(p):   # every card of project p, read once per pass: (answered, {issue: Status}). answered is False when GitHub did not answer (a refusal, a deadline miss), and then nothing is moved on a guess; an issue missing from an answered map is a card that does not exist
+class _Done:   # the shape the seam's runner answers: the binding reads returncode and stdout, and stderr is never kept (no pipe, see _run)
+    def __init__(self, rc, out): self.returncode, self.stdout, self.stderr = rc, out, ""
+def _seam_run(a, input=None, capture_output=True, text=True, timeout=None):   # the seam's calls go through this module's one runner and its deadline; the binding never writes here, so no input is sent
+    return _Done(*_run(list(a), timeout=timeout))
+def cards(p):   # every card of project p, read once per pass, asked of the seam (#236): (answered, {issue: Status}). answered is False when GitHub did not answer (a refusal, a deadline miss), and then nothing is moved on a guess; an issue missing from an answered map is a card that does not exist
     if p not in _cards:
-        f = sh("gh", "api", f"/users/{owner}/projectsV2/{p}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id').strip()
-        r, out = _run(["gh", "api", "--paginate", f"/users/{owner}/projectsV2/{p}/items?per_page=100&fields[]={f}", "--jq",
-                       '.[]|select(.content_type=="Issue")|[.content.number, ((.fields[]?|select(.name=="Status")|.value.name.raw)//""), (.content.repository_url//"")]|@tsv'])
-        m = {}
-        for l in out.splitlines():
-            n, s, u = (l.split("\t") + ["", ""])[:3]
-            if n.isdigit() and (not u or u.endswith("/" + repo0)): m[n] = s
-        _cards[p] = (bool(f) and r == 0, m)
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam sits beside this script; -I keeps the script's directory off sys.path
+        from issue_state import board_state
+        seam = board_state(owner=owner, project=p, repo=repo0, state_dir=st, run=_seam_run)
+        try: _cards[p] = (bool(seam.binding.status_field()["id"]), seam.read_all())
+        except (RuntimeError, ValueError): _cards[p] = (False, {})
     return _cards[p]
 def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""

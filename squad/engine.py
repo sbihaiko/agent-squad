@@ -39,7 +39,7 @@ from squad.runners.types import Scope as Scope
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
-                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None):
+                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board"):
         self.shadow = shadow     # advisory observer: its output is recorded as `diagnostic` and read by nothing
         self.graph_path = graph_path
         self.g, self.adapter, self.run_dir = graph, adapter, Path(run_dir)
@@ -74,6 +74,7 @@ class Engine:
         self.vendor = Path(vendor) if vendor else skills.VENDOR   # where VERSIONS.json lives
         self.ceiling = ceiling         # squad.caps.Ceiling: the machine-wide run and child slots; None admits without one
         self.defaults = defaults       # {path, sha256, engine}: the per-invocation engine-level defaults, recorded in run_start and resume
+        self.state_binding = state_binding  # the issue-state carrier, fixed for this run and checked on resume
         if hasattr(adapter, "bind"):
             adapter.bind(lambda kind, **f: self.record.append(kind, **f))
         self.item_workspaces = self._item_workspaces()
@@ -236,6 +237,7 @@ class Engine:
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
+                           state_binding=self.state_binding,
                            **({"caps": self.ceiling.caps} if self.ceiling else {}),
                            skills=skills.snapshot(self.g.doc, self.vendor), skills_commit=skills.commit(self.vendor))
 

@@ -127,7 +127,7 @@ def _jq(cmd):
 def _pass_calls(hub, monkeypatch, items, fallback=()):
     """One board_pass over the stubbed gh, returning the calls it made."""
     calls = []
-    monkeypatch.setattr(hub, "_board_sf", "PVTSSF_status")   # the Status field is read once per process (#1810)
+    monkeypatch.setattr(hub.board_seam().binding, "status_field", lambda: {"id": "PVTSSF_status", "opt": {}})   # the Status field is cached by the binding, not read per pass (#1810)
     monkeypatch.setattr(hub, "board_cache", _cache([]))
     monkeypatch.setattr(hub.subprocess, "run", _fake_gh(calls, items, fallback))
     hub.board_pass()

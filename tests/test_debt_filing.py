@@ -38,7 +38,8 @@ class StubGh:
     def __call__(self, args, input=None):
         self.calls.append(args)
         path = next((a for a in args if a.startswith(("repos/", "users/", "/users/"))), "")
-        method = args[args.index("--method") + 1] if "--method" in args else "GET"
+        flag = next((f for f in ("--method", "-X") if f in args), None)
+        method = args[args.index(flag) + 1] if flag else "GET"
         if method == "GET" and path == "users/o":
             return json.dumps({"type": "User"})
         if method == "GET" and "projectsV2/4/fields" in path:
@@ -46,8 +47,12 @@ class StubGh:
         if method == "GET" and re.fullmatch(r"repos/o/r/issues/\d+", path):
             n = int(path.rsplit("/", 1)[1])
             return json.dumps({"number": n, "id": 9000 + n})
-        if method == "GET" and "projectsV2/4/items" in path:
-            return "".join(json.dumps([n, "https://api.github.com/repos/o/r"]) + "\n" for n in sorted(self.on_board))
+        if method == "GET" and "projectsV2/4/items" in path and "@tsv" in args[-1]:   # the seam's state read
+            status = dict((int(i.removeprefix("PVTI_")) - 9000, v) for i, v in self.moved)
+            return "".join(f"{n}\t{status.get(n, '')}\thttps://api.github.com/repos/o/r\n" for n in sorted(self.on_board))
+        if method == "GET" and "projectsV2/4/items" in path:   # the seam's item id map
+            return "".join(json.dumps([n, f"PVTI_{9000 + n}", "https://api.github.com/repos/o/r"]) + "\n"
+                           for n in sorted(self.on_board))
         if method == "POST" and path.endswith("/items"):
             self.opened.append(json.loads(input)["id"])
             self.on_board.add(json.loads(input)["id"] - 9000)
@@ -150,6 +155,7 @@ def test_the_filer_puts_each_issue_it_opens_on_the_board(monkeypatch, tmp_path):
     SG_OWNER/SG_PROJECT, the same pair every other board move uses."""
     monkeypatch.setenv("SG_OWNER", "o")
     monkeypatch.setenv("SG_PROJECT", "4")
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))   # the seam's caches, never the live loop's
     gh = StubGh()
     monkeypatch.setattr(debt_filing, "_sh", gh)
     review = tmp_path / "review.md"
@@ -169,6 +175,7 @@ def test_an_issue_already_filed_without_a_card_gets_its_card_on_a_later_run(monk
 
     monkeypatch.setenv("SG_OWNER", "o")
     monkeypatch.setenv("SG_PROJECT", "4")
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "state"))   # the seam's caches, never the live loop's
     gh = StubGh(labels={"debt"})
     first = parse(REVIEW)[0]
     gh.issues.append({"number": 5, "title": "Debt: retry loop has no backoff (src/b.py:42)",

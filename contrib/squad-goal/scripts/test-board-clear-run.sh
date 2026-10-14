@@ -9,7 +9,7 @@
 # green on the accepted one. SG_BOARD_READ_BACKOFF is 0, so the suite sleeps for no read.
 # usage: bash test-board-clear-run.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"
+mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"

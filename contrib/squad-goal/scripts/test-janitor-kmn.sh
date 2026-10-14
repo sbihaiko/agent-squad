@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for janitor rules K (never-started autofix run -> retryfix; `Nothing ran` frees disp-<n>) and M (PR-STUCK alert), stubbed gh/retryfix/notifier. usage: bash test-janitor-kmn.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/s/janitor.py"
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
 printf '#!/bin/bash\necho "$1" >> %s/retry.calls\n' "$T" > "$T/s/retryfix.sh"; printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash

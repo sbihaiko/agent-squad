@@ -2,6 +2,8 @@
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.request
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
+from issue_state import board_state
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__file__).resolve().parent / "board_columns.py")
@@ -47,10 +49,14 @@ def repo_tag(repo, repos=None):
     repos = REPOS if repos is None else repos
     name = repo.rsplit("/", 1)[-1]
     return name if sum(1 for r in repos if r.rsplit("/", 1)[-1] == name) == 1 else repo
-def status_field():
-    """REST id of the board's Status field (the items endpoint needs it to return Status values)."""
-    o = subprocess.run(["gh", "api", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id'], capture_output=True, text=True, timeout=60).stdout.split()
-    return o[0] if o else ""
+_board_state = None   # the seam once per process (#236): the pane asks it for the board's rows, and holds no call of its own
+def board_seam():
+    """The pane's one reach of the board: the seam this repository binds the vocabulary to. The carrier,
+    its field ids and its retries are the binding's; here the pane projects the rows it draws."""
+    global _board_state
+    if _board_state is None:   # the binding's caches sit in the hub's own folder; each call goes through subprocess.run as the pass looks it up
+        _board_state = board_state(state_dir=HUBDIR, run=lambda a, **kw: subprocess.run(a, **kw))
+    return _board_state
 HOME = pathlib.Path.home()
 def state_dir():
     """$SG_STATE when the runner exports it, else the state directory the seam (address.sh) names, `sg_state_base`, for the
@@ -1045,7 +1051,6 @@ def task_count(i):
     t, c = s.get("total"), s.get("completed")
     if isinstance(t, bool) or isinstance(c, bool) or not isinstance(t, int) or not isinstance(c, int): return None
     return f"{c}/{t}" if t > 0 else None
-_board_sf = ""   # the Status field's REST id: read once per process, not once per pass
 def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None):
     """One board re-read: Board 4 statuses (REST) + one GraphQL page of Issue.blockedBy + the open and closed PRs of
     every repository the hub is told to read (#1820). The 60 s loop and the header's refresh button both run exactly
@@ -1054,13 +1059,11 @@ def board_pass(fetch_open=None, fetch_closed=None, fetch_total=None, repos=None)
     The two reads are independent: the issues are the profile repository's board, the PR columns span every configured
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
     repository's own error on the column), so a failed pass never writes a fresh empty board (#1772, #1820)."""
-    global _board_sf
     items = lc = None
     try:
-            _board_sf = _board_sf or status_field()
-            out = subprocess.run(["gh", "api", "--paginate", f"/users/{OWNER}/projectsV2/{PROJECT_NO}/items?per_page=100&fields[]={_board_sf}", "--jq",
-                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}'],
-                capture_output=True, text=True, timeout=120).stdout
+            out = board_seam().rows(
+                '.[]|select(.content_type=="Issue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}',
+                timeout=120)
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             oi = subprocess.run(["gh", "api", "--paginate", f"repos/{REPO}/issues?state=open&per_page=100", "--jq",
                 '.[]|select(.pull_request==null)|{n:.number,t:.title,s:.state,c:null,st:null,l:[.labels[].name],si:{total:.sub_issues_summary.total,completed:.sub_issues_summary.completed}}'], capture_output=True, text=True, timeout=120).stdout
