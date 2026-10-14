@@ -19,3 +19,11 @@ def router():
 
 def node(doc, name):
     return next(n for n in doc["nodes"] if n["name"] == name)
+
+
+def route(spend_max=4):
+    """The shipped dispatch node with a child spend the test owns, so a remainder the test passes still funds a child
+    when the shipped graph's own number moves (ADR-0018: re-anchor, never retune)."""
+    d = node(router(), "route")
+    d["budget"]["spend"]["max"] = spend_max
+    return d
