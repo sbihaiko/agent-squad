@@ -17,22 +17,32 @@ A miss on the item map re-reads the items with the same bounded backoff (#96): t
 so a card written a moment ago is not always in the next read. A card the board answered "already exists" for and no read then
 carried is a READ FAILURE, named by name, never "not on the board"; only a card no read ever carried, with nothing written for
 it here, is absent.
+A GitHub server error (HTTP 5xx) on any call is asked again with the same bounded backoff (#226): it is GitHub failing to
+answer, not a refusal, so a write the next answer proves is never named a refused write.
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
-import json, os, pathlib, subprocess, sys, time
+import json, os, pathlib, re, subprocess, sys, time
 st = pathlib.Path(os.environ["SG_STATE"]); st.mkdir(parents=True, exist_ok=True)
 args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]
 args = args[1:] if add or run_fields or clear_run else args
 owner, num = args[0], args[1]
 repo = os.environ.get("SG_REPO", "")
-def api(*a, inp=None):
-    r = subprocess.run(["gh", "api", *a], input=inp, capture_output=True, text=True)
-    if r.returncode: raise RuntimeError(r.stderr.strip()[:200])
-    return r.stdout
 def _num(name, default):   # a bad value in the environment must not kill a card move
     try: return float(os.environ.get(name, default))
     except ValueError: return float(default)
 ATTEMPTS = max(1, int(_num("SG_BOARD_READ_ATTEMPTS", "4")))   # bounded: the items route is eventually consistent (#96)
 BACKOFF = max(0.0, _num("SG_BOARD_READ_BACKOFF", "1"))        # the base delay, doubled per retry; 0 sleeps for no read
+SERVER_ERROR = re.compile(r"\bHTTP 5\d\d\b")
+def api(*a, inp=None):
+    """One gh api call. A server error (HTTP 5xx) is GitHub failing to answer, not a verdict on the request: it is asked
+    again with the same bounded backoff, and only an error that outlasts ATTEMPTS is raised (#226). Any other error is
+    GitHub's verdict, raised at once."""
+    for k in range(ATTEMPTS):
+        if k and BACKOFF: time.sleep(BACKOFF * (2 ** (k - 1)))
+        r = subprocess.run(["gh", "api", *a], input=inp, capture_output=True, text=True)
+        if not r.returncode: return r.stdout
+        err = r.stderr.strip()[:200]
+        if not SERVER_ERROR.search(err): break
+    raise RuntimeError(err)
 class ReadFailure(Exception):
     """A card the board answered "already there" for, which no read then carried: the read is behind the write, not the card gone."""
     def __init__(self, reads, count): super().__init__(f"the board read never carried it after {reads} reads ({count} items read); a read failure, not an absence")

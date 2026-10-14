@@ -376,4 +376,58 @@ $G -qF 'Core: null deref' <<<"$blk" && ok "11 the issue block carries the issue'
 $G -qF 'step a.py' <<<"$blk" && ok "11 the issue block carries the issue's body" || ko "11 the block carries no body: '$blk'"
 $G -qE 'jq: error' "$T/err218" && ko "11 the pass logged a jq parse error: $(cat "$T/err218")" || ok "11 the pass logs no jq parse error"
 
+# 12) (#226) a GitHub server error is not a refusal. HTTP 500 is GitHub failing to answer, not GitHub refusing the write,
+# and the same request a moment later is answered. board.py read the issue of an --add once, took the 500 as final, and
+# the door filed "refused BOARD-WRITE-FAILED ... gh: HTTP 500" as a bug. The real board.sh and board.py run here, and
+# the stub answers the board's first issue read with HTTP 500: the card is still written, and nothing is filed.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T"/st/owner-kind-* "$T"/st/rest-*
+cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$T/s/"
+printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
+printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
+chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
+: > "$T/filed"; : > "$T/st/cycle.log"; : > "$T/board.calls"; rm -f "$T/b500" "$T/bseen" "$T/bstatus"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+a="\$*"
+if [ "\${SG_GH_PASS:-}" = board ]; then   # the calls of the real board.py
+  echo "\$a" >> "$T/board.calls"
+  case "\$a" in *"--input -"*) cat > "$T/board.in";; esac
+  case "\$a" in
+    "api users/o") echo '{"type":"User"}' ;;
+    *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_PROG","name":"In Progress"}]}]' ;;
+    *items?per_page=100\&fields*) [ -e "$T/bseen" ] && printf '[1228,"%s"]\n' "\$(cat "$T/bstatus" 2>/dev/null)"; exit 0 ;;
+    *items?per_page=100*) [ -e "$T/bseen" ] && printf '[1228,"ITEM1","https://api.github.com/repos/x/y"]\n'; exit 0 ;;
+    *repos/x/y/issues/1228*)
+      if [ ! -e "$T/b500" ]; then touch "$T/b500"; echo 'gh: HTTP 500' >&2; exit 1; fi   # GitHub's server failed once
+      echo '{"id":3228}' ;;
+    *"-X POST"*items*) touch "$T/bseen"; echo '{"id":"ITEM1"}' ;;
+    *"-X PATCH"*items/ITEM1*) sed -n 's/.*"value": "\([^"]*\)".*/\1/p' "$T/board.in" > "$T/bstatus"; echo '{"id":"ITEM1"}' ;;
+    *) echo "" ;;
+  esac
+  exit 0
+fi
+case "\$a" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
+    for x in "\$@"; do case "\$x" in body=@*) cat "\${x#body=@}" >> "$T/filed";; esac; done
+    echo '{"number":900}' ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+export BOARD="$T/s/board.sh" SG_BOARD_READ_BACKOFF=0
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "12 the pass whose board read met HTTP 500 finishes" || ko "12 the pass exited $rc: '$r'"
+[ -e "$T/b500" ] && ok "12 the board's issue read met HTTP 500 once" || ko "12 the stub never served the 500: $(cat "$T/board.calls")"
+[ "$(cat "$T/bstatus" 2>/dev/null)" = O_PROG ] && ok "12 the card is written In Progress after the server error" \
+  || ko "12 the card was not written: $(cat "$T/board.calls")"
+filed=$($G -c '^title=' "$T/filed")
+[ "$filed" = 0 ] && ok "12 a server error files no bug" || ko "12 a server error filed $filed bug(s): $(cat "$T/filed")"
+[ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "12 no refusal is named in the cycle log" || ko "12 cycle.log: $(cat "$T/st/cycle.log")"
+unset SG_BOARD_READ_BACKOFF
+
 rm -rf "$T"; exit $fail
