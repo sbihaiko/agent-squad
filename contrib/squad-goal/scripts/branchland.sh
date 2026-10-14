@@ -81,7 +81,8 @@ while read -r sha br i; do
   # The review must have approved this tip as well (#357): branchreview.sh keeps its verdict and the sha it read under the branch key.
   rk="$SG_STATE/review-$(printf '%s' "$br" | tr '/' '_')"
   if [ "$(cat "$rk.sha" 2>/dev/null)" != "$sha" ] || [ ! -s "$rk.md" ]; then say wait "$br" "$sha" noreview "no review of ${sha:0:9} yet"; continue; fi
-  head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
+  # a CHANGES with no Blocking finding (debt only) is an approval, as autopilot reads it (revformat.py count; #392)
+  head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || python3 "$here/revformat.py" --summary "$rk.md" 2>/dev/null | grep -q '^blocking=0 ' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
   if [ -n "$gate" ]; then localgate "$br" "$sha" "$i" || continue; green="The local gate (CI off) passed on ${sha:0:9}."
   else green="The check on ${sha:0:9} was green."; fi
   fl=$(SG_BASE=$land bash "$here/ffland.sh" 0 "$br" "$i" 2>/dev/null | tail -1)

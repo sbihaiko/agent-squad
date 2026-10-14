@@ -4,7 +4,7 @@
 # usage: bash test-branchland.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/branchland.sh" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q dev)
@@ -30,7 +30,9 @@ RED='{"check_runs":[{"id":10,"name":"check (3.11)","status":"completed","conclus
 RUNNING='{"check_runs":[{"id":10,"name":"check (3.11)","status":"in_progress","conclusion":null}]}'
 # The review verdict of the branch tip, which the lander waits for beside the check (#357): VERDICT=APPROVE|CHANGES|none, kept
 # the way branchreview.sh keeps it (review-<key>.md and review-<key>.sha under the state directory).
-rev() { rm -f "$T/st/review-gui_7-x".*; [ "${1:-}" = none ] && return; printf 'VERDICT: %s\n' "${1:-APPROVE}" > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"; }
+rev() { rm -f "$T/st/review-gui_7-x".*; [ "${1:-}" = none ] && return; printf 'VERDICT: %s\n' "${1:-APPROVE}" > "$T/st/review-gui_7-x.md"
+  [ "${1:-}" = CHANGES ] && printf '## Blocking\n- a.sh:1 — wrong — breaks — fix\n' >> "$T/st/review-gui_7-x.md"
+  [ "${1:-}" = DEBTONLY ] && printf 'VERDICT: CHANGES\n## Blocking\n\n## Debt\n- a.sh:1 — naming — unclear — rename\n' > "$T/st/review-gui_7-x.md"; $O rev-parse gui/7-x > "$T/st/review-gui_7-x.sha"; }
 bl() { bash "$T/s/branchland.sh" 2>&1; }
 O="$G -C $T/origin.git"
 reset() { rm -f "$T/st/cq"/* "$T/gh.log" "$T/board.log" "$T/st/auto"/branchland-*; mkorigin; rev APPROVE; }
@@ -118,6 +120,9 @@ reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$RED" bl)
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS="$RUNNING" bl)
 [ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a running check runs no gate and lands nothing" || ko "a running check ran the gate or landed"
 # a green check is not enough: the review must have approved the tip (#357)
+# A CHANGES with no Blocking finding (debt only) is an approval (#392): the lander reads the findings, as autopilot does.
+reset; rev DEBTONLY; r=$(CHECKS="$GREEN" bl)
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a debt-only CHANGES lands: no Blocking finding";; *) ko "a debt-only CHANGES did not land: '$r'";; esac
 reset; rev CHANGES; r=$(CHECKS="$GREEN" bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a review that asked for changes: nothing lands on a green check" || ko "landed over a CHANGES verdict"
 case "$r" in *"BRANCHLAND WAIT gui/7-x"*"changes"*) ok "CHANGES: waits and says why";; *) ko "CHANGES silent: '$r'";; esac
