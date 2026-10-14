@@ -52,6 +52,44 @@ chmod 755 "$live"
 case "$out" in *LIVE-GUARD*"copy SKILL.md"*) ok "the unresolved difference is read and named";; *) ko "the unresolved difference is silent: $out";; esac
 case "$out" in *LIVE-GUARD*"could not resolve"*"copy SKILL.md"*) ok "the pass names the difference the publish left";; *) ko "the pass does not name what the publish left: $out";; esac
 
+# --- the main tree follows origin before the publish (issue #292) ---------------------------------
+# The live copy is published from the main working tree, and nothing moved that tree to origin/main: it stayed at an old
+# commit while later PRs merged. Before the publish the pass fast-forwards it (ff-only), and only a clean tree on its base.
+# Each case is a bare origin, a clone that is the checkout, and a live skill a version behind. No network, no GitHub call.
+G() { git -c user.name=t -c user.email=t@t "$@"; }
+mk() { # mk NAME: bare origin $T/NAME.git, a clone at $T/NAME carrying contrib/squad-goal v1, a live skill at v1
+  local n=$1; local w=$T/$n.work
+  G init -q --bare -b main "$T/$n.git"; G clone -q "$T/$n.git" "$w" 2>/dev/null
+  mkdir -p "$w/contrib/squad-goal/scripts"; printf 'skill v1\n' > "$w/contrib/squad-goal/SKILL.md"; printf 'hub\n' > "$w/contrib/squad-goal/scripts/hub.py"
+  G -C "$w" add -A; G -C "$w" commit -qm v1; G -C "$w" push -q origin HEAD:main
+  G clone -q -b main "$T/$n.git" "$T/$n" 2>/dev/null
+  mkdir -p "$T/$n.live/scripts"; printf 'skill v1\n' > "$T/$n.live/SKILL.md"
+  printf 'new file\n' > "$w/contrib/squad-goal/board-definition.json"; printf 'skill v2\n' > "$w/contrib/squad-goal/SKILL.md"
+  G -C "$w" add -A; G -C "$w" commit -qm v2; G -C "$w" push -q origin HEAD:main     # origin is now a commit ahead of $T/$n
+}
+ffpass() { SG_CHECKOUT=$T/$1 SG_LIVE_DIR=$T/$1.live bash "$S/live-guard.sh" 2>&1; }
+
+mk behind; head0=$(G -C "$T/behind" rev-parse HEAD)
+out=$(ffpass behind)
+[ "$(G -C "$T/behind" rev-parse HEAD)" = "$(G -C "$T/behind" rev-parse origin/main)" ] && [ "$(G -C "$T/behind" rev-parse HEAD)" != "$head0" ] && ok "a clean tree behind origin is fast-forwarded" || ko "the tree was not fast-forwarded: $out"
+case "$out" in *LIVE-GUARD*"fast-forwarded"*) ok "the fast-forward is named";; *) ko "the fast-forward is silent: $out";; esac
+[ "$(cat "$T/behind.live/SKILL.md")" = "skill v2" ] && [ -f "$T/behind.live/board-definition.json" ] && ok "the publish carries the files the fast-forward brought" || ko "the publish did not carry the new files: $out"
+
+mk dirty; printf 'mine\n' >> "$T/dirty/contrib/squad-goal/SKILL.md"; h=$(G -C "$T/dirty" rev-parse HEAD)
+out=$(ffpass dirty)
+[ "$(G -C "$T/dirty" rev-parse HEAD)" = "$h" ] && [ "$(cat "$T/dirty/contrib/squad-goal/SKILL.md")" = "$(printf 'skill v1\nmine')" ] && ok "a dirty tree is left alone" || ko "the dirty tree was touched: $out"
+case "$out" in *LIVE-GUARD*"not fast-forwarded"*dirty*) ok "the dirty tree is reported by name";; *) ko "the dirty tree is not reported: $out";; esac
+
+mk other; G -C "$T/other" checkout -q -b topic; h=$(G -C "$T/other" rev-parse HEAD)
+out=$(ffpass other)
+[ "$(G -C "$T/other" rev-parse HEAD)" = "$h" ] && [ "$(G -C "$T/other" branch --show-current)" = topic ] && ok "a tree on another branch is left alone" || ko "the other-branch tree was touched: $out"
+case "$out" in *LIVE-GUARD*"not fast-forwarded"*topic*) ok "the other branch is reported by name";; *) ko "the other branch is not reported: $out";; esac
+
+mk diverged; printf 'local\n' > "$T/diverged/local.txt"; G -C "$T/diverged" add -A; G -C "$T/diverged" commit -qm local; h=$(G -C "$T/diverged" rev-parse HEAD)
+out=$(ffpass diverged)
+[ "$(G -C "$T/diverged" rev-parse HEAD)" = "$h" ] && ok "a diverged tree is left alone" || ko "the diverged tree was touched: $out"
+case "$out" in *LIVE-GUARD*"not fast-forwarded"*"fast-forward"*) ok "the divergence is reported by name";; *) ko "the divergence is not reported: $out";; esac
+
 # --- a checkout that ships no copy of the skill: nothing to read, nothing to publish --------------
 out=$(SG_CHECKOUT=$T/elsewhere bash "$S/live-guard.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && ok "a checkout with no contrib/squad-goal: the pass says nothing" || ko "a foreign checkout spoke (exit $rc): $out"
