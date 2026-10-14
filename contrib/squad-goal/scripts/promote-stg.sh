@@ -8,6 +8,8 @@
 # $SG_PROMOTE_REMOTE overrides the remote; $SG_CI_STATE_CMD <sha> prints green, red or running (the test seam).
 d=$(cd "$(dirname "$0")" && pwd); remote=${SG_PROMOTE_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
+# The promotion gate takes the machine-wide gate lock (#392); a pass already inside it just runs.
+case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) exec bash "$d/gate.sh" bash "$0" "$@";; esac
 state=${SG_STATE:-${TMPDIR:-/tmp}/sg-state}; mkdir -p "$state"; log=$state/promote.log
 W=$(mktemp -d) || exit 1; trap 'rm -rf "$W"' EXIT
 g() { /usr/bin/git -C "$W" "$@"; }

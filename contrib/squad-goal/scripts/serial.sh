@@ -12,7 +12,7 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # else the run's own SG_CALL_DEADLINE_SECONDS, else 1800) and its command name beside its pid, stops its own command at that
 # deadline (exit 75), and a waiter reaps a holder that is past its deadline AND orphaned (its parent is pid 1: its run is gone),
 # matching the holder by the name recorded in the lock so a reused pid is never killed. A live, owned holder is only waited for.
-st=${SG_STATE:-$SG_STATE}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
+st=${SG_STATE:-${TMPDIR:-/tmp}/sg-state}; n=$1; shift; # GUI kill switch (scripts/gui-tests.sh off, or SG_GUI_TESTS=no for one process tree): the gui-suite lock is the chokepoint every
 # Mesen GUI run takes -- the fork gate, the e2e and a hand-run suite -- so one marker stops them all without touching a caller. It
 # exits 0, never non-zero: a suite deliberately not run is not a failure, and a red gate would revert every branch in flight.
 case "$n" in gui-suite)
