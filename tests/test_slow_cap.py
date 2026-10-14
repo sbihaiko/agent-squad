@@ -28,7 +28,7 @@ SPIN = "def test_spin():\n    while True:\n        pass\n"
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 @pytest.mark.heavy
 def test_a_test_over_the_cap_fails_and_is_named(tmp_path):
-    r = run_inner(tmp_path, SLEEP + "def test_slow():\n    time.sleep(0.5)\n")
+    r = run_inner(tmp_path, SLEEP + "def test_slow():\n    time.sleep(1.5)\n")
     assert r.returncode == 1
     assert "test_inner.py::test_slow took" in r.stdout
 
@@ -42,7 +42,7 @@ def test_a_test_under_the_cap_passes(tmp_path):
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 @pytest.mark.heavy
 def test_a_slow_marker_with_a_reason_lets_a_test_pass(tmp_path):
-    body = SLEEP + "import pytest\n@pytest.mark.slow(reason='real subprocess')\ndef test_slow():\n    time.sleep(0.5)\n"
+    body = SLEEP + "import pytest\n@pytest.mark.slow(reason='real subprocess')\ndef test_slow():\n    time.sleep(1.5)\n"
     assert run_inner(tmp_path, body).returncode == 0
 
 
@@ -77,7 +77,7 @@ def test_a_slow_marker_with_a_reason_is_exempt_from_the_deadline(tmp_path):
 @pytest.mark.heavy
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 def test_an_unmarked_test_at_the_heavy_line_fails_and_is_named(tmp_path):
-    r = run_inner(tmp_path, SLEEP + "def test_slow():\n    time.sleep(0.5)\n", ini=("slow_cap_seconds=5", "heavy_cap_seconds=0.3"))
+    r = run_inner(tmp_path, SLEEP + "def test_slow():\n    time.sleep(1.5)\n", ini=("slow_cap_seconds=5", "heavy_cap_seconds=0.3"))
     assert r.returncode == 1, r.stdout + r.stderr
     assert "test_inner.py::test_slow took" in r.stdout and "heavy" in r.stdout
 
@@ -85,14 +85,14 @@ def test_an_unmarked_test_at_the_heavy_line_fails_and_is_named(tmp_path):
 @pytest.mark.heavy
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 def test_a_heavy_marker_lets_a_test_past_the_heavy_line_pass(tmp_path):
-    body = SLEEP + "import pytest\n@pytest.mark.heavy\ndef test_slow():\n    time.sleep(0.5)\n"
+    body = SLEEP + "import pytest\n@pytest.mark.heavy\ndef test_slow():\n    time.sleep(1.5)\n"
     assert run_inner(tmp_path, body, ini=("slow_cap_seconds=5", "heavy_cap_seconds=0.3")).returncode == 0
 
 
 @pytest.mark.heavy
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
 def test_a_heavy_marker_does_not_lift_the_cap(tmp_path):
-    body = SLEEP + "import pytest\n@pytest.mark.heavy\ndef test_slow():\n    time.sleep(0.5)\n"
+    body = SLEEP + "import pytest\n@pytest.mark.heavy\ndef test_slow():\n    time.sleep(1.5)\n"
     r = run_inner(tmp_path, body)
     assert r.returncode == 1 and "over the 0.2 s cap" in r.stdout, r.stdout + r.stderr
 

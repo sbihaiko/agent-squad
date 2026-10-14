@@ -8,14 +8,22 @@ test by name instead of waiting for a return that never comes.
 The fast battery (`-m "not heavy"`, the one CI runs) stays fast by one more rule: a call over 1 s carries `heavy`. The
 guard fails an unmarked call only from `heavy_cap_seconds` (2 s), twice the line, so xdist and machine load do not
 fail a test that sits near 1 s; a call that really drifts past it is named.
+
+Both lines guard the work a test does, not the runner's load. A call over a line is read once more against the
+scheduling slowdown measured right then (`contention_factor`): the measured wall time is divided by it, bounded, so a
+call that only waited for a CPU is not named while a call that sleeps past the line still is. The measure runs only for
+a call already over a line, so a passing suite pays nothing.
 """
 import signal
+import time
 
 import pytest
 
 DEFAULT_CAP_SECONDS = 20.0
 DEFAULT_DEADLINE_SECONDS = 60.0
 DEFAULT_HEAVY_CAP_SECONDS = 2.0
+MAX_CONTENTION_FACTOR = 4.0
+CALIBRATION_SECONDS = 0.05
 
 
 def pytest_addoption(parser):
@@ -67,6 +75,18 @@ def pytest_runtest_call(item):
         signal.signal(signal.SIGALRM, previous)
 
 
+def contention_factor():
+    """How much slower than its own CPU time a short spin runs right now: 1 on an idle machine, more when the process
+    waits for a CPU. Bounded by `MAX_CONTENTION_FACTOR`, so load can excuse only so much of a call."""
+    wall_start, cpu_start = time.perf_counter(), time.thread_time()
+    while time.perf_counter() - wall_start < CALIBRATION_SECONDS:
+        pass
+    wall, cpu = time.perf_counter() - wall_start, time.thread_time() - cpu_start
+    if cpu <= 0:
+        return 1.0
+    return min(MAX_CONTENTION_FACTOR, max(1.0, wall / cpu))
+
+
 def _over(item, seconds):
     raise AssertionError(
         f"{item.nodeid} ran past its deadline of {seconds:g} s and was stopped. "
@@ -82,15 +102,18 @@ def pytest_runtest_makereport(item, call):
     if call.when != "call" or report.failed or report.skipped:
         return
     cap = float(item.config.getini("slow_cap_seconds"))
-    if report.duration > cap and _slow_reason(item) is None:
+    heavy_cap = float(item.config.getini("heavy_cap_seconds"))
+    duration = report.duration
+    if duration > min(cap, heavy_cap):
+        duration /= contention_factor()
+    if duration > cap and _slow_reason(item) is None:
         report.outcome = "failed"
         report.longrepr = (
             f"{item.nodeid} took {report.duration:.1f} s, over the {cap:g} s cap. "
             "Investigate the cause; do not tune the test to sit under the cap."
         )
         return
-    heavy_cap = float(item.config.getini("heavy_cap_seconds"))
-    if report.duration >= heavy_cap and item.get_closest_marker("heavy") is None:
+    if duration >= heavy_cap and item.get_closest_marker("heavy") is None:
         report.outcome = "failed"
         report.longrepr = (
             f"{item.nodeid} took {report.duration:.1f} s, at or over the {heavy_cap:g} s line for an unmarked call. "
