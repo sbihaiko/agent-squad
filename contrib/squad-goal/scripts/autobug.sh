@@ -120,10 +120,25 @@ PY
 # gather <label>: prints "number<US>labels" per issue; a refusal is not a candidate list at all (#1855).
 gather() {
   local q out rc
-  q="repos/$SG_REPO/issues?state=open&labels=$1&per_page=100&sort=created&direction=asc"
+  q="repos/$SG_REPO/issues?state=open&${1:+labels=$1&}per_page=100&sort=created&direction=asc"
   out=$(gh_api "$q" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")'); rc=$?
   if [ "$rc" -ne 0 ]; then echo "AUTOBUG: the ${1} candidate list is not a list: $gh_api_err; nothing dispatched" >&2; return 3; fi
   printf '%s\n' "$out"
+}
+# gather_bugs: the bug pass takes an item by the kind the seam answers (issue_state.py --kinds), never by the platform's issue
+# type. An item of kind bug is a candidate; an item of another kind is not, label or not; an item that carries no kind keeps
+# the $lab label as its fallback. A seam that answers no kinds is reported, and the label alone selects (#243).
+gather_bugs() {
+  local kinds all fs
+  fs=$(printf '\037')
+  if ! kinds=$(python3 "$here/issue_state.py" --kinds 2>"$SG_STATE/kinds.err"); then
+    echo "AUTOBUG: the item kinds are not read ($(head -c 200 "$SG_STATE/kinds.err" 2>/dev/null | tr '\n' ' ')); the bug pass falls back to the $lab label" >&2
+    gather "$lab"; return
+  fi
+  all=$(gather "") || return 3
+  printf '%s\n' "$all" | KINDS="$kinds" awk -F "$fs" -v lab="$lab" -v OFS="$fs" \
+    'BEGIN { n = split(ENVIRON["KINDS"], L, "\n"); for (i = 1; i <= n; i++) { split(L[i], f, "\t"); k[f[1]] = f[2] } }
+     NF { if (k[$1] == "bug") print; else if (k[$1] == "" && index("," $2 ",", "," lab ",")) print }'
 }
 pulls=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))') \
   || { echo "AUTOBUG: the open-PR list is not a list: $gh_api_err; nothing dispatched" >&2; exit 0; }
@@ -132,7 +147,7 @@ refs=" $(printf '%s\n' "$pulls" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | 
 cand=(); cj="["
 for sel in "$lab" debt; do
   [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
-  list=$(gather "$sel") || exit 0            # refused selection: no candidate, no marker, no request (#1855)
+  if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || exit 0; else list=$(gather "$sel") || exit 0; fi            # refused selection: no candidate, no marker, no request (#1855)
   while IFS=$'\x1f' read -r n labels; do
     [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue

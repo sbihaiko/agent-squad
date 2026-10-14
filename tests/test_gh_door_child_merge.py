@@ -12,8 +12,6 @@ import stat
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from squad import defaults
 
 ROOT = Path(__file__).resolve().parents[1]

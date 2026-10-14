@@ -65,3 +65,84 @@ def column_for(facts):
     if facts.get("run_live"): return "Doing", freeze
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
+
+
+# The hub's view of the shipped definition (#247). The definition names a GitHub colour; the page needs a hex that reads
+# at AA on the hub's chip. A pull request is a lane beside the axis, never a column: the lanes are named here, so the hub
+# holds no name of its own. A role names the column a reader looks up by meaning, never by a literal.
+HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
+       "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
+LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff"},
+         {"key": "pr_closed", "name": "Closed PRs", "color": "#8b9bb3"})
+ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "merged": "Testing"}
+SPEC_LABEL = "spec"
+
+
+def view_columns():
+    """The shipped columns in the definition's order, each with the hex the hub draws it in."""
+    return [{"name": s["name"], "terminal": s["terminal"], "color": HEX[s["color"]]}
+            for s in json.loads(_pinned_text())["statuses"]]
+
+
+def view_column(status, closed, labels=()):
+    """(column, freeze label or None) the hub draws one card in, from its Status (old or shipped name), state and labels.
+
+    Blocked is no column: it is the owner freeze over the column the work reached, Backlog when the Status names none.
+    A card with no Status is not scheduled, so it is Backlog. A closed card is Closed, unless its Status says Abandoned."""
+    labels = set(labels or ())
+    owner = status == "Blocked" or FREEZE_LABEL["owner"] in labels
+    freeze = FREEZE_LABEL["owner"] if owner else FREEZE_LABEL["gated"] if FREEZE_LABEL["gated"] in labels else None
+    name = SHIPPED_NAME.get(status, status) if status else None
+    if closed: return (name if name == ROLE["abandoned"] else ROLE["issue_closed"]), None
+    return (name or ROLE["unscheduled"]), freeze
+
+
+# Every terminal entry carries its condition in text on the issue (spec #132, #245). The tag is what a later pass reads to
+# know the comment is there, so a settled card is backfilled once and never twice.
+TERMINAL = ("Closed", "Abandoned")
+TERMINAL_TAG = "<!-- squad-goal:terminal -->"
+
+
+def terminal_comment(column, facts):
+    """The comment a move into a terminal column writes, or None when the facts do not state the condition.
+
+    None is the guard: the caller makes no terminal write it cannot explain. Closed facts: base, and pr with sha and test
+    (the checks on the merge commit, "" when none ran), or closed_by when no merged pull request names the issue.
+    Abandoned facts: who decided and why."""
+    facts = facts or {}
+    if column == "Closed" and facts.get("pr"):
+        sha = str(facts.get("sha") or "")[:7]
+        test = facts.get("test") or (f"no check ran on merge commit {sha}" if sha else "no merge commit to test")
+        body = f"Closed: pull request #{facts['pr']} merged into {facts.get('base') or 'the base'} carries this issue (merge commit {sha or 'unknown'}). Test on the merge: {test}."
+    elif column == "Closed" and facts.get("closed_by"):
+        body = f"Closed: @{facts['closed_by']} closed it as completed; no merged pull request into {facts.get('base') or 'the base'} names it."
+    elif column == "Abandoned" and facts.get("who") and facts.get("why"):
+        body = f"Abandoned: {facts['why']}, decided by @{facts['who']}."
+    else:
+        return None
+    return f"{TERMINAL_TAG}\n{body}\n"
+
+
+# A pull request's state, from the loop's own review line for its current head (revci.sh prints `#<pr> <sha9> <mergeable_state>
+# CI=<conclusion:count,...> <verdict>`), so the column costs no read of its own (#244).
+PR_RED_BADGE = "pr:red"   # a Merging card whose PR turned red keeps its column and carries this label: a marker, never a move back
+PR_HOLD_LABELS = {"hold", "needs-human"}   # the labels autopilot.sh holds a PR on
+RED_CHECKS = ("failure", "timed_out", "cancelled", "action_required", "startup_failure")
+
+
+def pr_green(line, labels):
+    """True when the review line says the PR is green, mergeable and unheld: GitHub calls it clean, every check finished
+    and none red, the review approved, and no hold label. A missing line is no review given, so not green."""
+    f = (line or "").split()
+    if len(f) < 4 or not f[3].startswith("CI="): return False
+    checks = f[3][3:]
+    if f[2] != "clean" or checks in ("", "none") or any(c in checks for c in RED_CHECKS): return False
+    return "APPROVE" in " ".join(f[4:]) and not (set(labels) & PR_HOLD_LABELS)
+
+
+def pr_column(green, have):
+    """(column, badge or None) for an issue an open PR names: green -> Merging; not green -> Code Complete, except a card
+    already in Merging, which keeps its column and carries the badge (a card never moves back)."""
+    if green: return "Merging", None
+    if have == "Merging": return "Merging", PR_RED_BADGE
+    return "Code Complete", None
