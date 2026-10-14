@@ -53,11 +53,11 @@ def _own_caps_dir(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _stop_test_dashboard_servers():
+def _stop_test_dashboard_servers(tmp_path_factory):
     """A run a test starts may leave a dashboard server on its tmp folder; stop those when the session ends."""
     yield
-    import subprocess
-    subprocess.run(["pkill", "-f", r"squad\.dashboard_server .*pytest-of-"], check=False)
+    from tests.dashstop import stop_test_dashboard_servers
+    stop_test_dashboard_servers(tmp_path_factory.getbasetemp())
 
 
 @pytest.fixture
