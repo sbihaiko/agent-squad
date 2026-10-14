@@ -143,7 +143,7 @@ joins() {   # one when issue $2 joins a child the picks of its own group already
 # cuts a shared-file slice in two, which is what bounding the picks alone did (#1521, #57).
 cands=()
 # Read every open issue once. `stack.sh` owns the blocker gate; a label only orders a ready issue and never hides it.
-while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
+while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((.title // "")|test("^Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+$")|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' 2>/dev/null | sort)
 i=0
 while [ $i -lt ${#cands[@]} ]; do
   IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))

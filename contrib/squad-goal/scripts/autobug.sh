@@ -121,7 +121,7 @@ PY
 gather() {
   local q out rc
   q="repos/$SG_REPO/issues?state=open&${1:+labels=$1&}per_page=100&sort=created&direction=asc"
-  out=$(gh_api "$q" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")'); rc=$?
+  out=$(gh_api "$q" -q '.[]|select(.pull_request|not)|select((.title|ascii_downcase|startswith("[duplicate"))|not)|select(.title|test("^Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+$")|not)|[(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")'); rc=$?
   if [ "$rc" -ne 0 ]; then echo "AUTOBUG: the ${1} candidate list is not a list: $gh_api_err; nothing dispatched" >&2; return 3; fi
   printf '%s\n' "$out"
 }
