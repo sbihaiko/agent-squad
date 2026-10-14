@@ -28,7 +28,7 @@ case "$a" in
   *) echo '{"message":"not found"}' >&2; exit 1;;
 esac
 J
-sed -i '' "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 run() { SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0 python3 "$T/s-board.py" "$@"; }
 patches() { [ -e "$T/patches" ] && wc -l < "$T/patches" | tr -d ' ' || echo 0; }
 reads() { [ -e "$T/reads" ] && wc -l < "$T/reads" | tr -d ' ' || echo 0; }

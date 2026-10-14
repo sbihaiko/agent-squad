@@ -35,7 +35,7 @@ import json, sys
 f = {x["id"]: x["value"] for x in json.load(open(sys.argv[1]))["fields"]}
 if f.get("F_RUN"): print("2101\t%s\t%s\thttps://api.github.com/repos/x/y" % (f["F_RUN"], f.get("F_START") or ""))
 P
-sed -i '' "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+sed -i.bak "s|TMPDIR|$T|g" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mkdir -p "$T/co/runs/run-live"; echo run-live > "$T/st/active-runs.txt"; printf 'CHILD — GitHub issue(s) 2101:\n' > "$T/co/runs/run-live/request.txt"
 : > "$T/co/runs/run-live/record.jsonl"; echo run-live > "$T/st/auto/disp-2101"
 cycle() { : > "$T/events"; SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" SG_BOARD_READ_BACKOFF=0 python3 -I "$T/s/janitor.py" 2>&1; }
