@@ -50,9 +50,18 @@ case "$a" in
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2018; do
-      case $n in 2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';; 2012) labs='{"nodes":[{"name":"needs-ratification"}]}';; *) labs='{"nodes":[]}';; esac
-      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019; do
+      body=""
+      case $n in
+        2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
+        2012) labs='{"nodes":[{"name":"needs-ratification"}]}';;
+        # #2017 is a spec and #2019 one of its children, published the way /to-tickets publishes them (#117): the parent
+        # carries the spec label, the child carries its wave beside the triage label and names its blocker in its body.
+        2017) labs='{"nodes":[{"name":"spec"}]}';;
+        2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
+        *) labs='{"nodes":[]}';;
+      esac
+      printf '%s{"number":%s,"title":"Issue %s","body":"%s","state":"OPEN","labels":%s,"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$body" "$labs"; sep=,; done
     printf ']}}}}';;
   *issues/2007*) echo $'open\t\tIssue 2007\tneeds-owner';;
   *issues/2010*) echo $'closed\t\tIssue 2010';;
@@ -144,6 +153,15 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open; repaired to Todo' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported and repaired" || ko "#2015 Done regression not repaired: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
+# A spec is written, not scheduled, so its card opens in Open Specs (#117); the tickets /to-tickets cuts from it are work,
+# so every child opens in the loop's queue column, Todo, in ONE write when the card is missing (#86). The child's wave and
+# its `## Blocked by` line do not move it off Todo: the column carries the loop floor, and the gate that holds a wave-2
+# ticket back until its blocker lands is the dispatch's own reading of those edges, never the column (#142).
+/usr/bin/grep -q '^ADD o 4 Open Specs 2017$' "$T/board.calls" 2>/dev/null && ok "a spec with no card is created in Open Specs" || ko "#2017 not added Open Specs: $(bc) $o"
+! /usr/bin/grep -q 'Todo 2017' "$T/board.calls" 2>/dev/null && ok "a spec is never created in the queue column" || ko "#2017 read as work: $(bc)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Open Specs (issue carries the spec label)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q '^ADD o 4 Todo 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Todo" || ko "#2019 not added Todo: $(bc) $o"
+! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"

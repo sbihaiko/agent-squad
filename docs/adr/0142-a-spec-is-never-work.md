@@ -30,7 +30,11 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
    a reading aid for a person; the sub-issue link is the fact, and it is the relation the tracker
    carries.
 5. **A spec's card sits in the board's spec column, never in the column a startable card waits
-   in.** A card's column says who acts next; for a spec that is its owner.
+   in.** A card's column says who acts next; for a spec that is its owner. Its tickets are its
+   opposite: their cards open in the column the loop's next work comes from, and a missing card is
+   added in that column, in one write, on the loop's next pass. The column carries no blocking edge
+   — a ticket whose blocker is still open waits on the dispatch's reading of that edge, not on a
+   column of its own.
 
 ## Consequences
 
@@ -48,4 +52,6 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
 `contrib/squad-goal/scripts/test-autofrontier-one-run.sh` proves the case the decision names: one
 spec, one issue that waits on the owner and one plain ticket in the same walk, and the ticket alone
 becomes the child of the run. `tests/test_vendor_skills.py` guards the title prefix of a spec's
-child in the skill that cuts the tickets.
+child in the skill that cuts the tickets. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`
+proves the column: a spec with no card is added in Open Specs, and a child of it with an open
+blocker is added in Todo, each in one write.
