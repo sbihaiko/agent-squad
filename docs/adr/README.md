@@ -43,7 +43,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0141](0141-the-board-is-a-shipped-definition.md) | The board is a shipped definition, applied by one command; the definition names the vocabulary and the repository binds it to a carrier |
 | [0142](0142-a-spec-is-never-work.md) | A spec is a document, never a unit of work: the dispatch skips every label a profile names as not-work, and only its tickets are children of a run |
 | [0143](0143-a-card-only-moves-forward.md) | A card only moves forward along the axis, Closed and Abandoned are terminal, and an old Status option is removed only once the migration plan has emptied it |
-| [0144](0144-the-carrier-is-the-label-on-the-issue.md) | The state of a card is one label of a closed family on the issue, written by the reconciler and proven by the issue read |
+| [0144](0144-the-carrier-is-the-project-field.md) | The state of a card stays on the Project Status field; a write is sent only when the value changes |
 
 ## Adding an ADR
 

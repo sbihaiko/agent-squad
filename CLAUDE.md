@@ -96,7 +96,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **The board is a shipped definition, applied by one command; the definition names the vocabulary and the repository binds it to a carrier** ([ADR-0141](docs/adr/0141-the-board-is-a-shipped-definition.md)). Guard: none yet; a draft.
 - **A spec is a document, never work; only its tickets are, and the owner starts it** ([ADR-0142](docs/adr/0142-a-spec-is-never-work.md)). Guard: `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`, `tests/test_vendor_skills.py`, `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`.
 - **A card only moves forward, and an old option is removed only after its cards moved** ([ADR-0143](docs/adr/0143-a-card-only-moves-forward.md)). Guard: `contrib/squad-goal/scripts/test-board-migrate.sh`, `tests/test_board_migrate.py`.
-- **This repository's card state is one label of a closed family on the issue, written by one reconciler and proven by the issue read** ([ADR-0144](docs/adr/0144-the-carrier-is-the-label-on-the-issue.md)). Guard: none yet; a draft.
+- **This repository's card state stays on the Project Status field; a writer sends a board write only when the value changes** ([ADR-0144](docs/adr/0144-the-carrier-is-the-project-field.md)). Guard: none yet; a draft.
 
 ## Where decisions go
 
