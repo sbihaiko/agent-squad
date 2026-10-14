@@ -381,7 +381,7 @@ $G -qE 'jq: error' "$T/err218" && ko "11 the pass logged a jq parse error: $(cat
 # the door filed "refused BOARD-WRITE-FAILED ... gh: HTTP 500" as a bug. The real board.sh and board.py run here, and
 # the stub answers the board's first issue read with HTTP 500: the card is still written, and nothing is filed.
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T"/st/owner-kind-* "$T"/st/rest-*
-cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$T/s/"
+cp "$d/autobug.sh" "$d/autohunt.sh" "$d/board.sh" "$d/board.py" "$d/issue_state.py" "$T/s/"   # board.py imports the seam
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
 printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
 chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
@@ -395,7 +395,7 @@ if [ "\${SG_GH_PASS:-}" = board ]; then   # the calls of the real board.py
   case "\$a" in
     "api users/o") echo '{"type":"User"}' ;;
     *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_PROG","name":"In Progress"}]}]' ;;
-    *items?per_page=100\&fields*) [ -e "$T/bseen" ] && printf '[1228,"%s"]\n' "\$(cat "$T/bstatus" 2>/dev/null)"; exit 0 ;;
+    *items?per_page=100\&fields*) [ -e "$T/bseen" ] && printf '1228\t%s\thttps://api.github.com/repos/x/y\n' "\$(cat "$T/bstatus" 2>/dev/null)"; exit 0 ;;   # the seam's tsv row
     *items?per_page=100*) [ -e "$T/bseen" ] && printf '[1228,"ITEM1","https://api.github.com/repos/x/y"]\n'; exit 0 ;;
     *repos/x/y/issues/1228*)
       if [ ! -e "$T/b500" ]; then touch "$T/b500"; echo 'gh: HTTP 500' >&2; exit 1; fi   # GitHub's server failed once
@@ -429,5 +429,54 @@ filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 0 ] && ok "12 a server error files no bug" || ko "12 a server error filed $filed bug(s): $(cat "$T/filed")"
 [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "12 no refusal is named in the cycle log" || ko "12 cycle.log: $(cat "$T/st/cycle.log")"
 unset SG_BOARD_READ_BACKOFF
+
+# 13) (#243) the bug pass takes items by the kind the seam answers, never by the platform's issue type. 1500 carries kind
+# bug and no label; 1501 carries the bug label but kind task (the kind wins); 1502 carries the label and no kind (the
+# label stays the fallback for an item no kind was written on); 1503 carries kind bug and a skip label. Its own sandbox.
+K=$T/k; mkdir -p "$K/bin" "$K/st/auto" "$K/co/docs/squad" "$K/s"
+cp "$d/autobug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$K/s/"
+: > "$K/st/active-runs.txt"; printf 'caps:\n  runs: 4\n' > "$K/co/docs/squad/defaults.yaml"
+printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$K/st" "$K/co" > "$K/s/env.sh"
+printf '#!/bin/bash\necho READY\n' > "$K/s/stack.sh"; chmod +x "$K/s/stack.sh"
+printf '1500\tbug\n1501\ttask\n1503\tbug\n' > "$K/kinds.tsv"
+# the seam's door, stubbed at the script's own name: the pass asks `issue_state.py --kinds` and never names a carrier
+cat > "$K/s/issue_state.py" <<PY
+import os, sys
+if sys.argv[1:] != ["--kinds"]: sys.exit(2)
+if os.path.exists("$K/seam-down"): print("no board", file=sys.stderr); sys.exit(1)
+sys.stdout.write(open("$K/kinds.tsv").read())
+PY
+cat > "$K/bin/gh" <<J
+#!/bin/bash
+list() { python3 -c 'import json,sys
+for i in json.load(open("$K/issues.json")):
+  if sys.argv[1] == "" or sys.argv[1] in i["labels"]: print(str(i["number"])+"\x1f"+",".join(i["labels"]))' "\$1"; }
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues?state=open"*labels=bug*) list bug ;;
+  *"issues?state=open"*labels=debt*) list debt ;;
+  *"issues?state=open"*) list "" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$K/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$K/bin/gh"
+cat > "$K/issues.json" <<'JSON'
+[
+  {"number":1500,"title":"Core: a","body":"a.py","created_at":"2026-10-10T10:00:00Z","labels":[]},
+  {"number":1501,"title":"Core: b","body":"b.py","created_at":"2026-10-10T11:00:00Z","labels":["bug"]},
+  {"number":1502,"title":"Core: c","body":"c.py","created_at":"2026-10-10T12:00:00Z","labels":["bug"]},
+  {"number":1503,"title":"Core: d","body":"d.py","created_at":"2026-10-10T13:00:00Z","labels":["no-auto"]}
+]
+JSON
+r=$(PATH="$K/bin:$PATH" SG_SQUAD="$SG_SQUAD" AB_DRY=1 bash "$K/s/autobug.sh" 2>&1)
+case "$r" in *1500*) ok "13 an item of kind bug with no bug label is taken";; *) ko "13 kind bug #1500 not taken: '$r'";; esac
+case "$r" in *1501*) ko "13 the bug label won over kind task for #1501: '$r'";; *) ok "13 an item of another kind is not taken, label or not";; esac
+case "$r" in *1502*) ok "13 an item with no kind keeps the label as its fallback";; *) ko "13 label fallback #1502 not taken: '$r'";; esac
+case "$r" in *1503*) ko "13 a skip label did not hold kind bug #1503: '$r'";; *) ok "13 a skip label still holds an item of kind bug";; esac
+touch "$K/seam-down"
+r=$(PATH="$K/bin:$PATH" SG_SQUAD="$SG_SQUAD" AB_DRY=1 bash "$K/s/autobug.sh" 2>&1)
+case "$r" in *"kinds are not read"*) ok "13 a seam that answers no kinds is reported, never silent";; *) ko "13 no report line when the seam is down: '$r'";; esac
+case "$r" in *1501*1502*|*1502*) ok "13 with the seam down the pass falls back to the label";; *) ko "13 no fallback with the seam down: '$r'";; esac
 
 rm -rf "$T"; exit $fail

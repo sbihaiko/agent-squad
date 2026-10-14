@@ -300,7 +300,7 @@ _PULLS_QUERY = """query($owner: String!, $repo: String!) {
 # What one issue of a fact carries. `comments(last: ...)` is how the TDD RED comment of a fork-only fix is found without a
 # read of the issue's comments, which was one request per candidate (#45).
 _COMMENTS = 50
-_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} subIssuesSummary {{ total completed }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
+_ISSUE_FIELDS = f"number title body state labels(first: 100) {{ nodes {{ name }} }} blockedBy(first: 100) {{ nodes {{ number state }} }} subIssuesSummary {{ total completed }} subIssues(first: 100) {{ nodes {{ number }} }} comments(last: {_COMMENTS}) {{ nodes {{ body }} }}"
 _ISSUES_QUERY = """query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(states: OPEN, first: %d) {
@@ -405,6 +405,11 @@ def _issue(node: Any) -> dict[str, Any]:
         "blocked_by_read": isinstance(node.get("blockedBy"), dict),   # False: the answer carried no relation, so [] proves nothing
         "tdd_red": _tdd_red(node.get("comments")),
         "sub_issues_summary": _sub_issues(node.get("subIssuesSummary")),
+        "sub_issues": [   # the native relation's children, numbers only: the spec's column folds over their cards (spec_fold.py)
+            n.get("number")
+            for n in _connection(node.get("subIssues")).get("nodes") or []
+            if isinstance(n, dict) and isinstance(n.get("number"), int)
+        ],
     }
 
 

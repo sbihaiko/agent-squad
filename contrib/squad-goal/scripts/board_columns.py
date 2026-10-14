@@ -91,3 +91,28 @@ def terminal_comment(column, facts):
     else:
         return None
     return f"{TERMINAL_TAG}\n{body}\n"
+
+
+# A pull request's state, from the loop's own review line for its current head (revci.sh prints `#<pr> <sha9> <mergeable_state>
+# CI=<conclusion:count,...> <verdict>`), so the column costs no read of its own (#244).
+PR_RED_BADGE = "pr:red"   # a Merging card whose PR turned red keeps its column and carries this label: a marker, never a move back
+PR_HOLD_LABELS = {"hold", "needs-human"}   # the labels autopilot.sh holds a PR on
+RED_CHECKS = ("failure", "timed_out", "cancelled", "action_required", "startup_failure")
+
+
+def pr_green(line, labels):
+    """True when the review line says the PR is green, mergeable and unheld: GitHub calls it clean, every check finished
+    and none red, the review approved, and no hold label. A missing line is no review given, so not green."""
+    f = (line or "").split()
+    if len(f) < 4 or not f[3].startswith("CI="): return False
+    checks = f[3][3:]
+    if f[2] != "clean" or checks in ("", "none") or any(c in checks for c in RED_CHECKS): return False
+    return "APPROVE" in " ".join(f[4:]) and not (set(labels) & PR_HOLD_LABELS)
+
+
+def pr_column(green, have):
+    """(column, badge or None) for an issue an open PR names: green -> Merging; not green -> Code Complete, except a card
+    already in Merging, which keeps its column and carries the badge (a card never moves back)."""
+    if green: return "Merging", None
+    if have == "Merging": return "Merging", PR_RED_BADGE
+    return "Code Complete", None
