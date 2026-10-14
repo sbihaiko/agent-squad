@@ -254,6 +254,7 @@ def _emulator(tmp_path, **kw):
                            work_dir=tmp_path / "work", **kw)
 
 
+@pytest.mark.heavy
 def test_the_emulator_adapter_passes_the_shared_contract_suite(tmp_path):
     made = []
 
@@ -895,6 +896,7 @@ def _alive(pid):
         return False
 
 
+@pytest.mark.heavy
 def test_a_hang_is_killed_after_the_step_timeout_and_leaves_no_orphan(tmp_path):
     pid_file = tmp_path / "grandchild.pid"
     d = _two_batch_script([step("b1.one")])
@@ -2820,6 +2822,7 @@ def test_1241_asked_but_not_the_emulator_adapter_it_still_files_nothing(tmp_path
     assert not titles.exists(), "a run against a fake adapter never touches GitHub"
 
 
+@pytest.mark.heavy
 def test_1241_a_filing_that_fails_is_recorded_and_leaves_the_exit_code_alone(tmp_path, monkeypatch):
     """No token, no network: the run still ends red on its steps, and the file says why no bug is there."""
     root, _ = _bug_helper(tmp_path, exit_code=3)
@@ -2990,6 +2993,7 @@ def test_1249_a_look_up_that_cannot_run_files_a_bug_rather_than_losing_the_failu
     assert "look-up" in detail["lookup_failed"]
 
 
+@pytest.mark.heavy
 def test_1249_the_run_command_records_the_issue_the_run_belongs_to(tmp_path, monkeypatch):
     root, titles = _bug_helper(tmp_path)
     fake_github.reset()

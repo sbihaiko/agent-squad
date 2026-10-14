@@ -131,6 +131,7 @@ def test_the_reread_interval_an_engine_run_records_is_the_one_the_dashboard_read
     assert run_node([{"op": "delay", "events": record.read(tmp_path / "r" / "record.jsonl")}])[0] == 4
 
 
+@pytest.mark.heavy
 def test_a_growing_record_runs_then_completes_and_its_totals_never_shrink():
     doc, events = _run22()
     last_spend, states = 0, []
@@ -207,6 +208,7 @@ def test_a_reread_that_catches_a_half_written_last_line_drops_it_and_keeps_the_c
     assert "error" in run_node([{"op": "parse_live", "text": '{"event": "run_st'}])[0]                              # nothing complete yet
 
 
+@pytest.mark.heavy
 def test_a_missing_value_shows_a_dash_and_a_value_shows_its_unit():
     f = lambda kind, value: run_node([{"op": "fmt", "kind": kind, "value": value}])[0]  # noqa: E731
     assert [f(k, None) for k in ("seconds", "usd", "pct", "count")] == ["\u2014"] * 4
@@ -246,6 +248,7 @@ def test_a_call_with_zero_elapsed_gives_no_rate_and_two_entries_sum_their_tokens
     assert (m["tokens_in"], m["tokens_out"]) == (300, 200)
 
 
+@pytest.mark.heavy
 def test_tokens_and_the_rate_show_a_dash_when_missing_and_a_short_unit_when_present():
     f = lambda kind, value: run_node([{"op": "fmt", "kind": kind, "value": value}])[0]  # noqa: E731
     assert f("tokens", None) == "\u2014" and f("rate", None) == "\u2014"
@@ -265,6 +268,7 @@ def _state_class(ns):
     return run_node([{"op": "stateclass", "ns": ns}])[0]
 
 
+@pytest.mark.heavy
 def test_a_nodes_card_state_resolves_for_every_state_and_a_node_that_never_ran_is_not_grey():
     assert _state({"outcome": "pass"}) == "passed"
     assert _state({"outcome": "fail"}) == "failed"

@@ -27,9 +27,9 @@ docs/skill-workflow-map.md   skill flow from request to ship; greenfield vs brow
 ADRs and this file are never ledgers (see Design rules): no dates, counts, statuses, issue numbers, run ids or amendment logs. A changed decision is rewritten in place; git keeps the history. A one-off fact goes to memory; a status goes to the tracker.
 
 - **Everything written is US English, Concise STE100.** Rafael may talk in Portuguese; the record is English. Guard: none yet; a draft.
-- **Run the suite in parallel: `python3 -m pytest -n auto`** (`pytest-xdist`, dev extras). Serial is `python3 -m pytest -p no:xdist`; both must pass, and a test never relies on the worker count. Guard: the full suite, run in both modes.
+- **The full suite is `python3 -m pytest -n auto`; serial is `-p no:xdist`. Both must pass before a merge, and a test never relies on the worker count.** CI runs the fast battery, `-m "not heavy"`. A test call over 1 s carries `heavy`. Guard: `tests/test_slow_cap.py`, `tests/test_tooling.py`.
 - **One test call over 20 seconds fails the suite, unless it carries a reason.** Guard: `tests/test_slow_cap.py`.
-- **CI runs ruff, mypy and the suite on every push to `main` and every pull request** (`.github/workflows/ci.yml`, Python 3.11 and 3.13; no secret). Guard: `tests/test_tooling.py`.
+- **CI runs ruff, mypy and the fast battery on every push to `main` and every pull request** (`.github/workflows/ci.yml`, Python 3.11 and 3.13; no secret). Guard: `tests/test_tooling.py`.
 - **One commit starts one CI job, and one concurrency group spans a branch's pushes and its pull requests** (`.github/workflows/ci.yml`; a superseded head is cancelled). Guard: `tests/test_tooling.py`.
 - **A run records the autonomy setting** (`autonomy.enabled`, default on; `autonomy.max_resumes`, default 3, range 0 to 10; `config/agent-defaults.yaml`) in `run_start`, and a resume refuses when it differs. Guard: `tests/test_defaults.py`, `tests/test_launch.py`.
 - **The repo is a Claude Code plugin** (`agent-squad`): `/agent-squad:editor [id]` opens the editor, `/agent-squad:work <request>` and `/agent-squad:task <task>` start a run, `/agent-squad:dashboard [run]` opens a run's page, `/agent-squad:skill-update` checks the skills,

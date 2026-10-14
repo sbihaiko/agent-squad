@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from squad import to_test_scenario as tts
 
 SLOW = """\
@@ -21,6 +23,7 @@ def _command(tmp_path, body=SLOW):
     return [sys.executable, str(path)]
 
 
+@pytest.mark.heavy
 def test_start_run_returns_before_the_run_ends_and_names_the_file_and_the_write_back(tmp_path):
     script = tmp_path / "demo.gui-test.json"
     script.write_text("{}")

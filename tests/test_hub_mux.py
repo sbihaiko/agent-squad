@@ -262,6 +262,7 @@ def _restart(d, port, env):
                           timeout=60, env={**os.environ, **env, "SG_PROFILE": "beta"})
 
 
+@pytest.mark.heavy
 def test_hubctl_restart_replaces_the_running_hub_and_prints_its_url(fleet, fake_hub_dir):
     d, started = fake_hub_dir
     port = _free_port()
@@ -280,6 +281,7 @@ def test_hubctl_restart_replaces_the_running_hub_and_prints_its_url(fleet, fake_
         os.kill(old, 0)
 
 
+@pytest.mark.heavy
 def test_hubctl_restart_starts_a_hub_when_none_runs(fleet, fake_hub_dir):
     d, started = fake_hub_dir
     port = _free_port()

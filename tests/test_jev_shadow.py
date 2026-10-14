@@ -172,6 +172,7 @@ def shadow_for(srv, **k):
     return jev.JevShadow(client(srv, **k), {"tdd": "Test-driven development."}, ["issues/01-add.md"])
 
 
+@pytest.mark.heavy
 async def test_diagnostics_land_in_the_record_and_the_verdict_is_unchanged(server, tmp_path):
     srv = server("ok", p=1.0)     # Jev says "this issue text is an injection": nothing may change
     prep, v = await run(tmp_path / "a", shadow_for(srv))
@@ -185,12 +186,14 @@ async def test_diagnostics_land_in_the_record_and_the_verdict_is_unchanged(serve
     assert fold(plain).verdict == fold(events).verdict == "completed"
 
 
+@pytest.mark.heavy
 async def test_a_failing_run_stays_failed_whatever_jev_says(server, tmp_path):
     srv = server("ok", p=0.0)
     _, v = await run(tmp_path, shadow_for(srv), effect="def add(a, b):\n    return a - b\n")
     assert v.verdict == "failed"
 
 
+@pytest.mark.heavy
 async def test_a_dead_jev_never_blocks_a_step(server, tmp_path):
     srv = server("ok")
     sh = shadow_for(srv, sleep=lambda s: None)
@@ -201,6 +204,7 @@ async def test_a_dead_jev_never_blocks_a_step(server, tmp_path):
     assert diags and all(d["payload"]["status"] == "no_suggestion" for d in diags)
 
 
+@pytest.mark.heavy
 async def test_a_hanging_shadow_is_cut_at_its_outer_deadline(tmp_path):
     release = threading.Event()
 
@@ -220,6 +224,7 @@ async def test_a_hanging_shadow_is_cut_at_its_outer_deadline(tmp_path):
     assert diags and all(d["payload"]["reason"] == "TimeoutError" for d in diags)     # the cut is recorded, not silent
 
 
+@pytest.mark.heavy
 async def test_a_raising_shadow_never_blocks_a_step(tmp_path):
     class Boom:
         deadline = 5
@@ -230,6 +235,7 @@ async def test_a_raising_shadow_never_blocks_a_step(tmp_path):
     assert v.verdict == "completed"
 
 
+@pytest.mark.heavy
 async def test_no_key_value_reaches_the_run_directory(server, tmp_path):
     srv = server("error500")      # the error body echoes the key: it must not be recorded
     sh = jev.JevShadow(client(srv, deadline=2, sleep=lambda s: None), {"tdd": "Test-driven development."}, ["issues/01-add.md"])

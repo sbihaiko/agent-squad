@@ -94,6 +94,7 @@ def _post(hub, **changes):
     return hub.models_set(doc)
 
 
+@pytest.mark.heavy
 def test_a_rows_switch_round_trips_through_save_and_revert(hub, models):
     """The state survives Save (models.json carries it per chain) and Revert (models_get hands the same thing back)."""
     out = _post(hub, off={"coding_models": {"claude-sonnet-5-5": True}})

@@ -92,18 +92,21 @@ def test_the_workflow_the_run_names_is_the_one_checked(tmp_path):
     assert runs == []
 
 
+@pytest.mark.heavy
 def test_a_graph_on_models_that_are_on_starts(tmp_path):
     r, runs = launch(tmp_path, graph(router="haiku", allow=("haiku",)), off=OFF)
     assert r.returncode == 0, r.stdout + r.stderr
     assert runs
 
 
+@pytest.mark.heavy
 def test_no_switch_in_models_json_starts_the_same_graph(tmp_path):
     r, runs = launch(tmp_path, graph(), off=None)
     assert r.returncode == 0, r.stdout + r.stderr
     assert runs
 
 
+@pytest.mark.heavy
 def test_the_deliberate_exception_starts_a_run_on_an_off_model(tmp_path):
     r, runs = launch(tmp_path, graph(), off=OFF, env={"SG_ALLOW_MODEL": "1"})
     assert r.returncode == 0, r.stdout + r.stderr

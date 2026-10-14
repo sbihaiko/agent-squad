@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -124,6 +126,7 @@ def _collect_e2e():
                           cwd=ROOT, env=_no_host_env(), capture_output=True, text=True)
 
 
+@pytest.mark.heavy
 def test_the_host_bound_tests_are_deselected_and_never_run_when_the_host_is_absent():
     """Guard for ADR-0139: with no MesenAI checkout the e2e module imports and collects, every host-bound test is
     deselected by name, none is collected to run, and none is skipped."""
@@ -141,6 +144,7 @@ def test_the_host_bound_tests_are_deselected_and_never_run_when_the_host_is_abse
     assert "skipped" not in out, "a host-bound test was skipped, not deselected"
 
 
+@pytest.mark.heavy
 def test_the_host_free_tests_in_the_e2e_file_still_run_without_the_host():
     """Guard for ADR-0139: the deselection removes only the host-bound tests; the rest of the file runs green."""
     collected = _collect_e2e().stdout
@@ -175,3 +179,9 @@ def test_ci_e2e_step_names_no_mesenai_path_the_job_never_checks_out():
     assert "MESENAI_REPO" not in json.dumps(e2e[0]), e2e[0]
     assert e2e[0].get("env", {}) == {}, e2e[0]
     assert any("pytest -n auto" in r for r in _ci_run_lines()), "the gate step must keep its own command"
+
+
+def test_ci_gate_steps_run_the_fast_battery_on_both_pythons():
+    """Guard for the suite rule: each gate step runs the fast battery, which leaves the `heavy` tests out."""
+    gates = [r for r in _ci_run_lines() if r.startswith("python3 -m pytest") and "test_gui_test_e2e.py" not in r]
+    assert gates == ['python3 -m pytest -n auto -m "not heavy"'] * 2, gates
