@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended by the owner decision ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)), verbatim: "three long-lived branches (`dev`, `stg`, `main`); a work branch lands in `dev` by a fast-forward push, with no pull request; the loop promotes `dev` to `stg` when the CI of the `dev` tip is green; the owner promotes `stg` to `main` with one command; the live copy publishes from `stg`; a card is Done when its branch is in `dev`."
 
 ## Context
 
@@ -29,8 +29,9 @@ not.
    the red of this fix, and a fix whose test only ever ran green has not been
    verified.
 3. **The red travels with the deliverable.** The test's name and its failure
-   line, captured against the parent, go in the PR body where there is a PR,
-   and in a `TDD RED` comment on the issue where the work is fork-only. The
+   line, captured against the parent, go in the commit message of the fix
+   where the work lands in `dev` with no pull request, and in a `TDD RED` comment on the issue
+   where the work is fork-only. The
    green run of the same test follows the fix the same way.
 4. **The check refuses; it does not warn.** A landing whose fix carries no red
    run is a defect of the landing, not a note on it.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Amended by the owner decision ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)), verbatim: "three long-lived branches (`dev`, `stg`, `main`); a work branch lands in `dev` by a fast-forward push, with no pull request; the loop promotes `dev` to `stg` when the CI of the `dev` tip is green; the owner promotes `stg` to `main` with one command; the live copy publishes from `stg`; a card is Done when its branch is in `dev`."
 
 ## Context
 
@@ -14,8 +14,9 @@ column its work never reached.
 ## Decision
 
 1. **A card's column only moves forward along the axis.** The furthest the work reached sets the
-   column, and a freeze never moves it. A card in Merging whose pull request turns red keeps its
-   column and carries a badge; it never moves back.
+   column, and a freeze never moves it. A card whose landing fails keeps
+   its column and carries a badge; it never moves back. A card is Done when its branch is in `dev`
+   ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)).
 2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays. A closed card
    that still carries an old option lands in Closed, whatever its option said.
 3. **A migration plan names every move before any write.** It is a dry run: each card on an old
