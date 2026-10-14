@@ -151,7 +151,8 @@ while [ $i -lt ${#cands[@]} ]; do
   # A spec is not a unit of work: the owner starts it by breaking it into tickets, and a run that implemented one would
   # commit a decision he has not made. The same holds for an issue that waits on the owner, one closed as not-work, and
   # one waiting on an answer. The bug label is skipped here too: autobug.sh owns those.
-  skip=; for s in "${SG_BUG_LABEL:-bug}" debt frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1;; esac; done
+  # A run parent rolls a run's children up and is never work (#340).
+  skip=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1;; esac; done
   [ -n "$skip" ] && continue
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   sg_not_startable "$n" && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
