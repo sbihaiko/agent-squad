@@ -36,8 +36,9 @@ ghcall_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${SG_GHREAD:=python3 $ghcall_here/ghread.py}"   # the interface module: one place to point at another build of it
 : "${SG_GHSNAP:=python3 $ghcall_here/ghthrottle.py}"   # the throttled, snapshotting reader behind gh_snapshot
 
-# _gh_refused <body>: 0 when the body is GitHub's own refusal shape (a message beside a status). Any body that is not
-# JSON, or is JSON without that shape, is not a refusal -- `jq -e` exits non-zero for both.
+# _gh_refused <body>: 0 when the body is GitHub's own refusal shape: a REST message beside a status, or a GraphQL `errors[]`
+# list with no `data` (a rate limit comes back that way, with gh exit 0 or 1). Any body that is not JSON, or is JSON without
+# either shape, is not a refusal -- `jq -e` exits non-zero for both.
 # _gh_log <outcome> <gh api args…>: one call-log line for a call this file makes itself. The route is the one argument that is
 # neither a flag nor the value of one; the transport is REST (a write, a diff and a Project v2 read are all REST).
 _gh_log() {
@@ -53,12 +54,36 @@ _gh_log() {
   $SG_GHREAD --log REST "$route" miss "$outcome" >/dev/null 2>&1 || true
 }
 
+# _gh_child_merge <gh args…>: 0 when a child session asks to merge a PR, by `pr merge` or by `PUT .../pulls/N/merge`. A child
+# session is a call the engine started (`SG_CHILD_SESSION`, exported by the call environment): the loop merges, so the door
+# refuses the merge there and names the refusal. The loop's own mergers run outside a call and never carry the marker.
+_gh_child_merge() {
+  [ -n "${SG_CHILD_SESSION:-}" ] || return 1
+  local words=() put=0 a
+  for a in "$@"; do
+    case "$a" in
+      -X=PUT|--method=PUT) put=1;;
+      PUT) put=1;;
+      -*) ;;
+      *) words+=("$a");;
+    esac
+  done
+  [ "${words[0]:-}" = pr ] && [ "${words[1]:-}" = merge ] && return 0
+  [ "$put" -eq 1 ] && [[ " ${words[*]} " =~ /pulls/[0-9]+/merge ]] && return 0
+  return 1
+}
+
+_gh_child_merge_line() {
+  printf 'refused: CHILD-MERGE-REFUSED: a child session never merges a PR; the loop merges it once review and CI pass\n'
+}
+
 _gh_refused() {
-  printf '%s' "$1" | jq -e 'type == "object" and (.message | type == "string") and has("status")' >/dev/null 2>&1
+  printf '%s' "$1" | jq -e 'type == "object" and (((.message | type == "string") and has("status"))
+    or ((.errors | type == "array") and (.errors | length > 0) and (.data == null)))' >/dev/null 2>&1
 }
 
 _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub's own words, and nothing invented
-  printf 'refused: GitHub refused: %s\n' "$(printf '%s' "$1" | jq -r '.message // "no message"' 2>/dev/null)"
+  printf 'refused: GitHub refused: %s\n' "$(printf '%s' "$1" | jq -r '.message // .errors[0].message // "no message"' 2>/dev/null)"
 }
 
 # gh_api <route> [-q <jq filter>]   A read. Answers on stdout with exit 0; a refusal is exit 2 and its line is not an
@@ -107,6 +132,7 @@ _gh_read() {   # _gh_read <reader command> <route> [-q <jq filter>]
 # passed through verbatim, and the three outcomes are the same: a caller can tell an empty diff from a refusal.
 gh_get() {
   local o rc
+  if _gh_child_merge "$@"; then _gh_log refused "$@"; _gh_child_merge_line; return 2; fi
   o=$(gh api "$@" 2>/dev/null); rc=$?
   if [ "$rc" -eq 0 ] && ! _gh_refused "$o"; then _gh_log answer "$@"; printf '%s' "$o"; return 0; fi
   if _gh_refused "$o"; then _gh_log refused "$@"; _gh_refusal_line "$o"; return 2; fi
@@ -126,6 +152,7 @@ gh_send() {
     esac
   done
   local o rc
+  if _gh_child_merge "${args[@]}"; then _gh_log refused "${args[@]}"; _gh_child_merge_line; return 2; fi
   o=$(gh api "${args[@]}" 2>/dev/null); rc=$?
   if _gh_refused "$o"; then _gh_log refused "${args[@]}"; _gh_refusal_line "$o"; return 2; fi
   if [ "$rc" -ne 0 ]; then _gh_log failed "${args[@]}"; printf 'failed: the write reached no verdict (gh exited %s)\n' "$rc"; return 1; fi

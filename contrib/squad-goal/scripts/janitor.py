@@ -44,7 +44,7 @@
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
     Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
-import json, os, pathlib, re, signal, subprocess, sys, tempfile, time
+import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 acts = []
@@ -367,10 +367,12 @@ def pr_count(n):   # how many PRs (open or merged) name the issue, as GitHub's o
 def pr_merged_count(n):   # a merge is delivery only when it landed on the base (#127): a PR merged into its own parent branch carries the work nowhere, and a card in Done over it claims a change the base does not have (#125)
     return sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo0} is:pr is:merged base:{base} \"Refs #{n}\"", "-q", ".total_count").strip()
 _opr = None
-def open_pulls():   # rule R reads the issues a PR names and its labels, rule G a PR's head and rule M its head branch and age: one read of the route answers all three
-    global _opr   # a line: `<pr> <sha> <base> <head ref> <updated_at>`, then a tab, the PR's labels (comma-joined), a tab, the issues its title and body name
-    if _opr is None: _opr = sh("gh", "api", f"repos/{repo0}/pulls?state=open&per_page=100", "--jq", r'.[]|select(.draft==false)|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)\t\([.labels[].name]|join(","))\t\([((.title//"")+" "+(.body//""))|scan("(?i)\\b(?:refs|closes|fixes|resolves) #([0-9]+)")[]]|join(","))"').splitlines()
+def all_pulls():   # the one read of the open-PR route, drafts included (a draft's branch is a live parent for the retarget rule, #285)
+    global _opr   # a line: `<pr> <sha> <base> <head ref> <updated_at>`, then a tab, the PR's labels (comma-joined), a tab, the issues its title and body name, a tab, `draft` or `ready`
+    if _opr is None: _opr = sh("gh", "api", f"repos/{repo0}/pulls?state=open&per_page=100", "--jq", r'.[]|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)\t\([.labels[].name]|join(","))\t\([((.title//"")+" "+(.body//""))|scan("(?i)\\b(?:refs|closes|fixes|resolves) #([0-9]+)")[]]|join(","))\t\(if .draft then "draft" else "ready" end)"').splitlines()
     return _opr
+def open_pulls():   # rule R reads the issues a PR names and its labels, rule G a PR's head and rule M its head branch and age: one read of the route answers all three, and a draft is none of theirs (a line with no fourth field is ready)
+    return [l for l in all_pulls() if (l.split("\t") + ["", "", "", ""])[3] != "draft"]
 def pr_by_issue():   # issue -> (pr, head sha, labels) for every open PR on the base, from the open-PR list (#244): no read of its own
     m = {}
     for l in open_pulls():
@@ -445,6 +447,31 @@ def queue_terminal(n, col, note):   # one comment per terminal entry, through th
     (st / "cq" / f"{CQ}#{n}-terminal-{os.getpid()}.md").write_text(note)
     mk.write_text(col + "\n")
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
+def door(fn, *a):   # one call through ghcall.sh: (exit code, output). A read is gh_api, a write gh_send (ADR-0277), so this module's own call sites stay as they were
+    return _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), fn, *a])
+def reopen_off_main(n):   # an issue closed with its code off the base (#285): reopen it only when a loop PR (`Refs #n` or `Closes #n`) merged into another base and no PR that names the issue merged into the base. The caller has read both facts already; the merged PRs are asked only here, in that case. One comment names the PR and the base, and the marker makes it run once. An issue closed by hand with no such PR is never reopened.
+    mk = st / "auto" / f"janitor-offmain-{n}"
+    if mk.exists(): return False
+    r, out = door("gh_api", "search/issues?q=" + urllib.parse.quote(f'repo:{repo0} is:pr is:merged "#{n}"'))
+    try: items = json.loads(out)["items"] if r == 0 else []
+    except (ValueError, KeyError, TypeError): items = []
+    for it in items if isinstance(items, list) else []:
+        num = it.get("number") if isinstance(it, dict) else None
+        if not isinstance(num, int): continue
+        r, out = door("gh_api", f"repos/{repo0}/pulls/{num}")
+        try: pr = json.loads(out) if r == 0 else {}
+        except ValueError: pr = {}
+        pb = (pr.get("base") or {}).get("ref") if isinstance(pr, dict) else None
+        if not (pb and pb != base and pr.get("merged_at") and re.search(rf"\b(?:Refs|Closes) #{n}\b", pr.get("body") or "")): continue
+        say(f"REOPEN #{n}: closed over PR #{num}, which merged into {pb} and not {base}")
+        if dry: return False
+        r, out = door("gh_send", "-X", "PATCH", f"repos/{repo0}/issues/{n}", "-f", "state=open")
+        if r: say(f"REOPEN-FAILED #{n}: {out.strip().splitlines()[0] if out.strip() else 'no output'}"); return False
+        mk.touch()
+        (st / "cq" / f"{CQ}#{n}-offmain.md").write_text(f"REOPENED #{n}: the issue was closed, but its PR #{num} merged into {pb}, not {base}, so the change is not on {base}. The janitor reopened it so the work lands. Retarget or re-open the work against {base}.\n")
+        _is[n] = ["open"] + _is[n][1:]
+        return True
+    return False
 def reconcile_board():
     if not (owner and proj and repo0): return
     shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
@@ -541,6 +568,8 @@ def reconcile_board():
             if badge: badged.add(n)
         mc = pr_merged_count(n)
         if mc.isdigit() and mc != "0": set_expected(n, "Done", "merged PR names the issue", "", "", 80)
+        if state == "closed" and mc == "0" and pc.isdigit() and pc != "0" and reopen_off_main(n):   # closed over a PR the base never took: the issue is open again, so the card is Code Complete
+            expected[n] = (50, "Code Complete", "issue reopened: its loop PR merged off the base", "", "", "")
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
@@ -733,6 +762,16 @@ if fd and fb:
                 (st / "cq" / f"{CQ}#{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+def retarget_dead_bases():   # a stacked PR whose parent is gone (#285): the parent squash-merged into the base and its branch has no open PR, so a merge of this PR would land on a stale branch and never reach the base. One PATCH per PR, from the list the pass already read; the next pass lists it on the base
+    rows = [(l.split("\t")[0].split() + ["", "", "", "", ""])[:5] for l in all_pulls()]
+    heads = {r[3] for r in rows}   # a draft PR counts: its branch is a live parent
+    for pr, sha, pb, hr, ua in rows:
+        if not (pr.isdigit() and pb and pb != base and pb not in heads): continue
+        say(f"RETARGET #{pr}: its base {pb} has no open PR, so the PR moves to {base}")
+        if not dry:
+            r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "PATCH", f"repos/{repo}/pulls/{pr}", "-f", f"base={base}"])   # through the door's write (ADR-0277)
+            if r: say(f"RETARGET-FAILED #{pr}: {out.strip().splitlines()[0] if out.strip() else 'no output'}")
+retarget_dead_bases()
 for l in open_pulls():
     pr, sha, pb = (l.split() + ["", "", ""])[:3]; o = st / f"revci-{pr}.out"; mg = st / "auto" / f"merged-{pr}"
     if not (pr.isdigit() and pb == base and o.exists() and not mg.exists()): continue

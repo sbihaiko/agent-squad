@@ -79,7 +79,7 @@ def owner_only(text=None):
 
 
 def call_env(cfg):
-    """The per-call environment that carries the two token limits and the call deadline. The adapter merges it into ClaudeAgentOptions.env.
+    """The per-call environment that carries the two token limits, the call deadline and the child-session mark. The adapter merges it into ClaudeAgentOptions.env.
     The deadline is exported so it reaches the processes a call starts: a gate the call takes (`serial.sh`) reads it as the cap it must
     stop at, so a call that outlives its own deadline stops its children instead of leaving them to hold a machine-wide lock (ADR-0051)."""
     lim = cfg["limits"]
@@ -87,6 +87,7 @@ def call_env(cfg):
     env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(lim["max_output_tokens"])
     env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(lim["context_tokens"])
     env["SG_CALL_DEADLINE_SECONDS"] = str(lim["deadline_seconds"])
+    env["SG_CHILD_SESSION"] = "1"   # the loop merges, never a call: the gh door (`ghcall.sh`) refuses a PR merge where this is set
     return env
 
 
