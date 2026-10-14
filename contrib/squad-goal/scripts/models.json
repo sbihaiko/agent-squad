@@ -6,7 +6,8 @@
   "anthropic_weekly_reserve_percent": 10,
   "anthropic_models": [],
   "coding_models": [
-    "claude-deepseek-v4-flash[1m]",
+    "claude-sonnet-5-5",
+    "claude-deepseek-v4-flash",
     "claude-gpt-5.6-terra"
   ],
   "review_models": [
