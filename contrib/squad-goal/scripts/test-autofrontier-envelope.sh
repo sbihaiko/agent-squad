@@ -24,6 +24,8 @@ for a in "$@"; do
   case "$a" in repos/*) p="$a";; esac
   prev="$a"
 done
+case "$*" in *"issues(states: OPEN"*)   # the open-issue list is one GraphQL request through the door (#383): the REST fixture in its shape
+  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
@@ -41,7 +43,7 @@ cp "$(dirname "$src")/mkreq.sh" "$T/scripts/mkreq-real.sh"; cp "$(dirname "$src"
 printf '%%s\n' 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\n")' > "$T/scripts/launch.py"
 chmod +x "$T/scripts/mkreq.sh"
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py} "$T/scripts/"   # the pass reads the open-issue list through the door
 scene() { # <name>: fresh state, its own env.sh; no graph written here -- each case writes the one it needs
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
@@ -50,6 +52,7 @@ SG_REPO=o/r; SG_OWNER=o; SG_PROJECT=1; SG_STATE=$d/st; SG_CHECKOUT=$d/co; SG_BAS
 SG_FRONTIER_LABEL=frontier; SG_BUG_LABEL=bug; SG_CODING_RULES=rules; BOARD=$T/board.sh
 sg_cq_file() { printf '%s/cq/o__r#%s\n' "$SG_STATE" "$1"; }
 E
+  export SG_GH_AGGREGATE_WINDOW=0   # a case rewrites the list between passes: no snapshot answers the second one
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
   export GH_ISSUES=$d/issues.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
   printf '[]' > "$GH_OPEN"; printf '[]' > "$GH_CLOSED"

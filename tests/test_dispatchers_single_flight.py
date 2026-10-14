@@ -18,6 +18,8 @@ GH = """#!/bin/bash
 # `<wave><US><number><US><labels>`, so the two queries answer in their own shape. autobug asks by label;
 # autofrontier reads every open issue and lets stack.sh's blocker gate decide, so a label only orders a candidate.
 case "$*" in *"pulls?state=open"*) exit 0;; esac
+# autofrontier reads the open-issue list once, through the door: one GraphQL request (#383).
+case "$*" in *"issues(states: OPEN"*) printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a bug","body":"b","state":"OPEN","labels":{"nodes":[{"name":"wave:01"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}\\n'; exit 0;; esac
 case "$*" in *"issues?state=open&labels="*) printf '42\\037%s\\n' "$LABELS"; exit 0;; esac
 case "$*" in *"issues?state=open"*) printf 'wave:01\\03742\\037%s\\n' "$LABELS"; exit 0;; esac
 case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","created_at":"2026-10-11T00:00:00Z"}\\n'; exit 0;; esac
@@ -50,7 +52,7 @@ def _scripts(tmp_path, cluster_sleep):
     """A scripts folder holding the real dispatchers and single.sh, plus every stub they call."""
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
-    for name in ("single.sh", "autobug.sh", "autofrontier.sh"):
+    for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
     (d / "startability.sh").write_text(STARTABILITY)

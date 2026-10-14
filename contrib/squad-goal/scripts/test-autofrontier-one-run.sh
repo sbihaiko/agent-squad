@@ -20,6 +20,8 @@ for a in "$@"; do
   case "$a" in repos/*) p="$a";; esac
   prev="$a"
 done
+case "$*" in *"issues(states: OPEN"*)   # the open-issue list is one GraphQL request through the door (#383): the REST fixture in its shape
+  jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[])},blockedBy:{nodes:[]},comments:{nodes:[(.comments//[])[]|{body:.}]}}]}}}}' "$GH_ISSUES"; exit 0;; esac
 case "$p" in
   */pulls?state=open*)    f=$GH_OPEN;;
   */pulls?state=closed*)  f=$GH_CLOSED;;
@@ -38,7 +40,7 @@ printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' >
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py} "$T/scripts/"   # the pass reads the open-issue list through the door
 scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh state, its own env.sh and workflow graph
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
@@ -51,6 +53,7 @@ E
     rb='{"max_parallel":20}'; [ -n "$3" ] && rb="{\"max_parallel\":20,\"max_children\":$3}"
     printf '{"run":%s,"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":%s,"max_parallel":2}]}]}' "$rb" "$2" > "$d/co/docs/squad/workflows/dynamic.graph.json"
   fi
+  export SG_GH_AGGREGATE_WINDOW=0   # a case rewrites the list between passes: no snapshot answers the second one
   export HOME=$d/home SG_STATE=$d/st SG_CHECKOUT=$d/co SG_REPO=o/r SG_FRONTIER_LABEL=frontier MKLOG=$d/mk.log LAUNCHLOG=$d/launch.log BOARDLOG=$d/board.log
   export GH_ISSUES=$d/issues.json GH_FRONTIER=$d/frontier.json GH_OPEN=$d/open.json GH_CLOSED=$d/closed.json GH_ISSUE1=$d/issue1.json GH_ISSUEDIR=$d/issue; mkdir -p "$GH_ISSUEDIR"
   printf '[]' > "$GH_FRONTIER"
@@ -113,8 +116,7 @@ unset GH_FRONTIER_ONLY
 # 1b) #33: a child with SEVERAL issues is one slice, one request line and one PR, and each of its issues still holds its marker,
 #     its own comment and its own card move -- the claim the comment above makes for one-issue children, asserted for the bundle
 scene bundle
-issues '[{"number":31,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":32,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":34,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
-issuebody 31 "fix scripts/shared_fix.py"; issuebody 32 "also scripts/shared_fix.py"; issuebody 34 "unrelated"
+issues '[{"number":31,"title":"a","body":"fix scripts/shared_fix.py","labels":[{"name":"wave:01"}]},{"number":32,"title":"a","body":"also scripts/shared_fix.py","labels":[{"name":"wave:01"}]},{"number":34,"title":"a","body":"unrelated","labels":[{"name":"wave:01"}]}]'   # #383: the bodies come from the list, never a read per issue
 cp "$(dirname "$src")/cluster.py" "$T/scripts/"   # the real files rule bundles two tickets that name one file; the other cases leave it out, their issues share one fixture number
 r=$(run); rm -f "$T/scripts/cluster.py"
 [ "$(childblocks)" = 2 ] && $G -q '^CHILD — GitHub issue(s) 31, 32 ' "$MKLOG.body" && ok "two issues that name one file are ONE child; the third is its own" || ko "two issues that name one file are one child: '$($G '^CHILD' "$MKLOG.body")'"
@@ -198,6 +200,15 @@ issues '[{"number":48,"title":"Squad run run-1","body":"b","labels":[{"name":"ru
 r=$(run)
 [ "$(marked 48)" = 0 ] && ok "a run parent is never dispatched" || ko "the run parent #48 was dispatched: '$r'"
 [ "$(marked 49)" = 1 ] && ok "an issue beside a run parent is dispatched" || ko "the issue beside the run parent was not dispatched: '$r'"
+
+# 11) #383: the not-startable marker is read from the open-issue list's entry, never from a comments read per candidate.
+#     The stub sg_not_startable says "startable", so only the list's comments can keep #51 out.
+scene notstartable
+issues '[{"number":51,"title":"a","body":"b","labels":[{"name":"wave:01"}],"comments":["SQUAD-NOT-STARTABLE: failed 3 times"]},{"number":52,"title":"a","body":"b","labels":[{"name":"wave:01"}],"comments":["a note"]}]'
+r=$(run)
+[ "$(marked 51)" = 0 ] && case "$r" in *"FRONTIER skip #51: SQUAD-NOT-STARTABLE"*) true;; *) false;; esac && ok "an entry whose comments carry the marker is skipped" || ko "the marked #51 was not skipped from the list: '$r'"
+[ "$(marked 52)" = 1 ] && ok "an entry without the marker goes out" || ko "#52 did not go out: '$r'"
+$G -qx 'b' "$MKLOG.body" && ok "the request pastes the body from the list" || ko "the request has no body from the list: '$(cat "$MKLOG.body")'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
