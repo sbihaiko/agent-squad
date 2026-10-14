@@ -2,8 +2,11 @@
 # Regression test for the branch review (#357): review.sh --branch, branchreview.sh and branchfix.sh, with stubbed gh and claude
 # (no network, no model). The review reads the diff of a work branch against `dev`, never a pull request; its findings go to the
 # one status comment of the issue (a queue file of the status kind, which cqflush.sh edits in place); a fix round works on the
-# same branch. usage: bash test-branchreview.sh [scripts dir]
+# same branch. A child of a wave (#376) sets SG_REVIEW_BASE to the wave branch: the diff is then the child's own commits
+# against their merge-base with the wave branch, never the whole wave, and the base is kept beside the verdict.
+# usage: bash test-branchreview.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+unset SG_REVIEW_BASE   # each case decides the base the review is read against; an ambient one from a live loop must not
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$d/review.sh" "$d/revformat.py" "$d/address.sh" "$T/s/"; : > "$T/s/codex-reset.py"
 cp "$d/ghcall.sh" "$d/ghread.py" "$d/branchreview.sh" "$d/branchfix.sh" "$T/s/" 2>/dev/null
 printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}\n' > "$T/s/models.json"
@@ -16,6 +19,8 @@ cat > "$T/bin/gh" <<'J'
 printf '%s\n' "gh $*" >> "$GHLOG"
 case "$*" in
   *commits/gui/7-x*) echo "{\"sha\":\"$(cat "$GHHEAD")\"}";;   # the door reads JSON and applies -q itself
+  *Accept*compare/wave/run-1...gui/7-x*) printf 'diff --git a/f b/f\n+wave-only-child-diff\n';;
+  *compare/wave/run-1...gui/7-x*) echo '{"files":[{"filename":"W/a.cs"}]}';;
   *Accept*compare/dev...gui/7-x*) printf 'diff --git a/f b/f\n+branch-diff-line\n';;
   *compare/dev...gui/7-x*) echo '{"files":[{"filename":"UI/a.cs"}]}';;
   *Accept*compare*) printf 'diff --git a/f b/f\n+delta-line\n';;
@@ -36,6 +41,7 @@ out=$(CLAUDE_CHANGES=1 bash "$T/s/branchreview.sh" gui/7-x 7 2>&1); rc=$?
 /usr/bin/grep -q "compare/dev...gui/7-x" "$T/gh.log" && /usr/bin/grep -q "branch-diff-line" "$T/prompt" && ok "the prompt carries the diff of the branch against dev" || ko "no dev diff in the prompt"
 ! /usr/bin/grep -q "pulls" "$T/gh.log" && ok "no pull request is read" || ko "a pull request call: $(/usr/bin/grep pulls "$T/gh.log")"
 head -1 "$T/st/review-$key.md" | /usr/bin/grep -q CHANGES && [ "$(cat "$T/st/review-$key.sha")" = aaa111 ] && ok "the verdict and the reviewed sha are kept under the branch key" || ko "no verdict kept"
+[ "$(cat "$T/st/review-$key.base" 2>/dev/null)" = dev ] && ok "the base the review was read against is kept beside the verdict" || ko "no base kept: '$(cat "$T/st/review-$key.base" 2>/dev/null)'"
 # 2) the findings go to the status comment of the issue: a status-kind queue file, never a plain comment
 n1=$(ls "$T/st/cq/" | wc -l | tr -d ' '); ls "$T/st/cq/"x__y#7-status~* >/dev/null 2>&1 && ok "the findings are queued as the issue's status comment" || ko "no status file: $(ls "$T/st/cq")"
 /usr/bin/grep -q "a.cs:1" "$T/st/cq/"x__y#7-status~* && ok "the status comment carries the findings" || ko "findings missing from the status comment"
@@ -52,4 +58,16 @@ echo '#7 title' > /dev/null; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 —
 r=$(AF_DRY=1 bash "$T/s/branchfix.sh" gui/7-x 7 2>&1)
 case "$r" in *"Check out origin/gui/7-x, commit on top, push to the SAME branch (git push origin HEAD:gui/7-x); no pull request"*) ok "the fix round commits on the work branch";; *) ko "fix request: '$r'";; esac
 case "$r" in *"a.cs:1"*) ok "the fix request carries the findings";; *) ko "no findings in the fix request";; esac
+# 5) the child of a wave (#376): the review reads only the child's own commits, against its merge-base with the wave branch,
+#    and the verdict still lands in the issue's one status comment. SG_REVIEW_BASE names the branch the diff is taken against.
+: > "$T/gh.log"; rm -f "$T/st/cq/"* "$T/st/review-$key".*; echo ccc333 > "$T/head"
+out=$(SG_REVIEW_BASE=wave/run-1 CLAUDE_CHANGES=1 bash "$T/s/branchreview.sh" gui/7-x 7 2>&1); rc=$?
+[ $rc = 0 ] && ok "wave: the review runs with the wave branch as its base" || ko "wave: branchreview exited $rc: $out"
+/usr/bin/grep -q "compare/wave/run-1...gui/7-x" "$T/gh.log" && ok "wave: the diff is read against the wave branch" || ko "wave: no wave compare: $(cat "$T/gh.log")"
+! /usr/bin/grep -q "compare/dev...gui/7-x" "$T/gh.log" && ok "wave: the whole wave (a dev compare) is never read" || ko "wave: a dev compare was made"
+/usr/bin/grep -q 'wave-only-child-diff' "$T/prompt" && ! /usr/bin/grep -q 'branch-diff-line' "$T/prompt" && ok "wave: the prompt carries only the child's own diff" || ko "wave: the prompt carries the wrong diff"
+[ "$(cat "$T/st/review-$key.base" 2>/dev/null)" = wave/run-1 ] && ok "wave: the wave base is kept beside the verdict" || ko "wave: no base kept: '$(cat "$T/st/review-$key.base" 2>/dev/null)'"
+ls "$T/st/cq/"x__y#7-status~* >/dev/null 2>&1 && /usr/bin/grep -q "a.cs:1" "$T/st/cq/"x__y#7-status~* && ok "wave: the verdict lands in the issue's one status comment" || ko "wave: no status comment: $(cat "$T/st/cq/"* 2>&1)"
+ls "$T/st/cq/" | /usr/bin/grep -qv -- '-status~' && ko "wave: a round queued a comment that is not the status one: $(ls "$T/st/cq")" || ok "wave: the status comment is the only one"
+! /usr/bin/grep -qE "issues/7/comments" "$T/gh.log" && ok "wave: the review posts no comment itself" || ko "wave: the review posted a comment"
 rm -rf "$T"; exit $fail

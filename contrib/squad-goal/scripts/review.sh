@@ -3,6 +3,8 @@
 #        review.sh [repo] --branch <branch> <issue>  -> $SG_STATE/review-<branch with / as _>.md  (#357)
 # A work branch has no pull request: the review reads the diff of the branch against $SG_LAND_BRANCH (default dev), the head is
 # the branch tip, and every file it keeps (.md, .sha, .err) is named by the branch with each / written as _. branchland.sh reads them.
+# SG_REVIEW_BASE names another base for that diff (#376): a child of a wave is read against the wave branch, so the three-dot
+# compare gives the merge-base of the child and the wave branch -- the child's own commits, never the whole wave.
 # `repo` is the repository the PR belongs to (owner/name): the squad works in two, and a tooling PR is reviewed by the
 # same chain, against its own repository's issue and diff. With no argument it is the profile's $SG_REPO (#1820).
 # Walks review_models in models.json (claude:* -> claude CLI, grok-* -> grok CLI, gemini-* -> agy (Antigravity) CLI, else codex): a model that fails for infrastructure reasons (non-zero exit,
@@ -18,7 +20,7 @@
 # gets the previous findings plus that delta only; otherwise (first review, rebase, big delta) a full review.
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; : "${SG_SHARED:=$SG_STATE}"; repo=$SG_REPO; case "${1:-}" in */*) repo=$1; shift;; esac; bm=""; [ "${1:-}" = --branch ] && { bm=$2; shift 2; set -- "$(printf '%s' "$bm" | tr / _)" "$@"; }   # in branch mode $pr is the branch key
 pr=$1 iss=$2; p=$(mktemp); cfg="$(dirname "$0")/models.json"
-if [ -n "$bm" ]; then head=$(gh_api repos/$repo/commits/$bm -q .sha); pbase=${SG_LAND_BRANCH:-dev}; lbl="branch $bm" fetchref=$bm
+if [ -n "$bm" ]; then head=$(gh_api repos/$repo/commits/$bm -q .sha); pbase=${SG_REVIEW_BASE:-${SG_LAND_BRANCH:-dev}}; lbl="branch $bm" fetchref=$bm
 else read -r head pbase <<<"$(gh api repos/$repo/pulls/$pr -q '.head.sha+" "+.base.ref')"; lbl="PR #$pr" fetchref=pull/$pr/head; fi   # pbase: a parent PR's branch when stacked
 curhead() { if [ -n "$bm" ]; then gh_api repos/$repo/commits/$bm -q .sha; else gh api repos/$repo/pulls/$pr -q .head.sha; fi; }
 stk=""; [ -z "$bm" ] && [ "$pbase" != "$SG_BASE" ] && stk=" This PR is STACKED on branch $pbase (an open parent PR): its diff is only its own change over that branch; review that, and judge the parent only where this change depends on it."

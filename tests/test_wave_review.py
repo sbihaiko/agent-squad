@@ -1,0 +1,34 @@
+"""Issue #376: the review reads each child's diff against the wave branch, and a child it asked changes of never enters.
+
+The two shell suites beside the scripts are the behavior, run here as the targeted pytest half. `test-branchreview.sh`
+drives review.sh and branchreview.sh over a bare local remote and a stub `gh`/`claude`: with SG_REVIEW_BASE set to the wave
+branch the three-dot compare and the prompt carry only the child's own commits, the base is kept beside the verdict, and the
+verdict still lands in the issue's one status comment. `test-wave.sh` drives wave.sh: a child whose review asked for changes,
+a review read against `dev` (the whole wave), a review of an older tip, and a child with no review are all held out of the
+wave branch. Both run offline, in throwaway repos, and take a few seconds, so each call is marked heavy.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
+
+
+def _suite(name: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["bash", str(SCRIPTS / name)], capture_output=True, text=True, timeout=120)
+
+
+@pytest.mark.heavy
+def test_the_review_reads_the_child_diff_against_the_wave_branch() -> None:
+    r = _suite("test-branchreview.sh")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.heavy
+def test_a_changes_requested_child_never_enters_the_wave_branch() -> None:
+    r = _suite("test-wave.sh")
+    assert r.returncode == 0, r.stdout + r.stderr

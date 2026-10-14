@@ -15,7 +15,11 @@
 # The gates are the profile's SG_WAVE_GATES: ruff, mypy and the fast battery for this repository. `start` works in a
 # throwaway clone, never in a checkout of the owner's, as ffland.sh does. `enter` runs where the child works, so it reads
 # the branch from that worktree's HEAD, and the gates run there too. Every line the script prints is one `WAVE ...` line.
-# Exit: 0 entered (or the wave branch was cut), 1 refused and requeued, 2 a bad call or a wave branch that is not there.
+# A child enters only after the review of its own diff approved it (#376): `enter` reads review-<branch>.md beside the base
+# it was read against and the sha, and holds the child out (one `WAVE HOLD` line, nothing requeued) when the review did not
+# approve it, was read against another base, or read a different head.
+# Exit: 0 entered (or the wave branch was cut), 1 not entered (requeued after a failed gate, a conflict or a refused push;
+# held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
 # Guards: `test-wave.sh`.
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 G=/usr/bin/git; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; base=${SG_BASE:-dev}
@@ -57,6 +61,18 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
+  # The review of the child reads only its own commits, against its merge-base with the wave branch (#376), and a verdict that
+  # did not approve it keeps it out of the wave. The gate reads three things: the verdict, the base it was read against (the
+  # wave branch, never `dev`, which would be the whole wave), and the sha it read. The sha is read before the rebase below:
+  # the entry rewrites the child's shas while its own commits stay the same, so what was approved is what enters, rebased.
+  # A child that cannot enter is held where it stands -- its branch and its review stay for the fix round -- so nothing is
+  # requeued here, unlike a failed gate, a conflict or a refused push.
+  local rk="$SG_STATE/review-$(printf '%s' "$br" | tr / _)" rsha
+  rsha=$($G rev-parse HEAD)
+  [ -s "$rk.md" ] || { echo "WAVE HOLD #$iss: no review of $br yet: a child never enters a wave unreviewed"; return 1; }
+  [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] || { echo "WAVE HOLD #$iss: the review of $br was read against '$(cat "$rk.base" 2>/dev/null)', not $w: it read the whole wave, not this child's own commits"; return 1; }
+  [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] || { echo "WAVE HOLD #$iss: the review of $br read $(cut -c1-9 "$rk.sha" 2>/dev/null), not HEAD ${rsha:0:9}"; return 1; }
+  head -1 "$rk.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$iss: the review of $br did not approve it: $(head -1 "$rk.md")"; return 1; }
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   out=$(bash -c "$SG_WAVE_GATES" 2>&1) || {
