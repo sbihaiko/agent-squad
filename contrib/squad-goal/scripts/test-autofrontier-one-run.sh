@@ -178,6 +178,19 @@ r=$(run)
 [ "$(marked 40)" = 0 ] && ok "an issue that waits on the owner is left alone" || ko "the pass dispatched an issue waiting on the owner: $(marked 40) marker(s)"
 [ "$(childblocks)" = 1 ] && ok "the request asks for the one ticket alone" || ko "the request asks for $(childblocks) children: '$($G '^CHILD' "$MKLOG.body")'"
 
+# 8) #238: freeze markers are holds, not columns. Both reasons, and the tracker owner words, keep their
+# card out of the dispatch pass; no board write moves a frozen card. Once the marker is removed, the same
+# item is startable again.
+scene freeze 24
+issues '[{"number":43,"title":"a","body":"b","labels":[{"name":"frozen:owner"},{"name":"wave:01"}]},{"number":44,"title":"a","body":"b","labels":[{"name":"frozen:dependency"},{"name":"wave:01"}]},{"number":45,"title":"a","body":"b","labels":[{"name":"needs-ratification"},{"name":"wave:01"}]},{"number":46,"title":"a","body":"b","labels":[{"name":"needs-info"},{"name":"wave:01"}]},{"number":47,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 43 44 45 46)" = 0 ] && ok "both freeze markers and owner words hold dispatch" || ko "a frozen item was dispatched: $(marked 43 44 45 46) marker(s): '$r'"
+[ "$(marked 47)" = 1 ] && ok "an unfrozen item beside holds is dispatched" || ko "an unfrozen item beside holds was not dispatched"
+! $G -qE ' (43|44|45|46)( |$)' "$BOARDLOG" && ok "a freeze does not change the card column" || ko "a frozen card had a board write: '$(cat "$BOARDLOG")'"
+issues '[{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":44,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 43 44)" = 2 ] && ok "removing either freeze makes the item startable" || ko "removing a freeze did not start both items: '$r'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
