@@ -29,7 +29,7 @@ class Repo:
         self.issues = {n: {"id": 1000 + n, "number": n, "title": t} for n, t in existing}
         self.subs = {}
         self.lag, self.drop = lag, drop
-        self.created, self.link_posts, self.sub_reads = [], [], 0
+        self.created, self.link_posts, self.sub_reads, self.list_reads = [], [], 0, 0
 
     def _jq(self, cmd, rows):
         jq = cmd[cmd.index("--jq") + 1]
@@ -61,6 +61,7 @@ class Repo:
         elif "/issues/" in s:
             out = json.dumps(self.issues[int(s.split("/issues/")[1].split()[0])])
         elif "/issues?" in s:
+            self.list_reads += 1
             out = self._jq(cmd, list(self.issues.values()))
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
@@ -120,3 +121,28 @@ def test_a_link_no_read_carries_is_named(tmp_path):
 
     with pytest.raises(issue_state.NotCarried, match="issue 10.*sub-issue"):
         seam(tmp_path, repo).group_run(RUN, [10, 11])
+
+
+def test_a_child_that_is_a_run_parent_is_refused(tmp_path):
+    repo = repo_with(existing=[(7, "Squad run run-20261014-010101-aaaaaa")])
+    state = seam(tmp_path, repo)
+
+    with pytest.raises(issue_state.RunParentChild, match="#7"):
+        state.group_run(RUN, [10, 7])
+
+    assert repo.link_posts == [], "nothing is linked when one child is a run parent"
+
+
+def test_a_parent_whose_links_did_not_land_is_found_again_without_paging_the_issues(tmp_path):
+    repo = repo_with(drop=True)
+    state = seam(tmp_path, repo)
+    with pytest.raises(issue_state.NotCarried):
+        state.group_run(RUN, [10, 11])
+    reads = repo.list_reads
+    repo.drop = False
+
+    parent = state.group_run(RUN, [10, 11])
+
+    assert repo.created == [f"Squad run {RUN}"], "the retry reuses the parent, never creates a second"
+    assert repo.list_reads == reads, "the parent is known from the first pass: no page of every issue"
+    assert [c["number"] for c in repo.subs[parent]] == [10, 11]
