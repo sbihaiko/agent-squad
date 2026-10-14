@@ -84,3 +84,12 @@ def test_the_queue_add_box_offers_only_gateway_ids_and_the_role_box_keeps_the_ot
     src = HUB_PY.read_text()
     assert re.search(r'<input list=mkr data-radd', src), "the Router queue Add box reads its own list"
     assert re.search(r'<datalist id=mkr>\$\{\(mdl\.router_known\|\|\[\]\)', src), "that list is router_known"
+
+
+def test_an_anthropic_id_the_gateway_does_not_list_is_kept_in_the_queue(hub, checkout, monkeypatch):
+    """The gateway's `/v1/models` lists no Anthropic id, and it still passes one through: the loop ran a child on
+    `claude-opus-5-5` on 2026-10-13. A Save that refused it would refuse the queue the shipped graph carries."""
+    monkeypatch.setattr(hub, "gateway_models", lambda ttl=120: [m for m in GATEWAY if not m.startswith("claude-opus")])
+    out = hub.models_set({**hub.models_get(), "router_models": ["claude-gpt-5.6-terra", "claude-opus-5-5"]})
+    assert "err" not in out, out
+    assert _envelope(checkout) == ["claude-gpt-5.6-terra", "claude-opus-5-5"]
