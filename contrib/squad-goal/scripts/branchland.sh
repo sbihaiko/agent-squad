@@ -13,6 +13,8 @@
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
 # marker under $SG_STATE/auto, so it is said once per head and reason, and a refused push lands nothing.
 #
+# Each landing adds one row to $SG_STATE/landed.tsv (epoch, branch, landed sha, issue): the hub's Landed branches lane reads it.
+#
 # The branch list is `git ls-remote` of $SG_LAND_REMOTE (no API read); every GitHub read goes through the throttle (ghcall.sh).
 # watch.sh runs this under single.sh, so two passes never overlap.
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
@@ -60,6 +62,7 @@ while read -r sha ref; do
 Closed #$i after landing $br in $land as $ms (fast-forward push, $br deleted). The check on ${sha:0:9} was green. Refs #$i
 EOT
   $BOARD "$SG_OWNER" "$SG_PROJECT" "Done" "$i" >/dev/null
+  printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$i" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads: the landed branch is deleted by the push, so the remote no longer names it
   echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"
 done <<EOT
 $(printf '%s\n' "$heads" | awk '{print $1, $2}')

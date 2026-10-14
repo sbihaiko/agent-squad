@@ -257,14 +257,14 @@ def test_speed_keeps_the_provisional_note():
 def test_open_rows_read_number_and_minutes():
     out = _run_js("const o=[{n:1491,min:28},{n:1502,min:31}];const out={html:openRows(o)};")
     html = out["html"]
-    assert re.search(r"<h4>Open PRs <small>oldest first</small></h4>", html)
-    assert re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip() == "Open PRs oldest first #1491 · 28 min (warns at 30) #1502 · 31 min"
+    assert re.search(r"<h4>Open branches <small>oldest first</small></h4>", html)
+    assert re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip() == "Open branches oldest first #1491 · 28 min (warns at 30) #1502 · 31 min"
 
 
 def test_open_with_none_reads_none_open():
     out = _run_js("const out={empty:openRows([]),missing:openRows(null)};")
     for html in (out["empty"], out["missing"]):
-        assert re.search(r"<h4>Open PRs\b", html) and "none open" in html
+        assert re.search(r"<h4>Open branches\b", html) and "none open" in html
         assert "#" not in html
     assert "Open now" not in SRC
 

@@ -14,7 +14,7 @@ COLUMNS_PY = SCRIPTS / "board_columns.py"
 HUB_PY = SCRIPTS / "hub.py"
 RECONCILE_PY = SCRIPTS / "reconcile.py"
 NAMES = ("No status", "Todo", "Open Specs", "In Progress", "Code Complete", "Testing", "Blocked", "Done",
-         "Open PRs", "Closed PRs")
+         "Open branches", "Landed branches")
 
 
 def _module(name, path):
@@ -43,7 +43,7 @@ def test_each_column_declares_its_fact_actor_and_terminal_state(columns):
     assert all(isinstance(column["fact"], str) and column["fact"] for column in columns)
     assert all(isinstance(column["actor"], str) and column["actor"] for column in columns)
     assert all(isinstance(column["terminal"], bool) for column in columns)
-    assert {column["name"] for column in columns if column["terminal"]} == {"Done", "Closed PRs"}
+    assert {column["name"] for column in columns if column["terminal"]} == {"Done", "Landed branches"}
 
 
 def test_every_column_has_a_distinct_fact(columns):

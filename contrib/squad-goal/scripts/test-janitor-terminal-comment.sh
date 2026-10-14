@@ -1,6 +1,6 @@
 #!/bin/bash
 # Every terminal entry carries its condition in a comment (#245, spec #132): with SG_BOARD_VOCAB=shipped a move into Closed
-# queues one comment naming the merged pull request and the test on its merge commit, and a move into Abandoned one naming
+# queues one comment naming the branch that is in dev and the test on its tip, and a move into Abandoned one naming
 # who decided and why. A terminal write whose condition cannot be read is not made (the guard). A card that settled in a
 # terminal column with no such comment gets one, once. Stubbed gh and board.sh; a temp state dir, never the live board.
 # usage: bash test-janitor-terminal-comment.sh [janitor.py]
@@ -21,12 +21,10 @@ cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in
-  *--include*search/issues*2201*) echo '{"total_count":1,"items":[{"number":301}]}';;
-  *--include*search/issues*2205*) echo '{"total_count":1,"items":[{"number":305}]}';;
-  *--include*search/issues*2204*) echo '{"message":"Server Error","status":"500"}'; exit 1;;
-  *--include*search/issues*) echo '{"total_count":0,"items":[]}';;
-  *--include*pulls/301*) echo '{"number":301,"merge_commit_sha":"abcdef1234567890"}';;
-  *--include*pulls/305*) echo '{"number":305,"merge_commit_sha":"5555555aaaaaaaa"}';;
+  *--include*repos/x/y/branches/gui%2F2201-a*) echo '{"commit":{"sha":"abcdef1234567890"}}';;
+  *--include*repos/x/y/branches/gui%2F2205-b*) echo '{"commit":{"sha":"5555555aaaaaaaa"}}';;
+  *repos/x/y/branches*) printf 'gui/2201-a abcdef1234567890\ngui/2205-b 5555555aaaaaaaa\n';;
+  *compare/dev...*) echo behind;;
   *--include*commits/abcdef1234567890/check-runs*) echo '{"check_runs":[{"name":"test (3.11)","status":"completed","conclusion":"success"}]}';;
   *--include*commits/5555555aaaaaaaa/check-runs*) echo '{"check_runs":[{"name":"test (3.13)","status":"completed","conclusion":"success"}]}';;
   *--include*issues/2202/events*) echo '[{"event":"labeled","label":{"name":"wontfix"},"actor":{"login":"rafael"}}]';;
@@ -52,21 +50,21 @@ sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:
 mkdir -p "$T/co/runs/run-a"; echo run-a > "$T/st/active-runs.txt"
 printf 'CHILD — GitHub issue(s) 2201, 2203, 2204:\n' > "$T/co/runs/run-a/request.txt"
 printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
-run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
+run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run); o2=$(run)
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 note() { cat "$T"/st/cq/x__y#"$1"-terminal-*.md 2>/dev/null; }
 count() { ls "$T"/st/cq/ 2>/dev/null | /usr/bin/grep -c "^x__y#$1-terminal-"; }
 has '^STATUS o 4 Closed 2201$' && ok "a closed issue moves into Closed" || ko "#2201 not Closed: $(cat "$T/board.calls")"
-note 2201 | /usr/bin/grep -q '#301' && note 2201 | /usr/bin/grep -q 'abcdef1' && note 2201 | /usr/bin/grep -q 'test (3.11): success' \
-  && ok "the Closed comment names the merged pull request and the test on its merge commit" || ko "#2201 comment: $(note 2201) $o"
+note 2201 | /usr/bin/grep -q 'gui/2201-a' && note 2201 | /usr/bin/grep -q 'abcdef1' && note 2201 | /usr/bin/grep -q 'test (3.11): success' \
+  && ok "the Closed comment names the branch in dev and the test on its tip" || ko "#2201 comment: $(note 2201) $o"
 has '^STATUS o 4 Abandoned 2202$' && ok "a wontfix issue moves into Abandoned" || ko "#2202 not Abandoned: $(cat "$T/board.calls")"
 note 2202 | /usr/bin/grep -q 'wontfix' && note 2202 | /usr/bin/grep -q '@rafael' && ok "the Abandoned comment names who labelled wontfix" || ko "#2202 comment: $(note 2202)"
 has '^STATUS o 4 Abandoned 2203$' && ok "an issue closed as not planned moves into Abandoned" || ko "#2203 not Abandoned: $(cat "$T/board.calls")"
 note 2203 | /usr/bin/grep -q 'not planned' && note 2203 | /usr/bin/grep -q '@owner1' && ok "the Abandoned comment names who closed it and why" || ko "#2203 comment: $(note 2203)"
 ! has ' 2204$' && ok "a terminal write whose condition cannot be read is not made" || ko "#2204 written with no comment: $(cat "$T/board.calls")"
 [ "$(count 2204)" = 0 ] && /usr/bin/grep -q "TERMINAL-NO-CONDITION #2204" "$T/st/cycle.log" && ok "the refused terminal write is named" || ko "#2204 not named: $o"
-note 2205 | /usr/bin/grep -q '#305' && ok "a settled Closed card with no comment is backfilled" || ko "#2205 not backfilled: $(note 2205) $o"
+note 2205 | /usr/bin/grep -q 'gui/2205-b' && ok "a settled Closed card with no comment is backfilled" || ko "#2205 not backfilled: $(note 2205) $o"
 [ "$(count 2206)" = 0 ] && ok "a settled card that already carries its comment gets none" || ko "#2206 commented twice"
 for n in 2201 2202 2203 2205; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
 [ "$fail" = 0 ] && ok "every terminal entry has exactly one comment after two passes"
