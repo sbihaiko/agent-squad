@@ -2,10 +2,9 @@
 # usage: ffland.sh <pr> <branch> <issue>      land one pull request by a git fast-forward push (no merge API call).
 #
 # A git push counts against no REST, GraphQL or secondary write limit; the merge API and the close/comment writes that
-# followed it did. So: rebase the PR branch on $SG_BASE, put `Closes #<issue>` on the tip commit (the one place the loop
-# allows a closing keyword: the landed commit, never the PR body), push that head to the PR branch, then push the same
-# sha to $SG_BASE as a fast-forward. GitHub marks the PR merged because its head is now in the base, and closes the issue
-# from the commit. The branch goes with `git push origin :<branch>`. The work happens in a throwaway clone, never in a
+# followed it did. So: rebase the PR branch on $SG_BASE, push that head to the PR branch, then push the same sha to
+# $SG_BASE as a fast-forward. GitHub marks the PR merged because its head is now in the base. The commit keeps `Refs` and
+# carries no closing keyword (owner, #330): the caller closes the issue through the API, as after an API merge. The branch goes with `git push origin :<branch>`. The work happens in a throwaway clone, never in a
 # checkout of the owner's.
 #
 # Exit 0: landed; stdout `FFLAND <sha>`. Exit 1: nothing landed; stdout `FFLAND-FALLBACK <reason>`, and the caller merges
@@ -24,11 +23,6 @@ orig=$(g rev-parse "origin/$br") || fb "no branch $br"
 g checkout -q -B land "origin/$br" 2>/dev/null || fb "checkout failed"
 o=$(g rebase "origin/$base" 2>&1) || { g rebase --abort >/dev/null 2>&1; fb "rebase on $base conflicts: $(printf '%s' "$o" | tail -1)"; }
 [ "$(g rev-list --count "origin/$base..HEAD")" -gt 0 ] || fb "nothing ahead of $base"
-if ! g log -1 --format=%B | grep -qiE "^Closes #$iss\$"; then
-  g commit -q --amend -m "$(g log -1 --format=%B)
-
-Closes #$iss" || fb "could not write Closes #$iss on the tip"
-fi
 head=$(g rev-parse HEAD)
 if [ "$head" != "$orig" ]; then   # the PR head must equal the pushed sha, or GitHub would not see the PR as merged
   o=$(g push -q --force-with-lease="refs/heads/$br:$orig" origin "HEAD:refs/heads/$br" 2>&1) || fb "the PR branch push was refused: $(printf '%s' "$o" | tail -1)"

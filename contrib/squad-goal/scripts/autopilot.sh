@@ -276,7 +276,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
     $fl --repo "$SG_REPO" --pr $pr --issue $iss --head $sha --review "$rv" >> "$A/debt-$pr.out" 2>&1 || { hold debtfile "debt filing failed (see auto/debt-$pr.out); the debt-only CHANGES is not merged"; continue; }
     echo "DEBT FILED #$pr @ $s9: debt-only CHANGES, debt filed, merge guards next"
   fi
-  # the landing: a git fast-forward push (no merge API call; the landed commit closes the issue, #330). A refused push falls back to the API merge.
+  # the landing: a git fast-forward push (no merge API call; the commit keeps Refs, owner #330). A refused push falls back to the API merge.
   fl=$(bash "$(cd "$(dirname "$0")" && pwd)/ffland.sh" "$pr" "$ref" "$iss" 2>/dev/null | tail -1)
   case "$fl" in "FFLAND "*) m=${fl#FFLAND }; ff=1;; *) ff=0; echo "AUTOMERGE FALLBACK #$pr: ${fl#FFLAND-FALLBACK }; merging through the API instead";; esac
   if [ $ff = 1 ] || m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
