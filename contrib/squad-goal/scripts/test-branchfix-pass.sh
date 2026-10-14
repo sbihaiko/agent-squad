@@ -6,7 +6,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/co"
-cp "$d/branchfixpass.sh" "$d/branchfix.sh" "$d/workbranches.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/branchfixpass.sh" "$d/revformat.py" "$d/branchfix.sh" "$d/workbranches.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git} SG_CODING_RULES=rules
 export SG_FRONTIER_SKIP_LABELS=spec,needs-ratification,frozen:owner
@@ -90,6 +90,9 @@ r=$(OPEN="13 14" LABELED="13=needs-ratification 14=other" fp)
 [ "$(n gui/14-l)" = 1 ] && ok "an issue with another label gets its fix run" || ko "gui/14-l dispatched $(n gui/14-l) times: '$r'"
 /usr/bin/grep -q "issues/1[34]" "$T/gh.log" && ko "the labels were read with an extra call: $(/usr/bin/grep 'issues/1[34]' "$T/gh.log")" || ok "the labels come from the open-issue list, with no extra call"
 # 10) the cycle runs the pass under its own single.sh lock, gated like the landers
+# A CHANGES with no Blocking finding (debt only) is an approval (#392): it dispatches no fix round, as autopilot merges it.
+push gui/10-w; printf 'VERDICT: CHANGES\n## Blocking\n\n## Debt\n- c.sh:1 — naming — unclear — rename\n' > "$T/st/review-gui_10-w.md"; $O rev-parse gui/10-w > "$T/st/review-gui_10-w.sha"
+r=$(OPEN="7 8 9 10" fp); [ "$(n gui/10-w)" = 0 ] && ok "a debt-only CHANGES dispatches no fix round" || ko "a debt-only CHANGES was dispatched: '$r'"
 w=$(/usr/bin/grep -n 'single.sh" branchfix ' "$d/watch.sh")
 case "$w" in *'SG_PRLAND_PAUSED'*'branchfixpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_PRLAND_PAUSED";; *) ko "watch.sh does not run the fix pass: '$w'";; esac
 exit $fail
