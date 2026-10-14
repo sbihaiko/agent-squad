@@ -12,7 +12,8 @@ case "$*" in
   "api users/x") echo '{"type":"User"}';;
   *"/fields"*) echo '[{"id":7,"name":"Status"}]';;
   *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
-  *"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
+  *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
+  *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
   *"issues/1090") echo '{"state":"closed","body":""}';;
   *"issues/1092") echo '{"state":"closed","body":""}';;
   *"issues/1093") echo '{"state":"open","body":""}';;
@@ -43,4 +44,10 @@ case "$m" in *1140*) ko "a revert moved #1140 back: '$m'";; *) ok "a revert keep
 case "$r" in *"BACKWARD #1140: Done -> Todo"*) ok "the revert is reported by name";; *) ko "the revert of #1140 is not reported by name: '$r'";; esac
 case "$(cat "$T/tags" 2>/dev/null)" in *"issues/1140/labels"*reverted*|*reverted*"issues/1140/labels"*) ok "a revert adds the tag";; *) ko "a revert added no tag: '$(cat "$T/tags" 2>/dev/null)'";; esac
 case "$(cat "$T/tags" 2>/dev/null)" in *"issues/1120"*) ko "a plain backward attempt tagged the card: '$(cat "$T/tags" 2>/dev/null)'";; *) ok "only a revert carries the tag";; esac
+# (4) a reconcile run on an issue that already carries the tag reads the labels and sends no label write (#328, criterion c).
+rm -f "$T/tags" "$T/tagreads"; r=$(HAS_TAG=1 RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1)
+case "$(cat "$T/tagreads" 2>/dev/null)" in *"issues/1140/labels"*) ok "the labels are read before the tag is added";; *) ko "the labels of #1140 were not read: '$(cat "$T/tagreads" 2>/dev/null)'";; esac
+[ ! -s "$T/tags" ] && ok "an issue that already has the tag gets no label write" || ko "a label write was sent for a tagged issue: '$(cat "$T/tags")'"
+rm -f "$T/tags"; r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1)
+[ "$(grep -c 'issues/1140/labels' "$T/tags" 2>/dev/null)" = 1 ] && ok "an issue without the tag still gets it" || ko "the tag was not added to an untagged issue: '$(cat "$T/tags" 2>/dev/null)'"
 rm -rf "$T"; exit $fail

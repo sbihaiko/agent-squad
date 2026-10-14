@@ -278,7 +278,7 @@ while IFS=$'\x1f' read -r pr sha iss ref labels base created; do   # unit separa
   fi
   if m=$(gh api -X PUT repos/$SG_REPO/pulls/$pr/merge -f merge_method=$SG_MERGE_METHOD -f sha=$sha -q .sha 2>&1); then
     touch "$A/merged-$pr"; gate merged "merged as ${m:0:9}: APPROVE + CI green + clean + no open threads"
-    printf "PR #%s merged automatically (squash %s): review APPROVE and CI green on %s, mergeable clean, no open review threads. Follow-up: e2e on the merge SHA, close when AC are met.\n" $pr "${m:0:9}" $s9 > "$(sg_cq_file "$iss-automerge$$.md")"
+    printf "PR #%s merged automatically (squash %s): review APPROVE and CI green on %s, mergeable clean, no open review threads. Follow-up: e2e on the merge SHA, close when AC are met.\n" $pr "${m:0:9}" $s9 > "$(sg_cq_delivery "$iss" "automerge$$")"
     $BOARD $SG_OWNER $SG_PROJECT "Testing" $iss >/dev/null   # merged: the e2e on the merge SHA is the test pass
     echo "AUTOMERGE #$pr issue #$iss sha ${m:0:9} -> e2e, worktree cleanup, close if done"
   else echo "AUTOMERGE FAILED #$pr: $m"; gate merge-failed "the merge call failed: $m"; touch "$A/merged-$pr"; fi
