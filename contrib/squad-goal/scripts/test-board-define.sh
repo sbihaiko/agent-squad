@@ -8,7 +8,7 @@
 # Stubbed gh that serves a fixture board snapshot and logs every call; a temp state dir, so the live board is never read or written.
 # usage: bash test-board-define.sh [board_define.py]
 src=${1:-$(dirname "$0")/board_define.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/board_define.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
+mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/board_define.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; for f in board_migrate.py board_columns.py board-definition.json; do cp "$(dirname "$src")/$f" "$T/$f"; done
 cat > "$T/board.json" <<'J'
 {"fieldNames": {"statuses": "Status", "kinds": "Kind", "freeze": "Freeze", "outcomes": "Outcome"},
  "statuses": [{"name": "Backlog", "color": "GRAY", "fact": "Open, not in the schedule"},
