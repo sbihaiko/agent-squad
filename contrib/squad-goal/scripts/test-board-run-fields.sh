@@ -8,7 +8,7 @@
 # Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
 # usage: bash test-board-run-fields.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"
+mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"

@@ -63,7 +63,7 @@ def _write(path: Path, text: str) -> None:
 def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False) -> Path:
     """The janitor with the throttle and the reader beside it, a stub `gh` (the merge scoped to the base answers
     `scoped`), a stub board.sh, and one finished run for issue #2030."""
-    for name in ("janitor.py", "ghthrottle.py", "ghread.py"):
+    for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"

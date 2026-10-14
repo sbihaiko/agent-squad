@@ -8,15 +8,16 @@ but only when the card is still in Todo/In Progress/Blocked, never past Code Com
 Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never overrides a later column: an issue already
 past it is left alone because the marker is written the first time the child is seen passing."""
 import json, os, pathlib, re, subprocess, sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
+from issue_state import board_state
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
 board = str(pathlib.Path(__file__).resolve().parent / "board.sh")
-def card_status(n):   # REST, no GraphQL quota; "" when unreadable
-    g = lambda *a: subprocess.run(["gh", *a], capture_output=True, text=True).stdout.strip()
-    f = g("api", f"/users/{owner}/projectsV2/{proj}/fields?per_page=100", "--jq", '.[]|select(.name=="Status")|.id')
-    return g("api", "--paginate", f"/users/{owner}/projectsV2/{proj}/items?per_page=100&fields[]={f}", "--jq",
-             f'.[]|select(.content_type=="Issue" and .content.number=={n})|((.fields[]?|select(.name=="Status")|.value.name.raw)//"")')
+state = board_state()   # the dispatch pass asks the seam what state an issue carries, never the carrier (#236)
+def card_status(n):   # the state the card carries, "" when it carries none or the carrier does not answer
+    try: return state.read(n)
+    except RuntimeError: return ""   # a refusal or a deadline miss is the carrier not answering, not a card that carries nothing
 def issue_from(df):
     m = (re.search(r"GitHub issue #(\d+)", df) or re.search(r"\bissue #(\d+)", df)
          or re.search(r"GitHub issues (\d+)", df) or re.search(r"GitHub issue (\d+)", df)

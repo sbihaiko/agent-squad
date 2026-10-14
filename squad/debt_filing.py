@@ -11,7 +11,8 @@ The filed issue is put on the loop's project board when it is opened, and a find
 is carded too if it has none (#1838 -- an issue filed by a run that could not mint a card is repaired here): the frontier and the close passes read
 the board, so an issue filed without a card is one nobody works and nobody closes, and every later move for it is a
 no-op on stderr. The board is `$SG_OWNER`/`$SG_PROJECT`, the pair every other board move of the loop uses.
-GitHub goes through REST only (`gh api`), never GraphQL.
+GitHub goes through REST only (`gh api`), never GraphQL. The card is asked of the seam that reads and writes the state
+an issue carries (`issue_state.py`, #236); the filer holds no board route of its own.
 """
 import argparse
 import hashlib
@@ -22,6 +23,8 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
+import time
 import types
 
 LABELS = ("debt",)
@@ -95,40 +98,64 @@ def _body(finding, pr, issue, head):
             f"**Acceptance criterion:** {ac}\n\n<!-- {MARK}{key(finding)} -->\n")
 
 
-def _base(sh, owner, project):
-    """The project's REST path, after the owner kind (an org and a user share the endpoint but not the prefix)."""
-    kind = "orgs" if json.loads(sh(["gh", "api", f"users/{owner}"]))["type"] == "Organization" else "users"
-    return f"/{kind}/{owner}/projectsV2/{project}"
+class _Done:
+    """The answer shape the seam's runner returns: the binding reads returncode, stdout and stderr."""
+
+    def __init__(self, rc, out, err=""):
+        self.returncode, self.stdout, self.stderr = rc, out, err
 
 
-def board_items(sh, owner, project, repo):
-    """The numbers of `repo`'s issues already on the board, read the way board.py reads them (REST, paginated)."""
-    out = sh(["gh", "api", "--paginate", f"{_base(sh, owner, project)}/items?per_page=100", "--jq",
-              '.[]|select(.content.number)|[.content.number,(.content.repository_url//"")]|@json'])
-    return {str(n) for n, ru in (json.loads(row) for row in out.splitlines() if row.strip())
-            if not repo or ru.endswith("/" + repo)}
+def board_state(sh, owner, project, repo):
+    """The seam that reads and writes the state an issue carries (#236), over the loop's board. `issue_state.py` is
+    loaded from the checkout beside revformat.py, and every call it makes goes through `sh`: the filer holds no board
+    route of its own. The seam's caches sit in `$SG_STATE`, beside board.py's."""
+    if "issue_state" not in _REVFORMAT:
+        path = pathlib.Path(__file__).resolve().parents[1] / "contrib" / "squad-goal" / "scripts" / "issue_state.py"
+        spec = importlib.util.spec_from_file_location("issue_state", path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        _REVFORMAT["issue_state"] = m
+
+    def run(args, input=None, capture_output=True, text=True, timeout=None):
+        try:
+            return _Done(0, sh(list(args), input=input))
+        except subprocess.CalledProcessError as e:
+            return _Done(e.returncode or 1, "", str(e.stderr or e))
+    state_dir = os.environ.get("SG_STATE") or tempfile.mkdtemp(prefix="debt-filing-")
+    return _REVFORMAT["issue_state"].board_state(owner=owner, project=project, repo=repo, kind=None, run=run,
+                                                 state_dir=state_dir)
 
 
-def card(sh, repo, owner, project, number, items, status=BOARD_STATUS):
+def board_items(state):
+    """The numbers of the repository's issues already on the board, in one read of the seam."""
+    return set(state.read_all())
+
+
+def card(state, number, items, status=BOARD_STATUS):
     """Put issue `number` on the board in `status` if it has no card; `items` is the board index, mutated in place.
 
-    The move board.py would do with `--add`. An issue already on the board keeps the Status it has: the reconciler
-    owns it from there, not the filer. A board with no `status` option is a configuration this filer cannot invent
-    its way out of, so it raises and the loop holds the merge with the reason -- a filed task nobody can see is not
-    a filed task.
+    The move board.py would do with `--add`, asked of the seam: the add, then a Status write the read that follows
+    proves. An issue already on the board keeps the Status it has: the reconciler owns it from there, not the filer.
+    A board with no `status` option is a configuration this filer cannot invent its way out of, so it raises and the
+    loop holds the merge with the reason -- a filed task nobody can see is not a filed task. A write no read carries
+    raises the seam's `NotCarried`, and the card is never counted as made.
     """
     if str(number) in items:
         return
-    base = _base(sh, owner, project)
-    field = next((f for f in json.loads(sh(["gh", "api", f"{base}/fields?per_page=100"])) if f.get("name") == "Status"), None)
-    opts = {o["name"]["raw"] if isinstance(o["name"], dict) else o["name"]: o["id"] for o in field["options"]}
+    opts = state.binding.status_field()["opt"]
     if status not in opts:
         raise RuntimeError(f"the board has no Status option {status!r} (it has: {', '.join(opts)})")
-    iid = json.loads(sh(["gh", "api", f"repos/{repo}/issues/{number}"]))["id"]
-    item = json.loads(sh(["gh", "api", "--method", "POST", f"{base}/items", "--input", "-"],
-                         input=json.dumps({"type": "Issue", "id": iid})))["id"]
-    sh(["gh", "api", "--method", "PATCH", f"{base}/items/{item}", "--input", "-"],
-       input=json.dumps({"fields": [{"id": field["id"], "value": opts[status]}]}))
+    if not state.binding.item_id(number, add_missing=True):
+        raise RuntimeError(f"#{number} was not added to the board")
+    for k in range(state.binding.attempts):   # the items route is eventually consistent (#96): written again, then read back, as board.py does
+        if k and state.binding.backoff:
+            time.sleep(state.binding.backoff * (2 ** (k - 1)))
+        try:
+            state.write(number, status)
+            break
+        except RuntimeError:
+            if k == state.binding.attempts - 1:
+                raise
     items.add(str(number))
 
 
@@ -148,7 +175,8 @@ def file_debt(repo, pr, issue, review, head, runner=None, owner="", project="", 
         sh(["gh", "api", "--method", "POST", f"repos/{repo}/labels", "--input", "-"],
            input=json.dumps({"name": "debt", "color": "d93f0b", "description": "Review debt: a non-blocking finding"}))
     seen = json.loads(sh(["gh", "api", "--paginate", f"repos/{repo}/issues?labels=debt&state=all&per_page=100"]))
-    board = board_items(sh, owner, project, repo) if owner and project else set()
+    state = board_state(sh, owner, project, repo) if owner and project else None
+    board = board_items(state) if state else set()
     filed = []
     for f in findings:
         # the issue this finding owns: the one already filed for it, or the one opened here -- the card is owed in
@@ -165,7 +193,7 @@ def file_debt(repo, pr, issue, review, head, runner=None, owner="", project="", 
             filed.append(out["html_url"])
             number = out["number"]
         if owner and project:
-            card(sh, repo, owner, project, number, board, status)
+            card(state, number, board, status)
         elif not hit:
             print(f"#{number} filed without a card: no board (--owner/--project or SG_OWNER/SG_PROJECT)",
                   file=sys.stderr)

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for janitor rule F (report-only: open issue named by a fork commit subject "(#N)"), stubbed gh and a throwaway fork repo. usage: bash test-janitor-f.sh [path/to/janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/co" "$T/fork"; cp "$src" "$T/janitor.py"
+mkdir -p "$T/bin" "$T/st/auto" "$T/co" "$T/fork"; cp "$src" "$T/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in *issues/5*) echo open;; *issues/6*) echo closed;; *search/issues*) echo "${GH_PRS:-0}";; *) echo "";; esac

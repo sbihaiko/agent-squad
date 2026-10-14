@@ -5,7 +5,7 @@
 #  (B) the stub `gh` sleeps in the foreground: the call itself misses the deadline, and the pass names it.
 # Stubbed gh/board, a temp state dir; the live loop is never read or written. usage: bash test-janitor-deadline.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/caps/runs" "$T/caps/children"; cp "$src" "$T/s/janitor.py"
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs" "$T/caps/runs" "$T/caps/children"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 # Rule O reads the card of an issue whose dispatch marker a run left behind, so a pass reaches gh.
 echo run-pr > "$T/st/active-runs.txt"; mkdir -p "$T/co/runs/run-pr"; : > "$T/st/auto/disp-901"

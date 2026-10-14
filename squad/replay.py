@@ -26,6 +26,9 @@ class Replay:
         gone = self.project_drift(ev[0])
         if gone:
             raise ResumeRefused(gone)
+        rec = ev[0].get("state_binding")
+        if rec is not None and rec != e.state_binding:
+            raise ResumeRefused(f"the issue-state binding changed since the run started (recorded {rec}, now {e.state_binding}): restore it or start a new run")
         rec = ev[0].get("autonomy")      # a record from before ticket #180 has none and is not checked
         if rec and e.autonomy and rec != e.autonomy:
             raise ResumeRefused(f"the autonomy setting changed since the run started (recorded {rec}, now {e.autonomy}): restore it or start a new run")

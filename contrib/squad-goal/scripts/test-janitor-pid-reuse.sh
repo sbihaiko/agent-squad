@@ -2,7 +2,7 @@
 # A live but later process with a reused call pid is not the stranded run. The janitor frees its active entry, issue marker, and leases.
 # usage: bash test-janitor-pid-reuse.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-reused" "$T/caps/runs" "$T/caps/children"; cp "$src" "$T/s/janitor.py"
+mkdir -p "$T/s" "$T/st/auto" "$T/co/runs/run-reused" "$T/caps/runs" "$T/caps/children"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
 sleep 60 & reused=$!
 printf 'CHILD — GitHub issue #62 (bug; one PR):\n' > "$T/co/runs/run-reused/request.txt"
 printf '{"event": "call_start", "pid": %s, "started_at": 1}\n' "$reused" > "$T/co/runs/run-reused/record.jsonl"

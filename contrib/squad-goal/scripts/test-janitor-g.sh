@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for janitor rule G (READY-NOT-MERGED: APPROVE + clean + old, not merged -> one autopilot pass), stubbed gh and autopilot. usage: bash test-janitor-g.sh [path/to/janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/co"; cp "$src" "$T/janitor.py"; printf '#!/bin/bash\necho x >> %s/kicks\n' "$T" > "$T/autopilot.sh"
+mkdir -p "$T/bin" "$T/st/auto" "$T/co"; cp "$src" "$T/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"; printf '#!/bin/bash\necho x >> %s/kicks\n' "$T" > "$T/autopilot.sh"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
