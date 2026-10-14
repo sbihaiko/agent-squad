@@ -1811,7 +1811,8 @@ function loadMark(r){return r.cpu?`<span class=load title="this run owns ${r.cpu
 // ceiling is red, and that is `LOAD_ERR`, substituted when the page is served. A source the hub cannot see stays `?`:
 // a missing reading is not a high one. Red sits above the older, machine-wide amber of `#foot.warn`, and never replaces it.
 const LOAD_ERR=Number("__LOADERR__");
-const MODELRE=new RegExp("^"+__MODELID__+"$");   // the one model-id shape, substituted when the page is served (#221): the Add boxes test it, never a copy of it
+const MODELID_SRC="__MODELID__";   // the one model-id shape, substituted when the page is served (#221): the Add boxes test it, never a copy of it
+const MODELRE=new RegExp("^"+MODELID_SRC+"$");   // an unsubstituted page still evaluates: the placeholder is a string, never a bare name
 function ldNum(v){if(v===null||v===undefined||v===""||typeof v==="boolean")return null;const f=Number(v);return(f!==f||f<0)?null:Math.min(f,100)}
 function ldRound(f){const fl=Math.floor(f),fr=f-fl;return fr>.5?fl+1:fr<.5?fl:fl+(fl%2)}   // half to even, exactly as `:.0f` rounds
 function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!==null&&f>=LOAD_ERR}}

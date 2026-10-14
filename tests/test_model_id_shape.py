@@ -73,9 +73,10 @@ def _panel_shape(hub):
     Read from the source that serves it, never copied into this test: the defect was a second spelling of the shape, and
     a test that spells it again would agree with the source by construction."""
     src = HUB_PY.read_text()
-    assert 'const MODELRE=new RegExp("^"+__MODELID__+"$");' in src, "the page no longer carries the one shape"
+    assert 'const MODELID_SRC="__MODELID__";' in src, "the page no longer carries the one shape"
     assert '.replace("__MODELID__", json.dumps(MODEL_ID_SRC))' in src, "the served page never substitutes the shape"
     assert src.count("MODELRE.test(v)") == 2, "both Add boxes test it"
+    assert src.count("MODELID_SRC") == 2, "the shape is declared once and used once"
     assert not re.search(r"!/\(\^\[A-Za-z0-9\]\S*?\)\.test\(v\)\)", src), "a copy of the shape survives in the page"
     return re.compile("^" + hub.MODEL_ID_SRC + "$")
 
@@ -90,9 +91,11 @@ def _graph_ids():
     return out
 
 
-def test_the_shipped_graph_names_an_id_with_a_context_suffix():
-    """The guard below is about a real id, not a hypothetical one: the graph the loop starts holds this spelling."""
-    assert [m for m in _graph_ids() if re.search(r"\[\w+\]$", m)], _graph_ids()
+def test_the_shape_takes_the_context_suffix_the_gateway_serves(hub):
+    """The ids are the gateway's own, read from its `/v1/models`: the graph's queue is the owner's and moves."""
+    for m in SUFFIXED:
+        assert hub.MODEL_ID.match(m), f"the save refuses {m}"
+        assert _panel_shape(hub).match(m), f"an Add box refuses {m}"
 
 
 def test_the_save_accepts_a_router_queue_that_names_a_suffixed_id(hub, checkout):
