@@ -99,7 +99,11 @@ def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
 
     A matrix made one commit start two jobs that queued behind each other for two runners, and a check no runner picks
     up answers nothing. The group is the branch a push carries, so one branch's pushes share it. Only a landing pushes,
-    and a landing keeps its evidence, so nothing is cancelled and the group needs no `github.head_ref`.
+    and a landing keeps its evidence, so the group needs no `github.head_ref`.
+
+    `cancel-in-progress: false` alone is not enough. The group's default queue holds one pending run, so the arrival of
+    a third landing cancels the pending second one and the middle landing loses its evidence (GitHub Actions workflow
+    syntax, `concurrency.queue`, default `single`). `queue: max` holds every pending landing until it runs, in order.
     """
     import yaml
 
@@ -107,11 +111,15 @@ def test_one_commit_starts_one_job_and_a_superseded_head_waits_for_no_runner():
     assert len(wf["jobs"]) == 1, "one commit starts one job"
     job = next(iter(wf["jobs"].values()))
     assert "matrix" not in (job.get("strategy") or {}), "a matrix splits one commit into two jobs waiting for two runners"
-    group = wf["concurrency"]["group"]
+    con = wf["concurrency"]
+    group = con["group"]
     assert "github.ref_name" in group and "github.head_ref" not in group, group
     assert not re.search(r"github\.ref\b", group), f"{group}: the group names the branch, not the full ref"
-    cancel = wf["concurrency"]["cancel-in-progress"]
-    assert cancel is False, "a landing on dev, stg or main is never cancelled, and no other push starts a run"
+    assert con["cancel-in-progress"] is False, "a landing on dev, stg or main is never cancelled, and no other push starts a run"
+    assert con.get("queue") == "max", (
+        "the group's default queue holds one pending run, so the next landing cancels a pending one and the middle "
+        "landing loses its evidence; `queue: max` holds every pending landing until it runs"
+    )
 
 
 E2E = ROOT / "tests" / "test_gui_test_e2e.py"
