@@ -151,8 +151,9 @@ uv run ruff check squad tests && uv run mypy squad
 bash contrib/squad-goal/scripts/shell-suites.sh   # the loop's own suites
 ```
 
-CI runs the first four on Python 3.11 and 3.13 for every push and every pull request
-(`.github/workflows/ci.yml`). A red check is a defect of the change, never of the check.
+CI runs the first four on Python 3.11 and 3.13 on a landing, a push to `dev`, `stg` or `main`, and on no work-branch
+push and no pull request (`docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md`); a work branch is proven by the
+local gate above. A red check is a defect of the change, never of the check.
 
 ## Troubleshooting
 

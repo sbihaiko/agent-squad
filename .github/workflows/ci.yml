@@ -2,18 +2,18 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: ["dev", "stg", "main"]
 
+# CI runs only on a landing, a push to dev, stg or main (#398). A work-branch push starts no run and a pull request
+# starts none; a work branch is proven by the local fast gate before it lands.
 # One commit starts one job, and that job runs both supported Pythons in order (#149). A matrix split one commit into
 # two jobs that waited behind each other for two runners, and a check no runner picks up answers nothing.
-# A push to dev, stg, main or a work branch starts the run; a pull request starts none (#354). The group is the branch,
-# so one branch's pushes share it. A superseded work-branch push is cancelled; a landing on dev, stg or main is never
-# cancelled, so every landing keeps its evidence.
+# The group is the branch, so one branch's pushes share it, and nothing is cancelled: a landing keeps its evidence.
 # No job outlives the twenty minutes it gives itself (#128). The gate is the fast battery, `-m "not heavy"`; the full
 # suite runs before a merge.
 concurrency:
   group: ci-${{ github.ref_name }}
-  cancel-in-progress: ${{ !contains(fromJSON('["main", "dev", "stg"]'), github.ref_name) }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
