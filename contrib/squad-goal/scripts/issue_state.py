@@ -302,12 +302,15 @@ class State:
     def group_run(self, run, children):
         """One parent issue that names `run`, with each of `children` linked to it as a sub-issue, so the platform
         rolls the run's progress up. A run with fewer than two distinct children has no parent: None, and nothing
-        is written. A child that is itself a run parent is refused (`RunParentChild`), before anything is written. The run's parent is found by its title and reused, never created twice. Returns its number."""
+        is written. A child that already has another parent (a spec) is left out, and counts as no child. A child that is itself a run parent is refused (`RunParentChild`), before anything is written. The run's parent is found by its title and reused, never created twice. Returns its number."""
         kids = sorted({int(c) for c in children})
         if len(kids) < 2: return None
         for k in kids:
             if is_run_parent(self.binding.title(k)): raise RunParentChild(k)
-        parent = self.binding.parent_of(run) or self.binding.create_parent(run)
+        found = self.binding.parent_of(run)
+        kids = [k for k in kids if self.binding.parent(k) in (None, found)]   # GitHub gives an issue one parent: a child under a spec is left out (#368)
+        if len(kids) < 2: return found
+        parent = found or self.binding.create_parent(run)
         for k in kids: self.link(parent, k)
         return parent
 
@@ -623,6 +626,11 @@ class BoardBinding:
     def title(self, issue):
         """The title of `issue`, in one read."""
         return json.loads(self.api(f"repos/{self.repo}/issues/{issue}")).get("title") or ""
+
+    def parent(self, issue):
+        """The number of the parent issue of `issue`, None when it has none, in one read."""
+        u = json.loads(self.api(f"repos/{self.repo}/issues/{issue}")).get("parent_issue_url") or ""
+        return int(u.rstrip("/").rsplit("/", 1)[1]) if u else None
 
     def create_parent(self, run):
         """One POST of the parent issue, titled for the run. Returns its number, which is remembered for `parent_of`."""

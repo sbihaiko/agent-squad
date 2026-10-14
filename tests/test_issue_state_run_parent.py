@@ -146,3 +146,21 @@ def test_a_parent_whose_links_did_not_land_is_found_again_without_paging_the_iss
     assert repo.created == [f"Squad run {RUN}"], "the retry reuses the parent, never creates a second"
     assert repo.list_reads == reads, "the parent is known from the first pass: no page of every issue"
     assert [c["number"] for c in repo.subs[parent]] == [10, 11]
+
+
+def test_a_child_that_already_has_a_parent_is_left_out(tmp_path):
+    """GitHub gives an issue one parent. A child that is a sub-issue of a spec can not be linked, so it is left out (#368)."""
+    repo = repo_with((10, 11, 12))
+    for n in (10, 11):
+        repo.issues[n]["parent_issue_url"] = "https://api.github.com/repos/x/y/issues/352"
+    assert seam(tmp_path, repo).group_run(RUN, [10, 11]) is None
+    assert repo.created == [] and repo.link_posts == [], "no parent is written for children that already have one"
+    assert seam(tmp_path, repo).group_run(RUN, [10, 11, 12]) is None, "one free child is not a group"
+    assert repo.created == []
+
+
+def test_only_the_children_with_no_parent_are_linked(tmp_path):
+    repo = repo_with((10, 11, 12))
+    repo.issues[10]["parent_issue_url"] = "https://api.github.com/repos/x/y/issues/352"
+    parent = seam(tmp_path, repo).group_run(RUN, [10, 11, 12])
+    assert parent and [sid for _, sid in repo.link_posts] == [1011, 1012]
