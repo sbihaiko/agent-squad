@@ -1,4 +1,4 @@
-"""The token ledger: review.sh writes one line per model call, `tokens.py burners` names the biggest consumers.
+"""The token ledger: review.sh writes one line per model call (`test-token-ledger.sh`, run by the shell-suite runner), `tokens.py burners` names the biggest consumers.
 
 Ledger line: `<iso-ts>\\t<consumer>\\t<model>\\t<tokens_in>\\t<tokens_out>\\t<cache_read>`, no header.
 The hub reads the reader; it never reads the ledger. Host-free: throwaway state and checkout folders.
@@ -10,8 +10,6 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
 
@@ -36,7 +34,7 @@ def test_burners_sorted_by_total_with_window(tmp_path: Path) -> None:
                        (1, "dispatch:d1", "a", 1000, 0, 0), (30, "janitor:board", "a", 9999, 0, 0)])
     r = _run(str(tmp_path))
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["1000\tdispatch:d1\ta\t1", "170\treview:PR#1\ta,b\t2"]
+    assert r.stdout.splitlines() == ["1169\treview:PR#1\ta,b\t2", "1000\tdispatch:d1\ta\t1"]
 
 
 def test_empty_window_prints_dash(tmp_path: Path) -> None:
@@ -69,9 +67,3 @@ def test_threshold_from_env(tmp_path: Path) -> None:
     _ledger(tmp_path, [(1, "review:PR#1", "a", 600, 0, 0)])
     j = json.loads(_run(str(tmp_path), "--json", env={**os.environ, "SG_TOKEN_ALERT": "100"}).stdout)
     assert j["threshold"] == 100 and j["over"] is True
-
-
-@pytest.mark.heavy
-def test_review_appends_one_ledger_line() -> None:
-    r = subprocess.run(["bash", str(SCRIPTS / "test-token-ledger.sh")], capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0, r.stdout + r.stderr

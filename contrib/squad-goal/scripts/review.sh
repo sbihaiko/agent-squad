@@ -153,13 +153,24 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)
     case $m in
-      claude:*) cap claude -p --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
+      claude:*) cap claude -p --output-format json --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
       grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode plan --disable-web-search) > "$out" 2>"$SG_STATE/review-$pr.err";;
       gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --print-timeout 1800s -p "$(cat "$p")") > "$out" 2>"$SG_STATE/review-$pr.err";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" -o "$out" - < $p > "$SG_STATE/review-$pr.err" 2>&1;;
     esac
     rc=$?
+    # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:PR#<pr>,
+    # review:PR#<pr>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens; a plain
+    # answer (an error line, an old CLI) passes through untouched and logs nothing. grok, agy and codex print no token count on
+    # the plain path this script reads, so they log 0 (the call is still counted and named).
+    tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:PR#$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:PR#$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
+    tu=""
+    case $m in claude:*) tu=$(jq -r 'select(type=="object" and (.result|type)=="string" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$out" 2>/dev/null)
+      [ -n "$tu" ] && { jq -r .result "$out" > "$out.r" 2>/dev/null && mv "$out.r" "$out"; };;
+      *) tu="0	0	0";;
+    esac
+    [ -n "$tu" ] && printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"
     [ -e "$p.superseded" ] && { echo "VERDICT: BLOCKED ($lbl head moved during the review)" > "$out"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then

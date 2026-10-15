@@ -29,7 +29,7 @@ J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"; L="$T/st/token-usage.tsv"
 out=$(bash "$T/s/review.sh" 7 8); rc=$?
 [ $rc = 0 ] && head -1 "$T/st/review-7.md" | grep -qx 'VERDICT: APPROVE' && ok "json output still yields the verdict" || ko "verdict: rc=$rc '$(head -1 "$T/st/review-7.md")'"
-[ "$(wc -l < "$L" 2>/dev/null)" = 1 ] && ok "one call, one line" || ko "line count: $(cat "$L" 2>/dev/null)"
+[ "$(wc -l < "$L" 2>/dev/null | tr -d " ")" = 1 ] && ok "one call, one line" || ko "line count: $(cat "$L" 2>/dev/null)"
 awk -F'\t' '$1 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+/ && $2=="review:PR#7" && $3=="claude:claude-opus-5-5" && $4==120 && $5==30 && $6==400 && NF==6 {f=1} END{exit !f}' "$L" 2>/dev/null && ok "line is ts, consumer, model, in, out, cache_read" || ko "format: $(cat "$L" 2>/dev/null)"
 rm -f "$T/st/review-7.sha"; bash "$T/s/review.sh" 7 8 >/dev/null
 [ "$(cut -f2 "$L" | tail -1)" = "review:PR#7#2" ] && ok "second call on a PR is #2" || ko "second: $(cat "$L")"
