@@ -40,7 +40,7 @@ rm -f "$T/st/auto/bug-426"
 
 # A live child keeps its exact issue busy, whether its request says Issue #N or gui/N.
 live() { printf '%s\n' "$1" > "$T/co/runs/live/record.jsonl"; printf '%s\n' "$T/co/runs/live" > "$T/st/active-runs.txt"; }
-for text in 'Issue #426 is data' 'gui/426'; do
+for text in 'Issue #426 is data' 'gui/426' 'Fix GitHub issue 426 in the repository' 'github issues 426, 427'; do
   live "{\"event\":\"spawn_accepted\",\"prompt\":\"$text\"}"
   r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
   case "$r" in *"AUTOBUG would dispatch"*) ko "c autobug missed live '$text': '$r'";; *) ok "c autobug reads live '$text'";; esac
