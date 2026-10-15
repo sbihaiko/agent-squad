@@ -3,6 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
+import router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2839,7 +2840,7 @@ def _graph_doc():
 def router_get():
     """The router's own chain (#95): the models the dispatch envelope allows, in the order it lists them. It is the
     same list the router reads to name a child's model, and the same one a request outside of which is refused whole."""
-    return [bare_id(m) for m in (envelope_of().get("models") or [])]
+    return [bare_id(m) for m in router_envelope.envelope_models(_graph_doc())]
 
 
 def router_set(ids):
@@ -2874,19 +2875,13 @@ def envelope_of():
         if n.get("kind") == "dispatch":
             a = n.get("allow") or {}
             return {"node": n.get("name"), "graph": d.get("name"),
-                    "models": a.get("models") or [], "efforts": a.get("efforts") or [],
+                    "models": router_envelope.envelope_models(d), "efforts": a.get("efforts") or [],
                     "tools": a.get("tools") or [], "workspaces": a.get("workspaces") or [],
                     "max_children": n.get("max_children"), "max_parallel": n.get("max_parallel"),
                     "max_depth": n.get("max_depth")}
     return {}
 
 
-def envelope_blocked(chain, envelope):   # {ids of the chain the router's dispatch envelope does not allow}: one rule, mirrored in launch.py; an alias, a `claude:` prefix and a `claude-` provider spelling name the same model
-    def key(m):
-        m = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"}.get(m.removeprefix("claude:"), m.removeprefix("claude:"))
-        return m if m.startswith(("claude-sonnet", "claude-opus", "claude-haiku", "claude-fable")) else m.removeprefix("claude-")
-    allowed = {key(m) for m in envelope}
-    return [m for m in chain if allowed and key(m) not in allowed]
 def models_get():
     """The three chains as the panel reads them: bare ids, so one model is one row in every chain and in the box.
 
@@ -2899,7 +2894,7 @@ def models_get():
             "off": {k: {bare_id(m): True for m in ok} for k, ok in off_of(d).items()},
             "known": known_models(d), "last_coding": last_coding_model(), "envelope": envelope_of(),
             "router_models": router_get(), "router_known": router_known(),
-            "blocked": {k: envelope_blocked([bare_id(m) for m in d.get(k, [])], router_get()) for k in ("coding_models",)}}
+            "blocked": {k: router_envelope.envelope_blocked([bare_id(m) for m in d.get(k, [])], router_get()) for k in ("coding_models",)}}
 def models_set(new):
     """Replace the three role chains in models.json; every other key is kept. Atomic write, so a reader never sees half a file."""
     # The panel posts back whatever models_get() handed it, so every read-only field it carries comes back here: `known`

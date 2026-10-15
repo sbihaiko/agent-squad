@@ -69,8 +69,8 @@ def test_the_loop_names_a_first_coding_model_the_envelope_blocks(tmp_path):
 
 
 @pytest.mark.heavy   # launch.py waits for the run folder, over a second
-def test_the_loop_stays_quiet_when_the_first_coding_model_fits_the_envelope(tmp_path):
-    r = _launch(tmp_path, ["claude-sonnet-5-5", "grok-4.7"], ENVELOPE)
+def test_the_loop_stays_quiet_when_every_coding_model_fits_the_envelope(tmp_path):
+    r = _launch(tmp_path, ["claude-sonnet-5-5", "claude-opus-5-5"], ENVELOPE)
     assert "router envelope" not in r.stderr, r.stdout + r.stderr
 
 

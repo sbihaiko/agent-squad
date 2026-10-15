@@ -41,6 +41,7 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
+    shutil.copy(SCRIPTS / "router_envelope.py", s / "router_envelope.py")
     models = {"coding_models": ["claude-sonnet-5-5", "test-model"], "review_models": ["claude:claude-opus-5-5"],
               "vision_models": ["claude-sonnet-5-5"], "hours": hours or {}}
     if off:

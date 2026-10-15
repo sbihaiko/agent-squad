@@ -64,12 +64,6 @@ def _off_ids():   # {bare model id: chain}: hub.py's model_off (the switch count
         for mid in (mdoc.get("hours") or {}).get(chain) or {}:
             if mid in (mdoc.get(chain) or []) and not _in_hours(chain, mid): out.setdefault(mid.removeprefix("claude:"), chain + " hours window")
     return out
-def envelope_blocked(chain, envelope):   # {ids of the chain the router's dispatch envelope does not allow}: one rule, mirrored in launch.py; an alias, a `claude:` prefix and a `claude-` provider spelling name the same model
-    def key(m):
-        m = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"}.get(m.removeprefix("claude:"), m.removeprefix("claude:"))
-        return m if m.startswith(("claude-sonnet", "claude-opus", "claude-haiku", "claude-fable")) else m.removeprefix("claude-")
-    allowed = {key(m) for m in envelope}
-    return [m for m in chain if allowed and key(m) not in allowed]
 def _graph_path(workflow):   # mirrors squad/workflows.py resolve: no id, `default` or `dynamic` is the owner's default file, else the dynamic seed
     folder = cwd / "docs" / "squad" / "workflows"; sq = pathlib.Path(squad)
     if workflow in (None, "", "default", "dynamic"):
@@ -97,11 +91,15 @@ if off_ids:
 # takes an allowed id and the "Coding model:" line loses in silence (#433). Say so by name; the run still starts, and the owner
 # decides whether the envelope or the chain changes.
 if primary:
-    try: _env = [m for n in json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text()).get("nodes", []) if n.get("kind") == "dispatch" for m in (n.get("allow") or {}).get("models") or []]
+    import importlib.util   # the shared envelope module sits beside this script, as hub.py's does (#436)
+    _spec = importlib.util.spec_from_file_location("router_envelope", here / "router_envelope.py")
+    router_envelope = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(router_envelope)
+    try: _env = router_envelope.envelope_models(json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text()))
     except (OSError, ValueError): _env = []
-    if envelope_blocked([primary], _env):
-        print(f"warning: {primary} is not in the router envelope (allow.models of the dispatch node: {', '.join(_env)}); the router cannot request it, "
-              "so the child runs an allowed model instead of the Coding model line. Add it to the Router queue in the hub's models panel, or change the chain.", file=sys.stderr)
+    for _m in router_envelope.envelope_blocked([m for m in cm if _may_run("coding_models", m)], _env):   # every eligible model, the primary and each fallback
+        print(f"warning: {_m} is not in the router envelope (allow.models of the dispatch node: {', '.join(_env)}); the router cannot request it, "
+              + ("so the child runs an allowed model instead of the Coding model line" if _m == primary else "so this fallback is never requested")
+              + ". Add it to the Router queue in the hub's models panel, or change the chain.", file=sys.stderr)
 
 co = os.environ.get("SG_CHECKOUT")
 if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTHER_CWD"):
