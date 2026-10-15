@@ -390,7 +390,7 @@ def pr_count(n):   # how many remote work branches name the issue: one exists on
     return str(len(work_branches().get(str(n), [])))
 def branch_ahead_count(n):   # how many of its work branches hold commits the landing branch lacks
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("ahead", "diverged")))
-def pr_merged_count(n):   # how many of its work branches are in the landing branch (the delivery, #355): the tip is an ancestor of dev
+def branch_in_dev_count(n):   # how many of its work branches are in the landing branch: the tip is an ancestor of dev
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("behind", "identical")))
 _opr = None
 def all_pulls():   # the one read of the open-PR route, drafts included (a draft's branch is a live parent for the retarget rule, #285)
@@ -558,7 +558,7 @@ def reconcile_board():
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         if branch_ahead_count(n) != "0": set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)   # the branch's own state sets the column (#358): no pull request is read
-        if pr_merged_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Merging", "Testing"):   # a fresh branch is in dev too, so only a card that reached review is delivered by it
+        if branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Landing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)

@@ -9,8 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "868f8c99fdf44a50e6fef618a01d88ba1369456917b5691192c6a1892d41f69e"
-SHIPPED = ["Backlog", "Todo", "Doing", "Code Complete", "Merging", "Testing", "Closed", "Abandoned"]
+PINNED = "039335dee82c74d591d210d74ec6d1161df01918e6d93f4267a8412f89b86742"
+SHIPPED = ["Backlog", "Todo", "Doing", "Code Complete", "Landing", "Testing", "Closed", "Abandoned"]
 
 
 def _load(directory):
@@ -65,17 +65,18 @@ def test_the_pin_command_exits_one_on_a_mismatch(tmp_path):
     ({"spec": True}, "Backlog", None),
     ({}, "Todo", None),
     ({"run_live": True}, "Doing", None),
-    ({"pr_open": True}, "Code Complete", None),
-    ({"pr_open": True, "pr_green": True}, "Merging", None),
-    ({"merged": True}, "Testing", None),
-    ({"merged": True, "closed": True}, "Closed", None),
+    ({"review_wait": True}, "Doing", None),
+    ({"wave_branch": True}, "Code Complete", None),
+    ({"landing": True}, "Landing", None),
+    ({"dev_ci": True}, "Testing", None),
+    ({"dev_ci": True, "closed": True}, "Closed", None),
     ({"closed": True}, "Closed", None),
     ({"abandoned": True}, "Abandoned", None),
     ({"owner": True}, "Backlog", "frozen:owner"),
-    ({"owner": True, "pr_open": True}, "Code Complete", "frozen:owner"),
+    ({"owner": True, "wave_branch": True}, "Code Complete", "frozen:owner"),
     ({"owner": True, "run_live": True}, "Doing", "frozen:owner"),
     ({"gated": True}, "Backlog", "frozen:dependency"),
-    ({"gated": True, "pr_open": True}, "Code Complete", "frozen:dependency"),
+    ({"gated": True, "wave_branch": True}, "Code Complete", "frozen:dependency"),
 ])
 def test_each_card_lands_in_the_column_the_table_names(columns, facts, column, freeze):
     assert columns.column_for(facts) == (column, freeze)

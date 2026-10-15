@@ -1,6 +1,6 @@
 #!/bin/bash
 # The reconciler writes the shipped vocabulary (ADR-0141): with SG_BOARD_VOCAB=shipped the janitor writes Backlog, Todo,
-# Doing, Code Complete, Merging, Testing, Closed and Abandoned, and never Blocked, In Progress, Done or Open Specs. An owner
+# Doing, Code Complete, Landing, Testing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs or Merging. An owner
 # label is a freeze marker over the column the work reached (the frozen:owner label), never a column of its own, and a spec
 # opens in Backlog. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-board-vocab.sh [janitor.py]
@@ -8,6 +8,23 @@ src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
 cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
+python3 - "$T/s/board-definition.json" <<'PY'
+import json
+import sys
+
+statuses = {status["name"]: status["fact"] for status in json.load(open(sys.argv[1]))["statuses"]}
+expected = {
+    "Doing": "A live run holds it; a review wait is marked here",
+    "Code Complete": "A child is in the wave branch",
+    "Landing": "The wave is approved and the push to dev is in progress",
+    "Testing": "CI runs on the dev tip",
+    "Closed": "In dev",
+}
+if any(statuses.get(name) != fact for name, fact in expected.items()) or "Merging" in statuses or any("pull request" in fact.lower() for fact in statuses.values()):
+    print("FAIL ADR-0145 board vocabulary", file=sys.stderr)
+    sys.exit(1)
+PY
+[ $? = 0 ] && ok "ADR-0145 columns name the wave and dev path" || ko "ADR-0145 board vocabulary"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in
@@ -73,5 +90,5 @@ has '^STATUS o 4 Closed 2105$' && ok "a closed issue: Closed" || ko "#2105 not C
 has '^STATUS o 4 Abandoned 2106$' && ok "a wontfix issue: Abandoned" || ko "#2106 not Abandoned: $(bc)"
 ! has ' 2107$' && ok "a startable card already in Todo is not written" || ko "#2107 rewritten: $(bc)"
 ! has ' 2108$' && ok "a spec already in Backlog is not written" || ko "#2108 rewritten: $(bc)"
-! has 'Blocked\|In Progress\|Done\|Open Specs' && ok "no write names Blocked, In Progress, Done or Open Specs" || ko "an old option was written: $(bc)"
+! has 'Blocked\|In Progress\|Done\|Open Specs\|Merging' && ok "no write names Blocked, In Progress, Done, Open Specs or Merging" || ko "an old option was written: $(bc)"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

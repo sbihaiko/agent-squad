@@ -23,11 +23,11 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "868f8c99fdf44a50e6fef618a01d88ba1369456917b5691192c6a1892d41f69e"
+PIN_SHA256 = "039335dee82c74d591d210d74ec6d1161df01918e6d93f4267a8412f89b86742"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.
-SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None}
+SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Landing"}
 FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
 
 
@@ -54,14 +54,15 @@ def column_for(facts):
     """(column, freeze label or None) the shipped table names for one open or closed issue's facts.
 
     The furthest the work reached sets the column; a freeze never moves it (the definition's own rule). Facts are booleans,
-    each missing one false: abandoned, closed, merged (a PR naming the issue merged into the base), pr_open, pr_green (that
-    PR is mergeable and unheld), run_live, spec, owner (an owner label), gated (another item gates it)."""
+    each missing one false: abandoned, closed, dev_ci, landing, wave_branch, run_live, spec, owner (an owner label), gated
+    (another item gates it), and review_wait (a marker on Doing)."""
     freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
     if facts.get("abandoned"): return "Abandoned", freeze
     if facts.get("closed"): return "Closed", freeze
-    if facts.get("merged"): return "Testing", freeze
-    if facts.get("pr_open"): return ("Merging" if facts.get("pr_green") else "Code Complete"), freeze
-    if facts.get("run_live"): return "Doing", freeze
+    if facts.get("dev_ci"): return "Testing", freeze
+    if facts.get("landing"): return "Landing", freeze
+    if facts.get("wave_branch"): return "Code Complete", freeze
+    if facts.get("run_live") or facts.get("review_wait"): return "Doing", freeze
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
 
@@ -204,27 +205,3 @@ def terminal_comment(column, facts):
         return None
     return f"{TERMINAL_TAG}\n{body}\n"
 
-
-# A pull request's state, from the loop's own review line for its current head (revci.sh prints `#<pr> <sha9> <mergeable_state>
-# CI=<conclusion:count,...> <verdict>`), so the column costs no read of its own (#244).
-PR_RED_BADGE = "pr:red"   # a Merging card whose PR turned red keeps its column and carries this label: a marker, never a move back
-PR_HOLD_LABELS = {"hold", "needs-human"}   # the labels autopilot.sh holds a PR on
-RED_CHECKS = ("failure", "timed_out", "cancelled", "action_required", "startup_failure")
-
-
-def pr_green(line, labels):
-    """True when the review line says the PR is green, mergeable and unheld: GitHub calls it clean, every check finished
-    and none red, the review approved, and no hold label. A missing line is no review given, so not green."""
-    f = (line or "").split()
-    if len(f) < 4 or not f[3].startswith("CI="): return False
-    checks = f[3][3:]
-    if f[2] != "clean" or checks in ("", "none") or any(c in checks for c in RED_CHECKS): return False
-    return "APPROVE" in " ".join(f[4:]) and not (set(labels) & PR_HOLD_LABELS)
-
-
-def pr_column(green, have):
-    """(column, badge or None) for an issue an open PR names: green -> Merging; not green -> Code Complete, except a card
-    already in Merging, which keeps its column and carries the badge (a card never moves back)."""
-    if green: return "Merging", None
-    if have == "Merging": return "Merging", PR_RED_BADGE
-    return "Code Complete", None

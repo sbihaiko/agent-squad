@@ -147,7 +147,7 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 # The decision, not a starting point: the eight shipped statuses and the one open-branch lane (#247, #384), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Merging": "#b087f9",
+    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Landing": "#b087f9",
     "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open branches": "#5aa9ff",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later

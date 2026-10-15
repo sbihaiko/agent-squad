@@ -9,16 +9,17 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "scripts"
 SCRIPT = SCRIPTS / "board_migrate.py"
-OLD = ("Blocked", "In Progress", "Done", "Open Specs")
+OLD = ("Blocked", "In Progress", "Done", "Open Specs", "Merging")
 ITEMS = [
     {"n": 1, "st": "Open Specs", "s": "OPEN", "l": []},
     {"n": 2, "st": "Open Specs", "s": "OPEN", "l": ["spec"]},
-    {"n": 3, "st": "Blocked", "s": "OPEN", "l": ["needs-human"], "facts": {"pr_open": True}},
+    {"n": 3, "st": "Blocked", "s": "OPEN", "l": ["needs-human"], "facts": {"wave_branch": True}},
     {"n": 4, "st": "Blocked", "s": "OPEN", "l": []},
     {"n": 5, "st": "In Progress", "s": "OPEN", "l": []},
     {"n": 6, "st": "Done", "s": "CLOSED", "l": []},
     {"n": 7, "st": "Todo", "s": "OPEN", "l": []},
     {"n": 8, "st": "Doing", "s": "OPEN", "l": []},
+    {"n": 9, "st": "Merging", "s": "OPEN", "l": []},
 ]
 
 
@@ -49,17 +50,18 @@ def test_a_blocked_card_lands_where_its_work_reached_with_the_owner_marker(mig):
     assert _move(plan, 4)["new"] == "Backlog"
 
 
-def test_in_progress_and_done_take_their_shipped_names(mig):
+def test_in_progress_done_and_merging_take_their_shipped_names(mig):
     plan = mig.plan(ITEMS)
 
     assert _move(plan, 5)["new"] == "Doing"
     assert _move(plan, 6)["new"] == "Closed"
+    assert _move(plan, 9)["new"] == "Landing"
 
 
 def test_a_card_on_a_shipped_column_is_never_moved(mig):
     plan = mig.plan(ITEMS)
 
-    assert {m["card"] for m in plan["moves"]} == {1, 2, 3, 4, 5, 6}
+    assert {m["card"] for m in plan["moves"]} == {1, 2, 3, 4, 5, 6, 9}
 
 
 def test_the_plan_lists_every_old_option_for_removal_after_the_moves(mig):
@@ -72,8 +74,8 @@ def test_the_plan_lists_every_old_option_for_removal_after_the_moves(mig):
 def test_removal_is_refused_with_counts_while_a_card_carries_an_option(mig):
     counts = mig.carried(ITEMS)
 
-    assert counts == {"Blocked": 2, "In Progress": 1, "Done": 1, "Open Specs": 2}
-    assert "Blocked: 2" in mig.refusal(counts) and "Open Specs: 2" in mig.refusal(counts)
+    assert counts == {"Blocked": 2, "In Progress": 1, "Done": 1, "Open Specs": 2, "Merging": 1}
+    assert "Blocked: 2" in mig.refusal(counts) and "Merging: 1" in mig.refusal(counts)
 
 
 def test_removal_is_allowed_once_no_card_carries_an_old_option(mig):
@@ -95,7 +97,8 @@ def test_the_dry_run_prints_every_move_and_removal_and_writes_nothing(tmp_path):
     assert "dry run: nothing is written" in out
     assert "MOVE #1 Open Specs -> Backlog +spec" in out
     assert "MOVE #3 Blocked -> Code Complete +frozen:owner" in out
-    assert out.count("MOVE #") == 6
+    assert "MOVE #9 Merging -> Landing" in out
+    assert out.count("MOVE #") == 7
     assert all(f"REMOVE option {o}" in out for o in OLD)
     assert sorted(p.name for p in tmp_path.iterdir()) == sorted(before + ["items.json"])
 

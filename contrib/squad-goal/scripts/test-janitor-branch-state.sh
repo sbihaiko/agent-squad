@@ -1,7 +1,7 @@
 #!/bin/bash
 # The card column comes from the work branch's state, never from a pull request. With SG_BOARD_VOCAB=shipped the janitor reads
 # the remote work branches (`fix|gui/<n>-...`) and how each stands against the landing branch (dev): a branch ahead of dev puts
-# its card in Code Complete; a branch in dev puts a card that reached Code Complete in Closed (Done). An open pull request or a
+# its card in Code Complete; a branch in dev puts a card that reached Code Complete or Landing in Closed (Done). An open pull request or a
 # merged one, whatever its state, moves no card. Stubbed gh and board.sh; a temp state dir, the live board is never touched.
 # usage: bash test-janitor-branch-state.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -29,18 +29,22 @@ case "$a" in
     printf '32 bbbbbbbbb2 main fix/2207-x 2099-01-01T00:00:00Z\t\t2207\n';;
   *--include*repos/x/y/branches/gui%2F2202-landed*) echo '{"commit":{"sha":"sha2202"}}';;
   *--include*commits/sha2202/check-runs*) echo '{"check_runs":[{"name":"test","status":"completed","conclusion":"success"}]}';;
+  *--include*repos/x/y/branches/gui%2F2208-landed*) echo '{"commit":{"sha":"sha2208"}}';;
+  *--include*commits/sha2208/check-runs*) echo '{"check_runs":[{"name":"test","status":"completed","conclusion":"success"}]}';;
   *repos/x/y/branches*)
-    printf 'fix/2201-ahead sha2201\ngui/2202-landed sha2202\ngui/2203-landed sha2203\nmain shamain\n';;
+    printf 'fix/2201-ahead sha2201\ngui/2202-landed sha2202\ngui/2203-landed sha2203\ngui/2208-landed sha2208\nmain shamain\n';;
   *commits/sha2202/check-runs*) echo 'test: success';;
+  *commits/sha2208/check-runs*) echo 'test: success';;
   *compare/dev...sha2201*) echo ahead;;
   *compare/dev...sha2202*) echo behind;;
   *compare/dev...sha2203*) echo behind;;
+  *compare/dev...sha2208*) echo behind;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
-    for n in 2201:Doing 2202:"Code Complete" 2203:Doing 2206:Doing 2207:"Code Complete"; do printf '%s\t%s\thttps://api.github.com/repos/x/y\n' "${n%%:*}" "${n#*:}"; done;;
+    for n in 2201:Doing 2202:"Code Complete" 2203:Doing 2206:Doing 2207:"Code Complete" 2208:Landing; do printf '%s\t%s\thttps://api.github.com/repos/x/y\n' "${n%%:*}" "${n#*:}"; done;;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2201 2202 2203 2206 2207; do
+    sep=""; for n in 2201 2202 2203 2206 2207 2208; do
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}' "$sep" "$n" "$n"; sep=,; done
     printf ']}}}}';;
   *issues/22*/labels*) echo '[]';;
@@ -53,8 +57,9 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Code Complete 2201$' && ok "a work branch ahead of dev puts the card in Code Complete" || ko "#2201 not Code Complete: $(bc) $o"
 has '^STATUS o 4 Closed 2202$' && ok "a branch in dev puts a Code Complete card in Closed (Done)" || ko "#2202 not Closed: $(bc)"
-! has '\(Closed\|Code Complete\|Merging\) 2203$' && ok "a branch in dev does not close a card still in Doing (a fresh branch is in dev too)" || ko "#2203 moved: $(bc)"
-! has '\(Closed\|Code Complete\|Merging\|Testing\) 2206$' && ok "an open pull request moves no card to Code Complete" || ko "#2206 moved over a PR: $(bc)"
-! has '\(Closed\|Merging\|Testing\) 2207$' && ok "a merged pull request moves no card to Closed" || ko "#2207 moved over a PR: $(bc)"
+has '^STATUS o 4 Closed 2208$' && ok "a branch in dev puts a Landing card in Closed (ADR-0145 rule 12)" || ko "#2208 not Closed: $(bc)"
+! has '\(Closed\|Code Complete\|Landing\) 2203$' && ok "a branch in dev does not close a card still in Doing (a fresh branch is in dev too)" || ko "#2203 moved: $(bc)"
+! has '\(Closed\|Code Complete\|Landing\|Testing\) 2206$' && ok "an open pull request moves no card to Code Complete" || ko "#2206 moved over a PR: $(bc)"
+! has '\(Closed\|Landing\|Testing\) 2207$' && ok "a merged pull request moves no card to Closed" || ko "#2207 moved over a PR: $(bc)"
 /usr/bin/grep -q 'repos/x/y/branches' "$T/gh.calls" && ok "the work branches are read" || ko "no branch read: $(cat "$T/gh.calls")"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

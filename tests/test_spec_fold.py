@@ -33,7 +33,7 @@ CASES = [
     (["Abandoned", "Abandoned"], "Abandoned"),
     (["Abandoned", "Todo"], "Backlog"),
     (["Abandoned", "In Progress"], "Doing"),
-    (["Merging", "Todo"], "Doing"),
+    (["Landing", "Todo"], "Doing"),
     (["Closed", "Closed", "Todo"], "Doing"),   # a delivered child is past Doing: the spec's work is under way
     (["Done", "Todo"], "Doing"),
     (["Closed", "Abandoned", "Backlog"], "Doing"),

@@ -123,7 +123,7 @@ def test_the_column_names_are_unchanged(hub):
     # The map is written from the column table, so its key order and quoting are not the guard; its names and colours are.
     assert json.loads("{" + m.group(1) + "}") == {
         # the shipped columns (#247), then the open-branch lane beside the axis
-        "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Merging": "#b087f9",
+        "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Landing": "#b087f9",
         "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open branches": "#5aa9ff",
     }
 
