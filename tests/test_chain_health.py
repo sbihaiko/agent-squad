@@ -143,4 +143,4 @@ def time_in_future():
 
 def test_the_page_draws_the_reader_field_and_computes_no_rule(hub):
     page = (SCRIPTS / "hub.py").read_text().split("function mdlRender")[1].split("async function mdlLoad")[0]
-    assert "mdl.chain" in page and "chain.banner" in page and "chain.out" in page
+    assert "mdl.chain" in page and "ch.banner" in page and "ch.out" in page
