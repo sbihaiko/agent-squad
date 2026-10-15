@@ -7,6 +7,7 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
 cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$T/s/"
+unset SG_BOARD_VOCAB   # the loop that runs a child exports it; the cases that need the shipped vocabulary set it themselves
 export SG_GH_AGGREGATE_WINDOW=0   # the open-issue list changes between cases: no snapshot answers a later one
 : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
@@ -433,7 +434,7 @@ if [ "\${SG_GH_PASS:-}" = board ]; then   # the calls of the real board.py
       if [ ! -e "$T/b500" ]; then touch "$T/b500"; echo 'gh: HTTP 500' >&2; exit 1; fi   # GitHub's server failed once
       echo '{"id":3228}' ;;
     *"-X POST"*items*) touch "$T/bseen"; echo '{"id":"ITEM1"}' ;;
-    *"-X PATCH"*items/ITEM1*) sed -n 's/.*"value": "\([^"]*\)".*/\1/p' "$T/board.in" > "$T/bstatus"; echo '{"id":"ITEM1"}' ;;
+    *"-X PATCH"*items/ITEM1*) [ -e "$T/bnowrite" ] && { echo '{"id":"ITEM1"}'; exit 0; }; sed -n 's/.*"value": "\([^"]*\)".*/\1/p' "$T/board.in" > "$T/bstatus"; echo '{"id":"ITEM1"}' ;;
     *) echo "" ;;
   esac
   exit 0
@@ -461,6 +462,20 @@ filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 0 ] && ok "12 a server error files no bug" || ko "12 a server error filed $filed bug(s): $(cat "$T/filed")"
 [ "$($G -c 'REFUSED' "$T/st/cycle.log")" = 0 ] && ok "12 no refusal is named in the cycle log" || ko "12 cycle.log: $(cat "$T/st/cycle.log")"
 unset SG_BOARD_READ_BACKOFF
+
+# 12b) (#432) a read that never catches up is not a refusal. GitHub accepted the card and the read carried no Status for
+# the whole settle bound: board.py says "a read failure, not a written card", and that is the board failing to answer, not
+# GitHub refusing the write -- the same as the HTTP 500 above. The door logged it by name and filed no bug; the next pass
+# writes the card again. The stub accepts the PATCH and never shows the Status.
+rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"; rm -f "$T"/st/rest-* "$T/bseen" "$T/bstatus" "$T/launched"; touch "$T/b500" "$T/bnowrite"
+: > "$T/filed"; : > "$T/st/cycle.log"
+export SG_BOARD_READ_BACKOFF=0 SG_BOARD_SETTLE_SECONDS=0
+r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "12b the pass whose card read never caught up finishes" || ko "12b the pass exited $rc: '$r'"
+filed=$($G -c '^title=' "$T/filed")
+[ "$filed" = 0 ] && ok "12b a read failure files no bug" || ko "12b a read failure filed $filed bug(s): $(cat "$T/filed")"
+$G -q 'BOARD-READ-FAILED' "$T/st/cycle.log" && ok "12b the read failure is named in the cycle log" || ko "12b cycle.log: $(cat "$T/st/cycle.log")"
+rm -f "$T/bnowrite"; unset SG_BOARD_READ_BACKOFF SG_BOARD_SETTLE_SECONDS
 
 # 13) (#243) the bug pass takes items by the kind the seam answers, never by the platform's issue type. 1500 carries kind
 # bug and no label; 1501 carries the bug label but kind task (the kind wins); 1502 carries the label and no kind (the
