@@ -86,7 +86,7 @@ o=; for _ in 1 2 3 4; do o+=$(OPEN="7 8 10" FAILREV=1 rp)$'\n'; done
 st=$(printf '%s' "$o" | /usr/bin/grep -c '^BRANCHREVIEW STOP gui/10-b')
 [ "$st" = 1 ] && ok "the stop line is one line" || ko "stop lines ($st): '$o'"
 l=$(printf '%s' "$o" | /usr/bin/grep '^BRANCHREVIEW STOP gui/10-b')
-case "$l" in *codex*"try again at 14:05"*claude:opus*gemini-pro*|*claude:opus*gemini-pro*codex*|*gemini-pro*codex*claude:opus*|*codex*claude:opus*gemini-pro*) ok "the stop names each failed model and its reason";; *) ko "stop line lacks the models: '$l'";; esac
+case "$l" in *"codex: exit 1, usage limit reached, try again at 14:05"*"claude:opus: line 2"*"gemini-pro: outside"*|*"claude:opus: line 2"*"codex: exit 1"*"gemini-pro: outside"*|*"gemini-pro: outside"*"claude:opus: line 2"*"codex: exit 1"*) ok "the stop names each failed model and its reason";; *) ko "stop line lacks the models: '$l'";; esac
 case "$l" in *"an old reason"*) ko "the stop shows an older reason of a model with a newer one: '$l'";; *) ok "one reason per model, the newest";; esac
 touch -t 202001010000 "$T/st/auto/"branchreview-stop-gui_10-b-*
 o=$(OPEN="7 8 10" FAILREV=1 rp)
@@ -98,7 +98,7 @@ o=; for _ in 1 2 3; do o+=$(OPEN="7 8 10" FAILREV=1 rp)$'\n'; done
 o=$(SG_REVIEW_STOP_TTL=0 OPEN="7 8 10" FAILREV=1 rp)
 [ "$(n gui/10-b)" = 7 ] && ok "SG_REVIEW_STOP_TTL sets the expiry" || ko "ttl 0: tried $(n gui/10-b) times"
 # 9) parallel reviews: up to SG_REVIEW_PARALLEL (default 3) branches at once, each with its own count and result
-for i in 21 22 23 24; do push "gui/$i-p"; done; : > "$T/review.log"; rm -rf "$T/run" "$T/conc.log"; P="7 8 10 21 22 23 24"
+for i in 21 22 23 24; do push "gui/$i-p"; done; : > "$T/review.log"; rm -rf "$T/run" "$T/conc.log"; P="7 8 21 22 23 24"
 s0=$(date +%s); r=$(OPEN="$P" SG_REVIEW_PASS_MAX=4 SLOWREV=2 rp); s1=$(date +%s)
 [ "$(/usr/bin/grep -c '^gui/2[1-4]-p ' "$T/review.log")" = 4 ] && ok "four branches are reviewed in one pass" || ko "reviews: $(cat "$T/review.log"): '$r'"
 [ "$(sort -n "$T/conc.log" | tail -1)" = 3 ] && ok "at most SG_REVIEW_PARALLEL (3) reviews run at once, and 3 do" || ko "peak concurrency: $(sort -n "$T/conc.log" | tr '\n' ' ')"
