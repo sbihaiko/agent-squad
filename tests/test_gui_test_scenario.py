@@ -371,12 +371,21 @@ class _Shell:
 def test_the_rest_runner_posts_issues_and_links_a_sub_issue_by_its_numeric_id():
     sh = _Shell()
     gh = tts.rest_runner("sbihaiko/MesenAI", shell=sh)
-    gh("create_issue", title="Test case HOME-01", body="body", labels=["Test-Case", "wave:01"])
+    gh("create_issue", title="Test case HOME-01", body="body", labels=["Test-Case", "wave:01", "enhancement"])
     gh("add_sub_issue", parent=7, sub=99)
     assert "repos/sbihaiko/MesenAI/issues" in sh.args[0]
     assert "=Test case HOME-01" in " ".join(sh.args[0]) and "labels[]=Test-Case" in sh.args[0]
+    assert "labels[]=enhancement" in sh.args[0]
     link = " ".join(sh.args[1])
     assert "repos/sbihaiko/MesenAI/issues/7/sub_issues" in link and "sub_issue_id=99" in link
+
+
+def test_the_rest_runner_refuses_an_issue_without_a_product_type_label():
+    import pytest
+
+    gh = tts.rest_runner("sbihaiko/MesenAI", shell=_Shell())
+    with pytest.raises(ValueError, match="bug, enhancement, spec"):
+        gh("create_issue", title="Test case HOME-01", body="body", labels=["Test-Case", "wave:01"])
 
 
 def test_the_rest_runner_closes_through_rest_and_never_graphql():

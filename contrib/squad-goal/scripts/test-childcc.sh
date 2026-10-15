@@ -54,6 +54,6 @@ echo "$out" | /usr/bin/grep -c 'CHILDCC UNMAPPED unmapped c' | /usr/bin/grep -qx
 grep -c '^create' "$T/gh.log" | grep -qx 1 && ok "two children: one parent created, none for the one-child run" || ko "parent creates: $(cat "$T/gh.log" 2>/dev/null)"
 [ "$(grep -c '^link' "$T/gh.log")" = 2 ] && ok "two children: both linked as sub-issues" || ko "links: $(cat "$T/gh.log" 2>/dev/null)"
 echo "$out" | /usr/bin/grep -q 'RUN PARENT #900 (two)' && ok "the run's parent is reported" || ko "no parent report: $out"
-grep '^create' "$T/gh.log" | grep -q '"labels": \["run-parent"\]' && ok "the parent carries the run-parent label, so no pass dispatches it (#340)" || ko "parent create body: $(grep '^create' "$T/gh.log")"
+grep '^create' "$T/gh.log" | grep -q '"labels": \["run-parent", "enhancement"\]' && ok "the parent carries its run and type labels, so no pass dispatches it (#340)" || ko "parent create body: $(grep '^create' "$T/gh.log")"
 echo "$out" | /usr/bin/grep -q 'RUN PARENT .*(fin-two)' && ko "a finished run got a parent (#340)" || ok "a finished run gets no parent (#340)"
 rm -rf "$T"; exit $fail

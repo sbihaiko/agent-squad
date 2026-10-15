@@ -3569,7 +3569,7 @@ def test_debt_filing_command_files_once_through_a_stub_gh(tmp_path):
     filed = [json.loads(line) for line in log.read_text().splitlines() if line]
     # The filer labels a debt issue `debt` only (#1494): debts are worked like bugs, after the bugs,
     # so `ready-for-agent` would put them back in the frontier's pick.
-    assert len(filed) == 1 and set(filed[0]["labels"]) == {"debt"}
+    assert len(filed) == 1 and set(filed[0]["labels"]) == {"debt", "enhancement"}
     assert "b.py:2" in filed[0]["body"] and "backs off" in filed[0]["body"]
     again = subprocess.run(cmd, cwd=FORK, env=env, capture_output=True, text=True)
     assert again.returncode == 0 and "no new DEBT findings" in again.stdout

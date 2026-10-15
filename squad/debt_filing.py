@@ -27,7 +27,7 @@ import tempfile
 import time
 import types
 
-LABELS = ("debt",)
+LABELS = ("debt", "enhancement")   # the type label keeps the issue in autobug's debt tier; `bug` would lift it into the bug tier (#427)
 BOARD_STATUS = "Todo"   # where a filed task waits: the frontier and autobug read that column
 FINDING = re.compile(r"^\W*DEBT\W+(?P<loc>\S+?:\d+)\s*[—–:-]+\s*(?P<defect>.*?)\s*(?:Acceptance:\s*(?P<ac>.*))?$",
                      re.IGNORECASE)   # the shape of a review saved before #1777: an inline DEBT tag on the line

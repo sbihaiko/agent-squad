@@ -78,6 +78,8 @@ CASE_LABEL = "Test-Case"
 SCENARIO_LABEL = "Test-Scenario"
 GROUP_LABEL = "Test-Group"
 OLD_TYPE_LABELS = {"testcase", "testarea", "testrun", "gui-test-run"}   # what the Test-<Kind> labels replace (#1481)
+ISSUE_TYPE_LABELS = {"bug", "enhancement", "spec"}
+DEFAULT_ISSUE_TYPE = "enhancement"
 
 SUB_ISSUE_CAP = 100                      # GitHub refuses a parent with more sub-issues than this
 MAP_SUFFIX = ".gui-test.issues.json"
@@ -825,6 +827,9 @@ def publish(plan, github, *, script_path=None, map_path=None, saved=None, sleep=
              labels=labels)
 
     def create(title, body, labels):
+        labels = list(labels)
+        if not ISSUE_TYPE_LABELS.intersection(labels):
+            labels.append(DEFAULT_ISSUE_TYPE)
         made = call("create_issue", title=title, body=body, labels=labels)
         fresh.add(made["number"])
         return made
@@ -1307,7 +1312,7 @@ def _runs_container(call, entry, listing, month):
         return held[-1]
     n = held[-1]["n"] + 1 if held else 1
     title = f"{RUNS_EMOJI} Runs {month}" + (f" ({n})" if n > 1 else "")
-    made = call("create_issue", title=title, body="", labels=[GROUP_LABEL])
+    made = call("create_issue", title=title, body="", labels=[GROUP_LABEL, DEFAULT_ISSUE_TYPE])
     call("add_sub_issue", parent=entry["number"], sub=made["id"])
     container = {"title": title, "number": made["number"], "id": made["id"], "month": month, "n": n, "kids": []}
     listing.append(container)
@@ -1525,7 +1530,7 @@ def _write_areas(report, doc, map_path, github):
                 f"{report['build_sha'][:7]}"
         evidence = {s["id"]: s.get("evidence") for s in steps}
         made = call("create_issue", title=title, body=_run_body(report, area, block, changes, numbers, evidence),
-                    labels=[RUN_LABEL])
+                    labels=[RUN_LABEL, DEFAULT_ISSUE_TYPE])
         call("add_sub_issue", parent=container["number"], sub=made["id"])
         call("close", number=made["number"])
         container["kids"].append({"number": made["number"], "id": made["id"]})
@@ -1776,6 +1781,8 @@ def rest_runner(repo, shell=_sh, project=None, bug_helper=None, initial_status=I
             call(["gh", "label", "create", kw["name"], "--force", "--repo", repo])
             return {}
         if op == "create_issue":
+            if not ISSUE_TYPE_LABELS.intersection(kw["labels"]):
+                raise ValueError("an issue needs one of: bug, enhancement, spec")
             fields = [("title", kw["title"]), ("body", kw["body"])] + [("labels[]", x) for x in kw["labels"]]
             return api("POST", "issues", fields, json_out=True)
         if op == "update_issue":

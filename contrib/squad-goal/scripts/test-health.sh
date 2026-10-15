@@ -16,6 +16,7 @@ printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7\n'
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 case "$*" in
+  *'index("spec")'*) [ -n "$GH_UNTYPED" ] && printf '%s\n' "$GH_UNTYPED";;
   *"issues?state=open"*) [ -n "$GH_READY" ] && printf '%s\n' "$GH_READY";;
 esac
 GH
@@ -34,6 +35,8 @@ mkdir -p "$T/co/runs/run-n"; echo r > "$T/co/runs/run-n/request.txt"; touch -t 2
 o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'HEALTH never-started-runs' && ok "record-less run -> never-started-runs" || ko "no never-started: $o"
 # A wave-only issue can be READY after its blocker closes. The health pass must expose it without a triage label.
 o=$(GH_READY=41 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH frontier-idle: startable 41 with no open PR' && ok "a startable wave-only issue is reported" || ko "wave-only issue was not reported: $o"
+# An open issue without bug, enhancement, or spec is visible before the loop can dispatch it untyped.
+o=$(GH_UNTYPED=427 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH untyped-issues: open issue(s) without a type label: #427' && ok "an untyped open issue is reported" || ko "untyped issue was not reported: $o"
 # ---- #1795: runs-board-drift, the loop against its own board ----
 bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 alerts() { local n; n=$(/usr/bin/grep -c 'HEALTH runs-board-drift' "$T/st/alerts.log" 2>/dev/null); echo "${n:-0}"; }

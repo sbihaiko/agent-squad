@@ -66,6 +66,7 @@ def test_publish_gives_every_issue_exactly_one_type_label(tmp_path):
     assert seen["Cases"] == {("Test-Group",)}
     assert {("Test-Case",)} == {t for h, s in seen.items() if h not in ("Test scenario", "Area", "Cases") for t in s}
     assert not any(OLD & set(labels) for labels in gh.by_title().values())
+    assert all(set(labels) & tts.ISSUE_TYPE_LABELS for labels in gh.by_title().values())
     assert {"Test-Scenario", "Test-Area", "Test-Group", "Test-Case"} <= {c["name"] for c in gh.of("ensure_label")}
 
 
@@ -96,3 +97,4 @@ def test_write_back_labels_run_issues_test_run_and_their_month_container_test_gr
     months = [labels for title, labels in by.items() if title.startswith("📅")]
     assert runs and all(kind(labels) == ["Test-Run"] and "testrun" not in labels for labels in runs)
     assert months and all(kind(labels) == ["Test-Group"] for labels in months)
+    assert all(set(labels) & tts.ISSUE_TYPE_LABELS for labels in runs + months)

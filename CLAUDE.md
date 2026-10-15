@@ -159,7 +159,7 @@ Issues live in GitHub Issues for `sbihaiko/agent-squad` (private; the plugin's r
 
 ### Triage labels
 
-The five default labels, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+The available triage labels are `ready-for-agent`, `ready-for-human`, and `wontfix`. An agent-created issue also carries `bug`, `enhancement`, or `spec`; a defect carries `bug`. Guard: `contrib/squad-goal/scripts/test-health.sh`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

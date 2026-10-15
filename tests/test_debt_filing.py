@@ -118,7 +118,7 @@ def test_body_carries_pr_location_defect_and_acceptance_and_labels():
     for needle in ("#77", "#70", "src/b.py:42", "retry loop has no backoff",
                    "retries wait with exponential backoff, covered by a test"):
         assert needle in first["body"], needle
-    assert first["labels"] == ["debt"]
+    assert first["labels"] == ["debt", "enhancement"]
     assert "ready-for-agent" not in first["labels"]
     assert "debt" in gh.labels   # created because it was absent
 

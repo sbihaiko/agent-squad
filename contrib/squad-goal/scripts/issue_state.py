@@ -658,7 +658,7 @@ class BoardBinding:
         """One POST of the parent issue, titled for the run. Returns its number, which is remembered for `parent_of`."""
         body = f"The children of squad run {run}. Each child is a sub-issue; the progress rolls up here."
         n = json.loads(self.api("-X", "POST", f"repos/{self.repo}/issues", "--input", "-",
-                                inp=json.dumps({"title": self.parent_title(run), "body": body, "labels": ["run-parent"]})))["number"]   # the label keeps it out of dispatch (#340)
+                                inp=json.dumps({"title": self.parent_title(run), "body": body, "labels": ["run-parent", "enhancement"]})))["number"]   # the label keeps it out of dispatch (#340)
         (self.st / f"run-parent-{run}").write_text(str(n))
         return n
 

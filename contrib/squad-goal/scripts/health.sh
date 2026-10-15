@@ -43,6 +43,9 @@ fi
 if [ -f "$(dirname "$0")/ghspend.py" ]; then
   while IFS=$'\t' read -r gc gb gd; do [ -n "$gc" ] && add "$gc" "$gd" "$gb"; done < <(python3 "$(dirname "$0")/ghspend.py" causes "$SG_STATE" 2>/dev/null)
 fi
+# Every agent-created issue has one product type. Surface a missing type before the issue can be dispatched or lost.
+untyped=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("enhancement")) // false | not))|select((([.labels[].name]|index("spec")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
+[ -n "${untyped// /}" ] && add untyped-issues "open issue(s) without a type label:$(for n in $untyped; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or pull request for one pass must remain visible even when it has only a wave label.
 ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
