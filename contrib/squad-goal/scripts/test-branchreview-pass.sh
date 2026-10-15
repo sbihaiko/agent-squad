@@ -5,7 +5,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/models.json" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
@@ -88,6 +88,9 @@ st=$(printf '%s' "$o" | /usr/bin/grep -c '^BRANCHREVIEW STOP gui/10-b')
 l=$(printf '%s' "$o" | /usr/bin/grep '^BRANCHREVIEW STOP gui/10-b')
 case "$l" in *"codex: exit 1, usage limit reached, try again at 14:05"*"claude:opus: line 2"*"gemini-pro: outside"*|*"claude:opus: line 2"*"codex: exit 1"*"gemini-pro: outside"*|*"gemini-pro: outside"*"claude:opus: line 2"*"codex: exit 1"*) ok "the stop names each failed model and its reason";; *) ko "stop line lacks the models: '$l'";; esac
 case "$l" in *"an old reason"*) ko "the stop shows an older reason of a model with a newer one: '$l'";; *) ok "one reason per model, the newest";; esac
+# 8b) the stop also reaches the issue's status file (#431): the models that failed and the chain summary, for the card
+sf=$(ls "$T/st/cq/"*"#10-status~mchain"* 2>/dev/null | head -1)
+[ -n "$sf" ] && /usr/bin/grep -q 'REVIEW_CHAIN STOP gui/10-b' "$sf" && /usr/bin/grep -q 'usage limit reached' "$sf" && ok "the stop is written to the issue status file" || ko "no status file with the stop: '$sf' $(cat "$sf" 2>/dev/null)"
 touch -t 202001010000 "$T/st/auto/"branchreview-stop-gui_10-b-*
 o=$(OPEN="7 8 10" FAILREV=1 rp)
 [ "$(n gui/10-b)" = 4 ] && ok "an expired stop is cleared and the branch is retried" || ko "expired stop: tried $(n gui/10-b) times: '$o'"
