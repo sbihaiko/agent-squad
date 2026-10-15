@@ -44,8 +44,13 @@ if [ -f "$(dirname "$0")/ghspend.py" ]; then
   while IFS=$'\t' read -r gc gb gd; do [ -n "$gc" ] && add "$gc" "$gd" "$gb"; done < <(python3 "$(dirname "$0")/ghspend.py" causes "$SG_STATE" 2>/dev/null)
 fi
 # Every agent-created issue has one product type. Surface a missing type before the issue can be dispatched or lost.
-untyped=" $(gh_api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("enhancement")) // false | not))|select((([.labels[].name]|index("spec")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
+# #437: every page of the open list (gh_pages), and a defect that is not typed bug is its own cause (a spec is a document, not a defect).
+oi=$(gh_pages "repos/$SG_REPO/issues?state=open&per_page=100" 2>/dev/null)
+untyped=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_request|not)|select(($l|index("bug")|not) and ($l|index("enhancement")|not) and ($l|index("spec")|not))|.number' 2>/dev/null | tr '\n' ' ')"
 [ -n "${untyped// /}" ] && add untyped-issues "open issue(s) without a type label:$(for n in $untyped; do printf ' #%s' "$n"; done)"
+# a defect reads as one in its title or body; typed enhancement (an untyped one is named above) and no bug label
+undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_request|not)|select(($l|index("enhancement")) and ($l|index("bug")|not) and ($l|index("spec")|not))|select((.title+" "+(.body//""))|test("\\b(bug|defect|regression|crash(es|ed)?|broken|fails|failing|wrong|incorrect)\\b";"i"))|.number' 2>/dev/null | tr '\n' ' ')"
+[ -n "${undef// /}" ] && add defect-without-bug "open defect(s) that carry no bug label:$(for n in $undef; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or pull request for one pass must remain visible even when it has only a wave label.
 ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"

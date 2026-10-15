@@ -49,13 +49,13 @@ o=$(GH_READY=41 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HE
 page 1 "$(iss 427 'Add a thing' '')"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH untyped-issues: open issue(s) without a type label: #427' && ok "an untyped open issue is reported" || ko "untyped issue was not reported: $o"
 # #437: the read pages. Page one is a full page of typed issues, the untyped one sits on page two.
-for i in $(seq 1 100); do iss $((1000+i)) "Typed $i" enhancement; done | jq -s . > "$T/pages/1.json"; page 2 "$(iss 901 'Add another thing' '')"
+for i in $(seq 1 100); do iss $((1000+i)) "Typed $i" enhancement; done | jq -s . > "$T/pages/1.json"; page 2 "$(iss 901 'Add another thing' '')"; rm -f "$T/st/auto/health-untyped-issues"   # each cause alerts once: re-arm it
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'without a type label: #901' && ok "an untyped issue beyond the first page is reported" || ko "page two was not read: $o"
 # #437: a defect carries bug. An enhancement whose title reads as a defect is named; a bug and a plain enhancement are not.
 page 1 "$(iss 501 'Health guard fails on a long list' enhancement)" "$(iss 502 'Health guard fails on a long list' bug)" "$(iss 503 'Add a thing' enhancement)"; rm -f "$T/pages/2.json"
 o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH defect-without-bug: open defect(s) that carry no bug label: #501' && ok "a defect filed as enhancement is reported" || ko "defect without bug was not reported: $o"
 printf '%s' "$o" | /usr/bin/grep -qE 'defect-without-bug.*#(502|503)' && ko "a bug or a plain enhancement was named: $o" || ok "a bug and a plain enhancement are not named"
-printf '%s' "$o" | /usr/bin/grep -q 'untyped-issues' && ko "typed issues reported untyped: $o" || ok "typed issues are not untyped"
+printf '%s' "$o" | /usr/bin/grep -q 'HEALTH untyped-issues:' && ko "typed issues reported untyped: $o" || ok "typed issues are not untyped"
 rm -f "$T/pages/"*.json
 # ---- #1795: runs-board-drift, the loop against its own board ----
 bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }

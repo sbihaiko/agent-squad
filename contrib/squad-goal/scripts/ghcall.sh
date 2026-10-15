@@ -93,6 +93,25 @@ gh_api() {
   _gh_read "$SG_GHREAD" "$route" "$@"
 }
 
+# gh_pages <route> [-q <jq filter>]   A list read, every page of it (#437). The route names `per_page=N`; the door asks `&page=1`,
+# `&page=2`, ... through `gh_api` (so each page keeps the three outcomes and the call log) and stops at the first page shorter
+# than N. The pages are one JSON array to the filter. A page that is refused or fails ends the read with that page's outcome.
+gh_pages() {
+  local route=${1:?gh_pages: a route is required}; shift || true
+  local q="" size p=1 o rc all="[]" n
+  [ "${1:-}" = "-q" ] && q=${2:-}
+  size=$(printf '%s' "$route" | sed -n 's/.*per_page=\([0-9][0-9]*\).*/\1/p'); size=${size:-30}
+  while :; do
+    o=$(gh_api "$route&page=$p"); rc=$?
+    [ "$rc" -eq 0 ] || { printf '%s\n' "$o"; return "$rc"; }
+    all=$(printf '%s\n%s' "$all" "$o" | jq -s 'add') || return 1
+    n=$(printf '%s' "$o" | jq 'length') || return 1
+    [ "$n" -ge "$size" ] || break
+    p=$((p+1))
+  done
+  if [ -n "$q" ]; then printf '%s' "$all" | jq -r "$q"; else printf '%s' "$all"; fi
+}
+
 # gh_snapshot <route> [-q <jq filter>]   A read that may repeat: the same three outcomes as gh_api, and a repeat inside
 # the window is answered from the snapshot. Never for a read that decides a write (see above).
 gh_snapshot() {
