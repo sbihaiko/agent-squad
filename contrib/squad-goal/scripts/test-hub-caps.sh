@@ -4,7 +4,7 @@
 # (no network, no server). usage: bash test-hub-caps.sh
 d=$(cd "$(dirname "$0")" && pwd); repo=$(cd "$d/../../.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/panes.js" "$d/board_columns.py" "$d/issue_state.py" "$d/board-definition.json" "$live/"   # hub.py reads panes.js, board_columns.py, issue_state.py and the pinned board-definition.json beside itself
+live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/router_envelope.py" "$d/panes.js" "$d/board_columns.py" "$d/issue_state.py" "$d/board-definition.json" "$live/"   # hub.py reads panes.js, board_columns.py, issue_state.py and the pinned board-definition.json beside itself
 
 # probe <env...> : load the copied hub.py in a fresh process, call loop_caps() twice; stdout is one JSON line, stderr is the hub's log.
 cat >"$T/probe.py" <<'PY'
