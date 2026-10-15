@@ -75,10 +75,10 @@ def _holder(d, cwd, log, seconds):
 
 def test_only_the_gate_runners_take_the_machine_wide_gate_lock():
     """#81 and #392: the gate of a landing runs in CI, and the gates that still run here -- the branchland local gate, the wave
-    entry gate, the promotion gate and a hand gate -- queue behind one lock. No other script takes it. A comment never counts."""
+    entry gate, the promotion gate, the fast gate and a hand gate -- queue behind one lock. No other script takes it. A comment never counts."""
     takers = sorted(p.name for p in _scripts()
                     if GATE_LOCK.search("\n".join(line.split("#", 1)[0] for line in p.read_text().splitlines())))
-    assert takers == ["branchland.sh", "gate.sh", "promote-stg.sh", "wave.sh"], takers
+    assert takers == ["branchland.sh", "fast-gate.sh", "gate.sh", "promote-stg.sh", "wave.sh"], takers
 
 
 def test_the_local_gate_and_the_land_path_that_ran_it_are_retired():

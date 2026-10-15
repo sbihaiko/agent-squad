@@ -12,7 +12,7 @@
 # the child is in the wave branch, Done means the wave is in `dev`. The wave branch is rebased on `dev` only before its own
 # final push (the wave's landing pass), never between entries: between them the tip moves only by a child that entered.
 #
-# The gates are the profile's SG_WAVE_GATES: ruff, mypy and the fast battery for this repository. `start` works in a
+# The gates are the profile's SG_WAVE_GATES: by default the fast gate (fast-gate.sh): ruff, mypy, the fast battery and the shell suites of the scripts the child changes. `start` works in a
 # throwaway clone, never in a checkout of the owner's, as ffland.sh does. `enter` runs where the child works, so it reads
 # the branch from that worktree's HEAD, and the gates run there too. Every line the script prints is one `WAVE ...` line.
 # A child enters only after the review of its own diff approved it (#376): `enter` reads review-<branch>.md beside the base
@@ -77,7 +77,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   # They run under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on.
-  out=$(bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
+  out=$(SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
   [ $grc = 0 ] || {
     requeue "$iss" "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
   # A push that is not a fast-forward is refused by git itself, so the entry is the rebase below and nothing else. The wave

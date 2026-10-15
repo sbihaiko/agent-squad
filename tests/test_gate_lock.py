@@ -136,18 +136,15 @@ def branchland_runner(tmp_path):
 
 @pytest.fixture
 def promote_runner(tmp_path):
-    """promote-stg.sh with dev one commit ahead of stg and a green CI: the pass pushes stg."""
+    """promote-stg.sh with dev one commit ahead of stg and a full gate that passes: the pass pushes stg."""
     d = tmp_path / "s"
     d.mkdir()
     _copy(SCRIPTS, ("promote-stg.sh", "gate.sh", "serial.sh"), d)
     co, origin = _repo_with_remote(tmp_path, ["stg"])
     _git("commit", "-q", "--allow-empty", "-m", "one", cwd=co)
     _git("push", "-q", str(origin), "dev", cwd=co)
-    ci = tmp_path / "ci.sh"
-    ci.write_text("#!/bin/bash\necho green\n")
-    ci.chmod(0o755)
     st = tmp_path / "st"
-    env = _env(st) | POLL | {"SG_PROMOTE_REMOTE": str(origin), "SG_REPO": "x/y", "SG_CI_STATE_CMD": str(ci)}
+    env = _env(st) | POLL | {"SG_PROMOTE_REMOTE": str(origin), "SG_REPO": "x/y", "SG_PROMOTE_GATE_CMD": "true"}
     ran = f'test "$({GIT} -C {origin} rev-parse stg)" = "$({GIT} -C {origin} rev-parse dev)"'
     return (["bash", str(d / "promote-stg.sh")], tmp_path, env, st, ran, None)
 

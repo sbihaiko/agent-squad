@@ -684,7 +684,7 @@ WT_CLEAN_SECS = 60
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"landing": "wait", "wt": "mute", "occ": "mute",
+FOOT_BLOCK_COLORS = {"landing": "wait", "gate": "none", "wt": "mute", "occ": "mute",
                      "quota": "none", "subs": "run"}  # subs last, and teal again: it shares with landing, which is not its neighbour
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
@@ -714,6 +714,17 @@ def _landing_parts(ld, now):
     if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
     return [{"text": "last landing", "tone": ""}, {"text": f"PR #{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+
+def _gate_parts(g, now):
+    """`gate fast pass 0123456 4m ago`: the latest gate the loop ran (fast for a tip or a wave entry, full for a promotion to
+    stg), its result, the sha it ran at and its age. A pass reads in the ok tone and a fail in the err tone; a line the hub
+    cannot read is `gate ?` in the neutral tone, never a pass. No reading at all draws no block."""
+    if g is None: return []
+    ok = isinstance(g, dict) and g.get("result") in ("pass", "fail") and g.get("kind") and g.get("sha") \
+        and isinstance(g.get("ts"), (int, float)) and not isinstance(g.get("ts"), bool)
+    if not ok: return [{"text": "gate ?", "tone": FOOT_NEUTRAL}]
+    text = f"gate {g['kind']} {g['result']} {str(g['sha'])[:7]} {_rel_span(max(now - g['ts'], 0.0))} ago"
+    return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err"}]
 
 def _occ_fact(occ, caps):
     """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
@@ -849,7 +860,9 @@ def foot_items(src, caps=None, now=None):
     now = time.time() if now is None else now
     src = src or {}
     land = _landing_parts(src.get("landing"), now)
+    gate = _gate_parts(src.get("gate"), now)
     items = [_fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
+             _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate), parts=gate or None),
              _fact("wt", _wt_fact(src.get("wt")), act="wtclean" if src.get("wt") is not None else None),
              _fact("occ", _occ_fact(src.get("occ"), caps)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
@@ -890,6 +903,13 @@ def _last_landing():
         if best is None or ts > best["ts"]: best = {"issue": p.get("n"), "ts": ts}
     return best
 
+def _gate_status():
+    """The one line the gate wrapper leaves in $SG_STATE/gate-status, `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`: the latest
+    gate, its result and the sha it ran at. None when the file is absent or is not that line."""
+    f = _read(STATE / "gate-status").rstrip("\n").split("\t")
+    if len(f) != 4 or not f[0].isdigit() or not all(f[1:]): return None
+    return {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
+
 def _newest_mtime(*paths):
     ts = []
     for p in paths:
@@ -901,7 +921,7 @@ def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"landing": _last_landing(), "wt": _wt_plan() or _wt_count(), "occ": None,
+    out = {"landing": _last_landing(), "gate": _gate_status(), "wt": _wt_plan() or _wt_count(), "occ": None,
            "quota": {"codex": limited_until(_read(SHARED / "codex-limited"), now),
                      "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
     if FOOT_ROWS.get("live") is not None:

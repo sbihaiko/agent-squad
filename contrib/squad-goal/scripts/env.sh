@@ -11,10 +11,10 @@ SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
 # A spec is a document until the owner starts it, and a freeze marker holds the card without changing its column:
 # the dispatch pass never takes one of these labels as work (SG_FRONTIER_SKIP_LABELS, beside the bug label it already skips).
 : "${SG_FRONTIER_SKIP_LABELS:=spec,needs-owner,needs-ratification,needs-info,frozen:owner,frozen:dependency,wontfix}"
-# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types and the fast
-# battery. A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
+# The local gates a child runs in its own worktree before it enters the wave branch (wave.sh): lint, types, the fast
+# battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
 # enters a wave ungated (ADR-0145 rule 9).
-: "${SG_WAVE_GATES:=uv run --extra dev ruff check . && uv run --extra dev mypy && uv run --extra dev pytest -n auto -m \"not heavy\" -p no:deepeval}"
+: "${SG_WAVE_GATES:=bash '$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fast-gate.sh'}"
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. One resolution here, and every script reads it from SG_LSOF.
 SG_LSOF="${SG_LSOF:-}"; [ -n "$SG_LSOF" ] || SG_LSOF="$(command -v lsof 2>/dev/null)"

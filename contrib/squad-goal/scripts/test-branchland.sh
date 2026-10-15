@@ -4,7 +4,7 @@
 # usage: bash test-branchland.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/gate.sh" "$d/serial.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/gate.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q dev)
@@ -80,6 +80,9 @@ case "$(awk '{print $1}' "$T/gate.log" 2>/dev/null)" in ""|"$T/co"|"$T/w") ko "t
 case "$r" in *"BRANCHLAND LANDED gui/7-x"*"closed #7"*) ok "gate pass: the landed line";; *) ko "gate pass: no landed line: '$r'";; esac
 /usr/bin/grep -qh "local gate, CI off" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "${tip:0:9}" "$T/st/cq/"x__y#7-status~* && ok "gate pass: the status comment names the local gate and the sha" || ko "gate pass: no status comment: $(cat "$T/st/cq/"* 2>&1)"
 /usr/bin/grep -q "o 3 Done 7" "$T/board.log" 2>/dev/null && /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "gate pass: the issue closes and the card moves to Done" || ko "gate pass: no close or no Done"
+IFS=$'\t' read -r _ kind res at < "$T/st/gate-status" 2>/dev/null
+[ "$kind $res $at" = "fast pass $tip" ] && ok "gate pass: one fast status line carries the result and the sha it ran at" || ko "gate pass: status line: '$(cat "$T/st/gate-status" 2>&1)'"
+/usr/bin/grep -q 'fast-gate\.sh' "$d/branchland.sh" && ok "the default local gate is the fast gate: the shell suites of the changed scripts run in it" || ko "the default local gate does not run fast-gate.sh"
 [ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && ok "the gate checkout is removed" || ko "a gate worktree is left: $($G -C "$T/co" worktree list)"
 reset; rm -f "$T/gate.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_KO" CHECKS='{"check_runs":[]}' bl)
 [ -s "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "zero checks + gate fail: nothing lands" || ko "gate fail landed or no gate ran: '$r'"

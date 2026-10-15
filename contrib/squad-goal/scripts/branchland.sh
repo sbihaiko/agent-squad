@@ -32,7 +32,9 @@ say() { local m="$A/branchland-$1-$(printf '%s' "$2" | tr '/' '_')-${3:0:9}-$4";
 # replaces the gate command (tests stub it). A red or running check never starts it.
 here=$(cd "$(dirname "$0")" && pwd)
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
-gatecmd=${SG_LOCAL_GATE_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -o heavy_cap_seconds=20 -m 'not heavy'"}
+# The default is the fast gate (fast-gate.sh): that base battery, then the shell suites of the scripts the tip changes against $land.
+fastbase="'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -o heavy_cap_seconds=20 -m 'not heavy'"
+gatecmd=${SG_LOCAL_GATE_CMD:-"SG_FAST_BASE=refs/sg-gate/$land SG_FAST_CMD=$(printf '%q' "$fastbase") bash '$here/fast-gate.sh'"}
 # The gate runs with none of the loop's SG_* variables, so a test reads its own fixture and never the live loop state, and with the
 # 2 s line lifted to the 20 s cap: that line is the CI speed rule, and this machine's load is not a defect of the branch.
 # SG_SERIAL_HELD stays: it is not loop state but the guard of the lock the gate holds, and a gate nested in the gate command
@@ -58,13 +60,13 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base
   /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate rebase -q "refs/sg-gate/$land" >/dev/null 2>&1 || /usr/bin/git -C "$wt/tip" rebase --abort >/dev/null 2>&1
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
-  out=$(cd "$wt/tip" && PYTHONPATH=. bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
+  out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
   [ "$rc" = 0 ] || { out="$out
 --- the rerun of what failed ---
-$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); }
+$(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); }
   /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
   if [ "$rc" = 0 ]; then
-    printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy").\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"
+    printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy", the shell suites of the changed scripts).\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"
     return 0; fi
   { printf 'Status update — branch %s @ %s: local gate, CI off: failed at %s (exit %s). The branch does not land.\n\n```\n' "$br" "${sha:0:9}" "$sha" "$rc"
     printf '%s\n' "$out" | grep -E '^(FAILED|E  |ERROR)' | sort -u | head -20; printf '%s\n' "$out" | tail -30; printf '```\n'; } > "$(sg_cq_status "$i" "branchland$$")"
