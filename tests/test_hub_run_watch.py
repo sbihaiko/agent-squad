@@ -1,11 +1,9 @@
 """Hub run watch: record changes refresh the live run list before its fallback poll."""
 import importlib.util
 import json
-import os
 from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parent.parent
 HUB_PY = ROOT / "contrib/squad-goal/scripts/hub.py"
