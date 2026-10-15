@@ -1,0 +1,25 @@
+"""The runtime producer of the board facts `board_columns.column_for` reads (ADR-0145).
+
+The janitor's reconcile passes what the loop already knows; this module turns it into the facts. It reads no host and calls
+no client, so the same inputs always give the same facts. The table decides the column from them, never this module.
+"""
+IN_DEV = ("behind", "identical")   # a compare standing: the branch tip is in the landing branch
+AHEAD = ("ahead", "diverged")     # a compare standing: the branch holds commits the landing branch lacks
+APPROVED = "VERDICT: APPROVE"
+
+
+def review_state(verdict_text, sha_text, tip):
+    """`none` when no review of the branch was read, `approved` when the review read this tip and approved it, else `waiting`."""
+    if not (verdict_text or "").strip() or not (sha_text or "").strip(): return "none"
+    first = verdict_text.strip().splitlines()[0]
+    return "approved" if sha_text.strip() == tip and APPROVED in first else "waiting"
+
+
+def issue_facts(*, entered, standing, approved, dev_running, review_waits, run_live=False):
+    """The facts of one issue. `entered`: its child is in the run's wave branch. `standing`: that branch against the landing
+    branch. `approved`: the review of the wave tip approved it. `dev_running`: a check on the landing branch tip has not ended.
+    `review_waits`: a review of its work branch was read and does not approve the tip."""
+    ahead = bool(entered) and standing in AHEAD
+    return {"wave_branch": ahead, "landing": ahead and bool(approved),
+            "dev_ci": bool(entered) and standing in IN_DEV and bool(dev_running),
+            "review_wait": bool(review_waits), "run_live": bool(run_live)}

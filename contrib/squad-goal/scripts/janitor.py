@@ -43,7 +43,8 @@
     merge commit (or who closed it, when no merged PR names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
-    Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
+    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Landing, Testing, Doing). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
+Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -376,16 +377,43 @@ def holders(p):   # the Run and Run started every card carries, read once per pa
 def card_status(p, n):   # the card's Status on project p, "" when unreadable or absent (childcc.py reads it the same way)
     if not p: return ""
     return cards(p)[1].get(str(n), "")
-_wb = None
-def work_branches():   # {issue: [(branch, standing)]} for every remote work branch `fix|gui/<n>-...`, read once a pass (a branch read, never a pull request). standing is the compare of the branch tip with the landing branch: `ahead` or `diverged` (commits dev lacks), `behind` or `identical` (the tip is in dev)
+_wb = None; _wv = {}; _tips = {}
+def work_branches():   # {issue: [(branch, standing)]} for every remote work branch `fix|gui/<n>-...`, read once a pass (a branch read, never a pull request). standing is the compare of the branch tip with the landing branch: `ahead` or `diverged` (commits dev lacks), `behind` or `identical` (the tip is in dev). The same read keeps each wave branch `wave/<run>` in _wv (run -> (tip, standing)) and each work branch's tip in _tips: the board facts (board_facts.py) read them, and no new route is called
     global _wb
     if _wb is None:
         _wb = {}
         land = os.environ.get("SG_LAND_BRANCH") or "dev"
         for l in sh("gh", "api", f"repos/{repo0}/branches?per_page=100", "--paginate", "--jq", r'.[]|"\(.name) \(.commit.sha)"').splitlines():
-            m = re.match(r"(?:fix|gui)/(\d+)(?:\D\S*)? (\S+)$", l)
-            if m: _wb.setdefault(m.group(1), []).append((l.split()[0], sh("gh", "api", f"repos/{repo0}/compare/{land}...{m.group(2)}", "-q", ".status").strip()))
+            m = re.match(r"(?:fix|gui)/(\d+)(?:\D\S*)? (\S+)$", l); w = re.match(r"wave/(\S+) (\S+)$", l)
+            if not (m or w): continue
+            sha = (m or w).group(2); standing = sh("gh", "api", f"repos/{repo0}/compare/{land}...{sha}", "-q", ".status").strip()
+            if m: _wb.setdefault(m.group(1), []).append((l.split()[0], standing)); _tips[l.split()[0]] = sha
+            else: _wv[w.group(1)] = (sha, standing)
     return _wb
+def review_of(branch, tip):   # the state of the review of a branch tip, from the verdict branchreview.sh keeps in the state dir: none, approved or waiting
+    import board_facts
+    key = st / ("review-" + branch.replace("/", "_"))
+    def text(ext):
+        try: return key.with_suffix(key.suffix + ext).read_text()
+        except OSError: return None
+    return board_facts.review_state(text(".md"), text(".sha"), tip)
+def review_waits(n):   # a work branch of the issue is ahead of dev and the review of its tip is read and does not approve it
+    work_branches()
+    return any(g in ("ahead", "diverged") and review_of(b, _tips.get(b, "")) == "waiting" for b, g in work_branches().get(str(n), []))
+_devci = None
+def dev_ci_running():   # a check on the landing branch tip has not ended: one read through the door, once a pass
+    global _devci
+    if _devci is None:
+        ok, out = door_read(f"repos/{repo0}/commits/{os.environ.get('SG_LAND_BRANCH') or 'dev'}/check-runs", '[.check_runs[]|select(.status!="completed")]|length')
+        _devci = ok and out not in ("", "0")
+    return _devci
+def wave_facts(n, runs):   # the board facts of issue n whose child entered the wave of one of `runs` (the folder name or the record's run id)
+    import board_facts
+    work_branches()
+    run = next((r for r in runs if r in _wv), None)
+    tip, standing = _wv.get(run, ("", ""))
+    approved = bool(run) and review_of("wave/" + run, tip) == "approved"
+    return board_facts.issue_facts(entered=bool(run), standing=standing, approved=approved, dev_running=bool(run) and standing in board_facts.IN_DEV and dev_ci_running(), review_waits=False)
 def pr_count(n):   # how many remote work branches name the issue: one exists once the issue is past dispatch. The name is kept for its callers; no pull request is read
     return str(len(work_branches().get(str(n), [])))
 def branch_ahead_count(n):   # how many of its work branches hold commits the landing branch lacks
@@ -474,8 +502,9 @@ def reconcile_board():
     TERMINAL = ()
     if shipped:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
-        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for
     doing = "Doing" if shipped else "In Progress"
+    testing = set()   # issues whose wave is in dev while the CI of the dev tip runs: Done waits for the CI to end
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     def set_expected(n, status, why, run_id="", run_ts="", rank=0):
         if shipped:   # the shipped vocabulary (ADR-0141): Blocked is no column, it is the owner freeze over the column the work reached
@@ -484,6 +513,11 @@ def reconcile_board():
         old = expected.get(n)
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
+    def wave_column(n, f, i):   # the facts producer (ADR-0145): Landing and Testing come from the run's wave branch, its approval and the CI of the dev tip, and the table names the column
+        if not shipped: return
+        col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
+        if col == "Landing": set_expected(n, col, f"the wave of run {i['run_id']} is approved and its push to dev is pending", i["run_id"], i["run_ts"], 65)
+        elif col == "Testing": set_expected(n, col, f"the wave of run {i['run_id']} is in dev and the CI of the dev tip runs", i["run_id"], i["run_ts"], 70); testing.add(n)
     for r in keep:
         f = folder(r); i = read(f); nums = req_issues(f)
         if i: nums |= i["acc"]
@@ -500,6 +534,7 @@ def reconcile_board():
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif landed_kid:
                 set_expected(n, "Code Complete", f"run {i['run_id']} child {landed_kid} landed work locally", i["run_id"], i["run_ts"], 60)
+                wave_column(n, f, i)
             elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
                 why = "; ".join(ors) or "no reason recorded"
@@ -509,6 +544,7 @@ def reconcile_board():
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["landed"]:
                 set_expected(n, "Code Complete", f"run {i['run_id']} landed work locally", i["run_id"], i["run_ts"], 60)
+                wave_column(n, f, i)
             elif i["failed"]:
                 why = "; ".join(i["reasons"]) or "nothing landed"
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} failed with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
@@ -557,8 +593,10 @@ def reconcile_board():
         if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
-        if branch_ahead_count(n) != "0": set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)   # the branch's own state sets the column (#358): no pull request is read
-        if branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Landing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
+        if branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read
+            if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
+            else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
+        if n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Landing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)

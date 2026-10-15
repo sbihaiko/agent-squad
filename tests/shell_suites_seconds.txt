@@ -89,3 +89,4 @@ test-watch-cycle.sh 60.2
 test-wave.sh 3.4
 test-wtclean.sh 90.5
 test-token-ledger.sh 7.6
+test-janitor-board-facts.sh 1.1

@@ -12,8 +12,8 @@ COLUMNS = (
     {"name": "Todo", "fact": "unclaimed", "actor": "dispatch", "terminal": False, "order": 3, "flow": 5, "color": "#c9d1d9"},
     {"name": "Open Specs", "fact": "spec_open", "actor": "owner", "terminal": False, "order": 4, "flow": 2, "color": "#f78fb3"},
     {"name": "In Progress", "fact": "claimed", "actor": "agent", "terminal": False, "order": 0, "flow": 6, "color": "#e8d44d"},
-    {"name": "Code Complete", "fact": "open_pr", "actor": "tester", "terminal": False, "order": 1, "flow": 7, "color": "#b087f9"},
-    {"name": "Testing", "fact": "merged", "actor": "tester", "terminal": False, "order": 2, "flow": 8, "color": "#2dd4bf"},
+    {"name": "Code Complete", "fact": "wave_branch", "actor": "tester", "terminal": False, "order": 1, "flow": 7, "color": "#b087f9"},
+    {"name": "Testing", "fact": "dev_ci", "actor": "tester", "terminal": False, "order": 2, "flow": 8, "color": "#2dd4bf"},
     {"name": "Blocked", "fact": "blocked", "actor": "owner", "terminal": False, "order": 5, "flow": 4, "color": "#ff6b6b"},
     {"name": "Done", "fact": "issue_closed", "actor": "none", "terminal": True, "order": 7, "flow": 9, "color": "#3ecf8e"},
     {"name": "Open branches", "fact": "pr_open", "actor": "reviewer", "terminal": False, "order": 8, "flow": 0, "color": "#5aa9ff"},
@@ -76,7 +76,7 @@ def column_for(facts):
 HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
        "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
 LANES = ({"key": "pr_open", "name": "Open branches", "color": "#5aa9ff", "tracking": True},)
-ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "merged": "Testing"}
+ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "dev_ci": "Testing"}
 SPEC_LABEL = "spec"
 
 

@@ -36,4 +36,4 @@ Rejected: a pull request per work branch. Rejected: a merge commit on promotion.
 
 ## Guard
 
-`tests/test_tooling.py` guards rule 7 (the CI triggers in `.github/workflows/ci.yml`). Rules 1 to 6 and 8 to 14 have no guard yet; they are a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)).
+`tests/test_tooling.py` guards rule 7 (the CI triggers in `.github/workflows/ci.yml`). `tests/test_board_facts.py` and `contrib/squad-goal/scripts/test-janitor-board-facts.sh` guard rule 12 (the facts that place a card in Code Complete, Landing, Testing or Doing). Rules 1 to 6, 8 to 11, 13 and 14 have no guard yet; they are a draft ([ADR-0018](0018-failing-gate-is-a-defect.md)).

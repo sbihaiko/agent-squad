@@ -69,7 +69,7 @@ for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[
     deps = blockers(st.get("body"))
     if st["state"] == "closed" and cur != BY_FACT["issue_closed"]: move(n, BY_FACT["issue_closed"], "issue closed")
     elif st["state"] == "open" and cur == BY_FACT["issue_closed"]: move(n, BY_FACT["unclaimed"], "the issue is open again, so the work was taken back")   # the facts earn the floor; `move` refuses to walk the card back and tags it instead
-    elif st["state"] == "open" and i in refs and cur in (BY_FACT["unclaimed"], BY_FACT["claimed"], BY_FACT["blocked"], None): move(n, BY_FACT["open_pr"], f"work branch {refs[i]} is ahead of {LAND}")
+    elif st["state"] == "open" and i in refs and cur in (BY_FACT["unclaimed"], BY_FACT["claimed"], BY_FACT["blocked"], None): move(n, BY_FACT["wave_branch"], f"work branch {refs[i]} is ahead of {LAND}")
     elif st["state"] == "open" and deps:
         open_deps = [d for d in deps if is_open(d)]
         if open_deps and cur in (BY_FACT["unclaimed"], None): move(n, BY_FACT["blocked"], "blocked by open " + ", ".join(f"#{d}" for d in open_deps))
@@ -77,6 +77,6 @@ for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[
     elif st["state"] == "open" and cur in (BY_FACT["unclaimed"], None) and has_freetext_blocker(st.get("body")): print(f"BOARD NOTE #{n}: 'Blocked by' names no #N, fix the issue body")
 for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or []:
     if "pull_request" in i or i["number"] < MIN or str(i["number"]) in items: continue
-    to = BY_FACT["open_pr"] if i["number"] in refs else BY_FACT["unclaimed"]
+    to = BY_FACT["wave_branch"] if i["number"] in refs else BY_FACT["unclaimed"]
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {to} (new bug)")
     if APPLY: subprocess.run([MOVE, "--add", OWNER, str(BOARD), to, str(i["number"])], capture_output=True)

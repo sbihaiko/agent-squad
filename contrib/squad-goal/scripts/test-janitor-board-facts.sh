@@ -6,7 +6,7 @@
 # usage: bash test-janitor-board-facts.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
-cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/" 2>/dev/null
+cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/"
 cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
@@ -29,7 +29,7 @@ case "$a" in
   *projectsV2/4/items*) for n in 2301 2302 2303 2305 2306; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done;;
   *repos/x/y/branches*) printf 'wave/run-wl shaWL\nwave/run-wc shaWC\nwave/run-wt shaWT\nfix/2305-x shaF5\nfix/2306-x shaF6\n';;
   *compare/dev...shaWT*|*compare/dev...shaF*) :;;
-  *commits/dev/check-runs*) echo 1;;
+  *--include*commits/dev/check-runs*) echo '{"check_runs":[{"name":"test","status":"in_progress"}]}';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     sep=""; for n in 2301 2302 2303 2305 2306; do
