@@ -19,16 +19,17 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; D="TMPDIR"
 echo "$a" >> "$D/gh.calls"
 case "$a" in *"--input -"*) cat > "$D/last.in";; esac
-cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013 2014 2015 2016"
+cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013 2014 2015 2016 2017 2018"
 case "$a" in
   *users/o*) echo '{"type":"Organization"}';;
-  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"Doing"}}]}]';;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"Doing"}},{"id":"O_DONE","name":{"raw":"Done"}}]}]';;
   *items?per_page=100\&fields*)   # the one Status read: number, the state the card carries (its option id), the repository url
     s15=$(( $(cat "$D/sreads15" 2>/dev/null || echo 0) + 1 )); echo "$s15" > "$D/sreads15"
     for n in $cards; do [ "$n" = 2015 ] && [ "$s15" -lt 6 ] && continue   # #2015 is carried from the sixth Status read only (#403)
       [ -e "$D/seen-$n" ] || continue
       v=$(cat "$D/st-$n" 2>/dev/null)
       if [ "$n" = 2016 ]; then s16=$(( $(cat "$D/sreads16" 2>/dev/null || echo 0) + 1 )); echo "$s16" > "$D/sreads16"; [ "$s16" -lt 6 ] && v=O_TODO; fi   # #2016 reads its old Status until the sixth Status read (#434)
+      if [ "$n" = 2018 ]; then s18=$(( $(cat "$D/sreads18" 2>/dev/null || echo 0) + 1 )); echo "$s18" > "$D/sreads18"; [ "$s18" -ge 3 ] && v=O_DONE; fi   # #2018 is moved by another writer to a third Status (O_DONE) from the third Status read
       printf '%s\t%s\t%s\n' "$n" "$v" "https://api.github.com/repos/x/y"; done; exit 0;;
   *items?per_page=100*)   # the items route is eventually consistent: the read is counted, and #2002 is only carried from the second read (#96)
     r=$(( $(cat "$D/reads" 2>/dev/null || echo 0) + 1 )); echo "$r" > "$D/reads"
@@ -69,6 +70,7 @@ case "$a" in
           *O_OLD*|*O_GONE*) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # the option id the cache holds is not the board's any more
           *) echo "$w" > "$D/st-$n"; echo '{"id":"ITEM'"$i"'}';;
         esac;;
+      2017|2018) echo '{"id":"ITEM'"$i"'}';;   # accepted, and the card never carries it (#2017 stays on Todo; #2018 is moved on by another writer)
       2009) echo '{"message":"Invalid field values (HTTP 400)"}' >&2; exit 1;;   # refused, but the card already carries the Status
       2007) if [ -e "$D/dropped-2007" ]; then echo "$w" > "$D/st-2007"; echo '{"id":"ITEM7"}';   # the retry lands
             else touch "$D/dropped-2007"; echo '{"id":"ITEM7"}'; fi;;   # the first write is dropped, never carried
@@ -156,5 +158,17 @@ o=$(settle o 4 Todo 2015 2>&1); rc=$?
 echo '{"2016":"ITEM16"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2016"; echo O_TODO > "$T/st-2016"; rm -f "$T/sreads16"; : > "$T/gh.calls"
 o=$(settle o 4 Doing 2016 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"#2016 -> Doing"*) ok "a write whose card the read shows on its old Status past the bounded attempts is proven within the settle bound";; *) ko "settle old-Status message: $o";; esac || ko "settle old-Status exit $rc: $o"
-[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -le 3 ] && ok "the settle reads and never writes the card again" || ko "settle wrote again: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCHes"
+[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 3 ] && ok "the settle reads and never writes the card again: exactly the 3 bounded attempts, no 4th PATCH" || ko "settle wrote again: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCHes"
+# (#438) a write GitHub accepted that an old-Status card never carries is a lost write, not lag: its settle is capped
+# (SG_BOARD_OLD_SETTLE_SECONDS, default 10), so it does not wait the full SG_BOARD_SETTLE_SECONDS before the failure.
+echo '{"2017":"ITEM17"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2017"; echo O_TODO > "$T/st-2017"; : > "$T/gh.calls"
+t0=$(date +%s); o=$(SG_BOARD_OLD_SETTLE_SECONDS=0.1 SG_STATE="$T/st" SG_REPO=x/y SG_BOARD_READ_BACKOFF=0.01 SG_BOARD_SETTLE_SECONDS=30 python3 "$T/s-board.py" o 4 Doing 2017 2>&1); rc=$?; t1=$(date +%s)
+[ "$rc" -eq 1 ] && case $o in *"#2017"*"read failure"*) ok "a lost write on an old-Status card is a read failure";; *) ko "lost write message: $o";; esac || ko "lost write exit $rc: $o"
+[ $((t1 - t0)) -lt 5 ] && ok "its settle is capped: it does not wait the full settle bound" || ko "the lost write waited $((t1 - t0)) s"
+[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 3 ] && ok "a lost write is written for the 3 bounded attempts only" || ko "lost write PATCHes: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")"
+# another writer moved the card to a third Status during the settle: the settle never moves it back (ADR-0143).
+echo '{"2018":"ITEM18"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2018"; echo O_TODO > "$T/st-2018"; rm -f "$T/sreads18"; : > "$T/gh.calls"
+o=$(SG_BOARD_OLD_SETTLE_SECONDS=0.5 settle o 4 Doing 2018 2>&1); rc=$?
+[ "$rc" -eq 1 ] && case $o in *"#2018"*"read failure"*) ok "a card another writer moved to a third Status is not claimed as written";; *) ko "third-Status message: $o";; esac || ko "third-Status exit $rc: $o"
+[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" = 3 ] && ok "a card moved to a third Status is written for the 3 bounded attempts only, never moved back by the settle" || ko "third-Status PATCHes: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")"
 rm -rf "$T"; exit $fail
