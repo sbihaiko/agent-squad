@@ -35,7 +35,7 @@ run_def issues c "FORK-ONLY work for GitHub issues 1491 on the fork." pass
 run_def branch c "Create the worktree: git worktree add ~/wt-as-1492 -b gui/1492 local/next" pass
 run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
-export GH_LOG=$T/gh.log GH_KIDS="2000 2001"; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress"
+export GH_LOG=$T/gh.log GH_KIDS="2000 2001"; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -56,4 +56,31 @@ grep -c '^create' "$T/gh.log" | grep -qx 1 && ok "two children: one parent creat
 echo "$out" | /usr/bin/grep -q 'RUN PARENT #900 (two)' && ok "the run's parent is reported" || ko "no parent report: $out"
 grep '^create' "$T/gh.log" | grep -q '"labels": \["run-parent", "enhancement"\]' && ok "the parent carries its run and type labels, so no pass dispatches it (#340)" || ko "parent create body: $(grep '^create' "$T/gh.log")"
 echo "$out" | /usr/bin/grep -q 'RUN PARENT .*(fin-two)' && ko "a finished run got a parent (#340)" || ok "a finished run gets no parent (#340)"
+
+# A run with a wave (#375): the entry is wave.sh's, stubbed here. A child that its gates refused is tried again only on a new
+# HEAD, and a run whose wave landed (wave-<run> gone, waved-<run> kept) never moves a child's card to Code Complete.
+cat > "$T/wave.sh" <<'W'
+#!/bin/bash
+echo "$*" >> "$WAVE_CALLS"
+[ -e "$WAVE_FAIL" ] && { echo "WAVE REQUEUE #$3: the local gates failed: x"; exit 1; }
+echo "WAVE gui/$3 entered (#$3)"
+W
+export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail; : > "$WAVE_CALLS"
+wtree() { # run: the child's worktree, a git repo with one commit
+  local d="$T/co/runs/$1/ws/target-c"; mkdir -p "$d"; /usr/bin/git -C "$d" init -q . && /usr/bin/git -C "$d" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one; }
+pass() { : > "$T/st/active-runs.txt"; echo "$T/co/runs/$1" >> "$T/st/active-runs.txt"; (cd "$T/co" && python3 "$T/childcc.py.run" 2>&1); }
+run wv 5100 n; wtree wv; echo wave/wv > "$T/st/auto/wave-wv"; echo wave/wv > "$T/st/auto/waved-wv"; : > "$WAVE_FAIL"
+pass wv; pass wv; pass wv
+[ "$(grep -c '^enter wv 5100' "$WAVE_CALLS")" = 1 ] && ok "a refused child is not entered again on the same HEAD (gates and requeue run once)" || ko "enter calls for the refused child: $(cat "$WAVE_CALLS")"
+/usr/bin/git -C "$T/co/runs/wv/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m two
+pass wv >/dev/null
+[ "$(grep -c '^enter wv 5100' "$WAVE_CALLS")" = 2 ] && ok "a new commit on the refused child is tried again" || ko "enter calls after a new HEAD: $(cat "$WAVE_CALLS")"
+rm -f "$WAVE_FAIL"; /usr/bin/git -C "$T/co/runs/wv/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m three
+pass wv >/dev/null
+[ "$(grep -c '^enter wv 5100' "$WAVE_CALLS")" = 3 ] && [ -e "$T/st/auto/cc-wv-c" ] && ok "a child that then enters gets its marker" || ko "no entry marker: $(cat "$WAVE_CALLS")"
+# the wave landed: wave-<run> is gone, waved-<run> stays, and a child that never entered is not moved to Code Complete
+run lnd 5101 v; wtree lnd; echo wave/lnd > "$T/st/auto/waved-lnd"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+out=$(pass lnd)
+[ ! -s "$WAVE_CALLS" ] && ok "a run whose wave landed enters no child" || ko "enter ran for a landed wave: $(cat "$WAVE_CALLS")"
+grep -q ' 5101$' "$T/moves" 2>/dev/null && ko "a child that never entered reads Code Complete after its wave landed" || ok "a child that never entered is never moved to Code Complete after its wave landed"
 rm -rf "$T"; exit $fail

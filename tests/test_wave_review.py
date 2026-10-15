@@ -19,7 +19,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
 
 
 def _suite(name: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", str(SCRIPTS / name)], capture_output=True, text=True, timeout=120)
+    return subprocess.run(["bash", str(SCRIPTS / name)], capture_output=True, text=True, timeout=300)
 
 
 @pytest.mark.heavy
@@ -28,6 +28,7 @@ def test_the_review_reads_the_child_diff_against_the_wave_branch() -> None:
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.slow(reason="test-wave.sh runs the entry, landing and close cases over throwaway repositories, more than 20 s on a loaded machine")
 @pytest.mark.heavy
 def test_a_changes_requested_child_never_enters_the_wave_branch() -> None:
     r = _suite("test-wave.sh")

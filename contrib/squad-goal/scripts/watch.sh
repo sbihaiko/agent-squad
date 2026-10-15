@@ -43,6 +43,25 @@ else echo "WATCH: the open-PR list is not readable, keeping the last known set: 
 for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rs"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
 tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
+# land_wave <run>: the completion of one finished run -- the run's finished children enter its wave, and then the wave lands
+# (#375, ADR-0145 rules 9, 10 and 12). The order is the point: a child enters the wave in childcc's pass, which this cycle
+# reaches after this loop, so a landing attempted first finds a wave without the child in it, refuses it, and -- the run
+# being read once -- the child that enters afterwards stays on wave/<run> and never reaches $SG_BASE (#375 review). The
+# pass and the landing run inside ONE single-flight lock, the one fastloop.sh takes for childcc: a pass already running is
+# never doubled, and the entry it is making may still be in flight, so the landing waits for it instead. `wland-<run>` is
+# the marker the locked command leaves once the pass got through AND the landing succeeded; the caller leaves the run unread
+# when it is not there, and the next cycle lands the wave its children are in by then. So a run is read only when its
+# children had their pass and the wave is in $SG_BASE: a pass still running elsewhere, a pass that failed (its traceback is
+# in this log) and a landing that failed (a rebase conflict, a push refused twice) each leave the run unread, never a marker.
+land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
+  local run=$1 ran; ran="$SG_STATE/auto/wland-${run##*/}"
+  mkdir -p "$SG_STATE/auto"; rm -f "$ran"
+  tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2" && bash "$4" land "$5" && : > "$3"' landwave \
+     "${wme%/*}/childcc.py" "$run" "$ran" "${wme%/*}/wave.sh" "${run##*/}" 2>&1
+  [ -e "$ran" ] && { rm -f "$ran"; return 0; }
+  echo "WATCH: ${run##*/} waits: the pass that enters its children or the landing did not get through (a pass runs elsewhere, or one failed), so its wave lands on a later cycle"
+  return 1
+}
 while :; do
   c0=$SECONDS
   for r in $(cat "$SG_STATE/active-runs.txt"); do case "$seen" in *" $r "*) continue;; esac
@@ -56,7 +75,16 @@ if v:
   rs=v.get('reasons') or []
   if v['verdict']=='failed' and landed and rs and all(x.startswith('ac-verify:no_ac_commands') for x in rs): print('landed (gate: no_ac_commands)')
   else: print(v['verdict'], ','.join(rs))" $r 2>/dev/null | tail -1)
-    [ -n "$v" ] && { [ $boot = 1 ] || { echo "RUN ${r##*/} verdict=$v"
+    [ -n "$v" ] && {
+      # A run that ended lands its wave (#375, ADR-0145 rule 10): the branch the run cut at its start is rebased on $SG_BASE
+      # and pushed there in one fast-forward push -- one update, one CI run, at the landing. The marker `wave.sh start` left
+      # is what says the run has a wave; a run that cut none is left alone, and the landing pass clears the marker once the
+      # wave is in $SG_BASE. The landing comes BEFORE the announcement below: a run whose landing failed stays unread and is
+      # tried again next cycle, and the announcement, the retry of a failed run, the consult and the per-issue comments are
+      # side effects that run once per run, on the cycle that reads it, never on every retry. The landing only happens once
+      # the run's finished children are in the wave (land_wave above).
+      [ -e "$SG_STATE/auto/wave-${r##*/}" ] && ! land_wave "$r" && continue
+      [ $boot = 1 ] || { echo "RUN ${r##*/} verdict=$v"
         # the run's verdict goes on every issue it worked (issue numbers read from the run's first records)
         rd=$r; [ "${r#/}" = "$r" ] && rd=runs/$r
         case "$v" in failed*) "$(dirname "$0")/retryfix.sh" "$rd";; esac   # a failed autofix run re-arms its PR sha (max 2)

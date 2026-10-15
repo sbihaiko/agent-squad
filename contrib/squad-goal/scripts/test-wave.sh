@@ -1,19 +1,31 @@
 #!/bin/bash
-# Regression test for wave.sh (#374): the run's wave branch, and the child that enters it by a fast-forward.
+# Regression test for wave.sh: the run's wave branch and the child that enters it by a fast-forward (#374), and the wave's
+# landing pass: the rebase on the moved base, the one push, the push that repeats from the fetch, and the closes (#375).
 # A child enters only after its review approved its own diff against the wave branch (#376): a review that asked for changes,
 # one read against another base or an older tip, and no review at all each hold the child out, with nothing requeued.
-# A bare local remote, a stub board, a temp state dir: every case runs on this machine, with no GitHub call at all.
+# A bare local remote, a stub gh, a stub board, a temp state dir: every case runs on this machine, with no GitHub call at all.
+# A pre-receive hook on the bare remote logs every ref a push writes, so one push and "no child branch" are read, not assumed.
 # usage: bash test-wave.sh [scripts dir]
-d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from a live loop must not
-G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/co"
-cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$T/s/" 2>/dev/null
-printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
+d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/co" "$T/bin"
+cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T/co" "$T" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b dev "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init)
 $G clone -q --bare "$T/co" "$T/origin.git"; O="$G -C $T/origin.git"; W=wave/run-1
+# Every ref a push writes is logged by the remote itself (<old> <new> <ref>, one line per ref): the landing pass pushes
+# exactly one ref, and no child branch ever reaches the remote (#375).
+mkdir -p "$T/origin.git/hooks"
+printf '#!/bin/bash\nwhile read -r old new ref; do printf "%%s\\t%%s\\t%%s\\n" "$old" "$new" "$ref" >> "%s/pushes.log"; done\n' "$T" > "$T/origin.git/hooks/pre-receive"
+chmod +x "$T/origin.git/hooks/pre-receive"
+pushes() { awk -F'\t' -v r="${1:-}" '$3==r || r=="" {print $1, $2, $3}' "$T/pushes.log" 2>/dev/null; }
+# The stub gh: every argv is logged, and a close answers GitHub's own shape. SWEEPS resets the log between cases.
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The remote is a bare repository on this machine: the whole suite runs against it, never against GitHub.
 [ "$($O rev-parse --is-bare-repository)" = true ] && ok "the suite runs against a bare local remote" || ko "the remote is not a bare repository"
+[ -x "$T/origin.git/hooks/pre-receive" ] && ok "the remote logs every pushed ref" || ko "the remote has no push hook"
 start() { (cd "$T/co" && bash "$T/s/wave.sh" start run-1); }
 # A child worktree: a clone cut from the wave branch, on branch gui/<issue>, one commit that writes <file>.
 child() { local n=$1 f=$2 tip=${3:-origin/$W}
@@ -29,11 +41,20 @@ rev() { local n=$1 sha; sha=$($G -C "$T/c$n" rev-parse HEAD); rm -f "$T/st/revie
 # enter runs where the child works. GATES is the local gate command the profile sets (SG_WAVE_GATES).
 en() { local n=$1; rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=${GATES-true} bash "$T/s/wave.sh" enter run-1 "$n"); }
 entered() { $O merge-base --is-ancestor "$($G -C "$T/c$1" rev-parse HEAD)" $W 2>/dev/null && echo yes || echo no; }
+# The wave's landing pass runs beside the run, never in the owner's checkout (it works in a throwaway clone).
+land() { (cd "$T/co" && bash "$T/s/wave.sh" land "$@"); }
+# One commit lands on dev while the wave is open: the base a wave lands on has moved under it.
+devmoved() { rm -rf "$T/w2"; $G clone -q "$T/origin.git" "$T/w2" 2>/dev/null
+  (cd "$T/w2" && $G checkout -q dev && echo other > other && $G add other && $G -c user.email=a@b -c user.name=t commit -q -m "other work" && $G push -q origin HEAD:dev); }
 
 # A: the run cuts one wave branch, named for the run, from dev.
 r=$(start)
 [ "$($O rev-parse -q --verify $W)" = "$($O rev-parse dev)" ] && ok "A: the run cuts its wave branch from dev" || ko "A: no wave branch: '$r'"
 case "$r" in "WAVE $W "*) ok "A: start names the wave branch and its sha";; *) ko "A: start said nothing: '$r'";; esac
+# The run's completion finds its wave through this marker, and `land` clears it (#375): a run lands its wave once, and a
+# run that cut none is never sent to `land`.
+[ "$(cat "$T/st/auto/wave-run-1" 2>/dev/null)" = "$W" ] && ok "A: start records the run's wave for its completion" || ko "A: no wave marker: '$(cat "$T/st/auto/wave-run-1" 2>/dev/null)'"
+[ -e "$T/st/auto/waved-run-1" ] && ok "A: start also leaves the durable waved-<run> record" || ko "A: no waved-run-1 record"
 r2=$(start)
 [ "$($O rev-parse $W)" = "$($O rev-parse dev)" ] && ok "A: a wave branch that already exists is left where it is" || ko "A: the second start moved the wave: '$r2'"
 
@@ -108,4 +129,150 @@ r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter 
 [ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "I: the entry gate waits for the holder of the gate lock, then runs" || ko "I: gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "I: the wait shows on one line" || ko "I: wait lines: '$r'"
 [ "$(entered 24)" = yes ] && ok "I: the waiting gate is not dropped: the child enters" || ko "I: #24 did not enter"
-rm -rf "$T"; exit $fail
+
+
+# J: the wave lands in dev with one push and one CI run, closes what it carries, and pushes no child branch (#375).
+WAVE_ISSUES='7 8 10 11 24 30 31'                 # every child the wave carries: a gate failure and a conflict never entered
+: > "$T/gh.log"
+child 30 g30; en 30 >/dev/null; child 31 g31; r=$(en 31)
+[ "$(entered 30)" = yes ] && [ "$(entered 31)" = yes ] && ok "J: the wave of two children holds both" || ko "J: a child of the wave did not enter: '$r'"
+/usr/bin/grep -q 'refs/heads/gui/' "$T/pushes.log" && ko "J: a child branch reached the remote: $(/usr/bin/grep 'refs/heads/gui/' "$T/pushes.log")" || ok "J: an entry pushes the wave ref, never a child branch"
+# The base moves under the open wave: it is rebased onto before the one push, and only then (ADR-0145 rule 14).
+en30head=$($G -C "$T/c30" rev-parse HEAD); en31head=$($G -C "$T/c31" rev-parse HEAD); wtip=$($O rev-parse $W)
+devmoved; moved=$($O rev-parse dev)
+cp "$T/pushes.log" "$T/pushes.before"; : > "$T/pushes.log"   # from here, the only push left is the landing's own
+[ "$($O rev-parse $W)" = "$en31head" ] && [ "$($O rev-parse $W)" = "$wtip" ] && ok "J: the wave tip is the last entrant's head, and the moved dev did not move it" || ko "J: the wave tip is not the last entrant's head"
+$O merge-base --is-ancestor "$moved" $W && ko "J: the wave carries the moved dev before the landing" || ok "J: mid-wave the wave does not carry the moved dev (it is not rebased on dev yet)"
+$O merge-base --is-ancestor "$en30head" $W && ok "J: the entry of a child is what moves the wave tip" || ko "J: #30's entry is not in the wave"
+r=$(land run-1); rc=$?
+case "$r" in "WAVE $W "*) ok "J: land names the wave branch and its sha";; *) ko "J: land said nothing: '$r' (exit $rc)";; esac
+[ $rc = 0 ] && ok "J: the wave landed (exit 0)" || ko "J: exit $rc: '$r'"
+# One push to dev, and it is a fast-forward of the dev that moved: the tip lands whole, in one update.
+[ "$(pushes refs/heads/dev | wc -l | tr -d ' ')" = 1 ] && ok "J: the wave lands in dev with one push" || ko "J: $(pushes refs/heads/dev | wc -l | tr -d ' ') pushes to dev: $(pushes refs/heads/dev)"
+[ "$(pushes refs/heads/dev | cut -d' ' -f1)" = "$moved" ] && ok "J: the one push starts from the dev that moved" || ko "J: the push started from '$(pushes refs/heads/dev | cut -d' ' -f1)', not the moved dev '$moved'"
+$O merge-base --is-ancestor "$moved" dev && ok "J: the moved dev is rebased onto before the push" || ko "J: the moved dev is not in the landed dev"
+[ "$($O rev-parse dev)" = "$(pushes refs/heads/dev | cut -d' ' -f2)" ] && ok "J: the push is the one that landed (dev is at the pushed sha)" || ko "J: dev is not at the pushed sha"
+$O rev-list --merges dev | /usr/bin/grep -q . && ko "J: a merge commit landed" || ok "J: the landing keeps the history linear"
+# The rebase on the moved base rewrites the shas, so what proves a child is in dev is its work, not its sha.
+$O cat-file -e dev:g30 2>/dev/null && $O cat-file -e dev:g31 2>/dev/null && ok "J: the work of both children of the wave is in dev" || ko "J: a child of the wave is not in dev"
+# No child branch is on the remote, now that the whole cycle has run; the wave branch itself goes with the landing.
+/usr/bin/grep -q 'refs/heads/gui/' "$T/pushes.log" "$T/pushes.before" && ko "J: a child branch reached the remote" || ok "J: no child branch is pushed to the remote, ever"
+$O rev-parse -q --verify "refs/heads/$W" >/dev/null && ko "J: the landed wave branch survives" || ok "J: the wave branch is deleted once its work is in dev"
+[ "$(pushes | awk -v w="refs/heads/$W" '$3!="refs/heads/dev" && $3!=w')" = "" ] && ok "J: the landing writes dev and the wave ref, nothing else" || ko "J: the landing wrote $(pushes)"
+# Each issue of the wave is closed through the API, and its one delivery comment is queued, never posted.
+for n in $WAVE_ISSUES; do /usr/bin/grep -q "issues/$n -f state=closed" "$T/gh.log" || ko "J: #$n is not closed through the API"; done
+[ "$(/usr/bin/grep -c 'state=closed' "$T/gh.log")" = 7 ] && ok "J: each issue of the wave is closed through the API" || ko "J: $(/usr/bin/grep -c 'state=closed' "$T/gh.log") closes for 7 issues"
+for n in $WAVE_ISSUES; do ls "$T/st/cq/"x__y#$n-delivery~* >/dev/null 2>&1 || ko "J: no delivery comment is queued for #$n"; done
+[ "$(ls "$T/st/cq/"*-delivery~* 2>/dev/null | wc -l | tr -d ' ')" = 7 ] && ok "J: each issue of the wave has its one delivery comment queued" || ko "J: $(ls "$T/st/cq" 2>/dev/null | tr '\n' ' ')"
+/usr/bin/grep -qE 'issues/[0-9]+/comments' "$T/gh.log" && ko "J: the pass posted a comment itself" || ok "J: the pass posts no comment itself (the flush does)"
+for n in $WAVE_ISSUES; do /usr/bin/grep -qx "o 3 Done $n" "$T/board.log" || ko "J: the card of #$n does not read Done"; done
+[ "$(/usr/bin/grep -cE '^o 3 Done ' "$T/board.log")" -ge 7 ] && ok "J: each card of the wave reads Done" || ko "J: $(/usr/bin/grep -cE '^o 3 Done ' "$T/board.log") cards read Done"
+# A landing pass with no wave branch to land writes nothing: the second call is refused, and dev does not move.
+before=$($O rev-parse dev); r=$(land run-1); rc=$?
+[ $rc = 2 ] && case "$r" in *"WAVE-ERROR"*) ok "J: a wave branch that is not there is refused";; *) ko "J: the refusal is silent: '$r'";; esac || ko "J: a second land exited $rc: '$r'"
+[ "$($O rev-parse dev)" = "$before" ] && ok "J: a refused landing moves nothing" || ko "J: dev moved on a refused landing"
+[ ! -e "$T/st/auto/wave-run-1" ] && ok "J: the landing clears the run's wave marker" || ko "J: the wave marker outlives the landing"
+
+# E2: a push the remote refuses repeats from the fetch (ADR-0145 rule 2). The base moves between the pass's rebase and its
+# push -- a concurrent landing, made by the remote's own hook -- so the first push to dev is refused. The pass fetches the
+# moved base, rebases on it, and pushes again: the wave lands, and dev carries both the wave's work and the concurrent one.
+start2() { (cd "$T/co" && bash "$T/s/wave.sh" start "$1"); }
+en2() { local r=$1 n=$2; REV_BASE=wave/$r rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter "$r" "$n"); }
+land2() { (cd "$T/co" && bash "$T/s/wave.sh" land "$1"); }
+rm -rf "$T/race"; $G clone -q "$T/origin.git" "$T/race" 2>/dev/null
+(cd "$T/race" && $G checkout -q -b raceline dev && echo race > race && $G add race && $G -c user.email=a@b -c user.name=t commit -q -m "a concurrent landing" && $G push -q origin HEAD:raceline)
+RACE=$($G -C "$T/race" rev-parse HEAD)
+cat > "$T/origin.git/hooks/pre-receive" <<H
+#!/bin/bash
+reject=
+while read -r old new ref; do printf '%s\t%s\t%s\n' "\$old" "\$new" "\$ref" >> "$T/pushes.log"; [ "\$ref" = refs/heads/dev ] && [ -e "$T/hook-hold" ] && reject=1; done
+[ -n "\$reject" ] || exit 0
+rm -f "$T/hook-hold"
+printf '%s\n' "$RACE" > "$T/origin.git/refs/heads/dev"   # the concurrent landing, between the pass's rebase and its push
+exit 1
+H
+chmod +x "$T/origin.git/hooks/pre-receive"
+W2=wave/run-2; start2 run-2 >/dev/null; child 50 g50 "origin/$W2"; en2 run-2 50
+: > "$T/hook-hold"; : > "$T/pushes.log"; : > "$T/gh.log"
+r=$(land2 run-2); rc=$?
+case "$r" in "WAVE $W2 "*) ok "E2: a refused push repeats from the fetch and the wave lands";; *) ko "E2: the refused push did not land: '$r' (exit $rc)";; esac
+[ $rc = 0 ] && ok "E2: the landing exits 0" || ko "E2: exit $rc: '$r'"
+[ "$($O cat-file -e dev:race 2>/dev/null && echo yes)" = yes ] && ok "E2: the base that moved between the rebase and the push is in dev" || ko "E2: the concurrent landing is not in dev"
+[ "$($O cat-file -e dev:g50 2>/dev/null && echo yes)" = yes ] && ok "E2: the wave's work is in dev beside it" || ko "E2: the wave's work is not in dev"
+[ "$($O rev-parse dev)" = "$(pushes refs/heads/dev | tail -1 | cut -d' ' -f2)" ] && ok "E2: dev is at the sha the repeat push wrote" || ko "E2: dev is not at the last pushed sha"
+$O rev-parse -q --verify "refs/heads/$W2" >/dev/null && ko "E2: the landed wave branch survives" || ok "E2: the wave branch goes with its landing"
+[ "$(/usr/bin/grep -c 'issues/50 -f state=closed' "$T/gh.log")" = 1 ] && ok "E2: the issue of the landed wave closes through the API" || ko "E2: $(/usr/bin/grep -c 'issues/50 -f state=closed' "$T/gh.log") closes for #50"
+
+# E3: a close the API refuses queues no delivery comment (#375 debt): the issue stays open, and a comment claiming it
+# closed would be false delivery evidence. The close repeats once from the refusal, then the pass names it.
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\nexit 1\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+W3=wave/run-3; start2 run-3 >/dev/null; child 40 g40 "origin/$W3"; en2 run-3 40 >/dev/null
+: > "$T/gh.log"; : > "$T/pushes.log"
+r=$(land2 run-3); rc=$?
+[ "$($O cat-file -e dev:g40 2>/dev/null && echo yes)" = yes ] && ok "E3: the wave still lands when the close is refused" || ko "E3: the wave did not land: '$r' (exit $rc)"
+[ "$($O rev-parse dev)" = "$(pushes refs/heads/dev | tail -1 | cut -d' ' -f2)" ] && ok "E3: and dev is at the pushed sha" || ko "E3: dev is not at the pushed sha"
+[ "$(/usr/bin/grep -c 'issues/40 -f state=closed' "$T/gh.log")" = 2 ] && ok "E3: the refused close is retried once" || ko "E3: $(/usr/bin/grep -c 'issues/40 -f state=closed' "$T/gh.log") close attempts for #40"
+ls "$T/st/cq/"x__y#40-delivery~* >/dev/null 2>&1 && ko "E3: a delivery comment is queued for an issue that did not close" || ok "E3: no delivery comment is queued for an issue that did not close"
+/usr/bin/grep -qx "o 3 Done 40" "$T/board.log" && ko "E3: the card of an issue that did not close reads Done" || ok "E3: the card of an issue that did not close keeps its column"
+[ -z "$(awk -F'\t' '$4=="40"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "E3: the ledger carries no row for an issue that did not close" || ko "E3: the ledger claims a delivery that did not happen: '$(awk -F'\t' '$4=="40"' "$T/st/landed.tsv")'"
+case "$r" in *"#40"*"did not close"*) ok "E3: the close that failed is named";; *) ko "E3: the failed close is silent: '$r'";; esac
+printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+
+# E4: the issues a wave carries are read from the whole message of each commit and named once (#375 review). A `Refs #N`
+# that sits in a commit body closes its issue like one in a subject, and an issue two commits (or one commit twice) name is
+# closed one time.
+W4=wave/run-4; start2 run-4 >/dev/null
+rm -rf "$T/c60"; $G clone -q "$T/origin.git" "$T/c60" 2>/dev/null
+(cd "$T/c60" && $G checkout -q -b gui/60 "origin/$W4" && echo 60 > g60 && $G add g60 && $G -c user.email=a@b -c user.name=t commit -q -m "work 60" -m "Refs #60"
+  echo more > g60b && $G add g60b && $G -c user.email=a@b -c user.name=t commit -q -m "more work" -m "Refs #60"
+  echo third > g63 && $G add g63 && $G -c user.email=a@b -c user.name=t commit -q -m "third (Refs #63)" -m "Refs #63")
+en2 run-4 60 >/dev/null; : > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-4); rc=$?
+[ $rc = 0 ] && [ "$($O cat-file -e dev:g60 2>/dev/null && echo yes)" = yes ] && ok "E4: the wave of a body-only Refs lands" || ko "E4: the wave did not land: '$r' (exit $rc)"
+[ "$(/usr/bin/grep -c 'issues/60 -f state=closed' "$T/gh.log")" = 1 ] && ok "E4: an issue named in a commit body is closed, once" || ko "E4: $(/usr/bin/grep -c 'issues/60 -f state=closed' "$T/gh.log") closes for #60"
+ls "$T/st/cq/"x__y#60-delivery~* >/dev/null 2>&1 && ok "E4: the issue named in a body has its delivery comment queued" || ko "E4: no delivery comment for #60"
+/usr/bin/grep -qx "o 3 Done 60" "$T/board.log" && ok "E4: the card of the issue named in a body reads Done" || ko "E4: no Done card for #60: '$(cat "$T/board.log")'"
+[ "$(awk -F'\t' '$4=="60"' "$T/st/landed.tsv" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "E4: the ledger carries one row for an issue two commits name" || ko "E4: the ledger rows for #60: '$(cat "$T/st/landed.tsv" 2>/dev/null)'"
+[ "$(/usr/bin/grep -c 'issues/63 -f state=closed' "$T/gh.log")" = 1 ] && ok "E4: an issue a subject and a body both name is closed once" || ko "E4: $(/usr/bin/grep -c 'issues/63 -f state=closed' "$T/gh.log") closes for #63"
+
+# E5: a commit the base already holds is dropped by the rebase, and its issue is neither closed nor logged (#375 review):
+# the wave did not deliver it. The issues are read after the rebase, from what is left ahead of the base.
+W5=wave/run-5; start2 run-5 >/dev/null; child 61 g61 "origin/$W5"; en2 run-5 61 >/dev/null; child 62 g62 "origin/$W5"; en2 run-5 62 >/dev/null
+rm -rf "$T/dup"; $G clone -q "$T/origin.git" "$T/dup" 2>/dev/null
+(cd "$T/dup" && $G checkout -q dev && $G fetch -q "$T/c61" gui/61 && GIT_COMMITTER_NAME=other $G -c user.email=a@b -c user.name=t cherry-pick FETCH_HEAD >/dev/null 2>&1 && $G push -q origin HEAD:dev)
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-5); rc=$?
+[ $rc = 0 ] && [ "$($O cat-file -e dev:g62 2>/dev/null && echo yes)" = yes ] && ok "E5: the wave lands what the base did not hold" || ko "E5: the wave did not land: '$r' (exit $rc)"
+/usr/bin/grep -q 'issues/61 -f state=closed' "$T/gh.log" && ko "E5: the issue of a commit the base already held is closed" || ok "E5: the issue of a commit the base already held is not closed"
+[ -z "$(awk -F'\t' '$4=="61"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "E5: the ledger carries no row for it" || ko "E5: the ledger claims #61: '$(cat "$T/st/landed.tsv")'"
+/usr/bin/grep -q 'issues/62 -f state=closed' "$T/gh.log" && [ -n "$(awk -F'\t' '$4=="62"' "$T/st/landed.tsv")" ] && ok "E5: the issue the wave did deliver is closed and logged" || ko "E5: #62 is not closed and logged"
+
+# J: a wave with nothing ahead of the base landed empty (a run with no dispatch, or every child failed its gates): the landing
+# is done, not failed -- the wave ref goes, the marker goes, exit 0 -- or the loop retries it every cycle for good (#375 review).
+# `waved-<run>` outlives the landing: the durable record that the run cut a wave, which childcc.py reads.
+W6=wave/run-6; start2 run-6 >/dev/null; before=$($O rev-parse dev); : > "$T/pushes.log"
+r=$(land2 run-6); rc=$?
+[ $rc = 0 ] && ok "J: a wave with nothing ahead of dev lands empty (exit 0)" || ko "J: exit $rc: '$r'"
+$O rev-parse -q --verify "refs/heads/$W6" >/dev/null && ko "J: the empty wave branch stays on the remote" || ok "J: the empty wave branch is deleted"
+[ ! -e "$T/st/auto/wave-run-6" ] && ok "J: the run's wave marker is cleared" || ko "J: the wave marker outlives an empty landing"
+[ -e "$T/st/auto/waved-run-6" ] && ok "J: waved-<run> stays, the durable record that the run had a wave" || ko "J: no waved-run-6 record"
+[ "$($O rev-parse dev)" = "$before" ] && ok "J: an empty landing moves dev nowhere" || ko "J: dev moved on an empty landing"
+
+# K: a landing that fails the same way every pass stops at the cap (SG_WAVE_LAND_TRIES, default 3): each issue the wave
+# carries gets frozen:owner and one queued comment, the marker is cleared so the loop stops, and the wave stays on the remote.
+W7=wave/run-7; start2 run-7 >/dev/null; child 70 cf "origin/$W7"; en2 run-7 70 >/dev/null
+rm -rf "$T/w3"; $G clone -q "$T/origin.git" "$T/w3" 2>/dev/null
+(cd "$T/w3" && $G checkout -q dev && echo other > cf && $G add cf && $G -c user.email=a@b -c user.name=t commit -q -m "conflicting work" && $G push -q origin HEAD:dev)
+: > "$T/gh.log"; before=$($O rev-parse dev)
+r1=$(land2 run-7); rc1=$?; r2=$(land2 run-7); rc2=$?
+[ $rc1 = 1 ] && [ $rc2 = 1 ] && [ -e "$T/st/auto/wave-run-7" ] && ok "K: a conflicting landing fails and keeps its marker below the cap" || ko "K: exits $rc1 $rc2, marker $([ -e "$T/st/auto/wave-run-7" ] && echo kept || echo gone)"
+/usr/bin/grep -q 'issues/70/labels' "$T/gh.log" && ko "K: escalated below the cap" || ok "K: nothing is escalated below the cap"
+r3=$(land2 run-7); rc3=$?
+[ $rc3 = 1 ] && case "$r3" in *"WAVE NEEDS-HUMAN"*) ok "K: the third failure escalates to the owner";; *) ko "K: no escalation: '$r3'";; esac || ko "K: exit $rc3: '$r3'"
+/usr/bin/grep -q 'issues/70/labels -f labels\[\]=frozen:owner' "$T/gh.log" && ok "K: the issue the wave carries is labelled frozen:owner" || ko "K: no label: $(cat "$T/gh.log")"
+ls "$T/st/cq/"x__y#70-wavestuck* >/dev/null 2>&1 && ok "K: one comment is queued on the issue" || ko "K: no queued comment for #70"
+[ ! -e "$T/st/auto/wave-run-7" ] && ok "K: the marker is cleared, so the loop stops retrying" || ko "K: the marker is kept after the escalation"
+$O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work for the owner" || ko "K: the wave branch is gone"
+[ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a failing landing" || ko "K: dev moved"
+
+rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

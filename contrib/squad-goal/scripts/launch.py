@@ -143,6 +143,15 @@ def _issue_child_request(txt):
     child commits on the PR branch: that run keeps today's target."""
     return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
 
+def _wave_request(txt):
+    """The request of a run whose children enter a wave (#375, ADR-0145 rules 9 and 10): a child keeps its branch local, and the
+    loop's child pass (`childcc.py`) enters its finished commits into the run's wave branch, which the run's completion lands
+    in the base with one push. The dispatch builders still write "push your branch" into every request, so the launch is where
+    the sentence is made true; no child branch ever reaches the remote."""
+    txt = re.sub(r"\bpush your branch\b", "keep your branch local (never push it)", txt)
+    return txt.rstrip("\n") + "\n\nWAVE: your branch stays local. The loop enters your finished commits into the run's wave branch and lands the wave in " \
+        + (os.environ.get("SG_BASE") or "the base branch") + " with one push; push no branch of yours.\n"
+
 def _issue_worktree(issue):
     """The linked worktree the child works in, made when it is missing, else None: the checkout's own fork route only.
 
@@ -170,6 +179,7 @@ def _issue_worktree(issue):
     return wt
 
 req_text = req_file.read_text()
+if _issue_child_request(req_text): req_text = _wave_request(req_text)   # the run cuts a wave below: its children keep their branches local
 issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a run that commits on the branch the land reads
 target = _issue_worktree(issues[0]) if len(issues) == 1 else None
 if len(issues) > 1: print(f"note: the request names {issues}: one run has one target, so this run keeps {FALLBACK}", file=sys.stderr)
@@ -195,6 +205,14 @@ else:
     sys.exit(f"no run folder appeared in 180 s; see {log}")
 run = new[-1]
 (runs / run / "request.txt").write_text(req_file.read_text())   # consult.sh reads the request from the run folder
+# One branch per wave (#375, ADR-0145 rules 8 and 10): a run that dispatches children cuts its wave branch from the base
+# as it starts, so every child has a wave to enter and the run's completion has one to land. `wave.sh start` owns the cut
+# -- a throwaway clone, never this checkout -- and leaves the marker $SG_STATE/auto/wave-<run> that watch.sh reads when
+# the run ends. A cut that fails says so and starts the run anyway: its children then work as they did before, and the
+# run ends with no wave to land.
+if _issue_child_request(req_text):
+    w = subprocess.run(["bash", str(here / "wave.sh"), "start", run], capture_output=True, text=True)
+    print("\n".join(l for l in (w.stdout + w.stderr).splitlines() if l.strip()) or f"note: wave.sh start {run} said nothing", file=sys.stderr)
 run_log = runs / run / "launch.log"
 def _copy_launch_log():   # the janitor quotes this file to explain why the run never started; state/<req>.log is the same stream
     try: run_log.write_text(pathlib.Path(log).read_text())
