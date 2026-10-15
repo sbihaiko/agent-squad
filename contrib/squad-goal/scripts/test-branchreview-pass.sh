@@ -15,6 +15,7 @@ J
 cat > "$T/s/review.sh" <<J
 #!/bin/bash
 br=\$3; key=\$(printf '%s' "\$br" | tr / _); echo "\$br \$4" >> "$T/review.log"
+[ -n "\${SLOWREV:-}" ] && { mkdir -p "$T/run"; touch "$T/run/\$\$"; ls "$T/run" | wc -l | tr -d ' ' >> "$T/conc.log"; sleep "\$SLOWREV"; rm -f "$T/run/\$\$"; }
 [ -n "\${FAILREV:-}" ] && { echo "model failed"; exit 1; }   # a failed review keeps no verdict and no sha
 echo "VERDICT: APPROVE" > "$T/st/review-\$key.md"; $G -C "$T/origin.git" rev-parse "\$br" > "$T/st/review-\$key.sha"
 echo "model=stub"
@@ -73,4 +74,42 @@ push gui/7-x; r=$(FAILREV=1 rp)
 # 7) the cycle runs the pass under its own single.sh lock, gated like the landers
 w=$(/usr/bin/grep -n 'single.sh" branchreview ' "$d/watch.sh")
 case "$w" in *'SG_PRLAND_PAUSED'*'branchreviewpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_PRLAND_PAUSED";; *) ko "watch.sh does not run the review pass: '$w'";; esac
+# 8) a stop expires (#426): a stop marker older than SG_REVIEW_STOP_TTL (default 1800 s) is cleared with its tries file, the branch is
+# retried, and the retry restarts the count of 3. Each STOP names the models that failed and why, one line per model.
+push gui/10-b; : > "$T/review.log"; mkdir -p "$T/st/cq"
+printf 'MODEL_FAIL review codex on PR #0: exit 1, usage limit reached, try again at 14:05\n' > "$T/st/cq/x__y#10-status~mfail11-0.md"
+printf 'MODEL_FORMAT review claude:opus on PR #0: line 2 is not the shape.\n' > "$T/st/cq/x__y#10-status~mformat12.md"
+printf 'MODEL_HOURS review gemini-pro skipped on PR #0: outside its window in models.json.\n' > "$T/st/cq/x__y#10-status~mhours13.md"
+printf 'MODEL_FAIL review codex on PR #0: exit 1, an old reason\n' > "$T/st/cq/x__y#10-status~mfail01-0.md"; touch -t 202001010000 "$T/st/cq/x__y#10-status~mfail01-0.md"
+o=; for _ in 1 2 3 4; do o+=$(OPEN="7 8 10" FAILREV=1 rp)$'\n'; done
+[ "$(n gui/10-b)" = 3 ] && ok "a fresh stop blocks the branch" || ko "fresh stop: tried $(n gui/10-b) times"
+st=$(printf '%s' "$o" | /usr/bin/grep -c '^BRANCHREVIEW STOP gui/10-b')
+[ "$st" = 1 ] && ok "the stop line is one line" || ko "stop lines ($st): '$o'"
+l=$(printf '%s' "$o" | /usr/bin/grep '^BRANCHREVIEW STOP gui/10-b')
+case "$l" in *codex*"try again at 14:05"*claude:opus*gemini-pro*|*claude:opus*gemini-pro*codex*|*gemini-pro*codex*claude:opus*|*codex*claude:opus*gemini-pro*) ok "the stop names each failed model and its reason";; *) ko "stop line lacks the models: '$l'";; esac
+case "$l" in *"an old reason"*) ko "the stop shows an older reason of a model with a newer one: '$l'";; *) ok "one reason per model, the newest";; esac
+touch -t 202001010000 "$T/st/auto/"branchreview-stop-gui_10-b-*
+o=$(OPEN="7 8 10" FAILREV=1 rp)
+[ "$(n gui/10-b)" = 4 ] && ok "an expired stop is cleared and the branch is retried" || ko "expired stop: tried $(n gui/10-b) times: '$o'"
+[ "$(cat "$T/st/auto/"branchreview-tries-gui_10-b-* 2>/dev/null)" = 1 ] && ok "the retry restarts the count" || ko "tries after the retry: '$(cat "$T/st/auto/"branchreview-tries-gui_10-b-* 2>/dev/null)'"
+ls "$T/st/auto/"branchreview-stop-gui_10-b-* >/dev/null 2>&1 && ko "the expired stop marker stayed" || ok "the expired marker is gone"
+o=; for _ in 1 2 3; do o+=$(OPEN="7 8 10" FAILREV=1 rp)$'\n'; done
+[ "$(n gui/10-b)" = 6 ] && ok "the restarted count stops after 3 tries again" || ko "after the restart: tried $(n gui/10-b) times"
+o=$(SG_REVIEW_STOP_TTL=0 OPEN="7 8 10" FAILREV=1 rp)
+[ "$(n gui/10-b)" = 7 ] && ok "SG_REVIEW_STOP_TTL sets the expiry" || ko "ttl 0: tried $(n gui/10-b) times"
+# 9) parallel reviews: up to SG_REVIEW_PARALLEL (default 3) branches at once, each with its own count and result
+for i in 21 22 23 24; do push "gui/$i-p"; done; : > "$T/review.log"; rm -rf "$T/run" "$T/conc.log"; P="7 8 10 21 22 23 24"
+s0=$(date +%s); r=$(OPEN="$P" SG_REVIEW_PASS_MAX=4 SLOWREV=2 rp); s1=$(date +%s)
+[ "$(/usr/bin/grep -c '^gui/2[1-4]-p ' "$T/review.log")" = 4 ] && ok "four branches are reviewed in one pass" || ko "reviews: $(cat "$T/review.log"): '$r'"
+[ "$(sort -n "$T/conc.log" | tail -1)" = 3 ] && ok "at most SG_REVIEW_PARALLEL (3) reviews run at once, and 3 do" || ko "peak concurrency: $(sort -n "$T/conc.log" | tr '\n' ' ')"
+[ "$(/usr/bin/grep -c '^BRANCHREVIEW gui/2[1-4]-p' <<<"$r")" = 4 ] && ok "each review prints its own line" || ko "lines: '$r'"
+: > "$T/review.log"; for i in 21 22 23 24; do push "gui/$i-p"; done; rm -f "$T/conc.log"
+r=$(OPEN="$P" SG_REVIEW_PASS_MAX=4 SG_REVIEW_PARALLEL=1 SLOWREV=1 rp)
+[ "$(sort -n "$T/conc.log" | tail -1)" = 1 ] && ok "SG_REVIEW_PARALLEL=1 reviews one at a time" || ko "serial peak: $(sort -n "$T/conc.log" | tr '\n' ' ')"
+for i in 21 22 23 24; do push "gui/$i-p"; done; : > "$T/review.log"
+r=$(OPEN="$P" SG_REVIEW_PASS_MAX=4 FAILREV=1 rp)
+c=$(for i in 21 22 23 24; do cat "$T/st/auto/"branchreview-tries-gui_$i-p-* 2>/dev/null; done | tr -d '\n')
+[ "$c" = 1111 ] && ok "failed parallel reviews keep one count per branch" || ko "tries per branch: '$c'"
+[ "$(/usr/bin/grep -c '^BRANCHREVIEW FAILED gui/2[1-4]-p ' <<<"$r")" = 4 ] && ok "each failed review prints its own line" || ko "failed lines: '$r'"
+ls "$T/st/auto/" | /usr/bin/grep -q 'branchreview-out' && ko "a result temp file stayed" || ok "no result temp file stays"
 exit $fail
