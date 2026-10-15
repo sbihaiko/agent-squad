@@ -9,14 +9,24 @@ pg checkout -q -b gui/7 local/next; echo 7 > "$P/g"; pg add g; pg commit -q -m w
 export SG_FORK_DIR="$P" SG_FORK_BASE=local/next SG_FORK_BRANCH='gui/%n' SG_FORK_ORPHAN_MINUTES=0
 unset "${!SG_@}"; export HOME="$T/home"   # hermetic: whatever the caller exports (the live loop's SG_*) stops here
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"   # ...and so do the live loops of this machine: health.sh counts watch.sh processes by command line, so without this a second real loop adds a loops-duplicated alert to every count below
-mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
+mkdir -p "$HOME" "$T/s" "$T/st/auto" "$T/co" "$T/bin"; cp "$src" "$T/s/health.sh"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"; cp "$(dirname "$src")/ghcall.sh" "$T/s/ghcall.sh"
 # hermetic: health.sh counts watch.sh with a real pgrep, so the default pattern would count the host's own live loop (a duplicate there is a third cause)
 export SG_WATCH_CMD_RE="$T/s/watch\.sh\$"
-printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7\n' "$T/st" "$T/co" > "$T/s/env.sh"
+printf 'export SG_STATE=%s SG_CHECKOUT=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=7 SG_GHREAD=%s\n' "$T/st" "$T/co" "$T/bin/rd" > "$T/s/env.sh"
+# the door's reader, stubbed: the open-issue list one page at a time, from $T/pages/<n>.json (a page past the last is an empty list)
+mkdir -p "$T/pages"; cat > "$T/bin/rd" <<'RD'
+#!/bin/bash
+n=$(printf '%s' "$1" | sed -n 's/.*[?&]page=\([0-9]*\).*/\1/p'); f="$(dirname "$0")/../pages/${n:-1}.json"
+[ -f "$f" ] && cat "$f" || echo '[]'
+RD
+chmod +x "$T/bin/rd"
+# iss <number> <title> <label,...>: one issue object
+iss() { jq -nc --argjson n "$1" --arg t "$2" --arg l "$3" '{number:$n,title:$t,body:"",labels:($l|split(",")|map(select(.!=""))|map({name:.}))}'; }
+# page <n> <issue json>...: write one page
+page() { local n=$1; shift; printf '%s\n' "$@" | jq -s . > "$T/pages/$n.json"; }
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 case "$*" in
-  *'index("spec")'*) [ -n "$GH_UNTYPED" ] && printf '%s\n' "$GH_UNTYPED";;
   *"issues?state=open"*) [ -n "$GH_READY" ] && printf '%s\n' "$GH_READY";;
 esac
 GH
@@ -36,7 +46,17 @@ o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'HEALTH never-started-r
 # A wave-only issue can be READY after its blocker closes. The health pass must expose it without a triage label.
 o=$(GH_READY=41 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH frontier-idle: startable 41 with no open PR' && ok "a startable wave-only issue is reported" || ko "wave-only issue was not reported: $o"
 # An open issue without bug, enhancement, or spec is visible before the loop can dispatch it untyped.
-o=$(GH_UNTYPED=427 bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH untyped-issues: open issue(s) without a type label: #427' && ok "an untyped open issue is reported" || ko "untyped issue was not reported: $o"
+page 1 "$(iss 427 'Add a thing' '')"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH untyped-issues: open issue(s) without a type label: #427' && ok "an untyped open issue is reported" || ko "untyped issue was not reported: $o"
+# #437: the read pages. Page one is a full page of typed issues, the untyped one sits on page two.
+for i in $(seq 1 100); do iss $((1000+i)) "Typed $i" enhancement; done | jq -s . > "$T/pages/1.json"; page 2 "$(iss 901 'Add another thing' '')"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'without a type label: #901' && ok "an untyped issue beyond the first page is reported" || ko "page two was not read: $o"
+# #437: a defect carries bug. An enhancement whose title reads as a defect is named; a bug and a plain enhancement are not.
+page 1 "$(iss 501 'Health guard fails on a long list' enhancement)" "$(iss 502 'Health guard fails on a long list' bug)" "$(iss 503 'Add a thing' enhancement)"; rm -f "$T/pages/2.json"
+o=$(bash "$T/s/health.sh"); printf '%s' "$o" | /usr/bin/grep -qF 'HEALTH defect-without-bug: open defect(s) that carry no bug label: #501' && ok "a defect filed as enhancement is reported" || ko "defect without bug was not reported: $o"
+printf '%s' "$o" | /usr/bin/grep -qE 'defect-without-bug.*#(502|503)' && ko "a bug or a plain enhancement was named: $o" || ok "a bug and a plain enhancement are not named"
+printf '%s' "$o" | /usr/bin/grep -q 'untyped-issues' && ko "typed issues reported untyped: $o" || ok "typed issues are not untyped"
+rm -f "$T/pages/"*.json
 # ---- #1795: runs-board-drift, the loop against its own board ----
 bd() { { echo '#!/bin/bash'; printf 'case "$*" in *"/items"*) cat %s/board.tsv;; *"/fields"*) echo 422164739;; esac\n' "$T"; } > "$T/bin/gh"; chmod +x "$T/bin/gh"; }
 alerts() { local n; n=$(/usr/bin/grep -c 'HEALTH runs-board-drift' "$T/st/alerts.log" 2>/dev/null); echo "${n:-0}"; }
