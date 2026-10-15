@@ -1100,12 +1100,13 @@ def run_list():
     if time.monotonic() - RUN_LIST_AT >= RUN_POLL_SECS: refresh_runs()
     with RUN_LIST_LOCK: return list(RUN_LIST)
 
-def watch_runs():
-    """Watch the known runs directories without a platform-specific dependency; the API poll remains the fallback."""
-    dirs = project_dirs(); state = run_watch_state(dirs)
-    while True:
+def watch_runs(stop=None):
+    """Watch the known runs directories without a platform-specific dependency; the API poll remains the fallback.
+    The project directories are read on each tick, so a project added later is watched. `stop` (an Event) ends the loop: the test seam."""
+    state = run_watch_state()
+    while not (stop is not None and stop.is_set()):
         time.sleep(RUN_WATCH_SECS)
-        try: state = run_watch_tick(state, dirs)
+        try: state = run_watch_tick(state)
         except Exception: pass
 
 def working(rows):
