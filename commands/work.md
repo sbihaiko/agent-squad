@@ -9,7 +9,7 @@ Start a run from the owner's request.
 Run from the current project directory. The current directory is the run's target.
 
 ```
-uv run --project "${CLAUDE_PLUGIN_ROOT}" --extra sdk squad start --target "$PWD" --stdin <<'SQUAD_REQUEST'
+uv run --project "${CLAUDE_PLUGIN_ROOT}" --extra sdk squad start --no-watch --target "$PWD" --stdin <<'SQUAD_REQUEST'
 $ARGUMENTS
 SQUAD_REQUEST
 ```

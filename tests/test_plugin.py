@@ -111,6 +111,11 @@ def test_a_start_command_installs_the_sdk_extra(name):
     assert "--extra sdk" in line
 
 
+def test_the_work_command_starts_its_run_with_no_watch():
+    line = next(x for x in (ROOT / "commands" / "work.md").read_text().splitlines() if "squad start" in x)
+    assert "--no-watch" in line
+
+
 @pytest.mark.parametrize("name", ["work", "task"])
 def test_a_start_command_passes_the_request_in_a_quoted_here_document(name):    # #164: no character of the request reaches the shell
     text = (ROOT / "commands" / f"{name}.md").read_text()

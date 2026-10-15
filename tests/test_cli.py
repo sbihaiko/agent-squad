@@ -1,9 +1,11 @@
 """Ticket #36: engine options and the command line."""
+import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from squad import cli
+from squad import cli, launch
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
@@ -46,6 +48,33 @@ def test_run_exits_with_the_verdict_code_and_prints_the_message(tmp_path, capsys
     g, s = write(tmp_path, two_agents())
     code = cli.main(["run", g, "--script", s, "--run-dir", str(tmp_path / "r")])
     assert code == 0 and "verdict completed (exit 0)" in capsys.readouterr().out
+
+
+def test_no_watch_is_shared_by_every_run_command_and_reaches_launch(tmp_path, monkeypatch):
+    for argv in (["run", "g"], ["resume", "r"], ["start", "x"], ["work", "x"], ["task", "x"]):
+        assert cli.parser().parse_args([*argv, "--no-watch"]).no_watch
+
+    class Done:
+        async def run(self):
+            return SimpleNamespace(message="done", exit_code=0)
+
+        async def resume(self, **_kwargs):
+            return SimpleNamespace(message="done", exit_code=0)
+
+    g, s = write(tmp_path, two_agents())
+    run_dir = tmp_path / "resume"
+    eng = launch.launch(from_doc(two_agents()), run_dir, adapter=ScriptedAdapter({"a": OK, "b": OK}), graph_path=g,
+                        options={"stop_after": "a"}, watch=False)
+    asyncio.run(eng.run())
+    watched = []
+    monkeypatch.setattr("squad.cli.launch.launch", lambda *_args, **kwargs: watched.append(kwargs["watch"]) or Done())
+    monkeypatch.setattr("squad.cli.launch.resume_engine", lambda *_args, **kwargs: watched.append(kwargs["watch"]) or Done())
+
+    assert cli.main(["run", g, "--script", s, "--no-watch"]) == 0
+    assert cli.main(["resume", "r", "--run-dir", str(run_dir), "--script", s, "--no-watch"]) == 0
+    assert cli.main(["run", g, "--script", s]) == 0
+    assert cli.main(["resume", "r", "--run-dir", str(run_dir), "--script", s]) == 0
+    assert watched == [False, False, None, None]
 
 
 def test_stop_after_truncates_to_stopped_exit_30_with_the_resume_command(tmp_path, capsys):

@@ -109,6 +109,7 @@ def parser():
             s.add_argument("--auto-source", help="an automatic resume: the decision source (`autonomy`). Records one autonomy_resume event with the resume count; refuses at the cap")
         s.add_argument("--runs-dir", default="runs")
         s.add_argument("--run-dir")
+        s.add_argument("--no-watch", action="store_true", help="start no dashboard page or monitor")
         s.add_argument("--target")
         s.add_argument("--script")
         s.add_argument("--adapter", choices=["sdk"], help="run the real Claude Agent SDK adapter")
@@ -330,7 +331,7 @@ async def _run(a, g=None):
     """Start the run. `g` is a graph already loaded (the `start` command, whose graph file is the run folder's copy); else `a.graph` is the file."""
     graph = g or G.load(a.graph)
     eng = launch.launch(graph, a.run_dir, runs_dir=a.runs_dir, adapter=_adapter(a), defaults=a.defaults, graph_path=None if g else a.graph,
-                        target=a.target, options=_opts(a), name=getattr(a, "name", None))
+                        target=a.target, options=_opts(a), name=getattr(a, "name", None), watch=False if a.no_watch else None)
     if g:
         print(f"run: {eng.run_id}\nrun folder: {Path(eng.run_dir).resolve()}")
     v = await eng.run()
@@ -368,7 +369,7 @@ async def _resume(a):
     if not graph:
         return _fail("the record names no graph file: pass --graph")
     eng = launch.resume_engine(G.load(graph), run_dir, adapter=_adapter(a), defaults=a.defaults, target=a.target or events[0].get("target"),
-                               options=_opts(a))
+                               options=_opts(a), watch=False if a.no_watch else None)
     if a.auto_source:
         refused = _auto_resume(eng.record, a.auto_source)
         if refused:
