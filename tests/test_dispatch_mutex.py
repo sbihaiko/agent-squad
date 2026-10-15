@@ -15,6 +15,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
 
 
 @pytest.mark.heavy
+@pytest.mark.slow(reason="runs the dispatcher suite: a real shell suite over a stubbed gh")
 def test_the_two_dispatchers_share_one_claim_and_read_live_requests() -> None:
     r = subprocess.run(
         ["bash", str(SCRIPTS / "test-dispatch-mutex.sh")], capture_output=True, text=True, timeout=120
