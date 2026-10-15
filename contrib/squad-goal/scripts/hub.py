@@ -684,7 +684,7 @@ WT_CLEAN_SECS = 60
 # `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"landing": "wait", "gate": "none", "wt": "mute", "occ": "mute",
+FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none", "wt": "mute", "occ": "mute",
                      "quota": "none", "subs": "run"}  # subs last, and teal again: it shares with landing, which is not its neighbour
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
@@ -852,6 +852,44 @@ def wt_clean():
             "rc": r.returncode, "err": None if lines or not r.returncode else (r.stderr or "").strip()[-200:]}
 
 
+# --- who is eating the tokens. `tokens.py burners` holds every rule (the window, the threshold, `over`, the order); the
+# hub runs it, caches the answer, and draws the burners it names. No script, a nonzero exit or unreadable output is no data.
+TOKENS_PY = pathlib.Path(__file__).resolve().parent / "tokens.py"
+BURN_HOURS = 24
+BURN_TTL = 120.0      # the sampler ticks every few seconds; the burners change by the minute
+BURN_SHOWN = 5
+_BURN = {"t": 0.0, "v": None}
+
+def burn_read(script=None, state=None, checkout=None, hours=BURN_HOURS):
+    """The parsed `tokens.py burners --json` reading, or None when there is no data."""
+    script = pathlib.Path(script or TOKENS_PY)
+    if not script.is_file(): return None
+    try:
+        r = subprocess.run([sys.executable, str(script), "burners", str(state or STATE), "--checkout", str(checkout or CHECKOUT),
+                            "--hours", str(hours), "--json"], capture_output=True, text=True, timeout=20)
+        if r.returncode: return None
+        d = json.loads(r.stdout)
+    except Exception: return None
+    return d if isinstance(d, dict) else None
+
+def burn_cached(now=None):
+    now = time.time() if now is None else now
+    if now - _BURN["t"] >= BURN_TTL: _BURN.update(t=now, v=burn_read())
+    return _BURN["v"]
+
+def _tok(n):
+    n = int(n)
+    return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
+
+def _burn_fact(b):
+    """`tokens high (limit 2M/24h): review:PR#432 1.5M, ...` when the script says `over`; empty otherwise. The order and
+    the comparison are the script's, never this line's."""
+    if not isinstance(b, dict) or b.get("over") is not True: return ""
+    rows = [x for x in (b.get("burners") or []) if isinstance(x, dict) and x.get("consumer") and isinstance(x.get("tokens"), (int, float))]
+    if not rows: return ""
+    lim = f" (limit {_tok(b['threshold'])}/{b.get('window_hours', BURN_HOURS)}h)" if isinstance(b.get("threshold"), (int, float)) else ""
+    return f"tokens high{lim}: " + ", ".join(f"{x['consumer']} {_tok(x['tokens'])}" for x in rows[:BURN_SHOWN])
+
 def foot_items(src, caps=None, now=None):
     """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a
     subscription token carries the tone its own consumption earns, so the block is never painted as one value (#1843).
@@ -861,7 +899,8 @@ def foot_items(src, caps=None, now=None):
     src = src or {}
     land = _landing_parts(src.get("landing"), now)
     gate = _gate_parts(src.get("gate"), now)
-    items = [_fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
+    items = [_fact("burn", _burn_fact(src.get("burn")), bad=True),
+             _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
              _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate), parts=gate or None),
              _fact("wt", _wt_fact(src.get("wt")), act="wtclean" if src.get("wt") is not None else None),
              _fact("occ", _occ_fact(src.get("occ"), caps)),
@@ -927,6 +966,7 @@ def foot_sources(now=None):
     if FOOT_ROWS.get("live") is not None:
         out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
+    out["burn"] = burn_cached(now)
     out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     return out
 
