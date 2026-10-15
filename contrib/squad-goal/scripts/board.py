@@ -25,7 +25,8 @@ never reported as written. A pass that ended failed stays failed: a later pass o
 A new card is eventually consistent (#403): when GitHub accepted the add or the write and the read carries no card or no
 Status yet, the read is repeated within SG_BOARD_SETTLE_SECONDS (default 60) before the READ FAILURE is named. A card the
 read still shows on its old Status after an accepted write is the same lag, and is read the same way (#434); the settle
-only reads, so a card another writer moved meanwhile is never moved back.
+only reads, so a card another writer moved meanwhile is never moved back. A card that carried another Status before the write is
+read for at most SG_BOARD_OLD_SETTLE_SECONDS (default 10) of that bound: a write it never carries is likelier lost than late (#438).
 A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import os, pathlib, sys, time
@@ -79,7 +80,9 @@ for n in nums:
             reads += 1
             try: return state.read(n) == status
             except (RuntimeError, ValueError): return False
-        written = bool(state.binding.settle(probe, tries))
+        old = carried.get(str(n)) not in (None, "", status)   # the card carried another Status before the write: a write it never carries is more likely lost than late, so its settle is capped (#438)
+        cap = float(os.environ.get("SG_BOARD_OLD_SETTLE_SECONDS", "10")) if old else None
+        written = bool(state.binding.settle(probe, tries, cap))
     if written:
         if refused: print(f"#{n}: {refused}; the card carries {status} and the read proves the write", file=sys.stderr)   # the note, never the verdict
         print(f"#{n} -> {status}")

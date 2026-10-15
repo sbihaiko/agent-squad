@@ -353,15 +353,16 @@ class BoardBinding:
         try: return float(self.env.get(name, default))
         except ValueError: return float(default)
 
-    def settle(self, probe, reads):
+    def settle(self, probe, reads, cap=None):
         """A new card is eventually consistent (#403): an add or a write GitHub accepted can be missing from reads for
         longer than the bounded attempts. After `reads` reads that missed, read again with the doubling backoff (each
         delay at most 16 s) while the sleeps fit in SG_BOARD_SETTLE_SECONDS. Returns the first truthy `probe()`, else
         None. A backoff of 0 sleeps for no read, so it reads no more."""
         slept, k = 0.0, max(1, reads)
+        bound = self.settle_seconds if cap is None else min(self.settle_seconds, cap)   # `cap` lowers the bound for one settle (#438)
         while self.backoff:
             d = min(self.backoff * (2 ** (k - 1)), 16.0)
-            if slept + d > self.settle_seconds: return None
+            if slept + d > bound: return None
             time.sleep(d); slept += d; k += 1
             got = probe()
             if got: return got
