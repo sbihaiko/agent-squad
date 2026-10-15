@@ -5,7 +5,7 @@
 # clean checkout of the tip. stg moves only when both pass; a red mode stops the gate and moves nothing. A tip whose gate was red
 # is not gated again until dev moves. The result and the tip go on the status line the hub reads (gate-status.sh).
 # Exit 0: stg is at the dev tip (promoted, or already there). Exit 1: nothing promoted; the reason goes to $SG_STATE/promote.log
-# once per tip and reason, so a pass that repeats says nothing new. A later green tip carries the earlier work with it.
+# once per tip and reason (the dedupe list keeps its last 20 lines), so a pass that repeats says nothing new. A later green tip carries the earlier work with it.
 # The push is plain, never forced, so stg moves by a fast-forward or not at all.
 # The loop never writes main: the owner does, with promote-main.sh. The work happens in a throwaway clone.
 # $SG_PROMOTE_REMOTE overrides the remote; $SG_PROMOTE_GATE_CMD replaces the full gate command (the test seam); $SG_GATE_PY is
@@ -18,8 +18,9 @@ state=${SG_STATE:-/tmp/sg-state};   # the machine-wide default serial.sh uses: n
 mkdir -p "$state"; log=$state/promote.log
 W=$(mktemp -d) || exit 1; trap 'rm -rf "$W"' EXIT
 g() { /usr/bin/git -C "$W" "$@"; }
+seen() { echo "$1" >> "$state/promote.seen"; tail -n 20 "$state/promote.seen" > "$state/promote.seen.tmp" && mv "$state/promote.seen.tmp" "$state/promote.seen"; }   # the dedupe list keeps the last 20 lines, never grows (#438)
 say() {  # sha, reason: one line per tip and reason
-  grep -qxF "$1 $2" "$state/promote.seen" 2>/dev/null && return; echo "$1 $2" >> "$state/promote.seen"
+  grep -qxF "$1 $2" "$state/promote.seen" 2>/dev/null && return; seen "$1 $2"
   echo "$(date -u +%FT%TZ) promote-stg: $1 $2" >> "$log"; }
 py=${SG_GATE_PY:-python3}
 gatecmd=${SG_PROMOTE_GATE_CMD:-"'$py' -m pytest -n auto -p no:deepeval && '$py' -m pytest -p no:xdist -p no:deepeval"}
@@ -35,7 +36,7 @@ g checkout -q --detach "$tip" 2>/dev/null || { say "$tip" "not promoted: no clea
 if (cd "$W" && PYTHONPATH=. env $noloop bash -c "$gatecmd") >"$W/.gate.out" 2>&1; then
   bash "$d/gate.sh" --status full pass "$tip"
 else
-  bash "$d/gate.sh" --status full fail "$tip"; echo "$tip gate red" >> "$state/promote.seen"
+  bash "$d/gate.sh" --status full fail "$tip"; seen "$tip gate red"
   say "$tip" "not promoted: the full gate is red: $(grep -v '^$' "$W/.gate.out" | tail -1)"; exit 1; fi
 o=$(g push -q origin "$tip:refs/heads/stg" 2>&1) || { say "$tip" "not promoted: push refused: $(printf '%s' "$o" | tail -1)"; exit 1; }
 echo "PROMOTED stg $tip"
