@@ -177,4 +177,29 @@ reset; rm -f "$T/gl"; hold
 r=$(SG_LOCAL_GATE_CMD="echo 'mypy: 3 errors'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" CHECKS='{"check_runs":[]}' bl); wait
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "a failed gate that waited: the wait shows once on stderr" || ko "wait lines: '$r'"
 /usr/bin/grep -qh "mypy: 3 errors" "$T/st/cq/"x__y#7-status~* && ! /usr/bin/grep -qh "serial: waiting for lock" "$T/st/cq/"x__y#7-status~* && ok "the failure record does not repeat the wait line" || ko "the failure record: $(cat "$T/st/cq/"x__y#7-status~* 2>&1)"
+# A trial rebase that conflicts is aborted clean; nothing is resolved. One CONFLICT line names the files and the dev sha, once.
+reset; rm -f "$T/gate.log"; (cd "$T/w" && $G checkout -q dev && echo other > g && $G add g && $G -c user.email=a@b -c user.name=t commit -q -m "dev g" && $G push -q origin dev 2>/dev/null)
+devsha=$($O rev-parse dev); tip=$($O rev-parse gui/7-x); rev APPROVE
+r=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl); r2=$(SG_LOCAL_GATE_CMD="$GATE_OK" CHECKS='{"check_runs":[]}' bl)
+case "$r" in *"BRANCHLAND CONFLICT gui/7-x"*g*"${devsha:0:7}"*) ok "a conflict: one line names the files and the dev sha";; *) ko "conflict line: '$r'";; esac
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'BRANCHLAND CONFLICT')" = 1 ] && [ -z "$r2" ] && ok "a conflict is said once per head and dev head" || ko "conflict repeated: '$r' '$r2'"
+[ ! -e "$T/gate.log" ] && [ "$($O rev-parse dev)" = "$devsha" ] && [ "$($O rev-parse gui/7-x)" = "$tip" ] && ok "a conflict: no gate runs, nothing lands, the branch is untouched" || ko "a conflict ran the gate or moved a ref"
+/usr/bin/grep -qh "BRANCHLAND CONFLICT gui/7-x" "$T/st/cq/"x__y#7-status~* 2>/dev/null && /usr/bin/grep -qh "${devsha:0:7}" "$T/st/cq/"x__y#7-status~* && ok "a conflict: the one status line is on the issue" || ko "conflict: no status line: $(cat "$T/st/cq/"* 2>&1)"
+[ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && [ -z "$($G -C "$T/co" status --porcelain)" ] && ok "a conflict leaves no worktree and no residue" || ko "conflict residue: $($G -C "$T/co" worktree list) $($G -C "$T/co" status --porcelain)"
+# A failed gate leaves no worktree and no staged residue, even when the gate staged files.
+reset; r=$(SG_LOCAL_GATE_CMD="echo a > staged1; /usr/bin/git add staged1; echo 'mypy: 1 error'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" CHECKS='{"check_runs":[]}' bl)
+[ "$($G -C "$T/co" worktree list | wc -l | tr -d ' ')" = 1 ] && [ -z "$($G -C "$T/co" status --porcelain)" ] && [ -z "$($G -C "$T/co" diff --cached --name-only)" ] && ok "a failed gate leaves no worktree and nothing staged" || ko "gate residue: $($G -C "$T/co" worktree list)"
+# A gate that fails only on a fixable ruff finding: ruff --fix runs in the trial, its commit is made, the gate reruns and passes,
+# and the fix lands with the branch. SG_RUFF_FIX_CMD stubs the fix.
+RUFF_RED="echo \"\$PWD\" >> $T/gate.log; test -f lintfix || { echo 'Found 1 error.'; echo '[*] 1 fixable with the \`--fix\` option.'; exit 1; }"
+reset; rm -f "$T/gate.log" "$T/fix.log"; r=$(SG_LOCAL_GATE_CMD="$RUFF_RED" SG_LOCAL_GATE_RERUN_CMD="exit 1" SG_RUFF_FIX_CMD="echo \$PWD >> $T/fix.log; echo f > lintfix" CHECKS='{"check_runs":[]}' bl)
+case "$r" in *"BRANCHLAND LANDED gui/7-x"*) ok "a fixable ruff red: the fix is made and the branch lands";; *) ko "ruff fix did not land: '$r'";; esac
+[ "$($O log --format=%s dev | head -1)" = "Apply ruff --fix at the landing" ] && $O show dev:lintfix >/dev/null 2>&1 && ok "the fix is a commit on the trial and lands with the branch" || ko "dev history: $($O log --format=%s dev | head -3 | tr '\n' ,)"
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" -ge 2 ] && ok "the gate reruns after the fix" || ko "no rerun: $(cat "$T/gate.log" 2>&1)"
+# A red that is not fixable by ruff never runs the fix; a fix that does not cure the gate lands nothing.
+reset; rm -f "$T/fix.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_CMD="exit 1" SG_RUFF_FIX_CMD="echo x >> $T/fix.log" CHECKS='{"check_runs":[]}' bl)
+[ ! -e "$T/fix.log" ] && ok "a red with no fixable ruff finding runs no fix" || ko "the fix ran on a non-ruff red"
+reset; rm -f "$T/fix.log"; r=$(SG_LOCAL_GATE_CMD="echo '[*] 1 fixable with the --fix option.'; echo 'mypy: 2 errors'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" SG_RUFF_FIX_CMD="echo f > lintfix" CHECKS='{"check_runs":[]}' bl)
+[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*) ok "a fix that does not cure the gate: nothing lands, reported as a failure";; *) ko "silent: '$r'";; esac || ko "landed after a failed fix"
+/usr/bin/grep -q -- '--unsafe-fixes' "$d/branchland.sh" && ko "branchland uses --unsafe-fixes" || ok "branchland never uses --unsafe-fixes"
 rm -rf "$T"; exit $fail

@@ -24,9 +24,9 @@ SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/address.s
 A="$SG_STATE/auto"; mkdir -p "$A"; land=${SG_LAND_BRANCH:-dev}; remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}
 export GIT_TERMINAL_PROMPT=0
 cd "$SG_STATE" || exit 0
-# say <wait|refuse> <branch> <head> <kind> <reason>: one line per head and kind, kept as a marker so it is never repeated.
+# say <wait|refuse|conflict> <branch> <head> <kind> <reason>: one line per head and kind, kept as a marker so it is never repeated.
 say() { local m="$A/branchland-$1-$(printf '%s' "$2" | tr '/' '_')-${3:0:9}-$4"; [ -e "$m" ] && return; touch "$m"
-  case "$1" in wait) echo "BRANCHLAND WAIT $2: $5";; *) echo "BRANCHLAND REFUSE $2: $5";; esac; }
+  case "$1" in wait) echo "BRANCHLAND WAIT $2: $5";; conflict) echo "BRANCHLAND CONFLICT $2: $5";; *) echo "BRANCHLAND REFUSE $2: $5";; esac; }
 # While GitHub Actions is off, a tip has zero check runs (#385). The local gate is then the green signal: ruff, mypy and the fast
 # battery in a clean worktree of the tip. SG_LOCAL_GATE=no turns it off (default yes while Actions is off); SG_LOCAL_GATE_CMD
 # replaces the gate command (tests stub it). A red or running check never starts it.
@@ -44,6 +44,7 @@ noloop=$(env | sed -n 's/^\(SG_[A-Za-z0-9_]*\)=.*/-u \1/p' | /usr/bin/grep -v -x
 # alone; a real red fails again. The suite runs with no cache provider, so --lf has nothing to read: the rerun gets the failed
 # node ids in SG_GATE_FAILED. A red of ruff or mypy names no test, so its rerun fails again.
 rerun=${SG_LOCAL_GATE_RERUN_CMD:-"'$py' -m ruff check squad tests && '$py' -m mypy squad && [ -n \"\$SG_GATE_FAILED\" ] && '$py' -m pytest -p no:deepeval -o heavy_cap_seconds=20 \$SG_GATE_FAILED"}
+fixcmd=${SG_RUFF_FIX_CMD:-"'$py' -m ruff check --fix squad tests"}
 # localgate <branch> <sha> <issue>: exit 0 when the gate passed at <sha> rebased onto $land, which is what lands: a red the branch
 # inherited from an old base is fixed on $land, never on the branch. A rebase that conflicts gates the bare tip (ffland refuses it).
 # The result goes to the status comment of the issue. A failed gate is run once per head and $land head: its wait marker stops a
@@ -57,13 +58,34 @@ localgate() { local br=$1 sha=$2 i=$3 wt out rc base
   wt=$(mktemp -d "${TMPDIR:-/tmp}/sg-gate.XXXXXX")
   if ! /usr/bin/git -C "$SG_CHECKOUT" fetch -q "$remote" "refs/heads/$br" "+refs/heads/$land:refs/sg-gate/$land" >/dev/null 2>&1 || ! /usr/bin/git -C "$SG_CHECKOUT" worktree add -q --detach "$wt/tip" "$sha" >/dev/null 2>&1; then
     rm -rf "$wt"; say wait "$br" "$sha" gateco "the local gate has no clean checkout of ${sha:0:9}"; return 1; fi
-  /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate rebase -q "refs/sg-gate/$land" >/dev/null 2>&1 || /usr/bin/git -C "$wt/tip" rebase --abort >/dev/null 2>&1
+  [ -e "$A/branchland-conflict-$(printf '%s' "$br" | tr '/' '_')-${sha:0:9}-conflict$base" ] && { /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; return 1; }
+  /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate rebase -q "refs/sg-gate/$land" >/dev/null 2>&1 || {
+    # A content conflict is the author's to resolve: abort clean, resolve nothing, say which files and which $land head, once.
+    files=$(/usr/bin/git -C "$wt/tip" diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ' | sed 's/ $//'); [ -n "$files" ] || files="(unreadable)"
+    /usr/bin/git -C "$wt/tip" rebase --abort >/dev/null 2>&1; /usr/bin/git -C "$wt/tip" reset -q --hard >/dev/null 2>&1
+    /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
+    printf 'Status update — BRANCHLAND CONFLICT %s: %s conflicts with %s %s (rebase of %s). The branch does not land until it is rebased.\n' "$br" "$files" "$land" "${base:-?}" "${sha:0:9}" > "$(sg_cq_status "$i" "branchland$$")"
+    say conflict "$br" "$sha" "conflict$base" "$files conflicts with $land ${base:-?} (rebase of ${sha:0:9})"; return 1; }
   # The gate runs under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on. The lock
   # reads SG_STATE, so gate.sh runs in the loop env and only the gate command inside it drops the SG_* variables.
   out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
   [ "$rc" = 0 ] || { out="$out
 --- the rerun of what failed ---
 $(cd "$wt/tip" && SG_GATE_FAILED="$(printf '%s\n' "$out" | sed -n 's/^FAILED \([^ ]*\).*/\1/p' | sort -u | tr '\n' ' ' | sed 's/ $//')" PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$rerun" 2>&1)"; rc=$?; out=$(unwait "$out"); }
+  # Only ruff red, and ruff says it can fix it: `ruff check --fix` (safe fixes only) in the trial, one commit, the gate again.
+  # The fixed trial is pushed to the branch (it is rebased on $land), so the fix lands with the branch.
+  if [ "$rc" != 0 ] && printf '%s' "$out" | /usr/bin/grep -q 'fixable with the'; then
+    (cd "$wt/tip" && env $noloop bash -c "$fixcmd") >/dev/null 2>&1
+    if [ -n "$(/usr/bin/git -C "$wt/tip" status --porcelain 2>/dev/null)" ]; then
+      /usr/bin/git -C "$wt/tip" add -A >/dev/null 2>&1; /usr/bin/git -C "$wt/tip" -c user.email=gate@squad -c user.name=squad-gate commit -q -m "Apply ruff --fix at the landing
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>" >/dev/null 2>&1
+      out=$(cd "$wt/tip" && PYTHONPATH=. SG_GATE_KIND=fast bash "$here/gate.sh" env $noloop bash -c "$gatecmd" 2>&1); rc=$?; out=$(unwait "$out")
+      if [ "$rc" = 0 ] && ! /usr/bin/git -C "$wt/tip" push -q --force-with-lease="refs/heads/$br:$sha" "$remote" "HEAD:refs/heads/$br" >/dev/null 2>&1; then rc=1; out="the ruff fix passed the gate but its push to $br was refused"; fi
+    fi
+  fi
+  # A failed gate leaves the trial clean: no staged or stray file, then the worktree goes.
+  /usr/bin/git -C "$wt/tip" reset -q --hard >/dev/null 2>&1; /usr/bin/git -C "$wt/tip" clean -fdq >/dev/null 2>&1
   /usr/bin/git -C "$SG_CHECKOUT" worktree remove --force "$wt/tip" >/dev/null 2>&1; rm -rf "$wt"; mkdir -p "$SG_STATE/cq"
   if [ "$rc" = 0 ]; then
     printf 'Status update — branch %s @ %s: local gate, CI off: passed at %s (ruff, mypy, pytest -m "not heavy", the shell suites of the changed scripts).\n' "$br" "${sha:0:9}" "$sha" > "$(sg_cq_status "$i" "branchland$$")"
