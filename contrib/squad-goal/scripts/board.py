@@ -23,7 +23,9 @@ A test pass is recorded by `--test-case` through the seam (`record_pass`), prove
 is behind is waited for with the same bounded backoff, and an item no read carries is named on stderr and exits non-zero,
 never reported as written. A pass that ended failed stays failed: a later pass on the same merge commit writes nothing.
 A new card is eventually consistent (#403): when GitHub accepted the add or the write and the read carries no card or no
-Status yet, the read is repeated within SG_BOARD_SETTLE_SECONDS (default 60) before the READ FAILURE is named.
+Status yet, the read is repeated within SG_BOARD_SETTLE_SECONDS (default 60) before the READ FAILURE is named. A card the
+read still shows on its old Status after an accepted write is the same lag, and is read the same way (#434); the settle
+only reads, so a card another writer moved meanwhile is never moved back.
 A move to the Status the card already carries is skipped: one read of the board, no PATCH, no proving read (#327).
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import os, pathlib, sys, time
@@ -71,7 +73,7 @@ for n in nums:
             if e.refused:   # a refused write can be an option id the cache kept and the board dropped or recreated: the next attempt reads the field again (#311)
                 (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True)
                 if status not in state.binding.status_field()["opt"]: sys.exit(f"no Status option {status!r}")
-    if not written and last is not None and not last.carried and not last.refused:   # GitHub accepted the write and the read carries no Status yet: a new card, read again within the settle bound (#403)
+    if not written and last is not None and not last.refused:   # GitHub accepted the write and the read is behind it -- no Status yet (#403) or the old one (#434): read again within the settle bound, never written again
         def probe(n=n):
             global reads
             reads += 1

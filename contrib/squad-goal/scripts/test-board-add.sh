@@ -19,14 +19,17 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; D="TMPDIR"
 echo "$a" >> "$D/gh.calls"
 case "$a" in *"--input -"*) cat > "$D/last.in";; esac
-cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013 2014 2015"
+cards="2001 2002 2003 2004 2006 2007 2008 2009 2012 2013 2014 2015 2016"
 case "$a" in
   *users/o*) echo '{"type":"Organization"}';;
-  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}}]}]';;
+  *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"Doing"}}]}]';;
   *items?per_page=100\&fields*)   # the one Status read: number, the state the card carries (its option id), the repository url
     s15=$(( $(cat "$D/sreads15" 2>/dev/null || echo 0) + 1 )); echo "$s15" > "$D/sreads15"
     for n in $cards; do [ "$n" = 2015 ] && [ "$s15" -lt 6 ] && continue   # #2015 is carried from the sixth Status read only (#403)
-      [ -e "$D/seen-$n" ] && printf '%s\t%s\t%s\n' "$n" "$(cat "$D/st-$n" 2>/dev/null)" "https://api.github.com/repos/x/y"; done; exit 0;;
+      [ -e "$D/seen-$n" ] || continue
+      v=$(cat "$D/st-$n" 2>/dev/null)
+      if [ "$n" = 2016 ]; then s16=$(( $(cat "$D/sreads16" 2>/dev/null || echo 0) + 1 )); echo "$s16" > "$D/sreads16"; [ "$s16" -lt 6 ] && v=O_TODO; fi   # #2016 reads its old Status until the sixth Status read (#434)
+      printf '%s\t%s\t%s\n' "$n" "$v" "https://api.github.com/repos/x/y"; done; exit 0;;
   *items?per_page=100*)   # the items route is eventually consistent: the read is counted, and #2002 is only carried from the second read (#96)
     r=$(( $(cat "$D/reads" 2>/dev/null || echo 0) + 1 )); echo "$r" > "$D/reads"
     for n in $cards; do
@@ -146,4 +149,12 @@ o=$(settle o 4 Todo 2015 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"#2015 -> Todo"*) ok "a write whose card the read carries only after the bounded attempts is proven within the settle bound";; *) ko "settle write message: $o";; esac || ko "settle write exit $rc: $o"
 : > "$T/gh.calls"; o=$(settle --add o 4 Todo 2011 2>&1); rc=$?
 [ "$rc" -eq 1 ] && case $o in *"#2011"*"read failure"*) ok "a card no read carries within the settle bound is still a read failure";; *) ko "settle failure message: $o";; esac || ko "settle failure exit $rc: $o"
+# (#434) the same lag on a card that already carries a Status: GitHub accepted the write, and the read still answers the
+# old Status (Todo) for longer than the bounded attempts. That is the read behind the write, as for a card with no Status
+# yet, so it is read again within the settle bound, never named "carries no 'Doing' after 3 reads" a few seconds after the
+# write. The settle only reads: it never writes again, so a card another writer moved is never moved back (ADR-0143).
+echo '{"2016":"ITEM16"}' > "$T/st/rest-items-o-4.json"; touch "$T/seen-2016"; echo O_TODO > "$T/st-2016"; rm -f "$T/sreads16"; : > "$T/gh.calls"
+o=$(settle o 4 Doing 2016 2>&1); rc=$?
+[ "$rc" -eq 0 ] && case $o in *"#2016 -> Doing"*) ok "a write whose card the read shows on its old Status past the bounded attempts is proven within the settle bound";; *) ko "settle old-Status message: $o";; esac || ko "settle old-Status exit $rc: $o"
+[ "$(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls")" -le 3 ] && ok "the settle reads and never writes the card again" || ko "settle wrote again: $(/usr/bin/grep -c -- '-X PATCH' "$T/gh.calls") PATCHes"
 rm -rf "$T"; exit $fail
