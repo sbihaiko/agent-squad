@@ -59,14 +59,14 @@ LIFECYCLE_CASES = (
 # One case per acceptance criterion of #375, in the suite's own words.
 LAND_CASES = (
     "A: start records the run's wave for its completion",
-    "I: the wave of two children holds both",
-    "I: the wave lands in dev with one push",
-    "I: the moved dev is rebased onto before the push",
-    "I: the landing clears the run's wave marker",
-    "I: each issue of the wave is closed through the API",
-    "I: each issue of the wave has its one delivery comment queued",
-    "I: each card of the wave reads Done",
-    "I: no child branch is pushed to the remote, ever",
+    "J: the wave of two children holds both",
+    "J: the wave lands in dev with one push",
+    "J: the moved dev is rebased onto before the push",
+    "J: the landing clears the run's wave marker",
+    "J: each issue of the wave is closed through the API",
+    "J: each issue of the wave has its one delivery comment queued",
+    "J: each card of the wave reads Done",
+    "J: no child branch is pushed to the remote, ever",
     "E2: a refused push repeats from the fetch and the wave lands",
     "E2: the base that moved between the rebase and the push is in dev",
     "E3: the refused close is retried once",
@@ -97,7 +97,7 @@ class Wave:
         self.scripts = root / "s"
         for d in (self.state / "auto", self.bin, self.scripts):
             d.mkdir(parents=True)
-        for name in ("wave.sh", "address.sh", "ghcall.sh"):
+        for name in ("wave.sh", "address.sh", "ghcall.sh", "gate.sh", "serial.sh"):
             shutil.copy(SCRIPTS / name, self.scripts / name)
         self.origin = root / "origin.git"
         self.co = root / "co"
