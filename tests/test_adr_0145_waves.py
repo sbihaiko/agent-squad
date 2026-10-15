@@ -16,6 +16,6 @@ def test_adr_0145_states_each_wave_rule_and_the_draft_guard():
         "Code Complete means the child is in the wave branch",
         "Done means the wave is in `dev`",
         "rebased on `dev` only before the final push",
-        "8 to 14 have no guard yet",
+        "8 to 11, 13 and 14 have no guard yet",   # rule 12 gained its guard (the board facts), the rest stay a draft
     ):
         assert phrase in text, phrase

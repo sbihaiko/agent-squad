@@ -12,6 +12,7 @@ This guard reads the functions the hub ships, sliced out of the file with `ast`,
 never imports the module: the module body needs a profile, and a test that needs one cannot run on the runner.
 """
 import ast
+import importlib.util
 import json
 import pathlib
 import re
@@ -27,13 +28,19 @@ ANTHROPIC = ("sonnet", "opus", "haiku", "fable")
 # `bare_id` strips a `claude:` prefix; the graph never carries one, so the identity is enough here.
 STUBS = {"bare_id": lambda m: m, "subprocess": None, "sys": None}
 
+def _envelope_module():
+    """The one envelope source (#436), loaded by path: it is a pure module, and hub.py's sliced functions call it."""
+    spec = importlib.util.spec_from_file_location("router_envelope", ROOT / "contrib" / "squad-goal" / "scripts" / "router_envelope.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+
 
 def _hub(*names, checkout="", stubs=None):
     """The named functions of hub.py, compiled alone, so importing the module never starts a server."""
     tree = ast.parse(HUB.read_text())
     keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     assert {n.name for n in keep} == set(names), f"hub.py no longer ships {names}"
-    ns = {"json": json, "os": __import__("os"), "pathlib": pathlib, "CHECKOUT": checkout,
+    ns = {"json": json, "os": __import__("os"), "pathlib": pathlib, "CHECKOUT": checkout, "router_envelope": _envelope_module(),
           **{**STUBS, "subprocess": subprocess, "sys": sys, **(stubs or {})}}
     exec(compile(ast.Module(body=keep, type_ignores=[]), str(HUB), "exec"), ns)
     return ns
