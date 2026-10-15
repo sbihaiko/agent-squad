@@ -34,6 +34,12 @@ for st in red; do
   [ "$kind $res $at" = "full fail $(tip dev)" ] && ok "a $st tip: the status line says fail at the dev tip" || ko "status line: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 done
 
+# (#438) $SG_STATE/promote.seen is bounded: old lines are pruned, and the dedupe holds for the latest red tip.
+for i in $(seq 1 100); do echo "dead$i gate red" >> "$SG_STATE/promote.seen"; done
+adv dev pruned; ci red; rm -f "$T/gate.log"; bash "$d/promote-stg.sh" >/dev/null 2>&1; bash "$d/promote-stg.sh" >/dev/null 2>&1
+[ "$(wc -l < "$SG_STATE/promote.seen" | tr -d ' ')" -le 20 ] && ok "promote.seen is pruned to the last few lines" || ko "promote.seen has $(wc -l < "$SG_STATE/promote.seen" | tr -d ' ') lines"
+[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && grep -qxF "$(tip dev) gate red" "$SG_STATE/promote.seen" && ok "after the prune the latest red tip is still not gated again" || ko "pruned dedupe: gate runs '$(cat "$T/gate.log" 2>&1)'"
+
 adv dev later; ci green; bash "$d/promote-stg.sh" >/dev/null 2>&1
 [ "$(tip stg)" = "$(tip dev)" ] && ok "a later green tip carries the earlier work" || ko "later green tip did not promote"
 
