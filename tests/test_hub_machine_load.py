@@ -28,6 +28,8 @@ def hub():
     # under it, and a runner whose checkout holds one would read a reading of this machine, not of the fixture (#151)
     os.environ["SG_CHECKOUT"] = tempfile.mkdtemp()
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
+    os.environ["SG_STATE"] = tempfile.mkdtemp()
+    os.environ["SG_SHARED"] = tempfile.mkdtemp()
     spec = importlib.util.spec_from_file_location("hub_machine_load", HUB_PY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

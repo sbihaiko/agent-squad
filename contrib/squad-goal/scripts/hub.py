@@ -1002,6 +1002,52 @@ def runs():
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
 
+RUN_WATCH_SECS = 0.2
+RUN_POLL_SECS = 3.0
+RUN_LIST = []
+RUN_LIST_AT = 0.0
+RUN_LIST_LOCK = threading.Lock()
+
+def run_watch_state(dirs=None):
+    """The record files a watch pass sees: their nanosecond mtimes and sizes, so a new run and its verdict both differ."""
+    out = {}
+    for d in project_dirs() if dirs is None else dirs:
+        try: records = pathlib.Path(d).glob("run-*/record.jsonl")
+        except OSError: continue
+        for p in records:
+            try:
+                s = p.stat(); out[str(p)] = (s.st_mtime_ns, s.st_size)
+            except OSError: pass
+    return out
+
+def refresh_runs():
+    """Refresh the displayed run list after a record change, or the fixed fallback poll."""
+    global RUN_LIST_AT
+    rows = runs()
+    with RUN_LIST_LOCK:
+        RUN_LIST[:] = rows
+        RUN_LIST_AT = time.monotonic()
+    return rows
+
+def run_watch_tick(before, dirs=None):
+    """Refresh when a watched record appeared, changed or left the runs directory."""
+    after = run_watch_state(dirs)
+    if after != before: refresh_runs()
+    return after
+
+def run_list():
+    """The displayed list, with its fixed poll as a fallback for a missed watch event."""
+    if time.monotonic() - RUN_LIST_AT >= RUN_POLL_SECS: refresh_runs()
+    with RUN_LIST_LOCK: return list(RUN_LIST)
+
+def watch_runs():
+    """Watch the known runs directories without a platform-specific dependency; the API poll remains the fallback."""
+    dirs = project_dirs(); state = run_watch_state(dirs)
+    while True:
+        time.sleep(RUN_WATCH_SECS)
+        try: state = run_watch_tick(state, dirs)
+        except Exception: pass
+
 def working(rows):
     """The ids of the runs that work: a run folder with no verdict and a dashboard that answers, as the list above groups them. Test passes are not runs."""
     return [r["id"] for r in rows if r.get("kind") != "test" and group_of(r) == "running"]
@@ -2874,7 +2920,7 @@ class H(BaseHTTPRequestHandler):
             import html as _h
             ref = '<meta http-equiv="refresh" content="3">' if d.get("state") == "running" else ""
             body = f'<!doctype html><meta charset=utf-8>{ref}<body style="background:#0d1117;color:#c9d1d9;font:12px ui-monospace,monospace;margin:12px"><div style="color:#58a6ff">test #{d.get("issue")} · {d.get("state")}{" (exit "+str(d.get("rc"))+")" if "rc" in d else ""} · {_h.escape(d.get("dir",""))}</div><div style="color:#8b949e">$ {_h.escape(d.get("cmd",""))}</div><pre style="white-space:pre-wrap">{_h.escape(lg)}</pre><script>scrollTo(0,document.body.scrollHeight)</script>'.encode(); ct = "text/html; charset=utf-8"
-        elif self.path.startswith("/api/runs"): body, ct = json.dumps(runs()).encode(), "application/json"
+        elif self.path.startswith("/api/runs"): body, ct = json.dumps(run_list()).encode(), "application/json"
         elif self.path.startswith("/api/stats"): body, ct = json.dumps(stats((re.search(r"period=(\w+)", self.path) or [0, "day"])[1] if re.search(r"period=(hour|day|month)", self.path) else "day", (re.search(r"src=(sub|api)", self.path) or [0, "both"])[1])).encode(), "application/json"
         elif self.path.startswith("/api/issue"):
             m = re.search(r"[?&]n=(\d{1,6})\b", self.path); rr = re.search(r"[?&]r=([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)", self.path)
@@ -2914,5 +2960,6 @@ def watch_self():
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 7700
-    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start()
+    refresh_runs()
+    threading.Thread(target=refresh_prs, daemon=True).start(); threading.Thread(target=refresh_quota, daemon=True).start(); threading.Thread(target=watch_self, daemon=True).start(); threading.Thread(target=refresh_board, daemon=True).start(); threading.Thread(target=load_sampler, daemon=True).start(); threading.Thread(target=watch_runs, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
