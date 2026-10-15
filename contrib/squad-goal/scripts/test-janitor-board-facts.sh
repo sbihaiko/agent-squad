@@ -1,0 +1,64 @@
+#!/bin/bash
+# The board facts have one runtime producer (ADR-0145): the janitor's reconcile fills the facts board_columns.column_for reads
+# (wave_branch, landing, dev_ci, review_wait) from what the loop already knows -- the wave branch of a run on the remote, the
+# review of its tip kept in the state dir, the check runs of the dev tip, and the review of a work branch -- and writes the
+# column the table names. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
+# usage: bash test-janitor-board-facts.sh [janitor.py]
+src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
+cp "$src" "$T/s/janitor.py"; cp "$here/issue_state.py" "$here/board_columns.py" "$here/board_facts.py" "$here/board-definition.json" "$here/spec_fold.py" "$T/s/" 2>/dev/null
+cp "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/refusal.sh" "$here/address.sh" "$here/refusal-names.sh" "$T/s/"
+cat > "$T/s/board.sh" <<'J'
+#!/bin/bash
+case "$1" in
+  --run-fields) echo "RUN $2 $3 $4 $5 $6" >> "TMPDIR/board.calls";;
+  --clear-run) echo "CLEAR $2 $3 $4" >> "TMPDIR/board.calls";;
+  --add) echo "ADD $2 $3 $4 $5" >> "TMPDIR/board.calls";;
+  *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls";;
+esac
+J
+sed -i '' "s|TMPDIR|$T|" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+cat > "$T/bin/gh" <<'J'
+#!/bin/bash
+a="$*"; echo "$a" >> "TMPDIR/gh.calls"
+case "$a" in
+  *--include*search/issues*) echo '{"total_count":0,"items":[]}';;
+  *--include*issues/*/comments*) echo '[]';;
+  *search/issues*) echo 0;;
+  *projectsV2/4/fields*) echo FID4;;
+  *projectsV2/4/items*) for n in 2301 2302 2303 2305 2306; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done;;
+  *repos/x/y/branches*) printf 'wave/run-wl shaWL\nwave/run-wc shaWC\nwave/run-wt shaWT\nfix/2305-x shaF5\nfix/2306-x shaF6\n';;
+  *compare/dev...shaWT*|*compare/dev...shaF*) :;;
+  *commits/dev/check-runs*) echo 1;;
+  *graphql*)
+    printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
+    sep=""; for n in 2301 2302 2303 2305 2306; do
+      printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n"; sep=,; done
+    printf ']}}}}';;
+  *issues/23*) echo $'open\t\tIssue';;
+esac
+J
+python3 - "$T/bin/gh" <<'PY'
+import sys
+p = sys.argv[1]; t = open(p).read()
+# compare answers: the wave of run-wt is in dev, every other branch is ahead of it
+t = t.replace("  *compare/dev...shaWT*|*compare/dev...shaF*) :;;\n", "  *compare/dev...shaWT*) echo behind;;\n  *compare/dev...*) echo ahead;;\n")
+open(p, "w").write(t)
+PY
+sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'CHILD — GitHub issue(s) %s:\n' "$2" > "$T/co/runs/$1/request.txt"
+  printf '{"event":"run_start","run_id":"%s","ts":"2026-10-13T08:00:00Z"}\n{"event":"land","outcome":"pass"}\n{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}\n' "$1" > "$T/co/runs/$1/record.jsonl"; }
+mk run-wl 2301; mk run-wc 2302; mk run-wt 2303
+printf 'VERDICT: APPROVE\n' > "$T/st/review-wave_run-wl.md"; printf 'shaWL\n' > "$T/st/review-wave_run-wl.sha"
+printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_2305-x.md"; printf 'old\n' > "$T/st/review-fix_2305-x.sha"
+o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
+bc() { cat "$T/board.calls" 2>/dev/null; }
+has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
+has '^STATUS o 4 Landing 2301$' && ok "an approved wave ahead of dev: its child's card is Landing" || ko "#2301 not Landing: $(bc) $o"
+has '^STATUS o 4 Code Complete 2302$' && ok "a wave ahead of dev with no approval: Code Complete" || ko "#2302 not Code Complete: $(bc)"
+has '^STATUS o 4 Testing 2303$' && ok "a wave in dev while the dev tip's CI runs: Testing" || ko "#2303 not Testing: $(bc) $o"
+has '^STATUS o 4 Doing 2305$' && ok "a work branch whose review waits: Doing" || ko "#2305 not Doing: $(bc)"
+has '^STATUS o 4 Code Complete 2306$' && ok "a work branch with no review yet keeps Code Complete" || ko "#2306 lost Code Complete: $(bc)"
+/usr/bin/grep -q 'commits/dev/check-runs' "$T/gh.calls" && ok "the dev tip's CI is read once through the door" || ko "no check-runs read"
+[ "$(/usr/bin/grep -c 'commits/dev/check-runs' "$T/gh.calls")" -le 1 ] && ok "the dev tip's CI is read at most once a pass" || ko "check-runs read more than once"
+[ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }
