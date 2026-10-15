@@ -9,6 +9,46 @@ export SG_GH_PASS=landing   # the pass that spends the GitHub calls below, named
 # the worktree is made on cannot come from two sources.
 sg_fork_branch() { local br=${SG_FORK_BRANCH:-gui/%n}; echo "${br//%n/$1}"; }
 sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
+# An issue claimed by either dispatcher is unavailable to both passes. The marker is the dispatch lock,
+# so its namespace is intentionally shared even though each pass writes its own name.
+sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/disp-$1" ]; }
+# Read live child requests once for both dispatchers. Issue text is not structured in spawn_accepted yet,
+# so accept the two request forms that the dispatchers write and return exact decimal issue numbers only.
+sg_live_issues() {   # <active-runs.txt>: print comma-separated issue numbers from live spawn_accepted events
+  python3 - "$SG_CHECKOUT" "$1" <<'PY'
+import json, pathlib, re, sys
+root, active = sys.argv[1:]
+busy = set()
+try:
+    runs = pathlib.Path(active).read_text().split()
+except OSError:
+    runs = []
+for run in runs:
+    record = pathlib.Path(run if run.startswith("/") else pathlib.Path(root) / "runs" / run) / "record.jsonl"
+    if not record.is_file():
+        continue
+    try:
+        lines = record.read_text().splitlines()
+    except OSError:
+        continue
+    events = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        events.append(event)
+    if any(isinstance(event, dict) and event.get("event") == "verdict" for event in events):
+        continue
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") != "spawn_accepted":
+            continue
+        text = json.dumps(event, ensure_ascii=False)
+        busy.update(re.findall(r"\b(?:github\s+)?issues?\s*#\s*(\d+)\b", text, re.IGNORECASE))
+        busy.update(re.findall(r"\bgui/(\d+)\b", text, re.IGNORECASE))
+print(",".join(sorted(busy, key=int)) or "-")
+PY
+}
 # An old run can leave the issue worktree behind. The dispatcher owns that path, so it tells the next child when the
 # exact expected checkout is safe to reuse. Every other state stays intact and is reported as a blocker (#65).
 sg_issue_worktree_note() {   # <issue>: print child instructions only when worktrees/child/gui-<issue> already exists

@@ -16,7 +16,7 @@ export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, name
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOFRONTIER:-}" ] || exec env SG_SINGLE_AUTOFRONTIER=1 bash "$here/single.sh" autofrontier bash "$here/autofrontier.sh" "$@"
-read -r free busy room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
+read -r free room spend < <(cd "$SG_CHECKOUT" && python3 - "${SG_WORKFLOW:-dynamic}" "$SG_STATE/active-runs.txt" <<'PY'
 import json, os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
@@ -69,7 +69,7 @@ def budget_spend(o):   # the budget.spend.max of the first dispatch node: what O
     return None
 env = envelope(doc) if doc else None
 spend = budget_spend(doc) if doc else None
-live = 0; busy = set()
+live = 0
 for r in open(sys.argv[2]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not f.exists(): continue
@@ -79,20 +79,16 @@ for r in open(sys.argv[2]).read().split():
     for l in t.splitlines():
         if '"spawn_accepted"' in l:
             held += 1
-            # The router writes the issue down without the hash ("Fix GitHub issue 11 in the repository"), and a child that took
-            # several writes them as a list. A hashed-only read let the issue of a live run look untouched, so the pass sent it
-            # a second time, into a run that found the branch already checked out (#66).
-            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)", l):
-                busy.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or "") if x)
 # The children ONE run may take (#33): its envelope, and the child ceiling the run block of the graph names, both less the
 # children the live runs already hold -- and (#21) never more than the machine-wide ceiling caps.children, which is the one
 # resolution the engine enforces. "-" when nothing names a bound, and then the free run slots bound the picks, as before.
 run = doc.get("run") if isinstance(doc, dict) else None
 gmc = run.get("max_children") if isinstance(run, dict) else None
 limits = [x for x in (env, (gmc - held) if isinstance(gmc, int) else None, max(ceil.caps["children"] - held, 0)) if x is not None]
-print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-", min(limits) if limits else "-", spend if spend is not None else "-")
+print(max(cap - max(live, held), 0), min(limits) if limits else "-", spend if spend is not None else "-")
 PY
 )
+busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 [ -n "${free:-}" ] || { echo "autofrontier: no free-slot count; see the squad.caps line above" >&2; exit 1; }
 # What the request tells the router to ask for per child: the dispatch node's own budget, and no number of our own when that
 # budget cannot be read. A hardcoded 8 against a node whose limit is 4 made the router read spend_outside_budget in its own
@@ -154,7 +150,7 @@ while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$
 i=0
 while [ $i -lt ${#cands[@]} ]; do
   IFS=$'\x1f' read -r w n labels <<< "${cands[$i]}"; i=$((i+1))
-  [ -n "$n" ] || continue; [ -e "$A/disp-$n" ] && continue
+  [ -n "$n" ] || continue; sg_dispatch_claimed "$n" && continue
   # A spec is not a unit of work: the owner starts it by breaking it into tickets, and a run that implemented one would
   # commit a decision he has not made. The same holds for an issue that waits on the owner, one closed as not-work, and
   # one waiting on an answer. The bug label is skipped here too: autobug.sh owns those.

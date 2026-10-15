@@ -100,7 +100,7 @@ sg_is_issue() { local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1; pri
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOBUG:-}" ] || exec env SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"
 lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
-read -r free busy < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
+read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
 # by the project file of SG_CHECKOUT. The live count is the larger of the live runs of this repository and the live leases of
@@ -112,21 +112,18 @@ try:
 except Exception as e:
     print(f"squad.caps: {e}", file=sys.stderr); sys.exit(2)
 cap, held = ceil.caps["runs"], ceil.occupancy()["runs"]
-live = 0; busy = set()
+live = 0
 for r in open(sys.argv[1]).read().split():
     f = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not f.exists(): continue
     t = f.read_text()
     if '"event": "verdict"' in t or '"event":"verdict"' in t: continue
     live += 1
-    for l in t.splitlines():
-        if '"spawn_accepted"' in l:
-            m = re.search(r"GitHub issue #(\d+)", l) or re.search(r"\bissue #(\d+)", l)
-            if m: busy.add(m.group(1))
-print(max(cap - max(live, held), 0), ",".join(sorted(busy)) or "-")
+print(max(cap - max(live, held), 0))
 PY
 
 )
+busy=$(sg_live_issues "$SG_STATE/active-runs.txt")
 [ -n "${free:-}" ] || { echo "autobug: no free-slot count; see the squad.caps line above" >&2; exit 1; }
 [ "$free" -gt 0 ] || exit 0
 # bugs first, then debt (only when no bug is startable -- AB_SKIP_DEBT=1 is the idle hunt's startable check, bugs only)
@@ -162,7 +159,7 @@ for sel in "$lab" debt; do
   [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
   if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || exit 0; else list=$(gather "$sel") || exit 0; fi            # refused selection: no candidate, no marker, no request (#1855)
   while IFS=$'\x1f' read -r n labels; do
-    [ -n "$n" ] || continue; [ -e "$A/bug-$n" ] && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+    [ -n "$n" ] || continue; sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
     # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
