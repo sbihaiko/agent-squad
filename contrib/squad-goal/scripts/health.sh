@@ -7,7 +7,7 @@
 # which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
 # the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
 # Each cause alerts ONCE (alerts.log + macOS notification) when it appears and re-arms when it clears. HEALTH_DRY=1 prints only; HEALTH_NOTIFY overrides the notifier.
-. "$(dirname "$0")/env.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
@@ -44,7 +44,7 @@ if [ -f "$(dirname "$0")/ghspend.py" ]; then
   while IFS=$'\t' read -r gc gb gd; do [ -n "$gc" ] && add "$gc" "$gd" "$gb"; done < <(python3 "$(dirname "$0")/ghspend.py" causes "$SG_STATE" 2>/dev/null)
 fi
 # Every agent-created issue has one product type. Surface a missing type before the issue can be dispatched or lost.
-untyped=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("enhancement")) // false | not))|select((([.labels[].name]|index("spec")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
+untyped=" $(gh_api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("enhancement")) // false | not))|select((([.labels[].name]|index("spec")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
 [ -n "${untyped// /}" ] && add untyped-issues "open issue(s) without a type label:$(for n in $untyped; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
 # A ready issue with no run or pull request for one pass must remain visible even when it has only a wave label.
