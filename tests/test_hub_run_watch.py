@@ -1,6 +1,8 @@
 """Hub run watch: record changes refresh the live run list before its fallback poll."""
 import importlib.util
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -48,3 +50,43 @@ def test_run_record_changes_refresh_the_live_list(hub, tmp_path, monkeypatch):
     write_event(record, {"event": "verdict", "verdict": "completed", "ts": 2.0})
     hub.run_watch_tick(state)
     assert hub.run_list() == []
+
+
+def test_watch_loop_sees_a_project_dir_added_later(hub, tmp_path, monkeypatch):
+    first, later = tmp_path / "a" / "runs", tmp_path / "b" / "runs"
+    first.mkdir(parents=True)
+    dirs = [first]
+    seen = []
+    stop = threading.Event()
+    monkeypatch.setattr(hub, "RUN_WATCH_SECS", 0.01)
+    monkeypatch.setattr(hub, "project_dirs", lambda: list(dirs))
+    monkeypatch.setattr(hub, "runs", lambda: seen.append(1) or [])
+    thread = threading.Thread(target=hub.watch_runs, args=(stop,), daemon=True)
+    thread.start()
+    try:
+        record = later / "run-20261015-190000-late" / "record.jsonl"
+        record.parent.mkdir(parents=True)
+        write_event(record, {"event": "run_start", "ts": 1.0})
+        dirs.append(later)
+        deadline = time.monotonic() + 5
+        while not seen and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        stop.set()
+        thread.join(5)
+    assert seen, "a project dir added after the thread started is not watched"
+    assert not thread.is_alive()
+
+
+def test_run_list_fallback_poll_refreshes_only_when_due(hub, monkeypatch):
+    calls = []
+    monkeypatch.setattr(hub, "runs", lambda: calls.append(1) or [{"id": "r"}])
+    monkeypatch.setattr(hub, "RUN_POLL_SECS", 100.0)
+    monkeypatch.setattr(hub, "RUN_LIST_AT", 0.0)
+    assert hub.run_list() == [{"id": "r"}]
+    assert len(calls) == 1
+    assert hub.run_list() == [{"id": "r"}]
+    assert len(calls) == 1, "a list younger than RUN_POLL_SECS is not rebuilt"
+    monkeypatch.setattr(hub, "RUN_POLL_SECS", 0.0)
+    hub.run_list()
+    assert len(calls) == 2, "a list older than RUN_POLL_SECS is rebuilt by the fallback poll"
