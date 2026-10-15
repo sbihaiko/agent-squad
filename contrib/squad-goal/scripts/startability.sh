@@ -44,7 +44,13 @@ for run in runs:
         if not isinstance(event, dict) or event.get("event") != "spawn_accepted":
             continue
         text = json.dumps(event, ensure_ascii=False)
-        busy.update(re.findall(r"\b(?:github\s+)?issues?\s*#\s*(\d+)\b", text, re.IGNORECASE))
+        # The request text is not structured yet, so both forms the dispatchers write are read: the router writes
+        # the issue without the hash ("Fix GitHub issue 11 in the repository") and may name a list of them
+        # ("GitHub issues 11, 12"). Reading only the hashed single form left those issues unclaimed, and both
+        # dispatchers sent them into a second run (#428).
+        for listed in re.findall(r"\bgithub\s+issues?\s*#?\s*([0-9][0-9,\s]*)", text, re.IGNORECASE):
+            busy.update(re.findall(r"\d+", listed))
+        busy.update(re.findall(r"\bissues?\s*#\s*(\d+)\b", text, re.IGNORECASE))
         busy.update(re.findall(r"\bgui/(\d+)\b", text, re.IGNORECASE))
 print(",".join(sorted(busy, key=int)) or "-")
 PY
