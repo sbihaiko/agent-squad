@@ -14,7 +14,7 @@ S=$T/s; mkdir -p "$S"
 cp "$d/refusal-names.sh" "$S/" 2>/dev/null
 # the scripts that name a refusal: the two helpers and the write door, plus the reconciler's own pass
 WRITERS="refusal.sh autorefuse.sh autobug.sh janitor.py"
-MEMBERS="BOARD-WRITE-FAILED DISPATCH-FAILED REFUSAL-COMMENT-FAILED"
+MEMBERS="BOARD-WRITE-FAILED DISPATCH-FAILED REFUSAL-COMMENT-FAILED BOARD-READ-FAILED"
 holds() { [ -n "$1" ] && $G -qxF "$2" <<< "$1"; }
 
 # 1. the set is readable in one place: one helper prints it, and printing it needs nothing else

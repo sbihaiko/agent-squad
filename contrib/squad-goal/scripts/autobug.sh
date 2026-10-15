@@ -85,7 +85,7 @@ sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: th
   # board.py's own read failure (#432): the board never carried the card within the settle bound, and GitHub refused no
   # write. Its text says so with no refusal in parentheses before the closing words, so a refusal never matches. Named in
   # the log and filed as no bug; the next pass writes the card again.
-  if printf '%s' "$out" | /usr/bin/grep -qE 'after [0-9]+ reads( \([0-9]+ items read\))?; a read failure, not a (written card|absence)'; then
+  if printf '%s' "$out" | /usr/bin/grep -qE '^#[0-9]+: the board carries no .* on it after [0-9]+ reads( \([0-9]+ items read\))?; a read failure, not a (written card|absence)'; then
     echo "$(date +%T) ${SG_GH_PASS:-autobug} BOARD-READ-FAILED $name $addr: $(printf '%s' "$out" | tr '\n' ' ')" >> "$SG_STATE/cycle.log"
     return "$rc"
   fi
