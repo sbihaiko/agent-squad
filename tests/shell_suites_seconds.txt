@@ -15,7 +15,7 @@ test-board-test-case.sh 2.1
 test-branchfix-pass.sh 22.1
 test-branchland.sh 86.8
 test-branchreview-pass.sh 41.0
-test-branchreview.sh 11.2
+test-branchreview.sh 14.0
 test-childcc.sh 3
 test-cluster.sh 23.1
 test-cqflush-address.sh 5.0
@@ -80,6 +80,6 @@ test-token-guard.sh 2.8
 test-token-ledger.sh 14.4
 test-watch-cycle.sh 60.2
 test-watch-land.sh 8.5
-test-wave-lifecycle.sh 21.8
-test-wave.sh 40.1
+test-wave-lifecycle.sh 27.5
+test-wave.sh 38.1
 test-wtclean.sh 90.5
