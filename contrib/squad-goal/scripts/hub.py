@@ -329,21 +329,31 @@ def load_squad(roots):
     """`squad.caps` and `squad.run_caps` from the first root that holds the package, and only from that root: a package that
     some other entry of this machine's path happens to hold answers for no root (#452). A root that fails leaves nothing
     behind (not on sys.path, not in sys.modules), so the next one imports clean. Raises the last failure, which names what
-    was missing."""
+    was missing.
+    The resolution is one call's business: whatever answers, the caller's `squad` modules are the objects they were and its
+    table gains none (#453). This module is read by a longer-lived interpreter too -- a suite that imports it into its own
+    process -- and a purge that stayed there parted every class that process already held, so a raise it expected was a
+    different class from the one it caught."""
     err = ModuleNotFoundError("no squad package in: " + ", ".join(roots))
-    for root in roots:
-        added = root not in sys.path
-        if added: sys.path.insert(0, root)
-        try:
-            from squad import caps, run_caps
-            here = getattr(caps, "__file__", None)   # the caps module the import found: it must live under the root that was asked
-            if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return caps, run_caps
-            err = ModuleNotFoundError(f"{root} holds no squad package (the one imported is {here})")
-        except Exception as e:
-            err = e
+    ambient = {m: mod for m, mod in sys.modules.items() if m == "squad" or m.startswith("squad.")}
+    for m in ambient: del sys.modules[m]
+    try:
+        for root in roots:
+            added = root not in sys.path
+            if added: sys.path.insert(0, root)
+            try:
+                from squad import caps, run_caps
+                here = getattr(caps, "__file__", None)   # the caps module the import found: it must live under the root that was asked
+                if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return caps, run_caps
+                err = ModuleNotFoundError(f"{root} holds no squad package (the one imported is {here})")
+            except Exception as e:
+                err = e
+            for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
+            if added: sys.path.remove(root)
+        raise err
+    finally:
         for m in [m for m in sys.modules if m == "squad" or m.startswith("squad.")]: del sys.modules[m]
-        if added: sys.path.remove(root)
-    raise err
+        sys.modules.update(ambient)
 
 CAPS_LOGGED = set()
 def log_once(line, seen=CAPS_LOGGED, out=None):
