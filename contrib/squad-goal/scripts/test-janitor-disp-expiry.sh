@@ -58,6 +58,12 @@ echo run-ended > "$T/st/auto/disp-901"
 mk run-landed 902
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #902 on fix/902-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "head": "a7df8f1ecff77bdb5833721121a7a50be4066053"}}\n{"event": "verdict", "verdict": "pass", "reasons": [], "exit_code": 0}\n' > "$T/co/runs/run-landed/record.jsonl"
 echo run-landed > "$T/st/auto/disp-902"
+# F (#464): the run recorded a `land` pass whose merge moved the target's tip by nothing: the landing carries no work, so it
+# is no delivery. The issue goes back to the queue and the marker is dropped, exactly as for a run that landed nothing.
+mk run-empty-land 905
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #905 on fix/905-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "head": "e1837f1c9a2c4ac65b1e5c1c6d0dd0e2c5f8a1b4", "before": "e1837f1c9a2c4ac65b1e5c1c6d0dd0e2c5f8a1b4"}}\n{"event": "verdict", "verdict": "completed", "reasons": [], "exit_code": 0}\n' > "$T/co/runs/run-empty-land/record.jsonl"
+echo run-empty-land > "$T/st/auto/disp-905"
+touch -t 202001010000 "$T/co/runs/run-empty-land/record.jsonl"
 # C: a live run (no verdict yet) works its issue
 mk run-live 903
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #903 on fix/903-x"}\n' > "$T/co/runs/run-live/record.jsonl"
@@ -85,6 +91,8 @@ o=$(run)
 /usr/bin/grep -q 'needs-human' "$T/st/cycle.log" 2>/dev/null && ok "O: the announcement names the verdict it ended on" || ko "O announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'owner_decision' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q 'run-ended' "$T/st/cq/"*901* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
 [ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Code Complete 902$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 902' "$T/board.calls" 2>/dev/null && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+[ ! -e "$T/st/auto/disp-905" ] && ok "O: a landing that moved the tip by nothing drops its marker (no delivery)" || ko "O disp-905 kept although the land carried nothing: $o"
+! /usr/bin/grep -q '^o 4 Code Complete 905$' "$T/board.calls" 2>/dev/null && ok "R: a landing that carries nothing never claims Code Complete" || ko "R #905 claimed Code Complete: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q -- '^--run-fields o 4 903 run-live ' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker and writes Run fields" || ko "O #903 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Code Complete 904$' "$T/board.calls" 2>/dev/null && ok "O: a work branch naming the issue moves to Code Complete and keeps its marker" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"

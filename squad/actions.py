@@ -55,7 +55,12 @@ def commit(path, message, timeout=None, exclude=None):
 
 
 def merge_land(target, worktree, branch, message, timeout=None):
-    """Commit pending work in the worktree, then merge its branch into the target's current branch."""
+    """Commit pending work in the worktree, then merge its branch into the target's current branch.
+
+    The result carries the tip the merge started from, so a reader compares it with the head it recorded: a landing that
+    moved the tip by nothing carries no work and is no delivery (ADR-0145 rule 12: a wave with nothing ahead of its base
+    lands empty and moves no card, #464)."""
+    before = git.head(target)
     c = commit(worktree, message, timeout)
     if not c.ok:
         return c
@@ -63,4 +68,4 @@ def merge_land(target, worktree, branch, message, timeout=None):
     if r.returncode != 0:
         git.run(["merge", "--abort"], target)
         return ActionResult(False, ["merge_conflict"], git.head(target), {"stderr": (r.stdout + r.stderr).strip()[-400:]})
-    return ActionResult(True, [], git.head(target))
+    return ActionResult(True, [], git.head(target), {"before": before})

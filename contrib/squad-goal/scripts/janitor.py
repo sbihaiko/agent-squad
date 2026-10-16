@@ -164,10 +164,15 @@ def read(f):
         if ev == "verdict":   # the fold takes the last verdict event of a resumed record (ADR-0105)
             v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
         if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing
-            landed = landed or d.get("outcome") == "pass"
+            eff = d.get("effect") or {}
+            # A landing that moved the target's tip by nothing carries no work: it is no delivery, so no card is claimed and
+            # no marker stands on it (ADR-0145 rule 12, #464). A record written before the effect carried `before` keeps the
+            # old reading, so an old run is judged as it was.
+            moved = eff.get("before") is None or eff.get("before") != eff.get("head")
+            landed = landed or (d.get("outcome") == "pass" and moved)
             # The node that landed: a dispatch child's own name (`dispatch.py` writes node=child), or the run's own stage.
             # A landing a child's own held-out command turned red was undone, so it is not a landing (subject.py).
-            if d.get("outcome") == "pass" and (d.get("effect") or {}).get("held_out") != "fail" and d.get("node") is not None:
+            if d.get("outcome") == "pass" and moved and eff.get("held_out") != "fail" and d.get("node") is not None:
                 land_nodes.add(str(d["node"]))
         if ev == "outcome":   # the outcome the node itself recorded, child or run stage: the fact rule R reads per child (#271)
             if d.get("node") is not None:
