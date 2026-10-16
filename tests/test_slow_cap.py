@@ -141,6 +141,22 @@ def test_the_repo_default_cap_is_20_seconds_and_durations_print():
     assert 'heavy_cap_seconds = "2"' in text and '"heavy: ' in text
 
 
+NESTED_CHECKS = (
+    test_a_test_over_the_cap_fails_and_is_named,
+    test_a_test_under_the_cap_passes,
+    test_a_slow_marker_with_a_reason_lets_a_test_pass,
+    test_a_slow_marker_with_no_reason_refuses_the_run,
+    test_a_test_that_never_returns_fails_by_name_at_its_deadline,
+    test_a_slow_marker_with_a_reason_is_exempt_from_the_deadline,
+    test_an_unmarked_test_at_the_heavy_line_fails_and_is_named,
+    test_a_heavy_marker_lets_a_test_past_the_heavy_line_pass,
+    test_a_heavy_marker_does_not_lift_the_cap,
+    test_wall_time_that_only_contention_grew_does_not_fail_the_cap,
+    test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line,
+    test_a_test_far_past_the_line_fails_even_under_contention,
+)
+
+
 def _slow_reason(test):
     for mark in getattr(test, "pytestmark", ()):
         if mark.name == "slow":
@@ -148,21 +164,20 @@ def _slow_reason(test):
     return None
 
 
+def _heavy_marked(test):
+    return any(mark.name == "heavy" for mark in getattr(test, "pytestmark", ()))
+
+
+def test_nested_pytest_checks_carry_the_heavy_marker():
+    """Every check here starts a nested pytest, a call at or over the 1 s line the fast battery deselects. A call that sits
+    just over that line is named by the guard once the machine is loaded, so the mark is what keeps a loaded gate green. One
+    check was left unmarked and failed a loaded gate at 3.1 s."""
+    missing = [_test.__name__ for _test in NESTED_CHECKS if not _heavy_marked(_test)]
+    assert missing == [], f"these checks start a nested pytest and carry no heavy mark: {missing}"
+
+
 def test_nested_pytest_checks_explain_their_slow_marker():
-    checks = (
-        test_a_test_over_the_cap_fails_and_is_named,
-        test_a_test_under_the_cap_passes,
-        test_a_slow_marker_with_a_reason_lets_a_test_pass,
-        test_a_slow_marker_with_no_reason_refuses_the_run,
-        test_a_test_that_never_returns_fails_by_name_at_its_deadline,
-        test_a_slow_marker_with_a_reason_is_exempt_from_the_deadline,
-        test_an_unmarked_test_at_the_heavy_line_fails_and_is_named,
-        test_a_heavy_marker_lets_a_test_past_the_heavy_line_pass,
-        test_a_heavy_marker_does_not_lift_the_cap,
-        test_wall_time_that_only_contention_grew_does_not_fail_the_cap,
-        test_wall_time_that_only_contention_grew_does_not_fail_the_heavy_line,
-        test_a_test_far_past_the_line_fails_even_under_contention,
-    )
+    checks = NESTED_CHECKS
     assert {_test.__name__: _slow_reason(_test) for _test in checks} == {
         "test_a_test_over_the_cap_fails_and_is_named": "starts a nested pytest subprocess",
         "test_a_test_under_the_cap_passes": "starts a nested pytest subprocess",
