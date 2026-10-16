@@ -151,7 +151,7 @@ while [ $i -lt ${#cands[@]} ]; do
   d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|WAIT )')
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=
-  case "$d" in READY*) g=base; nt="cut your branch from origin/$SG_BASE";; *) continue;; esac
+  case "$d" in READY*) g=base; nt="work in the worktree the run gives you";; *) continue;; esac
   [ -z "$full" ] || joins "$g" "$n" || break
   pick+=("$n"); notes+=("$nt"); ready+=("$n")
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
@@ -172,8 +172,8 @@ child_block() { local c=$1 n; set -- $c; echo; echo "CHILD — GitHub issue(s) $
   for n in "$@"; do [ $# -gt 1 ] && echo "--- issue #$n"; sg_issue_worktree_note "$n"; jq -r --argjson n "$n" '.[]|select(.number==$n)|"\"" + .title + "\"\n" + (.body // "")' "$F/issues.json"; done; }
 build_body() { local c
   { echo "PANEL: $name"
-    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block, one branch each: cut it from origin/$SG_BASE, push your branch, and open no pull request. A block with several issues touches one shared slice: ONE branch, one \"Refs #N\" line per issue in the commit message. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
-    echo "Before every push, run \"bash $here/prepush.sh --local <pr-body-file>\" from the worktree: it must print nothing (closing keywords, unpushed commits, files the body cites but the head lacks)."
+    echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block. The engine gives each child its own worktree and has already checked out the branch it works on: pass it that worktree as the place to work, and tell it to commit there, to create no worktree and no branch of its own, and to push nothing. The loop reads that worktree, enters the child's commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). A block with several issues touches one shared slice: ONE child, one \"Refs #N\" line per issue in the commit message. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
+    echo "Before the child reports done, run \"bash $here/prepush.sh --local\" in that worktree: it must print nothing."
     echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
     for c in "${kids[@]}"; do child_block "$c"; done
   } > "$body"

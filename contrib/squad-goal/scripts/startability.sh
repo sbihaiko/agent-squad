@@ -81,7 +81,7 @@ sg_issue_worktree_note() {   # <issue>: print child instructions only when workt
     printf 'PRESERVE ISSUE WORKTREE: The existing worktree at %s cannot be checked; expected branch %s. Do not reuse, reset, delete, or replace it. Preserve it and report this blocker in your result.\n' "$path" "$branch"; return
   }
   [ "$current" = "$branch" ] && [ -z "$state" ] && {
-    printf 'REUSE ISSUE WORKTREE: Use the clean existing worktree at %s on branch %s. Do not create a fresh worktree. Work in it without deleting or resetting it.\n' "$path" "$branch"; return
+    printf 'REUSE ISSUE WORKTREE: Use the clean existing worktree at %s on branch %s as read-only evidence of earlier work. Do not create a fresh worktree, do not delete or reset this one, and create no branch of your own. Your own commits go in the worktree the run gives you (ADR-0145 rule 9).\n' "$path" "$branch"; return
   }
   printf 'PRESERVE ISSUE WORKTREE: The existing worktree at %s is on branch %s; expected branch %s%s. Do not reuse, reset, delete, or replace it. Preserve it and report this blocker in your result.\n' "$path" "$current" "$branch" "${state:+ and it is dirty}"
 }
