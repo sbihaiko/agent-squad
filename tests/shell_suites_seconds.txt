@@ -4,7 +4,7 @@ test-address.sh 7.2
 test-autobug.sh 56.8
 test-autofrontier-envelope.sh 7.3
 test-autofrontier-one-run.sh 44.9
-test-autohunt.sh 46.0
+test-autohunt.sh 30.5
 test-autorefuse.sh 2.2
 test-board-add.sh 14.0
 test-board-clear-run.sh 1.1
