@@ -7,6 +7,10 @@ ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 live="$T/home/.claude/skills/squad-goal/scripts"; mkdir -p "$live" "$T/bare"; cp "$d/hub.py" "$d/chainhealth.py" "$d/router_envelope.py" "$d/panes.js" "$d/board_columns.py" "$d/issue_state.py" "$d/board-definition.json" "$live/"   # hub.py reads chainhealth.py, router_envelope.py, panes.js, board_columns.py, issue_state.py and the pinned board-definition.json beside itself
 
 # probe <env...> : load the copied hub.py in a fresh process, call loop_caps() twice; stdout is one JSON line, stderr is the hub's log.
+# Case 3 is a proof of the resolution and of nothing else: the gate runs every suite under `uv run`, whose PATH puts this
+# checkout's .venv first, and that venv holds `squad` as an editable install. `load_squad` takes a package only from the root it
+# asked, so the ambient one answers for no root and case 3 reads no ceiling -- the suite failed here in the full gate at c3c6274
+# because the hub took it (#452).
 cat >"$T/probe.py" <<'PY'
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("hub", sys.argv[1]); hub = importlib.util.module_from_spec(spec); spec.loader.exec_module(hub)

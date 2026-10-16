@@ -101,6 +101,11 @@ waitfor autofrontier 100; waitfor autobug 100
 # while a separate repository uses its own lock. A holder that is gone is taken over.
 WL="$ST/locks/watch"
 rm -rf "$WL"; mkdir -p "$WL"; echo $$ > "$WL/pid"          # held by this shell: alive, so the next start must refuse
+# Drain what the earlier cases' detached passes still owe: the cycle detaches reconcile, the stub sleeps REC_SLEEP and writes
+# when it ends, and a case that ran two cycles leaves two of those. One landed inside this case's window in the full gate at
+# c3c6274 (`FAIL 7 the refused start still ran: reconcile`) and read as a refused start that ran a step -- it had not. Wait for
+# the step log to go quiet instead of for one line: none of them is this case's (#451).
+quiet=0; prev=""; while [ $quiet -lt 15 ]; do cur=$(cat "$STEPS" 2>/dev/null); [ "$cur" = "$prev" ] && quiet=$((quiet+1)) || quiet=0; prev=$cur; /bin/sleep 0.1; done
 : > "$STEPS"
 env SG_TEST_CYCLES=1 bash "$S/watch.sh" > "$T/lock.out" 2>&1
 case "$(cat "$T/lock.out")" in *"watch.sh already running pid=$$"*) ok "7 a second watch.sh on the same path refuses by name";; *) ko "7 the second start was not refused: '$(cat "$T/lock.out")'";; esac
