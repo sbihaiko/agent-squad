@@ -9,8 +9,9 @@
 # --check changes nothing, prints one `copy <file>` / `drop <scripts/name>` line per difference and exits 1; with no
 # difference it prints nothing and exits 0. A publish prints each retired name it drops and a one-line count.
 #
-# The retired names (#122, #134) are the fork-only route the repository no longer ships. They are split in the source so
-# this list is not itself a call site: test-retire-fork-only.sh greps every shipped script for a retired name.
+# The retired names (#122, #134, #361) are the routes the repository no longer ships: the fork-only route and, from the #361
+# landing, the pull-request route. The fork names are split in the source so this list is not itself a call site:
+# test-retire-fork-only.sh greps every shipped script for a retired name.
 RETIRED="fork""close.sh
 fork""-gate.sh
 fork""only.sh
@@ -19,12 +20,24 @@ sync-to-""fork.sh
 refresh-from-""fork.sh
 forkrescue.py
 forkstrand.py
-req-checklist-""fork.txt"
+req-checklist-""fork.txt
+autofix.sh
+autopanel.sh
+autopilot.sh
+prland.sh
+retryfix.sh
+revci.sh
+speed.py"
 # A retired name takes its suites with it: the fork route's suites stayed in the live copy after its scripts were gone, and
-# every one of them failed on a call to a file that is not there (#210). Two of them do not carry their subject in their
-# name, so they are named here.
+# every one of them failed on a call to a file that is not there (#210). Some do not carry their subject in their name, so
+# they are named here.
 RETIRED_SUITES="test-""forkbranch-source.sh
-test-sync-refresh.sh"
+test-sync-refresh.sh
+test-autofrontier-merged.sh
+test-janitor-g.sh
+test-janitor-kmn.sh"
+# A data file the landing deleted travels the same way, at the top of the skill, not under scripts/.
+RETIRED_DATA="ci-baseline.txt"
 set -uo pipefail
 check=""; args=()
 for a in "$@"; do case "$a" in --check) check=1;; *) args+=("$a");; esac; done
@@ -62,6 +75,11 @@ for s in $RETIRED_SUITES; do
   [ -e "$dest/scripts/$s" ] || continue
   if [ -n "$check" ]; then echo "drop scripts/$s"; rc=1; continue; fi
   rm -f "$dest/scripts/$s"; echo "publish-live: dropped scripts/$s"
+done
+for n in $RETIRED_DATA; do
+  [ -e "$dest/$n" ] || continue
+  if [ -n "$check" ]; then echo "drop $n"; rc=1; continue; fi
+  rm -f "$dest/$n"; echo "publish-live: dropped $n"
 done
 [ -n "$check" ] && exit $rc
 echo "publish-live: $(shipped | wc -l | tr -d ' ') file(s) published to $dest, retired names dropped by name"
