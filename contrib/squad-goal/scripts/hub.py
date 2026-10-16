@@ -859,7 +859,9 @@ def wt_clean():
 TOKENS_PY = pathlib.Path(__file__).resolve().parent / "tokens.py"
 BURN_HOURS = 24
 BURN_TTL = 120.0      # the sampler ticks every few seconds; the burners change by the minute
-BURN_SHOWN = 5
+BURN_SHOWN = 2        # named burners: the rest are one `+N`, so the block cannot grow with the queue
+BURN_MAX_CHARS = 72   # the block's own cap: the page drops whole blocks when the line is too wide, so one over-long
+                      # block would take the whole line with it (#446)
 _BURN = {"t": 0.0, "v": None}
 
 def burn_read(script=None, state=None, checkout=None, hours=BURN_HOURS):
@@ -883,14 +885,30 @@ def _tok(n):
     n = int(n)
     return f"{n/1e6:.1f}M".replace(".0M", "M") if n >= 1e6 else f"{n/1e3:.0f}k" if n >= 1e3 else str(n)
 
+def _burn_row(r):
+    """One burner as the line reads it: its consumer's name, shortened to the two ends that tell two burners apart, then
+    its tokens. A run's consumer is `run:<run id>:<node>` and the run id is `run-YYYYMMDD-HHMMSS-xxxx`, so the id's own
+    tail and the node are what a reader needs: `run:run-20261015-191451-9f6b30:route.router.1` reads `…9f6b30:route.router.1`.
+    Any other name is kept whole."""
+    parts = str(r["consumer"]).split(":")
+    if len(parts) > 2 and parts[1].startswith("run-"): parts = ["…" + parts[1].rsplit("-", 1)[-1], *parts[2:]]
+    return ":".join(parts) + " " + _tok(r["tokens"])
+
 def _burn_fact(b):
-    """`tokens high (limit 2M/24h): review:PR#432 1.5M, ...` when the script says `over`; empty otherwise. The order and
-    the comparison are the script's, never this line's."""
+    """`tokens high (limit 5M/24h): …9f6b30:route.router.1 16.9M +17` when the script says `over`; empty otherwise. The
+    order and the comparison are the script's, never this line's. The block is capped: it names what fits, at least one
+    burner, never more than BURN_SHOWN, counts the rest, and is cut at BURN_MAX_CHARS — the footer drops whole blocks when
+    the line is too wide, so a block that never ends would empty the line it is the first fact of (#446)."""
     if not isinstance(b, dict) or b.get("over") is not True: return ""
     rows = [x for x in (b.get("burners") or []) if isinstance(x, dict) and x.get("consumer") and isinstance(x.get("tokens"), (int, float))]
     if not rows: return ""
     lim = f" (limit {_tok(b['threshold'])}/{b.get('window_hours', BURN_HOURS)}h)" if isinstance(b.get("threshold"), (int, float)) else ""
-    return f"tokens high{lim}: " + ", ".join(f"{x['consumer']} {_tok(x['tokens'])}" for x in rows[:BURN_SHOWN])
+    head, plain = f"tokens high{lim}: ", [_burn_row(x) for x in rows]
+    for n in range(min(BURN_SHOWN, len(plain)), 0, -1):
+        rest = len(plain) - n
+        text = head + ", ".join(plain[:n]) + (f" +{rest}" if rest > 0 else "")
+        if len(text) <= BURN_MAX_CHARS: return text
+    return (head + plain[0])[:BURN_MAX_CHARS - 1].rstrip() + "…"
 
 def foot_items(src, caps=None, now=None):
     """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a
@@ -2031,9 +2049,11 @@ function ldCell(v){const f=ldNum(v);return{t:f===null?"?":ldRound(f)+"%",red:f!=
 function ldCells(d){return[["CPU","cpu"],["RAM","ram"],["GPU","gpu"]].map(p=>{const c=ldCell((d||{})[p[1]]);return{k:p[0],t:c.t,red:c.red}})}
 function ldPaint(l,d){l.textContent="";ldCells(d).forEach((c,i)=>{if(i)l.appendChild(document.createTextNode(" · "));const b=document.createElement("b");if(c.red)b.className="ldred";b.textContent=c.k+" "+c.t;l.appendChild(b)})}
 // The facts after the cells, served by the same tick. On a window too narrow for the whole row the trailing facts drop
-// (5 -> 4 -> 3) exactly as they are — the line never wraps and no number is cut into a different one. The budget is in
-// characters of the font the cells beside them are drawn in, measured off the cells themselves.
-function footFit(items,cols){const k=(items||[]).slice();while(k.length&&k.map(i=>i.text).join(" · ").length>cols)k.pop();return k}
+// (6 -> 5 -> 4) exactly as they are — the line never wraps and no number is cut into a different one. The last block is
+// never dropped: a window too narrow even for it cuts it at the budget instead, because a bar with a fact to carry never
+// draws the machine alone, and the first block is the one that matters most (#446). The budget is in characters of the
+// font the cells beside them are drawn in, measured off the cells themselves.
+function footFit(items,cols){const k=(items||[]).slice();while(k.length>1&&k.map(i=>i.text).join(" · ").length>cols)k.pop();if(k.length&&k[0].text.length>cols)k[0]={...k[0],text:k[0].text.slice(0,Math.max(0,cols-1)).trimEnd()+"…",parts:null};return k}
 function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" · ")}
 // The colour of each fact (#1843). A block wears its own palette colour, so the six blocks are told apart without one
 // character more; a token whose own reading earned one of the three tones the load strip already paints (#1816) keeps

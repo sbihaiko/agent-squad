@@ -654,7 +654,7 @@ def _foot_text(hub, items, cols):
     return out.stdout.rstrip("\n")
 
 
-def test_the_line_drops_trailing_facts_on_a_narrow_window_and_never_truncates_one(hub):
+def test_the_line_drops_trailing_facts_and_never_empties_itself(hub):
     if shutil.which("node") is None:
         pytest.skip("node is required")
     items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
@@ -662,9 +662,47 @@ def test_the_line_drops_trailing_facts_on_a_narrow_window_and_never_truncates_on
     full = " · ".join(texts)
     assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all three, in order
     two = " · ".join(texts[:2])
-    assert _foot_text(hub, items, len(two)) == two                             # 3 -> 2: the subs block drops first
-    assert _foot_text(hub, items, len(two) - 1) == texts[0]                    # 2 -> 1, still whole items
-    assert _foot_text(hub, items, 0) == ""                                     # nothing fits: no number is cut into another
+    assert _foot_text(hub, items, len(two)) == two                             # 3 -> 2: the last block drops whole
+    assert _foot_text(hub, items, len(two) - 1) == texts[0]                    # 2 -> 1, still a whole block
+    # The last block is never dropped, it is cut (#446): a bar that has one fact to carry draws it, cut, and never the
+    # machine reading alone. The live footer did the opposite on 2026-10-16 and drew no fact at all.
+    cut = _foot_text(hub, items, 12)
+    assert cut.endswith("…") and len(cut) == 12 and texts[0].startswith(cut[:-1].rstrip())
+    assert _foot_text(hub, items, 0) == "…"                                    # no room at all: the bar says it is cut
+
+
+def test_a_block_wider_than_the_budget_is_cut_and_still_carried(hub):
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    wide = {"key": "burn", "text": "tokens high (limit 5M/24h): " + "x" * 260, "bad": True}
+    assert _foot_text(hub, [wide], 40) == wide["text"][:39] + "…"               # the block the line cannot fit is the one it keeps
+    assert _foot_text(hub, [wide, {"key": "gate", "text": "gate fast fail ebb70f8 5m ago"}], 40).endswith("…")
+
+
+LIVE_BURN = {"over": True, "threshold": 5000000, "window_hours": 24, "burners": [
+    {"consumer": "run:run-20261015-191451-9f6b30:route.router.1", "tokens": 16910258},
+    {"consumer": "run:run-20261015-184237-60acae:route.router.1", "tokens": 7159543},
+    {"consumer": "run:run-20261015-191935-e168a6:route.router.1", "tokens": 5693232},
+    {"consumer": "run:run-20261015-184826-c2d878:route.router.1", "tokens": 5378177},
+    {"consumer": "run:run-20261015-180805-d879a7:route.router.1", "tokens": 5138278}]}
+
+
+def test_the_burn_block_names_what_fits_and_counts_the_rest(hub):
+    """The live reading of 2026-10-16: five burners named whole, 287 characters against a 160-character budget."""
+    fact = hub._burn_fact(LIVE_BURN)
+    assert fact == "tokens high (limit 5M/24h): …9f6b30:route.router.1 16.9M +4", fact
+    assert len(fact) <= hub.BURN_MAX_CHARS and "run-20261015-191451-9f6b30" not in fact   # the id whole is not the token a reader needs
+    assert hub._burn_fact({**LIVE_BURN, "over": False}) == ""                  # a reading under the threshold draws no block
+
+
+def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
+    """#446: the bar drew the three cells and no fact at all, one 287-character block having emptied the line."""
+    if shutil.which("node") is None:
+        pytest.skip("node is required")
+    src = _src(burn=LIVE_BURN, gate={"kind": "fast", "result": "fail", "sha": "ebb70f83f95560f99ad017c990aad406b0c7a6c4", "ts": NOW - 300})
+    line = _foot_text(hub, hub.foot_items(src, CAPS, NOW), 160)
+    assert line.startswith(hub._burn_fact(LIVE_BURN)), line
+    assert "last landing · PR #73 2h 14m ago" in line and "gate fast fail ebb70f8 5m ago" in line, line
 
 
 # ---------------------------------------------------------------- the worktree block and its one press
