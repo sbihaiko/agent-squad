@@ -251,6 +251,19 @@ def test_the_wave_suite_proves_the_landing_pass():
         assert f"ok   {case}" in r.stdout, f"{case} did not pass in the wave suite:\n{r.stdout}"
 
 
+@pytest.mark.slow(reason="runs the wave's hermetic shell suite over a throwaway remote, handed the gate lock")
+@pytest.mark.heavy
+def test_the_wave_suite_survives_an_inherited_gate_lock():
+    """The promotion gate runs the whole battery inside the machine-wide `gate` lock, so every test inherits SG_SERIAL_HELD=gate.
+    The suite must still take its own lock and prove the entry wait: handed the name of a lock it does not hold, its own holder
+    case can never be reached (case I fails, and the landing cases behind it). Run it the way the gate hands it, and keep every
+    FAIL line."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")} | {"SG_SERIAL_HELD": "gate"}
+    r = subprocess.run(["bash", str(SCRIPTS / "test-wave.sh")], cwd=ROOT, capture_output=True, text=True, timeout=300, env=env)
+    fails = [line for line in (r.stdout + r.stderr).splitlines() if line.startswith("FAIL")]
+    assert r.returncode == 0 and not fails, r.stdout + r.stderr
+
+
 @pytest.mark.slow(reason="runs the run lifecycle over a throwaway checkout, remote and stubbed launch")
 @pytest.mark.heavy
 def test_the_run_lifecycle_cuts_and_enters_the_wave():
