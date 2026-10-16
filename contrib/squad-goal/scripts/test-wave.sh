@@ -7,7 +7,14 @@
 # A pre-receive hook on the bare remote logs every ref a push writes, so one push and "no child branch" are read, not assumed.
 # usage: bash test-wave.sh [scripts dir]
 unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from a live loop must not
-unset SG_SERIAL_HELD   # nor the machine-lock name a gate hands down: this suite takes its own gate lock, so the holder case is proved
+# The machine-wide gate this suite is often run under exports its own settings into every command it starts (gate.sh, serial.sh;
+# #392, #393): the promotion gate runs the whole battery inside the gate lock. This suite takes its own lock and writes its own
+# status line, so none of them may reach it -- an inherited SG_SERIAL_HELD re-enters the lock (case I is never proved), an
+# inherited SG_GATE_STATUS=self stops the status line being written (case B reads a file that is not there), and an inherited
+# SG_GATE_KIND or SERIAL_* decides a lock and a deadline the suite did not take. gate.sh exports SERIAL_WAIT_SECONDS and
+# SERIAL_HOLD_SECONDS; serial.sh exports SG_SERIAL_HELD and reads SERIAL_POLL_SECONDS; a gate caller sets SG_GATE_KIND and
+# SG_GATE_STATUS. All of them go, beside REV.
+unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$d/ghcall.sh" "$T/s/" 2>/dev/null
@@ -32,10 +39,14 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 [ "$($O rev-parse --is-bare-repository)" = true ] && ok "the suite runs against a bare local remote" || ko "the remote is not a bare repository"
 [ -x "$T/origin.git/hooks/pre-receive" ] && ok "the remote logs every pushed ref" || ko "the remote has no push hook"
 start() { (cd "$T/co" && bash "$T/s/wave.sh" start run-1); }
-# A child worktree: a clone cut from the wave branch, on branch gui/<issue>, one commit that writes <file>.
-child() { local n=$1 f=$2 tip=${3:-origin/$W}
-  rm -rf "$T/c$n"; $G clone -q "$T/origin.git" "$T/c$n" 2>/dev/null
-  (cd "$T/c$n" && $G checkout -q -b "gui/$n" "$tip" && echo "$n" > "$f" && $G add "$f" && $G -c user.email=a@b -c user.name=t commit -q -m "work $n (Refs #$n)"); }
+# A child worktree: a clone cut from the wave branch, on branch gui/<issue>, one commit that writes <file>. A machine under
+# load can fail a clone or a checkout, and a test that swallows it reads a worktree that is not there for every case behind it
+# (#377): the failure is named here, at the child it belongs to, never discarded. No quiet machine is assumed.
+child() { local n=$1 f=$2 tip=${3:-origin/$W} o
+  rm -rf "$T/c$n"
+  o=$($G clone -q "$T/origin.git" "$T/c$n" 2>&1) || { ko "child #$n: the clone of the wave branch failed: $o"; return 1; }
+  o=$((cd "$T/c$n" && $G checkout -q -b "gui/$n" "$tip" && echo "$n" > "$f" && $G add "$f" && $G -c user.email=a@b -c user.name=t commit -q -m "work $n (Refs #$n)") 2>&1) \
+    || { ko "child #$n: the worktree on $tip is not ready: $o"; return 1; }; }
 # The review of the child's branch, read against the wave branch (#376): branchreview.sh keeps the verdict (review-<key>.md),
 # the sha it read (review-<key>.sha) and the base it was taken against (review-<key>.base). REV, REV_BASE and REV_SHA let one
 # case hand in a verdict that asked for changes, a review read against another base, or a review of an older tip.
@@ -194,8 +205,12 @@ before=$($O rev-parse dev); r=$(land run-1); rc=$?
 # E2: a push the remote refuses repeats from the fetch (ADR-0145 rule 2). The base moves between the pass's rebase and its
 # push -- a concurrent landing, made by the remote's own hook -- so the first push to dev is refused. The pass fetches the
 # moved base, rebases on it, and pushes again: the wave lands, and dev carries both the wave's work and the concurrent one.
-start2() { (cd "$T/co" && bash "$T/s/wave.sh" start "$1"); }
-en2() { local r=$1 n=$2; REV_BASE=wave/$r rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter "$r" "$n"); }
+# start2, en2 and land2 are the setup calls the cases from E2 on run. A failed start cuts no wave branch and a failed entry
+# leaves the child out of the wave; either reads as a case that proves nothing if it is swallowed, so both are named with the
+# line wave.sh printed. land2's own output and exit code are what each case reads, so it is left as it is.
+start2() { local o; o=$((cd "$T/co" && bash "$T/s/wave.sh" start "$1") 2>&1) || { ko "start2 $1: the wave branch was not cut: $o"; return 1; }; }
+en2() { local r=$1 n=$2 o; REV_BASE=wave/$r rev "$n"; o=$((cd "$T/c$n" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter "$r" "$n") 2>&1) \
+  || { ko "en2 $r #$n: the child did not enter its wave: $o"; return 1; }; printf '%s\n' "$o"; }
 land2() { (cd "$T/co" && bash "$T/s/wave.sh" land "$1"); }
 rm -rf "$T/race"; $G clone -q "$T/origin.git" "$T/race" 2>/dev/null
 (cd "$T/race" && $G checkout -q -b raceline dev && echo race > race && $G add race && $G -c user.email=a@b -c user.name=t commit -q -m "a concurrent landing" && $G push -q origin HEAD:raceline)
@@ -328,6 +343,13 @@ $O cat-file -e dev:g80 2>/dev/null && ok "L: the child the wave held is in dev" 
 # the wave without it lands. The wave's CI is the live check in production (blocked, #439): the local check at the tip is
 # what this suite can run, and the child re-run is the same rule.
 W9=wave/run-9; start2 run-9 >/dev/null; child 90 g90 "origin/$W9"; en2 run-9 90 >/dev/null; child 91 g91 "origin/$W9"; en2 run-9 91 >/dev/null
+# The preconditions of the red-tip case, asserted before the land: both children are in the wave, #91 the last entrant. The
+# case below proves the tip check, so a child that never entered it (a clone or an entry that a loaded machine failed, the
+# failure swallowed in the setup above) is a setup failure named here -- not left to read as the "no child named" and "#91
+# was not requeued" it would otherwise look like, whose real cause is three checks away.
+$O merge-base --is-ancestor "$($G -C "$T/c90" rev-parse HEAD 2>/dev/null)" "$W9" 2>/dev/null && [ "$($O rev-parse "$W9")" = "$($G -C "$T/c91" rev-parse HEAD 2>/dev/null)" ] \
+  && ok "M: both children are in the wave before the land, #91 the last entrant" \
+  || ko "M: a child is not in the wave before the land: tip=$($O rev-parse "$W9" 2>&1) #90=$($G -C "$T/c90" rev-parse HEAD 2>&1) #91=$($G -C "$T/c91" rev-parse HEAD 2>&1)"
 printf 'run-9\n' > "$T/st/auto/disp-91"
 : > "$T/gh.log"; : > "$T/board.log"
 r=$(SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 91"' SG_WAVE_CHILD_GATES='[ "$SG_WAVE_CHILD" = 91 ] && exit 1; exit 0' land2 run-9); rc=$?

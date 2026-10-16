@@ -256,11 +256,14 @@ def test_the_wave_suite_proves_the_landing_pass():
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over a throwaway remote, handed the gate lock")
 @pytest.mark.heavy
 def test_the_wave_suite_survives_an_inherited_gate_lock():
-    """The promotion gate runs the whole battery inside the machine-wide `gate` lock, so every test inherits SG_SERIAL_HELD=gate.
-    The suite must still take its own lock and prove the entry wait: handed the name of a lock it does not hold, its own holder
-    case can never be reached (case I fails, and the landing cases behind it). Run it the way the gate hands it, and keep every
-    FAIL line."""
-    env = {"SG_SERIAL_HELD": "gate"}
+    """The promotion gate runs the whole battery inside the machine-wide `gate` lock, so every test inherits what gate.sh and
+    serial.sh export: SG_SERIAL_HELD=gate (serial.sh), SERIAL_WAIT_SECONDS and SERIAL_HOLD_SECONDS (gate.sh), and a gate
+    caller's SG_GATE_KIND and SG_GATE_STATUS. The suite must still take its own lock and write its own status line: handed the
+    name of a lock it does not hold, its own holder case can never be reached (case I fails), and handed SG_GATE_STATUS=self its
+    status line is never written (case B reads a file that is not there) -- and every landing case behind them. Run it the way
+    the gate hands it, and keep every FAIL line."""
+    env = {"SG_SERIAL_HELD": "gate", "SG_GATE_STATUS": "self", "SG_GATE_KIND": "full",
+           "SERIAL_WAIT_SECONDS": "86400", "SERIAL_HOLD_SECONDS": "7200"}
     r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=300, extra_env=env)
     fails = [line for line in (r.stdout + r.stderr).splitlines() if line.startswith("FAIL")]
     assert r.returncode == 0 and not fails, r.stdout + r.stderr
