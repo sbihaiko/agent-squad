@@ -45,12 +45,15 @@ def _door(answers):
     return read
 
 
-def test_the_one_lane_is_named_for_branches_and_no_name_says_pull_request(hub):
-    assert hub.COLUMN["pr_open"] == "Open branches"
-    assert "pr_closed" not in hub.COLUMN, "the hub still reads a closed-branch lane by a role"
-    names = [g["name"] for g in hub._columns_module.kind_groups(hub.KINDS, [])]
-    assert not [n for n in names if "PR" in n or "pull" in n.lower()], names
-    assert not [n for n in names if "Landed" in n or "Closed Branches" in n], names
+def test_the_open_lane_is_named_open_prs_and_the_two_kinds_carry_their_labels(hub):
+    assert hub.COLUMN["pr_open"] == "Open PRs", "the pull-request lane is not the one the fact names"
+    assert "br_open" not in hub.COLUMN and "pr_closed" not in hub.COLUMN, "the hub still reads a lane it should not"
+    cm = hub._columns_module
+    assert cm.kind_label(cm.PR_KIND) == "Open PRs" and cm.kind_label(cm.BRANCH_KIND) == "Branches"
+    names = {(g["kind"], g["state"]): g["name"] for g in cm.kind_groups(hub.KINDS, [])}
+    assert names[("pr", "open")] == "Open PRs" and names[("branch", "open")] == "Branches", \
+        "the kinds view does not name a pull request and a work branch apart"
+    assert not [n for n in names.values() if "Landed" in n or "Closed Branches" in n], names
 
 
 def test_open_branches_are_the_work_branches_ahead_of_dev(hub, monkeypatch):
@@ -76,12 +79,51 @@ def test_landed_branches_come_from_the_landing_ledger(hub, monkeypatch, tmp_path
     assert "fix/355-lander" in rows[0]["t"] and "abc1234" in rows[0]["t"], "a row names the branch and the landed sha"
 
 
-def test_the_board_serves_branch_rows_without_a_pull_request_state(hub, monkeypatch):
+def _stub_pr_tools(hub, monkeypatch):
+    monkeypatch.setattr(hub, "pr_state", lambda x: None)
+    monkeypatch.setattr(hub, "gate_strip", lambda x, t=None: None)
+    monkeypatch.setattr(hub, "pr_badge", lambda x: None)
+
+
+def test_the_board_serves_the_branch_row_in_the_kinds_view_and_not_the_lane(hub, monkeypatch):
+    """A work branch has no lane: it reaches the reader as the `branch` kind, and the open-PR lane carries no branch row."""
     row = {"n": 358, "t": "fix/358-board", "u": "2026-10-14T09:00:00Z", "o": "", "r": REPO, "ps": "ahead 2", "br": True}
     landed = {"n": 355, "t": "fix/355-lander · abc1234", "c": "2026-10-14T08:00:00Z", "m": True, "r": REPO}
     monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [row], "landed": [landed], "errs": [], "err": None, "lc": {}})
     served = hub.board()
-    assert served["prs"]["name"] == "Open branches", "the open lane is not the one the table names"
-    assert "prev" not in served, "a landed branch is read from its issue card, so no closed lane is served"
-    item = served["prs"]["items"][0]
-    assert item["ps"] == "ahead 2" and not item.get("gs") and not item.get("pb"), "no review strip or badge: it is a branch"
+    assert served["prs"]["name"] == "Open PRs" and "prev" not in served, "the open lane is not the one the table names"
+    assert served["prs"]["n"] == 0 and served["prs"]["items"] == [], "the lane carries pull requests only, and says 0"
+    groups = {(g["kind"], g["state"]): g for g in served["kinds"]}
+    assert [x["n"] for x in groups[("branch", "open")]["items"]] == [358], "the branch row reaches the kinds view"
+    assert groups[("pr", "open")]["items"] == [], "a work branch is not a pull-request item"
+
+
+def test_every_row_carries_its_own_kind(hub, monkeypatch):
+    """A pull-request row is `pr` and a work branch row is `branch`: each row names what it is, so the page never reads the
+    lane's name to tell them apart."""
+    branch = {"n": 358, "t": "fix/358-board", "u": "2026-10-14T09:00:00Z", "o": "", "r": REPO, "ps": "ahead 2", "br": True}
+    pr = {"n": 1491, "t": "The OPEN PRS card", "u": "2026-10-14T10:00:00Z", "o": "2026-10-14T08:00:00Z", "r": REPO, "l": [],
+          "h": "a" * 40, "ms": "clean", "ci": []}
+    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [branch, pr], "landed": [], "errs": [], "err": None, "lc": {}})
+    _stub_pr_tools(hub, monkeypatch)
+    served = hub.board()
+    assert [x["kind"] for x in served["prs"]["items"]] == ["pr"], "the lane carries the pull request only"
+    groups = {(g["kind"], g["state"]): g for g in served["kinds"]}
+    assert [x["k"] for x in groups[("pr", "open")]["items"]] == ["pr"]
+    assert [x["k"] for x in groups[("branch", "open")]["items"]] == ["branch"]
+    assert all(x.get("kind") for x in served["prs"]["items"]), "a lane row carries no kind"
+
+
+def test_a_lane_row_carries_the_chip_strip_badge_rollup_author_and_closing_issues(hub, monkeypatch):
+    """All four row facts ride on the row: the chip and the review strip, the badge and the CI rollup, the author and the
+    age, and the issues the pull request closes."""
+    pr = {"n": 1491, "t": "Hub: a row", "u": "2026-10-14T10:00:00Z", "o": "2026-10-14T08:00:00Z", "r": REPO, "l": [],
+          "h": "a" * 40, "ms": "clean", "ci": ["success"], "rollup": "pass", "by": "sbihaiko", "cl": [440, 441]}
+    monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [pr], "landed": [], "errs": [], "err": None, "lc": {}})
+    monkeypatch.setattr(hub, "pr_state", lambda x: ["ready", "ready to merge"])
+    monkeypatch.setattr(hub, "gate_strip", lambda x, t=None: {"cells": []})
+    monkeypatch.setattr(hub, "pr_badge", lambda x: "green")
+    item = hub.board()["prs"]["items"][0]
+    assert item["ps"] == ["ready", "ready to merge"] and item["gs"] == {"cells": []} and item["pb"] == "green"
+    assert item["rollup"] == "pass" and item["ci"] == ["success"] and item["by"] == "sbihaiko" and item["cl"] == [440, 441]
+    assert item["kind"] == "pr"

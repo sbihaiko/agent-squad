@@ -92,20 +92,21 @@ def test_each_card_sits_in_the_column_the_table_names(board, item, column, freez
     assert where[0][1].get("fz") == freeze, f"#{item['n']} wears the wrong freeze marker"
 
 
-def test_a_work_branch_is_a_lane_beside_the_axis_with_its_badge(table, hub, board):
+def test_the_open_lane_is_drawn_beside_the_axis_with_its_badge(table, hub, board):
     lanes = {lane["name"] for lane in table.LANES}
-    assert not lanes & {g["name"] for g in board["groups"]}, "a branch lane is drawn as a column"
-    assert not lanes & set(hub.ORDER), "a branch lane is in the board's column order"
+    assert lanes == {"Open PRs"}, "the table does not name the one open lane"
+    assert not lanes & {g["name"] for g in board["groups"]}, "a lane is drawn as a column"
+    assert not lanes & set(hub.ORDER), "a lane is in the board's column order"
     flow = json.loads(re.search(r"FLOW=(\[[^;]*?\]),", hub.PAGE).group(1))
-    assert not lanes & set(flow), "a branch lane is on the axis"
-    assert [lane["name"] for lane in table.LANES] == ["Open branches"], "the table names a second lane"
-    assert board["prs"]["name"] in lanes and "prev" not in board, "a closed lane is still served"
+    assert not lanes & set(flow), "a lane is on the axis"
+    assert board["prs"]["name"] in lanes and "prev" not in board, "the open lane is served, and no closed lane is"
     assert {p["n"]: p.get("pb") for p in board["prs"]["items"]} == \
         {101: "conflict", 102: "checks red", 103: "green", 104: "approved"}
+    assert all(p["kind"] == "pr" for p in board["prs"]["items"]), "a pull-request row carries no kind"
     page = hub.PAGE
     assert re.search(r"all=\[b\.prs,\.\.\.b\.groups\.sort\(", page), "the lane is not drawn ahead of the axis"
     assert "class=pbg" in page or 'class="pbg' in page, "the page does not draw the pull request's badge"
-    assert re.search(r"isPR\(g\.name\)\?\" prs lane\"", page), "a lane does not wear its own look"
+    assert re.search(r"isPR\(g\.name\)\?\" prs lane\"", page), "the lane does not wear its own look"
 
 
 def test_the_specs_filter_lists_the_spec_items_and_no_column_holds_them(table, hub, board):

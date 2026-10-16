@@ -14,7 +14,7 @@ COLUMNS_PY = SCRIPTS / "board_columns.py"
 HUB_PY = SCRIPTS / "hub.py"
 RECONCILE_PY = SCRIPTS / "reconcile.py"
 NAMES = ("No status", "Todo", "Open Specs", "In Progress", "Code Complete", "Testing", "Blocked", "Done",
-         "Open branches")
+         "Open PRs")
 
 
 def _module(name, path):
@@ -91,10 +91,10 @@ def test_the_reconciler_names_no_column_literal_of_its_own(columns):
             f"reconcile.py names the column {column['name']!r} itself; the name comes from the table"
 
 
-def test_the_table_has_no_closed_branch_lane(table):
-    """The owner removed the closed lane: a landed branch is read from its issue card (Done = in dev), never from a
-    lane of its own. The open lane is the only one the table names."""
-    assert [lane["name"] for lane in table.LANES] == ["Open branches"], "the table names a lane that is not the open one"
+def test_the_table_names_one_open_lane_and_no_closed_one(table):
+    """One open tracking lane -- Open PRs -- and no closed one: a work branch has no lane of its own (its kind reaches the
+    kinds view), and a landed branch is read from its issue card (Done = in dev)."""
+    assert [lane["name"] for lane in table.LANES] == ["Open PRs"], "the table does not name the one open lane"
     assert all(lane["key"] != "pr_closed" for lane in table.LANES), "the table still holds a closed-branch lane"
     assert "Landed branches" not in {column["name"] for column in table.COLUMNS}, \
         "the column table still holds the landed-branch column"
@@ -102,15 +102,23 @@ def test_the_table_has_no_closed_branch_lane(table):
     assert states == ["open"], "the pull request kind still carries a closed group"
 
 
-def test_the_open_branch_lane_is_tracking_only(table):
-    """The lane is drawn beside the axis and read by no writer as state: a card never moves because a branch is open."""
-    lane = table.LANES[0]
+def test_the_two_machine_kinds_carry_their_own_labels(table):
+    """The pull request kind reads Open PRs and a work branch reads Branches: the two kinds never share a word, and neither
+    carries a closed group (a work branch has no lane, and a landed one is read from its issue card)."""
+    assert table.kind_label(table.PR_KIND) == "Open PRs" and table.kind_label(table.BRANCH_KIND) == "Branches"
+    names = {(g["kind"], g["state"]): g["name"] for g in table.kind_groups(("bug",), [])}
+    assert names[("pr", "open")] == "Open PRs" and names[("branch", "open")] == "Branches"
+    assert {s for (k, s) in names if k in (table.PR_KIND, table.BRANCH_KIND)} == {"open"}
 
-    assert lane.get("tracking") is True, "the table does not say the open-branch lane is for tracking only"
-    for name in ("janitor.py", "reconcile.py", "branchland.sh", "ffland.sh", "wtclean.sh"):
-        source = (SCRIPTS / name).read_text()
-        assert lane["name"] not in source and lane["key"] not in source, \
-            f"{name} reads or writes the tracking lane; the lane moves no card and gates nothing"
+
+def test_the_open_lanes_are_tracking_only(table):
+    """The lane is drawn beside the axis and read by no writer as state: no card moves because a PR or a branch is open."""
+    for lane in table.LANES:
+        assert lane.get("tracking") is True, "the table does not say the lane is for tracking only"
+        for name in ("janitor.py", "reconcile.py", "branchland.sh", "ffland.sh", "wtclean.sh"):
+            source = (SCRIPTS / name).read_text()
+            assert lane["name"] not in source and lane["key"] not in source, \
+                f"{name} reads or writes the tracking lane; the lane moves no card and gates nothing"
 
 
 def test_the_hub_renders_no_closed_branch_lane(table, hub, monkeypatch):

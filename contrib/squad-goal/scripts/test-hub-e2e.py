@@ -152,9 +152,9 @@ try:
         pg.wait_for_timeout(1200)
         ck(pg.title().strip() != "", "page loads", pg.title())
         # the OPEN PRS card of a head whose review timed out: the chip, its tooltip, the retry line, and the column's width (#1502)
-        try: pg.wait_for_selector('#bbody .col[data-g="Open branches"] .it .pst', timeout=20000)
+        try: pg.wait_for_selector('#bbody .col[data-g="Open PRs"] .it .pst', timeout=20000)
         except Exception: pass
-        pv = pg.eval_on_selector_all('#bbody .col[data-g="Open branches"] .it', """els=>els.map(e=>{const s=e.querySelector('.pst'),r=e.querySelector('.prr');
+        pv = pg.eval_on_selector_all('#bbody .col[data-g="Open PRs"] .it', """els=>els.map(e=>{const s=e.querySelector('.pst'),r=e.querySelector('.prr');
             return {n:e.dataset.n, chip:s&&s.textContent, line:r&&r.textContent, tip:(s&&s.title)||'', over:e.scrollWidth-e.clientWidth,
                     cover:s?s.scrollWidth-s.clientWidth:0, rover:r?r.scrollWidth-r.clientWidth:0}})""")
         card = next((x for x in pv if x["n"] == "1491"), None)

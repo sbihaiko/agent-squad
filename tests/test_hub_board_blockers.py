@@ -144,11 +144,11 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 
 # ---- one colour per board column (#1793) -----------------------------------------------------------
 
-# The decision, not a starting point: the eight shipped statuses and the one open-branch lane (#247, #384), each with
+# The decision, not a starting point: the eight shipped statuses and the one open-PR lane (#247, #384, #440), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
     "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Landing": "#b087f9",
-    "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open branches": "#5aa9ff",
+    "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
 CHIP_BG = "#2a303b"        # the chip the numbers sit on: what every column colour is measured against
@@ -230,14 +230,14 @@ def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
     got = _col(hub, "Object.fromEntries(Object.keys(COLORS).map(n=>[n,colOf(n,[])]))")
     assert got == NAMED, "the named columns and lane carry colours the table does not"
-    assert len(NAMED) == 9 and got["Open branches"] == "#5aa9ff", "the one lane is the live queue's own blue"
+    assert len(NAMED) == 9 and got["Open PRs"] == "#5aa9ff", "the open-PR lane is the live queue's own blue"
     assert _mute(hub) not in got.values(), "a muted column is a caption, not a column"
 
 
-def test_the_one_lane_keeps_the_blue_the_table_gives_it(hub):
-    lane = _col(hub, 'colOf("Open branches",[])')
+def test_the_open_pr_lane_keeps_the_blue_the_table_gives_it(hub):
+    lane = _col(hub, 'colOf("Open PRs",[])')
 
-    assert lane == NAMED["Open branches"], "the lane wears a colour of its own, not the table's"
+    assert lane == NAMED["Open PRs"], "the lane wears a colour of its own, not the table's"
     assert int(lane[5:7], 16) > int(lane[1:3], 16), "the lane is a blue: it is the live queue"
 
 
@@ -418,7 +418,7 @@ def test_every_number_is_painted_by_its_category_and_never_as_a_caption(hub):
     fallback = _rule(hub, ".hidbar .chip b")
     assert re.search(r"color:var\(--pin\)", fallback), \
         "a column the table does not name must fall back to --pin"
-    assert _token(hub, "--pin") == NAMED["Open branches"], "the lane's blue and the fallback are not one colour"
+    assert _token(hub, "--pin") == NAMED["Open PRs"], "the lane's blue and the fallback are not one colour"
     for name in list(HID_COL) + [""]:
         sel = f'.hidbar .chip[data-col="{name}"] b' if name else ".hidbar .chip b"
         assert "var(--mute)" not in _rule(hub, sel), f"{name or 'the fallback'} draws a number in the caption colour"
