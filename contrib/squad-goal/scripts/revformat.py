@@ -12,9 +12,8 @@ concern. Findings that share a theme sit under a `### <theme>` heading, most sev
 Nothing else: no preamble, no restating the diff, no closing summary.
 
 `review.sh` runs this on every model answer: a review that ignores the shape is a format failure
-of that try (the chain moves on and says so), never a silent pass. `branchfixpass.sh` and
-`branchland.sh` ask for the bullets per section with --summary instead of grepping a tag on the line
-(ADR-0273 Decision 3/5).
+of that try (the chain moves on and says so), never a silent pass. The loop's own passes ask for
+the bullets per section with --summary instead of grepping a tag on the line (ADR-0273 Decision 3/5).
 
 A fix round answers its previous findings in a `## Resolved` section of their own, accepted only
 with --fix-round (#1834). An answered finding moves there with the same bullet,
@@ -29,8 +28,8 @@ is the shape and the debt-only path sees blocking=0 (ADR-0273 Decision 3/5). A b
 `not fixed`, and one carrying no marker at all (a full review), keeps its severity (#1777).
 
 `is_finding` is the one predicate that tells a finding from an answer: the severity counts, the
---summary output `branchfixpass.sh` and `branchland.sh` read, and the debt filer asks it, so no two
-readers can disagree.
+--summary output the loop's own passes read, and the debt filer asks it, so no two readers can
+disagree.
 
 usage: revformat.py [--max-lines N] [--fix-round] <review>
                                            exit 0 = the shape holds; 1 = one reason on stdout
@@ -106,7 +105,7 @@ def bullets(review):
 def count(review):
     """The findings per section, in any order and however the shape is broken (--summary).
 
-    `branchland.sh` asks this to distinguish a review that only raises DEBT from one that raises a Blocking finding,
+    The loop's own passes use this to distinguish a review that only raises DEBT from one that raises a Blocking finding,
     and `hub.py` asks it for the R cell: the two read one module so a debt-only CHANGES is not blocking on one surface and
     merged on the other. A bullet that answers a previous finding `fixed`, and one under `## Resolved`, is not a
     finding (#1832, #1834), the same reading `survey` makes -- so a fix round whose Blocking findings are all fixed or
@@ -241,7 +240,7 @@ def normalize(review):
     """The review with its verdict as line 1 in the exact form the loop parses.
 
     A model writes the verdict in bold, in lower case, or after a paragraph of narration: the shape's
-    first line is not left to it (branchreview.sh, branchland.sh and hub.py read line 1). Whatever stands in the way
+    first line is not left to it (`review.sh`, the loop's own passes and `hub.py` read line 1). Whatever stands in the way
     of the shape stays in the text, where the check reports it.
     """
     lines = review.replace("\r\n", "\n").split("\n")

@@ -212,7 +212,7 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$")"
       rc=99; break; fi
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$")"; break; }
-    # the verdict goes on line 1 in the exact form the loop parses (revci/autopilot/hub.py read line 1): the model may
+    # the verdict goes on line 1 in the exact form the loop parses (review.sh, the loop's own passes and hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
     if [ $rc = 0 ] && [ -s "$out" ] && [ -f "$(dirname "$0")/revformat.py" ]; then
       python3 "$(dirname "$0")/revformat.py" --normalize "$out" > "$out.n" 2>/dev/null && mv "$out.n" "$out"

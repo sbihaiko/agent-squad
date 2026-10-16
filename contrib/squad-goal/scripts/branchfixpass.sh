@@ -33,7 +33,7 @@ while read -r sha br i; do
   key=$(printf '%s' "$br" | tr '/' '_'); s9=${sha:0:9}; f="$SG_STATE/review-$key.md"
   [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ] || continue
   head -1 "$f" 2>/dev/null | grep -q CHANGES || continue
-  # a CHANGES with no Blocking finding (debt only) is an approval: no fix round, as autopilot merges it (revformat.py count)
+  # a CHANGES with no Blocking finding (debt only) is an approval: no fix round, as the loop's own passes treat it (revformat.py count)
   python3 "$here/revformat.py" --summary "$f" 2>/dev/null | grep -q '^blocking=0 ' && continue
   [ -e "$A/branchfix-$key-$s9" ] && continue
   fp=$(findings "$f"); same=0

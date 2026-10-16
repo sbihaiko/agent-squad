@@ -1532,7 +1532,7 @@ def _revformat():
     return _REVFORMAT["m"]
 
 def review_debt_only(n):
-    """True when the review the loop wrote for this PR raises DEBT only (`blocking=0 debt>0`). `branchland.sh` treats one
+    """True when the review the loop wrote for this PR raises DEBT only (`blocking=0 debt>0`). The loop's own passes treat one
     as an approval, so no card may render it as blocking (#1772). A module that cannot answer is not an answer:
     no debt claim without it."""
     try: review = (STATE / f"review-{n}.md").read_text(errors="ignore")
@@ -1556,7 +1556,7 @@ def review_cell(n, sha9):
         tok = _verdict_token(v)
         if tok == "CHG" and review_debt_only(n): tok = "debt"
         tip = f"the loop's review of this head ({sha9}): VERDICT: {v}"
-        if tok == "debt": tip += " -- a debt-only CHANGES: branchland.sh treats it as an approval, so it does not block"
+        if tok == "debt": tip += " -- a debt-only CHANGES: the loop's own passes treat it as an approval, so it does not block"
         return tok, tip
     old = _summary_any_head(n)
     if old:
@@ -1643,7 +1643,7 @@ def pr_state(x):
     merged-soon, awaiting-review.
     Everything the card claims about the loop's own decision comes from auto/gate-<pr> instead of being derived (#1771).
     A row the batched query did not fill in says so instead of falling through to a passing word (#1772), and a debt-only
-    CHANGES is the loop's to decide, not a block: branchland.sh treats one as an approval.
+    CHANGES is the loop's to decide, not a block: the loop's own passes treat one as an approval.
     The CI chip reads the word GitHub reports (#149): a check that is `queued` says queued, never that a run is in
     progress -- `queued` and `in_progress` are two different words, and only a runner that picked the check up makes one
     of them a run. A head whose unfinished checks are all still queued past the timeout the ci job gives itself cannot
@@ -1660,7 +1660,7 @@ def pr_state(x):
     if any(c in ("failure", "timed_out", "action_required", "startup_failure") for c in ci): return ["broke", "CI failed"]
     line = (summary_lines(n, sha9) or [""])[-1]   # a notice (NOTICE #<pr> <sha9> ...) is not a result: see summary_lines
     if "CHANGES" in line:
-        if review_debt_only(n): return gate_state(n, sha9)   # a debt-only CHANGES is not blocking: branchland.sh treats it as an approval (#1772)
+        if review_debt_only(n): return gate_state(n, sha9)   # a debt-only CHANGES is not blocking: the loop's own passes treat it as an approval (#1772)
         return ["changes", "changes requested"]
     rs = review_state(n, sha9)   # an attempt on this head failed or timed out: that is what the card is waiting on, not `awaiting review`
     if rs: return [rs["cls"], rs["chip"], rs["tip"], rs["retry"]]
