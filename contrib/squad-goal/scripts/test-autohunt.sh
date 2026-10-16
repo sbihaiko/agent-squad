@@ -41,6 +41,7 @@ GH
 scene() {
   restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
+  /usr/bin/git init -q --bare "$T/$1/origin.git"   # the branch read of the case: a local bare repository, never github.com
   cp "$src" "$S/autohunt.sh"
   cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361)
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
@@ -54,6 +55,7 @@ SG_CODING_RULES=rules; BOARD=true
 E
   : > "$T/$1/st/active-runs.txt"
   export HOME=$T/$1/home SG_STATE=$T/$1/st GHLOG=$T/$1/gh.log GHPOST=$T/$1/ghpost
+  export SG_LAND_REMOTE=$T/$1/origin.git
   export SG_AUTO_HUNT=yes SG_HUNT_IDLE_MINUTES=0 SG_HUNT_COOLDOWN_MINUTES=0 SG_HUNT_PER_DAY=6
   unset SG_FILE_PASS SG_GH_PASS SG_FILE_CEILING   # a filing names no pass here: the ceiling is not this suite's subject (#140)
   echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
@@ -107,13 +109,10 @@ r=$(run); skipped "$r" && ok "does not start while a startable frontier exists" 
 
 # 7) a pushed work branch whose tip has no kept review: the review pass will spend a slot on it, so a hunt waits (#357)
 scene rev
-remote=$T/rev/origin.git; wt=$T/rev/wt
-/usr/bin/git init -q --bare "$remote"
+remote=$T/rev/origin.git; wt=$T/rev/wt    # the bare repository scene rev made; the case gives it one branch
 /usr/bin/git clone -q "$remote" "$wt" 2>/dev/null
 ( cd "$wt" && /usr/bin/git -c user.email=a@b -c user.name=t commit -q --allow-empty -m x && /usr/bin/git branch -q fix/1100-x && /usr/bin/git push -q origin fix/1100-x )
-export SG_LAND_REMOTE=$remote
 r=$(run); skipped "$r" && ok "does not start while a work branch waits on a review" || ko "started with a waiting branch: '$r'"
-unset SG_LAND_REMOTE
 
 # 8) cooldown (a recent hunt-last, as if a hunt-filed fix already started)
 scene cdn
