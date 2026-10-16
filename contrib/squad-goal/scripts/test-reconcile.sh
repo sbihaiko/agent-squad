@@ -64,6 +64,14 @@ case "$m" in *1160*) ko "an open pull request moved #1160: '$m'";; *) ok "an ope
 rm -f "$T/moves"; r=$(SG_BOARD_VOCAB=shipped RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); m=$(cat "$T/moves" 2>/dev/null)
 case "$m" in *"Done 1090"*) ko "the shipped board was written the internal name Done: '$m'";; *) ok "no internal name reaches the writer under the shipped vocabulary";; esac
 case "$m" in *"Closed 1090"*) ok "a closed issue moves to the shipped Closed";; *) ko "no shipped Closed for #1090 in the write: '$m' '$r'";; esac
+# The writer takes four fields in one order -- `<owner> <project> <status> <n>` -- and the stub here echoes them all, so a
+# caller that drops one is caught here rather than by the carrier: the pass that shipped #454 called `board.sh Closed 1090`,
+# board.py read the status as the owner, and every write of the pass failed with an IndexError it named as a refusal (#457).
+# The stub's own argv IS the contract, so the whole line is compared and not just the status that happens to sit in it.
+case "$m" in *"x 4 Closed 1090"*) ok "the writer is called with owner, project, status and number, in that order";;
+  *) ko "the write does not carry the writer's four fields: '$m'";; esac
+case "$m" in *"x 4 Code Complete 1150"*) ok "a forward move carries the same four fields";;
+  *) ko "a forward move lost a field of the writer's contract: '$m'";; esac
 # A write the carrier refused is named on the pass's stream and ends the pass non-zero, never swallowed.
 printf '#!/bin/bash\necho "no Status option $3" >&2; exit 1\n' > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); rc=$?
