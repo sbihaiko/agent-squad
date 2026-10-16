@@ -13,28 +13,37 @@ for n in foo bar baz; do
   printf '#!/bin/bash\n# %s\n' "$n" > "$S/$n.sh"; done
 rm "$S/test-baz.sh"   # baz has no suite
 echo base > "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m base
-$G -C "$R" checkout -q -b gui/9; echo 1 >> "$S/foo.sh"; echo 1 >> "$S/baz.sh"; echo 1 >> "$R/docs/x.md"; $G -C "$R" commit -qam work
-tip=$(git -C "$R" rev-parse HEAD)
+
+# A Python script selects its shell suite. baz.py has no suite and the docs change is outside scripts.
+$G -C "$R" checkout -q -b gui/py; echo 1 >> "$S/foo.py"; echo 1 >> "$S/baz.py"; echo 1 >> "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m python-work
+py_tip=$(git -C "$R" rev-parse HEAD)
 printf '#!/bin/bash\necho "base-cmd lock=$([ -d "%s/locks/gate" ] && echo held || echo free)" >> "%s/ran.log"\n[ -z "$BASE_FAIL" ]\n' "$SG_STATE" "$T" > "$T/base.sh"; chmod +x "$T/base.sh"
 fg() { rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="$T/base.sh" bash "$d/fast-gate.sh" 2>&1); }
 
 out=$(fg); rc=$?
-[ $rc = 0 ] && ok "a tip whose battery and suites pass exits 0" || ko "pass: rc $rc: $out"
+[ $rc = 0 ] && ok "a tip whose Python script suite passes exits 0" || ko "Python pass: rc $rc: $out"
 [ "$(cat "$T/ran.log" 2>/dev/null)" = "base-cmd lock=held
-test-foo.sh lock=held" ] && ok "the base battery runs first, then the suite of the changed script, both under the lock" || ko "ran: '$(cat "$T/ran.log" 2>&1)'"
+test-foo.sh lock=held" ] && ok "a Python script runs its suite, while a script with no suite and a file outside scripts add none" || ko "Python ran: '$(cat "$T/ran.log" 2>&1)'"
 IFS=$'\t' read -r _ kind res at < "$SG_STATE/gate-status" 2>/dev/null
-[ "$kind $res $at" = "fast pass $tip" ] && ok "the status line names the fast gate, its result and the tip" || ko "status line: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+[ "$kind $res $at" = "fast pass $py_tip" ] && ok "the status line names the fast gate, its result and the Python tip" || ko "status line: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 
 out=$(SUITE_FAIL=test-foo.sh fg); rc=$?
-[ $rc -ne 0 ] && case "$out" in *test-foo.sh*) true;; *) false;; esac && ok "a red suite of a changed script fails the gate and is named" || ko "red suite: rc $rc: $out"
+[ $rc -ne 0 ] && case "$out" in *test-foo.sh*) true;; *) false;; esac && ok "a red suite selected by a Python script fails the gate and is named" || ko "Python red suite: rc $rc: $out"
 IFS=$'\t' read -r _ kind res at < "$SG_STATE/gate-status" 2>/dev/null
 [ "$kind $res" = "fast fail" ] && ok "a red suite leaves a fail line" || ko "status line: '$(cat "$SG_STATE/gate-status" 2>&1)'"
 
 out=$(BASE_FAIL=1 fg); rc=$?
 [ $rc -ne 0 ] && [ "$(cat "$T/ran.log")" = "base-cmd lock=held" ] && ok "a red base battery fails the gate and no suite runs" || ko "red base: rc $rc: '$(cat "$T/ran.log" 2>&1)'"
 
+# A shell script selects the same suite on a separate branch from the same base.
+$G -C "$R" checkout -q dev; $G -C "$R" checkout -q -b gui/sh; echo 1 >> "$S/foo.sh"; echo 1 >> "$S/baz.sh"; echo 1 >> "$R/docs/x.md"; $G -C "$R" commit -qam shell-work
+out=$(fg); rc=$?
+[ $rc = 0 ] && ok "a tip whose shell script suite passes exits 0" || ko "shell pass: rc $rc: $out"
+[ "$(cat "$T/ran.log" 2>/dev/null)" = "base-cmd lock=held
+test-foo.sh lock=held" ] && ok "a shell script still runs its suite by name" || ko "shell ran: '$(cat "$T/ran.log" 2>&1)'"
+
 # A changed suite file runs itself; the base moving on after the branch point adds nothing (the merge-base is the reference).
-$G -C "$R" checkout -q dev; echo 2 >> "$S/bar.sh"; $G -C "$R" commit -qam "dev moves"; $G -C "$R" checkout -q gui/9
+$G -C "$R" checkout -q dev; echo 2 >> "$S/bar.sh"; $G -C "$R" commit -qam "dev moves"; $G -C "$R" checkout -q gui/sh
 echo 2 >> "$S/test-bar.sh"; $G -C "$R" commit -qam "suite edit"
 out=$(fg); rc=$?
 [ "$(cat "$T/ran.log" 2>/dev/null)" = "base-cmd lock=held
