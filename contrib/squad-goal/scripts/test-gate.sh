@@ -2,6 +2,7 @@
 # Regression test for gate.sh: a gate runs under the machine lock, passes the exit code through, and leaves one status line
 # for the hub: `<epoch> TAB <kind> TAB <pass|fail> TAB <sha>`, the result and the sha it ran at, in $SG_STATE/gate-status.
 # usage: bash test-gate.sh [scripts dir]
+unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st; mkdir -p "$SG_STATE"
 git init -q "$T/w"; $G -C "$T/w" commit -q --allow-empty -m one; sha=$(git -C "$T/w" rev-parse HEAD); S=$SG_STATE/gate-status

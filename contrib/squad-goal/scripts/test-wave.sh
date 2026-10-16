@@ -7,6 +7,7 @@
 # A pre-receive hook on the bare remote logs every ref a push writes, so one push and "no child branch" are read, not assumed.
 # usage: bash test-wave.sh [scripts dir]
 unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from a live loop must not
+unset SG_SERIAL_HELD   # nor the machine-lock name a gate hands down: this suite takes its own gate lock, so the holder case is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$d/ghcall.sh" "$T/s/" 2>/dev/null

@@ -48,12 +48,21 @@ def is_slow(suite):
     return measured().get(Path(suite).name, 0.0) > SLOW_SECONDS
 
 
-def _run(suite, timeout):
+def _run(suite, timeout, extra_env=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
+    if extra_env:
+        env.update(extra_env)   # a variable a caller sets on purpose, after the clear: the suite must survive it
     with tempfile.TemporaryDirectory() as home:
         env["HOME"] = home
         return subprocess.run(["bash", str(suite)], cwd=Path(suite).parent, env=env, capture_output=True, text=True,
                               stdin=subprocess.DEVNULL, timeout=timeout)
+
+
+def run(suite, timeout=SUITE_TIMEOUT_SECONDS, extra_env=None):
+    """Run one suite the way `problem` does -- every inherited `SG_*` cleared and `HOME` in its own temp dir -- and hand back
+    its result, so a module reads the run by this one seam instead of spawning the suite with the ambient environment. `extra_env`
+    names a variable to set on purpose (a lock the gate would hand down), so a caller can prove the suite survives it."""
+    return _run(Path(suite), timeout, extra_env)
 
 
 def problem(suite, timeout=SUITE_TIMEOUT_SECONDS):

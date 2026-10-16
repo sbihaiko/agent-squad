@@ -10,16 +10,17 @@ wave branch. Both run offline, in throwaway repos, and take a few seconds, so ea
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests import shell_suites
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"
 
 
-def _suite(name: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", str(SCRIPTS / name)], capture_output=True, text=True, timeout=300)
+def _suite(name: str):
+    return shell_suites.run(SCRIPTS / name)
 
 
 @pytest.mark.heavy

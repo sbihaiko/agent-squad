@@ -3,6 +3,7 @@
 # Two gates started at once run one after the other and never together; the second waits and then runs, and its wait shows on one
 # log line; a gate whose holder died takes the lock; the exit code passes through. Offline, a throwaway SG_STATE.
 # usage: bash test-gate-lock.sh [scripts dir]
+unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the order is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/s"; cp "$d/gate.sh" "$d/serial.sh" "$T/s/" 2>/dev/null
 export SG_STATE=$T/st; mkdir -p "$SG_STATE"

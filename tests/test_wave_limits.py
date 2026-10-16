@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import shell_suites
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 ENV_SH = SCRIPTS / "env.sh"
@@ -77,7 +79,7 @@ def test_a_profile_can_change_the_wave_age_cap(tmp_path: Path) -> None:
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over throwaway repositories, more than 20 s on a loaded machine")
 @pytest.mark.heavy
 def test_the_wave_suite_proves_the_age_cap_and_the_red_tip() -> None:
-    r = subprocess.run(["bash", str(SCRIPTS / "test-wave.sh")], cwd=ROOT, capture_output=True, text=True, timeout=300)
+    r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in WAVE_CASES:

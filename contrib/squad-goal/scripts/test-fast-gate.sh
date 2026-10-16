@@ -3,6 +3,7 @@
 # pytest) and then the shell suites of the scripts the tip changes against the merge-base, all under the machine lock, with one
 # status line for the hub. A throwaway repository, a stub base command, stub suites: nothing here runs a real battery.
 # usage: bash test-fast-gate.sh [scripts dir]
+unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so the hold is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; export SG_STATE=$T/st; mkdir -p "$SG_STATE"
 R=$T/r; S=$R/contrib/squad-goal/scripts; git init -q -b dev "$R"; mkdir -p "$S" "$R/docs"

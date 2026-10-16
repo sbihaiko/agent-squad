@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import shell_suites
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
 WAVE = SCRIPTS / "wave.sh"
@@ -244,7 +246,7 @@ def test_a_commit_the_base_already_holds_closes_no_issue(wave):
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over a throwaway remote")
 @pytest.mark.heavy
 def test_the_wave_suite_proves_the_landing_pass():
-    r = subprocess.run(["bash", str(SCRIPTS / "test-wave.sh")], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in LAND_CASES:
@@ -258,8 +260,8 @@ def test_the_wave_suite_survives_an_inherited_gate_lock():
     The suite must still take its own lock and prove the entry wait: handed the name of a lock it does not hold, its own holder
     case can never be reached (case I fails, and the landing cases behind it). Run it the way the gate hands it, and keep every
     FAIL line."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")} | {"SG_SERIAL_HELD": "gate"}
-    r = subprocess.run(["bash", str(SCRIPTS / "test-wave.sh")], cwd=ROOT, capture_output=True, text=True, timeout=300, env=env)
+    env = {"SG_SERIAL_HELD": "gate"}
+    r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=300, extra_env=env)
     fails = [line for line in (r.stdout + r.stderr).splitlines() if line.startswith("FAIL")]
     assert r.returncode == 0 and not fails, r.stdout + r.stderr
 
@@ -267,7 +269,7 @@ def test_the_wave_suite_survives_an_inherited_gate_lock():
 @pytest.mark.slow(reason="runs the run lifecycle over a throwaway checkout, remote and stubbed launch")
 @pytest.mark.heavy
 def test_the_run_lifecycle_cuts_and_enters_the_wave():
-    r = subprocess.run(["bash", str(SCRIPTS / "test-wave-lifecycle.sh")], cwd=ROOT, capture_output=True, text=True, timeout=300)
+    r = shell_suites.run(SCRIPTS / "test-wave-lifecycle.sh", timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in LIFECYCLE_CASES:
@@ -277,7 +279,7 @@ def test_the_run_lifecycle_cuts_and_enters_the_wave():
 @pytest.mark.slow(reason="runs the run-completion suite's own loop over a temp scripts dir")
 @pytest.mark.heavy
 def test_the_run_completion_lands_the_wave_and_leaves_a_waveless_run_alone():
-    r = subprocess.run(["bash", str(SCRIPTS / "test-watch-land.sh")], cwd=ROOT, capture_output=True, text=True, timeout=300)
+    r = shell_suites.run(SCRIPTS / "test-watch-land.sh", timeout=300)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in COMPLETION_CASES:

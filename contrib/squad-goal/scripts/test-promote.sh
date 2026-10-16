@@ -8,6 +8,7 @@
 # The owner fast-forwards main to the stg tip with one command, and it refuses when main is not an ancestor of stg
 # (promote-main.sh). No loop script pushes to main.
 # Offline: a bare local remote, a stub CI seam and a hand-written status line, no gh. usage: bash test-promote.sh
+unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so its wait is proved
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
 export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0; mkdir -p "$SG_STATE"

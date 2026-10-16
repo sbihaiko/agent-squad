@@ -2,6 +2,7 @@
 # Regression test for branchland.sh (#355): the pass that lands a pushed work branch whose check is green in `dev` by a
 # fast-forward push. Stub gh (every argv logged), a bare local remote, a stub board, temp state dir. One line per case.
 # usage: bash test-branchland.sh [scripts dir]
+unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so its wait is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
 cp "$d/gate.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
