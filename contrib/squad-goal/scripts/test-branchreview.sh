@@ -4,11 +4,13 @@
 # one status comment of the issue (a queue file of the status kind, which cqflush.sh edits in place); a fix round works on the
 # same branch. A child of a wave (#376) sets SG_REVIEW_BASE to the wave branch: the diff is then the child's own commits
 # against their merge-base with the wave branch, never the whole wave, and the base is kept beside the verdict.
+# The child of a run (#448) is reviewed the same way but from its own worktree: its branch is pushed nowhere, so review.sh
+# --worktree reads HEAD and the three-dot diff against the wave ref, and childreview.sh keeps the files the entry reads.
 # usage: bash test-branchreview.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset SG_REVIEW_BASE   # each case decides the base the review is read against; an ambient one from a live loop must not
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$d/review.sh" "$d/revformat.py" "$d/address.sh" "$T/s/"; : > "$T/s/codex-reset.py"
-cp "$d/ghcall.sh" "$d/ghread.py" "$d/branchreview.sh" "$d/branchfix.sh" "$T/s/" 2>/dev/null
+cp "$d/ghcall.sh" "$d/ghread.py" "$d/branchreview.sh" "$d/branchfix.sh" "$d/childreview.sh" "$T/s/" 2>/dev/null
 printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}\n' > "$T/s/models.json"
 cat > "$T/s/env.sh" <<J
 SG_REPO=x/y; SG_STATE=$T/st; SG_BASE=main; SG_LAND_BRANCH=dev; SG_CHECKOUT=$T; SG_REVIEW_RULES=CLAUDE.md; SG_CODING_RULES=CLAUDE.md
@@ -70,4 +72,21 @@ out=$(SG_REVIEW_BASE=wave/run-1 CLAUDE_CHANGES=1 bash "$T/s/branchreview.sh" gui
 ls "$T/st/cq/"x__y#7-status~* >/dev/null 2>&1 && /usr/bin/grep -q "a.cs:1" "$T/st/cq/"x__y#7-status~* && ok "wave: the verdict lands in the issue's one status comment" || ko "wave: no status comment: $(cat "$T/st/cq/"* 2>&1)"
 ls "$T/st/cq/" | /usr/bin/grep -qv -- '-status~' && ko "wave: a round queued a comment that is not the status one: $(ls "$T/st/cq")" || ok "wave: the status comment is the only one"
 ! /usr/bin/grep -qE "issues/7/comments" "$T/gh.log" && ok "wave: the review posts no comment itself" || ko "wave: the review posted a comment"
+# 6) the child of a run (#448): its branch is pushed nowhere (#375), so its review is read in its own worktree, against the
+#    wave branch, from the commits it holds. Nothing that lists pushed branches can see it, and the files the entry waits for
+#    are named by the branch itself, with HEAD as the reviewed head.
+: > "$T/gh.log"; rm -f "$T/st/cq/"* "$T/st/review-$key".* "$T/st/review-squad_run-1_ws-child".*
+G=/usr/bin/git; $G init -q -b dev "$T/repo"; (cd "$T/repo" && echo base > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m base)
+$G clone -q --bare "$T/repo" "$T/remote.git"; $G clone -q "$T/remote.git" "$T/child"
+(cd "$T/child" && $G checkout -q -b wave/run-1 && echo wave > w && $G add w && $G -c user.email=a@b -c user.name=t commit -q -m "the wave's own commit" \
+  && $G push -q origin HEAD:wave/run-1 && $G checkout -q -b squad/run-1/ws-child && echo child > c && $G add c && $G -c user.email=a@b -c user.name=t commit -q -m "work 7 (Refs #7)")
+ck=squad_run-1_ws-child
+out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1); rc=$?
+[ $rc = 0 ] && ok "child: the review of a run child runs in its own worktree" || ko "child: childreview exited $rc: $out"
+/usr/bin/grep -q '^+child' "$T/prompt" && ! /usr/bin/grep -q '^+wave' "$T/prompt" && ok "child: the prompt carries the child's own commits against the wave branch" || ko "child: the prompt carries the wrong diff"
+! /usr/bin/grep -qE 'compare/|commits/squad' "$T/gh.log" && ok "child: no remote read of a branch that is on no remote" || ko "child: a remote branch read: $(cat "$T/gh.log")"
+head -1 "$T/st/review-$ck.md" | /usr/bin/grep -q CHANGES && [ "$(cat "$T/st/review-$ck.sha")" = "$(cd "$T/child" && $G rev-parse HEAD)" ] && ok "child: the verdict and the reviewed head are kept under the child's branch key" || ko "child: no verdict kept: $(ls "$T/st")"
+[ "$(cat "$T/st/review-$ck.base" 2>/dev/null)" = wave/run-1 ] && ok "child: the base it was read against is the wave branch" || ko "child: base '$(cat "$T/st/review-$ck.base" 2>/dev/null)'"
+case "$out" in *"squad/run-1/ws-child"*"VERDICT: CHANGES"*) ok "child: the review prints the branch, its head and the verdict";; *) ko "child: '$out'";; esac
+ls "$T/st/cq/"x__y#7-status~* >/dev/null 2>&1 && /usr/bin/grep -q "a.cs:1" "$T/st/cq/"x__y#7-status~* && ok "child: the verdict lands in the issue's one status comment" || ko "child: no status comment: $(cat "$T/st/cq/"* 2>&1)"
 rm -rf "$T"; exit $fail

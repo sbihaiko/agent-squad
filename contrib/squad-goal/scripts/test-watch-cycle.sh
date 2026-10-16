@@ -123,4 +123,17 @@ lane_down; run_cycles 1
 run_cycles 2
 [ "$(count live-guard)" = 2 ] && ok "8 a per-cycle step keeps its cadence (two cycles, two reads)" || ko "8 live-guard ran $(count live-guard)× in 2 cycles"
 
+# 9) (#450) the stall watchdog names a live run whose record has not moved, and never names a finished one: a run whose record
+# carries its verdict is over, and it waits for its wave to land (childcc keeps it in active-runs.txt until then), so a
+# quiet record is not a hang to report. Both records are backdated past stall_timeout_minutes, so only the verdict differs.
+mkdir -p "$T/co/runs/run-live" "$T/co/runs/run-done"
+printf '{"event": "call_started"}\n' > "$T/co/runs/run-live/record.jsonl"
+printf '{"event": "verdict", "verdict": "pass"}\n' > "$T/co/runs/run-done/record.jsonl"
+touch -t 202001010000 "$T/co/runs/run-live/record.jsonl" "$T/co/runs/run-done/record.jsonl"
+printf '%s\n%s\n' "$T/co/runs/run-live" "$T/co/runs/run-done" > "$ST/active-runs.txt"
+run_cycles 1
+/usr/bin/grep -q "STALL RUN run-live" "$T/watch.out" && ok "9 a live run whose record stopped is named" || ko "9 no STALL line for a live run: $(tail -3 "$T/watch.out")"
+/usr/bin/grep -q "STALL RUN run-done" "$T/watch.out" && ko "9 the watchdog names a finished run as stalled" || ok "9 a run whose record holds its verdict is never named"
+: > "$ST/active-runs.txt"
+
 rm -rf "$T"; exit $fail

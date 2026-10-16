@@ -291,6 +291,15 @@ $O rev-parse -q --verify "refs/heads/$W6" >/dev/null && ko "J: the empty wave br
 [ -e "$T/st/auto/waved-run-6" ] && ok "J: waved-<run> stays, the durable record that the run had a wave" || ko "J: no waved-run-6 record"
 [ "$($O rev-parse dev)" = "$before" ] && ok "J: an empty landing moves dev nowhere" || ko "J: dev moved on an empty landing"
 
+# N (#449): an empty wave never runs the tip's check at all. A wave with nothing ahead of the base has no child commit for a
+# red check to blame, so the check could only fail the landing of a wave that carries nothing -- and four runs went
+# needs-human on exactly that (`WAVE CHECK RED` in the loop's own log, at ebb70f8).
+W20=wave/run-20; start2 run-20 >/dev/null
+r=$(SG_WAVE_TIP_GATES=false land2 run-20); rc=$?
+[ $rc = 0 ] && ok "N: an empty wave lands empty though its tip's check fails" || ko "N: exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*) ko "N: the tip's check ran on an empty wave: '$r'";; *) ok "N: the tip's check never runs on an empty wave";; esac
+$O rev-parse -q --verify "refs/heads/$W20" >/dev/null && ko "N: the empty wave branch stays" || ok "N: the empty wave branch goes with its landing"
+
 # K: a landing that fails the same way every pass stops at the cap (SG_WAVE_LAND_TRIES, default 3): each issue the wave
 # carries gets frozen:owner and one queued comment, the marker is cleared so the loop stops, and the wave stays on the remote.
 W7=wave/run-7; start2 run-7 >/dev/null; child 70 cf "origin/$W7"; en2 run-7 70 >/dev/null

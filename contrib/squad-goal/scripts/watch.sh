@@ -94,9 +94,13 @@ if v:
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
           printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$(sg_cq_file "$n-run$$-${r##*-}.md")"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
-  # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes
+  # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes. A run whose record already carries
+  # its verdict is not a stalled run: it is over, and it waits for its wave to land (childcc keeps it in active-runs until
+  # then, so its children can still enter). Reading its quiet record as a stall named three finished runs at 10:41 today and
+  # sent the diagnosis after a hang that was never there (#450).
   cfg="$(dirname "$0")/models.json"; st=$(jq -r .stall_timeout_minutes "$cfg")
   for r in $(cat "$SG_STATE/active-runs.txt"); do case "$seen" in *" $r "*) continue;; esac; case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
+    grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue
     [ -e "$f" ] && [ -n "$(find "$f" -mmin +$st 2>/dev/null)" ] && case "$stalled" in *" $r "*) ;; *) echo "STALL RUN ${r##*/} no record.jsonl progress for ${st}m"; stalled="$stalled$r "; echo "stall $r" >> "$W";; esac; done
   tick=$((tick+1))
   # reconcile.py is the most expensive step of the cycle by a wide margin (137 runs, 22,902 s, ~167 s each) and all it does is move cards

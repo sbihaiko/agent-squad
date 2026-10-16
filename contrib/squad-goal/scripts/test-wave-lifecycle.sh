@@ -98,6 +98,9 @@ child() { local rid=$1 iss=$2 f=$3; local rd wt; rd=$(run_dir "$rid" "$iss"); wt
   # so is caught at the remote, and a launch that tells it to keep the branch local leaves no gui/ ref there (#375 review).
   /usr/bin/grep -q 'push your branch' "$T/prompt-$rid" 2>/dev/null && $G -C "$wt" push -q origin "HEAD:refs/heads/gui/$iss"
   # The child's review approved its diff against the wave branch (#376): the entry reads it, and holds a child with none.
+  # CHILD_NO_REVIEW=1 leaves it out: that is the case that proves the completion pass writes one itself (#448), because a
+  # child's branch is pushed nowhere and no other pass can ever read it.
+  [ "${CHILD_NO_REVIEW:-}" = 1 ] && return 0
   local rk="$T/st/review-squad_${rid}_worktrees_child-route.router.1"
   printf 'VERDICT: APPROVE\n' > "$rk.md"; $G -C "$wt" rev-parse HEAD > "$rk.sha"; printf 'wave/%s\n' "$rid" > "$rk.base"; }
 child_head() { $G -C "$(run_dir "$1" "$2")/ws/worktrees_child-route.router.1" rev-parse HEAD; }
@@ -190,6 +193,45 @@ out=$(childcc)
 # The case is done with this run: it leaves the loop's list, so the completion case below lands its own wave and no other.
 rm -f "$T/card" "$T/st/auto/wave-$R3"; /usr/bin/grep -v "$R3" "$T/st/active-runs.txt" > "$T/st/active-runs.new"; mv "$T/st/active-runs.new" "$T/st/active-runs.txt"
 echo 67 > "$T/issue"
+
+# 3d) The child's own diff is reviewed by the completion pass itself, in the child's own worktree, before the entry (#448).
+# The entry waits for the review of the child's own commits against the wave branch (#376), and a child's branch is pushed
+# nowhere (#375), so the review lane that lists pushed `fix/`/`gui/` branches never reads it: nothing wrote that review, and
+# the entry held every child of every run for good (ten `WAVE HOLD` lines in the loop's own log, today at 09:2x).
+# The reviewer the pass calls (childreview.sh) is stubbed here, and writes what childreview.sh writes: the verdict, the head
+# it read and the base it read against, from this worktree's own HEAD. The stub counts its calls, so "once per head" is read.
+cat > "$T/s/childreview.sh" <<EOF
+#!/bin/bash
+printf 'childreview %s %s\n' "\$1" "\$2" >> "$T/rev.log"
+br=\$(git symbolic-ref --quiet --short HEAD); key=\$(printf '%s' "\$br" | tr / _)
+printf 'VERDICT: %s\nOne finding.\n' "\${STUB_VERDICT:-APPROVE}" > "$T/st/review-\$key.md"
+git rev-parse HEAD > "$T/st/review-\$key.sha"
+printf 'wave/%s\n' "\$1" > "$T/st/review-\$key.base"
+printf '%s 0000000 VERDICT: %s\n' "\$br" "\${STUB_VERDICT:-APPROVE}"
+EOF
+chmod +x "$T/s/childreview.sh"
+R5=run-20261014-000000-bbb555
+: > "$T/rev.log"; : > "$T/board.log"
+launch "$R5" 71 >/dev/null 2>&1; CHILD_NO_REVIEW=1 child "$R5" 71 g71; before=$(wtip "$R5")
+out=$(childcc)
+[ "$(wc -l < "$T/rev.log" | tr -d ' ')" = 1 ] && /usr/bin/grep -q "childreview $R5 71" "$T/rev.log" \
+  && ok "L8: the pass reviews the child's own diff before the entry" || ko "L8: no review of the child: '$(cat "$T/rev.log" 2>/dev/null)'"
+[ "$(wtip "$R5")" = "$(child_head "$R5" 71)" ] && [ "$(wtip "$R5")" != "$before" ] && ok "L8: the reviewed child enters its wave" \
+  || ko "L8: the wave tip is '$(wtip "$R5")' and the child's head '$(child_head "$R5" 71)': '$(printf '%s' "$out" | tail -3)'"
+
+# 3e) A review that asked for CHANGES on a run that already ended puts its issue back in the queue instead of holding it for
+# good, and the head it read is never read again: a hold no pass can clear is a child that never enters (#448).
+R6=run-20261014-000000-bbb666
+: > "$T/rev.log"; : > "$T/board.log"
+launch "$R6" 72 >/dev/null 2>&1; CHILD_NO_REVIEW=1 child "$R6" 72 g72; before=$(wtip "$R6")
+out=$(STUB_VERDICT=CHANGES childcc)
+[ -n "$(wtip "$R6")" ] && [ "$(wtip "$R6")" = "$before" ] && ok "L9: a child the review asked changes of never enters the wave" \
+  || ko "L9: the wave tip moved to '$(wtip "$R6")'"
+/usr/bin/grep -qx 'o 3 Todo 72' "$T/board.log" && ok "L9: its issue goes back to the queue instead of holding for good" \
+  || ko "L9: the issue was not requeued: '$(cat "$T/board.log" 2>/dev/null)'"
+out=$(STUB_VERDICT=CHANGES childcc)
+[ "$(wc -l < "$T/rev.log" | tr -d ' ')" = 1 ] && ok "L9: the review is read once per head, never on every pass" \
+  || ko "L9: the review ran again: '$(cat "$T/rev.log" 2>/dev/null)'"
 
 # 4) A run that ended lands the wave its finished child is in, through the loop's own cycle. The child reaches the wave in
 # the completion that lands it -- never after it -- because a landing attempted first finds an empty wave, refuses it, and

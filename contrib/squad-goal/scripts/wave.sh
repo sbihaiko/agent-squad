@@ -3,6 +3,7 @@
 #        wave.sh enter <run> <issue>  from the child's worktree: the local gates, the rebase on the wave tip, the --ff-only entry
 #        wave.sh land <run>           when the run ends: the rebase on the moved base, the one push, and the closes
 #        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
+#        wave.sh requeue <issue> <why>  the child never enters: its issue goes back to the queue and the loop builds it again
 #
 # One branch per wave (ADR-0145). A wave is the set of children that land in $SG_BASE (`dev`) together, and its branch is the
 # only branch that lands there for them, in one fast-forward push with one CI run. A run cuts the branch from `dev` when it
@@ -35,7 +36,11 @@
 #
 # A child enters only after the review of its own diff approved it (#376): `enter` reads review-<branch>.md beside the base
 # it was read against and the sha, and holds the child out (one `WAVE HOLD` line, nothing requeued) when the review did not
-# approve it, was read against another base, or read a different head.
+# approve it, was read against another base, or read a different head. The review of a run child is read in the child's own
+# worktree against the wave branch (childreview.sh, #448): a child's branch reaches no remote, so the review lane that lists
+# pushed `fix/` and `gui/` branches never sees it, and the entry held every child for good.
+# A review that asked for CHANGES on a run that already ended puts its issue back in the queue (`requeue`) instead of holding
+# it: the child of a live run stays where it stands, because that run may still fix it.
 # A wave with nothing ahead of the base landed empty: its ref and marker go and `land` exits 0. A landing that fails on a rebase
 # conflict or a push refused twice is counted per run (SG_WAVE_LAND_TRIES, default 3); at the cap each issue the wave carries
 # gets the label frozen:owner and one queued comment, and the run's wave marker is cleared so the cycle stops retrying.
@@ -271,15 +276,17 @@ land() {   # <run>: the wave's landing pass -- the rebase on the base, the one p
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
       stuck "$run" "$w" "$S" "the rebase of $w on $base conflicts: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
-    # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
-    # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
-    wave_check "$S" "$w" || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     # Nothing ahead of the base is a wave that landed empty (a run with no dispatch, every child failed its gates, no child):
-    # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0.
+    # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0. It is read
+    # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the
+    # landing of a wave that carries nothing (#449: it ran anyway, and four runs went needs-human on it).
     [ "$(sc rev-list --count "origin/$base..HEAD")" -gt 0 ] || {
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
       rm -rf "$S"; rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted)"; return 0; }
+    # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
+    # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
+    wave_check "$S" "$w" || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave carries: every `Refs #N` in a commit message, subject or body (a child never writes Closes), each
     # named once. They are read here, after the rebase, from what is ahead of the base: a commit the base already holds is
@@ -332,5 +339,6 @@ case "${1:-}" in
   enter) shift; enter "$@";;
   land) shift; land "$@";;
   expired) shift; expired "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run>" >&2; exit 2;;
+  requeue) shift; requeue "$@";;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why>" >&2; exit 2;;
 esac

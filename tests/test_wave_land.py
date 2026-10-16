@@ -45,6 +45,11 @@ LIFECYCLE_CASES = (
     "L6: a child that failed its gates enters on the next pass",
     "L6: its card reads Code Complete once it entered",
     "L7: a finished run's child enters its wave whatever column its card is in",
+    "L8: the pass reviews the child's own diff before the entry",
+    "L8: the reviewed child enters its wave",
+    "L9: a child the review asked changes of never enters the wave",
+    "L9: its issue goes back to the queue instead of holding for good",
+    "L9: the review is read once per head, never on every pass",
     "L4: the case runs on the loop's first start, with no watch-seen.txt",
     "L4: the run's finished child enters the wave before the completion lands it",
     "L4: the first start announces no verdict (boot=1), and the landing above is still reached",
@@ -77,6 +82,9 @@ LAND_CASES = (
     "E4: the card of the issue named in a body reads Done",
     "E5: the issue of a commit the base already held is not closed",
     "E5: the ledger carries no row for it",
+    "N: an empty wave lands empty though its tip's check fails",
+    "N: the tip's check never runs on an empty wave",
+    "N: the empty wave branch goes with its landing",
 )
 # The cases the run-completion suite proves: the cycle that reads a run's verdict is what calls the landing pass.
 COMPLETION_CASES = (
