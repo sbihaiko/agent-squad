@@ -200,4 +200,31 @@ M
 ); rc=$?
 [ $rc = 0 ] && ok "a line range or an approximate line passes" || ko "a line range was rejected: rc=$rc '$out'"
 
+# 13) #443: a finding about the change as a whole -- the branch delivers nothing from its issue, the commit message
+# misstates it -- names no file, so the formatter rejected it with MODEL_FORMAT and the branch could never land (the
+# same signature #412 fixed for a whole-file concern). A whole-diff bullet now names its place ("whole diff", "whole
+# branch", "<x> scope") and passes; a bullet that names no place at all still fails (#412).
+out=$(good --max-lines 60 <<'M'
+VERDICT: CHANGES
+## Blocking
+- Whole diff — the branch delivers nothing from #352 — the acceptance criteria stay unmet — retarget the branch to its issues
+M
+); rc=$?
+[ $rc = 0 ] && ok "a whole-diff bullet passes (#443)" || ko "a whole-diff bullet was rejected: rc=$rc '$out'"
+out=$(good --max-lines 60 <<'M'
+VERDICT: CHANGES
+## Debt
+- Branch scope — the diff carries two unrelated fixes under one issue — the review cannot pass against #249 — split the branch
+- Scope: this branch carries autobug and autorefuse fixes — the issue is not delivered — file the work under its own issue
+- Issue #249 scope — the diff delivers none of the issue's acceptance criteria — the issue cannot close on this branch — retarget it
+M
+); rc=$?
+[ $rc = 0 ] && ok "a whole-diff finding phrased as a scope passes (#443)" || ko "a scope-phrased whole-diff bullet was rejected: rc=$rc '$out'"
+# the whole-diff bullet is a finding like any other: --summary counts it, and it still blocks an APPROVE
+printf 'VERDICT: APPROVE\n## Blocking\n- Whole diff — the branch delivers nothing — the criteria stay unmet — retarget it\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 1 ] && ok "APPROVE with a whole-diff Blocking finding still fails" || ko "APPROVE + whole-diff Blocking accepted"
+printf 'VERDICT: CHANGES\n## Blocking\n- Whole diff — the branch delivers nothing — the criteria stay unmet — retarget it\n' > "$T/r.md"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=0" ] && ok "--summary counts a whole-diff Blocking bullet (#443)" || ko "--summary whole-diff: '$(python3 "$src" --summary "$T/r.md")'"
+
 rm -rf "$T"; exit $fail
