@@ -75,7 +75,7 @@ test-mkreq.sh 28.2
 test-pass-deadline.sh 16
 test-prepush.sh 2.2
 test-prland.sh 23.8
-test-promote.sh 5.1
+test-promote.sh 8.5
 test-publish-live.sh 1.5
 test-reconcile.sh 1.5
 test-refusal-comment.sh 7.1

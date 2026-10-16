@@ -6,6 +6,7 @@
 : "${SG_BASE:=dev}"
 : "${SG_MERGE_METHOD:=squash}"
 : "${SG_AUTO_MERGE:=yes}"
+# : "${SG_PROMOTE_PROOF:=local}"         # promote-stg.sh: the promotion proof. `ci` (unset: the default) takes the dev tip's CI; `local` takes the promotion gate's own status line, the full suite in both modes, for when CI cannot start (#439)
 : "${SG_E2E_DIR:=$HOME/wt-e2e}"         # detached worktree on the base branch for post-merge e2e
 : "${SG_E2E_CMD:=make test}"
 : "${SG_E2E_PASS_REGEX:=passed}"
