@@ -679,8 +679,9 @@ def load_tick(sample=None):
 # is a precision no reader acts on, and the exact span of a fact is in its tooltip. The one fact that needs a second number to
 # interpret -- the sha the gate ran at -- is on the line's block as a tooltip, which is how a fact is MOVED and never lost.
 # One fact earned the line after that list was drawn, and it earns it by (b) alone (subscriptions, #1839): one token per
-# subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
-# SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
+# subscription — `CL 42%`, the acronym and quota the provider's own CLI reports. Below the warn ladder, its reset span
+# moves to the token tooltip (`resets in 3h 20m`); at or above the ladder it stays in the token. An unreadable reset stays
+# visible as `?` at every consumption. SUBS fixes the order. A plan at 100% is exactly the reading that says the squad will
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
 # The fact an operator waiting on the queue asks first earns the line the same way (#87): `landed PR #73 2h ago`,
 # the newest merged pull request the board pass has read — its number is the landing and its merge time the age. Delivery
@@ -790,11 +791,11 @@ def consumption_tone(pct):
     return "err" if f >= FOOT_ERR_PCT else ("warn" if f >= FOOT_WARN_PCT else "ok")
 
 def _subs_parts(subs, now):
-    """One part per subscription in SUBS' own order — `CL 42% 3h 20m`: its acronym (#1839's one map), the quota and the
-    time to the reset, each token carrying the tone its OWN reading earns (#1843), so a glance says which subscription
-    is running out. The quota and the reset are `quota_row()`'s first window, the probe the cost panel already shows.
-    A probe that did not answer (or names no window) falls back to the percentage the owner typed by hand and reads `?`
-    for the reset; a subscription with neither reads `?` alone — neutral, never painted as if it carried a number."""
+    """One part per subscription in SUBS' own order. A token at or above the warn ladder reads `CL 42% 3h 20m`; one
+    below it reads `CL 42%`, with the omitted reset as `resets in 3h 20m` in its tooltip. An unreadable reset is `?` and
+    never hides. The quota and reset are `quota_row()`'s first window, the probe the cost panel already shows. A probe
+    that did not answer (or names no window) falls back to the percentage the owner typed by hand and reads `?` for the
+    reset; a subscription with neither reads `?` alone — neutral, never painted as if it carried a number."""
     out = []
     for k in SUBS:
         a, s = SUB_ACR.get(k) or k.upper(), (subs or {}).get(k) or {}
@@ -802,7 +803,12 @@ def _subs_parts(subs, now):
         pct = w.get("pct") if isinstance(w, dict) else None
         hand = s.get("quota")
         if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-            out.append({"text": f"{a} {_subs_pct(pct)} {_subs_reset(w.get('resets'), now)}", "tone": consumption_tone(pct)})
+            reset = _subs_reset(w.get("resets"), now)
+            text = f"{a} {_subs_pct(pct)}"
+            part = {"text": f"{text} {reset}" if reset == "?" or pct >= FOOT_WARN_PCT else text,
+                    "tone": consumption_tone(pct)}
+            if reset != "?" and pct < FOOT_WARN_PCT: part["tip"] = f"resets in {reset}"
+            out.append(part)
         elif isinstance(hand, (int, float)) and not isinstance(hand, bool):
             out.append({"text": f"{a} {_subs_pct(hand)} ?", "tone": consumption_tone(hand)})
         else: out.append({"text": f"{a} ?", "tone": FOOT_NEUTRAL})
@@ -2053,7 +2059,7 @@ function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" �
 // value the hub could not verify. The parts of a block keep the line's own separator between them, the text the hub
 // serves already carries it. The tone is decided where the number is — the hub serves it — never here:
 const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
-function footParts(i){return (i.parts||[{text:i.text}]).map(p=>FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text)).join(" · ")}
+function footParts(i){return (i.parts||[{text:i.text}]).map(p=>{const t=FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text);return p.tip?`<span title="${esc(p.tip)}">${t}</span>`:t}).join(" · ")}
 function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`;return i.tip?`<span title="${esc(i.tip)}">${s}</span>`:s}
 // The facts' own width budget: what the bar has left after the `load` label, the three cells, their gaps and the facts'
 // own margin. The line drops whole blocks when it is too narrow, so a budget that promises more room than the bar has

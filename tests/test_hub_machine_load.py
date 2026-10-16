@@ -808,8 +808,37 @@ def test_each_subscription_token_is_painted_by_its_own_consumption_not_the_block
                      "gpt": {"probe": {"windows": [{"pct": hub.FOOT_ERR_PCT, "resets": None}]}, "quota": None},
                      "gemini": {"probe": None, "quota": None}})
     parts = _subs_parts(hub, src)
-    assert [p["text"] for p in parts] == ["CL 20% 1h 0m", "GK 80% ?", "GPT 95% ?", "GEM ?"]
+    assert [p["text"] for p in parts] == ["CL 20%", "GK 80% ?", "GPT 95% ?", "GEM ?"]
+    assert [p.get("tip") for p in parts] == ["resets in 1h 0m", None, None, None]
     assert [p["tone"] for p in parts] == ["ok", "warn", "err", hub.FOOT_NEUTRAL]
+
+
+def test_subscription_reset_span_follows_the_warn_ladder_and_keeps_its_token_tooltip(hub):
+    w = hub.FOOT_WARN_PCT
+    cases = ((w - 0.1, "CL 80%", "resets in 3h 20m"),
+             (w, "CL 80% 3h 20m", None),
+             (w + 0.1, "CL 80% 3h 20m", None))
+    for pct, text, tip in cases:
+        part = _subs_parts(hub, _subs_src(hub, pct, resets=NOW + 3 * 3600 + 20 * 60))[0]
+        assert (part["text"], part.get("tip")) == (text, tip)
+    close = _subs_parts(hub, _subs_src(hub, w - 0.1, resets=NOW + 60))[0]
+    assert (close["text"], close.get("tip")) == ("CL 80%", "resets in 1m")
+
+
+def test_subscription_question_reset_and_quota_reset_are_never_hidden(hub):
+    w = hub.FOOT_WARN_PCT
+    for pct in (w - 0.1, w, w + 0.1):
+        part = _subs_parts(hub, _subs_src(hub, pct, resets=None))[0]
+        assert part["text"] == "CL 80% ?"
+        assert "tip" not in part
+    reset = time.mktime((2026, 10, 16, 14, 20, 0, 0, 0, -1))
+    assert hub._quota_fact({"codex": reset, "agy": None}, NOW, subs=()) == "codex reset 14:20 · agy ok"
+
+
+def test_the_page_renders_the_subscription_token_tooltip_from_its_fact(hub):
+    part = _subs_parts(hub, _subs_src(hub, hub.FOOT_WARN_PCT - 0.1, resets=NOW + 3 * 3600 + 20 * 60))[0]
+    out = _foot_paint(hub, [{"key": "subs", "text": part["text"], "bad": False, "color": "run", "parts": [part]}])
+    assert 'title="resets in 3h 20m"' in out
 
 
 def test_a_band_is_read_at_its_own_threshold_and_the_one_under_it(hub):

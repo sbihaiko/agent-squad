@@ -118,12 +118,26 @@ hub.quota = {
     "claude": {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW},
     "grok": {"windows": [{"label": "weekly", "pct": 88, "resets": NOW + 86400 + 2 * 3600}], "asof": NOW},
     "gpt": {"unavailable": True, "err": "no credit line in the log", "asof": NOW}}   # gemini: no probe and nobody typed one
-items = hub.foot_items(hub.foot_sources(NOW), None, NOW)
+items = hub.foot_items(hub.foot_sources(NOW), NOW)
 subs = [i for i in items if i["key"] == "subs"]
 ck(len(subs) == 1, "one subscription fact reaches the line", [i["key"] for i in items])
-ck(subs and subs[0]["text"] == "CL 42% 3h 20m · GK 88% 1d 2h · GPT 61% ? · GEM ?",
-   "the four tokens in SUBS' order: acronym, quota, time to reset", subs[0]["text"] if subs else None)
-ck(len(items) == 6, "the fact joins the five the line already had", [i["key"] for i in items])
+ck(subs and subs[0]["text"] == "CL 42% · GK 88% 1d 2h · GPT 61% ? · GEM ?",
+   "a token below the warn ladder moves its reset span out of the line", subs[0]["text"] if subs else None)
+ck(subs and subs[0]["parts"][0].get("tip") == "resets in 3h 20m",
+   "the hidden reset span is the token tooltip", subs[0]["parts"][0] if subs else None)
+# The warn boundary draws the span, but an unreadable reset always stays visible. A reset only one minute away does not
+# override the ladder; quota markers keep their absolute reset time.
+hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": hub.FOOT_WARN_PCT, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
+boundary = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
+ck(boundary["parts"][0]["text"] == "CL 80% 3h 20m", "the warn boundary keeps the reset span", boundary["parts"][0])
+hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 60}], "asof": NOW}
+close = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
+ck(close["parts"][0]["text"] == "CL 42%" and close["parts"][0].get("tip") == "resets in 1m",
+   "a reset minutes away stays hidden below the ladder", close["parts"][0])
+ck(hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()) == "codex reset 05:01 · agy ok",
+   "the quota block keeps its reset time", hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()))
+hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
+ck(len(items) == 2, "the fact joins the landing the line already has", [i["key"] for i in items])
 ck(items and items[-1]["key"] == "subs" and all(a in items[-1]["text"] for a in ("CL", "GK", "GPT", "GEM"))
    and not any(a in " ".join(i["text"] for i in items[:-1]) for a in ("CL 42%", "GK 88%")),
    "all four tokens are one fact, so the row's own drop takes them whole and no token is cut", items[-1]["text"])
@@ -131,20 +145,20 @@ ck(set(hub.SUB_ACR) == set(hub.SUBS) and all(2 <= len(v) <= 3 for v in hub.SUB_A
    "one 2-3 letter short form per subscription, defined beside SUBS", hub.SUB_ACR)
 # The percentage is the panel's own number, the time the page's own `rel()` shape — and neither is ever invented.
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 6.5}], "asof": NOW}
-f = {i["key"]: i["text"] for i in hub.foot_items(hub.foot_sources(NOW), None, NOW)}
+f = {i["key"]: i["text"] for i in hub.foot_items(hub.foot_sources(NOW), NOW)}
 ck(f["subs"].startswith("CL 6.5% ?"),
    "a probe that names no reset keeps the percentage and reads ? — the panel's fpct shape under 10", f["subs"])
 ck(f["subs"].split(" · ")[-1] == "GEM ?", "nothing readable is ? alone: no digit is conjured for it", f["subs"])
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
 hub.SUB_ACR["gpt"] = "XX"
-ck(hub.foot_items(hub.foot_sources(NOW), None, NOW)[-1]["text"].count("XX") == 1,
+ck(hub.foot_items(hub.foot_sources(NOW), NOW)[-1]["text"].count("XX") == 1,
    "the acronym is read from the one map, never spelled out at the use site")
 hub.SUB_ACR["gpt"] = "GPT"
 asked = []
 hub.QUOTA_PROBES = {k: (lambda k=k: asked.append(k)) for k in hub.SUBS}
 hub.foot_refresh(NOW)
 ck(not asked, "the pass the sampler already runs costs no probe", asked)
-ck((hub.LOAD_STATE.get("facts") or [])[-1]["text"].startswith("CL 42% 3h 20m"),
+ck((hub.LOAD_STATE.get("facts") or [])[-1]["text"].startswith("CL 42%"),
    "so the tokens reach the page through the same facts source as the rest of the line",
    (hub.LOAD_STATE.get("facts") or [{}])[-1].get("text"))
 
