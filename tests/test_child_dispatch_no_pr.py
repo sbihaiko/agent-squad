@@ -27,17 +27,18 @@ def test_no_dispatch_text_asks_a_child_to_open_a_pull_request():
 
 
 def test_prompts_give_the_child_the_runs_worktree_and_no_branch_of_its_own():
-    """ADR-0145 rule 9: the run cuts the child's worktree and its branch, so the dispatch tells the child to work there and
-    to push no branch. The retired route's wording -- cut a branch from origin/dev and push it -- steered the child into a
-    tree of its own that the wave entry never reads, so every run landed an empty wave (#464)."""
+    """ADR-0145 rule 9: the run cuts the child's worktree and its branch, so the dispatch points the child at the worktree it
+    stands in and tells it to push no branch. The retired route's wording -- cut a branch from origin/dev and push it -- steered
+    the child into a tree of its own that the wave entry never reads, so every run landed an empty wave (#464)."""
     for f in DISPATCH_TEXT + ["startability.sh"]:
         text = read(f)
         for gone in ("push your branch", "cut your branch from origin", "cut it from origin/$SG_BASE", "one branch each"):
             assert gone not in text, f"{f}: still tells a child to cut or push a branch of its own"
     for f in ("autofrontier.sh", "autobug.sh"):
         text = read(f)
-        assert re.search(r"worktree (?:the run|the engine) gives", text), f
+        assert re.search(r"no worktree and no branch of (?:its|your) own", text), f
         assert "the run's wave branch" in text, f
+        assert "worktree" in text and "origin/$SG_BASE" not in text.split("wave branch")[0], f
 
 
 def test_red_output_goes_in_the_issue_status_comment():
