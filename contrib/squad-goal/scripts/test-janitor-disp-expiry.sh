@@ -43,7 +43,7 @@ case "$*" in
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) for n in 901 902 903 904; do s=$(/usr/bin/grep "^o 4 .* $n\$" "TMPDIR/board.calls" 2>/dev/null | tail -1 | sed "s/^o 4 \(.*\) $n\$/\1/"); printf '%s\t%s\n' "$n" "${s:-In Progress}"; done;;   # one read, every card: the column the pass last wrote, In Progress before any write
+  *projectsV2/4/items*) for n in 901 902 903 904 905; do s=$(/usr/bin/grep "^o 4 .* $n\$" "TMPDIR/board.calls" 2>/dev/null | tail -1 | sed "s/^o 4 \(.*\) $n\$/\1/"); printf '%s\t%s\n' "$n" "${s:-In Progress}"; done;;   # one read, every card: the column the pass last wrote, In Progress before any write
   *projectsV2/1/items*) ;;
   *issues/90*) echo open;;
 esac
@@ -92,7 +92,7 @@ o=$(run)
 /usr/bin/grep -l 'owner_decision' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q 'run-ended' "$T/st/cq/"*901* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
 [ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Code Complete 902$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 902' "$T/board.calls" 2>/dev/null && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-905" ] && ok "O: a landing that moved the tip by nothing drops its marker (no delivery)" || ko "O disp-905 kept although the land carried nothing: $o"
-! /usr/bin/grep -q '^o 4 Code Complete 905$' "$T/board.calls" 2>/dev/null && ok "R: a landing that carries nothing never claims Code Complete" || ko "R #905 claimed Code Complete: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 905$' "$T/board.calls" 2>/dev/null && ok "R: a run that ended with nothing delivered leaves the card in the queue, never Code Complete" || ko "R #905 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q -- '^--run-fields o 4 903 run-live ' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker and writes Run fields" || ko "O #903 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Code Complete 904$' "$T/board.calls" 2>/dev/null && ok "O: a work branch naming the issue moves to Code Complete and keeps its marker" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"
