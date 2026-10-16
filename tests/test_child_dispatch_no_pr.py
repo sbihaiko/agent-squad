@@ -1,8 +1,9 @@
-"""A child is cut from origin/dev, pushes its branch and opens no pull request.
+"""A child works in the worktree its run gives it, pushes no branch of its own and opens no pull request.
 
-The dispatch prompts (frontier, bug), the request checklist and the example profile are text the loop hands a child. None
-of it asks for a pull request; the RED output goes to the issue status comment, and the profile and the prepush range
-name dev as the base.
+The dispatch prompts (frontier, bug), the request checklist, the worktree note and the example profile are text the loop
+hands a child. None of it asks for a pull request, and none of it tells the child to cut or push a branch of its own: the
+run cuts the child's worktree and checks out its branch, the loop enters the child's commits into the run's wave branch,
+and the wave lands in dev (ADR-0145 rule 9). The RED output goes to the issue status comment.
 """
 import re
 from pathlib import Path
@@ -25,11 +26,18 @@ def test_no_dispatch_text_asks_a_child_to_open_a_pull_request():
     assert hits == []
 
 
-def test_prompts_say_branch_from_origin_dev_push_and_open_no_pull_request():
+def test_prompts_give_the_child_the_runs_worktree_and_no_branch_of_its_own():
+    """ADR-0145 rule 9: the run cuts the child's worktree and its branch, so the dispatch tells the child to work there and
+    to push no branch. The retired route's wording -- cut a branch from origin/dev and push it -- steered the child into a
+    tree of its own that the wave entry never reads, so every run landed an empty wave (#464)."""
+    for f in DISPATCH_TEXT + ["startability.sh"]:
+        text = read(f)
+        for gone in ("push your branch", "cut your branch from origin", "cut it from origin/$SG_BASE", "one branch each"):
+            assert gone not in text, f"{f}: still tells a child to cut or push a branch of its own"
     for f in ("autofrontier.sh", "autobug.sh"):
         text = read(f)
-        assert "push your branch" in text, f
-        assert "open no pull request" in text, f
+        assert re.search(r"worktree (?:the run|the engine) gives", text), f
+        assert "the run's wave branch" in text, f
 
 
 def test_red_output_goes_in_the_issue_status_comment():
