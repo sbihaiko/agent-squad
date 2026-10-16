@@ -15,10 +15,6 @@ SG_REQUIRED_SETTINGS="SG_TOOLING_REPO:SG_FORK_DIR:retired:SG_REPOS"
 # battery and the shell suites of the scripts the child changes (fast-gate.sh). A profile that works another repository overrides it, and an empty value refuses the entry, so no child ever
 # enters a wave ungated (ADR-0145 rule 9).
 : "${SG_WAVE_GATES:=bash '$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fast-gate.sh'}"
-# The promotion proof promote-stg.sh reads (ADR-0145): `ci` (the default) takes the dev tip's CI, and `local` takes the promotion
-# gate's own status line, the full suite in both modes (owner decision on #439). Set `local` in the profile while the account's
-# Actions billing keeps CI from starting; a tip with no proof line is not promoted.
-: "${SG_PROMOTE_PROOF:=ci}"
 # A tool's absolute path differs by platform: /usr/sbin/lsof holds on macOS and is absent on the CI runner, where a
 # hardcoded path turns a missing tool into a failed pass. One resolution here, and every script reads it from SG_LSOF.
 SG_LSOF="${SG_LSOF:-}"; [ -n "$SG_LSOF" ] || SG_LSOF="$(command -v lsof 2>/dev/null)"
@@ -47,6 +43,11 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 # SG_WAVE_MAX_AGE_SECONDS wins. The wave tip's own check (#377) is SG_WAVE_TIP_GATES, built in wave.sh (a profile may set
 # it, and an empty value leaves the wave's CI as its only check).
 : "${SG_WAVE_MAX_AGE_SECONDS:=7200}"
+# The promotion proof promote-stg.sh reads (ADR-0145): `ci` (the default) takes the dev tip's CI, and `local` takes the promotion
+# gate's own status line, the full suite in both modes (owner decision on #439). Set `local` in the profile while the account's
+# Actions billing keeps CI from starting; a tip with no proof line is not promoted. It is read here, after the profile, so a
+# profile that names it wins (#439).
+: "${SG_PROMOTE_PROOF:=ci}"
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
 if [ -n "${SG_TOOLING_REPO:-}" ]; then
   SG_REPOS=$(sg_repos | tr '\n' ' '); SG_REPOS=${SG_REPOS% }
