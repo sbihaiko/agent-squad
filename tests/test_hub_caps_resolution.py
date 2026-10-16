@@ -60,3 +60,35 @@ def test_a_refused_root_is_not_left_on_sys_path(hub, tmp_path):
     with pytest.raises(ModuleNotFoundError):
         hub.load_squad([str(tmp_path)])
     assert str(tmp_path) not in sys.path
+
+
+def _ambient():
+    import sys
+
+    return {m: mod for m, mod in sys.modules.items() if m == "squad" or m.startswith("squad.")}
+
+
+def test_a_refused_root_leaves_the_callers_own_package_as_it_was(hub, tmp_path):
+    """The resolution is one call's business: the caller keeps one `squad` module and one class per name.
+    A purge that stayed parted every class the caller already held. In the full gate at 5531c10 a test that imports this
+    hub into its own interpreter lost the identity between the `ResumeRefused` a loaded `launch` raises and the one
+    `pytest.raises` holds, and a monkeypatched `defaults.PATH` landed on a module the reimported `launch` never read: two
+    unrelated tests failed, in one worker, for a reason neither of them sets up (#453)."""
+    import sys
+
+    before = _ambient()
+    assert before, "the premise: this process holds a squad package"
+    with pytest.raises(ModuleNotFoundError):
+        hub.load_squad([str(tmp_path)])
+    for m, mod in before.items():
+        assert sys.modules.get(m) is mod, m
+
+
+def test_an_answering_root_leaves_the_callers_own_package_as_it_was(hub):
+    import sys
+
+    before = _ambient()
+    caps, _ = hub.load_squad([str(ROOT)])
+    assert pathlib.Path(caps.__file__).resolve().is_relative_to(ROOT.resolve()), caps.__file__
+    for m, mod in before.items():
+        assert sys.modules.get(m) is mod, m
