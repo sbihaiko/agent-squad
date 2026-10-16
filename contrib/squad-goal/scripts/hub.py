@@ -891,7 +891,6 @@ def wt_clean():
 TOKENS_PY = pathlib.Path(__file__).resolve().parent / "tokens.py"
 BURN_HOURS = 24
 BURN_TTL = 120.0      # the sampler ticks every few seconds; the burners change by the minute
-BURN_SHOWN = 2        # named burners: the rest are one `+N`, so the block cannot grow with the queue
 BURN_MAX_CHARS = 72   # the block's own cap: the page drops whole blocks when the line is too wide, so one over-long
                       # block would take the whole line with it (#446)
 _BURN = {"t": 0.0, "v": None}
@@ -926,23 +925,46 @@ def _burn_row(r):
     if len(parts) > 2 and parts[1].startswith("run-"): parts = ["…" + parts[1].rsplit("-", 1)[-1], *parts[2:]]
     return ":".join(parts) + " " + _tok(r["tokens"])
 
+BURN_SHOWN = 3        # how many consumers the block's tooltip names: the worst, so the hover stays one readable line
+
+def _burn_rows(b):
+    """The consumers the script named, in the script's own order: the only rows the block and its tooltip draw from.
+    `over` decides, never the totals: the script is the one that compares."""
+    if not isinstance(b, dict) or b.get("over") is not True: return []
+    return [x for x in (b.get("burners") or []) if isinstance(x, dict) and x.get("consumer") and isinstance(x.get("tokens"), (int, float))]
+
+def _burn_window(b):
+    """`(total tokens, hours, threshold or None)` from one reading: the two numbers the block states and the one it names."""
+    rows = _burn_rows(b)
+    hours = b.get("window_hours") if isinstance(b, dict) and isinstance(b.get("window_hours"), (int, float)) else BURN_HOURS
+    thr = b.get("threshold") if isinstance(b, dict) else None
+    return sum(x["tokens"] for x in rows), hours, (thr if isinstance(thr, (int, float)) else None)
+
 def _burn_fact(b):
-    """`tokens >5M/24h: …9f6b30:route.router.1 16.9M +17` when the script says `over`; empty otherwise. The
-    order and the comparison are the script's, never this line's. The block is capped: it names what fits, at least one
-    burner, never more than BURN_SHOWN, counts the rest, and is cut at BURN_MAX_CHARS — the footer drops whole blocks when
-    the line is too wide, so a block that never ends would empty the line it is the first fact of (#446).
-    The head names the threshold it crossed as a comparison, `>5M/24h`, one clause with no parenthesis to parse; the block's
-    own colour already says the reading is high, so the word `high` is only the fallback when no threshold was read."""
-    if not isinstance(b, dict) or b.get("over") is not True: return ""
-    rows = [x for x in (b.get("burners") or []) if isinstance(x, dict) and x.get("consumer") and isinstance(x.get("tokens"), (int, float))]
+    """`tokens 62.9M/24h · 79 over 5M` when the script says `over`; empty otherwise. The window, the comparison and the
+    order are the script's, never this line's.
+    Two numbers and no ids: what the window cost, and how many calls crossed the threshold. What the block named before --
+    `…9f6b30:route.router.1 16.9M +78` -- was a machine id nobody reads across the room and a third number the reader had
+    to hold while reading it; the owner read the block as soup (2026-10-16). The names are `_burn_tip`'s now, so the fact
+    is moved to the hover and never lost.
+    A reading the hub cannot compare against a threshold still states both numbers it has, and names the cap as the word it
+    can: the block's own colour already says the reading is high. The text is cut at BURN_MAX_CHARS -- a block that never
+    ends would empty the line it is the first fact of (#446)."""
+    rows = _burn_rows(b)
     if not rows: return ""
-    lim = f">{_tok(b['threshold'])}/{b.get('window_hours', BURN_HOURS)}h" if isinstance(b.get("threshold"), (int, float)) else "high"
-    head, plain = f"tokens {lim}: ", [_burn_row(x) for x in rows]
-    for n in range(min(BURN_SHOWN, len(plain)), 0, -1):
-        rest = len(plain) - n
-        text = head + ", ".join(plain[:n]) + (f" +{rest}" if rest > 0 else "")
-        if len(text) <= BURN_MAX_CHARS: return text
-    return (head + plain[0])[:BURN_MAX_CHARS - 1].rstrip() + "…"
+    total, hours, thr = _burn_window(b)
+    over = f"over {_tok(thr)}" if thr is not None else "over the cap"
+    return f"tokens {_tok(total)}/{hours}h · {len(rows)} {over}"[:BURN_MAX_CHARS]
+
+def _burn_tip(b):
+    """What the block no longer says out loud, on hover: how many calls crossed the threshold in the window, the worst
+    BURN_SHOWN of them by the script's own name for each, and the count of the rest. None when the block draws nothing."""
+    rows = _burn_rows(b)
+    if not rows: return None
+    _, hours, thr = _burn_window(b)
+    lead = f"{len(rows)} calls, each over {_tok(thr)}" if thr is not None else f"{len(rows)} calls, each over the cap"
+    names, rest = [_burn_row(x) for x in rows[:BURN_SHOWN]], len(rows) - BURN_SHOWN
+    return lead + f" in {hours}h · " + ", ".join(names) + (f" +{rest} more" if rest > 0 else "")
 
 def foot_items(src, now=None):
     """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a
@@ -955,7 +977,7 @@ def foot_items(src, now=None):
     src = src or {}
     land = _landing_parts(src.get("landing"), now)
     gate = _gate_parts(src.get("gate"), now)
-    items = [_fact("burn", _burn_fact(src.get("burn")), bad=True),
+    items = [_fact("burn", _burn_fact(src.get("burn")), bad=True, tip=_burn_tip(src.get("burn"))),
              _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
              _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate),
                    parts=gate or None, tip=(gate[0].get("tip") if gate else None)),

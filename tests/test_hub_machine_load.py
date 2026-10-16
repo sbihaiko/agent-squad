@@ -701,15 +701,19 @@ LIVE_BURN = {"over": True, "threshold": 5000000, "window_hours": 24, "burners": 
     {"consumer": "run:run-20261015-180805-d879a7:route.router.1", "tokens": 5138278}]}
 
 
-def test_the_burn_block_names_what_fits_and_counts_the_rest(hub):
-    """The live reading of 2026-10-16: five burners named whole, 287 characters against a 160-character budget."""
+def test_the_burn_block_states_the_spend_and_the_count_never_a_name(hub):
+    """The live reading of 2026-10-16: five burners, 40.3M spent, the worst 16.9M. The block stated one of the names and
+    the count of the rest -- `…9f6b30:route.router.1 16.9M +4` -- and the owner read it as soup. Two numbers now, and the
+    names on the hover."""
     fact = hub._burn_fact(LIVE_BURN)
-    assert fact == "tokens >5M/24h: …9f6b30:route.router.1 16.9M +4", fact
-    assert "(" not in fact                                                     # the head is one clause: no parenthesis to parse (#455)
-    assert len(fact) <= hub.BURN_MAX_CHARS and "run-20261015-191451-9f6b30" not in fact   # the id whole is not the token a reader needs
+    assert fact == "tokens 40.3M/24h · 5 over 5M", fact
+    assert "(" not in fact and "route.router" not in fact                      # one clause, and no machine id on the row
+    assert len(fact) <= hub.BURN_MAX_CHARS and "run-20261015-191451-9f6b30" not in fact
+    tip = hub._burn_tip(LIVE_BURN)
+    assert tip.startswith("5 calls, each over 5M in 24h · …9f6b30:route.router.1 16.9M") and tip.endswith("+2 more"), tip
     assert hub._burn_fact({**LIVE_BURN, "over": False}) == ""                  # a reading under the threshold draws no block
-    # a reading the hub cannot compare against a threshold still names the block, as the one word it can state
-    assert hub._burn_fact({"over": True, "burners": LIVE_BURN["burners"]}).startswith("tokens high: ")
+    # a reading the hub cannot compare against a threshold states the same two numbers and names the cap as a word
+    assert hub._burn_fact({"over": True, "burners": LIVE_BURN["burners"]}) == "tokens 40.3M/24h · 5 over the cap"
 
 
 def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
