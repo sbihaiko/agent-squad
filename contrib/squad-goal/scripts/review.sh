@@ -153,7 +153,9 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   for i in $(seq 1 $tries); do
     rm -f "$out"; t1=$(date +%s)
     case $m in
-      claude:*) cap claude -p --output-format json --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
+      # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
+      # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
+      claude:*) cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
       grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode plan --disable-web-search) > "$out" 2>"$SG_STATE/review-$pr.err";;
       gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --print-timeout 1800s -p "$(cat "$p")") > "$out" 2>"$SG_STATE/review-$pr.err";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \

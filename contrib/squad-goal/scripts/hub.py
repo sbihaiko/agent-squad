@@ -2527,8 +2527,8 @@ QUOTA = SHARED / "hub-quota.json"
 try: quota = json.loads(QUOTA.read_text())
 except Exception: quota = {}
 def q_claude():
-    """`claude -p` streams a rate_limit_event with the five-hour and seven-day utilisation of the subscription (one tiny haiku call, no session kept)."""
-    out = subprocess.run(["claude", "-p", "ok", "--model", "haiku", "--output-format", "stream-json", "--verbose", "--max-turns", "1", "--no-session-persistence"],
+    """`claude -p` streams a rate_limit_event with the five-hour and seven-day utilisation of the subscription (one tiny haiku call, no session kept). --strict-mcp-config: the probe reads a rate limit and needs no MCP server; without it the machine's server set loads into the call and pays tens of thousands of input tokens of tool schemas before the one word it reads."""
+    out = subprocess.run(["claude", "-p", "ok", "--strict-mcp-config", "--model", "haiku", "--output-format", "stream-json", "--verbose", "--max-turns", "1", "--no-session-persistence"],
                          capture_output=True, text=True, timeout=180, cwd=tempfile.gettempdir()).stdout
     w = None
     for l in out.splitlines():
