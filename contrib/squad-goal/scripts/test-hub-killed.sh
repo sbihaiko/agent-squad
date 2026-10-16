@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression test for the hub's killed runs: a run with no verdict whose process is gone must never count as live in the footer, whatever its age.
+# Regression test for the hub's killed runs: a run with no verdict whose process is gone must never count as live in the WORKERS header, whatever its age.
 # A killed run writes no more events, so its record is idle for ever; without this it read `stalled` and held a footer slot for ever (no network, no server).
 # usage: bash test-hub-killed.sh [path/to/hub.py]
 d=$(cd "$(dirname "$0")" && pwd); export HUB_SRC=${1:-$d/hub.py}; T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; fail=0
@@ -31,7 +31,6 @@ rows = [{"id": "live", "state": "running", "live": True, "age": 5, "agents": 1},
         {"id": "quiet", "state": "stalled", "live": True, "age": 2000, "agents": 3},
         {"id": "killed", "state": "stalled", "live": False, "age": OLD, "agents": 2}]
 check("the killed run is not in the running group", [hub.group_of(r) for r in rows], ["running", "running", "4h"])
-check("the footer occupancy leaves the killed run out", hub.foot_occupancy(rows), (2, 4))
 b = hub.gone_badge(hub.badge_of("stalled"))
 check("the badge says why it is not live", b["text"], "stalled · no process")
 PY

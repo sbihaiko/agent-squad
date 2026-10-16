@@ -45,7 +45,7 @@ def burners(*rows):
 
 
 def facts(hub, burn):
-    return hub.foot_items({"burn": burn}, None, 0.0)
+    return hub.foot_items({"burn": burn}, 0.0)
 
 
 def test_over_names_consumers_and_tokens(hub, tmp_path):
@@ -73,13 +73,13 @@ def test_under_threshold_renders_nothing(hub, tmp_path):
     s = stub(tmp_path, {"window_hours": 24, "threshold": 2000000, "total": 10, "over": False, "brief": "",
                         "burners": burners(("review:PR#1", 10))})
     burn = hub.burn_read(script=s, state=tmp_path, checkout=tmp_path)
-    assert hub.foot_items({"burn": burn}, None, 0.0) == hub.foot_items({}, None, 0.0)
+    assert hub.foot_items({"burn": burn}, 0.0) == hub.foot_items({}, 0.0)
 
 
 def test_missing_script_renders_nothing_and_does_not_raise(hub, tmp_path):
     burn = hub.burn_read(script=tmp_path / "absent.py", state=tmp_path, checkout=tmp_path)
     assert burn is None
-    assert hub.foot_items({"burn": burn}, None, 0.0) == hub.foot_items({}, None, 0.0)
+    assert hub.foot_items({"burn": burn}, 0.0) == hub.foot_items({}, 0.0)
 
 
 def test_nonzero_exit_and_garbage_are_no_data(hub, tmp_path):

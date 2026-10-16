@@ -311,11 +311,6 @@ def gone_badge(b):
     """The badge of a run that is gone: the state stays (`stalled`), the text says why it is not live."""
     return {**b, "text": b["text"] + " · no process"}
 
-def foot_occupancy(rows):
-    """The footer's occupancy (#1797): the runs and the agents of the rows the left pane groups as running."""
-    live = [r for r in rows if group_of(r) == "running"]
-    return len(live), sum(r.get("agents") or 0 for r in live)
-
 def squad_roots(sg_squad, sg_checkout, checkout, here):
     """Where the squad package may live, in order, each once: SG_SQUAD, the SG_CHECKOUT variable, the profile's checkout as the
     hub resolved it (the seam, ADR-0138), then the repository this file sits in (parents[3]; the live copy under ~/.claude has none).
@@ -668,13 +663,27 @@ def load_tick(sample=None):
 #                                                changes too fast to read
 #   per-column board counts                   -> the column headers directly above the footer
 #   the age of the oldest card in a column    -> the column header (`Testing (3) · 2h`), one number per column
-#   fork-ahead / branches waiting / last      -> a fourth left-pane accordion; `fork-parked` already reaches the footer
-#   base-test duration                           through `health`
+#   fork-ahead / branches waiting / last      -> a left-pane accordion; `fork-parked` already reaches the footer
+#   base-test duration                           through `health`, and the three join after the worktrees one (#455)
+# The fourth left-pane accordion is the worktree count's (#455): the count holds a press, and a press belongs with the
+# left pane's own controls and never on a reading bar. So the three facts reserved for an accordion above take the fifth
+# when they arrive, and the numbering here and in the page's `ACC` is the same list.
+# Two facts left the line by (b) and (c) together, and each is drawn one screen away (#1797, the owner's ruling 2026-10-16):
+# the runs and the agents the line counted are the WORKERS header's own reading (`RUNS n/10 · AGENTS n/20 · waiting: …`,
+# `group_header`) and that header carries more than the footer did; the worktree count with its `clean now` press is the left
+# pane's fourth accordion, beside the other three, where a press is a control and not one more number on a reading bar. The
+# `wt` reading itself is unchanged: `wt_plan` and `wt_count` answer the accordion exactly as they answered the block.
+# One block is one token: `landed PR #73 2h ago`, `gate full pass 10m ago`. A block's inner ` · ` was the same glyph as the
+# separator between blocks, so seven blocks read as twelve tokens with no grouping -- the whole line read as cramped. Inside a
+# block the separator is now drawn by the page (a dimmed `.sep` span) and a fact that is two parts is two tokens the eye binds
+# by one colour, never by a dot the eye cannot tell from the row's own. An age reads one rung (`2h`, `16h`, `3d`): a second rung
+# is a precision no reader acts on, and the exact span of a fact is in its tooltip. The one fact that needs a second number to
+# interpret -- the sha the gate ran at -- is on the line's block as a tooltip, which is how a fact is MOVED and never lost.
 # One fact earned the line after that list was drawn, and it earns it by (b) alone (subscriptions, #1839): one token per
 # subscription — `CL 42% 3h 20m`, the acronym, the quota the provider's own CLI reports and the time to its reset, in
 # SUBS' order. A plan at 100% is exactly the reading that says the squad will stall while every other fact here still
 # looks busy, and it is the one the operator acts on within the minute — the plan, not the loop.
-# The fact an operator waiting on the queue asks first earns the line the same way (#87): `last landing · PR #73 2h 14m ago`,
+# The fact an operator waiting on the queue asks first earns the line the same way (#87): `landed PR #73 2h ago`,
 # the newest merged pull request the board pass has read — its number is the landing and its merge time the age. Delivery
 # is a pull request (#75), so the merge is the landing; it reads the rows the board pass already holds, so no log line is
 # parsed and no GitHub call is made. The `auto/fork-<n>-<sha9>` marker is NOT read: a marker outlives the landing it named,
@@ -694,14 +703,15 @@ WT_PLAN_SECS = 15 * 60
 # A cleanup pass asked for by hand: the same pass the loop makes every third cycle takes ~17 s, so a minute is generous and
 # an answer that never comes is reported as no answer rather than held open by the page.
 WT_CLEAN_SECS = 60
-# Every block of the line reads in its own palette colour, so six facts are told apart at a glance without a character
-# more on the row (#1843). The five colours that are not a state signal are the hub's own variables, and six blocks
-# means the two ends share one — neighbours are what must never collide. The tone a value earns is NOT a block colour:
-# `ok`, `warn` and `err` stay the load strip's alone, so a block colour can never say the value underneath it is fine.
+# Every block of the line reads in its own palette colour, so the facts are told apart at a glance without a character
+# more on the row (#1843). The colours that are not a state signal are the hub's own variables — neighbours are what must
+# never collide. The tone a value earns is NOT a block colour: `ok`, `warn` and `err` stay the load strip's alone, so a
+# block colour can never say the value underneath it is fine. `wt` and `occ` left the line (#455); their colours left with
+# them, and a block that is no longer drawn carries no palette entry to drift.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none", "wt": "mute", "occ": "mute",
-                     "quota": "none", "subs": "run"}  # subs last, and teal again: it shares with landing, which is not its neighbour
+FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none",
+                     "quota": "none", "subs": "run"}  # subs last, and teal: it shares with landing, which is not its neighbour
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
 FORK_MARKER = re.compile(r"fork-(\d+)-([0-9a-f]{7,40})")   # the close pass's marker, the name janitor.py's rule P reads
@@ -716,39 +726,40 @@ def limited_until(txt, now=None):
     return t if t > (time.time() if now is None else now) else None
 
 def _rel_span(x):
-    """A span in the page's own `rel()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth."""
+    """A span in the page's own `rel()` shape: `3d 2h`, `2h 14m`, `5m` — the same three rungs, never a fourth. A countdown
+    keeps them: the reader plans by the reset time, and the page's subscription panel draws the same span. An AGE does not
+    (`_age`): three rungs on `16h 13m ago` is a precision nobody reads across the room."""
     d, h, m = int(x // 86400), int(x % 86400 // 3600), int(x % 3600 // 60)
     return f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
 
+def _age(x):
+    """An age at one rung, the page's own `age()` rounded the same way, plus the day rung the row needs: `40s`, `12m`, `16h`,
+    `3d`. The page rounds half up (`Math.round`), so the two ends of the same fact never disagree."""
+    s = max(int(x), 0)
+    return f"{s}s" if s < 90 else (f"{int(s / 60 + 0.5)}m" if s < 5400 else (f"{int(s / 3600 + 0.5)}h" if s < 172800 else f"{int(s / 86400 + 0.5)}d"))
+
 def _landing_parts(ld, now):
-    """`last landing` and `PR #73 2h 14m ago`: the number of the newest merged pull request and the age of its merge.
-    No merge, or one whose number or time cannot be read, is `?` in the neutral tone — never a landing that did not happen.
-    The number is named as a pull request, because the row it comes from is one: a bare `#73` reads as an issue, and the
-    issue is not what landed."""
-    if not isinstance(ld, dict): return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
+    """`landed PR #73 2h ago`: one token — the newest merged pull request, named as a pull request because the row it comes
+    from is one (a bare `#73` reads as an issue, and the issue is not what landed), and the age of its merge at one rung.
+    No merge, or one whose number or time cannot be read, is `landed ?` in the neutral tone — never a landing that did not happen."""
+    if not isinstance(ld, dict): return [{"text": "landed ?", "tone": FOOT_NEUTRAL}]
     n, ts = ld.get("issue"), ld.get("ts")
     if isinstance(n, bool) or not isinstance(n, int) or isinstance(ts, bool) or not isinstance(ts, (int, float)):
-        return [{"text": "last landing ?", "tone": FOOT_NEUTRAL}]
-    return [{"text": "last landing", "tone": ""}, {"text": f"PR #{n} {_rel_span(max(now - ts, 0.0))} ago", "tone": ""}]
+        return [{"text": "landed ?", "tone": FOOT_NEUTRAL}]
+    return [{"text": f"landed PR #{n} {_age(max(now - ts, 0.0))} ago", "tone": ""}]
 
 def _gate_parts(g, now):
-    """`gate fast pass 0123456 4m ago`: the latest gate the loop ran (fast for a tip or a wave entry, full for a promotion to
-    stg), its result, the sha it ran at and its age. A pass reads in the ok tone and a fail in the err tone; a line the hub
-    cannot read is `gate ?` in the neutral tone, never a pass. No reading at all draws no block."""
+    """`gate fast pass 4m ago`: the latest gate the loop ran (fast for a tip or a wave entry, full for a promotion to stg),
+    its result and its age. A pass reads in the ok tone and a fail in the err tone; a line the hub cannot read is `gate ?` in
+    the neutral tone, never a pass. No reading at all draws no block.
+    The sha it ran at is the block's tooltip: a sha is matched against a list, never read across the room, so it is a second
+    number that has to be carried and not displayed — moved, never lost (the section's rule (b))."""
     if g is None: return []
     ok = isinstance(g, dict) and g.get("result") in ("pass", "fail") and g.get("kind") and g.get("sha") \
         and isinstance(g.get("ts"), (int, float)) and not isinstance(g.get("ts"), bool)
     if not ok: return [{"text": "gate ?", "tone": FOOT_NEUTRAL}]
-    text = f"gate {g['kind']} {g['result']} {str(g['sha'])[:7]} {_rel_span(max(now - g['ts'], 0.0))} ago"
-    return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err"}]
-
-def _occ_fact(occ, caps):
-    """`4/10 runs 7/20 agents` against the machine-wide ceiling `loop_caps()` resolves, never a hard-coded pair. With no
-    resolution there is no fraction to read, so the fact is `?` rather than a count that needs a denominator from somewhere else."""
-    if not isinstance(occ, dict) or not isinstance(caps, dict): return "?"
-    mp, mc = caps.get("runs"), caps.get("children")
-    if not isinstance(mp, int) or not isinstance(mc, int): return "?"
-    return f"{occ.get('live', 0)}/{mp} runs {occ.get('agents', 0)}/{mc} agents"
+    text = f"gate {g['kind']} {g['result']} {_age(max(now - g['ts'], 0.0))} ago"
+    return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}]
 
 def _quota_fact(q, now, subs=None):
     """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
@@ -808,12 +819,16 @@ def _subs_fact(subs, now):
     """The subs block as one string: its parts in the order they are read, which is the text the line carries."""
     return FOOT_SEP.join(p["text"] for p in _subs_parts(subs, now))
 
-def _fact(key, text, bad=False, parts=None, act=None):
+def _fact(key, text, bad=False, parts=None, tip=None):
     """One block of the line (#1843): its text, its own palette colour, and the parts it paints. A block with no parts
     of its own is the single part its text already is, with no tone — so the block's colour stands for the whole value.
     A part whose own reading earns a tone keeps it on top of that colour, which is how the block still says WHICH fact
-    it is while the value says whether it is the bad one. `act` names the one press the block answers to, or None."""
-    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "act": act,
+    it is while the value says whether it is the bad one.
+    `tip` is what the block does not say out loud but must not lose: a second number (the sha a gate ran at), read on
+    hover. It is how a fact is MOVED off a reading bar and never deleted from it. A block carries no press of its own
+    since the worktree count left the line (#455): the line is a reading, and the one control it held sits in the
+    accordion the count moved to, beside the other three."""
+    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "tip": tip,
             "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
 # --- the worktrees the loop holds open: what its child checkouts cost, at a glance, without a git call.
@@ -843,12 +858,15 @@ def _wt_plan():
     return d
 
 
-def _wt_fact(n):
-    """`wt 3` — the count of open child worktrees; `wt 10/21` — of the 21 the last pass saw, the 10 it freed. The block
-    draws nothing when neither reading exists."""
-    if isinstance(n, int): return f"wt {n}"
-    if isinstance(n, dict): return f"wt {n['cleanable']}/{n['total']}"
-    return ""
+def wt_parts(w):
+    """What the left pane's worktrees accordion draws (#455): `4` — the open child checkouts; `10/21` — the tally the last
+    cleanup pass left, of the 21 it saw, the 10 it freed — and the sentence that reads the tally. The count left the footer
+    for this accordion, so the reading and its wording are the hub's here too: the page renders what it is served, it holds
+    no rule of its own (ADR-0137). Neither reading is an empty count, and the accordion draws no number."""
+    if isinstance(w, dict):
+        return {"text": f"{w['cleanable']}/{w['total']}", "tip": f"the last cleanup pass saw {w['total']} and freed {w['cleanable']}"}
+    if isinstance(w, int): return {"text": str(w), "tip": "child worktrees the loop holds open"}
+    return {"text": "", "tip": ""}
 
 
 def wt_clean():
@@ -909,35 +927,38 @@ def _burn_row(r):
     return ":".join(parts) + " " + _tok(r["tokens"])
 
 def _burn_fact(b):
-    """`tokens high (limit 5M/24h): …9f6b30:route.router.1 16.9M +17` when the script says `over`; empty otherwise. The
+    """`tokens >5M/24h: …9f6b30:route.router.1 16.9M +17` when the script says `over`; empty otherwise. The
     order and the comparison are the script's, never this line's. The block is capped: it names what fits, at least one
     burner, never more than BURN_SHOWN, counts the rest, and is cut at BURN_MAX_CHARS — the footer drops whole blocks when
-    the line is too wide, so a block that never ends would empty the line it is the first fact of (#446)."""
+    the line is too wide, so a block that never ends would empty the line it is the first fact of (#446).
+    The head names the threshold it crossed as a comparison, `>5M/24h`, one clause with no parenthesis to parse; the block's
+    own colour already says the reading is high, so the word `high` is only the fallback when no threshold was read."""
     if not isinstance(b, dict) or b.get("over") is not True: return ""
     rows = [x for x in (b.get("burners") or []) if isinstance(x, dict) and x.get("consumer") and isinstance(x.get("tokens"), (int, float))]
     if not rows: return ""
-    lim = f" (limit {_tok(b['threshold'])}/{b.get('window_hours', BURN_HOURS)}h)" if isinstance(b.get("threshold"), (int, float)) else ""
-    head, plain = f"tokens high{lim}: ", [_burn_row(x) for x in rows]
+    lim = f">{_tok(b['threshold'])}/{b.get('window_hours', BURN_HOURS)}h" if isinstance(b.get("threshold"), (int, float)) else "high"
+    head, plain = f"tokens {lim}: ", [_burn_row(x) for x in rows]
     for n in range(min(BURN_SHOWN, len(plain)), 0, -1):
         rest = len(plain) - n
         text = head + ", ".join(plain[:n]) + (f" +{rest}" if rest > 0 else "")
         if len(text) <= BURN_MAX_CHARS: return text
     return (head + plain[0])[:BURN_MAX_CHARS - 1].rstrip() + "…"
 
-def foot_items(src, caps=None, now=None):
+def foot_items(src, now=None):
     """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a
     subscription token carries the tone its own consumption earns, so the block is never painted as one value (#1843).
     The loop's own health and its last progress were dropped from the line by the owner: the line is a machine reading,
-    and both said as much about the loop's mood as about the machine."""
+    and both said as much about the loop's mood as about the machine. The worktree count and the occupancy pair left it the
+    same way, and each is drawn one screen away — the WORKERS header and the left pane's fourth accordion (#1797, #455):
+    `foot_sources` still reads the worktree count for that accordion, and answers this line with what is left."""
     now = time.time() if now is None else now
     src = src or {}
     land = _landing_parts(src.get("landing"), now)
     gate = _gate_parts(src.get("gate"), now)
     items = [_fact("burn", _burn_fact(src.get("burn")), bad=True),
              _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
-             _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate), parts=gate or None),
-             _fact("wt", _wt_fact(src.get("wt")), act="wtclean" if src.get("wt") is not None else None),
-             _fact("occ", _occ_fact(src.get("occ"), caps)),
+             _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate),
+                   parts=gate or None, tip=(gate[0].get("tip") if gate else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
              # subs last, so a narrow window drops the block whole
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
@@ -951,7 +972,6 @@ def foot_line(items):
 # loop's own markers and `cycle.log` (a verdict, a land, a dispatch, a board move), the caps graph, the pair `health.sh`
 # writes, and the markers the review chain skips models over. Reading them is a few small files in the sampler thread
 # that already runs: no source here costs a query, a `ps` or a GitHub call.
-FOOT_ROWS = {"live": None, "agents": None, "asof": 0.0}   # what the `runs()` pass the page already polls saw
 
 def _read(p):
     try: return pathlib.Path(p).read_text(errors="ignore")
@@ -992,13 +1012,13 @@ def _newest_mtime(*paths):
 
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
-    so one unreadable file costs one `?` and never the rest of the line."""
+    so one unreadable file costs one `?` and never the rest of the line.
+    The worktree count is read here and drawn in the left pane's fourth accordion (#455): one pass serves both, so the
+    accordion costs no second reading of the same directory."""
     now = time.time() if now is None else now
-    out = {"landing": _last_landing(), "gate": _gate_status(), "wt": _wt_plan() or _wt_count(), "occ": None,
+    out = {"landing": _last_landing(), "gate": _gate_status(), "wt": _wt_plan() or _wt_count(),
            "quota": {"codex": limited_until(_read(SHARED / "codex-limited"), now),
                      "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
-    if FOOT_ROWS.get("live") is not None:
-        out["occ"] = {"live": FOOT_ROWS["live"], "agents": FOOT_ROWS["agents"] or 0}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["burn"] = burn_cached(now)
     out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
@@ -1006,14 +1026,18 @@ def foot_sources(now=None):
 
 def foot_refresh(now=None):
     """One pass of the footer's sources, kept where the page serves it from: the sampler thread calls this, so the line
-    can never be written from a figure the loop has stopped refreshing. A failed pass keeps the last good facts."""
-    LOAD_STATE["facts"] = foot_items(foot_sources(now), loop_caps(), now)
+    can never be written from a figure the loop has stopped refreshing. A failed pass keeps the last good facts.
+    The worktree reading of the same pass is kept beside the facts, for the accordion that draws it (#455)."""
+    src = foot_sources(now)
+    LOAD_STATE["facts"] = foot_items(src, now)
+    LOAD_STATE["wt"] = wt_parts(src.get("wt"))
     return LOAD_STATE["facts"]
 
 def load_payload():
     """What /api/load serves: the cached reading, never a fresh one, so three open tabs cost three JSON bodies and no
     sample. `cpu` is the newest reading, `warn` is the two-sample rule over the history, `runs` the shares the cards use,
-    `facts` the footer's own facts as the sampler last read them. The three numbers are the readings themselves, unrounded
+    `facts` the footer's own facts as the sampler last read them, and `wt` the worktree reading the left pane's accordion
+    draws from the same pass (#455). The three numbers are the readings themselves, unrounded
     (#1816): the page builds the cells from them, so the text rounds for display while the ceiling rule judges the reading."""
     hist = LOAD_STATE.get("cpu") or []
     cpu = hist[-1] if hist else None
@@ -1021,7 +1045,7 @@ def load_payload():
             "cpu": cpu,
             "ram": LOAD_STATE.get("ram"), "gpu": LOAD_STATE.get("gpu"),
             "warn": sustained(hist), "runs": dict(LOAD_STATE.get("runs") or {}),
-            "facts": list(LOAD_STATE.get("facts") or []),
+            "facts": list(LOAD_STATE.get("facts") or []), "wt": LOAD_STATE.get("wt"),
             "secs": LOAD_SAMPLE_SECS, "asof": LOAD_STATE.get("asof", 0.0)}
 
 def load_sampler():
@@ -1090,8 +1114,6 @@ def runs():
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
         out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
-    n_live, n_agents = foot_occupancy(out)   # the same rows the left pane groups
-    FOOT_ROWS.update(live=n_live, agents=n_agents, asof=time.time())
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
     return out
@@ -1998,9 +2020,10 @@ body.dockb .sec>.ch{cursor:pointer;border-top:1px solid #2dd4bf33}body.dockb .se
 .hidbar .hidsep{border-top:1px solid var(--line);margin:3px 0 1px}   /* the divider the auto-hidden columns sit under: below everything the user hid (#1809) */
 .hidbar .hidline{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:0 2px 0 6px;border-left:2px solid var(--cc,var(--mute));color:#6f7987;font-weight:400}   /* a column hidden because it is empty, not because the user asked: no chip fill and a dimmer text than the chip's #939cab, with a 2px tick in the column's own colour -- the value the header's dot carries (#1793) -- so the two kinds are never confusable at a glance (#1809) */
 iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-height:0}
-#foot{flex:none;display:flex;gap:8px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
+#foot{flex:none;display:flex;gap:10px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}#foot.warn b.ldred{color:var(--err)}#foot b.ldred{color:var(--err)}
-#ldfacts{margin-left:14px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}
+#ldfacts{margin-left:20px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}#ldfacts .sep{margin:0 3px;color:#4b5563}
+.wtrow{display:flex;align-items:center;gap:6px;margin-top:6px}#wtb{color:var(--mute)}#wtmsg{color:var(--mute)}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
 </style>
 <div id=win>
@@ -2008,6 +2031,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
 <details id=mdl class=sp><summary>squad models<span class=sr id=mdsr></span></summary><div class=sb id=mbody></div></details>
 <details id=stats class=sp><summary>cost &amp; usage<span class=sr id=stsr></span></summary><div class=sb><h4>Spend <span class=row id=src title="all = plans + API. plans = Claude, Grok, GPT and Gemini. API = every other model (deepseek…) and calls that name no model. Figures at API list prices (API-equivalent)."></span></h4><div class=tot id=tot></div><div class=cash id=cash></div><h4>Spend over time <span class=row id=per></span></h4><div id=chart></div><div id=kpi></div><div id=open></div><h4>Tokens by model <small class=m id=piet>all time</small></h4><div id=pie></div></div></details>
+<details id=wts class=sp><summary title="the child worktrees the loop holds open under its checkout">worktrees<span class=sr id=wtsr></span></summary><div class=sb><div id=wtb></div><div class=wtrow><button id=wtcl title="run one cleanup pass now: the loop's own wtclean.sh holds the rules, so the press frees exactly what the count above names">clean now</button><span id=wtmsg></span></div></div></details>
 <div id=list></div>
 </div>
 <div id=main></div>
@@ -2076,27 +2100,38 @@ function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" �
 // serves already carries it. The tone is decided where the number is — the hub serves it — never here:
 const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
 function footParts(i){return (i.parts||[{text:i.text}]).map(p=>FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text)).join(" · ")}
-function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`;return i.act?`<span class="fac${wtBusy?" busy":""}" data-act="${esc(i.act)}" role=button tabindex=0 title="Run one cleanup pass now: the loop's own wtclean.sh holds the rules, so the press frees exactly what this block counted">${s}</span>`:s}
-// The `wt` block answers one press. The press runs the loop's own pass and never a second rule of the page's, so what it
-// frees is what the block counted. The block says it is busy while it runs; the pass's own lines are reported beside it.
+function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`;return i.tip?`<span title="${esc(i.tip)}">${s}</span>`:s}
+// The worktrees accordion (#455), where the count and its one press moved off the footer line: the hub serves the count
+// and the sentence that reads the tally, and the press runs the loop's own pass, so what it frees is what the count named.
+// The button says it is busy while the pass runs; the pass's own lines are reported beside it.
 let wtBusy=false,wtTimer=null;
-function wtSay(txt,bad){const f=$("#foot");if(!f)return;let e=$("#wtmsg");
- if(!e){e=document.createElement("span");e.id="wtmsg";f.appendChild(e)}
- e.textContent=" "+txt;e.style.color=bad?"var(--err)":"var(--mute)"}
-async function wtClean(el){if(wtBusy)return;wtBusy=true;if(el)el.classList.add("busy");
+function wtDraw(w){const s=$("#wtsr"),b=$("#wtb");if(s)s.textContent=(w&&w.text)||"";if(b)b.textContent=(w&&w.tip)||""}
+function wtSay(txt,bad){const e=$("#wtmsg");if(!e)return;e.textContent=txt;e.style.color=bad?"var(--err)":"var(--mute)"}
+async function wtClean(){if(wtBusy)return;const b=$("#wtcl");wtBusy=true;if(b)b.disabled=true;
  try{const d=await (await fetch("/api/wtclean",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})).json();
   if(d.err)wtSay("cleanup refused: "+d.err,true);
   else wtSay(d.cleaned.length?"cleanup freed "+d.cleaned.length+": "+d.cleaned.map(l=>l.replace(/^WT CLEAN \S+ /,"")).join(", "):"cleanup freed nothing");
   await loadPoll()}
  catch(e){wtSay("cleanup did not answer: "+e.message,true)}
- finally{wtBusy=false;const b=document.querySelector("[data-act=wtclean]");if(b)b.classList.remove("busy");
-  clearTimeout(wtTimer);wtTimer=setTimeout(()=>{const m=$("#wtmsg");if(m)m.remove()},20000)}}
-function footCols(){const f=$("#foot"),l=$("#ldline");if(!f||!l||!f.clientWidth)return 1e9;
- const cs=getComputedStyle(f),w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
- return Math.max(0,Math.floor((f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-w-8)*n/w))}
+ finally{wtBusy=false;if(b)b.disabled=false;
+  clearTimeout(wtTimer);wtTimer=setTimeout(()=>{const m=$("#wtmsg");if(m)m.textContent=""},20000)}}
+// The facts' own width budget: what the bar has left after the `load` label, the three cells, their gaps and the facts'
+// own margin. The line drops whole blocks when it is too narrow, so a budget that promises more room than the bar has
+// would let one block run past the window instead of dropping.
+function footCols(){const f=$("#foot"),l=$("#ldline"),x=$("#ldfacts");if(!f||!l||!f.clientWidth)return 1e9;
+ const cs=getComputedStyle(f),xcs=x?getComputedStyle(x):null,gap=parseFloat(cs.columnGap||cs.gap||"0")||0;
+ let used=0;for(const c of f.children)if(c!==x)used+=c.getBoundingClientRect().width;
+ const avail=f.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight)-used-gap*Math.max(f.children.length-1,0)
+   -(xcs?parseFloat(xcs.marginLeft)||0:0)-8;
+ const w=l.getBoundingClientRect().width,n=Math.max((l.textContent||"").length,1);
+ return Math.max(0,Math.floor(avail*n/w))}
+// The row: the blocks the bar has room for, joined by a separator the page DRAWS — a dimmed span with its own margin,
+// never the ` · ` a block carries between its own parts. The two were the same glyph, so blocks ran together; the drawn
+// one is a different thing to the eye, and it is narrower than the ` · ` the fit counts, so the row never overflows.
+const FOOT_SEP_HTML='<span class=sep>&middot;</span>';
 function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
- if(f){f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(" · ")
-  f.querySelectorAll("[data-act]").forEach(e=>{e.onclick=()=>wtClean(e);e.onkeydown=ev=>{if(ev.key===" "||ev.key==="Enter"){ev.preventDefault();wtClean(e)}}})}}
+ if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(FOOT_SEP_HTML);
+ wtDraw(d.wt)}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
 function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
@@ -2214,8 +2249,8 @@ $("#mbody").addEventListener("click",async e=>{const t=e.target.closest("button"
  else if(t.id==="mrv")mdl=JSON.parse(mdlSrv);
  else if(t.id==="msv"){try{const r=await fetch("/api/models",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(mdl)}),d=await r.json();if(d.err)mdlMsg="!"+d.err;else{mdl=d;mdlSrv=JSON.stringify(d);mdlMsg="saved · new runs use it"}}catch(x){mdlMsg="!save failed"}}
  mdlRender()});
-/* accordions: each of the three answers its own header and leaves the others alone; the open set is stored like the pins */
-const ACC=["plans","stats","mdl"];
+/* accordions: each of the four answers its own header and leaves the others alone; the open set is stored like the pins */
+const ACC=["plans","stats","mdl","wts"];
 let openAcc=new Set(Array.isArray(ls.acc)?ls.acc.filter(i=>ACC.includes(i)):[]);   // the old single-id string is ignored, not trusted, and not fatal
 const saveAcc=()=>{ls.acc=[...openAcc];save()};
 ACC.forEach(i=>{const e=$("#"+i);e.open=openAcc.has(i);e.addEventListener("toggle",()=>{if(e.open)openAcc.add(i);else openAcc.delete(i);saveAcc();if(i==="mdl"&&e.open)mdlLoad()})});mdlLoad();
@@ -2279,6 +2314,7 @@ async function pollStats(){try{pollSubs();
 pollStats();setInterval(pollStats,30000);
 poll();setInterval(poll,3000);
 loadPoll();setInterval(loadPoll,LOAD_MS);   // the window owns the reading: one timer and one /api/load per tick, whatever else the page renders
+$("#wtcl").onclick=wtClean;   // the accordion's one control: the cleanup pass the count beside it names
 const bo=ls.bo||{},saveB=()=>{ls.bo=bo;localStorage.hub=JSON.stringify({...ls,pins:[...pins],q,per,bo})};
 bo.dock="bottom";   // the board always docks at the bottom
 if(bo.max)bo.off=false;else if(bo.off)bo.max=false;   // both controls live in one saved record, so a reload can never bring back a board that is maximized and collapsed at once

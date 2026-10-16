@@ -29,24 +29,27 @@ def hub():
 def _gate(hub, **over):
     src = {"occ": {"live": 1, "agents": 1}, "quota": {"codex": None, "agy": None},
            "gate": {"kind": "fast", "result": "pass", "sha": SHA, "ts": NOW - 240} | over}
-    return [i for i in hub.foot_items(src, {"runs": 10, "children": 20}, NOW) if i["key"] == "gate"]
+    return [i for i in hub.foot_items(src, NOW) if i["key"] == "gate"]
 
 
-def test_a_passing_gate_reads_kind_result_sha_and_age(hub):
+def test_a_passing_gate_reads_kind_result_and_age_with_the_sha_on_the_tooltip(hub):
+    """#455: the sha is a second number the reader matches against a list, never one read across the room, so it is the
+    block's tooltip — MOVED off the row, never lost."""
     (fact,) = _gate(hub)
-    assert fact["text"] == "gate fast pass 0123456 4m ago"
+    assert fact["text"] == "gate fast pass 4m ago"
+    assert fact["tip"] == "ran at 0123456"
     assert not fact["bad"]
 
 
 def test_a_red_full_gate_reads_in_the_error_tone(hub):
     (fact,) = _gate(hub, kind="full", result="fail")
-    assert fact["text"] == "gate full fail 0123456 4m ago"
+    assert fact["text"] == "gate full fail 4m ago" and fact["tip"] == "ran at 0123456"
     assert any(p["tone"] == "err" for p in fact["parts"])
 
 
 def test_no_gate_reading_draws_no_block(hub):
     src = {"occ": {"live": 1, "agents": 1}, "quota": {"codex": None, "agy": None}}
-    assert [i["key"] for i in hub.foot_items(src, {"runs": 10, "children": 20}, NOW) if i["key"] == "gate"] == []
+    assert [i["key"] for i in hub.foot_items(src, NOW) if i["key"] == "gate"] == []
 
 
 def test_a_line_the_hub_cannot_read_is_a_question_mark_never_a_pass(hub):

@@ -472,37 +472,40 @@ CAPS = {"runs": 10, "children": 20}
 def _src(**over):
     """One reading of every source, all readable, so a test can break exactly one of them."""
     base = {"landing": {"issue": 73, "ts": NOW - (2 * 3600 + 14 * 60)},
-            "occ": {"live": 4, "agents": 7}, "quota": {"codex": None, "agy": None}}
+            "quota": {"codex": None, "agy": None}}
     return {**base, **over}
 
 
-def _facts(hub, src=None, caps=CAPS):
-    return [i["text"] for i in hub.foot_items(src or _src(), caps, NOW)]
+def _facts(hub, src=None):
+    return [i["text"] for i in hub.foot_items(src or _src(), NOW)]
 
 
 def test_the_facts_follow_the_load_cells_in_this_order(hub):
     reset = time.mktime((2026, 10, 11, 14, 20, 0, 0, 0, -1))                 # the reset the marker names: the subs block carries it
-    items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), CAPS, NOW)
-    assert [i["key"] for i in items] == ["landing", "occ", "subs"]
-    assert hub.foot_line(items) == ("last landing · PR #73 2h 14m ago · "
-                                    "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
-    assert [i["bad"] for i in items] == [False] * 3
+    items = hub.foot_items(_src(quota={"codex": None, "agy": reset}), NOW)
+    assert [i["key"] for i in items] == ["landing", "subs"]
+    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
+    assert [i["bad"] for i in items] == [False] * 2
 
 
-def test_occupancy_reads_the_resolved_ceiling_and_never_a_hard_coded_pair(hub):
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), {"runs": 3, "children": 40})[1] \
-        == "4/3 runs 7/40 agents"                                            # the ceiling comes from the caps resolution, not from 10/20
-    assert _facts(hub, _src(occ={"live": 4, "agents": 7}), None)[1] == "?"
-    assert _facts(hub, _src(occ=None))[1] == "?"
+def test_the_occupancy_pair_and_the_worktree_count_carry_no_block_of_their_own(hub):
+    """#455: the occupancy pair repeated the WORKERS header one screen above, and the worktree count with its one press
+    belongs beside the other three accordions. Both left the line, so neither may be drawn on it again. The header's own
+    readings are guarded in `test_hub_occupancy_header.py`, so the rule did not leave with the block."""
+    keys = [i["key"] for i in hub.foot_items(_src(occ={"live": 4, "agents": 7}, wt=3), NOW)]
+    assert keys == ["landing", "subs"] and "occ" not in keys and "wt" not in keys
+    line = hub.foot_line(hub.foot_items(_src(occ={"live": 4, "agents": 7}, wt=3), NOW))
+    assert "runs" not in line and "agents" not in line and "wt" not in line, line
+    assert "runs" not in hub.FOOT_BLOCK_COLORS and "wt" not in hub.FOOT_BLOCK_COLORS   # the palette left with the blocks
 
 
 def test_the_bar_carries_no_drift_fact(hub):
-    """The bar shows what an operator acts on: the last landing, the occupancy and the quotas. The board-versus-runs drift
-    is a cause of the loop's own health pass, never a fact of the bar (#48)."""
-    for s in [_src(occ={"live": 9, "agents": 1})]:
-        line = hub.foot_line(hub.foot_items(s, CAPS, NOW))
+    """The bar shows what an operator acts on: the last landing, the gate, the burn and the quotas. The board-versus-runs
+    drift is a cause of the loop's own health pass, never a fact of the bar (#48)."""
+    for s in [_src()]:
+        line = hub.foot_line(hub.foot_items(s, NOW))
         assert "drift" not in line, line
-    assert [i["key"] for i in hub.foot_items(_src(), CAPS, NOW)] == ["landing", "occ", "subs"]
+    assert [i["key"] for i in hub.foot_items(_src(), NOW)] == ["landing", "subs"]
 
 
 def test_only_the_limited_quota_markers_are_named_each_with_its_reset(hub):
@@ -522,7 +525,7 @@ def test_a_marker_the_subs_block_already_carries_is_not_named_twice(hub):
     assert hub._quota_fact({"codex": reset, "agy": reset}, NOW) == ""
     assert hub._quota_fact({"codex": reset, "agy": reset}, NOW, subs=("claude", "gpt")) == "agy reset 14:20"
     assert hub._quota_fact({"codex": None, "agy": None}, NOW, subs=("gemini",)) == "codex ok"
-    items = hub.foot_items(_src(quota={"codex": reset, "agy": reset}), CAPS, NOW)
+    items = hub.foot_items(_src(quota={"codex": reset, "agy": reset}), NOW)
     assert "quota" not in [i["key"] for i in items]                          # an empty block draws no lone `·`
     assert " ·  · " not in hub.foot_line(items) and "codex" not in hub.foot_line(items)
     assert "quota" in hub.FOOT_BLOCK_COLORS                                   # the colour waits for the day a marker returns
@@ -536,12 +539,11 @@ def test_a_quota_marker_counts_only_while_the_time_it_names_is_ahead(hub):
 
 
 def test_one_unreadable_source_shows_a_question_mark_and_leaves_the_rest_intact(hub):
-    line = hub.foot_line(hub.foot_items(_src(occ=None), CAPS, NOW))
-    assert line == ("last landing · PR #73 2h 14m ago · ? · "
-                    "CL ? · GK ? · GPT ? · GEM ?")
-    # The worktree count was never read here, so its block draws nothing (only `foot_sources` reads it).
-    assert hub.foot_line(hub.foot_items({"occ": None, "quota": {"codex": "?", "agy": None}}, None, NOW)) \
-        == "last landing ? · ? · CL ? · GK ? · GPT ? · GEM ?"
+    line = hub.foot_line(hub.foot_items(_src(landing=None), NOW))
+    assert line == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
+    # a source this reading does not carry at all draws no block of its own, and the landing still says `?`
+    assert hub.foot_line(hub.foot_items({"quota": {"codex": "?", "agy": None}}, NOW)) \
+        == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path, monkeypatch):
@@ -553,13 +555,14 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     monkeypatch.setattr(hub, "SHARED", shared)
     src = hub.foot_sources(now)
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
-    facts = hub.foot_line(hub.foot_items(src, {"runs": 10, "children": 20}, now))
+    assert src["wt"] == 0                                           # the worktree count is read here for the accordion (#455)
+    facts = hub.foot_line(hub.foot_items(src, now))
     assert "drift" not in facts and "agy" not in facts
-    assert "last landing ?" in facts                                # no merged PR read: no landing to name
+    assert "landed ?" in facts                                      # no merged PR read: no landing to name
     monkeypatch.setattr(hub, "STATE", tmp_path / "nothing-here")               # a state dir with none of these files
     monkeypatch.setattr(hub, "SHARED", tmp_path / "nothing-here")              # and a shared dir with no limit marker
-    assert hub.foot_line(hub.foot_items(hub.foot_sources(now), None, now)) \
-        == "last landing ? · wt 0 · ? · CL ? · GK ? · GPT ? · GEM ?"
+    assert hub.foot_line(hub.foot_items(hub.foot_sources(now), now)) \
+        == "landed ? · CL ? · GK ? · GPT ? · GEM ?"
 
 
 def _iso(ts):
@@ -578,11 +581,11 @@ def test_the_last_landing_is_the_newest_merged_pull_request(hub, monkeypatch):
     now = time.time()
     monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(42, 5 * 3600, now)]})
     assert hub.foot_sources(now)["landing"] == {"issue": 42, "ts": pytest.approx(now - 5 * 3600, abs=2)}
-    assert "last landing · PR #42 5h 0m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    assert "landed PR #42 5h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), now))
     monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(42, 5 * 3600, now),
                                                       _landed_row(73, 2 * 3600 + 14 * 60, now)]})
     assert hub.foot_sources(now)["landing"]["issue"] == 73                      # the newest merge wins
-    assert "last landing · PR #73 2h 14m ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    assert "landed PR #73 2h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), now))
 
 
 def test_a_closed_pull_request_that_never_merged_is_not_a_landing(hub, monkeypatch):
@@ -590,10 +593,10 @@ def test_a_closed_pull_request_that_never_merged_is_not_a_landing(hub, monkeypat
     now = time.time()
     monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(12, 60, now, merged=False)]})
     assert hub.foot_sources(now)["landing"] is None
-    assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    assert "landed ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), now))
     monkeypatch.setattr(hub, "board_cache", {"landed": [_landed_row(12, 60, now, merged=False),
                                                       _landed_row(9, 3 * 86400 + 2 * 3600, now)]})
-    assert "last landing · PR #9 3d 2h ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    assert "landed PR #9 3d ago" in hub.foot_line(hub.foot_items(hub.foot_sources(now), now))
 
 
 def test_a_merge_time_the_hub_cannot_read_is_not_a_landing(hub, monkeypatch):
@@ -601,20 +604,30 @@ def test_a_merge_time_the_hub_cannot_read_is_not_a_landing(hub, monkeypatch):
     monkeypatch.setattr(hub, "board_cache", {"landed": [{"n": 7, "t": "landing", "c": "soon", "m": True, "r": "o/r"},
                                                       {"n": 8, "t": "landing", "m": True, "r": "o/r"}]})
     assert hub.foot_sources(now)["landing"] is None
-    assert "last landing ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), CAPS, now))
+    assert "landed ?" in hub.foot_line(hub.foot_items(hub.foot_sources(now), now))
 
 
 def test_no_marker_reads_a_question_mark_in_the_neutral_tone_never_a_landing(hub):
     for src in (_src(landing=None), _src(landing={"issue": 73}), _src(landing={"issue": 73, "ts": "soon"}),
                 _src(landing={"ts": NOW - 60})):
-        item = [i for i in hub.foot_items(src, CAPS, NOW) if i["key"] == "landing"][0]
-        assert item["text"] == "last landing ?" and item["bad"] is False, src
+        item = [i for i in hub.foot_items(src, NOW) if i["key"] == "landing"][0]
+        assert item["text"] == "landed ?" and item["bad"] is False, src
         assert [p["tone"] for p in item["parts"]] == [hub.FOOT_NEUTRAL]
-    item = [i for i in hub.foot_items(_src(), CAPS, NOW) if i["key"] == "landing"][0]
-    assert item["text"] == "last landing · PR #73 2h 14m ago" and item["bad"] is False
-    assert [p["text"] for p in item["parts"]] == ["last landing", "PR #73 2h 14m ago"]
-    assert [p["tone"] for p in item["parts"]] == ["", ""]                      # the block's colour stands for the value
+    item = [i for i in hub.foot_items(_src(), NOW) if i["key"] == "landing"][0]
+    assert item["text"] == "landed PR #73 2h ago" and item["bad"] is False
+    assert [p["text"] for p in item["parts"]] == ["landed PR #73 2h ago"]      # one token: the age is one rung, not three
+    assert [p["tone"] for p in item["parts"]] == [""]                          # the block's colour stands for the value
     assert hub.FOOT_BLOCK_COLORS["landing"] not in hub.FOOT_TONES
+
+
+def test_the_age_of_a_fact_reads_one_rung_and_the_countdown_of_a_plan_keeps_two(hub):
+    """#455: `16h 13m ago` is a precision nobody reads across the room, and the reader acts on the rung. A subscription's
+    time to reset is the one span that keeps two rungs, because it is the time the reader plans by."""
+    assert [hub._age(x) for x in (40, 600, 7200, 16 * 3600 + 13 * 60, 172800, 3 * 86400)] \
+        == ["40s", "10m", "2h", "16h", "2d", "3d"]
+    assert all(re.fullmatch(r"\d+[smhd]", hub._age(x)) for x in range(0, 400000, 997))   # one rung at every age, never `2h 14m`
+    assert hub._age(16 * 3600 + 13 * 60) == hub._age(16 * 3600 + 25 * 60)      # under the rung: two ages one reading
+    assert hub._subs_reset(NOW + 3 * 3600 + 20 * 60, NOW) == "3h 20m"          # the countdown keeps its two rungs
 
 
 def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub, monkeypatch):
@@ -622,10 +635,11 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
         raise AssertionError("serving a view must not read a source of its own")
     monkeypatch.setattr(hub, "foot_sources", boom)
     hub.LOAD_STATE.update({"cpu": [12.0], "ram": 71.2, "gpu": None, "asof": 1.0, "runs": {},
-                           "facts": hub.foot_items(_src(), CAPS, NOW)})
+                           "facts": hub.foot_items(_src(), NOW), "wt": {"text": "4", "tip": "child worktrees the loop holds open"}})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
-    assert p["facts"][0]["text"] == "last landing · PR #73 2h 14m ago" and len(p["facts"]) == 3
+    assert p["facts"][0]["text"] == "landed PR #73 2h ago" and len(p["facts"]) == 2
+    assert p["wt"] == {"text": "4", "tip": "child worktrees the loop holds open"}   # the accordion's reading rides the same tick
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
@@ -657,7 +671,7 @@ def _foot_text(hub, items, cols):
 def test_the_line_drops_trailing_facts_and_never_empties_itself(hub):
     if shutil.which("node") is None:
         pytest.skip("node is required")
-    items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
+    items = hub.foot_items(_src(quota={"codex": None, "agy": None}), NOW)
     texts = [i["text"] for i in items]
     full = " · ".join(texts)
     assert _foot_text(hub, items, len(full)) == full                           # a wide window keeps all three, in order
@@ -690,9 +704,12 @@ LIVE_BURN = {"over": True, "threshold": 5000000, "window_hours": 24, "burners": 
 def test_the_burn_block_names_what_fits_and_counts_the_rest(hub):
     """The live reading of 2026-10-16: five burners named whole, 287 characters against a 160-character budget."""
     fact = hub._burn_fact(LIVE_BURN)
-    assert fact == "tokens high (limit 5M/24h): …9f6b30:route.router.1 16.9M +4", fact
+    assert fact == "tokens >5M/24h: …9f6b30:route.router.1 16.9M +4", fact
+    assert "(" not in fact                                                     # the head is one clause: no parenthesis to parse (#455)
     assert len(fact) <= hub.BURN_MAX_CHARS and "run-20261015-191451-9f6b30" not in fact   # the id whole is not the token a reader needs
     assert hub._burn_fact({**LIVE_BURN, "over": False}) == ""                  # a reading under the threshold draws no block
+    # a reading the hub cannot compare against a threshold still names the block, as the one word it can state
+    assert hub._burn_fact({"over": True, "burners": LIVE_BURN["burners"]}).startswith("tokens high: ")
 
 
 def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
@@ -700,22 +717,27 @@ def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
     if shutil.which("node") is None:
         pytest.skip("node is required")
     src = _src(burn=LIVE_BURN, gate={"kind": "fast", "result": "fail", "sha": "ebb70f83f95560f99ad017c990aad406b0c7a6c4", "ts": NOW - 300})
-    line = _foot_text(hub, hub.foot_items(src, CAPS, NOW), 160)
+    line = _foot_text(hub, hub.foot_items(src, NOW), 160)
     assert line.startswith(hub._burn_fact(LIVE_BURN)), line
-    assert "last landing · PR #73 2h 14m ago" in line and "gate fast fail ebb70f8 5m ago" in line, line
+    assert "landed PR #73 2h ago" in line and "gate fast fail 5m ago" in line, line
+    # the sha the gate ran at is MOVED off the row and never lost: it is the block's tooltip (#455)
+    gate = [i for i in hub.foot_items(src, NOW) if i["key"] == "gate"][0]
+    assert gate["tip"] == "ran at ebb70f8" and "tip" in hub.PAGE and "title=" in hub.PAGE
 
 
-# ---------------------------------------------------------------- the worktree block and its one press
+# ---------------------------------------------------------------- the worktrees accordion and its one press (#455)
 # The footer counted the child trees (`worktrees/child/*`) and the cleaner only ever looked at `runs/*/ws/*`: two sets, so
 # the number a reader saw was not the set a pass could free (measured 2026-10-13: 21 trees in the first set, none of them
-# ever examined). The pass now counts and clears that set, writes the tally, and the block reads it: `wt 10/21` — 10 of the
-# 21 the pass saw. The block answers one press, and the press runs the loop's own pass rather than a second rule of the page's.
+# ever examined). The pass now counts and clears that set and writes the tally, so the count reads `10/21` — 10 of the 21
+# the pass saw. The count left the footer line for the left pane's fourth accordion (#455), and its one press went with
+# it: the press runs the loop's own pass rather than a second rule of the page's.
 
-def test_the_block_reads_the_tally_the_pass_wrote(hub, tmp_path, monkeypatch):
+def test_the_accordion_reads_the_tally_the_pass_wrote(hub, tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "STATE", tmp_path)
     (tmp_path / "wt.json").write_text(json.dumps({"total": 21, "cleanable": 10, "ts": time.time()}))
     assert hub._wt_plan() == {"total": 21, "cleanable": 10, "ts": pytest.approx(time.time(), abs=5)}
-    assert hub._wt_fact(hub._wt_plan() or hub._wt_count()) == "wt 10/21"
+    assert hub.wt_parts(hub._wt_plan() or hub._wt_count()) \
+        == {"text": "10/21", "tip": "the last cleanup pass saw 21 and freed 10"}
 
 
 def test_a_stale_or_unreadable_tally_falls_back_to_the_plain_count(hub, tmp_path, monkeypatch):
@@ -727,12 +749,21 @@ def test_a_stale_or_unreadable_tally_falls_back_to_the_plain_count(hub, tmp_path
     assert hub._wt_plan() is None
     (tmp_path / "wt.json").write_text(json.dumps({"total": 21}))
     assert hub._wt_plan() is None                                            # a half reading is no reading
-    assert hub._wt_fact(hub._wt_count()) == "wt 0"                           # and the block says the count alone
+    assert hub.wt_parts(hub._wt_count())["text"] == "0"                      # and the accordion says the count alone
 
 
-def test_the_block_draws_nothing_when_neither_reading_exists(hub):
-    assert hub._wt_fact(None) == ""
-    assert [i for i in hub.foot_items(_src(), CAPS, NOW) if i["key"] == "wt"] == []   # a block with nothing to say draws no lone `·`
+def test_the_accordion_draws_no_count_when_neither_reading_exists(hub):
+    assert hub.wt_parts(None) == {"text": "", "tip": ""}
+    assert [i for i in hub.foot_items(_src(wt=3), NOW) if i["key"] == "wt"] == []   # the count draws no block of the line
+
+
+def test_the_accordion_is_drawn_beside_the_other_three_and_carries_the_press(hub):
+    """The one door to the cleanup pass is MOVED, never lost: it stands as a fourth accordion, after the three the left
+    pane already carries, and its count is drawn from the reading the same tick serves the line."""
+    assert "<button id=wtcl" in hub.PAGE and "id=wtsr" in hub.PAGE and "id=wtb" in hub.PAGE
+    assert hub.PAGE.index("id=wts ") > hub.PAGE.index("id=stats ")            # a fourth accordion, below the other three
+    assert "$(\"#wtcl\").onclick=wtClean" in hub.PAGE                         # its one control is wired, once
+    assert "wtDraw(d.wt)" in hub.PAGE                                         # drawn from the reading, never a rule of the page's
 
 
 def test_the_press_runs_the_loops_own_pass_and_never_a_second_rule(hub, monkeypatch):
@@ -765,13 +796,17 @@ def test_a_pass_that_cannot_start_is_reported_too(hub, monkeypatch):
 def test_the_cleanup_route_is_a_guarded_write_like_the_others(hub):
     src = HUB_PY.read_text()
     assert '"/api/wtclean"' in src and '"/api/models", "/api/plans", "/api/wtclean"' in src   # the same origin-and-JSON guard
-    assert "data-act=" in hub.PAGE and "wtClean(" in hub.PAGE                                 # the block carries the press the page wires
+    assert "wtClean(" in hub.PAGE                                                # the press is wired from the page
 
 
-def test_the_block_is_a_keyboard_stop_and_says_what_it_will_do(hub):
-    line = hub.PAGE[hub.PAGE.index("function footItem(i)"):]
-    line = line[:line.index("\n")]
-    assert 'role=button tabindex=0' in line and "wtclean.sh holds the rules" in line
+def test_the_accordions_button_is_a_keyboard_stop_and_says_what_it_will_do(hub):
+    """A real button, so the keyboard reaches it with no role of the page's own, and it names the rule it defers to."""
+    assert "wtclean.sh holds the rules" in hub.PAGE
+    assert "b.disabled=true" in hub.PAGE and "b.disabled=false" in hub.PAGE     # one pass at a time, released when it answers
+    line = hub.PAGE[hub.PAGE.index("async function wtClean("):]
+    line = line[:line.index("\n finally{")]
+    assert 'fetch("/api/wtclean"' in line and "wtSay(" in line                  # who it answers to, and where the answer goes
+    assert 'id=wtmsg' in hub.PAGE and "e.textContent=txt" in hub.PAGE           # the pass's own lines are reported beside the count
 
 
 # ---------------------------------------------------------------- the colour of each fact (#1843)
@@ -792,7 +827,7 @@ def _subs_src(hub, claude=None, hand=None, resets=None):
 
 def _subs_parts(hub, src):
     """The subs block's parts as the page receives them: one per subscription, in SUBS' order."""
-    return [i for i in hub.foot_items(src, CAPS, NOW) if i["key"] == "subs"][0]["parts"]
+    return [i for i in hub.foot_items(src, NOW) if i["key"] == "subs"][0]["parts"]
 
 
 def _foot_js(hub):
@@ -854,9 +889,9 @@ def test_an_unverifiable_subscription_reads_a_question_mark_and_stays_neutral(hu
 
 
 def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
-    items = hub.foot_items(_src(), CAPS, NOW)
+    items = hub.foot_items(_src(gate={"kind": "fast", "result": "pass", "sha": "ebb70f8", "ts": NOW - 300}), NOW)
     order = [i["color"] for i in items]
-    assert [i["key"] for i in items] == ["landing", "occ", "subs"]
+    assert [i["key"] for i in items] == ["landing", "gate", "subs"]
     root = re.search(r"^:root\{([^}]*)\}", hub.PAGE, re.M).group(1)
     palette = set(re.findall(r"--([a-z-]+):", root))
     assert all(c in palette for c in order), order                             # a colour the hub already has, not a new one
@@ -867,7 +902,7 @@ def test_every_fact_block_carries_its_own_colour_from_the_hub_palette(hub):
 
 def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
     """No fact of the line turns amber since health and progress left it (#1843's rule still stands for the day one returns)."""
-    items = hub.foot_items(_src(), CAPS, NOW)
+    items = hub.foot_items(_src(), NOW)
     assert not [i for i in items if i["bad"]]
     bad = {"key": "landing", "color": "wait", "bad": True, "text": "last landing ?", "parts": [{"text": "last landing ?", "tone": ""}]}
     assert _foot_paint(hub, [bad]) == "<span class=bad>last landing ?</span>", _foot_paint(hub, [bad])
@@ -881,12 +916,24 @@ def test_a_bad_value_still_reads_as_bad_over_its_blocks_own_colour(hub):
 
 
 def test_the_line_still_reads_the_same_tokens_in_the_same_order(hub):
-    items = hub.foot_items(_src(quota={"codex": None, "agy": None}), CAPS, NOW)
-    assert hub.foot_line(items) == ("last landing · PR #73 2h 14m ago · "
-                                    "4/10 runs 7/20 agents · CL ? · GK ? · GPT ? · GEM ?")
+    items = hub.foot_items(_src(quota={"codex": None, "agy": None}), NOW)
+    assert hub.foot_line(items) == "landed PR #73 2h ago · CL ? · GK ? · GPT ? · GEM ?"
     assert all(" · ".join(p["text"] for p in i["parts"]) == i["text"] for i in items)   # a block's parts ARE its text
     painted = re.sub(r"<[^>]+>", "", _foot_paint(hub, items))
     assert painted == hub.foot_line(items)                                     # one row, the same tokens, in the same order
+
+
+def test_the_blocks_are_joined_by_a_separator_the_page_draws_and_never_a_blocks_own(hub):
+    """#455: a block's inner ` · ` was the same glyph as the separator between blocks, so the blocks ran together as twelve
+    tokens. The page draws the join now — a dimmed span with its own margin — and the span is narrower than the ` · ` the
+    width budget counts, so a row fitted to the budget never overflows the bar."""
+    assert "FOOT_SEP_HTML" in hub.PAGE and "class=sep" in hub.PAGE
+    assert ".sep{margin:" in hub.PAGE and re.search(r"#ldfacts \.sep\{[^}]*color:", hub.PAGE)
+    assert "join(FOOT_SEP_HTML)" in hub.PAGE                                   # the drawn join is what the row is built with
+    assert 'join(" · ")' in hub.PAGE                                           # the plain join stays the width the budget counts
+    sep = re.search(r"^const FOOT_SEP_HTML=(.*)$", hub.PAGE, re.M).group(1)
+    assert "&middot;" in sep and " · " not in sep                              # the drawn join is never the row's own ` · ` text
+    assert "gap:10px" in hub.PAGE and "#ldfacts{margin-left:20px" in hub.PAGE  # the breathing room of the same change
 
 
 # ---------------------------------------------------------------- the ceiling, per attribute (#1816)
