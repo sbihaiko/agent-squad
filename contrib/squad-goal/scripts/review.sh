@@ -160,16 +160,23 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     esac
     rc=$?
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
-    # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens; a plain
-    # answer (an error line, an old CLI) passes through untouched and logs nothing. grok, agy and codex print no token count on
-    # the plain path this script reads, so they log 0 (the call is still counted and named).
+    # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
+    # call whose answer carries no usage is not a zero, it is a FLOOR: a claude:* call -- a model that reports tokens -- whose
+    # answer carried none (a refusal, an error, a zeroed .usage, an old CLI's plain text) gets a 7th field `no-usage`, so a reader
+    # can tell a call that never answered from a model that never reports. grok, agy and codex print no token count on the plain
+    # path this script reads, so they log 0 with NO mark: their silence is expected, and the call is still counted and named.
+    # The mark is APPENDED, never substituted into a count field: the six fields keep their order and their meaning, so a reader
+    # that stops at six (tokens.py reads len(p) >= 6) is untouched, and a count field holding a word would make that reader drop
+    # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
     tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
-    tu=""
+    tu=""; mark=""
     case $m in claude:*) tu=$(jq -r 'select(type=="object" and (.result|type)=="string" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$out" 2>/dev/null)
-      [ -n "$tu" ] && { jq -r .result "$out" > "$out.r" 2>/dev/null && mv "$out.r" "$out"; };;
+      jq -r .result "$out" > "$out.r" 2>/dev/null && mv "$out.r" "$out"; rm -f "$out.r"
+      case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
       *) tu="0	0	0";;
     esac
-    [ -n "$tu" ] && printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"
+    if [ -n "$mark" ]; then printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" "$mark" >> "$tl"
+    else printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"; fi
     [ -e "$p.superseded" ] && { echo "VERDICT: BLOCKED ($lbl head moved during the review)" > "$out"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
