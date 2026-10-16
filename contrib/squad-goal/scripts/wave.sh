@@ -2,6 +2,7 @@
 # usage: wave.sh start <run>          the run cuts its wave branch wave/<run> from origin/$SG_BASE, on the remote
 #        wave.sh enter <run> <issue>  from the child's worktree: the local gates, the rebase on the wave tip, the --ff-only entry
 #        wave.sh land <run>           when the run ends: the rebase on the moved base, the one push, and the closes
+#        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
 #
 # One branch per wave (ADR-0145). A wave is the set of children that land in $SG_BASE (`dev`) together, and its branch is the
 # only branch that lands there for them, in one fast-forward push with one CI run. A run cuts the branch from `dev` when it
@@ -39,6 +40,21 @@
 # conflict or a push refused twice is counted per run (SG_WAVE_LAND_TRIES, default 3); at the cap each issue the wave carries
 # gets the label frozen:owner and one queued comment, and the run's wave marker is cleared so the cycle stops retrying.
 # `waved-<run>` stays after the landing: the durable record that the run cut a wave.
+#
+# A wave has an age cap (#378, ADR-0145 rule 13): SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, set by a profile (env.sh holds
+# the default). `start` records the epoch it cut the wave in `auto/wave-start-<run>`, and the age is read from that marker,
+# never from a second clock. A wave past its cap lands what it holds and the children of the run that never entered go back
+# to the queue: `land` reads the run's own record (as childcc.py does) and requeues every dispatched issue that is not
+# ahead of the base. `enter` refuses a new child into an expired wave (its issue goes back to the queue), and the loop lands
+# an expired wave without waiting for the run's verdict (watch.sh). `wave.sh expired <run>` is the predicate it reads.
+#
+# A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
+# production, which no run can produce while the account's GitHub Actions billing is blocked (issue #439); the local check
+# at the tip, `SG_WAVE_TIP_GATES` (the fast gate by default, run in the wave's throwaway clone with the checkout's python),
+# carries the same rule and is the one that runs today. When that check is red, `land` runs each child's own suite again
+# against the tip, the last entrant first (`SG_WAVE_CHILD_GATES`; the default is the shell suite of each script that child's
+# commit changes). The first child whose suite fails leaves the wave -- its commits are dropped from the tip, its issue goes
+# back to the queue -- and the wave without it lands. A red tip no child's suite names is a landing that failed, as before.
 # Exit: 0 entered (or the wave branch was cut, or the wave landed), 1 not entered (requeued after a failed gate, a conflict or a
 # refused push; held where it stands when the review did not approve the child), 2 a bad call or a wave branch that is not there.
 # Guards: `test-wave.sh`.
@@ -52,7 +68,31 @@ wave_of() { case "${1:-}" in wave/*) printf '%s\n' "$1";; *) printf 'wave/%s\n' 
 # `land` clears the marker when the wave is in $SG_BASE.
 # `waved-<run>` is the durable record that the run cut a wave: nothing clears it, so childcc.py still knows, after the landing
 # removed `wave-<run>`, that a child of this run never gets the direct Code Complete move.
-mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1"; }
+mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-$1" && printf '%s\n' "$2" > "$SG_STATE/auto/waved-$1" \
+  && { [ -s "$SG_STATE/auto/wave-start-$1" ] || date +%s > "$SG_STATE/auto/wave-start-$1"; }; }
+
+# expired <run>: 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, a profile setting).
+# The age is the epoch `mark` wrote into the run's wave start marker, never a second clock. A wave with no marker, or one
+# that is not cut, is never expired: the cap is a fact about a wave that exists.
+expired() {
+  local run=$1 t; [ -e "$SG_STATE/auto/wave-$run" ] || return 1
+  t=$(cat "$SG_STATE/auto/wave-start-$run" 2>/dev/null); case "$t" in ''|*[!0-9]*) return 1;; esac
+  [ $(( $(date +%s) - t )) -ge "${SG_WAVE_MAX_AGE_SECONDS:-7200}" ]
+}
+
+# run_issues <run-dir>: every issue the run dispatched, read from its own record as childcc.py reads it (spawn_accepted and
+# its definition prompt), each named once. A run whose directory carries no record names none.
+run_issues() {
+  local f="$1/record.jsonl"; [ -f "$f" ] || return 0
+  python3 -c 'import json,re,sys
+for l in open(sys.argv[1]):
+    try: d=json.loads(l)
+    except Exception: continue
+    if d.get("event") != "spawn_accepted": continue
+    t = json.dumps(d.get("definition"))
+    m = re.search(r"GitHub issue #(\d+)", t) or re.search(r"\bissue #(\d+)", t)
+    if m: print(m.group(1))' "$f" 2>/dev/null | sort -un
+}
 
 start() {   # <run>: cut wave/<run> from origin/$SG_BASE, unless it is already there. A scratch clone: the owner's checkout is never touched.
   local run=$1 w; w=$(wave_of "$run")
@@ -90,6 +130,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
+  # A wave past its age cap takes no new child (#378, ADR-0145 rule 13): the child's issue goes back to the queue, so the
+  # loop builds it into a later wave. It is refused before the review and the gates: the wave is closing, whatever the child.
+  expired "$run" && { requeue "$iss" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): the child's issue goes back to the queue"; return 1; }
   # The review of the child reads only its own commits, against its merge-base with the wave branch (#376), and a verdict that
   # did not approve it keeps it out of the wave. The gate reads three things: the verdict, the base it was read against (the
   # wave branch, never `dev`, which would be the whole wave), and the sha it read. The sha is read before the rebase below:
@@ -130,6 +173,53 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   requeue "$iss" "the push to $w was refused: HEAD is not a fast-forward of its tip"; return 1
 }
 
+# A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
+# production, which no run starts while the account's Actions billing is blocked (#439); the local check at the tip is the
+# same rule and the one that runs today. `SG_WAVE_TIP_GATES` is that check, run in the wave's throwaway clone; the default is
+# the fast gate (the base battery, then the shell suites of what the wave changes) with the checkout's python, as
+# branchland.sh runs it. An empty value turns the local check off and leaves the wave's CI as its only check.
+py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
+fastbase="'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -o heavy_cap_seconds=20 -m 'not heavy'"
+tipgate=${SG_WAVE_TIP_GATES-"SG_FAST_BASE=origin/$base SG_FAST_CMD=$(printf '%q' "$fastbase") bash '$here/fast-gate.sh'"}
+
+# child_of <clone> <sha>: the issue a commit names, its last `Refs #N`, empty when it names none.
+child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tail -1; }
+
+# child_gate <clone> <from> <to> <issue>: one child's own suite against the wave tip, run in the clone. `SG_WAVE_CHILD_GATES`
+# replaces it (with SG_WAVE_CHILD the issue, SG_WAVE_CHILD_FROM/_TO the child's commit range); the default is the shell suite
+# test-<script>.sh of every script the child's commit changes, as fast-gate.sh reads a changed script. Exit 0: it passed.
+child_gate() {
+  local S=$1 from=$2 to=$3 iss=$4 n s hm rc=0
+  if [ -n "${SG_WAVE_CHILD_GATES:-}" ]; then (cd "$S" && SG_WAVE_CHILD=$iss SG_WAVE_CHILD_FROM=$from SG_WAVE_CHILD_TO=$to bash -c "$SG_WAVE_CHILD_GATES"); return $?; fi
+  for n in $($G -C "$S" diff --name-only --diff-filter=d "$from" "$to" 2>/dev/null | sed -n 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' | /usr/bin/grep -v / | sed 's|^test-||' | sort -u); do
+    s="$S/contrib/squad-goal/scripts/test-$n.sh"; [ -f "$s" ] || continue
+    hm=$(mktemp -d); (cd "$S" && env $(env | sed -n 's/^\(SG_[A-Za-z0-9_]*\)=.*/-u \1/p' | tr '\n' ' ') HOME="$hm" bash "$s") || rc=1; rm -rf "$hm"
+  done
+  return $rc
+}
+
+# wave_check <clone> <w>: the wave tip's check, and, when it is red, the child that broke it. Each child's own suite runs
+# again against the tip, the last entrant first; the first child whose suite fails leaves the wave -- its commits are dropped
+# from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
+# the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before.
+wave_check() {
+  local S=$1 w=$2 rc found cx
+  [ -n "$tipgate" ] || return 0
+  while :; do
+    (cd "$S" && eval "$tipgate") >/dev/null 2>&1 && return 0
+    found=""; while read -r sha; do
+      [ -n "$sha" ] || continue
+      child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" || { found=$sha; break; }
+    done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)   # newest first: the last entrant is tried first
+    [ -n "$found" ] || { echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause"; return 1; }
+    cx=$(child_of "$S" "$found")
+    $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1
+      echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
+    requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
+    echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
+  done
+}
+
 # refs_of <clone> <range>: every `Refs #N` in the whole message of each commit of the range, each named once.
 refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' '; }
 
@@ -148,7 +238,7 @@ stuck() {
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$f"
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$f"
   echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $w stays on the remote"
   return 1
 }
@@ -156,6 +246,9 @@ stuck() {
 land() {   # <run>: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
   local run=$1 w; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
+  # The age cap is read before the landing clears the markers it is read from (#378): a wave that reached it requeues the
+  # children of the run that never entered it, once the wave it holds is in the base.
+  local capped=0; expired "$run" && capped=1
   local S; S=$(mktemp -d) || { echo "WAVE-ERROR no scratch dir"; return 2; }
   sc() { $G -C "$S" "$@"; }
   sc init -q . || { echo "WAVE-ERROR cannot make a scratch clone"; rm -rf "$S"; return 2; }
@@ -173,15 +266,18 @@ land() {   # <run>: the wave's landing pass -- the rebase on the base, the one p
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n
+  local out sha try=1 issues n; local rd=$run; case "$run" in /*) ;; *) rd="runs/$run";; esac
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
       stuck "$run" "$w" "$S" "the rebase of $w on $base conflicts: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
+    # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
+    # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
+    wave_check "$S" "$w" || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     # Nothing ahead of the base is a wave that landed empty (a run with no dispatch, every child failed its gates, no child):
     # there is nothing to push or close, so the wave ref goes, the marker goes, and the run is done, exit 0.
     [ "$(sc rev-list --count "origin/$base..HEAD")" -gt 0 ] || {
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      rm -rf "$S"; rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wland-tries-$run"
+      rm -rf "$S"; rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted)"; return 0; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave carries: every `Refs #N` in a commit message, subject or body (a child never writes Closes), each
@@ -199,7 +295,14 @@ land() {   # <run>: the wave's landing pass -- the rebase on the base, the one p
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base: the run's completion has no wave left to land
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base: the run's completion has no wave left to land
+  # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
+  # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
+  # (run_issues); an issue the wave carried just closed above, and is never requeued.
+  if [ "$capped" = 1 ]; then
+    for n in $(run_issues "$rd"); do case " $issues " in *" $n "*) ;; *)
+      requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue";; esac; done
+  fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
   # (cqflush.sh keeps one per issue, edited in place, #328). Each card reads Done, which is what the landing means. Only a
   # close the API accepted queues the comment, writes the ledger row and moves the card: a close that fails leaves the issue
@@ -227,5 +330,6 @@ case "${1:-}" in
   start) shift; start "$@";;
   enter) shift; enter "$@";;
   land) shift; land "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run>" >&2; exit 2;;
+  expired) shift; expired "$@";;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run>" >&2; exit 2;;
 esac

@@ -111,8 +111,8 @@ class Wave:
         board.chmod(0o755)
         (self.scripts / "env.sh").write_text(
             f"export SG_STATE={self.state} SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT={self.co}"
-            f" SG_LAND_REMOTE={self.origin} BOARD={board}\n. {self.scripts}/address.sh\n"
-        )
+            f" SG_LAND_REMOTE={self.origin} BOARD={board} SG_WAVE_TIP_GATES=true\n. {self.scripts}/address.sh\n"
+        )   # the wave tip's own check (#377) is `true` here: this fixture runs wave.sh's verbs, never the fast gate
         gh = self.bin / "gh"
         gh.write_text(f'#!/bin/bash\necho "$*" >> "{root}/gh.log"\necho \'{{"number":1,"state":"closed"}}\'\n')
         gh.chmod(0o755)

@@ -75,6 +75,13 @@ if v:
   rs=v.get('reasons') or []
   if v['verdict']=='failed' and landed and rs and all(x.startswith('ac-verify:no_ac_commands') for x in rs): print('landed (gate: no_ac_commands)')
   else: print(v['verdict'], ','.join(rs))" $r 2>/dev/null | tail -1)
+    # A wave that reached its age cap lands as it is (#378, ADR-0145 rule 13): the children it holds land in $SG_BASE, and
+    # the children of the run that never entered go back to the queue. The age is read from the wave's own start marker by
+    # `wave.sh expired`, so a live run whose wave is old lands without waiting for its verdict. The run stays unread (the
+    # landing clears the wave marker), so a failed landing is tried again next cycle, and the verdict path below reads a
+    # run with a verdict exactly as it did before.
+    if [ -z "$v" ] && [ -e "$SG_STATE/auto/wave-${r##*/}" ] && bash "$(dirname "$0")/wave.sh" expired "${r##*/}"; then
+      land_wave "$r"; continue; fi
     [ -n "$v" ] && {
       # A run that ended lands its wave (#375, ADR-0145 rule 10): the branch the run cut at its start is rebased on $SG_BASE
       # and pushed there in one fast-forward push -- one update, one CI run, at the landing. The marker `wave.sh start` left

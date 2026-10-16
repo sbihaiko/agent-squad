@@ -14,6 +14,8 @@
 : "${SG_CODING_RULES:=follow AGENTS.md; bug fixes in TDD with the RED output in the issue status comment; a view constructs, binds and delegates - keep the rule in the layer the host-free test project compiles, never read a file, open a client, mutate application state or instantiate a domain service from a view (ADR-0137)}"
 : "${SG_ROOT_NAME:=repo}"
 # : "${SG_WAVE_GATES:=uv run --extra dev ruff check . && uv run --extra dev mypy && uv run --extra dev pytest -n auto -m \"not heavy\"}"   # wave.sh: the local gates a child runs in its own worktree before it enters the wave branch (env.sh's default is this repository's; an empty value refuses the entry)
+# : "${SG_WAVE_MAX_AGE_SECONDS:=7200}"   # wave.sh: a wave older than this (seconds) lands what it holds; the children still running go back to the queue (env.sh's default is two hours)
+# : "${SG_WAVE_TIP_GATES:=...}"          # wave.sh: the wave tip's own check (#377), run in the wave's throwaway clone; a red one makes each child's suite run again against the tip, last entrant first. Unset: the fast gate. Empty: the wave's CI is its only check
 # : "${SG_SQUAD:=$HOME/src/agent-squad}"   # unset: the installed agent-squad plugin
 : "${SG_AUTO_BUGFIX:=yes}"           # autobug.sh dispatches open bug issues automatically (no = off)
 : "${SG_BUG_LABEL:=bug}"
