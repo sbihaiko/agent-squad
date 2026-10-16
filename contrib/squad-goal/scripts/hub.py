@@ -1939,7 +1939,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .it .ft{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}#bbody .age,#bbody .tsk{display:inline-block;padding:0 6px;border-radius:9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:#e3b341;border-color:#6b5223}#bbody .age.old{color:#f85149;border-color:#6e2a27}
 #bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:700;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:#f85149;border-color:#6e2a27}#bbody .pbg.green{color:#3fb950;border-color:#2e6b3a}#bbody .pbg.approved{color:#3fb950;border-color:#3fb950;background:#12261a}   /* the lane badge (#247) */
 #bbody .fz{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:10px;color:var(--warn);border:1px dashed var(--warn)}   /* the freeze marker: the card keeps its column */
-#bsp[aria-pressed=true]{color:var(--warn);border-color:#6b5223}
+#bsp[data-m=only],#bsp[data-m=hidden]{color:var(--warn);border-color:#6b5223}   /* the two modes that leave the specs out of the way, or ask for them: the one that draws every card is the resting colour (#456) */
 #bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:600;vertical-align:1px;border:1px solid;max-width:100%;overflow-wrap:anywhere}
 #bbody .pst.ready{color:#3fb950;border-color:#2e6b3a;background:#12261a}#bbody .pst.running{color:#5aa9ff;border-color:#24496e;background:#0f1d2c}
 #bbody .pst.changes{color:#e3b341;border-color:#6b5223;background:#261e0f}#bbody .pst.broke,#bbody .pst.conflict{color:#f85149;border-color:#6e2a27;background:#2a1212}
@@ -2058,7 +2058,7 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 </div>
 <div id=main></div>
 <div id=pop><div id=pbox></div></div>
-<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp title="show only the issues that carry the spec label, in the columns they reached" aria-pressed=false>Specs</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div></div>
+<div id=board><div id=grip title="drag to resize"></div><div id=bhead><b>TASKS <span id=bt class=m></span></b><span><details id=lf><summary title="filter cards by label">labels</summary><div id=lfl></div></details> <button id=bsp data-m=all title="the Specs filter holds a mode: every card, only the spec-labelled cards, or every card but those. A press cycles the three, and the label states the one it holds.">Specs: all</button> <button id=bz title="maximize the board over the run pane" aria-pressed=false></button> <button id=bx title="collapse" aria-pressed=false>&raquo;</button></span></div><div id="pip"><div id="piph" tabindex="0" title="drag to move the window; arrow keys move it 16px (64 with shift); Esc collapses it"><b id="pipt"></b><button id=pipx title="collapse the window to its header">&#8211;</button><button id=pipo title="close the window and restore the split">&#215;</button></div><div id="pipb"><iframe id="pipf" title="one card of the run panel"></iframe></div><div id="pipm"></div></div><div id=bcases></div><div id=bbody></div></div>
 </div>
 <div id=foot title="machine load: read in the hub process every few seconds; ? means the hub cannot see that source"><span>load</span><b id=ldline>CPU ? · RAM ? · GPU ?</b><span id=ldfacts title="the squad's own state: health, progress, occupancy, quotas, subscriptions"></span></div>
 <script>
@@ -2516,7 +2516,7 @@ const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div clas
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
 // stored, so a card appearing brings the column back on its own and the last one leaving collapses it again (#1809).
 const perr=g=>g.err?`<div class=perr title="a repository the hub was told to read and could not: the rows this column still shows for it are its last good ones">&#9888; ${esc(g.err)}</div>`:"";   // a repository the hub cannot read is an error on the column, never an empty column (#1820)
-const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)&&(isPR(g.name)||(!bo.specs||x.sp))));   // the Specs filter shows the spec-labelled items, never a column of its own (#247)
+const fits={};all.forEach(g=>fits[g.name]=g.items.filter(x=>(!f||String(x.n).includes(f)||x.t.toLowerCase().includes(f.toLowerCase()))&&lok(x)&&(isPR(g.name)||spOk(x))));   // the Specs filter shows, only shows, or hides the spec-labelled items, never a column of its own (#247, #456)
 const kept=new Set(bo.kept||[]),
  autoHidden=g=>!hid.has(g.name)&&!kept.has(g.name)&&!fits[g.name].length&&!g.tracking,   // the columns the strip's lines stand for, and the only ones: a column the user hid is a chip, one the user kept is drawn, and the lane is always drawn -- empty, it says 0 (#440)
  vis=all.filter(g=>!bottom||(!hid.has(g.name)&&!autoHidden(g))),autos=bottom?all.filter(autoHidden):[];
@@ -2532,7 +2532,19 @@ const hidchip=g=>{const c=colOf(g.name,CN),ring=!Object.hasOwn(COLORS,g.name);re
 const html=vis.map(one).join("")+(bottom&&hid.size?`<div class=hidbar>${all.filter(g=>hid.has(g.name)).map(hidchip).join("")}`:"")+(bottom&&(hid.size||autos.length)?`${hid.size?"":`<div class=hidbar>`}${autos.length?(hid.size?'<div class=hidsep></div>':"")+autos.map(g=>`<span class=hidline style="--cc:${colOf(g.name,CN)}" data-g="${esc(g.name)}"><span>${esc(g.name)}</span><b>${badge(g)}</b>${eye(g,true)}</span>`).join(""):""}</div>`:"");   // one quiet line per column hidden only because it is empty, behind a divider (#1809)
 if($("#bbody").dataset.h!==html){$("#bbody").dataset.h=html;$("#bbody").innerHTML=html;restore()}   // same cards: leave the DOM alone, so a scroll in progress is never interrupted
 }catch(e){}finally{lim.busy=0}}
-$("#bsp").onclick=()=>{bo.specs=!bo.specs;saveB();pollBoard()};
+// The Specs control holds three modes (#456): every card the other filters leave, only the cards that carry the spec
+// label, or every card but those. It is one control because it is one question -- are the specs in the way, or am I
+// looking for them? -- and its own label states the mode it holds, so the mode is read without a hover. The stored value
+// is the mode; the boolean an older page stored is read as the two modes it named (true = only, false = all), so a board
+// opens where it was left. `spOk` is the whole rule, and the columns ask it once per card: the modes are the page's, the
+// spec label is the hub's (`x.sp`, from the table's own SPEC_LABEL), and no column is named here.
+const SP=[["all","every card the other filters leave"],["only","only the cards that carry the spec label"],["hidden","every card but those"]];
+const specMode=()=>{const v=bo.specs;if(v===true)return 1;if(v===false||v===undefined||v===null)return 0;
+ const n=Math.trunc(+v);return n===1||n===2?n:0};   // 1 = only, 2 = hidden: a value the page cannot read is `all`, never a silent hide
+const spOk=x=>{const m=specMode();return m===0||(m===1?!!x.sp:!x.sp)};
+const spPaint=()=>{const m=specMode(),b=$("#bsp");b.dataset.m=SP[m][0];b.textContent="Specs: "+SP[m][0];b.title=`the Specs filter holds ${SP[m][0]}: a press moves it to ${SP[(m+1)%3][0]}, and this mode draws ${SP[m][1]}.`};
+$("#bsp").onclick=()=>{bo.specs=(specMode()+1)%3;saveB();spPaint();pollBoard()};
+spPaint();
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
 $("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
 document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});

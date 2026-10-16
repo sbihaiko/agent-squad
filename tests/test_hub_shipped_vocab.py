@@ -109,13 +109,14 @@ def test_the_open_lane_is_drawn_beside_the_axis_with_its_badge(table, hub, board
     assert re.search(r"isPR\(g\.name\)\?\" prs lane\"", page), "the lane does not wear its own look"
 
 
-def test_the_specs_filter_lists_the_spec_items_and_no_column_holds_them(table, hub, board):
+def test_the_specs_filter_asks_the_items_and_no_column_holds_them(table, hub, board):
     rows = {x["n"]: x for g in board["groups"] for x in g["items"]}
     assert [n for n, x in rows.items() if x.get("sp")] == [3], "only the spec-labelled item is a spec"
     assert "Open Specs" not in hub.ORDER and "Open Specs" not in [g["name"] for g in board["groups"]]
     page = hub.PAGE
-    assert re.search(r"<button id=bsp[^>]*>Specs</button>", page), "the board has no Specs filter"
-    assert "(!bo.specs||x.sp)" in page, "the Specs filter is not a filter over the same items"
+    assert re.search(r"<button id=bsp[^>]*>Specs: all</button>", page), "the board has no Specs filter"
+    assert "(isPR(g.name)||spOk(x))" in page, "the Specs filter is not a filter over the same items"
+    assert "spOk=" in page and "specMode=" in page, "the three modes are not the page's own"
 
 
 def test_the_hub_holds_no_column_name_of_its_own(table):
