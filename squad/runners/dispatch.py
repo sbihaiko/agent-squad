@@ -5,10 +5,11 @@ baseline. It decides spawn requests ("decide these requests") and lands finished
 children"). It reads and writes the spawn, land, and ledger events. The engine runs the children's sessions.
 """
 import subprocess
+from pathlib import Path
 
 import anyio
 
-from squad import actions, envelope, git, session, workcmd
+from squad import actions, envelope, git, node_commit, session, workcmd
 from squad import verdict as V
 from squad.engine_errors import Frontier
 
@@ -158,7 +159,15 @@ class Dispatch:
         return False
 
     def prune(self):
-        """Remove the branch and worktree of every child that landed. The work is in the target's history now."""
+        """Remove the branch and worktree of every child that landed. The work is in the target's history now.
+
+        A run that works in a linked worktree holding its own run folder is the loop's shape (#90): the loop reads each
+        child's worktree again after this verdict, to enter the child's commits into its run's wave branch and to review the
+        child's own diff there (ADR-0145 rule 9). Removing it here left that entry with nothing to read, so every wave
+        landed empty and no card left the queue (#464). The loop's own pass removes the tree once the wave landed.
+        """
+        if node_commit.ownership(self.e, Path(self.e.target).resolve(), True) is None:
+            return
         for name, land in self.landed.items():
             if land["outcome"] != "pass" or name not in self.children:
                 continue

@@ -319,7 +319,7 @@ class Engine:
         v = V.fold(self.record.events, self.observe_target(), self.run_id, self.run_dir.resolve())
         self.record.append("verdict", **v.event_fields())
         if v.verdict == "completed" and self.has_git:
-            self.dispatch.prune()      # a landed child's branch and worktree are clutter once the run passed; a failed run keeps them for resume
+            self.dispatch.prune()      # a landed child's branch and worktree are clutter once the run passed (a failed run keeps them for resume, and a run the loop started keeps them for its wave entry)
         return v
 
     async def run(self):

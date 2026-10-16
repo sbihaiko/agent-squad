@@ -2,7 +2,8 @@
 # usage: wtclean.sh   (from watch.sh) Removes squad child worktrees under $SG_CHECKOUT/runs/*/ws once their run has a
 # verdict (or the run is a zombie: no verdict, idle 20 min, no process inside), the tree is clean and HEAD is on a remote branch. The run folder and its dashboard server are left alone (the hub lists runs from live servers). A finished worktree
 # whose HEAD is on no remote branch (a run that landed commits without pushing) is kept and reported once as WT UNPUSHED: the
-# work is preserved and a person, or the next run, decides what to do with it.
+# work is preserved and a person, or the next run, decides what to do with it. A run whose wave has not landed is held
+# whatever the tree holds (WT HELD wave): the wave entry reads the child's worktree after the verdict (ADR-0145 rule 9).
 # A tree that holds a checked out submodule is its own class: git refuses to remove such a tree whole (`fatal: working trees
 # containing submodules cannot be moved or removed`, a line with no run id in it), so every removal here carries the flag that
 # case needs, and the line names the run or the tree. One the flag still cannot free is reported once as WT KEPT submodule.
@@ -40,6 +41,14 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   run=${w%%/ws/*}   # only after the RUN's verdict: the run's land step reads every child workspace (removing one early fails it with land_workspace_missing)
   # no verdict yet: only a ZOMBIE run (record.jsonl idle >20 min and no process whose cwd is inside the run folder) is cleaned, under the same clean-tree / HEAD-on-a-remote-branch rules below
   grep -q '"event": *"verdict"' "$run/record.jsonl" 2>/dev/null || { [ -n "$(find "$run/record.jsonl" -mmin +20 2>/dev/null)" ] && ! printf '%s\n' "$cwds" | grep -qF "$run/" || continue; }
+  # V (#464): a run whose wave has not landed keeps its child trees. The wave entry reads the child's worktree AFTER the
+  # verdict -- it reviews the child's own diff there and enters its commits into the wave branch (ADR-0145 rule 9) -- so a
+  # tree removed here left the entry with nothing to read ("WAVE no entry for #N: the child's worktree ... is not there"),
+  # every wave landed empty and no card left the queue. `wave-<run>` exists from the cut to the landing; `waved-<run>` is
+  # the durable record that the entry is done, and a wave that reached its age cap lands and clears the marker (rule 13).
+  if [ -e "$SG_STATE/auto/wave-${run##*/}" ]; then
+    grep -qx "wave $w" "$seen" || { echo "WT HELD wave ${run##*/} ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
+    continue; fi
   [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
