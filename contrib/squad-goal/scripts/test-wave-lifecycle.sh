@@ -36,6 +36,8 @@ export SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
 export BOARD=$T/s/board.sh
 : "\${SG_WAVE_GATES:=true}"   # the profile's default, as the real env.sh has it: a gate command the caller set wins
 export SG_WAVE_GATES
+: "\${SG_WAVE_TIP_GATES:=true}"   # the wave tip's own check (#377): the fast gate in production, `true` here
+export SG_WAVE_TIP_GATES
 . $T/s/address.sh
 EOF
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/s/board.sh"; chmod +x "$T/s/board.sh"

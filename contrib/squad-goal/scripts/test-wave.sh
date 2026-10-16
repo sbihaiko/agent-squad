@@ -8,9 +8,13 @@
 # usage: bash test-wave.sh [scripts dir]
 unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from a live loop must not
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/co" "$T/bin"
+G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
 cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$d/ghcall.sh" "$T/s/" 2>/dev/null
-printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T/co" "$T" "$T" "$T/s" > "$T/s/env.sh"
+{
+  printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T"
+  printf ': "${SG_WAVE_TIP_GATES:=true}"; export SG_WAVE_TIP_GATES\n'   # the tip's check (#377): `true` unless a case replaces it
+  printf '. %s/address.sh\n' "$T/s"
+} > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b dev "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init)
 $G clone -q --bare "$T/co" "$T/origin.git"; O="$G -C $T/origin.git"; W=wave/run-1
@@ -274,5 +278,52 @@ ls "$T/st/cq/"x__y#70-wavestuck* >/dev/null 2>&1 && ok "K: one comment is queued
 [ ! -e "$T/st/auto/wave-run-7" ] && ok "K: the marker is cleared, so the loop stops retrying" || ko "K: the marker is kept after the escalation"
 $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work for the owner" || ko "K: the wave branch is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a failing landing" || ko "K: dev moved"
+
+# L (#378): a wave has an age cap (SG_WAVE_MAX_AGE_SECONDS, 2 h by default, ADR-0145 rule 13). A wave that reaches it
+# lands the children it holds and sends the children still running back to the queue; it takes no new child. The age is
+# read from the run's own wave start marker (auto/wave-start-<run>), written once when the run cuts its wave.
+W8=wave/run-8; start2 run-8 >/dev/null
+child 80 g80 "origin/$W8"; en2 run-8 80 >/dev/null
+[ -s "$T/st/auto/wave-start-run-8" ] && ok "L: the run's wave records its start for the age cap" || ko "L: no wave start marker"
+# the children of the run: #80 is in the wave, #81 is still running (dispatched, never entered)
+printf 'run-8\n' > "$T/st/auto/disp-81"
+mkdir -p "$T/co/runs/run-8"
+printf '%s\n%s\n' \
+  '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #80 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #81 work"}}' > "$T/co/runs/run-8/record.jsonl"
+bash "$T/s/wave.sh" expired run-8 >/dev/null 2>&1 && ko "L: a wave younger than its cap is expired" || ok "L: a wave younger than its cap is not expired"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-8"
+bash "$T/s/wave.sh" expired run-8 >/dev/null 2>&1 && ok "L: a wave past its cap is expired" || ko "L: a wave past its cap is not expired"
+# an expired wave takes no new child: its entry sends the child's issue back to the queue
+before=$($O rev-parse $W8); child 82 g82 "origin/$W8"; REV_BASE=$W8 rev 82
+r=$(cd "$T/c82" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-8 82 2>&1); rc=$?
+[ $rc = 1 ] && case "$r" in *"WAVE REQUEUE #82"*"age cap"*) ok "L: an expired wave takes no new child, and its issue is back in the queue";; *) ko "L: no cap reason: '$r'";; esac || ko "L: the entry exited $rc: '$r'"
+[ "$($O rev-parse $W8)" = "$before" ] && ok "L: the child that reached an expired wave does not enter" || ko "L: the wave tip moved on an expired wave"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(land2 run-8); rc=$?
+[ $rc = 0 ] && ok "L: the expired wave lands what it holds (exit 0)" || ko "L: exit $rc: '$r'"
+$O cat-file -e dev:g80 2>/dev/null && ok "L: the child the wave held is in dev" || ko "L: the held child is not in dev"
+/usr/bin/grep -qx 'o 3 Done 80' "$T/board.log" && ok "L: the card of the held child reads Done" || ko "L: no Done card for #80"
+/usr/bin/grep -q 'issues/80 -f state=closed' "$T/gh.log" && ok "L: the held child's issue is closed" || ko "L: #80 was not closed"
+[ ! -e "$T/st/auto/disp-81" ] && /usr/bin/grep -qx 'o 3 Todo 81' "$T/board.log" && ok "L: the child still running is back in the queue" || ko "L: #81 was not requeued"
+/usr/bin/grep -q 'issues/81 -f state=closed' "$T/gh.log" && ko "L: an issue that never entered the wave was closed" || ok "L: the child back in the queue is not closed"
+[ ! -e "$T/st/auto/wave-start-run-8" ] && ok "L: the landed wave clears its start marker" || ko "L: the wave start marker outlives the landing"
+
+# M (#377): a red check at the wave tip names the child that broke it. Each child's own suite runs again against the wave
+# tip, the last entrant first; the first child whose suite fails leaves the wave -- its issue goes back to the queue -- and
+# the wave without it lands. The wave's CI is the live check in production (blocked, #439): the local check at the tip is
+# what this suite can run, and the child re-run is the same rule.
+W9=wave/run-9; start2 run-9 >/dev/null; child 90 g90 "origin/$W9"; en2 run-9 90 >/dev/null; child 91 g91 "origin/$W9"; en2 run-9 91 >/dev/null
+printf 'run-9\n' > "$T/st/auto/disp-91"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(SG_WAVE_TIP_GATES='! /usr/bin/git log --format=%s origin/dev..HEAD | /usr/bin/grep -q "work 91"' SG_WAVE_CHILD_GATES='[ "$SG_WAVE_CHILD" = 91 ] && exit 1; exit 0' land2 run-9); rc=$?
+[ $rc = 0 ] && ok "M: the wave without the child that broke it lands (exit 0)" || ko "M: exit $rc: '$r'"
+case "$r" in *"WAVE CHECK RED"*"#91"*) ok "M: the red check names the child that broke it";; *) ko "M: no child named: '$r'";; esac
+$O cat-file -e dev:g90 2>/dev/null && ok "M: the rest of the wave is in dev" || ko "M: the rest of the wave is not in dev"
+$O cat-file -e dev:g91 2>/dev/null && ko "M: the child that broke the wave landed" || ok "M: the child that broke the wave did not land"
+/usr/bin/grep -q 'issues/90 -f state=closed' "$T/gh.log" && ok "M: the issue of the rest is closed" || ko "M: #90 was not closed"
+/usr/bin/grep -q 'issues/91 -f state=closed' "$T/gh.log" && ko "M: the issue of the child that broke the wave was closed" || ok "M: the issue of the child that broke the wave is not closed"
+[ ! -e "$T/st/auto/disp-91" ] && /usr/bin/grep -qx 'o 3 Todo 91' "$T/board.log" && ok "M: the child that broke the wave is back in the queue" || ko "M: #91 was not requeued"
+[ -z "$($O rev-parse -q --verify "refs/heads/$W9")" ] && ok "M: the wave branch goes with its landing" || ko "M: the wave branch survives"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
