@@ -36,6 +36,18 @@ remote=$($G ls-remote origin refs/heads/fix/9-x | cut -c1-9); [ "$remote" != "$(
 [ -d runs/run-landed/ws/w ] && ok "P: the tree with the unpushed work is kept" || ko "P: the tree with the unpushed work was removed"
 [ ! -s "$T/ghlog" ] && ok "P: the pass reads nothing of GitHub" || ko "P: a gh call was made: $(cat "$T/ghlog")"
 case "$out" in *"WT UNPUSHED run-moved"*) ok "P: a branch that moved on the remote is reported the same way, never force-pushed";; *) ko "P: run-moved not reported: $out";; esac
+# V (#464): the loop's wave entry reads the child's worktree after the run's VERDICT (ADR-0145 rule 9), so a run whose wave
+# has not landed keeps its child trees: a tree removed here left the entry with nothing to read ("WAVE no entry for #N: the
+# child's worktree ... is not there"), so every wave landed empty and no card left the queue. The marker `wave-<run>` exists
+# from the cut to the landing, so it is the fact this pass reads; `waved-<run>` is the durable record that the entry is done.
+cd "$T/co"; mkdir -p "$T/st/auto" runs/run-wave/ws; $G worktree add -q --detach runs/run-wave/ws/w HEAD
+echo '{"event": "verdict"}' > runs/run-wave/record.jsonl; : > "$T/st/auto/wave-run-wave"
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ -d runs/run-wave/ws/w ] && ok "V: a run whose wave has not landed keeps its child tree" || ko "V: the tree went before the entry: $out"
+case "$out" in *"WT HELD wave run-wave"*) ok "V: the hold names the run and its class";; *) ko "V: the hold is silent: $out";; esac
+rm -f "$T/st/auto/wave-run-wave"   # the wave landed: the entry is done, or the wave took no child
+out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ ! -d runs/run-wave/ws/w ] && ok "V: once the wave landed the tree goes" || ko "V: the tree stayed after the landing: $out"
 # F: a fork-only tree (SG_FORK_DIR, ~/wt-as-<n>) a run is still using must survive the close of a sibling issue. The tree is
 # named nowhere in the record until the final gate writes its outcome, so the old liveness test (grep the record for the tree's
 # name) never saw a live run and deleted the tree out from under the gate: every ac_command failed with "cd: No such file or
