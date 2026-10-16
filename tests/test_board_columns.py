@@ -127,7 +127,5 @@ def test_the_hub_renders_no_closed_branch_lane(table, hub, monkeypatch):
 
     assert tuple(hub.BOARD_LANES) == tuple(table.LANES), "the hub draws a lane the table does not name"
     assert "prev" not in board, "the board still serves a closed-branch lane"
-    assert not [g for g in board["kinds"] if g["kind"] == "pr" and g["state"] == "closed"], \
-        "the board still draws a closed-branch group"
     assert "pr_closed" not in hub.COLUMN, "the hub still reads a lane by a role the table does not name"
     assert '"pr_closed"' not in hub.PAGE, "the page still holds a name for the closed-branch lane"

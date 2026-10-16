@@ -58,7 +58,6 @@ def test_a_test_case_is_never_a_column(hub, monkeypatch):
     _cache(hub, monkeypatch, [])
     assert [g["name"] for g in model["groups"]] == [g["name"] for g in hub.board()["groups"]]
     assert [n for g in model["groups"] for n in (x["n"] for x in g["items"])] == [10]
-    assert "test case" not in [g["kind"] for g in model["kinds"] if g["items"]]
 
 
 def test_the_pass_reads_a_test_case_in_the_one_items_read_it_already_makes(hub, monkeypatch):

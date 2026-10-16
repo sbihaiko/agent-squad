@@ -85,17 +85,16 @@ def _stub_pr_tools(hub, monkeypatch):
     monkeypatch.setattr(hub, "pr_badge", lambda x: None)
 
 
-def test_the_board_serves_the_branch_row_in_the_kinds_view_and_not_the_lane(hub, monkeypatch):
-    """A work branch has no lane: it reaches the reader as the `branch` kind, and the open-PR lane carries no branch row."""
+def test_the_board_serves_no_work_branch_and_the_lane_carries_pull_requests_only(hub, monkeypatch):
+    """A work branch has no lane and, the Kinds view having gone (owner, 2026-10-16), no other view of the board: the open
+    lane carries pull requests only and says 0."""
     row = {"n": 358, "t": "fix/358-board", "u": "2026-10-14T09:00:00Z", "o": "", "r": REPO, "ps": "ahead 2", "br": True}
     landed = {"n": 355, "t": "fix/355-lander · abc1234", "c": "2026-10-14T08:00:00Z", "m": True, "r": REPO}
     monkeypatch.setattr(hub, "board_cache", {"t": 0, "items": [], "prs": [row], "landed": [landed], "errs": [], "err": None, "lc": {}})
     served = hub.board()
     assert served["prs"]["name"] == "Open PRs" and "prev" not in served, "the open lane is not the one the table names"
     assert served["prs"]["n"] == 0 and served["prs"]["items"] == [], "the lane carries pull requests only, and says 0"
-    groups = {(g["kind"], g["state"]): g for g in served["kinds"]}
-    assert [x["n"] for x in groups[("branch", "open")]["items"]] == [358], "the branch row reaches the kinds view"
-    assert groups[("pr", "open")]["items"] == [], "a work branch is not a pull-request item"
+    assert "kinds" not in served, "the board still serves a view that reaches a work branch"
 
 
 def test_every_row_carries_its_own_kind(hub, monkeypatch):
@@ -108,9 +107,6 @@ def test_every_row_carries_its_own_kind(hub, monkeypatch):
     _stub_pr_tools(hub, monkeypatch)
     served = hub.board()
     assert [x["kind"] for x in served["prs"]["items"]] == ["pr"], "the lane carries the pull request only"
-    groups = {(g["kind"], g["state"]): g for g in served["kinds"]}
-    assert [x["k"] for x in groups[("pr", "open")]["items"]] == ["pr"]
-    assert [x["k"] for x in groups[("branch", "open")]["items"]] == ["branch"]
     assert all(x.get("kind") for x in served["prs"]["items"]), "a lane row carries no kind"
 
 
