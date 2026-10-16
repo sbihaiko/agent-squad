@@ -4,7 +4,11 @@
 Line 1 is `VERDICT: APPROVE` or `VERDICT: CHANGES` (the exact form the loop parses), then a
 `## Blocking` section and/or a `## Debt` section, whichever is non-empty, Blocking first. Under a
 section, one bullet per finding, at most two lines: `<file>:<line> — <defect> — <concrete failure>
-— <fix>`. Findings that share a theme sit under a `### <theme>` heading, most severe first.
+— <fix>`. A finding about the change as a whole (the branch delivers nothing from its issue, the
+commit message misstates it) has no path to cite: its place is the diff, named by a whole-change
+label in the location field -- a leading `whole` (`whole diff`, `whole branch`) or the word
+`scope` (`Branch scope`, `Issue #249 scope`) (#443), the same room #412 gave a whole-file
+concern. Findings that share a theme sit under a `### <theme>` heading, most severe first.
 Nothing else: no preamble, no restating the diff, no closing summary.
 
 `review.sh` runs this on every model answer: a review that ignores the shape is a format failure
@@ -40,6 +44,11 @@ SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
 THEME = re.compile(r"^#{3,}\s*(\S.*?)\s*$")
 BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`,]*)`?(?:[\s,;]|$)")  # path:line, or a path alone for a file-level finding; the first field of a bullet (or the second)
+# a finding about the change as a whole, not a file (#443): the branch delivers nothing from its issue, the commit
+# message misstates it -- there is no path to cite. Its place is the diff itself, and a whole-change label names it:
+# a leading "whole" (whole diff / whole branch / the whole change), or the word "scope" (Scope: ... / Branch scope /
+# Issue #249 scope). A bullet that still names no place at all fails (#412), so the vague one is not let in.
+WHOLE = re.compile(r"^`?(?:(?:the\s+)?whole\b|.*\bscope\b)", re.IGNORECASE)
 SEP = re.compile(r"\s+[—–-]\s+")             # the " — " between the fields
 # the fix-round answer to a previous finding, the third field of a bullet (#1832): "fixed: <reason>", a bare "fixed",
 # or "fixed — <check>". "not fixed: <reason>" is not the answer, and neither is prose that merely opens with the word
@@ -133,8 +142,8 @@ def survey(review, max_lines=0, fix_round=False):
         if len(fields) < 3:
             return (f"line {n}: {text[0][:40]!r} is not 'file:line — defect — concrete failure — fix'"
                     " (three fields at least)")
-        if not any(LOC.match(f.strip()) for f in fields[:2]):
-            return f"line {n}: the bullet names no file or file:line ({fields[0].strip()[:30]!r})"
+        if not any(LOC.match(f.strip()) or WHOLE.match(f.strip()) for f in fields[:2]):
+            return f"line {n}: the bullet names no file, file:line or whole diff ({fields[0].strip()[:30]!r})"
         if is_finding(section, joined):            # a bullet that answers a previous finding is not a finding
             counts[section] += 1
         return None
