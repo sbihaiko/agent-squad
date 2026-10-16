@@ -16,7 +16,7 @@ COLUMNS = (
     {"name": "Testing", "fact": "dev_ci", "actor": "tester", "terminal": False, "order": 2, "flow": 8, "color": "#2dd4bf"},
     {"name": "Blocked", "fact": "blocked", "actor": "owner", "terminal": False, "order": 5, "flow": 4, "color": "#ff6b6b"},
     {"name": "Done", "fact": "issue_closed", "actor": "none", "terminal": True, "order": 7, "flow": 9, "color": "#3ecf8e"},
-    {"name": "Open branches", "fact": "pr_open", "actor": "reviewer", "terminal": False, "order": 8, "flow": 0, "color": "#5aa9ff"},
+    {"name": "Open PRs", "fact": "pr_open", "actor": "reviewer", "terminal": False, "order": 8, "flow": 0, "color": "#5aa9ff"},
 )
 
 BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
@@ -71,11 +71,12 @@ def column_for(facts):
 # at AA on the hub's chip. An open work branch is a lane beside the axis, never a column: the lane is named here, so the
 # hub holds no name of its own. A role names the column a reader looks up by meaning, never by a literal.
 #
-# The lane is for tracking only (#384): no writer moves a card because of it and no gate reads it, which is what
-# `tracking` records. A landed branch has no lane at all -- it is read from its issue card (Done = in dev).
+# The open-PR lane stands beside the axis, never a column, and it is for tracking only (#384): no writer moves a card
+# because of it and no gate reads it, which is what `tracking` records. A work branch has no lane at all: it is reached
+# through the kinds view, under its own `branch` kind (#440). A landed branch is read from its issue card (Done = in dev).
 HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
        "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
-LANES = ({"key": "pr_open", "name": "Open branches", "color": "#5aa9ff", "tracking": True},)
+LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff", "tracking": True},)
 ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "dev_ci": "Testing"}
 SPEC_LABEL = "spec"
 
@@ -100,27 +101,33 @@ def view_column(status, closed, labels=()):
 
 
 PR_KIND = "pr"
+BRANCH_KIND = "branch"   # a work branch: no lane of its own, reached through the kinds view (#440)
 
 
 def kind_label(kind):
-    """The plural a kind's groups are named with: the kind's own words, never a list the hub keeps (`test case` -> Test Cases)."""
-    return ("Branches" if kind == PR_KIND else kind.title() + "s")
+    """The plural a kind's groups are named with: the kind's own words, never a list the hub keeps (`test case` -> Test Cases).
+
+    The pull request kind wears the lane's own wording; a work branch wears the branch kind's own word."""
+    if kind == PR_KIND: return "Open PRs"
+    if kind == BRANCH_KIND: return "Branches"
+    return kind.title() + "s"
 
 
 def kind_groups(kinds, rows):
     """One open and one closed group for each kind, in that order, named by the table.
 
-    The pull request kind carries the lane's own group and no closed one: the lane is open branches for tracking, and a
-    landed branch is read from its issue card, so no group collects one (#384). Every other kind takes the lanes' own open
+    The lane kinds carry one open group and no closed one: the pull request lane is open PRs for tracking, and a work
+    branch has no lane at all, so the kinds view is where a branch is reached (#384, #440). Every other kind takes the open
     and closed words. A row is `{"kd": kind, "closed": bool, ...}`, and its key is (kind, number), so a pull request and an
     issue with one number are two items. A row of a kind not named here is not grouped: the pane draws what the kinds and
     the table name."""
     words = {"open": "Open", "closed": "Closed"}
-    names = {PR_KIND: {"open": LANES[0]["name"]}}
+    open_only = (PR_KIND, BRANCH_KIND)
+    names = {PR_KIND: {"open": LANES[0]["name"]}, BRANCH_KIND: {"open": kind_label(BRANCH_KIND)}}
     out = []
-    for kind in (PR_KIND, *kinds):
+    for kind in (PR_KIND, BRANCH_KIND, *kinds):
         for state in ("open", "closed"):
-            if kind == PR_KIND and state == "closed": continue
+            if kind in open_only and state == "closed": continue
             items = [{**{k: v for k, v in r.items() if k not in ("kd", "closed")}, "k": kind, "key": f"{kind}:{r['n']}"}
                      for r in rows if r.get("kd") == kind and bool(r.get("closed")) == (state == "closed")]
             name = names.get(kind, {}).get(state) or f"{words[state]} {kind_label(kind)}"
