@@ -6,6 +6,7 @@ no client, so the same inputs always give the same facts. The table decides the 
 IN_DEV = ("behind", "identical")   # a compare standing: the branch tip is in the landing branch
 AHEAD = ("ahead", "diverged")     # a compare standing: the branch holds commits the landing branch lacks
 APPROVED = "VERDICT: APPROVE"
+LIVE_WORK = ("Doing", "Code Complete", "Landing", "Testing")   # a child card past dispatch and before done
 
 
 def review_state(verdict_text, sha_text, tip):
@@ -23,3 +24,12 @@ def issue_facts(*, entered, standing, approved, dev_running, review_waits, run_l
     return {"wave_branch": ahead, "landing": ahead and bool(approved),
             "dev_ci": bool(entered) and standing in IN_DEV and bool(dev_running),
             "review_wait": bool(review_waits), "run_live": bool(run_live)}
+
+
+def spec_facts(children):
+    """The `child_live` fact of a spec: true when at least one sub-issue card reads live work (Doing, Code Complete,
+    Landing or Testing).
+
+    `children` is the column each sub-issue's card reads, in the loop's own words; the sub-issue relation comes with the
+    pass's one read. A spec is a document, never work (ADR-0142): the fact moves the spec's card, never a dispatch."""
+    return {"child_live": any(c in LIVE_WORK for c in children)}

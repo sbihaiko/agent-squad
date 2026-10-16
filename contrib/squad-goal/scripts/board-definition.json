@@ -33,7 +33,7 @@
     {
       "name": "Doing",
       "color": "YELLOW",
-      "fact": "A live run holds it; a review wait is marked here",
+      "fact": "A live run holds it; a review wait, or a spec whose child is live work, is marked here",
       "actor": "The run",
       "terminal": false
     },

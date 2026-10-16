@@ -14,7 +14,7 @@ import sys
 
 statuses = {status["name"]: status["fact"] for status in json.load(open(sys.argv[1]))["statuses"]}
 expected = {
-    "Doing": "A live run holds it; a review wait is marked here",
+    "Doing": "A live run holds it; a review wait, or a spec whose child is live work, is marked here",
     "Code Complete": "A child is in the wave branch",
     "Landing": "The wave is approved and the push to dev is in progress",
     "Testing": "CI runs on the dev tip",

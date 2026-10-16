@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "039335dee82c74d591d210d74ec6d1161df01918e6d93f4267a8412f89b86742"
+PINNED = "5af439f883a0e9d4c283c186cb57773e5224fcbfa5b20af52e9bb7c77c9dabe9"
 SHIPPED = ["Backlog", "Todo", "Doing", "Code Complete", "Landing", "Testing", "Closed", "Abandoned"]
 
 

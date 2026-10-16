@@ -23,7 +23,7 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "039335dee82c74d591d210d74ec6d1161df01918e6d93f4267a8412f89b86742"
+PIN_SHA256 = "5af439f883a0e9d4c283c186cb57773e5224fcbfa5b20af52e9bb7c77c9dabe9"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.
@@ -54,15 +54,16 @@ def column_for(facts):
     """(column, freeze label or None) the shipped table names for one open or closed issue's facts.
 
     The furthest the work reached sets the column; a freeze never moves it (the definition's own rule). Facts are booleans,
-    each missing one false: abandoned, closed, dev_ci, landing, wave_branch, run_live, spec, owner (an owner label), gated
-    (another item gates it), and review_wait (a marker on Doing)."""
+    each missing one false: abandoned, closed, dev_ci, landing, wave_branch, run_live, spec, child_live (a spec whose
+    sub-issue is live work), owner (an owner label), gated (another item gates it), and review_wait (a marker on Doing)."""
     freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
     if facts.get("abandoned"): return "Abandoned", freeze
     if facts.get("closed"): return "Closed", freeze
     if facts.get("dev_ci"): return "Testing", freeze
     if facts.get("landing"): return "Landing", freeze
     if facts.get("wave_branch"): return "Code Complete", freeze
-    if facts.get("run_live") or facts.get("review_wait"): return "Doing", freeze
+    if facts.get("run_live") or facts.get("review_wait") or facts.get("child_live"): return "Doing", freeze
+    # A spec is a document, never work (ADR-0142): the child_live fact above moves the spec's card, and never a dispatch.
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
 
