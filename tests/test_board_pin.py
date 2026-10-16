@@ -63,6 +63,8 @@ def test_the_pin_command_exits_one_on_a_mismatch(tmp_path):
 
 @pytest.mark.parametrize("facts, column, freeze", [
     ({"spec": True}, "Backlog", None),
+    ({"spec": True, "child_live": True}, "Doing", None),
+    ({"spec": True, "child_live": False}, "Backlog", None),
     ({}, "Todo", None),
     ({"run_live": True}, "Doing", None),
     ({"review_wait": True}, "Doing", None),

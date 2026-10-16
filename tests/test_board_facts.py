@@ -56,6 +56,32 @@ def test_review_state_reads_the_verdict_for_the_tip_only():
     assert facts.review_state("VERDICT: CHANGES\n", "abc\n", "abc") == "waiting"
 
 
+def _spec(*children):
+    """The facts of a spec whose sub-issue cards read `children` (the loop's own words for them)."""
+    return {"spec": True, **facts.spec_facts(list(children))}
+
+
+def test_a_spec_with_a_live_child_reads_doing():
+    for child in ("Doing", "Code Complete", "Landing", "Testing"):
+        assert columns.column_for(_spec(child))[0] == "Doing"
+
+
+def test_a_spec_with_no_live_child_reads_backlog():
+    assert columns.column_for(_spec())[0] == "Backlog"
+    assert columns.column_for(_spec("Todo"))[0] == "Backlog"
+    assert columns.column_for(_spec("Closed", "Abandoned"))[0] == "Backlog"
+
+
+def test_an_open_work_issue_with_no_spec_label_still_reads_todo():
+    assert columns.column_for({}) == ("Todo", None)
+    assert columns.column_for({"child_live": False}) == ("Todo", None)
+
+
+def test_the_child_live_fact_marks_live_work_only():
+    assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": False}
+    assert facts.spec_facts(["Code Complete"]) == {"child_live": True}
+
+
 def test_the_hub_legacy_table_names_no_pull_request_fact():
     names = {c["fact"] for c in columns.COLUMNS}
 
