@@ -538,8 +538,8 @@ def reconcile_board():
             elif i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor, and the board says so
                 why = "; ".join(i["reasons"]) or "no reason recorded"
                 set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
-            else:
-                set_expected(n, "Code Complete", f"run {i['run_id']} completed but nothing landed", i["run_id"], i["run_ts"], 40)
+            else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
+                set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} completed with nothing landed", i["run_id"], i["run_ts"], 20)
     for m in sorted((st / "auto").glob("disp-*")):
         n = m.name[5:]; holder = m.read_text().strip()
         if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
