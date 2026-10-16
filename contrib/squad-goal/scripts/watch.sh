@@ -64,6 +64,19 @@ land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its
 }
 while :; do
   c0=$SECONDS
+  # The token tripwire runs at the TOP of the cycle, before any step that spends tokens: the moment the burn since the
+  # guard's own marker crosses the cap the loop stops itself -- on the first pass, no second attempt. watchd must be
+  # stopped too, not merely this cycle ended, because it restarts watch.sh after 5 s. The guard's own sentence says why:
+  # it goes to the cycle log, the token-stop marker the owner reads, and to stdout. Only exit 1 with a sentence stops
+  # the loop; a missing or crashing guard is ignored, so a bad guard never takes the loop down by itself.
+  guard_stop=$("$(dirname "$0")/token-guard.sh" 2>/dev/null); guard_rc=$?
+  if [ "$guard_rc" = 1 ] && [ -n "$guard_stop" ]; then
+    printf '%s\n' "$guard_stop" >> "$SG_STATE/cycle.log"
+    printf '%s\n' "$guard_stop" > "$SG_STATE/token-stop"
+    printf '%s\n' "$guard_stop"
+    "$(dirname "$0")/watchd.sh" stop
+    exit 0
+  fi
   for r in $(cat "$SG_STATE/active-runs.txt"); do case "$seen" in *" $r "*) continue;; esac
     v=$(python3 -c "import json,sys
 landed=0; v=None
