@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Board reconciler: derive each tracked issue's Status from GitHub facts and move the card.
 Facts only (no comment-text inference): the table defines every destination from the fact that earns it. Dry run by default: RECONCILE=apply writes.
+The vocabulary is the carrier's: under SG_BOARD_VOCAB=shipped the write names the shipped column (ADR-0141), a column the
+shipped board has no name for is no write, and a write the carrier refused is named with its own text and fails the pass
+(#454). A MOVE line beside a write that never landed is a log that lies.
 Scope: issues already on board 4 (open ones only from number >= RECONCILE_MIN, default 1102; a closed issue of any number is derived to its terminal column) plus new `bug` issues.
 A card never moves backwards: the column it carries is the furthest the work reached and is its own watermark, so a recomputed
 column lower in the shipped flow is refused, reported by name, and no new ledger is kept. A merge taken back is a tag plus a new
 issue, never a move back, so a card the facts pull back out of a terminal column keeps its column and carries the tag."""
 import json, os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-from board_columns import BY_FACT, COLUMNS
+from board_columns import BY_FACT, COLUMNS, SHIPPED_NAME
 from issue_state import board_state
 REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = int(os.environ.get("SG_PROJECT") or 0)
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
 MIN = int(os.environ.get("RECONCILE_MIN", "1102")); APPLY = os.environ.get("RECONCILE") == "apply"
+VOCAB = os.environ.get("SG_BOARD_VOCAB")   # the vocabulary the carrier holds, the switch the janitor reads too: `shipped` writes the shipped names
+REFUSED = []   # the cards whose write the carrier refused this pass (#454)
 FLOW = {column["name"]: column["flow"] for column in COLUMNS}   # the shipped column order (the flow the page draws left to right): a card moves forward along it and never back
 TERMINAL = {column["name"] for column in COLUMNS if column["terminal"]}   # the columns the work is delivered at, each entered once
 TAG = "reverted"   # what a card carries when its merge was taken back (#246): the tag and the new issue decide what happens next, never a silent move back
@@ -32,6 +37,11 @@ for b in js("api", f"repos/{REPO}/branches?per_page=100") or []:
     cmp = js("api", f"repos/{REPO}/compare/{LAND}...{b['commit']['sha']}") or {}
     if cmp.get("status") in ("ahead", "diverged"): refs.setdefault(int(m.group(1)), b["name"])
 def labels_of(n): return [x.get("name") for x in js("api", f"repos/{REPO}/issues/{n}/labels") or []]
+def shipped_name(to):
+    """The name the carrier holds for a column: this module's own until the board carries the shipped vocabulary, and the
+    shipped name after (the janitor reads the same switch, #249). The shipped board has no name for Blocked, which is the
+    owner freeze over the column the work reached, never a column of its own (ADR-0141): it earns None, and no write."""
+    return SHIPPED_NAME.get(to, to) if VOCAB == "shipped" else to
 def move(n, to, why):
     cur = items.get(str(n)) or None
     if cur in FLOW and FLOW[to] < FLOW[cur]:   # the card itself is the watermark: its column is the furthest the work reached, and the shipped flow order fixes which way is back
@@ -41,8 +51,19 @@ def move(n, to, why):
             print(f"{'TAG' if APPLY else 'WOULD TAG'} #{n} {TAG}")
             if APPLY and TAG not in labels_of(n): gh("api", "--method", "POST", f"repos/{REPO}/issues/{n}/labels", "-f", f"labels[]={TAG}")   # the tag is written once: a card that carries it already gets no write (#328)
         return
-    print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {to} ({why})")
-    if APPLY: subprocess.run([MOVE, OWNER, str(BOARD), to, str(n)], capture_output=True)
+    name = shipped_name(to)
+    if name is None:
+        print(f"{'FREEZE' if APPLY else 'WOULD FREEZE'} #{n} {to} ({why}): the shipped board carries it as the owner freeze, whose marker the janitor writes")
+        return
+    print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {name} ({why})")
+    if APPLY: write(n, [name], name)
+def write(n, args, name):
+    """One writer call. A refusal is named with the carrier's own text and ends the pass non-zero: a MOVE line beside a write
+    that never landed is a log that lies, which is what this pass filed for months (#454)."""
+    r = subprocess.run([MOVE, *args, str(n)], capture_output=True, text=True)
+    if r.returncode:
+        REFUSED.append(n)
+        print(f"WRITE REFUSED #{n} -> {name}: {(r.stderr or r.stdout).strip().replace(chr(10), ' ')[:200] or 'the writer said nothing'}")
 _state = {}
 def is_open(d):
     if d not in _state:
@@ -78,5 +99,7 @@ for i, cur in sorted(((int(k), v) for k, v in items.items()), key=lambda kv: kv[
 for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or []:
     if "pull_request" in i or i["number"] < MIN or str(i["number"]) in items: continue
     to = BY_FACT["wave_branch"] if i["number"] in refs else BY_FACT["unclaimed"]
-    print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {to} (new bug)")
-    if APPLY: subprocess.run([MOVE, "--add", OWNER, str(BOARD), to, str(i["number"])], capture_output=True)
+    name = shipped_name(to) or to   # a new card is addable at any column the carrier holds; the shipped name is what it holds
+    print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {name} (new bug)")
+    if APPLY: write(i["number"], ["--add", OWNER, str(BOARD), name], name)
+sys.exit(1 if REFUSED else 0)   # a pass that could not write what it reported is a failed pass, never a quiet one
