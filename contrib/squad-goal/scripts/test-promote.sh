@@ -21,6 +21,20 @@ adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --a
 ci() { printf '#!/bin/bash\necho "ci read %s" >> "%s/ci.log"\necho "%s"\n' "$1" "$T" "$1" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci; }
 # line <kind> <result> <sha>: the promotion gate's own status line, as gate.sh writes it.
 line() { printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" > "$SG_STATE/gate-status"; }
+# The promotion proof is a profile setting (#439): the default lives in env.sh after the profile, so a profile that names it
+# wins. The real env.sh is sourced under a throwaway profile directory, so the value is read from the code the loop runs.
+env_proof() {  # $1: the profile's own lines. Prints the SG_PROMOTE_PROOF the real env.sh resolves.
+  local pd=$T/prof
+  rm -rf "$pd"; mkdir -p "$pd"
+  { printf '%s\n' ': "${SG_REPO:=x/emu}"' ': "${SG_OWNER:=x}"' ': "${SG_PROJECT:=1}"' ': "${SG_CHECKOUT:=$HOME/co}"' ': "${SG_BASE:=dev}"'
+    [ -n "${1:-}" ] && printf '%s\n' "$1"; } > "$pd/agent-squad.sh"
+  env -i PATH="$PATH" HOME="$HOME" SG_PROFILES_DIR="$pd" SG_PROFILE=agent-squad SG_STATE_BASE="$T/pcache" SG_SQUAD="$T/squad" \
+    bash -c ". '$d/env.sh' >/dev/null 2>&1 || exit 2; printf '%s\n' \"\${SG_PROMOTE_PROOF:-unset}\""
+}
+out=$(env_proof ': "${SG_PROMOTE_PROOF:=local}"')
+[ "$out" = local ] && ok "a profile's SG_PROMOTE_PROOF wins over the env.sh default" || ko "the profile's proof did not win (got '$out')"
+out=$(env_proof '')
+[ "$out" = ci ] && ok "with no profile setting it, the promotion proof is ci" || ko "the default promotion proof is not ci (got '$out')"
 base=$(tip main)
 
 # The default proof is `ci`: with no SG_PROMOTE_PROOF set the CI seam decides, and a green CI promotes.
