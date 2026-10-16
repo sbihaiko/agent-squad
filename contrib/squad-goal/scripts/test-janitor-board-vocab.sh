@@ -83,7 +83,7 @@ has '^ADD o 4 Doing 2109$' && ok "a spec with a child in Doing folds to Doing" |
 ! has '^RUN o 4 2109 ' && ok "a spec folded to Doing gets no Run fields: no run holds it" || ko "#2109 Run written: $(bc)"
 has '^STATUS o 4 Backlog 2102$' && ok "a spec opens in Backlog, not Open Specs" || ko "#2102 not Backlog: $(bc)"
 has '^STATUS o 4 Backlog 2103$' && ok "an owner-label card with no work reached sits in Backlog" || ko "#2103 not Backlog: $(bc)"
-has '^STATUS o 4 Code Complete 2104$' && ok "an owner-label card keeps the column its work reached" || ko "#2104 lost its column: $(bc)"
+! has ' 2104$' && ok "a run that delivered nothing writes no column over the card the dispatch left, and the freeze stands" || ko "#2104 rewritten: $(bc)"
 /usr/bin/grep -q 'issues/2103/labels.*frozen:owner' "$T/gh.calls" && ok "an owner-label card carries the owner freeze" || ko "#2103 freeze not written: $(cat "$T/gh.calls")"
 /usr/bin/grep -q 'issues/2104/labels.*frozen:owner' "$T/gh.calls" && ok "a frozen card with a reached column carries the owner freeze" || ko "#2104 freeze not written"
 has '^STATUS o 4 Closed 2105$' && ok "a closed issue: Closed" || ko "#2105 not Closed: $(bc)"

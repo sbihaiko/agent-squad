@@ -117,9 +117,10 @@ def test_a_locally_landed_run_without_a_merged_pr_stops_at_code_complete(tmp_pat
 @pytest.mark.heavy
 def test_a_merge_into_a_parent_branch_does_not_move_the_card_to_done(tmp_path):
     """The measured defect (#127, the #125 strand): the PR names the issue but its base is a parent branch, so the base
-    never carries the change. The card stops at Code Complete; a merge the base did not take is not Done."""
+    never carries the change. The card is not Done, and it is not Code Complete either: the run recorded no landing, so
+    nothing of it is in the wave branch the column means (#464, ADR-0145 rule 12), and the issue goes back to the queue."""
     sandbox(tmp_path, "echo 0")
     janitor(tmp_path)
     log = writes(tmp_path)
-    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not stop at Code Complete: {log}"
+    assert f"ADD o 4 Todo {N}" in log, f"the card did not go back to the queue: {log}"
     assert f"Done {N}" not in log, f"the card read Done over a merge the base never took: {log}"

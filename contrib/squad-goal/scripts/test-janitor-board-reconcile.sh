@@ -49,8 +49,8 @@ case "$a" in
   *projectsV2/4/items*)   # one read answers every card: number, Status, repository
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     for n in 2002 2003 2005 2006 2009 2022 2023; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
-    for n in 2001 2007 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
-    for n in 2004 2008 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2001 2007 2008 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2004 2010 2011; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
     printf '2030\tDone\thttps://api.github.com/repos/x/y\n2031\tAbandoned\thttps://api.github.com/repos/x/y\n2029\tClosed\thttps://api.github.com/repos/x/y\n'   # spec children, and a spec card already Closed
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
@@ -154,7 +154,7 @@ bc() { cat "$T/board.calls" 2>/dev/null; }
 # Code Complete -- Done over a merge the base never took is the false delivery #125 showed.
 /usr/bin/grep -q '^ADD o 4 Code Complete 2018$' "$T/board.calls" 2>/dev/null && ok "a merge into a parent branch leaves the card at Code Complete" || ko "#2018 left the dispatch column: $(bc)"
 ! /usr/bin/grep -q 'Done 2018' "$T/board.calls" 2>/dev/null && ok "a merge the base never carried is not Done" || ko "#2018 read Done over work main does not carry: $(bc)"
-/usr/bin/grep -q '^STATUS o 4 Code Complete 2005$' "$T/board.calls" 2>/dev/null && ok "completed unlanded run: card moves to Code Complete" || ko "#2005 not Code Complete: $(bc)"
+/usr/bin/grep -q '^STATUS o 4 Todo 2005$' "$T/board.calls" 2>/dev/null && ok "completed unlanded run: card goes back to the queue, never Code Complete" || ko "#2005 not Todo: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2006$' "$T/board.calls" 2>/dev/null && ok "failed unlanded run: card moves to Todo" || ko "#2006 not Todo: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2007$' "$T/board.calls" 2>/dev/null && ok "owner label: card moves to Blocked" || ko "#2007 not Blocked: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Blocked 2012$' "$T/board.calls" 2>/dev/null && ok "ratification label: card moves to Blocked" || ko "#2012 not Blocked: $(bc)"
