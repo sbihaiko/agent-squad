@@ -58,11 +58,15 @@ def test_over_names_consumers_and_tokens(hub, tmp_path):
     assert "2M" in text   # the threshold is named, so the owner can raise it
 
 
-def test_at_most_five_burners(hub):
+def test_the_burn_block_names_what_fits_and_counts_the_rest(hub):
+    """The block is capped: the footer drops whole blocks when the line is too wide, so a block that never ends would
+    empty the line it is the first fact of (#446). Names fit to BURN_MAX_CHARS, the rest is one count."""
     rows = [(f"review:PR#{n}", 1000000 - n) for n in range(8)]
     burn = {"over": True, "threshold": 1, "burners": burners(*rows), "window_hours": 24}
     text = hub.foot_line(facts(hub, burn))
-    assert "PR#4" in text and "PR#5" not in text
+    assert "PR#0" in text and "PR#1" in text, text                   # the worst burners, in the script's own order
+    assert "PR#2" not in text and "+6" in text, text                 # the other six are one count, never five more names
+    assert len(hub._burn_fact(burn)) <= hub.BURN_MAX_CHARS, hub._burn_fact(burn)
 
 
 def test_under_threshold_renders_nothing(hub, tmp_path):
