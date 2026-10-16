@@ -1,8 +1,13 @@
 #!/bin/bash
-# The promotion line (ADR-0145): the loop fast-forwards stg to the dev tip when the full suite, in both modes, passed on that
-# tip under the machine lock, and never otherwise (promote-stg.sh); the owner fast-forwards main to the stg tip with one command, and it refuses when main is
-# not an ancestor of stg (promote-main.sh). No loop script pushes to main.
-# Offline: a bare local remote and a stub gate command, no gh. usage: bash test-promote.sh
+# The promotion line (ADR-0145, #439): promote-stg.sh moves stg to the dev tip only when the promotion proof is green on that
+# tip, and never otherwise. SG_PROMOTE_PROOF names the proof.
+#   ci (the default): the dev tip's CI. Green promotes; red, running or a missing run promotes nothing.
+#   local: the promotion gate's own status line, $SG_STATE/gate-status, which the run that earns it writes through the existing
+#     seam: `SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>'` (gate.sh's header names the line and the kind). stg
+#     moves only when that line says `full`, `pass`, and names the dev tip exactly.
+# The owner fast-forwards main to the stg tip with one command, and it refuses when main is not an ancestor of stg
+# (promote-main.sh). No loop script pushes to main.
+# Offline: a bare local remote, a stub CI seam and a hand-written status line, no gh. usage: bash test-promote.sh
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G="git -c user.email=a@b -c user.name=t"; R=$T/remote.git
 export SG_STATE=$T/state SG_PROMOTE_REMOTE=$R SG_REPO=x/emu GIT_TERMINAL_PROMPT=0; mkdir -p "$SG_STATE"
@@ -11,57 +16,55 @@ $W checkout -q -b main; $W commit -q --allow-empty -m base; $W remote add origin
 for b in dev stg main; do $W push -q origin "main:refs/heads/$b"; done
 tip() { git -C "$R" rev-parse "refs/heads/$1"; }
 adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --allow-empty -m "$2"; $W push -q origin "$1"; }
-# gate <green|red>: the stub full gate. It logs where it ran (the working directory's HEAD) and whether the machine lock was held.
-gate() { printf '#!/bin/bash\necho "$(git rev-parse HEAD) lock=$([ -d "%s/locks/gate" ] && echo held || echo free)" >> "%s/gate.log"\n[ %s = green ]\n' "$SG_STATE" "$T" "$1" > "$T/gate.sh"; chmod +x "$T/gate.sh"; export SG_PROMOTE_GATE_CMD=$T/gate.sh; }
-ci() { gate "$1"; }
+# ci <green|red|running>: the stub CI seam. It logs the sha it was read for, so a test proves which proof the script used.
+ci() { printf '#!/bin/bash\necho "ci read %s" >> "%s/ci.log"\necho "%s"\n' "$1" "$T" "$1" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci; }
+# line <kind> <result> <sha>: the promotion gate's own status line, as gate.sh writes it.
+line() { printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" > "$SG_STATE/gate-status"; }
 base=$(tip main)
 
-adv dev one; ci green; out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
-[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "a dev tip whose full gate is green is promoted to stg by fast-forward" || ko "green: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
-[ "$(cat "$T/gate.log" 2>/dev/null)" = "$(tip dev) lock=held" ] && ok "the full gate ran once, at the dev tip, under the machine lock" || ko "gate log: '$(cat "$T/gate.log" 2>&1)'"
-IFS=$'\t' read -r _ kind res at < "$SG_STATE/gate-status" 2>/dev/null
-[ "$kind $res $at" = "full pass $(tip dev)" ] && ok "the status line names the full gate, its result and the dev tip" || ko "status line: '$(cat "$SG_STATE/gate-status" 2>&1)'"
+# The default proof is `ci`: with no SG_PROMOTE_PROOF set the CI seam decides, and a green CI promotes.
+unset SG_PROMOTE_PROOF
+adv dev one; ci green; rm -f "$T/ci.log"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ -s "$T/ci.log" ] && ok "the default proof is ci: the CI seam is read with SG_PROMOTE_PROOF unset" || ko "the default proof did not read the CI seam"
+[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "a dev tip whose CI is green is promoted to stg by fast-forward" || ko "green CI: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
 [ "$(tip main)" = "$base" ] && ok "the loop left main alone" || ko "the loop moved main"
 
-for st in red; do
-  adv dev "two-$st"; ci $st; before=$(tip stg); rm -f "$T/gate.log"
-  bash "$d/promote-stg.sh" >/dev/null 2>&1; bash "$d/promote-stg.sh" >/dev/null 2>&1
-  [ "$(tip stg)" = "$before" ] && ok "a dev tip whose full gate is $st is not promoted" || ko "a $st dev tip moved stg"
-  n=$(grep -c "$(tip dev).*$st" "$SG_STATE/promote.log" 2>/dev/null)
-  [ "$n" = 1 ] && ok "a $st tip: the reason is logged once over two passes" || ko "a $st tip: $n log lines"
-  [ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && ok "a $st tip: the full gate ran once over two passes" || ko "a $st tip: gate runs: $(cat "$T/gate.log")"
-  IFS=$'\t' read -r _ kind res at < "$SG_STATE/gate-status" 2>/dev/null
-  [ "$kind $res $at" = "full fail $(tip dev)" ] && ok "a $st tip: the status line says fail at the dev tip" || ko "status line: '$(cat "$SG_STATE/gate-status" 2>&1)'"
-done
+# A missing CI run (no check runs) reads as running: nothing is promoted.
+adv dev one-absent; before=$(tip stg); ci running
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && ok "a missing CI run promotes nothing" || ko "running CI: rc $rc, stg $(tip stg), out '$out'"
+case "$out" in *running*) ok "the refusal says the CI is running";; *) ko "the refusal does not say running: '$out'";; esac
 
-# (#438) $SG_STATE/promote.seen is bounded: old lines are pruned, and the dedupe holds for the latest red tip.
-for i in $(seq 1 100); do echo "dead$i gate red" >> "$SG_STATE/promote.seen"; done
-adv dev pruned; ci red; rm -f "$T/gate.log"; bash "$d/promote-stg.sh" >/dev/null 2>&1; bash "$d/promote-stg.sh" >/dev/null 2>&1
-[ "$(wc -l < "$SG_STATE/promote.seen" | tr -d ' ')" -le 20 ] && ok "promote.seen is pruned to the last few lines" || ko "promote.seen has $(wc -l < "$SG_STATE/promote.seen" | tr -d ' ') lines"
-[ "$(wc -l < "$T/gate.log" | tr -d ' ')" = 1 ] && grep -qxF "$(tip dev) gate red" "$SG_STATE/promote.seen" && ok "after the prune the latest red tip is still not gated again" || ko "pruned dedupe: gate runs '$(cat "$T/gate.log" 2>&1)'"
+# The local proof: the promotion gate's own status line, and nothing else.
+export SG_PROMOTE_PROOF=local
+adv dev two; before=$(tip stg); rm -f "$SG_STATE/gate-status"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && ok "local: no status line promotes nothing" || ko "local no line: rc $rc, stg $(tip stg), out '$out'"
+case "$out" in *"no local proof"*) ok "local: the refusal names the missing proof";; *) ko "local: the refusal does not name the missing proof: '$out'";; esac
 
-adv dev later; ci green; bash "$d/promote-stg.sh" >/dev/null 2>&1
-[ "$(tip stg)" = "$(tip dev)" ] && ok "a later green tip carries the earlier work" || ko "later green tip did not promote"
+other=$(tip stg)   # an older commit is not the dev tip
+adv dev two-other; before=$(tip stg); line full pass "$other"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && ok "local: a proof for another sha promotes nothing" || ko "local other sha: rc $rc, stg $(tip stg), out '$out'"
+case "$out" in *"$other"*) ok "local: the refusal names the sha the proof has";; *) ko "local: the refusal does not name the sha it has: '$out'";; esac
 
-# stg holds work dev lacks: a fast-forward is impossible, so nothing moves.
-adv stg stg-only; adv dev dev-only; ci green; before=$(tip stg); rm -f "$T/gate.log"
+adv dev three; before=$(tip stg); line full fail "$(tip dev)"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ "$(tip stg)" = "$before" ] && ok "local: a failed proof for the dev tip promotes nothing" || ko "local fail: rc $rc, stg $(tip stg), out '$out'"
+
+adv dev four; before=$(tip stg); line full pass "$(tip dev)"
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "local: a full pass for the dev tip promotes, and stg moves" || ko "local pass: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
+
+# stg holds work dev lacks: a fast-forward is impossible, so nothing moves, whatever the proof.
+adv stg stg-only; adv dev dev-only; line full pass "$(tip dev)"; before=$(tip stg)
 bash "$d/promote-stg.sh" >/dev/null 2>&1
 [ "$(tip stg)" = "$before" ] && ok "a dev tip that does not descend from stg is not promoted" || ko "stg moved without a fast-forward"
-[ ! -e "$T/gate.log" ] && ok "no full gate runs for a tip that cannot fast-forward" || ko "the gate ran for a tip with no fast-forward"
 $W checkout -q -B stg origin/dev; $W push -q -f origin stg   # fixture: realign stg with dev
 
-# The default full gate: both modes, in this order, and stg moves only when both pass.
-unset SG_PROMOTE_GATE_CMD; printf '#!/bin/bash\necho "$*" >> "%s/py.log"\ncase "$*" in *"${PYFAIL:-@none@}"*) exit 1;; esac\n' "$T" > "$T/py"; chmod +x "$T/py"; export SG_GATE_PY=$T/py
-$W checkout -q -B stg origin/dev; $W push -q -f origin stg; adv dev three; before=$(tip stg); rm -f "$T/py.log"; PYFAIL="-p no:xdist" bash "$d/promote-stg.sh" >/dev/null 2>&1
-[ "$(tip stg)" = "$before" ] && ok "the serial run red: stg does not move" || ko "stg moved with a red serial run"
-[ "$(cat "$T/py.log")" = "-m pytest -n auto -p no:deepeval
--m pytest -p no:xdist -p no:deepeval" ] && ok "the full gate runs -n auto, then -p no:xdist" || ko "gate modes: '$(cat "$T/py.log")'"
-adv dev four; before=$(tip stg); rm -f "$T/py.log"; PYFAIL="-n auto" bash "$d/promote-stg.sh" >/dev/null 2>&1
-[ "$(tip stg)" = "$before" ] && [ "$(wc -l < "$T/py.log" | tr -d ' ')" = 1 ] && ok "the parallel run red: stg does not move and the serial run is skipped" || ko "parallel red: '$(cat "$T/py.log")'"
-adv dev five; rm -f "$T/py.log"; PYFAIL=none-at-all bash "$d/promote-stg.sh" >/dev/null 2>&1
-[ "$(tip stg)" = "$(tip dev)" ] && ok "both modes green: stg moves to the dev tip" || ko "both green did not promote"
-
 # The owner command.
+unset SG_PROMOTE_PROOF
 bash "$d/promote-main.sh" >/dev/null 2>&1; rc=$?
 [ $rc = 0 ] && [ "$(tip main)" = "$(tip stg)" ] && ok "the owner command promotes stg to main" || ko "owner: rc $rc, main $(tip main), stg $(tip stg)"
 adv main main-only; before=$(tip main)
@@ -71,11 +74,12 @@ out=$(bash "$d/promote-main.sh" 2>&1); rc=$?
 # No loop script pushes to main: only promote-main.sh names it, and a test fixture is no loop script.
 bad=$(cd "$d" && grep -lE 'push[^#]*(refs/heads/main|origin main|HEAD:main)' *.sh *.py 2>/dev/null | grep -v -e '^test-' -e '^promote-main.sh$')
 [ -z "$bad" ] && ok "no loop script pushes to main" || ko "pushes to main: $bad"
-# (#392) The promotion gate takes the machine-wide gate lock: with a holder it waits, says so on one line, then promotes.
-adv dev three; ci green; rm -f "$T/gl"
-(bash "$d/serial.sh" gate sh -c "sleep 10; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/gate/pid" ] && break; sleep 0.1; done
+
+# (#392) The promotion reads the machine-wide gate lock: with a holder it waits, says so on one line, then promotes.
+export SG_PROMOTE_PROOF=local; adv dev lock; line full pass "$(tip dev)"; rm -f "$T/gl"
+(bash "$d/serial.sh" gate sh -c "sleep 5; echo holder >> $T/gl") & for _ in $(seq 1 50); do [ -s "$SG_STATE/locks/gate/pid" ] && break; sleep 0.1; done
 out=$(bash "$d/promote-stg.sh" 2>&1); wait
-[ "$(printf '%s\n' "$out" | grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "the promotion gate waits for the holder, on one line" || ko "promotion wait lines: '$out'"
-[ "$(tip stg)" = "$(tip dev)" ] && ok "the waiting promotion gate is not dropped: stg is promoted" || ko "the waiting promotion did not promote"
+[ "$(printf '%s\n' "$out" | grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "the promotion waits for the holder, on one line" || ko "promotion wait lines: '$out'"
+[ "$(tip stg)" = "$(tip dev)" ] && ok "the waiting promotion is not dropped: stg is promoted" || ko "the waiting promotion did not promote"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
