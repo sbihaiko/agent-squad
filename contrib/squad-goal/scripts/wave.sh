@@ -203,15 +203,16 @@ child_gate() {
 # from the tip and its issue goes back to the queue -- and the check runs again, so the wave without it can land. Exit 0:
 # the tip's check is green (after any child left); 1: it stayed red, so the landing fails as before.
 wave_check() {
-  local S=$1 w=$2 rc found cx
+  local S=$1 w=$2 rc found cx clog
   [ -n "$tipgate" ] || return 0
   while :; do
-    (cd "$S" && eval "$tipgate") >/dev/null 2>&1 && return 0
+    clog="$SG_STATE/wave-check-$(printf '%s' "$w" | tr / _).log"   # the check's own output, kept: a red that names no cause has to name its log (#447)
+    if (cd "$S" && eval "$tipgate") >"$clog" 2>&1; then rm -f "$clog"; return 0; fi
     found=""; while read -r sha; do
       [ -n "$sha" ] || continue
       child_gate "$S" "$sha^" "$sha" "$(child_of "$S" "$sha")" || { found=$sha; break; }
     done < <($G -C "$S" log --format=%H "origin/$base..HEAD" 2>/dev/null)   # newest first: the last entrant is tried first
-    [ -n "$found" ] || { echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause"; return 1; }
+    [ -n "$found" ] || { echo "WAVE CHECK RED $w: the wave tip's check is red and no child's own suite names the cause (the check's own output is $clog)"; return 1; }
     cx=$(child_of "$S" "$found")
     $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }

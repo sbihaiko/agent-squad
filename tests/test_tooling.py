@@ -35,6 +35,30 @@ def test_ruff_check_squad_and_tests_is_clean():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_every_gate_lints_the_scope_this_repository_owns():
+    """Guard for the lint scope: the CI workflow and every local gate lint `squad tests`.
+
+    `ruff check .` also lints the delivery loop's own scripts under contrib/squad-goal/scripts, which the repository never
+    lints, and it is red at every tip: 1378 findings at ebb70f8, all of them there. The fast gate's default battery drifted
+    to `.` while branchland.sh, wave.sh and ci.yml keep the repository's own scope, so a child entering a wave could never
+    pass its gate and no wave could land (#447).
+    """
+    for f in ("contrib/squad-goal/scripts/branchland.sh", "contrib/squad-goal/scripts/wave.sh",
+              "contrib/squad-goal/scripts/fast-gate.sh", ".github/workflows/ci.yml"):
+        # The command lines only: the comment above a gate may name the wrong scope it was warned about, and does.
+        body = "\n".join(line for line in (ROOT / f).read_text().splitlines() if not line.lstrip().startswith("#"))
+        assert "ruff check squad tests" in body, f"{f} does not lint the scope this repository owns"
+        assert "ruff check ." not in body, f"{f} lints a wider scope than the repository owns"
+
+
+def test_the_wave_check_keeps_the_output_of_a_red_tip():
+    """Guard for the diagnosis path: a red tip check writes what it printed to a named log, never `/dev/null` (#447)."""
+    txt = (ROOT / "contrib/squad-goal/scripts/wave.sh").read_text()
+    assert 'clog="$SG_STATE/wave-check-' in txt and 'eval "$tipgate") >"$clog" 2>&1' in txt, \
+        "the wave's tip check throws its output away, so a red one names no cause"
+    assert "the check's own output is $clog" in txt, "the WAVE CHECK RED line does not name the log"
+
+
 def _ci_run_lines() -> list[str]:
     import yaml
 

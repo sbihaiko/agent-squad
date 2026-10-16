@@ -10,7 +10,11 @@
 here="$(cd "$(dirname "$0")" && pwd)"
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
-fastcmd=${SG_FAST_CMD:-'uv run --extra dev ruff check . && uv run --extra dev mypy && uv run --extra dev pytest -n auto -m "not heavy" -p no:deepeval'}
+# The base battery is the repository's own rule, the one ci.yml, branchland.sh and wave.sh run: `ruff check squad tests`
+# and `mypy squad`. `ruff check .` lints this loop's own scripts, which no other gate lints, and it is red at every tip:
+# 1378 findings, all under contrib/squad-goal/scripts, so a child could never enter a wave (#447).
+py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
+fastcmd=${SG_FAST_CMD:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n auto -m 'not heavy'"}
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
 bash -c "$fastcmd" || { echo "fast-gate: the base battery failed"; exit 1; }
