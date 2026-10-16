@@ -3,7 +3,7 @@
 #
 # branchreviewpass.sh keeps the verdict of each tip in $SG_STATE/review-<key>.{md,sha}. This pass lists the work branches as the
 # review pass does (workbranches.sh) and, for each branch whose kept sha is its tip and whose verdict is CHANGES, dispatches one fix
-# run on the same branch: the request is branchfix.sh's text, sent through mkreq.sh and launch.py as autofix.sh sends a PR fix round.
+# run on the same branch: the request is branchfix.sh's text, sent through mkreq.sh and launch.py as every pass sends a run.
 # The fix run pushes a new tip; the review pass reviews it; an APPROVE lets branchland.sh land it.
 # Once per reviewed tip: auto/branchfix-<key>-<sha9> holds the run id. A launch that starts no run keeps no marker, so the next pass
 # retries the tip.

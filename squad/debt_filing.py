@@ -4,7 +4,7 @@ The review is the checklist of `contrib/squad-goal/scripts/revformat.py` (#1777)
 its severity, and a bullet reads `- <file>:<line> — <defect> — <concrete failure> — <fix>`, at most two lines.
 BLOCKING findings block the merge and are never filed; the acceptance criterion of a filed task is that fix.
 The filer asks revformat.py what a finding is (`is_finding`), the same predicate the severity counts and the
-`--summary` line `autopilot.sh` reads ask (#1834), so a bullet that answers a previous finding -- under a fix
+`--summary` line `branchfixpass.sh` reads ask (#1834), so a bullet that answers a previous finding -- under a fix
 round's `## Resolved`, or marked `fixed:` where it sits -- is filed by nobody.
 A review saved before the checklist (an inline DEBT tag, no sections) is still read the old way.
 The filed issue is put on the loop's project board when it is opened, and a finding whose issue is already filed

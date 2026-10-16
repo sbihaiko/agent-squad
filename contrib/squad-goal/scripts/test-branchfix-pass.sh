@@ -94,5 +94,5 @@ r=$(OPEN="13 14" LABELED="13=needs-ratification 14=other" fp)
 push gui/10-w; printf 'VERDICT: CHANGES\n## Blocking\n\n## Debt\n- c.sh:1 — naming — unclear — rename\n' > "$T/st/review-gui_10-w.md"; $O rev-parse gui/10-w > "$T/st/review-gui_10-w.sha"
 r=$(OPEN="7 8 9 10" fp); [ "$(n gui/10-w)" = 0 ] && ok "a debt-only CHANGES dispatches no fix round" || ko "a debt-only CHANGES was dispatched: '$r'"
 w=$(/usr/bin/grep -n 'single.sh" branchfix ' "$d/watch.sh")
-case "$w" in *'SG_PRLAND_PAUSED'*'branchfixpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_PRLAND_PAUSED";; *) ko "watch.sh does not run the fix pass: '$w'";; esac
+case "$w" in *'SG_LAND_PAUSED'*'branchfixpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_LAND_PAUSED";; *) ko "watch.sh does not run the fix pass: '$w'";; esac
 exit $fail

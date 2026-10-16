@@ -28,7 +28,7 @@ CONTROL_PATHS = [
     "contrib/squad-goal/scripts/watch.sh",
     "contrib/squad-goal/scripts/watchd.sh",
     "contrib/squad-goal/scripts/single.sh",
-    "contrib/squad-goal/scripts/autopilot.sh",
+    "contrib/squad-goal/scripts/branchland.sh",
     "contrib/squad-goal/scripts/janitor.py",
     "contrib/squad-goal/scripts/autofrontier.sh",
     "contrib/squad-goal/scripts/autobug.sh",

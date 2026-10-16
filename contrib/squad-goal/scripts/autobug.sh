@@ -1,13 +1,13 @@
 #!/bin/bash
 # usage: autobug.sh   (called by watch.sh every ~6 min; AB_DRY=1 prints what it would dispatch)
-# Automatic bug/debt fixing: every open issue labeled $SG_BUG_LABEL (then, only when none of those is startable, `debt`) that has no open PR naming it ("Refs #N"), no dispatch
+# Automatic bug/debt fixing: every open issue labeled $SG_BUG_LABEL (then, only when none of those is startable, `debt`) that no open work branch names, no dispatch
 # marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
-# PR per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
-# runs). The marker is never removed after a launch: a run that ends without a PR is surfaced by its RUN verdict, and the
+# per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
+# runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529): a dispatch that never
 # happened must not mark the issue done. The janitor frees it for a run that never starts (no record.jsonl, rule J, at
 # most twice) or that ends with a failed verdict and nothing landed (janitor rule O, which also puts the cards back). SG_AUTO_BUGFIX=no turns it off.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; . "$(dirname "$0")/refusal-names.sh"; . "$(dirname "$0")/workbranches.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=autobug   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 export SG_FILE_PASS="autobug-$$-$(date +%s)"   # the filings of THIS pass share one ceiling (#140): a fresh pass is never held by the ledger of one that ended
 # ONE wrapper owns the refusal (#1855). `gh api` writes the error body to stdout and exits non-zero, and it does not honour
@@ -150,9 +150,9 @@ gather_bugs() {
     'BEGIN { n = split(ENVIRON["KINDS"], L, "\n"); for (i = 1; i <= n; i++) { split(L[i], f, "\t"); k[f[1]] = f[2] } }
      NF { if (k[$1] == "bug") print; else if (k[$1] == "" && index("," $2 ",", "," lab ",")) print }'
 }
-pulls=$(gh_api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))') \
-  || { echo "AUTOBUG: the open-PR list is not a list: $gh_api_err; nothing dispatched" >&2; exit 0; }
-refs=" $(printf '%s\n' "$pulls" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
+# An issue an open work branch names is past dispatch (#361): the branch is the unit of work, so a git read of the remote
+# heads is the fact, never a GitHub call.
+refs=" $(sg_work_issues) "
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["
 for sel in "$lab" debt; do

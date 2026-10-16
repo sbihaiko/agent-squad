@@ -17,7 +17,7 @@ sg_cq_file() {
   case "${SG_REPO:-}" in ?*/?*) ;; *) echo "sg_cq_file: no repository in force for $leaf" >&2; return 1;; esac
   printf '%s/cq/%s#%s\n' "${SG_STATE:?sg_cq_file: no state directory}" "${SG_REPO/\//__}" "$leaf"
 }
-# One loop comment of a kind per issue or PR (#328): `sg_cq_status <n> <tag>` and `sg_cq_delivery <n> <tag>` name a queue file that
+# One loop comment of a kind per issue (#328): `sg_cq_status <n> <tag>` and `sg_cq_delivery <n> <tag>` name a queue file that
 # cqflush.sh does not post blindly. It finds the comment carrying the hidden marker of that kind (status or delivery), edits it when the body
 # differs, and writes nothing when it is the same. Every writer of a status or a delivery comment names its file through these two.
 sg_cq_status() { sg_cq_file "$1-status~$2.md"; }
@@ -68,7 +68,7 @@ sg_same_repo() {
   a=$(sg_resolve_repo "$1") && b=$(sg_resolve_repo "$2") || return 1
   [ "$a" = "$b" ]
 }
-# The land of an address is the pull request merge into the addressed repository's base branch.
+# The land of an address is the branch landing into the addressed repository's base branch.
 # A bare number resolves to the profile repository. A repository outside the profile is refused.
 sg_land_target() {
   local n r; n=$(sg_address_issue "${1:-}"); r=$(sg_address_repo "${1:-}")

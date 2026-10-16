@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regression test for mkreq.sh's dispatch-time slice gate (ADR-0274, Refs #1400, #1519). usage: bash test-mkreq.sh
-# Offline: gh is a stub that reports one open PR touching scripts/shared.py and HOME is a throwaway directory.
+# Offline: HOME is a throwaway directory, and the only holder of a file is a queued request (#361: the loop reads no pull request).
 # The report is buffered so the first line says TDD RED while a fix is missing, TDD GREEN once it is in.
 d=$(dirname "$0"); T=$(mktemp -d); log=$T/report; : > "$log"; fail=0
 # Hermetic (#1410, the rule of shell-suites.sh): every inherited SG_* is cleared, so the live loop's fork, repo and state can
@@ -10,15 +10,7 @@ ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "
 S=$T/scripts; mkdir -p "$S" "$T/bin" "$T/home"
 cp "$d/mkreq.sh" "$d/address.sh" "$d/models.json" "$d/req-checklist.txt" "$S/"   # address.sh: the seam mkreq.sh resolves its state directory through, as env.sh sources it
 printf 'export SG_REPO=o/r SG_CHECKOUT=%s\n' "$T/co" > "$S/env.sh"
-cat > "$T/bin/gh" <<'GH'
-#!/bin/bash
-case "$*" in
-  *"/files"*) echo scripts/shared.py;;
-  *"pulls?state=open"*) echo 7;;
-esac
-GH
-chmod +x "$T/bin/gh"
-export HOME=$T/home PATH="$T/bin:$PATH"; R=$HOME/.cache/squad-goal/req
+export HOME=$T/home; R=$HOME/.cache/squad-goal/req
 body() { printf 'IMPORTANT: your first and only action is X\nPANEL: %s\nEdit %s\n' "$1" "$2" > "$T/$3.body"; }
 run() { bash "$S/mkreq.sh" "$1" "$T/$1.body" 2>"$T/$1.err" >"$T/$1.out"; }
 runf() { SG_SLICE_FORCE=1 bash "$S/mkreq.sh" "$1" "$T/$1.body" 2>"$T/$1.err" >"$T/$1.out"; }
@@ -30,14 +22,16 @@ run b && ko "same-panel overlap launched" || ok "same-panel overlap refuses"
 [ -f "$R/b.txt" ] && ko "a refused request left a file" || ok "refused request wrote no file"
 # 2. a disjoint panel launches
 body p2 scripts/c.py c; run c && ok "disjoint panel launches" || ko "disjoint refused: $(cat "$T/c.err")"
-# 3. an overlap with an open PR is refused, not warned about (#1519): it names the PR and the path and writes nothing
-body p3 scripts/shared.py e; run e && ko "open-PR overlap launched" || ok "open-PR overlap refuses"
-/usr/bin/grep -q 'PR #7' "$T/e.err" && /usr/bin/grep -q 'scripts/shared.py' "$T/e.err" && ok "open-PR refusal names the PR and the path" || ko "open-PR refusal text: $(cat "$T/e.err")"
-/usr/bin/grep -q 'SG_SLICE_FORCE=1' "$T/e.err" && ok "refusal names the SG_SLICE_FORCE=1 override" || ko "refusal hides the override: $(cat "$T/e.err")"
-[ -f "$R/e.txt" ] && ko "open-PR refusal left a file" || ok "open-PR refusal wrote no file"
-runf e && [ -f "$R/e.txt" ] && ok "SG_SLICE_FORCE=1 dispatches the same body" || ko "override refused: $(cat "$T/e.err")"
-/usr/bin/grep -q 'SLICE FORCE' "$T/e.err" && ok "a forced overlap is announced on stderr" || ko "forced overlap silent: $(cat "$T/e.err")"
-rm -f "$R/e.txt"
+# 3. a body naming a file a queued request holds refuses, not warns (#1519): it names the holder and the path, names the
+# override, and writes nothing. It is the holder the later cases (16, 17b, 17c) contest, so request e stays.
+body p3 scripts/shared.py e; run e && [ -f "$R/e.txt" ] && ok "the holder request builds" || ko "holder request: $(cat "$T/e.err")"
+body p3b scripts/shared.py e2; run e2 && ko "an overlap with a queued request launched" || ok "an overlap with a queued request refuses"
+/usr/bin/grep -q 'request e' "$T/e2.err" && /usr/bin/grep -q 'scripts/shared.py' "$T/e2.err" && ok "the refusal names the holder and the path" || ko "refusal text: $(cat "$T/e2.err")"
+/usr/bin/grep -q 'SG_SLICE_FORCE=1' "$T/e2.err" && ok "refusal names the SG_SLICE_FORCE=1 override" || ko "refusal hides the override: $(cat "$T/e2.err")"
+[ -f "$R/e2.txt" ] && ko "the refusal left a file" || ok "the refusal wrote no file"
+runf e2 && [ -f "$R/e2.txt" ] && ok "SG_SLICE_FORCE=1 dispatches the same body" || ko "override refused: $(cat "$T/e2.err")"
+/usr/bin/grep -q 'SLICE FORCE' "$T/e2.err" && ok "a forced overlap is announced on stderr" || ko "forced overlap silent: $(cat "$T/e2.err")"
+rm -f "$R/e2.txt"
 # 4. a queued request of ANOTHER panel refuses too: the rule is not panel-scoped (ADR-0274 is its narrower half)
 body p4 scripts/a.py f; run f && ko "another panel's pending request launched" || ok "a pending request of another panel refuses"
 /usr/bin/grep -q 'request f and request a' "$T/f.err" && ok "cross-panel refusal names the holder request" || ko "cross-panel text: $(cat "$T/f.err")"
@@ -82,26 +76,6 @@ cp "$R/just-req.txt" "$T/co/runs/run-9003/request.txt"; echo '{"event": "verdict
 echo "$T/co/runs/run-9003" >> "$T/home/.cache/squad-goal/active-runs.txt"
 body p9 scripts/justdone.py p
 run p && [ -f "$R/p.txt" ] && ok "a verdict makes the request history at once" || ko "fresh request of a finished run refuses: $(cat "$T/p.err")"
-# 10. (#1769) a FIX RUN is not a second slice. autofix.sh names its request `auto-fix-<pr>-<sha9>` and the body lists the files
-# that PR's own review asked to change -- which the open PR already changes, so the guard refused the launch of the only run
-# that could repair it. PR #1706 (2026-10-11): after a BLOCKING review on 27aaaf5b5, `refusing: request auto-fix-1706-27aaaf5b5
-# names scripts/checks/verify_report_bug_prefix.sh, which open PR #1706 already changes`; autofix.sh then exited 1 and the
-# verdict sat on a mergeable, CI-green PR with nothing working it. ADR-0274 refuses an overlap between two SLICES; a slice and
-# its own repair are one unit of work, and the claim record already carries the number the request name carries.
-body p10 scripts/shared.py auto-fix-7-27aaaf5b5
-run auto-fix-7-27aaaf5b5 && [ -f "$R/auto-fix-7-27aaaf5b5.txt" ] && ok "a fix run for the PR holding the file launches" || ko "fix run for its own PR refused: $(cat "$T/auto-fix-7-27aaaf5b5.err")"
-/usr/bin/grep -q 'refusing' "$T/auto-fix-7-27aaaf5b5.err" && ko "the fix run for its own PR was still refused" || ok "the fix run on its own PR prints no refusal"
-rm -f "$R/auto-fix-7-27aaaf5b5.txt"
-# 10b. the cross-slice rule is intact: the same request shape naming a file a DIFFERENT open PR changes is refused as before
-body p10 scripts/shared.py auto-fix-8-27aaaf5b5
-run auto-fix-8-27aaaf5b5 && ko "an auto-fix request naming another PR's file launched" || ok "an auto-fix request for another PR still refuses"
-/usr/bin/grep -q 'open PR #7' "$T/auto-fix-8-27aaaf5b5.err" && /usr/bin/grep -q 'scripts/shared.py' "$T/auto-fix-8-27aaaf5b5.err" && ok "the cross-PR refusal still names the PR and the path" || ko "cross-PR refusal text: $(cat "$T/auto-fix-8-27aaaf5b5.err")"
-[ -f "$R/auto-fix-8-27aaaf5b5.txt" ] && ko "the cross-PR refusal left a file" || ok "the cross-PR refusal wrote no file"
-# 10c. a plain request (not a fix run) naming the same file of the same open PR is still refused: the exemption is the fix-run
-# class, not "the PR mentions this path somewhere"
-body p10 scripts/shared.py plain-overlap
-run plain-overlap && ko "a plain request on an open PR's file launched" || ok "a plain request on an open PR's file still refuses"
-/usr/bin/grep -q 'open PR #7' "$T/plain-overlap.err" && ok "the plain refusal names the PR" || ko "plain refusal text: $(cat "$T/plain-overlap.err")"
 # 11. (#1774) a path named only inside quoted or code context is not a slice. A frontier/autobug request embeds the full text of
 # every issue it dispatches, so a path quoted as evidence counted as a file the request would edit: issue #1769's body indents
 # `refusing: request auto-fix-1706-27aaaf5b5 names scripts/checks/verify_report_bug_prefix.sh` as a code block, PR #1706 was
@@ -115,7 +89,7 @@ Edit scripts/quoted-free.py
 --- issue #9001
 Evidence from an earlier pass:
 
-    refusing: request auto-fix-1706-27aaaf5b5 names scripts/shared.py, which open PR #7 already changes.
+    refusing: request issue-prose names scripts/shared.py, which a queued request already names.
 
 > refusing: request frontier-x names contrib/squad-goal/scripts/hub.py, which the unmerged fork branch gui/1497 touches.
 
@@ -139,7 +113,7 @@ PANEL: p11
 Edit scripts/issue-prose-free.py
 
 --- issue #9002
-An earlier pass was refused because open PR #7 already changes scripts/shared.py, and a sibling had
+An earlier pass was refused because a queued request already names scripts/shared.py, and a sibling had
 claimed contrib/squad-goal/scripts/hub.py while gui/1497 touched dashboard/page.py.
 B
 run issue-prose && [ -f "$R/issue-prose.txt" ] && ok "a path in an embedded issue's prose does not claim a slice" || ko "embedded-issue prose refused the request: $(cat "$T/issue-prose.err")"
@@ -155,7 +129,7 @@ Edit scripts/shared.py
 Fix the bug the issue describes.
 B
 run issue-own && ko "an instruction path already in flight launched" || ok "a path the instructions name still refuses"
-$G -q 'open PR #7' "$T/issue-own.err" && $G -q 'scripts/shared.py' "$T/issue-own.err" && ok "the refusal names the PR and the instruction path" || ko "instruction-path refusal text: $(cat "$T/issue-own.err")"
+$G -q 'request e' "$T/issue-own.err" && $G -q 'scripts/shared.py' "$T/issue-own.err" && ok "the refusal names the holder and the instruction path" || ko "instruction-path refusal text: $(cat "$T/issue-own.err")"
 [ -f "$R/issue-own.txt" ] && ko "the instruction-path refusal left a file" || ok "the instruction-path refusal wrote no file"
 # 14. (#1799) an ac_command is a proof that passes at the FINAL HEAD, never a command that writes to the worktree. A child that
 # follows the TDD mandate can put its RED demonstration into ac_commands, and the final gate then runs it verbatim. The rejected
@@ -170,8 +144,8 @@ $G -q 'open PR #7' "$T/issue-own.err" && $G -q 'scripts/shared.py' "$T/issue-own
 REDCMD='cd ~/wt-as-1783 && git checkout local/next -- scripts/red-demo.py && python3 -m pytest tests/test_red.py -q -p no:deepeval'
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/red-demo.py\n%s\n' "$REDCMD" > "$T/red.body"
 run red && [ -f "$R/red.txt" ] && ok "a body carrying a RED-style ac_command builds" || ko "RED-style body refused: $(cat "$T/red.err")"
-# 14a. the PR-child DONE CHECK forbids the tree-mutating ac_command and sends the RED demonstration to the PR body
-for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'belongs in the PR body' 'not a gate input'; do
+# 14a. the child DONE CHECK forbids the tree-mutating ac_command and sends the RED demonstration to the issue status comment
+for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'belongs in the issue status comment' 'not a gate input'; do
   $G -qF -- "$w" "$R/red.txt" && ok "PR DONE CHECK states '$w'" || ko "PR DONE CHECK lacks '$w'"
 done
 # 15. (#44) a path a request only RUNS is not a slice it edits. Every frontier request carries the preamble line
@@ -194,9 +168,9 @@ $G -qF -- 'contrib/squad-goal/scripts/shell-suites.sh' "$T/cmd4.err" && ok "and 
 # 16. (#10) A refusal reports every contested file and its holder when SG_SLICE_REPORT names a file.
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/free-10.py\nEdit scripts/shared.py\n' > "$T/rep.body"
 SG_SLICE_REPORT=$T/rep.report run rep && ko "a body naming a contested file launched" || ok "a body naming a contested file refuses"
-printf 'scripts/shared.py\tPR #7\n' > "$T/rep.want"
+printf 'scripts/shared.py\trequest e\n' > "$T/rep.want"
 cmp -s "$T/rep.want" "$T/rep.report" && ok "the report lists the contested file with its holder" || ko "report: $(cat "$T/rep.report" 2>&1)"
-[ "$($G -c '^refusing:' "$T/rep.err")" = 1 ] && $G -q 'names scripts/shared.py' "$T/rep.err" && ok "the refusal is one line, naming the contested file" || ko "refusal text: $(cat "$T/rep.err")"
+[ "$($G -c '^refusing:' "$T/rep.err")" = 1 ] && $G -q 'scripts/shared.py' "$T/rep.err" && ok "the refusal is one line, naming the contested file" || ko "refusal text: $(cat "$T/rep.err")"
 [ -f "$R/rep.txt" ] && ko "a reported refusal left a file" || ok "a reported refusal wrote no file"
 # 16b. a clean body reports nothing, and a stale report never survives: the file is emptied before the guard reads anything
 printf 'stale\n' > "$T/clean.report"; printf 'IMPORTANT: your first and only action is X\nEdit scripts/free-10b.py\n' > "$T/clean.body"

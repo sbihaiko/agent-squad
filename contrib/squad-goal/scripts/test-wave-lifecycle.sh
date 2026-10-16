@@ -108,7 +108,7 @@ childcc() { ( cd "$T/co" && . "$T/s/env.sh" && SG_WAVE_GATES=${GATES-true} pytho
 # cycle <n>: the loop's own cycle over the same fixture, every step stubbed, ended by its last step after <n> cycles
 # (SG_TEST_CYCLES), so the completion of a finished run is reached the way production reaches it.
 printf '#!/bin/bash\nexit 0\n' > "$T/s/reconcile.py"
-for s in retryfix.sh consult.sh autohunt.sh autopilot.sh autofrontier.sh autobug.sh heartbeat.sh wtclean.sh janitor.sh live-guard.sh prland.sh branchland.sh startability.sh; do
+for s in consult.sh autohunt.sh autofrontier.sh autobug.sh heartbeat.sh wtclean.sh janitor.sh live-guard.sh branchland.sh startability.sh; do
   printf '#!/bin/bash\nexit 0\n' > "$T/s/$s"; chmod +x "$T/s/$s"; done
 cat > "$T/s/vendor-guard.sh" <<EOF
 #!/bin/bash

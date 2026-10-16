@@ -20,7 +20,7 @@
 #
 # A read that may be answered from the snapshot (#6) has its own door, `gh_snapshot`, beside `gh_api` and never instead of
 # it: `gh_api` is always live, and it is what a read that decides a write calls -- is the branch still eligible, is the base
-# red, is the PR still open. `gh_snapshot` goes through ghthrottle.py, which answers a repeated read inside
+# red, is the work branch still open. `gh_snapshot` goes through ghthrottle.py, which answers a repeated read inside
 # `SG_GH_CACHE_WINDOW` seconds from `$SG_STATE/gh-cache` with no request, and which reads live every route that is not one
 # of the few it classifies as cheap or keyed -- so a gating route handed to `gh_snapshot` by mistake is still live.
 #
@@ -119,10 +119,10 @@ gh_snapshot() {
   _gh_read "$SG_GHSNAP" "$route" "$@"
 }
 
-# gh_aggregate <route> [-q <jq filter>]   The open-PR or open-issue list, from the snapshot while it is younger than
+# gh_aggregate <route> [-q <jq filter>]   The open-issue or open-work-branch list, from the snapshot while it is younger than
 # `SG_GH_AGGREGATE_WINDOW` (60 to 120 s, default 90): the same three outcomes as `gh_api`, and a repeat inside the window
 # sends no request (#45). It is the caller's explicit choice, for a pass that reads the list ONCE for its whole set and
-# tolerates an answer a window old -- the announcement of a PR, the landing pass's "an open PR names it" check. A read that
+# tolerates an answer a window old -- the work-branch list a dispatch pass reads once for its whole set. A read that
 # decides one write about one issue stays `gh_api`.
 gh_aggregate() {
   local route=${1:?gh_aggregate: a route is required}; shift || true

@@ -2,12 +2,10 @@
 # usage: branchland.sh      one pass over the pushed work branches: land the ones whose check is green in `dev` by a fast-forward push.
 #
 # A work branch is `fix/<n>-…` or `gui/<n>-…` on the remote: it names its issue. The pass reads the check-run of the branch tip by
-# commit sha (never a pull request), and lands the branch in $SG_LAND_BRANCH (default dev) through ffland.sh, which rebases first when
-# that branch moved. Then the issue is closed through the API, the one delivery comment is queued (cqflush.sh posts it), and the
-# card moves to Done. It runs beside prland.sh until the pull request path is removed: a branch with an open pull request is
-# prland's and is left alone here.
+# commit sha, and lands the branch in $SG_LAND_BRANCH (default dev) through ffland.sh, which rebases first when that branch moved.
+# Then the issue is closed through the API, the one delivery comment is queued (cqflush.sh posts it), and the card moves to Done.
 #
-# A branch is landed when, and only when, it names an open issue, has no open pull request, the review of its tip approved (#357),
+# A branch is landed when, and only when, it names an open issue, the review of its tip approved (#357),
 # and every check run on its tip finished
 # in success, skipped or neutral, or, with zero check runs while CI is off, the local gate passed at the tip rebased onto $SG_LAND_BRANCH (#385). A red, running or missing check is one `BRANCHLAND WAIT <branch>: <why>`; a push a ruleset
 # refuses, a rebase that conflicts or a branch with nothing ahead is one `BRANCHLAND REFUSE <branch>: <why>`. Each is kept as a
@@ -117,7 +115,7 @@ while read -r sha br i; do
   head -1 "$rk.md" | grep -q 'VERDICT: APPROVE' || python3 "$here/revformat.py" --summary "$rk.md" 2>/dev/null | grep -q '^blocking=0 ' || { say wait "$br" "$sha" changes "the review of ${sha:0:9} asked for changes or did not approve: $(head -1 "$rk.md")"; continue; }
   if [ -n "$gate" ]; then localgate "$br" "$sha" "$i" || continue; green="The local gate (CI off) passed on ${sha:0:9}."
   else green="The check on ${sha:0:9} was green."; fi
-  fl=$(SG_BASE=$land bash "$here/ffland.sh" 0 "$br" "$i" 2>/dev/null | tail -1)
+  fl=$(SG_BASE=$land bash "$here/ffland.sh" "$br" "$i" 2>/dev/null | tail -1)
   case "$fl" in
     "FFLAND "*) ms=${fl#FFLAND };;
     *) say refuse "$br" "$sha" push "not landed in $land: ${fl#FFLAND-FALLBACK }"; continue;;

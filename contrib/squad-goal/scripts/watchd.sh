@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: watchd.sh start|stop|status   (run `start` from the target checkout)
-# Keeps watch.sh (the 90 s cycle) and fastloop.sh (childcc + autopilot every SG_FAST_INTERVAL s) alive without a Monitor task: a supervisor in its own session restarts them if they die.
+# Keeps watch.sh (the 90 s cycle) and fastloop.sh (childcc every SG_FAST_INTERVAL s) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
 alive() { [ -s "$P" ] && pid=$(cat "$P") && /bin/ps -p "$pid" -ww -o command= 2>/dev/null | grep -qF "$me run"; }
@@ -14,7 +14,7 @@ case "${1:-status}" in
     trap '[ -n "$child" ] && kill "$child" 2>/dev/null; rm -f "$P"; exit 0' TERM INT
     fast=; trap '[ -n "$child" ] && kill "$child" 2>/dev/null; [ -n "$fast" ] && kill "$fast" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; exit 0' TERM INT
     while :; do
-      # the fast lane (childcc + autopilot every SG_FAST_INTERVAL s) lives beside watch.sh, so a slow cycle step never delays a merge
+      # the fast lane (childcc every SG_FAST_INTERVAL s) lives beside watch.sh, so a slow cycle step never delays a dispatch
       { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || { bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$!; }
       bash "$(dirname "$me")/watch.sh" >> "$L" 2>&1 & child=$!; wait $child; echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; done;;
   stop) alive || { echo "watchd not running"; rm -f "$P"; exit 0; }

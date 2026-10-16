@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: acpr.sh <branch> -- <command...>   A squad run's acceptance command for work pushed to a PR branch.
+# usage: acpr.sh <branch> -- <command...>   A squad run's acceptance command for work pushed to a work branch.
 # The final gate (ac-verify) runs in the run's root workspace, which is the main checkout, not the child's worktree;
 # so this checks out origin/<branch> into a throwaway detached worktree, runs the command there and removes it.
 # Exit: the command's exit code; 2 when the branch cannot be fetched or checked out.

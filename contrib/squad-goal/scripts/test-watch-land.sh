@@ -21,7 +21,7 @@ printf '#!/bin/bash\nexit 0\n' > "$B/sleep"       # the cycle's own naps cost no
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
 # Every step the cycle runs, stubbed: the cycle costs its own wiring, not a pass of the loop.
-for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh prland.sh branchland.sh consult.sh; do
+for s in autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh branchland.sh consult.sh; do
   printf '#!/bin/bash\nexit 0\n' > "$S/$s"; chmod +x "$S/$s"; done
 printf 'pass\n' > "$S/childcc.py"; printf 'pass\n' > "$S/reconcile.py"
 # The landing pass is what a run's completion reaches: the stub logs the call, and nothing else is read from it.
@@ -85,15 +85,15 @@ run_cycle 2
 /usr/bin/grep -q "run-4" "$ST/watch-seen.txt" 2>/dev/null && ok "a landed run is recorded as seen" || ko "the landed run is not in watch-seen.txt"
 
 # 5) the side effects of a finished run run once per run, never on every retry of a landing that fails (#375 review): the
-# announcement, the retry of a failed run and the per-issue comment follow the landing, so a failing landing repeats none.
+# announcement and the per-issue comment follow the landing, so a failing landing repeats none. (#361: the retry that re-armed
+# a failed run read the run's pull request, and it went with the pull-request path: the janitor frees the issue instead.)
 run run-5 failed; printf '{"event":"spawn_accepted","child":"c","definition":"GitHub issue #5001"}\n' >> "$T/run-5/record.jsonl"
 printf 'wave/run-5\n' > "$ST/auto/wave-run-5"; printf '%s\n' "$T/run-5" > "$ST/active-runs.txt"
-printf '#!/bin/bash\necho "retryfix $*" >> "%s"\n' "$STEPS" > "$S/retryfix.sh"
 : > "$T/landfail"; run_cycle 3
-[ "$(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")" = 0 ] && [ "$(/usr/bin/grep -c '^retryfix' "$STEPS")" = 0 ] && ok "a landing that keeps failing repeats no announcement and no retryfix" \
-  || ko "side effects repeated while the landing failed: announced $(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")x, retryfix $(/usr/bin/grep -c '^retryfix' "$STEPS")x"
+[ "$(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")" = 0 ] && ok "a landing that keeps failing repeats no announcement" \
+  || ko "side effects repeated while the landing failed: announced $(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")x"
 rm -f "$T/landfail"; run_cycle 3
-[ "$(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")" = 1 ] && [ "$(/usr/bin/grep -c '^retryfix' "$STEPS")" = 1 ] && ok "the cycle that lands the run announces it once" \
-  || ko "announced $(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")x, retryfix $(/usr/bin/grep -c '^retryfix' "$STEPS")x after the landing"
+[ "$(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")" = 1 ] && ok "the cycle that lands the run announces it once" \
+  || ko "announced $(/usr/bin/grep -c 'RUN run-5 verdict' "$T/watch.out")x after the landing"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: autofrontier.sh   (watch.sh, every ~3 min; AF_DRY=1 prints what it would dispatch)
-# Dispatches the startable frontier as soon as a blocker falls: every open non-bug issue with no open PR naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
+# Dispatches the startable frontier as soon as a blocker falls: every open non-bug issue with no open work branch naming it, no dispatch marker (auto/disp-<n>) and no live run working it, for
 # which stack.sh says READY or STACK, all as the children of ONE run (one squad start; it needs a free run slot), wave label first.
 # A run takes as many children as its envelope allows: the dispatch node's max_children, and run.max_children less the children the
 # live runs already hold. A pass never asks for more (the engine rejects a request over its limit whole), the startable issues past
@@ -98,26 +98,11 @@ case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allo
 [ "$free" -gt 0 ] || exit 0
 cap=$free; case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac   # the children this run may take: the free run slots, and never more than the room the envelope and the child ceilings leave (the tighter of the two bounds wins, never the room alone)
 [ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
-# One pass reads each list once (#383): the open PRs here and the open issues below, kept in $F for the walk, stack.sh and
-# the request. A read per candidate (its comments, the issue again, the PR list again) cost 915 requests an hour.
-. "$here/ghcall.sh"; F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'rm -rf "$F"' EXIT
-gh api "repos/$SG_REPO/pulls?state=open&per_page=100" > "$F/pulls.json" 2>/dev/null
-refs=" $(jq -r '.[]?|(.title+" "+(.body//""))' "$F/pulls.json" 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ') "
-# A MERGED PR that names the issue already delivered it (#1808), and janitor.py reports FIXED-NOT-CLOSED without closing:
-# closing needs evidence, so it is never the janitor's call. The issue therefore keeps looking untouched here, gets picked
-# again, and its child can only read the repository and report there is nothing to build -- a whole slot and its spend for
-# an empty slice. Fetch the merged page too and treat what it names as delivered. Only `merged_at` counts: a PR closed
-# without merging is not a delivery. Cached for $SG_FRONTIER_MERGED_TTL seconds -- a merge is never urgent next to a
-# blocker falling, and this pass runs every ~3 min. Failure-tolerant in both directions: a gh that fails leaves the
-# previous page in place, and an empty page skips nothing, so a broken fetch can cost a redispatch but never the frontier.
-merged="$A/merged-refs"; ttl=${SG_FRONTIER_MERGED_TTL:-120}; mt=0
-[ -f "$merged" ] && mt=$(stat -f %m "$merged" 2>/dev/null || stat -c %Y "$merged" 2>/dev/null || echo 0)
-if [ $(( $(date +%s) - mt )) -ge "$ttl" ]; then
-  if page=$(gh api "repos/$SG_REPO/pulls?state=closed&sort=updated&direction=desc&per_page=100" -q '.[]|select(.merged_at)|(.title+" "+(.body//""))' 2>/dev/null); then
-    printf '%s' "$(printf '%s\n' "$page" | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')" > "$merged.tmp" && mv "$merged.tmp" "$merged"
-  fi
-fi
-refs="$refs $(cat "$merged" 2>/dev/null) "
+# The issues an open work branch already names are past dispatch, so a pass never dispatches one twice (#361). It is a git
+# read of the remote heads (workbranches.sh), never a GitHub call: the work branch is the unit of work now, and the open
+# issues are read once below, through the door.
+. "$here/ghcall.sh"; . "$here/workbranches.sh"; F=$(mktemp -d "${TMPDIR:-/tmp}/frontier.XXXXXX"); trap 'rm -rf "$F"' EXIT
+refs=" $(sg_work_issues) "
 pick=(); notes=(); ready=(); kids=(); full=""
 # Issues whose bodies name a common file share one child and one branch.
 cluster_of() {   # one line per cluster of <n> issues, in the same shape; a lone issue is its own line
@@ -162,13 +147,13 @@ while [ $i -lt ${#cands[@]} ]; do
   # The list's entry decides; only an entry that carried no comments costs the comments read.
   ns=$(jq -r 'if .not_startable == null then "unread" else .not_startable end' "$F/issue-$n.json" 2>/dev/null)
   { [ "$ns" = true ] || { [ "$ns" != false ] && sg_not_startable "$n"; }; } && { echo "FRONTIER skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
-  stack_out=$(SG_STACK_ISSUE="$F/issue-$n.json" SG_STACK_PULLS="$F/pulls.json" "$here/stack.sh" "$n" 2>&1)
-  d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|STACK |WAIT )')
+  stack_out=$(SG_STACK_ISSUE="$F/issue-$n.json" "$here/stack.sh" "$n" 2>&1)
+  d=$(printf '%s\n' "$stack_out" | grep -m1 -E '^(READY|WAIT )')
   printf '%s\n' "$stack_out" | grep '^STACK NOTE ' | sed 's/^STACK NOTE /FRONTIER NOTE /' >&2 || true
   g=; nt=
-  case "$d" in READY*) g=base; nt="cut your branch from origin/$SG_BASE";; STACK\ *) g=other; set -- $d; nt="OPTIMISTICALLY STACKED on the branch $3 (PR #$2, still open): cut your branch from origin/$3";; *) continue;; esac
+  case "$d" in READY*) g=base; nt="cut your branch from origin/$SG_BASE";; *) continue;; esac
   [ -z "$full" ] || joins "$g" "$n" || break
-  pick+=("$n"); notes+=("$nt"); case "$g" in base) ready+=("$n");; *) kids+=("$n");; esac
+  pick+=("$n"); notes+=("$nt"); ready+=("$n")
   [ -n "$full" ] || [ ${#pick[@]} -lt "$cap" ] || full=1
 done
 [ ${#pick[@]} -gt 0 ] || exit 0

@@ -2,19 +2,9 @@
 # 1 s or more: heavy. Over 15 s: also a slow reason. A suite not listed counts as fast. Only suites of 1 s or more are listed.
 test-address.sh 7.5
 test-autobug.sh 73.8
-test-autofix-rounds.sh 2.1
-test-autofix.sh 7.4
 test-autofrontier-envelope.sh 13.8
-test-autofrontier-merged.sh 18.9
 test-autofrontier-one-run.sh 59.3
 test-autohunt.sh 20.3
-test-autopilot-debt.sh 4.2
-test-autopilot-gate.sh 6.5
-test-autopilot-hold.sh 2.4
-test-autopilot-leash.sh 1.2
-test-autopilot-norefs.sh 3.2
-test-autopilot-stale-launch.sh 3.7
-test-autopilot-two-repos.sh 1.4
 test-autorefuse.sh 7.2
 test-board-add.sh 11.6
 test-board-clear-run.sh 1.6
@@ -55,11 +45,9 @@ test-janitor-disp-expiry.sh 4.1
 test-janitor-env-hermetic.sh 10.6
 test-janitor-f.sh 2.9
 test-janitor-failed-dispatch.sh 3.2
-test-janitor-g.sh 4
 test-janitor-h.sh 1.9
 test-janitor-i.sh 1.8
 test-janitor-killed.sh 2.6
-test-janitor-kmn.sh 3.3
 test-janitor-neverstarted.sh 4.2
 test-janitor-rule-o.sh 1.6
 test-janitor-rule-p.sh 7.5
@@ -73,15 +61,13 @@ test-live-guard.sh 21.1
 test-merge-audit.sh 7.5
 test-mkreq.sh 28.2
 test-pass-deadline.sh 16
-test-prepush.sh 2.2
-test-prland.sh 23.8
+test-prepush.sh 1.4
 test-promote.sh 8.5
 test-publish-live.sh 1.5
 test-reconcile.sh 1.5
 test-refusal-comment.sh 7.1
 test-retire-fork-only.sh 3.9
 test-retired-settings.sh 1.5
-test-revci-notice.sh 1.7
 test-revformat.sh 7.9
 test-review.sh 71.7
 test-serial.sh 23.3
@@ -93,7 +79,7 @@ test-state-split.sh 2.9
 test-token-guard.sh 2.8
 test-token-ledger.sh 7.6
 test-watch-cycle.sh 60.2
-test-watch-land.sh 9.6
+test-watch-land.sh 6.2
 test-wave-lifecycle.sh 21.8
 test-wave.sh 3.4
 test-wtclean.sh 90.5

@@ -150,11 +150,9 @@ prompt_of() { local W; W=$(mktemp -d); mkdir -p "$W/bin" "$W/st/cq"
   cat > "$W/bin/gh" <<'J'
 #!/bin/bash
 case "$*" in
-  *'.head.sha+" "+.base.ref'*) echo "aaa111 main";;
   *Accept*compare*) printf 'diff --git a/f b/f\n+x\n';;
-  *compare*) echo '{"status":"ahead"}';;
-  *pulls/7/files*) echo UI/a.cs;;
-  *'.head.sha'*) echo aaa111;;
+  *compare*) echo '{"status":"ahead","files":[{"filename":"UI/a.cs"}]}';;
+  *commits/*) echo '{"sha":"aaa111"}';;
   *) echo stub;;
 esac
 J
@@ -163,8 +161,8 @@ J
 cat > "$CLAUDE_PROMPT"; echo "VERDICT: APPROVE"
 J
   chmod +x "$W/bin/gh" "$W/bin/claude"
-  [ "$1" = fix ] && { echo ccc333 > "$W/st/review-7.sha"; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$W/st/review-7.md"; }
-  PATH="$W/bin:$PATH" CLAUDE_PROMPT="$W/prompt" bash "$W/review.sh" 7 8 >/dev/null 2>&1
+  [ "$1" = fix ] && { echo ccc333 > "$W/st/review-fix_1-x.sha"; printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$W/st/review-fix_1-x.md"; }
+  PATH="$W/bin:$PATH" CLAUDE_PROMPT="$W/prompt" bash "$W/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
   cat "$W/prompt" 2>/dev/null; rm -rf "$W"; }
 for mode in full fix; do
   want=$sh_full; [ $mode = fix ] && want=$sh_fix

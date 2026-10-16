@@ -42,7 +42,7 @@ scene() {
   restore_gh
   S=$T/$1/scripts; mkdir -p "$S" "$T/$1/st/req" "$T/$1/st/cq" "$T/$1/st/auto" "$T/$1/st/locks" "$T/$1/co/runs" "$T/$1/home"
   cp "$src" "$S/autohunt.sh"
-  cp "$here/ghcall.sh" "$here/ghread.py" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py
+  cp "$here/ghcall.sh" "$here/ghread.py" "$here/workbranches.sh" "$S/"   # the filer's one write door (#140, #139): --file writes through gh_send, which reads ghread.py; the work-branch read is workbranches.sh (#361)
   printf '#!/bin/bash\n[ -n "${AB_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-bug" ] && echo "AUTOBUG would dispatch 1 cluster(s)"; exit 0\n' > "$S/autobug.sh"
   printf '#!/bin/bash\n[ -n "${AF_DRY:-}" ] && [ -e "$SG_STATE/auto/startable-frontier" ] && echo "FRONTIER would dispatch"; exit 0\n' > "$S/autofrontier.sh"
   printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$S/mkreq.sh"
@@ -84,10 +84,10 @@ scene gate
 mkdir -p "$SG_STATE/locks/gui-suite"; echo $$ > "$SG_STATE/locks/gui-suite/pid"
 r=$(run); skipped "$r" && ok "does not start while a gate test holds gui-suite" || ko "started with gui-suite lock: '$r'"
 
-# 5) the landing pass's lock held: prland is what replaced the retired fork pass, so a hunt waits for it (#134)
+# 5) the landing pass's lock held: the branch landing pass is what replaced the retired fork pass, so a hunt waits for it (#134)
 scene fc
-mkdir -p "$SG_STATE/locks/single-prland"; echo $$ > "$SG_STATE/locks/single-prland/pid"
-r=$(run); skipped "$r" && ok "does not start while the landing pass is running" || ko "started with prland lock: '$r'"
+mkdir -p "$SG_STATE/locks/single-branchland"; echo $$ > "$SG_STATE/locks/single-branchland/pid"
+r=$(run); skipped "$r" && ok "does not start while the landing pass is running" || ko "started with branchland lock: '$r'"
 
 # 6) startable autobug / autofrontier
 scene bug; touch "$SG_STATE/auto/startable-bug"
@@ -95,11 +95,15 @@ r=$(run); skipped "$r" && ok "does not start while a startable bug exists" || ko
 scene fr; touch "$SG_STATE/auto/startable-frontier"
 r=$(run); skipped "$r" && ok "does not start while a startable frontier exists" || ko "started with startable frontier: '$r'"
 
-# 7) PR waiting on a review round
+# 7) a pushed work branch whose tip has no kept review: the review pass will spend a slot on it, so a hunt waits (#357)
 scene rev
-export GH_PRS='1	aaaaaaaa	1100'
-r=$(run); skipped "$r" && ok "does not start while a PR waits on a review round" || ko "started with a waiting PR: '$r'"
-unset GH_PRS
+remote=$T/rev/origin.git; wt=$T/rev/wt
+/usr/bin/git init -q --bare "$remote"
+/usr/bin/git clone -q "$remote" "$wt" 2>/dev/null
+( cd "$wt" && /usr/bin/git -c user.email=a@b -c user.name=t commit -q --allow-empty -m x && /usr/bin/git branch -q fix/1100-x && /usr/bin/git push -q origin fix/1100-x )
+export SG_LAND_REMOTE=$remote
+r=$(run); skipped "$r" && ok "does not start while a work branch waits on a review" || ko "started with a waiting branch: '$r'"
+unset SG_LAND_REMOTE
 
 # 8) cooldown (a recent hunt-last, as if a hunt-filed fix already started)
 scene cdn

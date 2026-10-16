@@ -93,10 +93,10 @@ slice_paths() { slice_claims "$1" | cut -f1 | sort -u; }
 # spent a whole review plus a conflict round on it; gui/1497, gui/1498 and gui/1502 each landed a branch on
 # contrib/squad-goal/scripts/hub.py and the fork merge stalled. A request already names the files it will touch, so every slice
 # in flight is checkable before anything is launched. A body that names a file already in flight is REFUSED: non-zero exit,
-# nothing written, a message naming the file and its holder. In flight means any of three things: an open PR that changes the
-# file; a queued request of any panel that claims it -- the same-panel sibling case of ADR-0274 (#1400) is the narrower half of
-# that rule, and an overlapping pair of that panel still says so; or an unmerged gui/* branch in the fork checkout, which is the
-# only place a fork-only child's slice is visible at all, since it never opens a PR. SG_SLICE_FORCE=1 is the documented way past
+# nothing written, a message naming the file and its holder. In flight means either of two things: a queued request of any panel
+# that claims it -- the same-panel sibling case of ADR-0274 (#1400) is the narrower half of that rule, and an overlapping pair of
+# that panel still says so; or an unmerged gui/* branch in the fork checkout, which is the only place a fork-only child's slice is
+# visible at all, since it never opens a pull request. SG_SLICE_FORCE=1 is the documented way past
 # it: a deliberate overlap stays possible, but it has to be asked for and it is announced on stderr.
 # (#10) The refusal prints ONE line, for the first contested file, because that is what an operator reads. A dispatcher that
 # bundles several tickets into one request needs all of them: with SG_SLICE_REPORT=<file> a refusal also writes `file <TAB>
@@ -121,15 +121,9 @@ slice_guard() {
   fi
   # "file <TAB> holder", one line per file in flight; the first holder found for a file is the one reported.
   taken=""
-  if [ -n "$repo" ] && command -v gh >/dev/null 2>&1; then
-    for p in $(gh api "repos/$repo/pulls?state=open&per_page=100" -q '.[].number' 2>/dev/null || true); do
-      for f in $(gh api "repos/$repo/pulls/$p/files?per_page=100" -q '.[].filename' 2>/dev/null || true); do
-        taken="$taken$f	PR #$p
-"; done; done
-  fi
   # (#1529) A request counts as in flight only while its work is. Nothing ever deletes $SG_STATE/req/*.txt, so
   # reading every one of them as in flight made the set only grow: a request whose run ended days ago still refused every
-  # later slice naming one of its files (auto-fix-1203-3fbfa13ca, PR #1203 closed 2026-10-10), citing a run long over. The
+  # later slice naming one of its files, citing a run long over. The
   # run folder is the evidence: launch.py copies the request into runs/<run>/request.txt, so content links the request to
   # the run it went into, and a record.jsonl holding a verdict says that run is over -- the same test autobug.sh's live-run
   # scan and heartbeat.sh use. A request no run carries is in flight only inside the launch window (SG_SLICE_REQ_TTL
@@ -173,23 +167,10 @@ slice_guard() {
     ln=$(printf '%s\n' "$claims" | /usr/bin/awk -F'\t' -v f="$f" '$1==f {print $2; exit}')
     at=" (request line $ln: \"$(sed -n "${ln}p" "$2" | cut -c1-100)\")"
     if [ $force = 1 ]; then echo "SLICE FORCE $1: $f is already in flight ($holder); dispatching anyway on SG_SLICE_FORCE=1" >&2; continue; fi
-    # (#1769) A fix run is not a second slice. autofix.sh names its request `auto-fix-<pr>-<sha9>`, and the PR it repairs is
-    # in the claim set above by definition -- its own branch changes the very files the review asked to fix. So the guard
-    # refused the only run that could repair the PR it was guarding: PR #1706 (2026-10-11) got a BLOCKING verdict on 27aaaf5b5
-    # and `refusing: request auto-fix-1706-27aaaf5b5 names scripts/checks/verify_report_bug_prefix.sh, which open PR #1706
-    # already changes` left the verdict sitting on a mergeable, CI-green PR with nothing working it (autofix.sh then exits 1).
-    # ADR-0274 separates two slices of work; a slice and its own repair are one unit of work, and the claim record already
-    # carries the number the request name carries. Only that pair is exempt: the file of another open PR, of another request
-    # and of an unmerged fork branch refuses exactly as before, and so does any request whose name is not a fix run's.
-    if [[ $1 =~ ^auto-fix-([0-9]+)-[0-9a-f]{9}$ ]] && [ "$holder" = "PR #${BASH_REMATCH[1]}" ]; then
-      echo "SLICE SELF-FIX $1: $f is $holder's own file; a fix run on the PR it repairs is not a second slice (#1769)" >&2; continue
-    fi
     case "$holder" in
       "request "*)
         rid=${holder#request }; hpanel=$(grep -m1 -E '^PANEL: *[^ ]+' "$SG_STATE/req/$rid.txt" 2>/dev/null | sed -E 's/^PANEL: *//; s/ +$//') || true
         msg="refusing: request $1 and request $rid$([ -n "$id" ] && [ "$hpanel" = "$id" ] && echo " (same panel $id)") both name: $f$at. Re-split the slices or add a '## Blocked by' edge between them (ADR-0274). Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
-      "PR "*)
-        msg="refusing: request $1 names $f$at, which open $holder already changes. Set SG_SLICE_FORCE=1 to dispatch anyway." ;;
     esac
     [ -n "$refused" ] || echo "$msg" >&2   # the first contested file is the one the operator reads; the report below carries the rest
     [ -z "${SG_SLICE_REPORT:-}" ] || printf '%s\t%s\n' "$f" "$holder" >> "$SG_SLICE_REPORT"
@@ -206,4 +187,4 @@ slice_guard "$1" "$2" || exit 1
 # touched and the cases it needs. Both inline spans open with a command word, so the slice guard reads them as what the request
 # RUNS and never as a file it claims (#44); the paths they name are not slices either way.
 suites_line="SUITES: run what you touched -- the shell suite beside the script you changed (\`bash contrib/squad-goal/scripts/test-<script>.sh\`) and the targeted pytest cases (\`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>\`). The machine's full gate (\`bash contrib/squad-goal/scripts/shell-suites.sh\` and the pytest gate beside it) belongs to the loop and to the land pass, once per landing: never run it."
-mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a PR branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in the PR body, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for the PR body, not a gate input (#1799)."; echo "$suites_line"; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; echo "$out"
+mkdir -p "$(dirname "$out")"; { cat "$2"; echo; echo "DONE CHECK (the run's final gate runs these; without them the run ends failed with no_ac_commands even when the work is right): end your result with {\"status\": \"pass\", \"ac_commands\": [...]}, one string per check you ran as evidence. Work pushed to a work branch: wrap each as \"$here/acpr.sh <branch> -- <command>\" (the gate runs in the main checkout; acpr.sh checks out origin/<branch> in a throwaway worktree first). Work committed only in a local fork: \"cd <fork worktree> && <command>\". Use the targeted commands (the touched test classes, the doc checks when docs changed), not a full suite, and only commands that passed for you. ac_commands are the proofs that pass at the final head, and only those: the gate runs each string verbatim there, so a command that writes to the worktree turns your own fix against you -- a RED demonstration belongs in the issue status comment, never in ac_commands, and never an ac_command that writes to the worktree: no \`git checkout <other-ref> -- <file>\` (that is the RED step, which restores the pre-fix file), no \`git stash\`, no revert. A command that mutates the tree is evidence for the issue status comment, not a gate input (#1799)."; echo "$suites_line"; [ -n "$cm" ] && echo "Coding model: $cm (no [1m] suffix); fall back to $fb. This line wins over any other model named above."; cat "$here/req-checklist.txt"; } > "$out"; echo "$out"

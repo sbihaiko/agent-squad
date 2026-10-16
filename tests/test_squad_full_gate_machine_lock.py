@@ -4,7 +4,7 @@ The loop's land pass used to run the full gate here -- the shell suites and the 
 suites in its own worktree: eight cores take one of them, both finish later, and the owner's editor loses the machine. The
 gate's pytest half therefore held the machine-wide `gate` lock `serial.sh` owns (#81), and never held it across the shell
 suites (#94). The local land path retired (#115): `forkclose.sh` and the gate script it ran are gone, and the landing pass
-`prland.sh` gates the landed head by reading the CI check job's failed-test set. So the one full gate of a landing runs in
+`branchland.sh` gates the tip it lands on the check runs GitHub reports for it. So the one full gate of a landing runs in
 CI, on the pushed commit, and only a landing pushes, so the run the gate reads is one the branch carries. The group and
 its queue belong to the CI rule, and `tests/test_tooling.py` guards them.
 The gates that still run on this machine -- the branchland local gate, the wave entry gate, the promotion gate and a hand
@@ -116,7 +116,8 @@ def test_the_gate_of_a_landing_is_the_ci_check_job():
     assert any("pytest" in r for r in runs), runs
 
 
-def test_the_landing_pass_reads_that_check_before_it_merges():
-    """The gate's caller now: prland.sh merges only when the check's failed-test set is inside the baseline."""
-    src = (SCRIPTS / "prland.sh").read_text()
-    assert "SG_CI_BASELINE" in src and "failed_tests" in src, "the landing pass no longer gates the landed head on the check"
+def test_the_landing_pass_reads_the_checks_of_the_tip():
+    """The gate's caller now: branchland.sh lands a tip only when its check runs are green, and the local gate
+    (`fast-gate.sh`) is what a tip with no check run is proved by while Actions is off (#385)."""
+    src = (SCRIPTS / "branchland.sh").read_text()
+    assert "check-runs" in src and "SG_LOCAL_GATE" in src, "the landing pass no longer gates the tip on its checks"

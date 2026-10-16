@@ -8,7 +8,7 @@
 #  (B) a run that landed (a `land` event with outcome pass) keeps its marker and reconciles its card to Code Complete:
 #      a local landing is not a merge into the base, so it does not make the card Done (#239);
 #  (C) a live run (no verdict yet) keeps the marker of the issue it works and writes Run fields;
-#  (D) an open PR naming the issue keeps the marker and moves the card to Code Complete.
+#  (D) a work branch naming the issue keeps the marker and moves the card to Code Complete.
 #  A card is one column, written by one rule (#91): a needs-human run that landed nothing is not a completed run
 #  (ADR-0029), so the column is the dispatch's (Todo) and the release rule O owns the write. The board stub answers a
 #  read from the last status the pass itself wrote, as the live board does, so a second column for that card is a race
@@ -38,7 +38,7 @@ cat > "$T/bin/gh" <<'J'
 case "$*" in
   # the live API answers a POST to /search/issues with Not Found and a non-zero body, which a caller reading `.total_count` sees as "a PR exists" (#1981): the stub refuses it the same way
   *search/issues*) case "$*" in *"-X GET"*|*"--method GET"*) case "$*" in *"is:merged"*) echo 0;; *"Refs #904"*|*"Refs #908"*) echo 1;; *) echo 0;; esac;; *) printf '{\n  "message": "Not Found"\n}\n'; exit 1;; esac;;
-  # a work branch names the issue (#382: the janitor reads branches, never pull requests): #904 and #908 each have one, ahead of the landing branch
+  # a work branch names the issue (#382, #361: the janitor reads branches, never pull requests): #904 and #908 each have one, ahead of the landing branch
   *repos/x/y/branches*) printf 'fix/904-x sha904\nfix/908-x sha908\n';;
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
@@ -62,15 +62,15 @@ echo run-landed > "$T/st/auto/disp-902"
 mk run-live 903
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #903 on fix/903-x"}\n' > "$T/co/runs/run-live/record.jsonl"
 echo run-live > "$T/st/auto/disp-903"
-# D: the run ended without landing, but an open PR names the issue
+# D: the run ended without landing, but a work branch names the issue
 mk run-pr 904
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #904 on fix/904-x"}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["label_missing"], "exit_code": 0}\n' > "$T/co/runs/run-pr/record.jsonl"
 echo run-pr > "$T/st/auto/disp-904"
 touch -t 202001010000 "$T/co/runs/run-ended/record.jsonl" "$T/co/runs/run-landed/record.jsonl" "$T/co/runs/run-pr/record.jsonl"
 # E (#1981): the marker names the REQUEST that dispatched the issue (frontier-<id>), and rule E drops it when that
-# request's own log says `verdict failed`, the issue is open and no PR names it. The PR check is what broke: a bare
-# `gh api search/issues -f ...` POSTs, the API answers Not Found, and a non-zero body read as "a PR exists" forever --
-# so the marker outlived every failed dispatch and autofrontier.sh skipped the issue for good.
+# request's own log says `verdict failed`, the issue is open and no work branch names it. The check is what broke: a bare
+# `gh api search/issues -f ...` POSTs, the API answers Not Found, and a non-zero body read as "the issue is past
+# dispatch" forever -- so the marker outlived every failed dispatch and autofrontier.sh skipped the issue for good.
 printf 'verdict failed (exit 1)\nreasons: blocked_by_11\n' > "$T/st/frontier-old.log"
 printf 'verdict pass (exit 0)\n' > "$T/st/frontier-ok.log"
 echo frontier-old > "$T/st/auto/disp-906"; touch -t 202001010000 "$T/st/auto/disp-906" "$T/st/frontier-old.log"
@@ -86,15 +86,15 @@ o=$(run)
 /usr/bin/grep -l 'owner_decision' "$T/st/cq/"*901* >/dev/null 2>&1 && /usr/bin/grep -q 'run-ended' "$T/st/cq/"*901* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
 [ -e "$T/st/auto/disp-902" ] && /usr/bin/grep -q '^o 4 Code Complete 902$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 902' "$T/board.calls" 2>/dev/null && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #902 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q -- '^--run-fields o 4 903 run-live ' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker and writes Run fields" || ko "O #903 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
-[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Code Complete 904$' "$T/board.calls" 2>/dev/null && ok "O: an open PR naming the issue moves to Code Complete and keeps its marker" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Code Complete 904$' "$T/board.calls" 2>/dev/null && ok "O: a work branch naming the issue moves to Code Complete and keeps its marker" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"
 /usr/bin/grep -q 'stale disp-906' "$T/st/cycle.log" 2>/dev/null && ok "E: the drop is announced with the request that failed" || ko "E announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"
-[ -e "$T/st/auto/disp-908" ] && ok "E: an open PR naming the issue keeps its marker" || ko "E disp-908 dropped although a PR names it"
-# A failed dispatch whose issue a PR names is past dispatch: the pass keeps the marker AND says so, naming the issue, so the
+[ -e "$T/st/auto/disp-908" ] && ok "E: a work branch naming the issue keeps its marker" || ko "E disp-908 dropped although a work branch names it"
+# A failed dispatch whose issue a work branch names is past dispatch: the pass keeps the marker AND says so, naming the issue, so the
 # operator can tell that decision from a dispatch that was released, and it writes no card of its own for the issue.
-/usr/bin/grep -q 'DISPATCH-FAILED #908:.*a PR names the issue' "$T/st/cycle.log" 2>/dev/null && ok "E: the pass names the issue whose dispatch stands" || ko "E #908 kept without a word: $(cat "$T/st/cycle.log" 2>/dev/null)"
-[ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 908$' "$T/board.calls" 2>/dev/null)" = 0 ] && ok "E: an open-PR issue's card is left alone" || ko "E #908 card written: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q 'DISPATCH-FAILED #908:.*a work branch names the issue' "$T/st/cycle.log" 2>/dev/null && ok "E: the pass names the issue whose dispatch stands" || ko "E #908 kept without a word: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 908$' "$T/board.calls" 2>/dev/null)" = 0 ] && ok "E: the card of the issue a work branch names is left alone" || ko "E #908 card written: $(cat "$T/board.calls" 2>/dev/null)"
 run >/dev/null   # the announcement is once per run, not once per pass
 [ "$(/usr/bin/grep -c 'DISPATCH-FAILED #901' "$T/st/cycle.log" 2>/dev/null)" = 1 ] && ok "O: the drop is announced once" || ko "O re-announced: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ "$(/usr/bin/grep -c '^o 4 [A-Za-z ]* 901$' "$T/board.calls" 2>/dev/null)" = 1 ] && ok "R: a board that follows the writes is written once; the card does not flap" || ko "#901 flapped across passes: $(cat "$T/board.calls" 2>/dev/null)"

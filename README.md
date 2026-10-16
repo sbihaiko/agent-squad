@@ -68,29 +68,29 @@ It plans the ticket graph from the issues and their `## Blocked by` lists, dispa
 ```text
 issues ──► frontier (stack.sh) ──► squad run: router ──► children, one worktree each
               │                                              │
-     board + issues updated live                     PRs opened, CI watched
+     board + issues updated live                     branches pushed, checks watched
               │                                              │
-   Done ◄── close pass / autopilot ◄── review chain ◄── autofix rounds ◄── verdict
+   Done ◄── close pass / branchland ◄── review chain ◄── branchfix rounds ◄── verdict
 ```
 
 **The loop is small single-purpose scripts** under [`contrib/squad-goal/scripts/`](contrib/squad-goal/scripts/). `watch.sh` drives them on a cadence, and every one is covered by a shell suite (`test-*.sh`) beside it.
 
 ### Dispatch
 
-- **`watchd.sh` / `watch.sh`** are the event loop: they tail the live runs, print one line per event (`RUN … verdict`, `NEW PR`, `REVIEW`, `STALL`, `DEAD RUN`), and call the steps below. `fastloop.sh` runs the fast passes on a ~30 s beat, so a dispatchable issue is picked up in seconds instead of the slow cycle's minutes.
+- **`watchd.sh` / `watch.sh`** are the event loop: they tail the live runs, print one line per event (`RUN … verdict`, `BRANCHREVIEW`, `BRANCHLAND`, `STALL`, `DEAD RUN`), and call the steps below. `fastloop.sh` runs the fast passes on a ~30 s beat, so a dispatchable issue is picked up in seconds instead of the slow cycle's minutes.
 - **`single.sh`** runs a command unless one under the same name is still alive; **`serial.sh`** runs a command holding a named lock, so two emulator-facing suites never collide.
 - **`autofrontier.sh`** re-dispatches the frontier the moment a blocker closes. It reads the run's own envelope — the graph the engine will run — for the child slot count and the per-child spend, so a request never asks for more than the node allows. **`envelope-spend.sh`** prints that budget for every pass that spawns.
-- **`stack.sh`** answers whether an issue can start, must stack on exactly one open PR, or must wait.
+- **`stack.sh`** answers whether an issue can start (`READY`) or must wait for its blocker's branch to land (`WAIT`).
 - **`mkreq.sh`** builds the child's request: the issue's requirements, its evidence rules and the preamble its route needs. Its **slice guard** refuses a request that names a file an unmerged branch already touches, before a child is spawned; a bundled request loses only the ticket that names the contested file.
 - **`cluster.py`** groups the ready work by root cause, so one child owns one cause.
 
 ### Review, fix and land
 
 - **`review.sh`** walks the review chain of [`models.json`](contrib/squad-goal/scripts/models.json). A model that fails for infrastructure reasons is skipped, and the answer must be the checklist shape [`revformat.py`](contrib/squad-goal/scripts/revformat.py) enforces. A fix round reviews the delta since the last finding set, not the whole diff again.
-- **`autofix.sh`** charges fix rounds, capped. Past the cap, **`autopanel.sh`** puts one read-only panel in the challenger stance on the PR and the issue.
-- **`autopilot.sh`** owns the PR: it re-runs CI, dispatches the fix rounds, merges when the review approves and CI is green, and keeps the card in step. **`prepush.sh`** checks the pushed head before CI is asked; **`revci.sh`** watches CI and reports the review's notice.
-- **`check-tdd-red.sh`** refuses a bug fix whose PR carries no red test. **`check-gh-interface.sh`** refuses a loop script that reaches GitHub with a call site of its own: every script goes through the door beside it (`. ghcall.sh`), because a refused read looks like an answer and a refused write looks like success (ADR-0277). `acscan.sh` writes a read-only brief of the acceptance criteria an issue's citations conflict over; `acpr.sh` runs a run's acceptance command against the pushed PR branch in a throwaway worktree.
-- **`forkclose.sh`** lands the work of a repository that takes no PR (see [How delivery works](#how-delivery-works)). **`fork-gate.sh`** is the gate that pass runs, and **`gate-suites.sh`** decides which suite set a diff needs (`full` boots the emulator, `offline`, `shell`, `python`).
+- **`branchreviewpass.sh`** reviews each pushed work branch tip that has no kept review, through **`review.sh`** and its chain. **`branchfixpass.sh`** dispatches one fix run for a tip whose review says `CHANGES`, and stops when a round does not change the findings (`SG_BRANCHFIX_STALLS`, ADR-0134).
+- **`branchland.sh`** lands a tip whose review approved and whose checks are green in `dev`, through **`ffland.sh`** (rebase on the base, one fast-forward push, the branch deleted), then closes the issue and moves the card to Done. **`prepush.sh`** checks the pushed head before CI is asked.
+- **`check-tdd-red.sh`** refuses a bug fix whose push carries no red test. **`check-gh-interface.sh`** refuses a loop script that reaches GitHub with a call site of its own: every script goes through the door beside it (`. ghcall.sh`), because a refused read looks like an answer and a refused write looks like success (ADR-0277). `acscan.sh` writes a read-only brief of the acceptance criteria an issue's citations conflict over; `acpr.sh` runs a run's acceptance command against the pushed work branch in a throwaway worktree.
+- **`forkclose.sh`** lands the work of a repository that pushes no branch (see [How delivery works](#how-delivery-works)). **`fork-gate.sh`** is the gate that pass runs, and **`gate-suites.sh`** decides which suite set a diff needs (`full` boots the emulator, `offline`, `shell`, `python`).
 
 ### Keeping the loop honest
 
@@ -157,12 +157,12 @@ An issue carries a route, and the route decides how its work is delivered:
 
 | Route | Deliverable | Closes the issue |
 | --- | --- | --- |
-| Default | A branch, a push and a **pull request** whose body carries `Refs #<n>` and `Closes #<n>` | The merge, through `Closes` |
-| `squad-only` label, or a `Fork-only work` line in the body | A **local commit** on `gui/<n>`, merged by `forkclose.sh`, with no PR | The close pass, after its gate is green |
+| Default | A **work branch** (`fix/<n>…` or `gui/<n>…`) pushed to the remote, landed in `dev` by a fast-forward push | The landing pass, after the review approved its tip and its checks are green |
+| `squad-only` label, or a `Fork-only work` line in the body | A **local commit** on `gui/<n>`, merged by `forkclose.sh`, pushed nowhere | The close pass, after its gate is green |
 
-A pull request carries **two** lines and needs both. The loop maps a pull request to its issue by reading `Refs #<n>`; a body that names only `Closes #<n>` is skipped out loud as `NOREFS` and the close pass never sees it. GitHub closes the issue on the merge through `Closes #<n>`. A pull request the loop wrote itself carries both.
+The work branch is the unit of work: no loop script opens, reads or merges a pull request (#361, ADR-0145). A branch names its issue in its own name (`fix/<n>…`). `branchreviewpass.sh` reviews each tip once, `branchfixpass.sh` dispatches one fix run for a tip whose review says `CHANGES`, and `branchland.sh` lands the tip whose review approved and whose checks are green: `ffland.sh` rebases it in a throwaway clone and pushes the tip straight to the landing branch. The landing pass then closes the issue through the API and moves the card to Done.
 
-The PR route is the parallelism: the runner checks several pull requests at once, while one machine runs one full gate at a time. The PR route is also what closes an issue by itself, so no card can claim a delivery the base never took.
+The branch route is the parallelism: several branches are in flight at once, while one machine runs one full gate at a time. Landing closes the issue itself, so no card can claim a delivery the base never took.
 
 What the loop learned by running is written in [`docs/learnings/`](docs/learnings/README.md) — one file per episode, with the measurements, the traps and a checklist. Prefer a file there over a comment buried in an issue.
 

@@ -17,11 +17,11 @@ export SG_STATE=$ST SG_STATE_BASE=$T/cache SG_REPO=o/r SG_OWNER=o SG_PROJECT=1 S
 export SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001   # every case below is its own GitHub: a list kept, or a cooldown set, by the last case would answer this one (#45)
 EOF
-printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # no open PR, no revci summary, nothing to move
+printf '#!/bin/bash\nexit 0\n' > "$B/gh"        # nothing to read, nothing to move
 printf '#!/bin/bash\n[ -n "$REAL_SLEEP" ] && exec /bin/sleep "$@"\nexit 0\n' > "$B/sleep"   # REAL_SLEEP=1 keeps a stub slow on purpose
 chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
-for s in retryfix.sh autohunt.sh autopilot.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh; do
+for s in branchland.sh branchreviewpass.sh branchfixpass.sh autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh; do
   printf '#!/bin/bash\necho %s >> "%s"\n' "${s%.sh}" "$STEPS" > "$S/$s"; chmod +x "$S/$s"; done
 printf 'open("%s","a").write("childcc\\n")\n' "$STEPS" > "$S/childcc.py"
 # reconcile.py blocks for REC_SLEEP: the case times the cycle around it (a detached pass costs the cycle nothing) and reads its own log
@@ -66,7 +66,7 @@ lane_down() { [ -n "$FPID" ] && kill "$FPID" 2>/dev/null; FPID=; rm -f "$ST/fast
 lane_up; run_cycles 1
 [ "$(count autofrontier)" = 0 ] && ok "fast lane up: the cycle does not dispatch the frontier" || ko "the cycle dispatched the frontier with the fast lane up ($(count autofrontier) passes)"
 [ "$(count autobug)" = 0 ] && ok "fast lane up: the cycle does not dispatch the bugs" || ko "the cycle dispatched the bugs with the fast lane up ($(count autobug) passes)"
-[ "$(count childcc)" = 0 ] && [ "$(count autopilot)" = 0 ] && ok "fast lane up: the cycle leaves childcc and autopilot to it" || ko "the cycle ran the fast lane's own steps"
+[ "$(count childcc)" = 0 ] && ok "fast lane up: the cycle leaves childcc to it" || ko "the cycle ran the fast lane's own steps"
 
 # 2) fast lane down: the standalone cycle still dispatches, once per cycle
 lane_down; run_cycles 1
@@ -86,96 +86,16 @@ for _ in $(seq 1 150); do /usr/bin/grep -q 'BOARD MOVE' "$ST/reconcile.log" 2>/d
 /usr/bin/grep -q 'BOARD' "$ST/cycle.log" 2>/dev/null && ko "reconcile output still lands in cycle.log" || ok "cycle.log no longer carries the reconcile pass"
 
 # 5) the fast lane dispatches, and a second pass does not overlap the first
-F2=$T/fastscripts; mkdir -p "$F2"; cp "$d/fastloop.sh" "$d/single.sh" "$F2/"; cp "$S/env.sh" "$S/childcc.py" "$S/autopilot.sh" "$S/autofrontier.sh" "$S/autobug.sh" "$F2/"
+F2=$T/fastscripts; mkdir -p "$F2"; cp "$d/fastloop.sh" "$d/single.sh" "$F2/"; cp "$S/env.sh" "$S/childcc.py" "$S/autofrontier.sh" "$S/autobug.sh" "$F2/"
 : > "$STEPS"; rm -f "$ST/fastloop.pid"
 AF_HOLD=3 SG_FASTLOOP_ONCE=1 bash "$F2/fastloop.sh" > "$T/fast.out" 2>&1
 AF_HOLD=3 SG_FASTLOOP_ONCE=1 bash "$F2/fastloop.sh" > "$T/fast2.out" 2>&1
 waitfor autofrontier 100; waitfor autobug 100
 [ "$(count autofrontier)" = 1 ] && ok "the fast lane dispatches the frontier" || ko "the fast lane dispatched $(count autofrontier) frontier passes"
 [ "$(count autobug)" = 1 ] && ok "the fast lane dispatches the bugs" || ko "the fast lane dispatched $(count autobug) bug passes"
-[ "$(count childcc)" = 2 ] && [ "$(count autopilot)" = 2 ] && ok "the fast lane keeps childcc and autopilot" || ko "childcc/autopilot: $(count childcc)/$(count autopilot)"
+[ "$(count childcc)" = 2 ] && ok "the fast lane keeps childcc" || ko "childcc: $(count childcc)"
 /bin/sleep 4
 [ "$(count autofrontier)" = 1 ] && ok "a pass already running is not started again (single.sh lock)" || ko "the frontier pass overlapped itself ($(count autofrontier))"
-
-# 6) (#1870) a refused gh api is not the open-PR list. gh writes the error body to stdout and exits non-zero, and it does
-# not honour -q on a failed request, so the cycle used to read the words of the JSON message as PR numbers: one phantom
-# `NEW PR #<token> {` line per word of the body, and the same body entered the set of PRs already announced for the life
-# of the process. The fixture is the rate-limit body of 2026-10-12, the one behind the sibling fix in autobug (#1855).
-# gh names a fresh request id in every refusal, and that is the token that became the phantom PR number: the copy the
-# startup line had cached no longer matched the words of the next body.
-cat > "$B/gh" <<J
-#!/bin/bash
-case "\$*" in
-  *pulls?state=open*|*graphql*) i=\$(( \$(cat "$T/reqid" 2>/dev/null || echo 0) + 1 )); echo "\$i" > "$T/reqid"
-    printf '{"message":"API rate limit exceeded for user ID 122891372. If you reach out to GitHub Support for help, please include the request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2%s and timestamp 2026-10-12 05:12:10 UTC. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)","documentation_url":"https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api#rate-limiting","status":"403"}\n' "\$i"
-    exit 1 ;;   # the rate limit: the error body on stdout, non-zero exit
-  *) echo "" ;;
-esac
-J
-chmod +x "$B/gh"; run_cycles 2
-n=$(/usr/bin/grep -c '^NEW PR #' "$T/watch.out")
-[ "$n" = 0 ] && ok "6 a refused gh api prints no NEW PR line" \
-  || ko "6 a refused gh api printed $n phantom NEW PR line(s): '$(/usr/bin/grep '^NEW PR #' "$T/watch.out" | head -3 | tr '\n' '|')'"
-# The refusal must reach the log with GitHub's own words (#1893): every call site reads the list inside `$( )`, and a
-# subshell cannot set a variable, so the message travelled nowhere and the line ended in an empty tail --
-# `the open-PR list is not a list: ;`. The refusal now travels in stdout, which a subshell can capture.
-/usr/bin/grep -q 'the open-PR list is not readable' "$T/watch.out" \
-  && ok "6 the refused open-PR list is reported" || ko "6 the refused open-PR list is silent: '$(cat "$T/watch.out")'"
-/usr/bin/grep -q 'the open-PR list is not readable.*API rate limit exceeded' "$T/watch.out" \
-  && ok "6 the log names GitHub's own message" || ko "6 the log does not carry GitHub's message: '$(/usr/bin/grep 'open-PR list' "$T/watch.out" | head -1)'"
-/usr/bin/grep -q 'the open-PR list is not readable.*request id 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2' "$T/watch.out" \
-  && ok "6 the log names GitHub's request id" || ko "6 the log does not carry the request id: '$(/usr/bin/grep 'open-PR list' "$T/watch.out" | head -1)'"
-/usr/bin/grep -q 'the open-PR list is not readable: *$' "$T/watch.out" \
-  && ko "6 the refusal line still ends in an empty tail (the message was lost again)" \
-  || ok "6 the refusal line is never empty after the colon"
-
-# 6b) an error body that happens to name a real open PR must not put it in the set: the refusal is not a list, so the
-# number in it is not a PR number either. The stub refuses the list on the first cycle and answers PR #7 from the second,
-# and the title of #7 is only served once the list has actually answered -- so the announcement can only come from a
-# successful read.
-# The list carries the PR's branch, title and body (#45): the announcement is read from it, with no read of its own.
-# The stub answers the RAW body now (#1893): ghread.py owns the read and the caller's `jq` does the projection, so `gh`
-# is stubbed at the wire and no longer at the projection (which is what `-q` used to fold into the same fake).
-cat > "$B/gh" <<J
-#!/bin/bash
-case "\$*" in
-  *pulls?state=open*|*graphql*) [ "\$(cat "$T/cyc" 2>/dev/null || echo 0)" -ge 1 ] && { echo '[{"number":7,"title":"a real open PR","body":"Refs #1870","head":{"ref":"gui/1870"}}]'; touch "$T/list-ok"; exit 0; }
-    i=\$(( \$(cat "$T/reqid" 2>/dev/null || echo 0) + 1 )); echo "\$i" > "$T/reqid"
-    printf '{"message":"API rate limit exceeded for user ID 122891372; retry after 7 seconds (request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2%s)","status":"403"}\n' "\$i"
-    exit 1 ;;
-  *pulls/7*) [ -e "$T/list-ok" ] && echo '{"head":{"ref":"gui/1870"},"title":"a real open PR","body":"Refs #1870"}' || echo "" ;;
-  *) echo "" ;;
-esac
-J
-chmod +x "$B/gh"; run_cycles 2
-n=$(/usr/bin/grep '^NEW PR #' "$T/watch.out" | /usr/bin/grep -vc '^NEW PR #[0-9][0-9]* ')
-[ "$n" = 0 ] && ok "6b every announced PR number is decimal" \
-  || ko "6b $n announced PR number(s) are not a decimal: '$(/usr/bin/grep '^NEW PR #' "$T/watch.out" | head -3 | tr '\n' '|')'"
-/usr/bin/grep -q '^NEW PR #7 gui/1870 a real open PR' "$T/watch.out" \
-  && ok "6b a refused body never enters the PR set: the real open PR is still announced" \
-  || ko "6b the real open PR was never announced from a successful read: '$(cat "$T/watch.out")'"
-# 6c) (#1893, AC5) a refused read leaves the caller's previous knowledge intact instead of clearing it. The list refuses,
-# answers #7 (announced once), refuses again, and answers #7 again: the set of PRs already announced has to survive the
-# refusal between the two answers, so the second answer announces nothing. A refusal that cleared the set would announce
-# #7 a second time -- which is the phantom-dispatch half of the same bug.
-cat > "$B/gh" <<J
-#!/bin/bash
-case "\$*" in
-  *pulls?state=open*|*graphql*) case "\$(cat "$T/cyc" 2>/dev/null || echo 0)" in
-      1|3) echo '[{"number":7,"title":"a real open PR","body":"Refs #1893","head":{"ref":"gui/1893"}}]'; exit 0 ;;
-    esac
-    printf '{"message":"API rate limit exceeded for user ID 122891372 (request ID 06F8:34CAED:22CD6B6:3FC4397:6ACC6C2A)","status":"403"}\n'
-    exit 1 ;;
-  *pulls/7*) echo '{"head":{"ref":"gui/1893"},"title":"a real open PR","body":"Refs #1893"}' ;;
-  *) echo "" ;;
-esac
-J
-chmod +x "$B/gh"; run_cycles 4
-n=$(/usr/bin/grep -c '^NEW PR #7 gui/1893' "$T/watch.out")
-[ "$n" = 1 ] && ok "6c a refusal keeps the set of PRs already announced (7 announced once across two answers and a refusal)" \
-  || ko "6c the PR was announced $n×: a refusal cleared (or never kept) the caller's previous knowledge: '$(/usr/bin/grep '^NEW PR #' "$T/watch.out" | tr '\n' '|')'"
-/usr/bin/grep -q 'the open-PR list is not readable' "$T/watch.out" \
-  && ok "6c the refusal in between is still named in the log" || ko "6c the refusal between the two answers was silent"
 
 # 7) One watch.sh per repository state directory. A live holder refuses another supervisor for the same repository,
 # while a separate repository uses its own lock. A holder that is gone is taken over.

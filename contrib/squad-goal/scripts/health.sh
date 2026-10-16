@@ -1,13 +1,13 @@
 #!/bin/bash
 # usage: health.sh   (also run by launchd every 2 min, outside watchd: nothing inside the loop can notice the loop itself dying)
 # One health pass -> $SG_STATE/health.json. Causes: watchd-down, fastloop-down, watch-stalled (cycle.log silent 6 min), never-started-runs,
-# orphan-markers (queued-/runof- whose run never recorded), stuck-prs (janitor-stuck- markers of still-open PRs), loose-worktrees,
+# orphan-markers (queued-/runof- whose run never recorded), loose-worktrees,
 # runs-board-drift (live runs that disagree with the cards sitting In Progress -- it NAMES both sides, not just the two counts).
 # gh-cooldown and gh-miss-rate come from ghspend.py (ADR-0277, the spend is visible): an exhausted cooldown names when it expires and
 # which pass owns it, and a sustained snapshot miss rate is named from the call log; both also land in health.json as a short `brief`
 # the hub's footer shows. ghspend.py makes no request, so this pass spends nothing from the bucket it reports on.
 # Each cause alerts ONCE (alerts.log + macOS notification) when it appears and re-arms when it clears. HEALTH_DRY=1 prints only; HEALTH_NOTIFY overrides the notifier.
-. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
+. "$(dirname "$0")/env.sh"; . "$(dirname "$0")/ghcall.sh"; . "$(dirname "$0")/workbranches.sh"; A="$SG_STATE/auto"; mkdir -p "$A"; G=/usr/bin/git; now=$(date +%s)
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
 alive() { [ -s "$1" ] && /bin/ps -p "$(cat "$1")" -ww -o command= 2>/dev/null | grep -q "$2"; }
@@ -22,9 +22,6 @@ nv=0; for r in $(cat "$SG_STATE/active-runs.txt" 2>/dev/null); do f=$r; [ "${r#/
 no=0; for f in "$A"/runof-*; do [ -e "$f" ] || continue; k=${f##*/runof-}; [ -e "$A/queued-$k" ] || continue; d="$SG_CHECKOUT/runs/$(cat "$f")"
   [ -e "$d/record.jsonl" ] || [ ! -d "$d" ] || { [ $((now - $(stat -f %m "$d/request.txt" 2>/dev/null || echo $now))) -gt 600 ] && no=$((no+1)); }; done
 [ $no -gt 0 ] && add orphan-markers "$no queued-* marker(s) whose fix run never started"
-ns=0; open=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[].number' 2>/dev/null | tr '\n' ' ')"
-for f in "$A"/janitor-stuck-*; do [ -e "$f" ] || continue; k=${f##*/janitor-stuck-}; case "$open" in *" ${k%%-*} "*) ns=$((ns+1));; esac; done
-[ $ns -gt 0 ] && add stuck-prs "$ns open PR(s) flagged PR-STUCK (conflict or red CI with no live fix run)"
 nl=$($G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | awk '/^worktree /{w=$2} /^detached/{print w}' | grep -cE "$HOME/wt-|/acpr\.")
 [ "$nl" -gt 0 ] && add loose-worktrees "$nl loose detached worktree(s) (wtclean keeps the dirty or unpushed ones; look at WT LOOSE)"
 # a fork branch ahead of the base with nobody on it: the fix run that was meant to move it is gone (forkclose re-arms it)
@@ -52,18 +49,18 @@ untyped=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_r
 undef=" $(printf '%s' "$oi" | jq -r '.[]|[.labels[].name] as $l|select(.pull_request|not)|select(($l|index("enhancement")) and ($l|index("bug")|not) and ($l|index("spec")|not))|select((.title+" "+(.body//""))|test("\\b(bug|defect|regression|crash(es|ed)?|broken|fails|failing|wrong|incorrect)\\b";"i"))|.number' 2>/dev/null | tr '\n' ' ')"
 [ -n "${undef// /}" ] && add defect-without-bug "open defect(s) that carry no bug label:$(for n in $undef; do printf ' #%s' "$n"; done)"
 # Startable work nobody is on: blocking edges decide readiness; labels only select the dispatcher that owns an issue.
-# A ready issue with no run or pull request for one pass must remain visible even when it has only a wave label.
+# A ready issue with no run or work branch for one pass must remain visible even when it has only a wave label.
 ra=" $(gh api "repos/$SG_REPO/issues?state=open&per_page=100" -q '.[]|select(.pull_request|not)|select((([.labels[].name]|index("bug")) // false | not))|select((([.labels[].name]|index("debt")) // false | not))|.number' 2>/dev/null | tr '\n' ' ')"
 ready=""
 for n in $ra; do
-  "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^(READY|STACK )' && ready="$ready $n"
+  "$(dirname "$0")/stack.sh" "$n" 2>/dev/null | head -1 | grep -qE '^READY' && ready="$ready $n"
 done
 if [ -n "${ready// /}" ]; then
-  prn=" $(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" -q '.[]|(.title+" "+(.body//""))' 2>/dev/null | grep -oE 'Refs #[0-9]+' | grep -oE '[0-9]+' | tr '\n' ' ')"
-  free=""; for n in $ready; do case "$prn" in *" $n "*) ;; *) free="$free $n";; esac; done
+  brs=" $(sg_work_issues) "
+  free=""; for n in $ready; do case "$brs" in *" $n "*) ;; *) free="$free $n";; esac; done
   nv2=$(sed 's|.*/runs/||' "$SG_STATE/active-runs.txt" 2>/dev/null | sort -u | while read -r r; do d="$SG_CHECKOUT/runs/$r"; [ -d "$d" ] || continue
     grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null || { [ -n "$(find "$d/request.txt" -mmin -30 2>/dev/null)" ] && echo x; }; done | wc -l | tr -d ' ')
-  [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "startable$free with no open PR and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
+  [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "startable$free with no work branch and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
 fi
 # The loop against its own board (#1795): a run that dies without its verdict leaves an `In Progress` card with nobody on it while
 # the loop still looks busy. Both numbers come from sources the loop already reads -- $SG_STATE/active-runs.txt and the REST board

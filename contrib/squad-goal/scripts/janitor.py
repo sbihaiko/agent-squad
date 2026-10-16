@@ -10,37 +10,32 @@
  C  zombie run (no verdict, record.jsonl idle 20 min, no process inside its folder, last started call dead): drop it from active-runs.txt, write the killed verdict into its record (squad.killed), and free its dispatch markers and leases.
  D  two live runs that accepted the same issue: report once (never kills).
  E  auto/disp-<n> older than 30 min whose dispatching request log says `verdict failed`: drop it so the frontier can dispatch the issue again.
- F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open PR naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
- G  an open PR on the base branch whose revci line for its current head says APPROVE (5 min old), mergeable clean, with no auto/merged-<pr>: report READY-NOT-MERGED and run one autopilot pass
-    (once per head; never merges itself). Still open 15 min later: report it once more (the autopilot's HOLD lines say why).
+ F  an open issue named "(#N)" in the subject of a fork commit older than 30 min, with no open work branch naming it: report FIXED-NOT-CLOSED once (never closes: closing needs evidence).
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
- K  the same never-started run that was an autofix run (auto/runof-<pr>-<sha9>): retryfix.sh re-arms the PR sha (its queued- marker, max 2 retries), so the fix is dispatched again instead of waiting for a verdict that never comes;
-    after the 2 retries the PR is reported by rule M. A disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
+ K  a disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
-    A run that landed a change, an issue a live run works, and an issue an open or merged PR names keep their marker. The loop-board card is rule R's: O writes none, and its comment names the column R wrote
+    A run that landed a change, an issue a live run works, and an issue with an open work branch keeps its marker. The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
- Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open or merged PR naming the issue, no fork-<n>-<sha9> marker.
+ Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
- M  an open PR on the base branch that is `dirty` or has a red CI line, unchanged for 20 min, with no live run naming it: report PR-STUCK once per head (cause + retries spent) and raise an alert (alerts.log + macOS notification).
  P  a `fork-<n>-<sha9>` marker whose commit left the fork base while the base no longer carries its change and the branch has nothing ahead to merge: an unwound landing (a hand revert, a branch reset, a base rebuilt under it).
     Its issue goes back to the column the dispatch reads (Todo; the bug board's Doing -> To triage) and the fork/disp/bug markers are dropped, so the frontier builds it again (#1830). A marker whose commit is in the base, or whose change the base holds anyway, and a branch still ahead of the base (the close retries on its head) are left alone.
  H  board state against the issue's own history (its loop comments; the REST timeline carries no project-status events), at most once per 10 min:
     RED-LOOP #N     3+ "fork suite failed after merging" comments with no green fork close since: the loop is not converging, a person must look.
     STATE-REGRESSION #N  the card is Todo/Blocked although the history says it reached Code Complete/Testing, or the card is Done while the issue is open; R repairs a Done card to the supported column.
  R  every board card the passes above know of: its expected status is derived from the run's own truth and the evidence beside it, and only a mismatch is written (one card, one PATCH), with the reason named.
-    A live run holds the issue (dispatch marker or accepted child) -> In Progress; an issue that is closed or carries a merged PR into $SG_BASE naming it -> Done, so a PR merged into a parent branch (#127) and a merge naming an issue never delivered to the base are not Done;
+    A live run holds the issue (dispatch marker or accepted child) -> In Progress; an issue that is closed or whose work branch is in $SG_BASE -> Done, so work that landed on a parent branch (#127) and never reached the base is not Done;
     a landing is credited to the child that made it, never to every issue the run held (#271): an issue a child's own accept line names follows that child's own `land` event and its own outcome, so a child that
     committed nothing keeps the loop's queue however many of its siblings landed, and only an issue no child of the run names takes the run's landing as its own;
-    a completed run, whether or not it landed work, whose branch and PR have not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
+    a completed run, whether or not it landed work, whose branch has not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
-    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the merged PR and the checks on its
-    merge commit (or who closed it, when no merged PR names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
+    With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
     With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Landing, Testing, Doing). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
@@ -238,8 +233,6 @@ for r in names:
         age = now - (f / "request.txt").stat().st_mtime if (f / "request.txt").exists() else 0
         if age > 300 and not [q for q in inside(f) if "dashboard_server" not in procs.get(q, (0, ""))[1]]:
             say(f"NEVER-STARTED run {f.name} (no record.jsonl after {int(age // 60)} min) dropped from active-runs")
-            if not dry:
-                _run(["bash", str(pathlib.Path(__file__).parent / "retryfix.sh"), str(f)], cwd=co)   # K: re-arm the PR sha of a never-started autofix run
             free_never_started(f)   # the run frees its own issues; say() reports it in a dry run too
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of never-started run {f.name}")
@@ -420,17 +413,6 @@ def branch_ahead_count(n):   # how many of its work branches hold commits the la
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("ahead", "diverged")))
 def branch_in_dev_count(n):   # how many of its work branches are in the landing branch: the tip is an ancestor of dev
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("behind", "identical")))
-_opr = None
-def all_pulls():   # the one read of the open-PR route, drafts included (a draft's branch is a live parent for the retarget rule, #285)
-    global _opr   # a line: `<pr> <sha> <base> <head ref> <updated_at>`, then a tab, the PR's labels (comma-joined), a tab, the issues its title and body name, a tab, `draft` or `ready`
-    if _opr is None: _opr = sh("gh", "api", f"repos/{repo0}/pulls?state=open&per_page=100", "--jq", r'.[]|"\(.number) \(.head.sha) \(.base.ref) \(.head.ref) \(.updated_at)\t\([.labels[].name]|join(","))\t\([((.title//"")+" "+(.body//""))|scan("(?i)\\b(?:refs|closes|fixes|resolves) #([0-9]+)")[]]|join(","))\t\(if .draft then "draft" else "ready" end)"').splitlines()
-    return _opr
-def open_pulls():   # rule R reads the issues a PR names and its labels, rule G a PR's head and rule M its head branch and age: one read of the route answers all three, and a draft is none of theirs (a line with no fourth field is ready)
-    return [l for l in all_pulls() if (l.split("\t") + ["", "", "", ""])[3] != "draft"]
-def review_line(pr, sha):   # the loop's own review line for the PR's current head (revci.sh's summary), "" when none
-    o = st / f"revci-{pr}.out"
-    try: return ([x for x in o.read_text().splitlines() if x.startswith(f"#{pr} {sha[:9]} ")] or [""])[-1]
-    except OSError: return ""
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
     if not (fd and fb): return "unknown"
@@ -557,7 +539,7 @@ def reconcile_board():
         n = m.name[5:]; holder = m.read_text().strip()
         if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
             set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder, "", 30)
-    # Every open issue starts at the loop floor. This rank is below every rule above, so current run, marker, PR, landing,
+    # Every open issue starts at the loop floor. This rank is below every rule above, so current run, marker, branch, landing,
     # closure, or owner-label evidence wins; a Blocked card never preserves a blocking cause that has disappeared.
     oans, olabels = open_issues()
     if oans:
@@ -566,7 +548,7 @@ def reconcile_board():
             set_expected(n, "Backlog" if hold else os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so it opens in its own column rather than in the loop's queue (#117's
-            # sibling ask). The rank sits above the floor and below every rule a run, a marker or a PR raises, so the day
+            # sibling ask). The rank sits above the floor and below every rule a run, a marker or a branch raises, so the day
             # work starts on the spec the card leaves the column by the rule that names that work.
             if "spec" in olabels[n]:
                 # A spec's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
@@ -652,10 +634,10 @@ for d in (st / "auto").glob("disp-*"):
     if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
-    if pr_count(n) != "0":   # a PR exists (open or merged): the issue is past dispatch, so the marker stands -- and the pass names the issue, so this decision reads apart from a release (#217)
-        say(f"DISPATCH-FAILED #{n}: request {req} ended failed, but a PR names the issue; {d.name} kept so the pass never dispatches it again")
+    if pr_count(n) != "0":   # a work branch exists: the issue is past dispatch, so the marker stands -- and the pass names the issue, so this decision reads apart from a release (#217)
+        say(f"DISPATCH-FAILED #{n}: request {req} ended failed, but a work branch names the issue; {d.name} kept so the pass never dispatches it again")
         continue
-    say(f"stale {d.name} (request {req} ended failed, issue open, no PR) removed")
+    say(f"stale {d.name} (request {req} ended failed, issue open, no work branch) removed")
     if not dry: d.unlink()
 if owner and proj and repo0:
     for r in names:   # O: a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
@@ -673,7 +655,7 @@ if owner and proj and repo0:
         for n in sorted(marks, key=int):
             if n in byissue: continue   # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
-            if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
+            if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
             moves = []   # the loop-board card is rule R's (one owner, #91): O reads the column R derived and writes none of its own; the marker is dropped either way, nothing must hold a finished run's issue back
             if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])   # only the column the dispatch set: never downgrade a card another step moved past it
             mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
@@ -723,7 +705,7 @@ if owner and proj and repo0:
         if bs == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])
         if not moves: no(); continue
         mks = " and ".join("auto/" + k + "-" + n for k in sorted(ms))
-        say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no PR names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
+        say(f"STALE-CARD #{n}: card In Progress behind {mks}, no run works it, no work branch names it; card -> {', '.join(s for _, s in moves)}, marker dropped so it dispatches again")
         if not dry:
             for p, s in moves: board_write([owner, str(p), s, str(n)], n, f"stale card back in {s}")
             for m in ms.values():
@@ -765,7 +747,7 @@ if fd and fb:
             br = (os.environ.get("SG_FORK_BRANCH") or "issue/%n").replace("%n", n)
             if n in byissue: continue                        # a live run works it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
-            if pr_count(n) != "0": continue   # a PR names it: the issue is past dispatch
+            if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
             if card_status(proj, n) not in ("In Progress", "Doing", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
@@ -782,47 +764,6 @@ if fd and fb:
                 (st / "cq" / f"{CQ}#{n}-unwound-{os.getpid()}.md").write_text(
                     f"UNWOUND #{n}: the close pass recorded a merge of {sha[:9]} into {fb}, and {fb} no longer holds that change ({br} has nothing left ahead of it either). The landing was undone, so the issue is back in {moves[-1][1]} with its {' and '.join('auto/' + k for k in marks)} marker(s) dropped and the next cycle builds it again.\n")
 repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
-def retarget_dead_bases():   # a stacked PR whose parent is gone (#285): the parent squash-merged into the base and its branch has no open PR, so a merge of this PR would land on a stale branch and never reach the base. One PATCH per PR, from the list the pass already read; the next pass lists it on the base
-    rows = [(l.split("\t")[0].split() + ["", "", "", "", ""])[:5] for l in all_pulls()]
-    heads = {r[3] for r in rows}   # a draft PR counts: its branch is a live parent
-    for pr, sha, pb, hr, ua in rows:
-        if not (pr.isdigit() and pb and pb != base and pb not in heads): continue
-        say(f"RETARGET #{pr}: its base {pb} has no open PR, so the PR moves to {base}")
-        if not dry:
-            r, out = _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "PATCH", f"repos/{repo}/pulls/{pr}", "-f", f"base={base}"])   # through the door's write (ADR-0277)
-            if r: say(f"RETARGET-FAILED #{pr}: {out.strip().splitlines()[0] if out.strip() else 'no output'}")
-retarget_dead_bases()
-for l in open_pulls():
-    pr, sha, pb = (l.split() + ["", "", ""])[:3]; o = st / f"revci-{pr}.out"; mg = st / "auto" / f"merged-{pr}"
-    if not (pr.isdigit() and pb == base and o.exists() and not mg.exists()): continue
-    last = [x for x in o.read_text().splitlines() if x.startswith(f"#{pr} {sha[:9]} ")][-1:]
-    age = now - o.stat().st_mtime
-    if not (last and "APPROVE" in last[0] and "SUPERSEDED" not in last[0] and age > 300): continue
-    if sh("gh", "api", f"repos/{repo}/pulls/{pr}", "-q", ".mergeable_state").strip() != "clean": continue
-    k = st / "auto" / f"janitor-rnm-{pr}-{sha[:9]}"; k2 = pathlib.Path(str(k) + "-still")
-    if not k.exists():
-        say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: APPROVE + clean for {int(age // 60)} min, not merged; running one autopilot pass")
-        if not dry:
-            k.touch(); _run(["bash", str(pathlib.Path(__file__).parent / "autopilot.sh")], cwd=co, timeout=180)
-    elif age > 900 and not k2.exists():
-        say(f"READY-NOT-MERGED #{pr} @ {sha[:9]}: still unmerged {int(age // 60)} min after the kick; read the HOLD lines in watch.log")
-        if not dry: k2.touch()
-liveq = " ".join((folder(r) / "request.txt").read_text() for r in keep if (folder(r) / "request.txt").exists() and folder(r).name in live)
-for l in open_pulls():   # M
-    pr, sha, pb, hr, ua = (l.split() + ["", "", "", "", ""])[:5]
-    if not (pr.isdigit() and pb == base and ua): continue
-    try: upd = time.mktime(time.strptime(ua, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
-    except ValueError: continue
-    if now - upd < 1200: continue
-    mk = st / "auto" / f"janitor-stuck-{pr}-{sha[:9]}"
-    if mk.exists() or any((st / "auto").glob(f"dupiss-{pr}-*")): continue   # dupiss: autopilot found its issue closed as a duplicate; superseded, not stuck
-    ms = sh("gh", "api", f"repos/{repo}/pulls/{pr}", "-q", ".mergeable_state").strip()
-    ci = sh("bash", "-c", f"grep -h '^#{pr} {sha[:9]} ' '{st}/revci-{pr}.out' 2>/dev/null | tail -1 | sed -n 's/.*CI=\\([^ ]*\\).*/\\1/p'").strip()
-    why = "conflicts with the base (dirty)" if ms == "dirty" else ("CI red (" + ci + ")" if re.search(r"failure|timed_out|cancelled", ci) else "")
-    if not why or f"#{pr}" in liveq or hr in liveq: continue
-    tried = sum(1 for _ in (st / "auto").glob(f"retry-{pr}-{sha[:9]}"))
-    say(f"PR-STUCK #{pr} @ {sha[:9]}: {why}, unchanged {int((now - upd) // 60)} min, no live run on it" + (" (retries spent)" if tried else ""))
-    if not dry: mk.touch(); alert(f"PR #{pr} stuck: {why}; no live fix run for {int((now - upd) // 60)} min")
 hb = pathlib.Path(os.environ.get("SG_HUB_DIR") or co / "runs" / ".hub") / "hub-board.json"; hm = st / "auto" / "janitor-h-last"
 if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
     if not dry: hm.touch()

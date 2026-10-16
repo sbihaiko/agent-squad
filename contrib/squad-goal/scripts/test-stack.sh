@@ -1,10 +1,11 @@
 #!/bin/bash
 # Regression test for stack.sh's native blocked-by relation: a body is a person-facing mirror, not a dispatch edge.
+# The answer is READY or WAIT: a work branch is the unit of work, so an open blocker whose work has not landed waits (#361).
 # usage: bash test-stack.sh [path/to/stack.sh]
 src=${1:-$(dirname "$0")/stack.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{startability.sh,ghcall.sh,ghread.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
+mkdir -p "$T/s" "$T/bin" "$T/co/runs/.hub"; cp "$src" "$T/s/stack.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py} "$T/s/"   # stack.sh reads the native relation through the GitHub door
 printf 'export SG_REPO=x/y SG_CHECKOUT=%s SG_HUB_DIR=%s SG_BASE=main SG_STATE=%s/st\n' "$T/co" "$T/co/runs/.hub" "$T" > "$T/s/env.sh"
-echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"   # #1796: a card in Code Complete with no PR
+echo '{"items":[{"n":1796,"st":"Code Complete","s":"open"}]}' > "$T/co/runs/.hub/hub-board.json"   # #1796: a card in Code Complete with no work branch landed
 # The body still names #1791, but only the native relation can block dispatch. #1800 has two open native blockers.
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
@@ -48,13 +49,13 @@ r=$(run 1805)
 case "$r" in *WAIT*"#1799"*) ok "#1805: a blocker whose state cannot be read gates dispatch";; *) ko "#1805 did not WAIT on #1799: '$r'";; esac
 r=$(run 1806)
 case "$r" in *WAIT*"#1796"*) ok "#1806: a Code Complete blocker with no open PR gates dispatch";; *) ko "#1806 did not WAIT on #1796: '$r'";; esac
-# #383: the frontier hands over the issue's entry of its open-issue list and its open-PR list. The blocker's state beside the
-# edge decides (#1797 reads open alone, closed in the entry), and no GitHub request is sent.
+# #383: the frontier hands over the issue's entry of its open-issue list. The blocker's state beside the edge decides
+# (#1797 reads open alone, closed in the entry), and no GitHub request is sent.
 printf '{"number":1810,"body":"Work.","blocked_by":[1797],"blocked_by_read":true,"blockers":[{"number":1797,"state":"closed"}]}' > "$T/e1810.json"; printf '[]' > "$T/pulls.json"; : > "$T/gh.log"
-r=$(GHLOG=$T/gh.log SG_STACK_ISSUE=$T/e1810.json SG_STACK_PULLS=$T/pulls.json run 1810)
+r=$(GHLOG=$T/gh.log SG_STACK_ISSUE=$T/e1810.json run 1810)
 case "$r" in READY*) ok "#1810: the entry's closed blocker state decides";; *) ko "#1810 did not read READY from its entry: '$r'";; esac
-[ ! -s "$T/gh.log" ] && ok "#1810: a handed-over entry and PR list cost no GitHub request" || ko "#1810 sent requests: $(cat "$T/gh.log")"
+[ ! -s "$T/gh.log" ] && ok "#1810: a handed-over entry cost no GitHub request" || ko "#1810 sent requests: $(cat "$T/gh.log")"
 printf '{"number":1811,"body":"Work.","blocked_by":[1797],"blocked_by_read":true,"blockers":[{"number":1797,"state":"open"}]}' > "$T/e1811.json"
-r=$(SG_STACK_ISSUE=$T/e1811.json SG_STACK_PULLS=$T/pulls.json run 1811)
-case "$r" in *"WAIT blocker #1797 has no open PR"*) ok "#1811: an open blocker in the entry gates dispatch";; *) ko "#1811 did not WAIT on #1797: '$r'";; esac
+r=$(SG_STACK_ISSUE=$T/e1811.json run 1811)
+case "$r" in *"WAIT blocker #1797 is open: its work is not in main yet"*) ok "#1811: an open blocker in the entry gates dispatch";; *) ko "#1811 did not WAIT on #1797: '$r'";; esac
 rm -rf "$T"; exit $fail

@@ -150,9 +150,9 @@ case "$r" in *"BRANCHLAND REFUSE gui/7-x"*ruleset*) ok "a refused push says so";
 ! /usr/bin/grep -q "issues/7" "$T/gh.log" && [ ! -e "$T/board.log" ] && ! ls "$T/st/cq/"* >/dev/null 2>&1 && ok "a refused push closes nothing, queues nothing, moves no card" || ko "a refusal wrote"
 r2=$(CHECKS="$GREEN" bl); [ -z "$r2" ] && ok "a refusal is said once per head" || ko "refusal repeated: '$r2'"
 
-# a branch that has an open pull request is the pull request lander's
+# (#361) a pull request naming the branch changes nothing: the loop reads no pull request, so the branch lands
 reset; r=$(PRS='[{"number":41,"head":{"ref":"gui/7-x"}}]' CHECKS="$GREEN" bl)
-[ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a branch with an open PR is left to the PR lander" || ko "landed a PR branch: '$r'"
+[ "$($O rev-parse dev)" != "$($O rev-parse main)" ] && ok "a branch a pull request names lands like any other" || ko "a pull-request branch was not landed: '$r'"
 # a branch that names no issue is not a work branch
 reset; (cd "$T/w" && $G push -q origin gui/7-x:refs/heads/scratch 2>/dev/null; $G push -q origin :gui/7-x 2>/dev/null)
 r=$(CHECKS="$GREEN" bl); [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && ok "a branch naming no issue is ignored" || ko "landed scratch: '$r'"

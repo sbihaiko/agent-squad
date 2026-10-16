@@ -16,24 +16,23 @@ bash "$d/single.sh" job sh -c "echo d >> $T/log"; /usr/bin/grep -q d "$T/log" &&
 # 4. different names do not block each other
 ( bash "$d/single.sh" one sleep 3 & ); sleep 1; bash "$d/single.sh" two sh -c "echo e >> $T/log"; /usr/bin/grep -q e "$T/log" && ok "different names are independent" || ko "names collided"
 sleep 3
-# 5. fastloop: one iteration runs childcc, autopilot and both dispatch passes, a slow forkclose (own name) does not delay them
+# 5. fastloop: one iteration runs childcc and both dispatch passes, a slow forkclose (own name) does not delay them
 F=$T/scripts; mkdir -p "$F"; cp "$d/fastloop.sh" "$d/single.sh" "$F/"
 printf '. /dev/null\n' > /dev/null
 cat > "$F/env.sh" <<EOF
 export SG_STATE=$SG_STATE
 EOF
 printf 'import sys\nopen("%s/fast.log","a").write("childcc\\n")\n' "$T" > "$F/childcc.py"
-printf '#!/bin/bash\necho autopilot >> %s/fast.log\n' "$T" > "$F/autopilot.sh"
-# the two dispatch passes ride the fast lane (#1845); they are detached, so the beat is timed without them and the four lines are waited for
+# the two dispatch passes ride the fast lane (#1845); they are detached, so the beat is timed without them and the three lines are waited for
 printf '#!/bin/bash\necho autofrontier >> %s/fast.log\n' "$T" > "$F/autofrontier.sh"
 printf '#!/bin/bash\necho autobug >> %s/fast.log\n' "$T" > "$F/autobug.sh"
 chmod +x "$F/autofrontier.sh" "$F/autobug.sh"
 ( bash "$d/single.sh" forkclose sleep 6 & ); sleep 1
 t0=$(date +%s); SG_FASTLOOP_ONCE=1 bash "$F/fastloop.sh"; e=$(( $(date +%s) - t0 ))
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$T/fast.log")" -ge 4 ] && break; sleep 0.3; done
-miss=; for s in childcc autopilot autofrontier autobug; do /usr/bin/grep -qx "$s" "$T/fast.log" || miss="$miss $s"; done
-{ [ -z "$miss" ] && [ "$e" -le 3 ]; } && ok "fastloop runs childcc, autopilot and both dispatch passes without waiting for forkclose" || ko "fastloop: missing${miss:- nothing}, ${e}s, '$(tr '\n' ' ' < "$T/fast.log")'"
-# 6. a gap of more than 120 s between autopilot starts is logged
-echo $(( $(date +%s) - 300 )) > "$SG_STATE/autopilot.last"; SG_FASTLOOP_ONCE=1 bash "$F/fastloop.sh"
-/usr/bin/grep -q AUTOPILOT-GAP "$SG_STATE/cycle.log" && ok "autopilot gap logged" || ko "no AUTOPILOT-GAP line"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ "$(wc -l < "$T/fast.log")" -ge 3 ] && break; sleep 0.3; done
+miss=; for s in childcc autofrontier autobug; do /usr/bin/grep -qx "$s" "$T/fast.log" || miss="$miss $s"; done
+{ [ -z "$miss" ] && [ "$e" -le 3 ]; } && ok "fastloop runs childcc and both dispatch passes without waiting for forkclose" || ko "fastloop: missing${miss:- nothing}, ${e}s, '$(tr '\n' ' ' < "$T/fast.log")'"
+# 6. (#361) the fast lane carries no merge pass: the review, the fix pass and the branch lander are the cycle's, and autopilot.sh is gone
+/usr/bin/grep -q 'autopilot' "$d/fastloop.sh" && ko "the fast lane still names autopilot" || ok "the fast lane carries no merge pass"
+[ -e "$d/autopilot.sh" ] && ko "autopilot.sh is back" || ok "autopilot.sh is gone (the branch lander is the landing path)"
 sleep 5; rm -rf "$T"; exit $fail

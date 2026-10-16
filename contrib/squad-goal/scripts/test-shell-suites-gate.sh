@@ -1,7 +1,7 @@
 #!/bin/bash
 # Regression test for #94: shell-suites.sh takes no machine-wide `gate` lock. The lock guarded the full pytest gate only,
 # and one holder held across the shell suites blocked every gate on the machine for a quarter hour. The local gate retired
-# with the local land path (#115): the machine's full gate is the CI check job, which the landing pass (prland.sh) reads,
+# with the local land path (#115): the machine's full gate is the CI check job, which the landing pass (branchland.sh) reads,
 # and tests/test_squad_full_gate_machine_lock.py now guards that no script of the loop takes that lock. So two
 # shell-suites.sh at once both run at once and print no wait line, and a run while another gate holds the lock runs at once
 # and leaves that lock alone.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Monitor stream: one line per run verdict, new PR, or review+CI summary. Run from the target checkout.
+# Monitor stream: one line per run verdict. Run from the target checkout.
 # active-runs.txt holds a run id (under ./runs) or an absolute run folder (launch.py writes absolute paths).
 . "$(dirname "$0")/env.sh"
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
@@ -18,29 +18,12 @@ echo $$ > "$wlock/pid"; trap 'rm -rf "$wlock"' EXIT; trap 'rm -rf "$wlock"; exit
 # ONE door owns every GitHub read of this cycle (ghcall.sh, #1893, ADR-0277): ghread.py answers in exactly three outcomes --
 # the answer in stdout with exit 0, a refusal naming GitHub's own message and request id with exit 2, and a failure before
 # GitHub reached a verdict with exit 1 -- and the body of a refusal is never on stdout as data. `gh api` writes the error
-# body to stdout and exits non-zero, and it does not honour -q on a failed request, so every `gh api … 2>/dev/null` here
-# used to treat a 403/404/500 body as a valid answer: on 2026-10-12 a rate-limit body became the open-PR list and the
-# loop below read each word of the JSON message as a PR number.
-#
-# The outcome travels in the exit code with its line in stdout, never in a variable: every call site below reads the
-# list inside `$( )`, and a subshell cannot set a variable in its caller, so a refusal kept in `$gh_api_err` reached the
-# log as `the open-PR list is not a list: ;` -- GitHub's own words lost, the empty tail read as "no PRs".
-#
-# The cycle reads the open PRs as ONE aggregate (#45): the list carries each PR's branch, title and body, so a new PR is
-# announced from the list it was found in and costs no read of its own, and `gh_aggregate` answers a repeat inside its
-# window (90 s) from the snapshot. A PR opened inside the window is announced by the next cycle, not this one.
+# body to stdout and exits non-zero, and it does not honour -q on a failed request, so a bare `gh api … 2>/dev/null`
+# treated a 403/404/500 body as a valid answer. The only GitHub call left in this cycle is the quota stretch at its end.
 . "$(dirname "$0")/ghcall.sh"
 # reported verdicts / stalls persist across restarts ($W); a first start (no file) records current verdicts silently
 W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
-# the set of PRs already announced is only ever built from an answer (#1870, #1893): a read that did not answer leaves it
-# as it was instead of filling it with the words of the error body, which is what silently swallowed the real PRs for the
-# life of the process. The refusal is named in the log from the module's own line, which carries GitHub's message and
-# request id -- a caller that only ever learns from an answer cannot clear what it already knew.
-prs=" "
-if pl=$(gh_aggregate "repos/$SG_REPO/pulls?state=open&per_page=100") && pn=$(printf '%s' "$pl" | jq -r '.[].number'); then prs=" $(printf '%s\n' "$pn" | tr '\n' ' ')"
-else echo "WATCH: the open-PR list is not readable, keeping the last known set: $pl"; fi
-for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rs"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
 tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
 # land_wave <run>: the completion of one finished run -- the run's finished children enter its wave, and then the wave lands
@@ -107,48 +90,31 @@ if v:
       [ $boot = 1 ] || { echo "RUN ${r##*/} verdict=$v"
         # the run's verdict goes on every issue it worked (issue numbers read from the run's first records)
         rd=$r; [ "${r#/}" = "$r" ] && rd=runs/$r
-        case "$v" in failed*) "$(dirname "$0")/retryfix.sh" "$rd";; esac   # a failed autofix run re-arms its PR sha (max 2)
         case "$v" in failed*no_dispatch*) "$(dirname "$0")/consult.sh" "$rd" >> "$SG_STATE/consult.log" 2>&1 & ;; esac   # router hesitated: ask the coding model once (ADR-free loop rule)
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
           printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$(sg_cq_file "$n-run$$-${r##*-}.md")"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
-  # a refusal is not an open-PR list (#1870): the words of an error body are never PR numbers, the per-PR follow-up is
-  # read only after the list answered, and a PR the follow-up could not read stays unannounced for the next cycle
-  if lj=$(gh_aggregate "repos/$SG_REPO/pulls?state=open&per_page=100") && lp=$(printf '%s' "$lj" | jq -r '.[].number'); then
-    for n in $lp; do case "$n" in ''|*[!0-9]*) continue;; esac; case "$prs" in *" $n "*) ;; *)
-      t=$(printf '%s' "$lj" | jq -r --argjson n "$n" '.[]|select(.number==$n)|.head.ref+" "+.title+"\t"+(.body//"")') \
-        || { echo "WATCH: PR #$n is not readable: $t"; continue; }
-      echo "NEW PR #$n ${t%%$'\t'*}"; prs="$prs$n "
-      for i in $(printf '%s' "$t" | grep -oE 'Refs #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do printf "PR #%s opened: %s. Refs #%s\n" $n "${t%%$'\t'*}" $i > "$(sg_cq_file "$i-pr$n.md")"; done;; esac; done
-  else echo "WATCH: the open-PR list is not readable, keeping the last known set: $lj"; fi
-  for f in "$SG_STATE"/revci-*.out; do grep '^#' "$f" 2>/dev/null | tail -1; done | sort > "$SG_STATE/.rn"
-  comm -13 "$SG_STATE/.rs" "$SG_STATE/.rn" | sed 's/^/REVIEW /'; cp "$SG_STATE/.rn" "$SG_STATE/.rs"
-  # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes; review with no summary after review_stall_minutes
-  cfg="$(dirname "$0")/models.json"; st=$(jq -r .stall_timeout_minutes "$cfg"); rs=$(jq -r .review_stall_minutes "$cfg")
+  # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes
+  cfg="$(dirname "$0")/models.json"; st=$(jq -r .stall_timeout_minutes "$cfg")
   for r in $(cat "$SG_STATE/active-runs.txt"); do case "$seen" in *" $r "*) continue;; esac; case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
-    [ -e "$f" ] && [ -n "$(find "$f" -mmin +$st 2>/dev/null)" ] && case "$stalled" in *" $r "*) ;; *) echo "STALL RUN ${r##*/} no record.jsonl progress for ${st}m"; "$(dirname "$0")/retryfix.sh" "$r" --stalled; stalled="$stalled$r "; echo "stall $r" >> "$W";; esac; done
-  for f in "$SG_STATE"/revci-*.out; do [ -e "$f" ] || continue; grep -q '^#' "$f" && continue; k=$(basename "$f" .out)
-    [ -n "$(find "$f" -mmin +$rs 2>/dev/null)" ] && case "$stalled" in *" $k "*) ;; *) echo "STALL REVIEW ${k#revci-} no result for ${rs}m"; stalled="$stalled$k "; echo "stall $k" >> "$W";; esac; done
+    [ -e "$f" ] && [ -n "$(find "$f" -mmin +$st 2>/dev/null)" ] && case "$stalled" in *" $r "*) ;; *) echo "STALL RUN ${r##*/} no record.jsonl progress for ${st}m"; stalled="$stalled$r "; echo "stall $r" >> "$W";; esac; done
   tick=$((tick+1))
   # reconcile.py is the most expensive step of the cycle by a wide margin (137 runs, 22,902 s, ~167 s each) and all it does is move cards
   # from GitHub facts: detached under its own single.sh lock, filing its stream in $SG_STATE/reconcile.log
   # instead of holding the cycle (#1845). A pass already running is skipped, not doubled.
   [ $((tick % 8)) -eq 1 ] && ( bash "$(dirname "$0")/single.sh" reconcile env RECONCILE=apply python3 "$(dirname "$0")/reconcile.py" 2>&1 | sed "s/^/BOARD /" >> "$SG_STATE/reconcile.log" & ) 2>/dev/null   # card Status from GitHub facts, every ~12 min (GraphQL budget)
-  # PR Code Complete (#83): a pull request nothing holds, whose check failed on the known baseline only, is squash-merged and
-  # its issue closed. Under single.sh, so two passes never overlap; the job logs it reads can take seconds
-  [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" prland "$(dirname "$0")/prland.sh" 2>&1 & ) 2>/dev/null
-  # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push, beside prland until the PR path is removed.
-  [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchland "$(dirname "$0")/branchland.sh" 2>&1 & ) 2>/dev/null
+  # Work-branch landing (#355): a pushed work branch with a green check lands in dev by a fast-forward push.
+  [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchland "$(dirname "$0")/branchland.sh" 2>&1 & ) 2>/dev/null
   # Work-branch review (#397): each pushed work branch is reviewed once per tip, so branchland finds the verdict it waits for.
-  [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchreview bash "$(dirname "$0")/branchreviewpass.sh" 2>&1 & ) 2>/dev/null
+  [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchreview bash "$(dirname "$0")/branchreviewpass.sh" 2>&1 & ) 2>/dev/null
   # Work-branch fix round (#401): a reviewed tip whose review says CHANGES gets one fix run on the same branch.
-  [ -n "${SG_PRLAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
-  fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc, autopilot and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
-  # The fast lane owns childcc, autopilot, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
+  [ -n "${SG_LAND_PAUSED:-}" ] || ( tm bash "$(dirname "$0")/single.sh" branchfix bash "$(dirname "$0")/branchfixpass.sh" 2>&1 & ) 2>/dev/null
+  fast=; [ -s "$SG_STATE/fastloop.pid" ] && kill -0 "$(cat "$SG_STATE/fastloop.pid")" 2>/dev/null && fast=1   # watchd runs fastloop.sh: childcc and both dispatch passes every SG_FAST_INTERVAL s (120 by default) outside this cycle
+  # The fast lane owns childcc, autofrontier and autobug; this cycle runs them only when that lane is down, so neither lane
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up
   # to ~6 min late, which is what frontier-idle kept reporting (#1845). Every step moved here keeps its own single.sh lock, so a pass
   # already running in the other lane is skipped rather than started a second time.
-  [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1; tm "$(dirname "$0")/autopilot.sh" 2>&1
+  [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1
     tm "$(dirname "$0")/autofrontier.sh" 2>&1   # dispatch the frontier as soon as a blocker falls
     tm "$(dirname "$0")/autobug.sh" 2>&1; }   # open bug issues dispatched automatically
   tm "$(dirname "$0")/autohunt.sh" 2>&1   # idle loop: one read-only bug hunt that files reproducible defects
@@ -161,7 +127,7 @@ if v:
   # (publish-live.sh, one explicit file list). It runs before the vendorguard step, so a drift is read, published and named in the same cycle.
   tm bash "$(dirname "$0")/single.sh" liveguard bash "$(dirname "$0")/live-guard.sh" 2>&1   # the live skill follows the repository copy: the difference is read, published, and named
   tm bash "$(dirname "$0")/single.sh" vendorguard bash "$(dirname "$0")/vendor-guard.sh" 2>&1   # re-vendor drifted personal skills (a drifted vendor makes every squad start refuse)
-  boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1; tm "$(dirname "$0")/autopilot.sh" 2>&1; }; done; sleep 30
+  boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || tm python3 "$(dirname "$0")/childcc.py" 2>&1; done; sleep 30
   # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains
   x=$(gh_stretch 90); [ "$x" -gt 0 ] 2>/dev/null && { echo "$(date +%T) QUOTA low: this cycle waits ${x}s more" >> "$SG_STATE/cycle.log"; sleep "$x"; }
-  echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc, autopilot and both dispatches every SG_FAST_INTERVAL s (fastloop.sh when watchd runs it), the rest every 90 s
+  echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc and both dispatches every SG_FAST_INTERVAL s (fastloop.sh when watchd runs it), the rest every 90 s

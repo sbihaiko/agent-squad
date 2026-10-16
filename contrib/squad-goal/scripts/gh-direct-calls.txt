@@ -10,24 +10,15 @@
 # in the same change that migrates the caller, and prove that migration with a case over the caller.
 #
 # Counted from the tree by: python3 contrib/squad-goal/scripts/check-gh-interface.py --ledger .
-# 2026-10-12, at the base of slice #8: 95 reaches in 22 scripts.
+# 2026-10-15, after #361 removed the pull request path: the pull request readers (prland.sh, revci.sh, autopilot.sh,
+# autofix.sh, autopanel.sh, stack.sh, speed.py, retryfix.sh) are gone, so the budget names no pull request caller:
+# 23 reaches in 9 scripts.
 autobug.sh 1
-autofix.sh 3
-autofrontier.sh 2
-autohunt.sh 2
-autopanel.sh 1
-autopilot.sh 13
-issue_state.py 1
+autohunt.sh 1
 childcc.py 1
-health.sh 3
+health.sh 1
 hub.py 6
-janitor.py 12
-mkreq.sh 2
-prepush.sh 3
-prland.sh 1
+issue_state.py 1
+janitor.py 9
 reconcile.py 2
-revci.sh 7
-review.sh 5
-speed.py 1
-stack.sh 3
-wtclean.sh 2
+wtclean.sh 1

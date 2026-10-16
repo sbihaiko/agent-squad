@@ -41,12 +41,13 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 rp() { bash "$T/s/branchreviewpass.sh" 2>&1; }
 n() { cat "$T/review.log" 2>/dev/null | /usr/bin/grep -c "^$1 "; }
 
-# 1) one review for a work branch with an open issue and no PR; the PR branch, the closed-issue branch and a non-work branch get none
+# 1) one review for a work branch with an open issue; the closed-issue branch and a non-work branch get none. A work branch is
+# reviewed whether or not a pull request names it (#361: the loop reads no pull request)
 PRS='[{"number":41,"head":{"ref":"fix/8-y"}}]'; export PRS
 r=$(rp)
 [ "$(n gui/7-x)" = 1 ] && ok "a work branch with no review at its tip is reviewed once" || ko "gui/7-x reviewed $(n gui/7-x) times: '$r' $(cat "$T/review.log" 2>/dev/null)"
 /usr/bin/grep -q "^gui/7-x 7$" "$T/review.log" && ok "the review names the branch and its issue" || ko "review call: $(cat "$T/review.log" 2>/dev/null)"
-[ "$(n fix/8-y)" = 0 ] && ok "a branch with an open PR is left to the PR lander" || ko "the PR branch was reviewed"
+[ "$(n fix/8-y)" = 1 ] && ok "a branch a pull request names is reviewed like any other" || ko "the branch a pull request names was not reviewed"
 [ "$(n gui/9-z)" = 0 ] && ok "a branch that names no open issue is not reviewed" || ko "the closed-issue branch was reviewed"
 [ "$(n feature/7-q)" = 0 ] && ok "a branch that is not a work branch is not reviewed" || ko "a non-work branch was reviewed"
 [ "$(cat "$T/st/review-gui_7-x.sha" 2>/dev/null)" = "$($O rev-parse gui/7-x)" ] && ok "the reviewed sha is the tip" || ko "no reviewed sha at the tip"
@@ -73,14 +74,14 @@ push gui/7-x; r=$(FAILREV=1 rp)
 [ "$(n gui/7-x)" = 4 ] && ok "a new tip resets the failed-try count" || ko "after a new tip gui/7-x tried $(n gui/7-x) times"
 # 7) the cycle runs the pass under its own single.sh lock, gated like the landers
 w=$(/usr/bin/grep -n 'single.sh" branchreview ' "$d/watch.sh")
-case "$w" in *'SG_PRLAND_PAUSED'*'branchreviewpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_PRLAND_PAUSED";; *) ko "watch.sh does not run the review pass: '$w'";; esac
+case "$w" in *'SG_LAND_PAUSED'*'branchreviewpass.sh'*) ok "watch.sh runs the pass under its own single.sh lock, gated by SG_LAND_PAUSED";; *) ko "watch.sh does not run the review pass: '$w'";; esac
 # 8) a stop expires (#426): a stop marker older than SG_REVIEW_STOP_TTL (default 1800 s) is cleared with its tries file, the branch is
 # retried, and the retry restarts the count of 3. Each STOP names the models that failed and why, one line per model.
 push gui/10-b; : > "$T/review.log"; mkdir -p "$T/st/cq"
-printf 'MODEL_FAIL review codex on PR #0: exit 1, usage limit reached, try again at 14:05\n' > "$T/st/cq/x__y#10-status~mfail11-0.md"
-printf 'MODEL_FORMAT review claude:opus on PR #0: line 2 is not the shape.\n' > "$T/st/cq/x__y#10-status~mformat12.md"
-printf 'MODEL_HOURS review gemini-pro skipped on PR #0: outside its window in models.json.\n' > "$T/st/cq/x__y#10-status~mhours13.md"
-printf 'MODEL_FAIL review codex on PR #0: exit 1, an old reason\n' > "$T/st/cq/x__y#10-status~mfail01-0.md"; touch -t 202001010000 "$T/st/cq/x__y#10-status~mfail01-0.md"
+printf 'MODEL_FAIL review codex on branch gui/10-b: exit 1, usage limit reached, try again at 14:05\n' > "$T/st/cq/x__y#10-status~mfail11-0.md"
+printf 'MODEL_FORMAT review claude:opus on branch gui/10-b: line 2 is not the shape.\n' > "$T/st/cq/x__y#10-status~mformat12.md"
+printf 'MODEL_HOURS review gemini-pro skipped on branch gui/10-b: outside its window in models.json.\n' > "$T/st/cq/x__y#10-status~mhours13.md"
+printf 'MODEL_FAIL review codex on branch gui/10-b: exit 1, an old reason\n' > "$T/st/cq/x__y#10-status~mfail01-0.md"; touch -t 202001010000 "$T/st/cq/x__y#10-status~mfail01-0.md"
 o=; for _ in 1 2 3 4; do o+=$(OPEN="7 8 10" FAILREV=1 rp)$'\n'; done
 [ "$(n gui/10-b)" = 3 ] && ok "a fresh stop blocks the branch" || ko "fresh stop: tried $(n gui/10-b) times"
 st=$(printf '%s' "$o" | /usr/bin/grep -c '^BRANCHREVIEW STOP gui/10-b')

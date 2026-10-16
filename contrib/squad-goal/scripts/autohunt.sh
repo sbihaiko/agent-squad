@@ -113,14 +113,16 @@ except Exception:
 }
 busy() { echo "$now" > "$A/hunt-activity"; exit 0; }
 lock_held() { local h; h=$(cat "$SG_STATE/locks/$1/pid" 2>/dev/null); [ -n "$h" ] && kill -0 "$h" 2>/dev/null; }
+# A work branch whose tip has not been reviewed yet (#357): the review pass will spend a slot on it, so a hunt waits. It is a
+# git read of the remote heads, never a GitHub call.
 review_waiting() {
-  local line pr sha
-  while read -r line; do
-    pr=$(printf '%s' "$line" | awk '{print $1}' | tr -dc '0-9'); sha=$(printf '%s' "$line" | awk '{print $2}')
-    [ -n "$pr" ] || continue
-    grep -qE "^#$pr ${sha:0:9} .*VERDICT" "$SG_STATE/revci-$pr.out" 2>/dev/null && continue
+  local remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git} sha ref br key
+  while read -r sha ref; do
+    br=${ref#refs/heads/}; case "$br" in fix/*|gui/*) ;; *) continue;; esac
+    key=$(printf '%s' "$br" | tr / _)
+    [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ] && continue
     return 0
-  done < <(gh api "repos/$SG_REPO/pulls?state=open&per_page=100" 2>/dev/null)
+  done < <(/usr/bin/git ls-remote --heads "$remote" 2>/dev/null | awk '{print $1, $2}')
   return 1
 }
 startable() {
@@ -152,7 +154,7 @@ esac
 
 live_run && busy
 lock_held gui-suite && busy
-lock_held single-prland && busy   # the landing pass (#134: the fork pass it replaced is retired)
+lock_held single-branchland && busy   # the landing pass (#355: the fork pass it replaced is retired)
 startable && busy
 review_waiting && busy
 
@@ -185,7 +187,7 @@ echo $(( (src_i + 1) % 4 )) > "$A/hunt-source"
 open_debt=$(gh api "repos/$SG_REPO/issues?state=open&labels=debt&per_page=100&sort=created&direction=asc" -q '.[]|select(.pull_request|not)|"#"+(.number|tostring)+" "+.title' 2>/dev/null)
 name="hunt-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 { echo "IMPORTANT: your first and only action is to call the spawn tool for the 1 child below, in one turn; ending the turn without a spawn call fails the run. Spawn the child with $(bash "$(dirname "$0")/envelope-spend.sh"). Repo $SG_REPO. One child, coding model from models.json. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
-  echo "This is a read-only bug hunt. Do not edit files, do not run git writes, do not open a PR, do not push."
+  echo "This is a read-only bug hunt. Do not edit files, do not run git writes, do not push a branch."
   echo "First source: open debt issues (work these before hunting for new defects) when there is no startable bug."
   if [ -n "$open_debt" ]; then echo "Open debt:"; echo "$open_debt"; else echo "Open debt: none."; fi
   echo "Then rotate among these sources; this hunt's rotated source is $src_name."

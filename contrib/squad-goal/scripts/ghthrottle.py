@@ -47,7 +47,7 @@ token, and the kind of fact decides what keeps an entry:
   and not the read. Only an answer is kept: a refusal or a failure never becomes a snapshot.
 
 The liveness rule: **every fact that gates a write is read live**. A merge, a close and a card move each rest on a read --
-is the branch still eligible, is the base red, is the PR still open, is the issue still open and what blocks it -- and a
+is the branch still eligible, is the base red, is the work branch still open, is the issue still open and what blocks it -- and a
 stale answer there is a merge onto a base another pass already moved, a class of red the loop cannot attribute. So the
 snapshot is an allowlist, not a denylist: `fact_class(route)` names the few routes that may be snapshotted, and every other
 route -- the open-PR and open-issue lists, a single issue, a single PR and its merge, a commit's status and checks, a

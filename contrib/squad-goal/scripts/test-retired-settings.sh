@@ -1,41 +1,52 @@
 #!/bin/bash
 # A profile that still names the retired SG_TOOLING_REPO keeps working: env.sh maps it into SG_REPOS, prints ONE warning
-# that names the profile, the setting and its replacement, and the loop runs. The same profile with the setting removed
-# runs with no warning. Drives the real env.sh and autopilot.sh against a stub gh; no network.
+# that names the profile, the setting and its replacement, and a real pass runs and reads its repository. The same profile
+# with the setting removed runs with no warning. Drives the real env.sh, address.sh and branchreviewpass.sh against a stub
+# gh and a local remote; no network. (#361: the pass driven here used to be autopilot.sh, which the pull-request path took
+# with it; the branch passes are the loop's work now.)
 # usage: bash test-retired-settings.sh
-here=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; G=/usr/bin/grep
+here=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; G=/usr/bin/grep; GIT=/usr/bin/git
 ok() { printf 'ok   %s\n' "$1"; }; ko() { printf 'FAIL %s\n' "$1"; fail=1; }
-S=$T/scene; mkdir -p "$S/s/profiles" "$S/bin" "$S/co/runs" "$S/state"
-cp "$here/env.sh" "$here/address.sh" "$here/autopilot.sh" "$S/s/"
-# the scripts a pass launches record the repository they were handed
-emit='printf "%s %s %s\n" "$(basename "$0")" "$SG_REPO" "$*" >> '"$S"'/launched'
-for f in revci autopanel prepush; do printf '#!/bin/bash\n%s\nexit 0\n' "$emit" > "$S/s/$f.sh"; done
-printf '#!/bin/bash\n%s\ncase "$*" in *--dupissue*) exit 1;; *--threads*) echo 0;; esac\nexit 0\n' "$emit" > "$S/s/autofix.sh"
-chmod +x "$S/s/"*.sh
-cat > "$S/bin/gh" <<'J'
+S=$T/scene; mkdir -p "$S/s/profiles" "$S/bin" "$S/co"
+cp "$here/env.sh" "$here/address.sh" "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/workbranches.sh" \
+   "$here/branchreviewpass.sh" "$here/branchreview.sh" "$here/chainhealth.py" "$here/models.json" "$S/s/" 2>/dev/null
+# the pass hands the repository to the review: the stub records that call, and keeps the verdict where branchland.sh reads it
+cat > "$S/s/review.sh" <<J
 #!/bin/bash
-printf '%s\n' "gh $*" >> "$GHLOG"
-case "$*" in
-  *repos/x/emu/pulls?state=open*) printf '%s\n' "${EMU_JSON:-}";;
-  *"check-runs"*) echo success;;
-  *"mergeable_state"*) echo clean;;
+printf 'review.sh %s %s %s\n' "\$1" "\$3" "\$4" >> "$S/launched"
+key=\$(printf '%s' "\$3" | tr / _)
+echo "VERDICT: APPROVE" > "\$SG_STATE/review-\$key.md"
+echo "model=stub"
+J
+chmod +x "$S/s/review.sh"
+# a local remote with one work branch naming open issue 1512, and the open-issue list the pass reads through the door
+( cd "$S/co" && echo x > f && $GIT init -q -b main . >/dev/null && $GIT add f && $GIT -c user.email=a@b -c user.name=t commit -q -m init \
+  && $GIT branch -q dev && $GIT checkout -q -b gui/1512 && echo y >> f && $GIT -c user.email=a@b -c user.name=t commit -qam work )
+$GIT clone -q --bare "$S/co" "$T/origin.git"
+cat > "$S/bin/gh" <<J
+#!/bin/bash
+printf '%s\n' "gh \$*" >> "$S/ghlog"
+case "\$*" in
+  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1512,"title":"t","body":"Refs #0","state":"OPEN","labels":{"nodes":[]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}';;
+  *"issues?state=open"*) echo '[{"number":1512,"title":"t","body":"Refs #0","labels":[]}]';;
+  *commits/gui/1512*) echo '{"sha":"aaaa1111bbbb"}';;
+  *) echo '{}';;
 esac
 J
 chmod +x "$S/bin/gh"
-common='export SG_OWNER=x SG_PROJECT=4 SG_BASE=main SG_AUTO_MERGE=yes SG_MERGE_METHOD=squash'
+common="SG_BASE=main SG_OWNER=x SG_PROJECT=4 SG_LAND_REMOTE=$T/origin.git SG_LAND_BRANCH=dev SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001"
 printf ': "${SG_REPO:=x/emu}"; SG_TOOLING_REPO=x/tool; SG_CHECKOUT=%s; %s\n' "$S/co" "$common" > "$S/s/profiles/retired.sh"
 printf ': "${SG_REPO:=x/emu}"; SG_REPOS="x/emu x/tool"; SG_CHECKOUT=%s; %s\n' "$S/co" "$common" > "$S/s/profiles/migrated.sh"
-export PATH="$S/bin:$PATH" GHLOG="$S/ghlog" SG_SQUAD=/dev/null SG_STATE_BASE="$S/state"
-pr() { printf '[{"number":%s,"head":{"sha":"%s"},"ref":"%s","title":"t","body":"Refs #%s","labels":[],"base":{"ref":"main"},"draft":false,"created_at":"2026-10-10T00:00:00Z"}]' "$1" "$2" "$3" "$4"; }
-export EMU_JSON="$(pr 1512 aaaaaaaaaaaa gui/1512 1512)"
-cycle() { : > "$S/launched"; : > "$GHLOG"; rm -rf "$S/state/$1"   # one pass of the loop as profile $1; stderr is kept apart
-  ( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=$1 bash "$S/s/autopilot.sh" >/dev/null 2>"$S/err-$1" )
-  for i in $(seq 1 20); do $G -q '^revci.sh' "$S/launched" && break; sleep 0.3; done; }
+export PATH="$S/bin:$PATH" SG_SQUAD=/dev/null SG_STATE_BASE="$S/state"
+# one pass of the loop as profile $1: its output is dropped, its stderr is kept (env.sh's warning goes there)
+cycle() { : > "$S/launched"; : > "$S/ghlog"; rm -rf "$S/state"
+  ( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=$1 bash -c '. "$1/env.sh"; exec bash "$1/branchreviewpass.sh"' _ "$S/s" >/dev/null 2>"$S/err-$1" )
+  for i in $(seq 1 20); do $G -q '^review.sh' "$S/launched" 2>/dev/null && break; sleep 0.3; done; }
 warned() { $G -c 'SG_TOOLING_REPO' "$S/err-$1" 2>/dev/null; }
 
 # --- 1. a retired profile runs a full cycle, with one warning naming the profile, the setting and its replacement
 cycle retired
-$G -q '^revci.sh x/emu 1512 1512$' "$S/launched" && ok "retired profile: the pass runs and reviews the PR in its repository" \
+$G -q '^review.sh x/emu gui/1512 1512$' "$S/launched" && ok "retired profile: the pass runs and reviews the branch in its repository" \
   || ko "retired profile: the pass did not run (launched: $(cat "$S/launched")) (stderr: $(cat "$S/err-retired"))"
 [ "$(warned retired)" = 1 ] && ok "retired profile: exactly one warning" || ko "retired profile: warnings = $(warned retired): $(cat "$S/err-retired")"
 w=$($G SG_TOOLING_REPO "$S/err-retired" | head -1)
@@ -52,7 +63,7 @@ out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG
 
 # --- 2. the same profile with the retired setting removed runs with no warning
 cycle migrated
-$G -q '^revci.sh x/emu 1512 1512$' "$S/launched" && ok "migrated profile: the pass runs the same work" || ko "migrated profile: the pass did not run (launched: $(cat "$S/launched"))"
+$G -q '^review.sh x/emu gui/1512 1512$' "$S/launched" && ok "migrated profile: the pass runs the same work" || ko "migrated profile: the pass did not run (launched: $(cat "$S/launched"))"
 [ ! -s "$S/err-migrated" ] || ! $G -qi 'retired\|SG_TOOLING_REPO' "$S/err-migrated" && ok "migrated profile: no warning" || ko "migrated profile warned: $(cat "$S/err-migrated")"
 out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=migrated bash -c '. "$1/env.sh" 2>/dev/null; sg_repos | tr "\n" " "' _ "$S/s")
 [ "$out" = "x/emu x/tool " ] && ok "migrated profile: the same repositories" || ko "migrated profile repositories: '$out'"

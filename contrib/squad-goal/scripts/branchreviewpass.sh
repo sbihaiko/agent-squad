@@ -25,7 +25,7 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # (MODEL_FAIL, MODEL_FORMAT, MODEL_HOURS); a reset time the text names is kept even when the reason is cut.
 why_failed() { local f l m r t seen=" " out=
   for f in $(ls -t "$SG_STATE"/cq/*"#$1-status~"mfail* "$SG_STATE"/cq/*"#$1-status~"mformat* "$SG_STATE"/cq/*"#$1-status~"mhours* 2>/dev/null); do
-    l=$(head -1 "$f" | sed -nE 's/^MODEL_(FAIL|FORMAT|HOURS) review ([^ ]+) (skipped )?on PR #[0-9]+: (.*)$/\2\t\4/p'); [ -n "$l" ] || continue
+    l=$(head -1 "$f" | sed -nE 's/^MODEL_(FAIL|FORMAT|HOURS) review ([^ ]+) (skipped )?on branch [^:]+: (.*)$/\2\t\4/p'); [ -n "$l" ] || continue
     m=${l%%$'\t'*}; r=${l#*$'\t'}; case "$seen" in *" $m "*) continue;; esac; seen+="$m "
     r=$(printf '%s' "$r" | tr -s ' \t' ' ' | sed 's/ *$//')
     t=$(printf '%s' "$r" | grep -oiE '(resets?|try again|retry)( at| in| after| on)? [0-9A-Za-z:., -]{1,30}' | head -1 | sed 's/[ .,]*$//')
