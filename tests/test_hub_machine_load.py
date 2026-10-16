@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import types
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -24,8 +23,8 @@ def hub():
     os.environ.setdefault("SG_REPO", "x/y")
     os.environ.setdefault("SG_OWNER", "x")
     os.environ.setdefault("SG_PROJECT", "4")
-    # the checkout is this test's own, never the one the runner was started in: `_wt_count()` counts the child worktrees
-    # under it, and a runner whose checkout holds one would read a reading of this machine, not of the fixture (#151)
+    # the checkout is this test's own, never the one the runner was started in: a source read under the runner's own
+    # repository would be a reading of this machine, not of the fixture (#151)
     os.environ["SG_CHECKOUT"] = tempfile.mkdtemp()
     os.environ["SG_HUB_DIR"] = tempfile.mkdtemp()
     os.environ["SG_STATE"] = tempfile.mkdtemp()
@@ -489,9 +488,9 @@ def test_the_facts_follow_the_load_cells_in_this_order(hub):
 
 
 def test_the_occupancy_pair_and_the_worktree_count_carry_no_block_of_their_own(hub):
-    """#455: the occupancy pair repeated the WORKERS header one screen above, and the worktree count with its one press
-    belongs beside the other three accordions. Both left the line, so neither may be drawn on it again. The header's own
-    readings are guarded in `test_hub_occupancy_header.py`, so the rule did not leave with the block."""
+    """#455: the occupancy pair repeated the WORKERS header one screen above, and the worktree count went to the left
+    pane. Both left the line, so neither may be drawn on it again. The header's own readings are guarded in
+    `test_hub_occupancy_header.py`, so the rule did not leave with the block."""
     keys = [i["key"] for i in hub.foot_items(_src(occ={"live": 4, "agents": 7}, wt=3), NOW)]
     assert keys == ["landing", "subs"] and "occ" not in keys and "wt" not in keys
     line = hub.foot_line(hub.foot_items(_src(occ={"live": 4, "agents": 7}, wt=3), NOW))
@@ -555,7 +554,7 @@ def test_the_facts_are_read_from_the_files_the_loop_already_writes(hub, tmp_path
     monkeypatch.setattr(hub, "SHARED", shared)
     src = hub.foot_sources(now)
     assert src["quota"]["agy"] == int(now + 3600) and src["quota"]["codex"] is None
-    assert src["wt"] == 0                                           # the worktree count is read here for the accordion (#455)
+    assert "wt" not in src                                          # the pass reads no worktree count: it left with the accordion
     facts = hub.foot_line(hub.foot_items(src, now))
     assert "drift" not in facts and "agy" not in facts
     assert "landed ?" in facts                                      # no merged PR read: no landing to name
@@ -635,11 +634,10 @@ def test_the_page_serves_the_facts_from_its_cache_and_reads_no_source_itself(hub
         raise AssertionError("serving a view must not read a source of its own")
     monkeypatch.setattr(hub, "foot_sources", boom)
     hub.LOAD_STATE.update({"cpu": [12.0], "ram": 71.2, "gpu": None, "asof": 1.0, "runs": {},
-                           "facts": hub.foot_items(_src(), NOW), "wt": {"text": "4", "tip": "child worktrees the loop holds open"}})
+                           "facts": hub.foot_items(_src(), NOW)})
     p = hub.load_payload()
     assert p["line"] == "CPU 12% · RAM 71% · GPU ?"                           # the three load cells stay first, unchanged
     assert p["facts"][0]["text"] == "landed PR #73 2h ago" and len(p["facts"]) == 2
-    assert p["wt"] == {"text": "4", "tip": "child worktrees the loop holds open"}   # the accordion's reading rides the same tick
 
 
 def test_the_triage_rule_and_what_was_rejected_are_stated_beside_the_code(hub):
@@ -732,85 +730,28 @@ def test_the_gate_and_the_landing_stay_on_the_line_beside_the_burn(hub):
 # ---------------------------------------------------------------- the worktrees accordion and its one press (#455)
 # The footer counted the child trees (`worktrees/child/*`) and the cleaner only ever looked at `runs/*/ws/*`: two sets, so
 # the number a reader saw was not the set a pass could free (measured 2026-10-13: 21 trees in the first set, none of them
-# ever examined). The pass now counts and clears that set and writes the tally, so the count reads `10/21` — 10 of the 21
-# the pass saw. The count left the footer line for the left pane's fourth accordion (#455), and its one press went with
-# it: the press runs the loop's own pass rather than a second rule of the page's.
+# ever examined). The count left the footer line for a fourth left-pane accordion (#455, `10/21`, with the `clean now`
+# press beside it). That accordion left the page (the owner's ruling 2026-10-16: it read poorly in the left bar, and the
+# pass its press asked for by hand runs on every third cycle by itself), so the count, the press, the reading behind them
+# and the route the press called left together. `wtclean.sh` is untouched: it holds the rules and the loop still runs it.
 
-def test_the_accordion_reads_the_tally_the_pass_wrote(hub, tmp_path, monkeypatch):
-    monkeypatch.setattr(hub, "STATE", tmp_path)
-    (tmp_path / "wt.json").write_text(json.dumps({"total": 21, "cleanable": 10, "ts": time.time()}))
-    assert hub._wt_plan() == {"total": 21, "cleanable": 10, "ts": pytest.approx(time.time(), abs=5)}
-    assert hub.wt_parts(hub._wt_plan() or hub._wt_count()) \
-        == {"text": "10/21", "tip": "the last cleanup pass saw 21 and freed 10"}
-
-
-def test_a_stale_or_unreadable_tally_falls_back_to_the_plain_count(hub, tmp_path, monkeypatch):
-    """The pass runs every third cycle (~4.5 min): an older reading describes a machine that has moved on."""
-    monkeypatch.setattr(hub, "STATE", tmp_path)
-    (tmp_path / "wt.json").write_text(json.dumps({"total": 21, "cleanable": 10, "ts": time.time() - hub.WT_PLAN_SECS - 1}))
-    assert hub._wt_plan() is None
-    (tmp_path / "wt.json").write_text("{not json")
-    assert hub._wt_plan() is None
-    (tmp_path / "wt.json").write_text(json.dumps({"total": 21}))
-    assert hub._wt_plan() is None                                            # a half reading is no reading
-    assert hub.wt_parts(hub._wt_count())["text"] == "0"                      # and the accordion says the count alone
+def test_the_left_pane_carries_three_accordions_and_no_worktree_one(hub):
+    """The removal is the rule: a fourth accordion named here is a defect, and one that came back would be read by name."""
+    left = [i for i in re.findall(r"<details id=(\w+)", hub.PAGE) if i in ("plans", "mdl", "stats", "wts")]
+    assert left == ["plans", "mdl", "stats"]
+    for gone in ("id=wts", "id=wtsr", "id=wtb", "id=wtcl", "id=wtmsg", "wtDraw", "wtClean", "wtSay", "wtBusy"):
+        assert gone not in hub.PAGE, gone
 
 
-def test_the_accordion_draws_no_count_when_neither_reading_exists(hub):
-    assert hub.wt_parts(None) == {"text": "", "tip": ""}
-    assert [i for i in hub.foot_items(_src(wt=3), NOW) if i["key"] == "wt"] == []   # the count draws no block of the line
-
-
-def test_the_accordion_is_drawn_beside_the_other_three_and_carries_the_press(hub):
-    """The one door to the cleanup pass is MOVED, never lost: it stands as a fourth accordion, after the three the left
-    pane already carries, and its count is drawn from the reading the same tick serves the line."""
-    assert "<button id=wtcl" in hub.PAGE and "id=wtsr" in hub.PAGE and "id=wtb" in hub.PAGE
-    assert hub.PAGE.index("id=wts ") > hub.PAGE.index("id=stats ")            # a fourth accordion, below the other three
-    assert "$(\"#wtcl\").onclick=wtClean" in hub.PAGE                         # its one control is wired, once
-    assert "wtDraw(d.wt)" in hub.PAGE                                         # drawn from the reading, never a rule of the page's
-
-
-def test_the_press_runs_the_loops_own_pass_and_never_a_second_rule(hub, monkeypatch):
-    """The page adds no rule of its own: the script holds them, so the press frees exactly what the block counted."""
-    seen = {}
-    def run(cmd, **kw):
-        seen["cmd"] = cmd
-        return subprocess.CompletedProcess(cmd, 0, "WT CLEAN child gui-27 gui/27 abc123456\nWT KEPT pr-merged gui/x\n", "")
-    monkeypatch.setattr(hub, "subprocess", types.SimpleNamespace(run=run))
-    out = hub.wt_clean()
-    assert seen["cmd"][0] == "bash" and seen["cmd"][1].endswith("wtclean.sh")
-    assert out["cleaned"] == ["WT CLEAN child gui-27 gui/27 abc123456"]
-    assert out["held"] == ["WT KEPT pr-merged gui/x"] and out["err"] is None and out["rc"] == 0
-
-
-def test_a_pass_that_never_returns_is_reported_and_never_an_empty_success(hub, monkeypatch):
-    def slow(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, hub.WT_CLEAN_SECS)
-    monkeypatch.setattr(hub, "subprocess", types.SimpleNamespace(run=slow, TimeoutExpired=subprocess.TimeoutExpired))
-    assert "longer than" in hub.wt_clean()["err"]
-
-
-def test_a_pass_that_cannot_start_is_reported_too(hub, monkeypatch):
-    def nope(cmd, **kw):
-        raise OSError("no such file")
-    monkeypatch.setattr(hub, "subprocess", types.SimpleNamespace(run=nope, TimeoutExpired=subprocess.TimeoutExpired))
-    assert "did not start" in hub.wt_clean()["err"]
-
-
-def test_the_cleanup_route_is_a_guarded_write_like_the_others(hub):
+def test_the_hub_reads_no_worktree_count_and_answers_no_cleanup_route(hub):
+    """What the accordion drew left with it: no reading of the child trees, no hand-run pass, no route at all."""
     src = HUB_PY.read_text()
-    assert '"/api/wtclean"' in src and '"/api/models", "/api/plans", "/api/wtclean"' in src   # the same origin-and-JSON guard
-    assert "wtClean(" in hub.PAGE                                                # the press is wired from the page
-
-
-def test_the_accordions_button_is_a_keyboard_stop_and_says_what_it_will_do(hub):
-    """A real button, so the keyboard reaches it with no role of the page's own, and it names the rule it defers to."""
-    assert "wtclean.sh holds the rules" in hub.PAGE
-    assert "b.disabled=true" in hub.PAGE and "b.disabled=false" in hub.PAGE     # one pass at a time, released when it answers
-    line = hub.PAGE[hub.PAGE.index("async function wtClean("):]
-    line = line[:line.index("\n finally{")]
-    assert 'fetch("/api/wtclean"' in line and "wtSay(" in line                  # who it answers to, and where the answer goes
-    assert 'id=wtmsg' in hub.PAGE and "e.textContent=txt" in hub.PAGE           # the pass's own lines are reported beside the count
+    for gone in ("def wt_parts", "def wt_clean", "def _wt_count", "def _wt_plan", "WT_DIRS", "WT_PLAN_SECS",
+                 "WT_CLEAN_SECS", "wt.json", '"/api/wtclean"'):
+        assert gone not in src, gone
+    assert "wt" not in hub.foot_sources()          # the pass that serves the line does not read the trees
+    assert "wt" not in hub.load_payload()          # and serves no count to the page
+    assert [i for i in hub.foot_items(_src(wt=3), NOW) if i["key"] == "wt"] == []   # nor draws a block of the line
 
 
 # ---------------------------------------------------------------- the colour of each fact (#1843)

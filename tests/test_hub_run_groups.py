@@ -192,7 +192,7 @@ function boot(){
     groupRows: () => { const o = {}; GHS.forEach((g) => (o[g.k] = g.rows)); return o; },
     listHtml: () => $("#list").innerHTML,
     clickAcc: (id) => { const e = $("#" + id); e.open = !e.open; drain(); },
-    accOpen: () => ["plans", "stats", "mdl", "wts"].filter((i) => $("#" + i).open),
+    accOpen: () => ["plans", "stats", "mdl"].filter((i) => $("#" + i).open),
     calls: () => CALLS,
     store: () => JSON.parse(STORE.hub || "{}"),
   };
@@ -346,17 +346,17 @@ def test_each_side_section_keeps_its_own_state_across_a_reload():
     assert out["restored"] == ["plans", "stats"], "each section comes back the way it was left"
 
 
-def test_the_worktrees_accordion_is_the_fourth_and_answers_only_itself():
-    """#455: the worktree count and its one press moved off the footer into a fourth accordion, so it behaves as the other
-    three do — its own header, its own stored state, no sibling touched — and the count is drawn from the tick's own reading."""
+def test_an_accordion_answers_only_itself_and_comes_back_the_way_it_was_left():
+    """The left pane carries three (the worktree one left, the owner's ruling 2026-10-16): each behaves as the others do —
+    its own header, its own stored state, no sibling touched."""
     out = _run("""
       const a = boot();
-      a.clickAcc("wts"); const opened = a.accOpen();
+      a.clickAcc("stats"); const opened = a.accOpen();
       const b = boot();
       return { opened, restored: b.accOpen(), stored: a.store() };
     """)
-    assert out["opened"] == ["wts"], "its own header opens it and nothing else"
-    assert out["stored"].get("acc") == ["wts"] and out["restored"] == ["wts"]   # and it comes back the way it was left
+    assert out["opened"] == ["stats"], "its own header opens it and nothing else"
+    assert out["stored"].get("acc") == ["stats"] and out["restored"] == ["stats"]   # and it comes back the way it was left
 
 
 def test_a_stored_value_in_the_old_single_id_shape_does_not_break_the_page():
