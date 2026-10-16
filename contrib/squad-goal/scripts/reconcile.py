@@ -56,11 +56,15 @@ def move(n, to, why):
         print(f"{'FREEZE' if APPLY else 'WOULD FREEZE'} #{n} {to} ({why}): the shipped board carries it as the owner freeze, whose marker the janitor writes")
         return
     print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {name} ({why})")
-    if APPLY: write(n, [name], name)
-def write(n, args, name):
-    """One writer call. A refusal is named with the carrier's own text and ends the pass non-zero: a MOVE line beside a write
-    that never landed is a log that lies, which is what this pass filed for months (#454)."""
-    r = subprocess.run([MOVE, *args, str(n)], capture_output=True, text=True)
+    if APPLY: write(n, name)
+def write(n, name, add=False):
+    """One writer call, in the one shape the writer takes: `<owner> <project> <status> <n>`, or its `--add` form. The shape
+    is built here and nowhere else, so a caller cannot drop a field of it -- the pass that shipped #454 called
+    `board.sh Closed 1090`, and board.py read the status as the owner and died with an IndexError on every write (#457).
+    A refusal is named with the carrier's own text and ends the pass non-zero: a MOVE line beside a write that never
+    landed is a log that lies, which is what this pass filed for months (#454)."""
+    pre = [MOVE] + (["--add"] if add else []) + [OWNER, str(BOARD)]
+    r = subprocess.run([*pre, name, str(n)], capture_output=True, text=True)
     if r.returncode:
         REFUSED.append(n)
         print(f"WRITE REFUSED #{n} -> {name}: {(r.stderr or r.stdout).strip().replace(chr(10), ' ')[:200] or 'the writer said nothing'}")
@@ -101,5 +105,5 @@ for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or
     to = BY_FACT["wave_branch"] if i["number"] in refs else BY_FACT["unclaimed"]
     name = shipped_name(to) or to   # a new card is addable at any column the carrier holds; the shipped name is what it holds
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {name} (new bug)")
-    if APPLY: write(i["number"], ["--add", OWNER, str(BOARD), name], name)
+    if APPLY: write(i["number"], name, add=True)
 sys.exit(1 if REFUSED else 0)   # a pass that could not write what it reported is a failed pass, never a quiet one
