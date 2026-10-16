@@ -3495,9 +3495,15 @@ def test_1276_a_run_hands_the_window_switch_to_the_adapter_unchanged(tmp_path):
     binary = tmp_path / "Mesen"
     binary.write_bytes(b"#!/bin/sh\n")
     # The gate loads the core, so the stand-in points it at a shared library that really loads: this interpreter's own.
+    # INSTSONAME is not a file name on the macOS framework build -- it is `Python.framework/Versions/3.12/Python`, a path
+    # under the framework root -- so the join names no file there and the library LIBDIR really holds is `libpython*.dylib`.
+    # Both readings are tried, and the file has to be there.
     name = sysconfig.get_config_var("INSTSONAME") or sysconfig.get_config_var("LDLIBRARY")
-    core = Path(sysconfig.get_config_var("LIBDIR") or "") / name
-    assert core.is_file() and ctypes.CDLL(str(core)), core
+    libdir = Path(sysconfig.get_config_var("LIBDIR") or "")
+    cands = [libdir / str(name), *(sorted(libdir.glob("libpython*.dylib")) + sorted(libdir.glob("libpython*.so")))]
+    core = next((c for c in cands if c.is_file()), None)
+    assert core is not None, f"no shared library of this interpreter to stand in for the core; tried {cands}"
+    assert ctypes.CDLL(str(core)), core
 
     clean = tmp_path / "clean.json"
     clean.write_text(json.dumps(script(step("b1.one"))))
