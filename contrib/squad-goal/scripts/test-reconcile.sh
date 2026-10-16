@@ -58,4 +58,15 @@ rm -f "$T/tags"; r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1)
 case "$m" in *"Code Complete 1150"*) ok "an open work branch ahead of dev moves its card to Code Complete";; *) ko "#1150 not moved on its branch: '$m' '$r'";; esac
 case "$m" in *1160*) ko "an open pull request moved #1160: '$m'";; *) ok "an open pull request moves no card";; esac
 [ ! -s "$T/pullreads" ] && ok "no pull request is read" || ko "a pull request route was read: $(cat "$T/pullreads")"
+# The vocabulary the loop writes (ADR-0141, #454): the Squad Board carries the shipped names, and SG_BOARD_VOCAB=shipped tells
+# every writer so. This pass wrote the internal names instead, so the carrier refused each write ("no Status option 'Done'") and
+# the pass swallowed it -- the MOVE line it filed was a write that never landed, week after week.
+rm -f "$T/moves"; r=$(SG_BOARD_VOCAB=shipped RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); m=$(cat "$T/moves" 2>/dev/null)
+case "$m" in *"Done 1090"*) ko "the shipped board was written the internal name Done: '$m'";; *) ok "no internal name reaches the writer under the shipped vocabulary";; esac
+case "$m" in *"Closed 1090"*) ok "a closed issue moves to the shipped Closed";; *) ko "no shipped Closed for #1090 in the write: '$m' '$r'";; esac
+# A write the carrier refused is named on the pass's stream and ends the pass non-zero, never swallowed.
+printf '#!/bin/bash\necho "no Status option $3" >&2; exit 1\n' > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
+r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); rc=$?
+case "$r" in *"WRITE REFUSED #1090"*"no Status option"*) ok "a refused write is named with the carrier's own text";; *) ko "a refused write was swallowed: '$r'";; esac
+[ "$rc" != 0 ] && ok "a pass whose write was refused ends non-zero" || ko "the refused write still ended the pass 0"
 rm -rf "$T"; exit $fail
