@@ -58,7 +58,17 @@ E
   unset SG_FILE_PASS SG_GH_PASS SG_FILE_CEILING   # a filing names no pass here: the ceiling is not this suite's subject (#140)
   echo $(( $(date +%s) - 3600 )) > "$SG_STATE/auto/hunt-activity"
 }
-run() { AH_DRY=1 bash "$S/autohunt.sh" 2>&1; }
+# Every case reads the pushed branch heads through SG_LAND_REMOTE. An unset one falls back to https://github.com/$SG_REPO.git,
+# a repository that is not there: one read costs 0.8 s of wall time and no CPU, the suite makes one per case, and its wall time
+# then follows the network instead of the loop. The fixture sets a local bare repository, so no case can leave the machine.
+leaves_the_machine() { case "${SG_LAND_REMOTE:-}" in "" | http* | git@*) return 0;; *) return 1;; esac; }
+run() {
+  if leaves_the_machine; then
+    ko "the case at test-autohunt.sh:${BASH_LINENO[0]} runs with SG_LAND_REMOTE='${SG_LAND_REMOTE:-}', so its branch read leaves the machine"
+    return 1
+  fi
+  AH_DRY=1 bash "$S/autohunt.sh" 2>&1
+}
 started() { case "$1" in *"HUNT started"*) return 0;; *) return 1;; esac; }
 skipped() { case "$1" in *"HUNT started"*) return 1;; *) return 0;; esac; }
 
