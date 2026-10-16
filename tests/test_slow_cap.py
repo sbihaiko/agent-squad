@@ -34,6 +34,7 @@ def test_a_test_over_the_cap_fails_and_is_named(tmp_path):
 
 
 @pytest.mark.slow(reason="starts a nested pytest subprocess")
+@pytest.mark.heavy
 def test_a_test_under_the_cap_passes(tmp_path):
     r = run_inner(tmp_path, "def test_fast():\n    pass\n")
     assert r.returncode == 0
