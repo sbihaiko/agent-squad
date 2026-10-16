@@ -81,6 +81,23 @@ async def test_merge_land_merges_the_worktree_branch_into_the_target(tmp_path):
     v = await Engine(from_doc(d), adapter, tmp_path / "run", target=repo).run()
     assert v.verdict == "completed" and (repo / "feature.txt").read_text() == "f\n"
     assert git.dirty(repo) == [] and "squad:" in sh(repo, "git", "log", "-1", "--format=%s")
+    m = outs(tmp_path / "run", "m")[0]
+    assert m["effect"]["before"] != m["effect"]["head"], m      # the branch carried work: the tip moved
+
+
+async def test_a_merge_land_records_the_tip_it_started_from(tmp_path):
+    """ADR-0145 rule 12: a landing that carries nothing ahead of its base is no delivery, and the event carries the tip the
+    merge started from so a reader can see it. Without the fact an empty landing read as a landing, the loop's janitor moved
+    the card to Code Complete, kept the dispatch marker, and never dispatched the issue again (#464)."""
+    repo = make_repo(tmp_path / "repo")
+    d = flow([act("wt", "worktree_create"), agent("a", output_key="x", workspace="worktrees/w", tools=["Read", "Edit"]), act("m", "merge_land")],
+             ["wt", "a", "m"])
+    adapter = ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1}})      # the child writes nothing: the branch carries nothing
+    head = git.head(repo)
+    await Engine(from_doc(d), adapter, tmp_path / "run", target=repo).run()
+    m = outs(tmp_path / "run", "m")[0]
+    assert (m["effect"]["before"], m["effect"]["head"]) == (head, head), m    # the tip did not move: no delivery to read out of it
+    assert git.head(repo) == head
 
 
 async def test_a_merge_conflict_fails_the_node_and_leaves_the_target_clean(tmp_path):
