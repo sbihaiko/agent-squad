@@ -1,8 +1,8 @@
 #!/bin/bash
 # usage: fast-gate.sh      the fast gate of a work-branch tip or of a child that enters a wave (ADR-0145), run in that tip's worktree.
 #
-# It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD), then the shell suite test-<script>.sh of every script under
-# contrib/squad-goal/scripts that the tip changes; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
+# It is the base battery (ruff, mypy and the fast pytest, SG_FAST_CMD), then the shell suite test-<script>.sh of every .sh or .py
+# script under contrib/squad-goal/scripts that the tip changes; a changed test-<script>.sh runs itself. The changed files are the diff of HEAD
 # against its merge-base with SG_FAST_BASE (default origin/$SG_BASE, else origin/dev), so work that landed on the base after the
 # branch point adds no suite. A base that does not resolve fails the gate, never skips the suites. Each suite runs hermetic, as
 # shell-suites.sh runs it: no SG_* variable, its own HOME. The promotion gate is the full suite (promote-stg.sh), not this.
@@ -18,7 +18,7 @@ fastcmd=${SG_FAST_CMD:-"$py -m ruff check squad tests && $py -m mypy squad && $p
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
 bash -c "$fastcmd" || { echo "fast-gate: the base battery failed"; exit 1; }
-suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' | grep -v / \
+suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
   | sed 's|^test-||' | sort -u)
 failed=""
 for n in $suites; do s=$top/contrib/squad-goal/scripts/test-$n.sh; [ -f "$s" ] || continue
