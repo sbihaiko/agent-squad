@@ -183,4 +183,12 @@ printf '{"review_models":["claude:slow","claude:fast"],"model_retry_budget":1,"r
 printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-7".* "$T/st/cq/"*
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "an ineligible model is not promoted by its latency ($wc)";; *) ko "skip before ordering: '$out'";; esac
+# 11) the review call carries --strict-mcp-config: a non-interactive `claude` call otherwise loads the owner's own MCP
+# servers (Notion, Slack, ...) and pays tens of thousands of input tokens of tool schemas and server instructions
+# before a line of the review. A review needs no MCP server, so the flag is on the call.
+printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-7".* "$T/st/cq/"*; export CLAUDE_ARGS="$T/claude-args"; : > "$CLAUDE_ARGS"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" 7 8 2>/dev/null)
+/usr/bin/grep -q -- '--strict-mcp-config' "$CLAUDE_ARGS" && ok "the review call sets --strict-mcp-config (no owner MCP servers in a review)" || ko "the review call misses --strict-mcp-config: $(cat "$CLAUDE_ARGS" 2>/dev/null)"
+unset CLAUDE_ARGS
 rm -rf "$T"; exit $fail
