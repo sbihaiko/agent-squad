@@ -34,7 +34,7 @@ def test_burners_sorted_by_total_with_window(tmp_path: Path) -> None:
                        (1, "dispatch:d1", "a", 1000, 0, 0), (30, "janitor:board", "a", 9999, 0, 0)])
     r = _run(str(tmp_path))
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["1169\treview:PR#1\ta,b\t2", "1000\tdispatch:d1\ta\t1"]
+    assert r.stdout.splitlines() == ["1169\treview:PR#1\ta,b\t2\t0", "1000\tdispatch:d1\ta\t1\t0"]
 
 
 def test_empty_window_prints_dash(tmp_path: Path) -> None:
@@ -49,17 +49,34 @@ def test_runs_outcome_events_are_consumers(tmp_path: Path) -> None:
           {"event": "other", "ts": _ts(1), "tokens_in": 99}]
     (run / "record.jsonl").write_text("\n".join(json.dumps(e) for e in ev) + "\nnot json\n")
     r = _run(str(tmp_path), "--checkout", str(tmp_path / "co"))
-    assert r.stdout.splitlines() == ["10\trun:run-1:scout\tm\t1", "7\trun:run-1\tm\t1"]
+    assert r.stdout.splitlines() == ["10\trun:run-1:scout\tm\t1\t0", "7\trun:run-1\tm\t1\t0"]
 
 
 def test_json_and_threshold(tmp_path: Path) -> None:
     _ledger(tmp_path, [(1, "review:PR#1", "a", 600, 0, 0), (1, "janitor:board", "a", 300, 0, 0)])
     j = json.loads(_run(str(tmp_path), "--json", "--threshold", "500").stdout)
     assert (j["window_hours"], j["threshold"], j["total"], j["over"]) == (24, 500, 900, True)
-    assert j["burners"][0] == {"consumer": "review:PR#1", "tokens": 600, "calls": 1, "models": ["a"]}
+    assert j["uncounted"] == 0
+    assert j["burners"][0] == {"consumer": "review:PR#1", "tokens": 600, "calls": 1, "uncounted": 0, "models": ["a"]}
     assert "review:PR#1" in j["brief"]
     j = json.loads(_run(str(tmp_path), "--json", "--threshold", "5000").stdout)
     assert j["over"] is False and j["brief"] == ""
+
+
+def test_a_call_without_a_count_is_named_in_both_readings(tmp_path: Path) -> None:
+    # A claude line that reported no usage carries the mark `no-usage` in a 7th field (review.sh writes it). It weighs 0,
+    # so the total is a floor; the reading must say so rather than let a review pass that reviewed nothing look healthy.
+    _ledger(tmp_path, [(1, "review:PR#1", "claude:claude-opus-5-5", 500, 0, 0)])
+    with open(tmp_path / "token-usage.tsv", "a") as f:
+        f.write(f"{_ts(1)}\treview:PR#2\tclaude:claude-opus-5-5\t0\t0\t0\tno-usage\n")
+        f.write(f"{_ts(1)}\treview:PR#2\tclaude:claude-opus-5-5\t0\t0\t0\tno-usage\n")
+    assert _run(str(tmp_path)).stdout.splitlines() == [
+        "500\treview:PR#1\tclaude:claude-opus-5-5\t1\t0",
+        "0\treview:PR#2\tclaude:claude-opus-5-5\t2\t2",
+    ]
+    j = json.loads(_run(str(tmp_path), "--json").stdout)
+    assert j["uncounted"] == 2
+    assert j["burners"][1]["uncounted"] == 2 and j["burners"][1]["tokens"] == 0
 
 
 def test_threshold_from_env(tmp_path: Path) -> None:
