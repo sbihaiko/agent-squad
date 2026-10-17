@@ -34,5 +34,6 @@
       "claude:claude-opus-5-5": "19-07"
     }
   },
-  "review_timeout_seconds_by_model": {}
+  "review_timeout_seconds_by_model": {},
+  "review_order": "config"
 }

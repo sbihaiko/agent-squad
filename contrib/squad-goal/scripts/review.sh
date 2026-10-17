@@ -149,7 +149,8 @@ fi
 # record at all, keeps the config's order -- unranked, never dropped, no latency invented for it.
 # This is ordering, not eligibility: it runs after the chain is read and before the loop, so every skip below (quota,
 # hours, switched off, codex/agy limits, the aging leash) still runs and the order never promotes an ineligible model.
-chain=$(python3 - "$SG_STATE/review-times.tsv" $chain <<'PY'
+# review_order "config" (#503): the owner's order stands, so a cheaper head is not passed by a faster, dearer model.
+[ "$(jq -r '.review_order // "measured"' "$cfg")" = config ] || chain=$(python3 - "$SG_STATE/review-times.tsv" $chain <<'PY'
 import statistics, sys
 t = {}
 try:
