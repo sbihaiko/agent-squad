@@ -84,6 +84,11 @@ if off_ids:
     try: gdoc = json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text())
     except (OSError, ValueError): gdoc = {}   # an absent or malformed graph is the squad's own refusal to make, not this gate's
     hits = [(nm, m, ALIASES.get(m, m), off_ids[ALIASES.get(m, m)], first) for nm, m, first in _run_models(gdoc) if ALIASES.get(m, m) in off_ids]
+    # A dispatch whose first model is only outside its hours window, with an open model after it, starts: the request names
+    # the first open coding model (mkreq.sh) and the router takes it (#433). Refused, no run started all night (#522).
+    open_in = {n["name"] for n in gdoc.get("nodes", []) if n.get("kind") == "dispatch"
+               and any(ALIASES.get(m, m) not in off_ids for m in (n.get("allow") or {}).get("models") or [])}
+    hits = [h[:4] + (False,) if h[4] and h[0] in open_in and h[3].endswith("hours window") else h for h in hits]
     said = lambda h: f"node {h[0]!r} runs {h[1]}{'' if h[1] == h[2] else f' -> {h[2]}'}, which the models panel switched off, or whose hours window excludes now, in models.json ({h[3]})"
     for h in hits:
         if not h[4] or os.environ.get("SG_ALLOW_MODEL"): print(f"warning: {said(h)}" + ("" if h[4] else " (a fallback of the dispatch)"), file=sys.stderr)
