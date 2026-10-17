@@ -110,3 +110,28 @@ async def test_an_error_that_is_not_a_provider_failure_still_fails_at_once(tmp_p
     assert [c.model for c in eng.adapter.calls if c.node == "router"] == ROUTER_CHAIN[:1]   # no provider status: the node fails as before
     e = outcomes(tmp_path, "router")[0]
     assert e["reasons"] == ["adapter_error"] and e["diagnostic"]["error"] == "socket closed" and v.verdict == "failed"
+
+
+# A subscription the shared marker closes (`codex-limited` for `gpt-`) is known to be spent before the run starts: the
+# launcher passes its model ids as the engine option `spent_models`, and the chain never starts a call on one of them.
+SPENT = [m for m in [node(_DOC, "router")["model"], *CHAIN] if m.startswith("claude-gpt-")]
+
+
+def test_model_chain_drops_the_spent_ids_and_keeps_the_order_of_the_rest():
+    assert model_chain(CHAIN, node(_DOC, "router")["model"], SPENT) == [m for m in ROUTER_CHAIN if m not in SPENT]
+
+
+def test_model_chain_keeps_the_chain_when_every_model_is_spent():
+    assert model_chain(CHAIN, PICK, spent=ROUTER_CHAIN) == CHILD_CHAIN   # a closed marker is a hint: with no model left, the chain tries them in order
+
+
+def test_model_chain_with_no_spent_ids_is_the_chain_as_before():
+    assert model_chain(CHAIN, PICK, []) == model_chain(CHAIN, PICK) == CHILD_CHAIN
+
+
+async def test_a_run_with_a_spent_gpt_marker_never_starts_a_call_on_a_gpt_model_and_the_router_answers_on_the_next(tmp_path):
+    eng = engine(tmp_path, {"router": SPAWNS, "route.router.1": CHILD}, options={"spent_models": SPENT})
+    v = await eng.run()
+    assert not [c.model for c in eng.adapter.calls if c.model.startswith("claude-gpt-")]
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [m for m in ROUTER_CHAIN if m not in SPENT][:1]   # the router starts on the next entry, with no wait for a refusal
+    assert v.verdict == "completed" and outcomes(tmp_path, "router")[0]["outcome"] == "pass"

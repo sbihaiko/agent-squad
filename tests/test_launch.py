@@ -99,6 +99,32 @@ def test_a_run_with_no_defaults_file_records_the_plugin_default_autonomy(tmp_pat
     assert eng.autonomy == {"enabled": True, "max_resumes": 3}
 
 
+@pytest.mark.anyio
+async def test_run_start_records_the_spent_models_and_a_resume_reads_the_option_again(tmp_path):
+    """The spent models are an engine option (ADR-0106): `run_start` records them. A marker moves with the provider's window, so a
+    resume takes the value its caller passes now and records it in its own `resume` event; the run_start value stays the first one."""
+    from tests.test_resume import wait_doc
+    both = {"a": {"output": {"x": 1, "y": 1}, "spend": 0.1}, "b": {"output": {"x": 1, "y": 1}, "spend": 0.1}}
+    eng = launch.launch(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), options={"spent_models": ["claude-gpt-5.5"]})
+    assert (await eng.run()).exit_code == 10
+    assert eng.record.events[0]["engine_options"]["spent_models"] == ["claude-gpt-5.5"]
+    again = launch.resume_engine(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), options={"spent_models": []})
+    assert (await again.resume(answer="pass")).exit_code == 0
+    assert record.read(tmp_path / "r" / "record.jsonl")[0]["engine_options"]["spent_models"] == ["claude-gpt-5.5"]
+    assert [e["engine_options"]["spent_models"] for e in record.read(tmp_path / "r" / "record.jsonl") if e["event"] == "resume"] == [[]]
+
+
+def test_a_spent_models_option_that_is_not_a_list_of_ids_is_refused(tmp_path):
+    with pytest.raises(OptionError, match="spent_models"):
+        launch.launch(one_agent(), tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), options={"spent_models": "claude-gpt-5.5"})
+
+
+def test_the_cli_turns_the_spent_models_flag_into_the_engine_option():
+    a = cli.parser().parse_args(["start", "--spent-models", "claude-gpt-5.5,claude-gpt-5.6-terra", "x"])
+    assert cli._opts(a)["spent_models"] == ["claude-gpt-5.5", "claude-gpt-5.6-terra"]
+    assert "spent_models" not in cli._opts(cli.parser().parse_args(["start", "x"]))
+
+
 def calls(path):
     tree = ast.parse(path.read_text())
     return {n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "") for n in ast.walk(tree) if isinstance(n, ast.Call)}
