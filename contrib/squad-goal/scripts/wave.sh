@@ -42,7 +42,8 @@
 # A review that asked for CHANGES on a run that already ended puts its issue back in the queue (`requeue`) instead of holding
 # it: the child of a live run stays where it stands, because that run may still fix it.
 # A wave with nothing ahead of the base landed empty: its ref and marker go and `land` exits 0. A landing that fails on a rebase
-# conflict or a push refused twice is counted per run (SG_WAVE_LAND_TRIES, default 3); at the cap each issue the wave carries
+# conflict, a push refused twice, or a start it cannot make (the base or the wave branch is gone, the checkout fails: exit 2)
+# is counted per run (SG_WAVE_LAND_TRIES, default 3); at the cap each issue the wave carries
 # gets the label frozen:owner and one queued comment, and the run's wave marker is cleared so the cycle stops retrying.
 # `waved-<run>` stays after the landing: the durable record that the run cut a wave.
 #
@@ -247,7 +248,7 @@ refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Ref
 # stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are counted in
 # auto/wland-tries-<run>; at SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label
 # frozen:owner and one queued comment, and the run's wave marker goes, so the loop's cycle reads the run and stops. The wave
-# branch stays on the remote with the work. Returns 1 either way: the landing did not happen.
+# branch stays on the remote with the work, when it is there. Returns 1 either way: the landing did not happen.
 stuck() {
   local run=$1 w=$2 S=$3 why=$4 f="$SG_STATE/auto/wland-tries-$1" t n
   mkdir -p "$SG_STATE/auto"; t=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); printf '%s\n' "$t" > "$f"
@@ -319,11 +320,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   [ -n "$(sc config user.email)" ] || sc config user.email "${SG_LAND_EMAIL:-squad-goal@localhost}"
   # One fetch per ref, as `start` does: a refspec that names a missing ref fails the whole call, and the wave branch is the one
   # that may be gone (a wave already landed).
+  # A landing that cannot start -- the base or the wave branch is gone, or the checkout fails -- exits 2, and it is a landing
+  # that failed: it counts toward the same cap as a conflict (#477), so its marker never holds the run's trees for good.
   sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null || {
-    echo "WAVE-ERROR $base is not on $remote"; rm -rf "$S"; return 2; }
+    stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
   sc fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null || {
-    echo "WAVE-ERROR $w is not on $remote (the run cuts it from $base at its start)"; rm -rf "$S"; return 2; }
-  sc checkout -q -B land "origin/$w" 2>/dev/null || { echo "WAVE-ERROR the checkout of $w failed"; rm -rf "$S"; return 2; }
+    stuck "$run" "$w" "$S" "$w is not on $remote (the run cuts it from $base at its start)"; rm -rf "$S"; return 2; }
+  sc checkout -q -B land "origin/$w" 2>/dev/null || { stuck "$run" "$w" "$S" "the checkout of $w failed"; rm -rf "$S"; return 2; }
   # The rebase on the base happens here and nowhere else (ADR-0145 rule 14): between entries the tip moves only by a child that
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
@@ -355,7 +358,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     [ "$try" = 1 ] || { stuck "$run" "$w" "$S" "the push of $w to $base was refused: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
     try=2
     sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null || {
-      echo "WAVE-ERROR $base is not on $remote"; rm -rf "$S"; return 2; }
+      stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"

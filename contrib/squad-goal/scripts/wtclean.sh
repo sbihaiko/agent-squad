@@ -18,6 +18,25 @@ tally="$SG_STATE/wt-tally.$$"; : > "$tally"
 in_use() { printf '%s\n' "$cwds" | awk -v p="$1" '$0==p || index($0,p"/")==1 {f=1} END{exit !f}'; }
 # mtime <path>: the file mtime in epoch seconds, whichever stat this machine has (GNU -c %Y, BSD -f %m).
 mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null || echo 0; else stat -f %m "$1" 2>/dev/null || echo 0; fi; }
+# wave_hold <run>: 0 while the run's wave has not landed: `wave-<run>` exists from the cut to the landing (wave.sh), wherever
+# the run folder sits. The hold has an age cap, SG_WAVE_HOLD_MAX_SECONDS (a day by default), read from the wave's own start
+# marker (the marker's mtime when that is missing): a marker no landing will clear -- a run that left active-runs.txt -- would
+# hold the trees for good. A lapsed hold is said once, and the trees then follow the rules below, so no unlanded work is lost.
+wave_hold() { local m="$SG_STATE/auto/wave-$1" t; [ -e "$m" ] || return 1
+  t=$(cat "$SG_STATE/auto/wave-start-$1" 2>/dev/null); case "$t" in ''|*[!0-9]*) t=$(mtime "$m");; esac
+  [ $(( now - t )) -lt "${SG_WAVE_HOLD_MAX_SECONDS:-86400}" ] && return 0
+  grep -qx "lapsed $1" "$seen" || { echo "WT HOLD LAPSED $1: its wave started $(( now - t )) s ago, past the hold cap (${SG_WAVE_HOLD_MAX_SECONDS:-86400} s); its trees follow the other rules"; echo "lapsed $1" >> "$seen"; }
+  return 1; }
+# in_base <tree>: every commit of the tree's HEAD is in origin/$SG_BASE, by its sha or by its patch. A wave rebases each child
+# on its tip and on the base, so a child that landed carries a sha no remote has; `git cherry` reads its patch in the base
+# (a merge commit has no patch and is skipped, so a target's `squad: land` merges do not hold it). A commit with no diff
+# has no patch of its own: it matches any empty commit of the base, so only its sha can say it landed.
+in_base() { [ -n "$SG_BASE" ] && $G -C "$1" rev-parse -q --verify "origin/$SG_BASE" >/dev/null 2>&1 || return 1
+  $G -C "$1" merge-base --is-ancestor HEAD "origin/$SG_BASE" 2>/dev/null && return 0
+  local c; for c in $($G -C "$1" rev-list --no-merges "origin/$SG_BASE..HEAD" 2>/dev/null); do
+    $G -C "$1" diff-tree --quiet "$c^" "$c" 2>/dev/null && return 1; done
+  c=$($G -C "$1" cherry "origin/$SG_BASE" HEAD 2>/dev/null) || return 1
+  ! printf '%s\n' "$c" | grep -q '^+'; }
 # has_sub <tree>: the tree holds a submodule git has checked out — the one state in which `git worktree remove` refuses the
 # whole tree whatever else is true of it: `fatal: working trees containing submodules cannot be moved or removed`.
 # `git submodule status` marks an uninitialized one with a leading `-`, a populated one with anything else (a space at the
@@ -46,14 +65,15 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   # tree removed here left the entry with nothing to read ("WAVE no entry for #N: the child's worktree ... is not there"),
   # every wave landed empty and no card left the queue. `wave-<run>` exists from the cut to the landing; `waved-<run>` is
   # the durable record that the entry is done, and a wave that reached its age cap lands and clears the marker (rule 13).
-  if [ -e "$SG_STATE/auto/wave-${run##*/}" ]; then
+  if wave_hold "${run##*/}"; then
     grep -qx "wave $w" "$seen" || { echo "WT HELD wave ${run##*/} ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
     continue; fi
   [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
-  # kept only when HEAD is on no remote branch and on no other local branch (a run that made no commit sits on its base)
-  if [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && [ -z "$($G branch --contains "$sha" --format='%(refname:short)' 2>/dev/null | grep -vxF "${own:-//}" | head -1)" ]; then
+  # kept only when HEAD is on no remote branch and on no other local branch (a run that made no commit sits on its base), and
+  # its work is not in the base: a wave that landed rebased the child, so its sha is on no remote and its patch is in the base
+  if ! in_base "$w" && [ -z "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ] && [ -z "$($G branch --contains "$sha" --format='%(refname:short)' 2>/dev/null | grep -vxF "${own:-//}" | head -1)" ]; then
     grep -qx "$w" "$seen" && continue
     echo "WT UNPUSHED ${run##*/} ${sha:0:9}: finished run with commits on no remote branch; kept"; echo "$w" >> "$seen"; continue; fi
   b=$($G -C "$w" branch --show-current)
@@ -67,7 +87,8 @@ done
 # as `wt N` and the one the reader is looking at when he asks what can be freed. No pass touched them until now, so a landed
 # issue left its tree behind for good (measured 2026-10-13: 20 trees, 10 of them already in origin/main). A tree goes only
 # when nothing can be lost and nothing is using it: no live process whose cwd is inside it, a clean tree, and HEAD in the
-# base (its work landed). Anything else is held, and the tally below carries the ratio the footer shows.
+# base (its work landed, by sha or by patch), and no run folder inside it whose wave has not landed. Anything else is held,
+# and the tally below carries the ratio the footer shows.
 for rel in worktrees/child .worktrees; do
   [ -d "$SG_CHECKOUT/$rel" ] || continue
   for w in "$SG_CHECKOUT/$rel"/*; do
@@ -75,8 +96,12 @@ for rel in worktrees/child .worktrees; do
     echo held >> "$tally"
     in_use "$w" && continue
     [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
-    [ -n "$SG_BASE" ] || continue
-    $G -C "$w" merge-base --is-ancestor HEAD "origin/$SG_BASE" 2>/dev/null || continue
+    # A run folder inside the tree whose wave has not landed holds it (#477). The run folder is ignored, so the tree reads
+    # clean, and its HEAD may already be in the base: between the run's verdict and its wave's landing only the marker keeps it.
+    hold=; for r in "$w"/runs/*/; do [ -d "$r" ] && wave_hold "$(basename "$r")" && { hold=$(basename "$r"); break; }; done
+    if [ -n "$hold" ]; then grep -qx "wave $w" "$seen" || { echo "WT HELD wave $hold ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
+      continue; fi
+    in_base "$w" || continue
     # An active run folder inside the child itself owns this tree, even before it starts a process. The janitor drops a
     # missing folder from active-runs, so this pass only preserves a folder that still exists and has no verdict.
     live=0
@@ -96,6 +121,7 @@ for rel in worktrees/child .worktrees; do
     b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
     wt_remove "$SG_CHECKOUT" "$w"; rc=$?
     if [ $rc = 0 ]; then echo free >> "$tally"; echo "WT CLEAN child ${w##*/} ${b:-detached} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
+      case $b in ""|feat/*|fix/*|docs/*) ;; *) $G branch -D "$b" >/dev/null 2>&1;; esac   # its work is in the base: the branch goes with the tree
     elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule child ${w##*/} ${sha:-} ${w}: a checked out submodule git refuses to remove, even with --force; kept"; echo "sub $w" >> "$seen"; }; fi
   done
 done
