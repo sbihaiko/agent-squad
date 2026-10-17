@@ -5,11 +5,10 @@ baseline. It decides spawn requests ("decide these requests") and lands finished
 children"). It reads and writes the spawn, land, and ledger events. The engine runs the children's sessions.
 """
 import subprocess
-from pathlib import Path
 
 import anyio
 
-from squad import actions, envelope, git, node_commit, session, workcmd
+from squad import actions, envelope, git, session, workcmd
 from squad import verdict as V
 from squad.engine_errors import Frontier
 
@@ -161,12 +160,14 @@ class Dispatch:
     def prune(self):
         """Remove the branch and worktree of every child that landed. The work is in the target's history now.
 
-        A run that works in a linked worktree holding its own run folder is the loop's shape (#90): the loop reads each
-        child's worktree again after this verdict, to enter the child's commits into its run's wave branch and to review the
-        child's own diff there (ADR-0145 rule 9). Removing it here left that entry with nothing to read, so every wave
-        landed empty and no card left the queue (#464). The loop's own pass removes the tree once the wave landed.
+        A run started with the engine option `keep_children` keeps them: a later pass reads each child's worktree again
+        after this verdict, as the loop does to enter the child's commits into its run's wave branch and to review the
+        child's own diff there (ADR-0145 rule 9). The hold is the run's own recorded option (ADR-0106), never the target's
+        shape: a wave run whose target is not the run's (#477) is held all the same, and a resume keeps what the start set.
+        The pass that lands the wave frees the trees.
         """
-        if node_commit.ownership(self.e, Path(self.e.target).resolve(), True) is None:
+        if self.e.options.get("keep_children") or any(
+                (e.get("engine_options") or {}).get("keep_children") for e in self.e.record.events if e["event"] == "run_start"):
             return
         for name, land in self.landed.items():
             if land["outcome"] != "pass" or name not in self.children:

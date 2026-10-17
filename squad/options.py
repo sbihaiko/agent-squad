@@ -6,7 +6,7 @@ from squad.graph import check_node_names
 
 LOWER = {"spend_cap": "spend_cap", "deadline": "deadline", "max_parallel": "max_parallel"}
 NODE_OPTIONS = ("stop_after",)
-OTHER = ("tier_pin", "expect_graph_hash", "spent_models")
+OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "keep_children")
 TIERS = ("trivial", "medium", "large")
 
 
@@ -40,6 +40,8 @@ def resolve(graph, options):
         raise OptionError(f"tier_pin must be one of {', '.join(TIERS)}")
     if "spent_models" in opts and not (isinstance(opts["spent_models"], list) and all(isinstance(m, str) and m for m in opts["spent_models"])):
         raise OptionError("spent_models must be a list of model ids")
+    if "keep_children" in opts and not isinstance(opts["keep_children"], bool):
+        raise OptionError("keep_children must be true or false")
     if "expect_graph_hash" in opts and opts["expect_graph_hash"] != graph.hash:
         raise OptionError(f"graph hash mismatch: expected {opts['expect_graph_hash']}, the loaded graph is {graph.hash}. Nothing ran")
     return opts, cfg
