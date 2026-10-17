@@ -1,0 +1,615 @@
+"""One model registry and one resolver (SPEC 505).
+
+The registry is data: `config/models.registry.json`, shipped byte-identical as
+`contrib/squad-goal/scripts/registry.json`. This module is stdlib only and is shipped the same way. It resolves a
+raw model spelling to one registry id, one route and the wire string that route sends today. A reader normalizes;
+a writer keeps the raw spelling (ADR-0107, opaque resume).
+
+The module never raises from `normalize`: an unknown spelling is data that passes through, not a defect. `load`
+is the loud door: a JSON parse error is a named failure, and one bad entry is dropped and named while the other
+entries still load.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROUTES = ("cli", "gateway", "direct")
+AUTHS = ("subscription", "api_key", "unverified")
+V1_CHAINS = {"coding": "coding_models", "review": "review_models",
+             "vision": "vision_models", "router": "router_models"}
+DEFAULT_RESERVE_PERCENT = 10
+_CTX = re.compile(r"\[([A-Za-z0-9]{1,8})\]$")
+_EFFORT = re.compile(r"^(.*)-(low|medium|high)$")
+
+
+class RegistryError(Exception):
+    """A registry that cannot be read: a parse error or a shape that is not a registry."""
+
+
+@dataclass(frozen=True)
+class Entry:
+    id: str
+    label: str
+    provider: str
+    subscription: str
+    efforts: tuple = ()
+    routes: dict = field(default_factory=dict)
+    capabilities: dict = field(default_factory=dict)
+    display_price: dict | None = None
+    aliases: tuple = ()
+    retired: bool = False
+    gateway_only: bool = False
+
+
+@dataclass(frozen=True)
+class Registry:
+    path: str
+    entries: dict
+    aliases: dict
+    subscriptions: dict
+    dropped: list
+
+
+@dataclass(frozen=True)
+class Ref:
+    id: str
+    raw: str
+    route: str | None
+    effort: str | None
+    ctx: str | None
+    known: bool
+
+
+@dataclass(frozen=True)
+class Inv:
+    route: str
+    wire: str
+    argv: tuple = ()
+
+
+@dataclass(frozen=True)
+class ChainEntry:
+    id: str
+    raw: str
+    route: str | None
+    effort: str | None
+    ctx: str | None
+    on: bool
+    hrs: str | None
+    timeout_s: float | None
+    no_tools: bool
+    provider: str | None
+    subscription: str | None
+    known: bool
+
+
+@dataclass(frozen=True)
+class Chain:
+    name: str
+    entries: list
+    mixed: bool = False
+    stray: list = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class Eligibility:
+    ok: bool
+    reason: str | None
+    until: int | None
+
+
+# --- paths ------------------------------------------------------------------------------------------------
+
+def _first_file(candidates):
+    for p in candidates:
+        if p.is_file():
+            return p
+    return candidates[-1]
+
+
+def _default_registry_path():
+    if os.environ.get("SG_MODELS_REGISTRY"):
+        return Path(os.environ["SG_MODELS_REGISTRY"])
+    here = Path(__file__).resolve().parent
+    return _first_file([here / "registry.json", here.parent / "config" / "models.registry.json"])
+
+
+def _default_models_path():
+    if os.environ.get("SG_MODELS"):
+        return Path(os.environ["SG_MODELS"])
+    here = Path(__file__).resolve().parent
+    return _first_file([here / "models.json", here.parent / "contrib" / "squad-goal" / "scripts" / "models.json"])
+
+
+def _default_plans_path():
+    if os.environ.get("SG_PLANS"):
+        return Path(os.environ["SG_PLANS"])
+    here = Path(__file__).resolve().parent
+    return _first_file([here / "plans.json", here.parent / "contrib" / "squad-goal" / "scripts" / "plans.json"])
+
+
+def _shared_dir(shared=None):
+    return Path(shared or os.environ.get("SG_SHARED") or os.environ.get("SG_STATE") or ".")
+
+
+# --- load: fault isolation -------------------------------------------------------------------------------
+
+def _validate_entry(raw, subscriptions):
+    if not isinstance(raw, dict):
+        return "not an object"
+    for key in ("id", "label", "provider", "subscription"):
+        if not isinstance(raw.get(key), str) or not raw[key]:
+            return f"missing {key}"
+    if raw["subscription"] not in subscriptions:
+        return f"unknown subscription {raw['subscription']}"
+    for key in ("efforts", "aliases", "served"):
+        if key in raw and not isinstance(raw[key], list):
+            return f"{key} must be a list"
+    for key in ("retired", "gateway_only"):
+        if key in raw and not isinstance(raw[key], bool):
+            return f"{key} must be a boolean"
+    routes = raw.get("routes") or {}
+    if not isinstance(routes, dict):
+        return "routes must be an object"
+    if not routes and not raw.get("retired", False):
+        return "no route"
+    for name, route in routes.items():
+        if name not in ROUTES:
+            return f"unknown route {name}"
+        if not isinstance(route, dict):
+            return f"route {name} is not an object"
+        auth = route.get("auth")
+        if auth not in AUTHS:
+            return f"route {name}: auth {auth!r}"
+        if auth == "api_key" and raw["provider"] != "deepseek":
+            return f"route {name}: api_key on provider {raw['provider']}"
+        served = route.get("served", [])
+        if not isinstance(served, list) or not all(isinstance(s, str) and s for s in served):
+            return f"route {name}: served must be a list of strings"
+        if name in ("gateway", "direct") and not (isinstance(route.get("model"), str) and route["model"]):
+            return f"route {name}: missing model"
+        if name == "cli":
+            argv = route.get("argv")
+            if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+                return "route cli: missing argv"
+    if raw.get("gateway_only") and "gateway" not in routes:
+        return "gateway_only without a gateway route"
+    return None
+
+
+def _entry_from(raw):
+    return Entry(id=raw["id"], label=raw["label"], provider=raw["provider"],
+                 subscription=raw["subscription"], efforts=tuple(raw.get("efforts") or ()),
+                 routes=raw.get("routes") or {}, capabilities=raw.get("capabilities") or {},
+                 display_price=raw.get("display_price"), aliases=tuple(raw.get("aliases") or ()),
+                 retired=bool(raw.get("retired", False)), gateway_only=bool(raw.get("gateway_only", False)))
+
+
+def load(path=None):
+    """Read and validate the registry. A parse error raises RegistryError; a bad entry is dropped and named."""
+    p = Path(path) if path else _default_registry_path()
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, ValueError) as exc:
+        raise RegistryError(f"registry {p}: invalid JSON: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise RegistryError(f"registry {p}: the document must be an object")
+    subscriptions = doc.get("subscriptions") or {}
+    if not isinstance(subscriptions, dict):
+        raise RegistryError(f"registry {p}: `subscriptions` must be an object")
+    models = doc.get("models")
+    if not isinstance(models, list):
+        raise RegistryError(f"registry {p}: `models` must be a list")
+    entries, aliases, dropped = {}, {}, []
+    for i, raw in enumerate(models):
+        name = raw.get("id") if isinstance(raw, dict) and isinstance(raw.get("id"), str) else f"entry[{i}]"
+        reason = _validate_entry(raw, subscriptions)
+        if reason:
+            dropped.append({"id": name, "reason": reason})
+            continue
+        if name in entries:
+            dropped.append({"id": name, "reason": "duplicate id"})
+            continue
+        entry = _entry_from(raw)
+        conflict = next((a for a in entry.aliases if a in aliases and aliases[a] != entry.id), None)
+        if conflict:
+            dropped.append({"id": name, "reason": f"alias {conflict} already names {aliases[conflict]}"})
+            continue
+        entries[entry.id] = entry
+        for alias in entry.aliases:
+            if alias != entry.id:
+                aliases[alias] = entry.id
+    return Registry(path=str(p), entries=entries, aliases=aliases,
+                    subscriptions=subscriptions, dropped=dropped)
+
+
+_CACHE: dict[str, Registry] = {}
+
+
+def default_registry():
+    """The committed registry, read once. A broken file is an error for `load` and a pass-through for `normalize`."""
+    key = str(_default_registry_path())
+    if key not in _CACHE:
+        _CACHE[key] = load(key)
+    return _CACHE[key]
+
+
+# --- normalize and invocation ----------------------------------------------------------------------------
+
+def _route_for(entry, raw):
+    for name in ("gateway", "cli", "direct"):
+        route = entry.routes.get(name)
+        if route and raw in (route.get("served") or []):
+            return name
+    if "gateway" in entry.routes:
+        return "gateway"
+    return next(iter(entry.routes), None)
+
+
+def normalize(raw, reg=None):
+    """Resolve one raw spelling. Never raises: an unknown spelling keeps its raw form and says known=False."""
+    try:
+        if not isinstance(raw, str) or not raw:
+            return Ref(id=str(raw), raw=raw if isinstance(raw, str) else "", route=None,
+                       effort=None, ctx=None, known=False)
+        reg = reg or default_registry()
+        original, body, ctx, route = raw, raw, None, None
+        match = _CTX.search(body)
+        if match:
+            ctx = match.group(1)
+            body = body[:match.start()]
+        if body.startswith("claude:"):
+            route = "cli"
+            body = body[len("claude:"):]
+        entry, effort = None, None
+        if body in reg.entries:
+            entry = reg.entries[body]
+        elif body in reg.aliases:
+            entry = reg.entries[reg.aliases[body]]
+        else:
+            match = _EFFORT.match(body)
+            if match and match.group(1) in reg.entries and match.group(2) in reg.entries[match.group(1)].efforts:
+                entry, effort = reg.entries[match.group(1)], match.group(2)
+        if entry is None:
+            return Ref(id=original, raw=original, route=route, effort=None, ctx=ctx, known=False)
+        if route is None:
+            route = _route_for(entry, body if ctx is None else original)
+        return Ref(id=entry.id, raw=original, route=route, effort=effort, ctx=ctx, known=True)
+    except Exception:  # noqa: BLE001 - the contract is "never raises": a bad registry passes the spelling through
+        return Ref(id=raw if isinstance(raw, str) else "", raw=raw if isinstance(raw, str) else "",
+                   route=None, effort=None, ctx=None, known=False)
+
+
+def model(raw, reg=None):
+    """The registry entry a raw spelling names, or None when the registry does not know it."""
+    reg = reg or default_registry()
+    ref = normalize(raw, reg)
+    return reg.entries.get(ref.id) if ref.known else None
+
+
+def _wire(route, use, raw):
+    served = route.get("served") or []
+    if raw in served:
+        return raw
+    if raw.startswith("claude:") and use in ("cli", "direct"):
+        stripped = raw[len("claude:"):]
+        return stripped if stripped in served else (route.get("model") or stripped)
+    return route.get("model") or raw
+
+
+def _argv(route, wire, effort, prompt_file):
+    if not route.get("argv"):
+        return ()
+    values = {"model": wire, "effort": effort or "", "prompt_file": prompt_file or "{prompt_file}"}
+    return tuple(a.format(**values) for a in route["argv"])
+
+
+def invocation(ref_or_raw, use="gateway", effort=None, prompt_file=None, reg=None):
+    """The route and the wire string a caller sends for one spelling. An unknown spelling passes through."""
+    reg = reg or default_registry()
+    ref = ref_or_raw if isinstance(ref_or_raw, Ref) else normalize(ref_or_raw, reg)
+    entry = reg.entries.get(ref.id) if ref.known else None
+    route = entry.routes.get(use) if entry else None
+    if not route:
+        return Inv(route=use, wire=ref.raw, argv=())
+    wire = _wire(route, use, ref.raw)
+    return Inv(route=use, wire=wire, argv=_argv(route, wire, effort or ref.effort, prompt_file))
+
+
+# --- chain: v1, v2, and a mixed file ----------------------------------------------------------------------
+
+def _canonical(name):
+    key = (name or "").removesuffix("_models")
+    if key not in V1_CHAINS:
+        raise ValueError(f"unknown chain {name!r}")
+    return key
+
+
+def _default_route(chain_name, entry):
+    if entry is None:
+        return None
+    if chain_name in ("coding", "router") and "gateway" in entry.routes:
+        return "gateway"
+    for name in ("cli", "gateway", "direct"):
+        if name in entry.routes:
+            return name
+    return None
+
+
+def _v2_entry(raw, chain_name, reg):
+    base = raw.get("raw") or raw.get("id") or ""
+    ref = normalize(base, reg)
+    mid = raw.get("id") if isinstance(raw.get("id"), str) else ref.id
+    entry = reg.entries.get(mid) or (reg.entries.get(ref.id) if ref.known else None)
+    if entry is not None:
+        mid = entry.id
+    return ChainEntry(id=mid, raw=base, route=raw.get("route") or ref.route or _default_route(chain_name, entry),
+                      effort=raw.get("effort") or ref.effort, ctx=raw.get("ctx") or ref.ctx,
+                      on=bool(raw.get("on", True)), hrs=raw.get("hrs"), timeout_s=raw.get("timeout_s"),
+                      no_tools=bool(raw.get("no_tools", False)),
+                      provider=entry.provider if entry else None,
+                      subscription=entry.subscription if entry else None,
+                      known=entry is not None)
+
+
+def chain(models_json, name, reg=None):
+    """One chain, read from a v1 or a v2 file. A mixed file reads `chains`, and `stray` names the v1 keys."""
+    reg = reg or default_registry()
+    doc = models_json if isinstance(models_json, dict) else json.loads(Path(models_json).read_text())
+    canon = _canonical(name)
+    stray = [key for key in V1_CHAINS.values() if key in doc] if isinstance(doc.get("chains"), dict) else []
+    mixed = bool(stray)
+    entries = []
+    if isinstance(doc.get("chains"), dict):
+        for raw in doc["chains"].get(canon) or []:
+            entries.append(_v2_entry(raw, canon, reg))
+    else:
+        key = V1_CHAINS[canon]
+        off = (doc.get("off") or {}).get(key) or {}
+        hours = (doc.get("hours") or {}).get(key) or {}
+        efforts = (doc.get("efforts") or {}).get(key) or {}
+        timeouts = doc.get("review_timeout_seconds_by_model") or {}
+        no_tools = doc.get("review_no_tools") or []
+        for raw in doc.get(key) or []:
+            ref = normalize(raw, reg)
+            entry = reg.entries.get(ref.id) if ref.known else None
+            entries.append(ChainEntry(
+                id=ref.id, raw=raw, route=ref.route, effort=efforts.get(raw) or ref.effort, ctx=ref.ctx,
+                on=not bool(off.get(raw)), hrs=hours.get(raw), timeout_s=timeouts.get(raw),
+                no_tools=raw in no_tools, provider=entry.provider if entry else None,
+                subscription=entry.subscription if entry else None, known=ref.known))
+    return Chain(name=canon, entries=entries, mixed=mixed, stray=stray)
+
+
+# --- eligible, quota, mark_limited, display_price ---------------------------------------------------------
+
+def _in_window(window, hour):
+    try:
+        start, end = int(window[:2]), int(window[3:5])
+    except (ValueError, IndexError):
+        return True
+    return start <= hour < end if start <= end else (hour >= start or hour < end)
+
+
+def _marker_state(sub, shared, now, reg):
+    """(reason, until) while the subscription marker holds; None when the marker is absent or stale."""
+    info = reg.subscriptions.get(sub) or {}
+    name = info.get("marker")
+    if not name:
+        return None
+    try:
+        text = (_shared_dir(shared) / name).read_text().strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        until = float(text)
+    except ValueError:
+        return ("balance exhausted" if sub == "grok" else "usage limit"), None
+    now = time.time() if now is None else now
+    return ("usage limit", int(until)) if until > now else None
+
+
+def _quota_row(sub, shared, reg):
+    probe = (reg.subscriptions.get(sub) or {}).get("quota_probe") or sub
+    try:
+        doc = json.loads((_shared_dir(shared) / "hub-quota.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return doc.get(probe) or {}
+
+
+def _weekly(row):
+    return next((w for w in (row.get("windows") or []) if w.get("label") == "weekly"), None)
+
+
+def _reserve_percent(sub, reg):
+    if sub != "claude":
+        return None
+    return int((reg.subscriptions.get("claude") or {}).get("reserve_percent", DEFAULT_RESERVE_PERCENT))
+
+
+def _plans():
+    try:
+        return json.loads(_default_plans_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def eligible(entry, shared=None, now=None, hour=None, reg=None):
+    """Why one chain entry may not run now: the switch, its window, its subscription marker, or the Claude reserve."""
+    if not entry.on:
+        return Eligibility(False, "off", None)
+    now = time.time() if now is None else now
+    hour = time.localtime(now).tm_hour if hour is None else hour
+    if entry.hrs and not _in_window(entry.hrs, hour):
+        return Eligibility(False, f"outside its window {entry.hrs}", None)
+    reg = reg or default_registry()
+    sub = entry.subscription
+    if not sub:
+        return Eligibility(True, None, None)
+    marker = _marker_state(sub, shared, now, reg)
+    if marker:
+        return Eligibility(False, marker[0], marker[1])
+    reserve = _reserve_percent(sub, reg)
+    if reserve is not None:
+        weekly = _weekly(_quota_row(sub, shared, reg))
+        if weekly and weekly.get("pct") is not None and weekly["pct"] >= 100 - reserve:
+            return Eligibility(False, "claude weekly reserve", weekly.get("resets"))
+    return Eligibility(True, None, None)
+
+
+def quota(sub, shared=None, now=None, reserve_percent=None, reg=None):
+    """One subscription's state: its marker first, then the probe windows, then the plan, then the Claude reserve."""
+    reg = reg or default_registry()
+    info = reg.subscriptions.get(sub) or {}
+    out = {"sub": sub, "limited": False, "until": None, "reason": None, "windows": [],
+           "plan": None, "reserve_percent": None, "spend_only": bool(info.get("spend_only"))}
+    if out["spend_only"]:
+        return out
+    marker = _marker_state(sub, shared, now, reg)
+    if marker:
+        out.update(limited=True, reason=marker[0], until=marker[1])
+    row = _quota_row(sub, shared, reg)
+    out["windows"] = list(row.get("windows") or [])
+    out["plan"] = _plans().get(sub)
+    reserve = _reserve_percent(sub, reg)
+    if reserve is not None:
+        reserve = reserve_percent if reserve_percent is not None else reserve
+        out["reserve_percent"] = reserve
+        weekly = _weekly(out)
+        if not out["limited"] and weekly and weekly.get("pct") is not None and weekly["pct"] >= 100 - reserve:
+            out.update(limited=True, reason="claude weekly reserve", until=weekly.get("resets"))
+    return out
+
+
+def mark_limited(sub, epoch=None, shared=None, reg=None):
+    """Write one subscription marker. None means it does not reset by itself (the Grok prepaid balance)."""
+    reg = reg or default_registry()
+    info = reg.subscriptions.get(sub)
+    if not info:
+        raise RegistryError(f"unknown subscription {sub!r}")
+    name = info.get("marker")
+    if not name:
+        raise RegistryError(f"{sub} has no marker: it is spend only")
+    folder = _shared_dir(shared)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / name
+    tmp = folder / (name + ".tmp")
+    tmp.write_text(("no-reset" if epoch is None else str(int(epoch))) + "\n")
+    os.replace(tmp, path)
+    return path
+
+
+def display_price(entry_or_raw, reg=None):
+    """The API-equivalent rate the hub and the dashboard show. The engine never reads it."""
+    if isinstance(entry_or_raw, Entry):
+        return entry_or_raw.display_price
+    reg = reg or default_registry()
+    entry = model(entry_or_raw, reg)
+    return entry.display_price if entry else None
+
+
+# --- check and CLI ----------------------------------------------------------------------------------------
+
+def check(path=None, models=None):
+    """The registry's own report: dropped entries, unknown chain ids, and a mixed models file."""
+    try:
+        reg = load(path)
+    except RegistryError as exc:
+        return {"ok": False, "error": str(exc), "dropped": [], "mixed": [], "unknown": []}
+    unknown, mixed = [], []
+    if models:
+        for name in V1_CHAINS:
+            try:
+                c = chain(models, name, reg)
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc), "dropped": reg.dropped, "mixed": mixed, "unknown": unknown}
+            if c.mixed:
+                mixed.append(name)
+            unknown += [f"{name}: {e.raw}" for e in c.entries if not e.known]
+    return {"ok": not reg.dropped and not unknown, "error": None,
+            "dropped": reg.dropped, "mixed": mixed, "unknown": unknown}
+
+
+def _check_text(result, reg=None):
+    if result["error"]:
+        return [f"error: {result['error']}"]
+    lines = [f"dropped {d['id']}: {d['reason']}" for d in result["dropped"]]
+    lines += [f"unknown {u}" for u in result["unknown"]]
+    lines += [f"mixed: {name} carries both shapes; `chains` wins" for name in result["mixed"]]
+    if reg is not None:
+        lines.append(f"ok: {len(reg.entries)} models")
+    return lines
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="modelreg", description="Resolve model ids through one registry.")
+    ap.add_argument("--registry", default=None, help="registry file (default: the committed one)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("chain", help="print one chain")
+    c.add_argument("name")
+    c.add_argument("--models", default=None)
+    c.add_argument("--eligible", action="store_true")
+    c.add_argument("--tsv", action="store_true")
+    c.add_argument("--shared", default=None)
+    c.add_argument("--now", type=float, default=None)
+    a = sub.add_parser("argv", help="print argv, NUL-separated")
+    a.add_argument("id")
+    a.add_argument("--use", default="gateway", choices=ROUTES)
+    a.add_argument("--effort", default=None)
+    a.add_argument("--prompt-file", default=None)
+    m = sub.add_parser("mark-limited", help="write a subscription marker")
+    m.add_argument("sub")
+    m.add_argument("--until", type=float, default=None)
+    m.add_argument("--shared", default=None)
+    k = sub.add_parser("check", help="validate the registry and the chains")
+    k.add_argument("--models", default=None)
+    ns = ap.parse_args(argv)
+    try:
+        reg = load(ns.registry)
+    except RegistryError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    if ns.cmd == "check":
+        result = check(ns.registry, ns.models)
+        for line in _check_text(result, reg):
+            print(line)
+        return 0 if result["ok"] else 1
+    if ns.cmd == "chain":
+        rows = chain(ns.models or _default_models_path(), ns.name, reg).entries
+        if ns.eligible:
+            rows = [e for e in rows if eligible(e, shared=ns.shared, now=ns.now, reg=reg).ok]
+        if ns.tsv:
+            for e in rows:
+                print("\t".join([e.id, e.raw, e.route or "", e.effort or "", e.hrs or "",
+                                 "" if e.timeout_s is None else str(e.timeout_s)]))
+        else:
+            for e in rows:
+                print(e.id)
+        return 0
+    if ns.cmd == "argv":
+        inv = invocation(ns.id, ns.use, effort=ns.effort, prompt_file=ns.prompt_file, reg=reg)
+        if not inv.argv:
+            print(f"modelreg: {ns.id} has no {ns.use} route", file=sys.stderr)
+            return 2
+        sys.stdout.write("\0".join(inv.argv))
+        return 0
+    if ns.cmd == "mark-limited":
+        try:
+            print(mark_limited(ns.sub, ns.until, shared=ns.shared, reg=reg))
+        except RegistryError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -201,10 +201,11 @@ def test_every_repo_spelling_is_known_and_pinned(reg):
         raws += mdoc.get(key, [])
     for raw in raws:
         assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
-    for key in ("hours", "review_timeout_seconds_by_model"):
-        for chain in mdoc.get(key, {}):
-            for raw in mdoc[key][chain]:
-                assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
+    for models in (mdoc.get("hours") or {}).values():
+        for raw in models:
+            assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
+    for raw in mdoc.get("review_timeout_seconds_by_model") or {}:
+        assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
 
 
 # --- chain: v1, v2, mixed ----------------------------------------------------------------------------------
