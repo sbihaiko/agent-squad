@@ -68,6 +68,12 @@ o=$(SG_STATE="$T/st" SG_TOKEN_CACHE_WEIGHT=1 bash "$G" 2>&1); rc=$?
 [ $rc = 1 ] && ok "the weight is a setting: at 1 the same line fires" || ko "cache weight 1: rc=$rc out=$o"
 case "$o" in *1011000*) ok "the sentence names the weighted total";; *) ko "weighted total missing: $o";; esac
 
+# owner ruling: a cache read is not counted by default; the cap measures new input and output only. Ten million cached
+# tokens in one review do not stop the loop.
+rm -f "$L"; marker 361; line "$(now)" review:CACHE0 claude:opus 10000 1000 10000000
+o=$(guard); rc=$?
+[ $rc = 0 ] && [ -z "$o" ] && ok "a cache read is not counted by default" || ko "cache read counted: rc=$rc out=$o"
+
 # a missing ledger: exit 0
 rm -f "$L"; marker 10
 o=$(guard); rc=$?
