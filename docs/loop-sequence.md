@@ -59,8 +59,9 @@ sequenceDiagram
     CR->>CR: review.sh --worktree against origin/wave/RUN#59; review-KEY.md/.sha/.base (childreview.sh:21-23)
     CC->>WV: wave.sh enter RUN N, cwd the child worktree (childcc.py:74)
     WV->>WV: not expired#59; review APPROVE, base == wave/RUN, sha == HEAD (wave.sh:140-152)
-    WV->>G: SG_GATE_KIND=fast gate.sh bash -c "$SG_WAVE_GATES" under locks/gate (wave.sh:156, gate.sh:28)
-    WV->>GH: fetch wave/RUN#59; rebase locally#59; push HEAD:wave/RUN, fast-forward only (wave.sh:164-171)
+    WV->>GH: fetch wave/RUN#59; rebase locally on its tip (wave.sh rebase_on_tip)
+    WV->>G: SG_GATE_KIND=fast gate.sh bash -c "$SG_WAVE_GATES" on the rebased tree, under locks/gate (wave.sh enter, gate.sh:28)
+    WV->>GH: push HEAD:wave/RUN, fast-forward only#59; a refused push rebases again and repeats once, ungated (wave.sh enter)
     WV->>GH: board "Code Complete"#59; a refusal is ignored (wave.sh:172)
     CC->>CC: touch cc-RUN-CHILD#59; queue the cq comment (childcc.py:123-125)
     E->>E: verdict completed#59; prune returns early for a linked-worktree target (engine.py:318-322, dispatch.py:169-170)
@@ -104,7 +105,7 @@ The column is the one the writer asks for. A board write that the API refuses le
 | 9 | engine _conclude | record fold | record verdict; prune skipped for a linked worktree (`engine.py:318-322`, `dispatch.py:169-170`) | Doing |
 | 10 | childcc.py (fast lane, live run or finished) | spawn_accepted and outcome pass; issue open (gh); wave-/waved- markers; card status for a backfill (`childcc.py:93-119`); rvd-/requeued- markers (`:41,72`) | rvd-RUN-CHILD (sha); cc-RUN-CHILD; cq comment (`:45,123-125`) | Doing |
 | 11 | childreview.sh | HEAD of the child worktree; origin/wave/RUN (`childreview.sh:18-20`) | review-KEY.md/.sha (review.sh), review-KEY.base (`:23`); cq status comment (`:26`) | Doing |
-| 12 | wave.sh enter | wave-start-RUN age (`:82-86`); review-KEY.{md,base,sha} (`:149-152`); SG_WAVE_GATES (`:137`) | gate-status fast pass SHA (`gate.sh:22-24`); remote wave/RUN tip (`:171`); card Code Complete (`:172`) | Code Complete |
+| 12 | wave.sh enter | wave-start-RUN age (`:82-86`); review-KEY.{md,base,sha} (`:149-152`); SG_WAVE_GATES (`:137`); origin/wave/RUN, which the child is rebased on before the gates | gate-status fast pass SHA of the rebased tree (`gate.sh:22-24`); remote wave/RUN tip; card Code Complete | Code Complete |
 | 13 | watch.sh | verdict event; wave-RUN marker (`watch.sh:63-89`) | wland-RUN, transient (`:41-44`); watch-seen.txt (`:96`) | - |
 | 14 | wave.sh land | origin/dev, origin/wave/RUN; Refs #N in the commits ahead of dev (`:294-295`); the run record when the wave is capped (`:90-100, 275`) | remote dev tip (`:298`); wave/RUN deleted; markers removed (`:304-306`); issue closed (`:324`); landed.tsv; cq delivery; card Closed (`:330-332`) | Closed |
 | 15 | GitHub CI | push to dev (`ci.yml:4-5`) | check runs on the dev tip | - |
@@ -137,7 +138,7 @@ sequenceDiagram
     E->>E: land fail: land_workspace_missing, land_timeout, merge_conflict (dispatch.py:145-151, actions.py:68-70)#59; ac_regression resets the target and the land event says fail (dispatch.py:214-216)
     Note over E,CC: childcc reads the child's outcome, never its land event (childcc.py:96, 102): a child whose engine landing failed still enters the wave
     Note over CC,WV: entry refused (gate red, rebase conflict, push refused twice)
-    WV->>GH: requeue: rm disp-N, bug-N#59; card Todo#59; cq why (wave.sh:125-131, 158, 168, 178)
+    WV->>GH: requeue: rm disp-N, bug-N#59; card Todo#59; cq why (wave.sh requeue, enter)
     CC->>CC: requeued-RUN-CHILD = HEAD, no cc- marker (childcc.py:76, 122)
     J->>GH: R ranks the card from the record: Doing while the run is live (janitor.py:520), Code Complete once a land event moved the tip (:522-523, 532-533)
     Note over CC,WV: review HOLD (no review, wrong base, other sha, not APPROVE)

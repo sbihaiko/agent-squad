@@ -169,7 +169,7 @@ fi
 
 
 # J: the wave lands in dev with one push and one CI run, closes what it carries, and pushes no child branch (#375).
-WAVE_ISSUES='7 8 10 11 24 30 31'                 # every child the wave carries: a gate failure and a conflict never entered
+WAVE_ISSUES='7 8 10 11 14 24 30 31'                 # every child the wave carries: a gate failure and a conflict never entered
 : > "$T/gh.log"
 child 30 g30; en 30 >/dev/null; child 31 g31; r=$(en 31)
 [ "$(entered 30)" = yes ] && [ "$(entered 31)" = yes ] && ok "J: the wave of two children holds both" || ko "J: a child of the wave did not enter: '$r'"
@@ -198,9 +198,9 @@ $O rev-parse -q --verify "refs/heads/$W" >/dev/null && ko "J: the landed wave br
 [ "$(pushes | awk -v w="refs/heads/$W" '$3!="refs/heads/dev" && $3!=w')" = "" ] && ok "J: the landing writes dev and the wave ref, nothing else" || ko "J: the landing wrote $(pushes)"
 # Each issue of the wave is closed through the API, and its one delivery comment is queued, never posted.
 for n in $WAVE_ISSUES; do /usr/bin/grep -q "issues/$n -f state=closed" "$T/gh.log" || ko "J: #$n is not closed through the API"; done
-[ "$(/usr/bin/grep -c 'state=closed' "$T/gh.log")" = 7 ] && ok "J: each issue of the wave is closed through the API" || ko "J: $(/usr/bin/grep -c 'state=closed' "$T/gh.log") closes for 7 issues"
+[ "$(/usr/bin/grep -c 'state=closed' "$T/gh.log")" = 8 ] && ok "J: each issue of the wave is closed through the API" || ko "J: $(/usr/bin/grep -c 'state=closed' "$T/gh.log") closes for 8 issues"
 for n in $WAVE_ISSUES; do ls "$T/st/cq/"x__y#$n-delivery~* >/dev/null 2>&1 || ko "J: no delivery comment is queued for #$n"; done
-[ "$(ls "$T/st/cq/"*-delivery~* 2>/dev/null | wc -l | tr -d ' ')" = 7 ] && ok "J: each issue of the wave has its one delivery comment queued" || ko "J: $(ls "$T/st/cq" 2>/dev/null | tr '\n' ' ')"
+[ "$(ls "$T/st/cq/"*-delivery~* 2>/dev/null | wc -l | tr -d ' ')" = 8 ] && ok "J: each issue of the wave has its one delivery comment queued" || ko "J: $(ls "$T/st/cq" 2>/dev/null | tr '\n' ' ')"
 /usr/bin/grep -qE 'issues/[0-9]+/comments' "$T/gh.log" && ko "J: the pass posted a comment itself" || ok "J: the pass posts no comment itself (the flush does)"
 # The shipped vocabulary has no Done column (#468): the landing writes Closed, the column the board carries.
 for n in $WAVE_ISSUES; do /usr/bin/grep -qx "o 3 Closed $n" "$T/board.log" || ko "J: the card of #$n does not read Closed"; done

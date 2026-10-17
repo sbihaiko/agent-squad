@@ -150,23 +150,28 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] || { echo "WAVE HOLD #$iss: the review of $br was read against '$(cat "$rk.base" 2>/dev/null)', not $w: it read the whole wave, not this child's own commits"; return 1; }
   [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] || { echo "WAVE HOLD #$iss: the review of $br read $(cut -c1-9 "$rk.sha" 2>/dev/null), not HEAD ${rsha:0:9}"; return 1; }
   head -1 "$rk.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$iss: the review of $br did not approve it: $(head -1 "$rk.md")"; return 1; }
-  # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
-  # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
-  # They run under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on.
-  out=$(SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
-  [ $grc = 0 ] || {
-    requeue "$iss" "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
-  # A push that is not a fast-forward is refused by git itself, so the entry is the rebase below and nothing else. The wave
-  # tip can move between that rebase and the push (a sibling entered first): the push is then refused, and one repeat from
-  # the fetch is what a rejected push gets, as the landing pass does (ADR-0145 rule 2).
-  local try=1
-  while :; do
+  # The child is rebased on the wave tip first, and the gates read that tree: what they pass is what enters (#514). A child
+  # cut from a base behind the wave (a stale main, #469) was gated on that base and failed a check the wave tip passes.
+  # A push that is not a fast-forward is refused by git itself. The wave tip can move between the rebase and the push (a
+  # sibling entered first): the push is then refused, and one repeat from the fetch is what a rejected push gets, as the
+  # landing pass does (ADR-0145 rule 2).
+  rebase_on_tip() {
     $G fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null || {
       echo "WAVE-ERROR $w is not on $remote (the run cuts it from $base at its start): #$iss enters no wave"; return 2; }
     if ! $G rebase "origin/$w" >/dev/null 2>&1; then
       files=$($G diff --name-only --diff-filter=U | tr '\n' ' '); $G rebase --abort >/dev/null 2>&1
       requeue "$iss" "the rebase on $w conflicts: ${files% }"; return 1
     fi
+  }
+  rebase_on_tip || return $?
+  # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
+  # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
+  # They run under the machine-wide gate lock (#392): a second gate waits, and its one wait line is passed on.
+  out=$(SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?; printf '%s\n' "$out" | /usr/bin/grep '^serial: waiting for lock' >&2
+  [ $grc = 0 ] || {
+    requeue "$iss" "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
+  local try=1
+  while :; do
     sha=$($G rev-parse HEAD)
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
       "$BOARD" "$SG_OWNER" "$SG_PROJECT" "Code Complete" "$iss" >/dev/null 2>&1
@@ -174,7 +179,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       echo "WAVE $br $sha entered $w (#$iss)"; return 0
     fi
     [ "$try" = 1 ] || break
-    try=2
+    try=2; rebase_on_tip || return $?
   done
   requeue "$iss" "the push to $w was refused: HEAD is not a fast-forward of its tip"; return 1
 }
