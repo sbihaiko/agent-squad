@@ -1243,15 +1243,18 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.{threading.get_ident()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
     return board_cache
 def refresh_board():
-    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag)."""
+    """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
+    The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
+    quick = False
     while True:
         try: board_pass()
         except Exception as e: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
-        for _ in range(30):
+        for _ in range(8 if quick else 30):
             time.sleep(2)
             try:
-                if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): break
+                if (STATE / "board-dirty").stat().st_mtime > board_cache.get("t", 0): quick = True; break
             except OSError: pass
+        else: quick = False
 ORDER = [column["name"] for column in BOARD_COLUMNS]
 def _marker_mtime(kind, pr, sha9):
     """mtime of a loop marker in auto/ (`launched-<pr>-<sha9>`, `rereview-<pr>-<sha9>`), i.e. when the loop acted on this head."""
