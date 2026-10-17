@@ -169,6 +169,18 @@ case "$out" in model=claude:slow*) ok "only successful tries order the chain";; 
 : > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".*
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "no record at all: the configured order stands";; *) ko "no-record fallback: '$out'";; esac
+# review_no_tools (#504): a model listed there reviews from the prompt alone -- no tool, and a prompt that does not send it
+# to read more code -- so DeepSeek does not explore the repo for 14 minutes. A model not listed keeps its tools.
+printf '{"review_models":["claude:nt"],"review_no_tools":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+: > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".*; export CLAUDE_ARGS="$T/args-nt" CLAUDE_PROMPT="$T/prompt-nt"; : > "$CLAUDE_ARGS"
+GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -q -- '--tools  ' "$CLAUDE_ARGS" && ! /usr/bin/grep -q -- '--tools Read' "$CLAUDE_ARGS" && ok "review_no_tools: the call has no tool" || ko "review_no_tools: the call still has tools: $(cat "$CLAUDE_ARGS")"
+! /usr/bin/grep -q 'git show' "$CLAUDE_PROMPT" && /usr/bin/grep -q 'no tools' "$CLAUDE_PROMPT" && ok "review_no_tools: the prompt judges from its own text" || ko "review_no_tools: the prompt still sends it to read code"
+printf '{"review_models":["claude:x"],"review_no_tools":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".*; : > "$CLAUDE_ARGS"
+GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -q -- '--tools Read Grep Glob Bash' "$CLAUDE_ARGS" && /usr/bin/grep -q 'git show' "$CLAUDE_PROMPT" && ok "a model not listed keeps its tools and its prompt" || ko "an unlisted model lost its tools: $(cat "$CLAUDE_ARGS")"
+unset CLAUDE_ARGS CLAUDE_PROMPT
 # review_order "config" (#503): the owner picks the head of the chain (a cheaper model first, so the token cap holds), and the
 # measured latency does not put a faster, dearer model in front of it.
 printf '{"review_models":["claude:slow","claude:fast"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"

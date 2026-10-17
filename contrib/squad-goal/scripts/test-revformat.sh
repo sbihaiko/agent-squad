@@ -241,5 +241,13 @@ python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
 printf 'VERDICT: APPROVE\n## Debt\n—\n' > "$T/r.md"
 python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
 [ $? = 0 ] && ok "an em dash is an empty section too" || ko "an em dash is rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+# #504: the empty section says None and why, on one line ("None. The four acceptance criteria are met."): Opus and DeepSeek
+# both write it, and it was MODEL_FORMAT. A second prose line is still prose.
+printf 'VERDICT: APPROVE\n## Blocking\nNone. The four acceptance criteria are met and no ADR is crossed.\n## Debt\n- src/a.py:1 — x — y — z\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 0 ] && ok "an empty section may say None and why on one line" || ko "None with its reason is rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+printf 'VERDICT: APPROVE\n## Blocking\nNone. All met.\nThe code is fine.\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 1 ] && ok "a second prose line after None is still prose" || ko "a second prose line was let in"
 
 rm -rf "$T"; exit $fail
