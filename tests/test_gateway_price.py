@@ -72,6 +72,15 @@ def test_the_price_counts_each_token_once_with_cache_tokens_split_out_of_tokens_
     assert prices.spend(FLASH, None) is None
 
 
+def test_a_renamed_or_aliased_spelling_keeps_its_table_price():
+    """A run records the spelling it was given. The table key is the raw id, so the registry resolves the others."""
+    assert prices.rates(TABLE, GATEWAY) == FLASH
+    assert prices.rates(TABLE, "deepseek-v4-flash") == FLASH
+    assert prices.rates(TABLE, "deepseek-flash") == FLASH
+    assert prices.rates(TABLE, "claude-deepseek-flash[1m]") == FLASH
+    assert prices.rates(TABLE, "claude-sonnet-5-5") is None
+
+
 async def test_a_priced_gateway_call_spends_its_table_price_and_names_the_source():
     r = await adapter([ResultMessage(total_cost_usd=4.08, usage=USAGE)]).call(request(model=GATEWAY))
     assert r.spend == pytest.approx(0.11 * 0.30 + 10.59 * 0.006 + 0.064 * 1.20)
