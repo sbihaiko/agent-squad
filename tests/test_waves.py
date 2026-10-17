@@ -68,6 +68,20 @@ async def test_a_passing_write_child_is_landed_in_the_target_and_recorded(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_a_childs_land_event_names_the_tip_before_the_merge(tmp_path):
+    """The janitor tells a landing that moved the target from one that did not by the land event's `before` and `head`
+    (ADR-0145 rule 12). The landing check that follows the merge replaced the merge's result, so the event lost `before`,
+    and the janitor read every passing landing as one that moved."""
+    repo = sibling_repo(tmp_path)
+    base = git.head(repo)
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")}, target=repo)
+    assert (await eng.run()).verdict == "completed"
+    [land] = lands(tmp_path)
+    assert land["effect"].get("before") == base, land["effect"]
+    assert land["effect"]["head"] != base, land["effect"]
+
+
+@pytest.mark.anyio
 @pytest.mark.heavy
 async def test_two_write_children_land_in_request_order_and_the_final_gate_sees_both(tmp_path):
     repo = sibling_repo(tmp_path)

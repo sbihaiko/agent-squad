@@ -213,6 +213,14 @@ r=$(run)
 [ "$(marked 52)" = 1 ] && ok "an entry without the marker goes out" || ko "#52 did not go out: '$r'"
 $G -qx 'b' "$MKLOG.body" && ok "the request pastes the body from the list" || ko "the request has no body from the list: '$(cat "$MKLOG.body")'"
 
+# V (#468): on the shipped vocabulary the dispatch writes Doing. "In Progress" is no column there, and the board refused it in
+# silence, so a dispatched card stayed on Todo until the janitor's next pass.
+scene vocab
+issues '[{"number":61,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(SG_BOARD_VOCAB=shipped run)
+$G -qE "^(--add )?o 1 Doing( [0-9]+)* 61( |\$)" "$BOARDLOG" && ok "V: a dispatch on the shipped vocabulary writes Doing" || ko "V: the dispatch wrote $(cat "$BOARDLOG")"
+$G -q "In Progress" "$BOARDLOG" && ko "V: the dispatch still writes In Progress on the shipped vocabulary" || ok "V: no In Progress write on the shipped vocabulary"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
