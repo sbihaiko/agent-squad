@@ -1,0 +1,47 @@
+{
+  "_doc": "made up live-shape models.json: `off` by chain, `_models_note`, no `review_max_lines`.",
+  "stall_timeout_minutes": 15,
+  "review_stall_minutes": 60,
+  "model_retry_budget": 1,
+  "anthropic_weekly_reserve_percent": 10,
+  "anthropic_models": [],
+  "coding_models": [
+    "claude-deepseek-flash[1m]",
+    "claude-sonnet-5-5",
+    "claude-gpt-5.6-terra"
+  ],
+  "review_models": [
+    "claude:claude-opus-5-5",
+    "gemini-3.8-flash-medium",
+    "grok-4.6"
+  ],
+  "vision_models": [
+    "gpt-5.6-luna",
+    "grok-4.5",
+    "claude-sonnet-5-5"
+  ],
+  "review_timeout_seconds": 360,
+  "review_delta_max_lines": 3000,
+  "review_timeout_seconds_by_model": {
+    "grok-4.5": 300,
+    "grok-4.6": 900,
+    "grok-4.7": 900,
+    "gpt-5.6-luna": 900,
+    "claude:claude-deepseek-flash": 120
+  },
+  "_models_note": "made up note on the live shape.",
+  "hours": {
+    "coding_models": {
+      "claude-deepseek-flash[1m]": "07-19"
+    }
+  },
+  "off": {
+    "review_models": {
+      "gemini-3.8-flash-medium": true
+    }
+  },
+  "review_order": "config",
+  "review_no_tools": [
+    "claude:claude-deepseek-flash"
+  ]
+}

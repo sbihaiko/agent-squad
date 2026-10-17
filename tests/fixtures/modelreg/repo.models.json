@@ -1,0 +1,44 @@
+{
+  "_doc": "made up repo-shape models.json: the keys the repository carries today.",
+  "stall_timeout_minutes": 15,
+  "review_stall_minutes": 60,
+  "model_retry_budget": 2,
+  "anthropic_weekly_reserve_percent": 10,
+  "anthropic_models": [],
+  "coding_models": [
+    "claude-gpt-5.6-terra",
+    "claude-deepseek-flash[1m]",
+    "gemini-3.8-flash-high",
+    "claude-sonnet-5-5"
+  ],
+  "review_models": [
+    "grok-4.7",
+    "claude:claude-deepseek-flash",
+    "gemini-3.8-flash-high",
+    "claude:claude-opus-5-5"
+  ],
+  "vision_models": [
+    "grok-4.5",
+    "gpt-5.6-terra",
+    "gemini-3.8-flash-low",
+    "deepseek-v4-flash"
+  ],
+  "review_timeout_seconds": 360,
+  "review_delta_max_lines": 3000,
+  "review_max_lines": 60,
+  "hours": {
+    "coding_models": {
+      "claude-sonnet-5-5": "19-07"
+    },
+    "review_models": {
+      "claude:claude-opus-5-5": "19-07"
+    }
+  },
+  "review_timeout_seconds_by_model": {
+    "claude:claude-deepseek-flash": 120
+  },
+  "review_order": "config",
+  "review_no_tools": [
+    "claude:claude-deepseek-flash"
+  ]
+}
