@@ -167,3 +167,29 @@ def test_two_writers_in_one_process_never_share_a_temp_file(hub, monkeypatch):
     for t in ts:
         t.join()
     assert len(srcs) == 2 and srcs[0] != srcs[1], srcs
+
+
+def test_a_move_pass_is_read_again_after_the_board_settles(hub, monkeypatch):
+    """The items route lags a write by seconds: the pass a board-dirty touch starts read the old Status and the card sat
+    in its old column for the full 60 s. A touch is followed by one settle pass, well before the next scheduled one."""
+    import time as real_time
+    passes, sleeps = [], []
+    state = Path(tempfile.mkdtemp())
+    (state / "board-dirty").touch()
+
+    def fake_pass():
+        passes.append(1)
+        hub.board_cache["t"] = real_time.time() + 1
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) == 15:
+            raise StopIteration
+
+    monkeypatch.setattr(hub, "board_pass", fake_pass)
+    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "STATE", state)
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+    with pytest.raises(StopIteration):
+        hub.refresh_board()
+    assert len(passes) == 3, "the start pass, the pass the touch asked for, and the settle pass"
