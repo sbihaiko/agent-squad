@@ -83,6 +83,10 @@ python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1; [ $? = 1 ] && ok "the s
 norm() { printf '%b' "$1" > "$T/r.md"; python3 "$src" --normalize "$T/r.md"; }
 [ "$(norm '**VERDICT: Changes**\n## Debt\n- a.cs:1 — x — y — z\n')" = "$(printf 'VERDICT: CHANGES\n## Debt\n- a.cs:1 — x — y — z')" ] && ok "--normalize canonicalizes a bold, lower-case verdict" || ko "--normalize: '$(norm '**VERDICT: Changes**\n## Debt\n')'"
 [ "$(norm 'Narration first.\nVERDICT: APPROVE\n')" = "$(printf 'VERDICT: APPROVE\nNarration first.')" ] && ok "--normalize moves the verdict up and keeps the narration" || ko "--normalize narration: '$(norm 'Narration first.\nVERDICT: APPROVE\n')'"
+# owner ruling: a preamble before the first section ("I'll review the branch against ...", grok's habit) is dropped, so a
+# sound review is not lost to it; prose with no section after it stays, and the check still refuses it.
+[ "$(norm "VERDICT: CHANGES\nI'll review the branch against issue #477.\n\n## Blocking\n- a.cs:1 — x — y — z\n")" = "$(printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z')" ] && ok "--normalize drops a preamble before the first section" || ko "--normalize preamble: '$(norm "VERDICT: CHANGES\nI'll review it.\n## Blocking\n- a.cs:1 — x — y — z\n")'"
+[ "$(norm 'VERDICT: APPROVE\nLooks good to me.\n')" = "$(printf 'VERDICT: APPROVE\nLooks good to me.')" ] && ok "--normalize keeps prose that no section follows" || ko "--normalize prose-only: '$(norm 'VERDICT: APPROVE\nLooks good to me.\n')'"
 [ "$(norm 'no verdict here\n')" = "no verdict here" ] && ok "--normalize leaves a verdictless review alone (the check then says so)" || ko "--normalize verdictless: '$(norm 'no verdict here\n')'"
 
 # 10) #1832: a bullet that answers a previous finding with 'fixed' is the answer to a finding, not a finding -- so a
