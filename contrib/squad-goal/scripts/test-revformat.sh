@@ -86,6 +86,9 @@ norm() { printf '%b' "$1" > "$T/r.md"; python3 "$src" --normalize "$T/r.md"; }
 # owner ruling: a preamble before the first section ("I'll review the branch against ...", grok's habit) is dropped, so a
 # sound review is not lost to it; prose with no section after it stays, and the check still refuses it.
 [ "$(norm "VERDICT: CHANGES\nI'll review the branch against issue #477.\n\n## Blocking\n- a.cs:1 — x — y — z\n")" = "$(printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z')" ] && ok "--normalize drops a preamble before the first section" || ko "--normalize preamble: '$(norm "VERDICT: CHANGES\nI'll review it.\n## Blocking\n- a.cs:1 — x — y — z\n")'"
+# the cut is the first severity section, never any '#' line; a numbered or '+' finding before it keeps the text whole
+[ "$(norm "VERDICT: CHANGES\nI'll review it.\n# Review\n## Blocking\n- a.cs:1 — x — y — z\n")" = "$(printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z')" ] && ok "--normalize cuts at the first severity section, not at a title" || ko "--normalize title: '$(norm "VERDICT: CHANGES\nI'll review it.\n# Review\n## Blocking\n- a.cs:1 — x — y — z\n")'"
+[ "$(norm "VERDICT: CHANGES\n1. a.cs:1 — x — y — z\n## Blocking\n- b.cs:2 — x — y — z\n")" = "$(printf 'VERDICT: CHANGES\n1. a.cs:1 — x — y — z\n## Blocking\n- b.cs:2 — x — y — z')" ] && ok "--normalize keeps a numbered finding before the first section" || ko "--normalize numbered: '$(norm "VERDICT: CHANGES\n1. a.cs:1 — x — y — z\n## Blocking\n- b.cs:2 — x — y — z\n")'"
 [ "$(norm 'VERDICT: APPROVE\nLooks good to me.\n')" = "$(printf 'VERDICT: APPROVE\nLooks good to me.')" ] && ok "--normalize keeps prose that no section follows" || ko "--normalize prose-only: '$(norm 'VERDICT: APPROVE\nLooks good to me.\n')'"
 [ "$(norm 'no verdict here\n')" = "no verdict here" ] && ok "--normalize leaves a verdictless review alone (the check then says so)" || ko "--normalize verdictless: '$(norm 'no verdict here\n')'"
 
