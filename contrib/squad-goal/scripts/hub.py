@@ -1471,15 +1471,27 @@ def gh_door_read(*args):
 LAND = os.environ.get("SG_LAND_BRANCH") or "dev"   # the branch a work branch lands in: a branch is open while it holds commits this one lacks
 WORK_BRANCH = re.compile(r"(?:fix|gui)/(\d+)(?:\D.*)?$")
 
+_compares = {}   # (repo, landing sha, branch sha) -> the compare answer the rows read (#524)
+
 def open_branches_of(repo):
     """The open work branches of ONE repository: every remote `fix|gui/<n>-...` branch with commits the landing branch lacks.
     A row is `{"n": issue, "t": branch, "u": date of its newest commit, "ps": "ahead N", "br": True, "r": repo}`. No pull
     request is read: the branch list and one compare per work branch, through the door."""
     rows = []
-    for b in json.loads(gh_door_read("gh_api", f"repos/{repo}/branches?per_page=100") or "[]"):
+    branches = json.loads(gh_door_read("gh_api", f"repos/{repo}/branches?per_page=100") or "[]")
+    land = next((b["commit"]["sha"] for b in branches if b.get("name") == LAND), None)
+    for b in branches:
         m = WORK_BRANCH.match(b.get("name") or "")
         if not m: continue
-        cmp = json.loads(gh_door_read("gh_api", f"repos/{repo}/compare/{LAND}...{b['commit']['sha']}") or "{}")
+        # A compare is a function of the two tips: kept by both shas, it is read again only when one moves (#524). One per
+        # work branch on every pass spent the REST quota.
+        key = (repo, land, b["commit"]["sha"])
+        cmp = _compares.get(key) if land else None
+        if cmp is None:
+            cmp = json.loads(gh_door_read("gh_api", f"repos/{repo}/compare/{LAND}...{b['commit']['sha']}") or "{}")
+            if land:
+                for k in [k for k in _compares if k[0] == repo and k[1] != land]: del _compares[k]   # the landing tip moved: the old answers never return
+                _compares[key] = {"status": cmp.get("status"), "ahead_by": cmp.get("ahead_by"), "commits": (cmp.get("commits") or [])[-1:]}
         if cmp.get("status") not in ("ahead", "diverged"): continue   # the tip is in the landing branch: the branch is landed, not open
         last = ((cmp.get("commits") or [{}])[-1].get("commit") or {}).get("committer") or {}
         rows.append({"n": int(m.group(1)), "t": b["name"], "u": last.get("date") or "", "o": "", "h": b["commit"]["sha"],
