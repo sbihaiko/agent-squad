@@ -35,6 +35,29 @@ def _envelope_module():
     return mod
 
 
+def test_the_envelope_keys_through_the_one_resolver():
+    """SPEC 505 ticket 5: the envelope's key is the registry id, and its context suffix is read apart from the alias,
+    so `sonnet[1m]` and `claude-sonnet-5-5[1m]` name the same model."""
+    env = _envelope_module()
+    assert env.envelope_blocked(["sonnet[1m]", "opus"], ["claude-sonnet-5-5[1m]", "claude:opus"]) == []
+
+
+def test_the_envelope_result_is_unchanged_for_the_shipped_graph():
+    """The strings the shipped router graph carries today keep their key: one spelling of a model is never blocked
+    beside another, and a model the envelope does not name still is."""
+    env = _envelope_module()
+    shipped = ["claude-grok-4.7", "claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-opus-5-5", "claude-sonnet-5-5"]
+    chain = ["grok-4.7", "gpt-5.6-terra", "deepseek-flash[1m]", "opus", "sonnet", "claude:sonnet"]
+    assert env.envelope_blocked(chain, shipped) == []
+    assert env.envelope_blocked(["gemini-3.8-flash-medium"], shipped) == ["gemini-3.8-flash-medium"]
+
+
+def test_the_envelope_module_carries_the_seam_header():
+    """The resolver seam enforces its header on a caller, so this file must carry it (SPEC 505 ticket 5)."""
+    text = (ROOT / "contrib" / "squad-goal" / "scripts" / "router_envelope.py").read_text()
+    assert any("modelreg: seam-clean" in line for line in text.splitlines()[:5])
+
+
 def _hub(*names, checkout="", stubs=None):
     """The named functions of hub.py, compiled alone, so importing the module never starts a server."""
     tree = ast.parse(HUB.read_text())
