@@ -79,6 +79,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **Run spend is a measured fact; a cap never starts an entry it cannot fund** ([ADR-0108](docs/adr/0108-run-spend-and-caps.md)). Guard: `tests/test_spend.py`, `tests/test_graph.py`, `tests/test_each.py`, `tests/test_gateway_price.py`.
 - **An adaptation is a read-only report; round one has no cross-run input** ([ADR-0109](docs/adr/0109-adaptation-report-no-cross-run.md)). Guard: `tests/test_graph.py`, `tests/test_report.py`.
 - **A dispatch node requests children inside an author-fixed envelope** ([ADR-0113](docs/adr/0113-dispatch-envelope.md)). Guard: `tests/test_dispatch.py`, `tests/test_waves.py`, `tests/test_graph.py`.
+- **One model registry names every model; one resolver maps a raw spelling to a route; a chain is a list of registry ids** ([ADR-0147](docs/adr/0147-one-model-registry.md)). Guard: `tests/test_model_resolver_seam.py`, `tests/test_modelreg.py`.
 
 ### Dashboard, editor and repository
 

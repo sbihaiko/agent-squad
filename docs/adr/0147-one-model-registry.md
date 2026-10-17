@@ -1,4 +1,4 @@
-# ADR-0146: One model registry, one resolver, and a chain is a list of registry ids
+# ADR-0147: One model registry, one resolver, and a chain is a list of registry ids
 
 ## Status
 
