@@ -705,7 +705,7 @@ FOOT_SEP = " · "
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
 FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none",
-                     "quota": "none", "subs": "run"}  # subs last, and teal: it shares with landing, which is not its neighbour
+                     "quota": "none", "cycle": "wait", "subs": "run"}  # subs last, and teal: it shares with landing, which is not its neighbour
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
 FORK_MARKER = re.compile(r"fork-(\d+)-([0-9a-f]{7,40})")   # the close pass's marker, the name janitor.py's rule P reads
@@ -755,6 +755,26 @@ def _gate_parts(g, now):
     text = f"gate {g['kind']} {g['result']} {_age(max(now - g['ts'], 0.0))} ago"
     return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}]
 
+def _cycle_state(now):
+    """The watch cycle's own beat, read off the `HH:MM:SS CYCLE <n>s` lines watch.sh writes to cycle.log: when the last cycle
+    ended and how long the last five took. None when the log has no such line."""
+    try: lines = (STATE / "cycle.log").read_text(errors="ignore").splitlines()[-4000:]
+    except OSError: return None
+    rows = [m.groups() for m in (re.match(r"(\d\d:\d\d:\d\d) CYCLE (\d+)s", l) for l in lines) if m]
+    if not rows: return None
+    day = time.strftime("%Y-%m-%d ", time.localtime(now))
+    end = time.mktime(time.strptime(day + rows[-1][0], "%Y-%m-%d %H:%M:%S"))
+    if end > now: end -= 86400   # the line is from before midnight
+    return {"end": end, "secs": [int(r[1]) for r in rows[-5:]]}
+def _span(s):
+    s = int(abs(s)); h, m = divmod(s // 60, 60)
+    return f"{h}h{m:02d}m" if h else f"{m}m{s % 60:02d}s"
+def _cycle_fact(c, now):
+    """`cycle in 3m40s`: the countdown to the end the last cycles' median length predicts; `cycle +1m40s late` once past it
+    (a cycle holds while childcc reviews, so its length is not fixed)."""
+    if not c or not c.get("secs"): return ""
+    left = c["end"] + sorted(c["secs"])[len(c["secs"]) // 2] - now
+    return f"cycle in {_span(left)}" if left >= 0 else f"cycle +{_span(left)} late"
 def _quota_fact(q, now, subs=None):
     """`codex ok · agy reset 14:20`: one name per account-wide marker the review chain skips models over, each with the
     reset time it names. A limited model is what the operator acts on; one that is back reads `ok`. A marker whose
@@ -927,6 +947,7 @@ def foot_items(src, now=None):
              _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate),
                    parts=gate or None, tip=(gate[0].get("tip") if gate else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
+             _fact("cycle", _cycle_fact(src.get("cycle"), now)),
              # subs last, so a narrow window drops the block whole
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
     return [i for i in items if i["text"]]   # a block with nothing to say draws no lone `·`
@@ -986,6 +1007,7 @@ def foot_sources(now=None):
                      "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["burn"] = burn_cached(now)
+    out["cycle"] = _cycle_state(now)
     out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     return out
 
