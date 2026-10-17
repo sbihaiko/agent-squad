@@ -156,6 +156,33 @@ def _wave_request(txt):
     return txt.rstrip("\n") + "\n\nWAVE: your branch stays local. The loop enters your finished commits into the run's wave branch and lands the wave in " \
         + (os.environ.get("SG_BASE") or "the base branch") + " with one push; push no branch of yours.\n"
 
+def _landing_base(co):
+    """`origin/<SG_BASE>`, fetched now: the branch the wave is cut from and lands in, so an issue branch starts where its
+    work lands (#469), never on a stale local main. None when the checkout has no such remote branch."""
+    base = os.environ.get("SG_BASE")
+    if not base: return None
+    subprocess.run(["git", "-C", co, "fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], capture_output=True, timeout=120)
+    ref = f"origin/{base}"
+    ok = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", ref + "^{commit}"], capture_output=True).returncode == 0
+    return ref if ok else None
+
+def _start_from(wt, br, land):
+    """A reused issue worktree starts from the landing branch (#469). A branch behind it moves up by a fast-forward. A branch
+    with commits the landing branch lacks (an earlier run's child that never entered a wave) keeps them on
+    refs/squad/leftover/<branch>-<sha9>, named on stderr, and starts again from the landing branch: nothing is lost, and nothing
+    rides into the next wave unnamed. A tree with uncommitted changes is left alone: False, and the run keeps its fallback."""
+    g = lambda *a: subprocess.run(["git", "-C", str(wt), *a], capture_output=True, text=True)
+    if g("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        print(f"note: {wt} has uncommitted changes: the run keeps {FALLBACK}, and a person must look", file=sys.stderr)
+        return False
+    head = g("rev-parse", "HEAD").stdout.strip()
+    extra = g("rev-list", "--count", f"{land}..HEAD").stdout.strip()
+    if extra not in ("", "0"):
+        ref = f"refs/squad/leftover/{br}-{head[:9]}"
+        g("update-ref", ref, head)
+        print(f"note: {br} carried {extra} leftover commit(s) not in {land}: kept on {ref}; the run starts from {land}", file=sys.stderr)
+    return g("reset", "-q", "--hard", land).returncode == 0
+
 def _issue_worktree(issue):
     """The linked worktree the child works in, made when it is missing, else None: the checkout's own fork route only.
 
@@ -166,14 +193,15 @@ def _issue_worktree(issue):
     if not co or not fork or pathlib.Path(co).resolve() != pathlib.Path(fork).resolve(): return None
     br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(issue))
     wt = pathlib.Path(co).resolve() / "worktrees" / "child" / br.replace("/", "-")
+    land = _landing_base(co)
     if wt.is_dir():
         cur = subprocess.run(["git", "-C", str(wt), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True)
         if cur.returncode or cur.stdout.strip() != br:
             print(f"note: {wt} is on {cur.stdout.strip() or 'no branch'}, not {br}: the run keeps {FALLBACK}, and a person must look", file=sys.stderr)
             return None
-        return wt
+        return wt if not land or _start_from(wt, br, land) else None
     wt.parent.mkdir(parents=True, exist_ok=True)
-    base = os.environ.get("SG_FORK_BASE") or os.environ.get("SG_BASE") or "main"
+    base = land or os.environ.get("SG_FORK_BASE") or os.environ.get("SG_BASE") or "main"
     have = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", f"refs/heads/{br}"], capture_output=True).returncode == 0
     made = subprocess.run(["git", "-C", co, "worktree", "add", "-q", str(wt), br] if have else
                           ["git", "-C", co, "worktree", "add", "-q", "-b", br, str(wt), base], capture_output=True, text=True)

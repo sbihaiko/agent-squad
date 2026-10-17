@@ -40,7 +40,7 @@ sequenceDiagram
     AF->>AF: write auto/disp-N (autofrontier.sh:168)#59; mkreq.sh builds the request (:191)
     AF->>L: Popen launch.py REQ (autofrontier.sh:207)
     AF->>GH: board --add Doing on the shipped vocabulary#59; a refused write is named (autofrontier.sh:210-211)
-    L->>L: git worktree add worktrees/child/gui-N -b gui/N from SG_FORK_BASE=main (launch.py:163-175)
+    L->>L: fetch origin/dev#59; git worktree add worktrees/child/gui-N -b gui/N from origin/dev#59; a reused gui/N moves to origin/dev, its leftover commits kept on refs/squad/leftover (launch.py _landing_base, _start_from)
     L->>E: Popen uv run squad start --target the issue worktree (launch.py:191-195)
     E->>E: run_start#59; run folder under the issue worktree (engine.py:236, launch.py:188)
     L->>L: wait for the run folder (launch.py:197-205)#59; write request.txt (:207)
@@ -97,7 +97,7 @@ The column is the one the writer asks for. A board write that the API refuses le
 | 2 | fastloop.sh | beat SG_FAST_INTERVAL (`env.sh:40`) | fastloop.pid (`fastloop.sh:9`); childcc, then both dispatch passes (`:11-15`) | Todo |
 | 3 | autofrontier.sh | open issues (GH REST via ghcall); labels; disp-/bug- markers (`startability.sh:14`); live spawn_accepted in active runs (`startability.sh:17-55`); remote gui/fix branches (`autofrontier.sh:105`); caps and envelope (`:19-89`) | auto/disp-N = request name (`:168`); req/NAME.body; cq comment (`:209`); card Doing (`:210-211`) | Doing |
 | 3b | autobug.sh | the same, over bug issues | auto/bug-N (`autobug.sh:201,226`); card Doing, and the bug board when SG_BUG_PROJECT is set (`:253-260`) | Doing |
-| 4 | launch.py | models.json; graph; worktrees/child/gui-N exists? (`launch.py:164-170`) | worktree and branch gui/N from main (`:173-175`); the engine process (`:191-195`); runs/RUN/request.txt (`:207`); launch.log (`:216-223`); active-runs.txt (`:231`) | Doing |
+| 4 | launch.py | models.json; graph; worktrees/child/gui-N exists? (`launch.py:164-170`) | worktree and branch gui/N from origin/dev; a reused one reset to origin/dev, leftovers on refs/squad/leftover (`_start_from`); the engine process (`:191-195`); runs/RUN/request.txt (`:207`); launch.log (`:216-223`); active-runs.txt (`:231`) | Doing |
 | 5 | wave.sh start | origin/dev, origin/wave/RUN (`wave.sh:112-114`) | remote wave/RUN (`:118`); auto/wave-RUN, waved-RUN, wave-start-RUN (`:76-77`) | Doing |
 | 6 | engine router | request text | record: spawn_requested (`dispatch.py:105-106`), spawn_accepted with definition.workspace (`:81`) | Doing |
 | 7 | child agent | its ws worktree, cut from the target HEAD (`children.py:45`) | commits "Refs #N" on squad/RUN/SLUG; no push | Doing |
