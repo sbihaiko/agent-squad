@@ -381,4 +381,29 @@ $O cat-file -e dev:g91 2>/dev/null && ko "M: the child that broke the wave lande
 [ ! -e "$T/st/auto/disp-91" ] && /usr/bin/grep -qx 'o 3 Todo 91' "$T/board.log" && ok "M: the child that broke the wave is back in the queue" || ko "M: #91 was not requeued"
 [ -z "$($O rev-parse -q --verify "refs/heads/$W9")" ] && ok "M: the wave branch goes with its landing" || ko "M: the wave branch survives"
 
+# N (#474): a loop run lives under its issue worktree, not under the checkout's runs/, and active-runs.txt records its absolute
+# folder. The landing is given that folder, so the age cap reads the run's own record there and requeues the child that never
+# entered; before, only the base name was passed, `runs/<run>` was not there, and nothing was requeued, in silence.
+W10=wave/run-10; start2 run-10 >/dev/null
+child 100 g100 "origin/$W10"; en2 run-10 100 >/dev/null
+printf 'run-10\n' > "$T/st/auto/disp-101"
+RD="$T/wt/child/gui-100/runs/run-10"; mkdir -p "$RD"
+printf '%s\n%s\n' \
+  '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #100 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #101 work"}}' > "$RD/record.jsonl"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-10"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(cd "$T/co" && bash "$T/s/wave.sh" land run-10 "$RD" 2>&1); rc=$?
+[ $rc = 0 ] && ok "N: the capped wave of a run under an issue worktree lands (exit 0)" || ko "N: exit $rc: '$r'"
+[ ! -e "$T/st/auto/disp-101" ] && /usr/bin/grep -qx 'o 3 Todo 101' "$T/board.log" && ok "N: the child that never entered, read from the run folder under its worktree, is back in the queue" || ko "N: #101 was not requeued: '$r'"
+/usr/bin/grep -q 'issues/101 -f state=closed' "$T/gh.log" && ko "N: an issue that never entered the wave was closed" || ok "N: the child back in the queue is not closed"
+
+# O (#474): a landing whose run record is missing names it in the log, once, and never reads it as a run with no issues.
+W11=wave/run-11; start2 run-11 >/dev/null
+child 110 g110 "origin/$W11"; en2 run-11 110 >/dev/null
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(cd "$T/co" && bash "$T/s/wave.sh" land run-11 "$T/wt/child/gui-110/runs/run-11" 2>&1); rc=$?
+[ $rc = 0 ] && ok "O: a landing whose run record is missing still lands (exit 0)" || ko "O: exit $rc: '$r'"
+[ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE-NOTE.*run-11.*record')" = 1 ] && ok "O: the missing run record is named in one log line" || ko "O: no single named line: '$r'"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

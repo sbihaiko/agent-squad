@@ -49,17 +49,17 @@ mkdir -p "$ST/auto"; run run-1 pass; run run-2 pass
 printf 'wave/run-1\n' > "$ST/auto/wave-run-1"
 printf '%s\n%s\n' "$T/run-1" "$T/run-2" > "$ST/active-runs.txt"
 run_cycle
-[ "$(/usr/bin/grep -cx 'wave land run-1' "$STEPS")" = 1 ] && ok "the run that ended lands its wave, once" \
-  || ko "wave.sh was called $(/usr/bin/grep -cx 'wave land run-1' "$STEPS")× for a finished wave run: '$(cat "$STEPS")'"
+[ "$(/usr/bin/grep -cxE 'wave land run-1 /.*/run-1' "$STEPS")" = 1 ] && ok "the run that ended lands its wave, once" \
+  || ko "wave.sh was called $(/usr/bin/grep -cxE 'wave land run-1 /.*/run-1' "$STEPS")× for a finished wave run: '$(cat "$STEPS")'"
 /usr/bin/grep -q 'wave land run-2' "$STEPS" && ko "a run that cut no wave was sent to the landing pass" || ok "a run that cut no wave is left alone"
 
 # 2) one landing per finished run: a later cycle of the same supervisor reads the run as seen, and a restart reads it from
 # watch-seen.txt, so a run that already ended is not landed twice.
 run_cycle 2
-[ "$(/usr/bin/grep -cx 'wave land run-1' "$STEPS")" = 0 ] && ok "a run already read is not landed again" \
+[ "$(/usr/bin/grep -cxE 'wave land run-1 /.*/run-1' "$STEPS")" = 0 ] && ok "a run already read is not landed again" \
   || ko "the landing pass ran again for a run already read: '$(cat "$STEPS")'"
 run_cycle 1
-[ "$(/usr/bin/grep -cx 'wave land run-1' "$STEPS")" = 0 ] && ok "and a restarted supervisor does not land it either" \
+[ "$(/usr/bin/grep -cxE 'wave land run-1 /.*/run-1' "$STEPS")" = 0 ] && ok "and a restarted supervisor does not land it either" \
   || ko "a restart landed a run already read: '$(cat "$STEPS")'"
 
 # 3) the marker the run's wave left is what says the run has one: a run whose wave is already in the base carries no
@@ -75,13 +75,13 @@ run_cycle
 rm -f "$ST/auto/wave-run-1"; run run-4 pass; printf 'wave/run-4\n' > "$ST/auto/wave-run-4"; printf '%s\n' "$T/run-4" > "$ST/active-runs.txt"
 : > "$T/landfail"
 run_cycle 2
-[ "$(/usr/bin/grep -cx 'wave land run-4' "$STEPS")" = 2 ] && ok "a landing that failed is retried on the next tick" \
-  || ko "a failed landing was tried $(/usr/bin/grep -cx 'wave land run-4' "$STEPS")x in 2 cycles: '$(cat "$STEPS")'"
+[ "$(/usr/bin/grep -cxE 'wave land run-4 /.*/run-4' "$STEPS")" = 2 ] && ok "a landing that failed is retried on the next tick" \
+  || ko "a failed landing was tried $(/usr/bin/grep -cxE 'wave land run-4 /.*/run-4' "$STEPS")x in 2 cycles: '$(cat "$STEPS")'"
 /usr/bin/grep -q "run-4" "$ST/watch-seen.txt" 2>/dev/null && ko "a run whose landing failed was read as seen" || ok "a run whose landing failed stays unread"
 rm -f "$T/landfail"
 run_cycle 2
-[ "$(/usr/bin/grep -cx 'wave land run-4' "$STEPS")" = 1 ] && ok "the retry that succeeds lands the run once, and the run is read" \
-  || ko "the run was landed $(/usr/bin/grep -cx 'wave land run-4' "$STEPS")x after the failure cleared: '$(cat "$STEPS")'"
+[ "$(/usr/bin/grep -cxE 'wave land run-4 /.*/run-4' "$STEPS")" = 1 ] && ok "the retry that succeeds lands the run once, and the run is read" \
+  || ko "the run was landed $(/usr/bin/grep -cxE 'wave land run-4 /.*/run-4' "$STEPS")x after the failure cleared: '$(cat "$STEPS")'"
 /usr/bin/grep -q "run-4" "$ST/watch-seen.txt" 2>/dev/null && ok "a landed run is recorded as seen" || ko "the landed run is not in watch-seen.txt"
 
 # 5) the side effects of a finished run run once per run, never on every retry of a landing that fails (#375 review): the
