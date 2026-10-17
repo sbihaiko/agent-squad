@@ -11,7 +11,7 @@ cat > "$T/bin/gh" <<'J'
 case "$*" in
   "api users/x") echo '{"type":"User"}';;
   *"/fields"*) echo '[{"id":7,"name":"Status"}]';;
-  *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
+  *"/items"*) printf '1090\tTodo\thttps://api.github.com/repos/x/y\n1092\tTesting\thttps://api.github.com/repos/x/y\n1095\tTodo\thttps://api.github.com/repos/x/y\n1110\tTesting\thttps://api.github.com/repos/x/y\n1120\tTodo\thttps://api.github.com/repos/x/y\n1130\tBlocked\thttps://api.github.com/repos/x/y\n1140\tDone\thttps://api.github.com/repos/x/y\n1150\tTodo\thttps://api.github.com/repos/x/y\n1160\tTodo\thttps://api.github.com/repos/x/y\n1170\tClosed\thttps://api.github.com/repos/x/y\n';;   # the one Status read of the seam: number, state, repository url
   *"--method POST"*"/labels"*) echo "$*" >> "TMPDIR/tags"; echo '[]';;   # the tag a refused move back writes: the tag plus a new issue, never a card moved back
   *"/labels"*) echo "$*" >> "TMPDIR/tagreads"; if [ -n "$HAS_TAG" ]; then echo '[{"name":"reverted"}]'; else echo '[]'; fi;;   # the labels the issue carries now
   *"issues/1090") echo '{"state":"closed","body":""}';;
@@ -27,10 +27,11 @@ case "$*" in
   *"compare/dev...sha1150"*) echo '{"status":"ahead"}';;
   *"issues/1150") echo '{"state":"open","body":""}';;
   *"issues/1160") echo '{"state":"open","body":""}';;
+  *"issues/1170") echo '{"state":"closed","body":""}';;
   *"issues?state=open&labels=bug"*) echo '[]';;
 esac
 J
-sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_STATE="$T/st" RECONCILE_MIN=1102
+unset SG_BOARD_VOCAB; sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 SG_STATE="$T/st" RECONCILE_MIN=1102
 r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); m=$(cat "$T/moves" 2>/dev/null)
 case "$m" in *1090*) ok "a closed issue #1090 below RECONCILE_MIN moves to Done";; *) ko "a closed issue #1090 not moved: '$r'";; esac
 case "$m" in *1092*) ok "a closed issue #1092 below RECONCILE_MIN moves to Done";; *) ko "a closed issue #1092 not moved: '$r'";; esac
@@ -72,6 +73,18 @@ case "$m" in *"x 4 Closed 1090"*) ok "the writer is called with owner, project, 
   *) ko "the write does not carry the writer's four fields: '$m'";; esac
 case "$m" in *"x 4 Code Complete 1150"*) ok "a forward move carries the same four fields";;
   *) ko "a forward move lost a field of the writer's contract: '$m'";; esac
+# A card already in the column its facts earn draws no line and no writer call (#458): #1170 is closed and sits in Closed, so the
+# shipped pass reports nothing for it, with or without apply; #1090 is closed and sits in Todo, so it keeps its line and its call.
+# One pass over one stub board holds both cases, and the writer's argv is compared whole.
+dry=$(SG_BOARD_VOCAB=shipped python3 "$T/s/reconcile.py" 2>&1)
+case "$dry" in *"#1170"*) ko "a dry pass filed a line for #1170, already in Closed: '$dry'";; *) ok "a card in its earned column draws no line in a dry pass";; esac
+case "$dry" in *"WOULD MOVE #1090 Todo -> Closed (issue closed)"*) ok "a card in another column draws its line in a dry pass";; *) ko "no WOULD MOVE line for #1090: '$dry'";; esac
+rm -f "$T/moves"; ap=$(SG_BOARD_VOCAB=shipped RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); m=$(cat "$T/moves" 2>/dev/null)
+case "$ap" in *"#1170"*) ko "an apply pass filed a line for #1170, already in Closed: '$ap'";; *) ok "a card in its earned column draws no line under apply";; esac
+case "$m" in *1170*) ko "the no-op card #1170 reached the writer: '$m'";; *) ok "a card in its earned column sends no writer call";; esac
+case "$ap" in *"MOVE #1090 Todo -> Closed (issue closed)"*) ok "a card in another column draws its line under apply";; *) ko "no MOVE line for #1090: '$ap'";; esac
+[ "$(printf '%s\n' "$m" | /usr/bin/grep -cx 'x 4 Closed 1090')" = 1 ] && ok "the writer's recorded argv for #1090 is the whole contract line" || ko "the writer argv for #1090 differs: '$m'"
+case "$ap" in *"moves: 5"*) ok "the final count is the moves made";; *) ko "the final count is not the five moves made: '$ap'";; esac
 # A write the carrier refused is named on the pass's stream and ends the pass non-zero, never swallowed.
 printf '#!/bin/bash\necho "no Status option $3" >&2; exit 1\n' > "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 r=$(RECONCILE=apply python3 "$T/s/reconcile.py" 2>&1); rc=$?
