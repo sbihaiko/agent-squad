@@ -73,6 +73,7 @@ def test_a_call_without_a_count_is_named_in_both_readings(tmp_path: Path) -> Non
     assert _run(str(tmp_path)).stdout.splitlines() == [
         "500\treview:PR#1\tclaude:claude-opus-5-5\t1\t0",
         "0\treview:PR#2\tclaude:claude-opus-5-5\t2\t2",
+        "# floor, not a measure: 2 calls carried no token count",
     ]
     j = json.loads(_run(str(tmp_path), "--json").stdout)
     assert j["uncounted"] == 2
@@ -84,3 +85,64 @@ def test_threshold_from_env(tmp_path: Path) -> None:
     _ledger(tmp_path, [(1, "review:PR#1", "a", 600, 0, 0)])
     j = json.loads(_run(str(tmp_path), "--json", env={**os.environ, "SG_TOKEN_ALERT": "100"}).stdout)
     assert j["threshold"] == 100 and j["over"] is True
+
+
+def _append(state: Path, *lines: str) -> None:
+    with open(state / "token-usage.tsv", "a") as f:
+        f.write("".join(f"{_ts(1)}\t{ln}\n" for ln in lines))
+
+
+def test_a_non_claude_call_with_no_count_makes_the_total_a_floor(tmp_path: Path) -> None:
+    # grok, agy and codex print no count on the plain path: 0 0 0 is logged, the call is still counted. That is a floor.
+    _ledger(tmp_path, [(1, "review:PR#1", "claude:claude-opus-5-5", 500, 0, 0)])
+    _append(tmp_path, "review:PR#2\tgrok-4\t0\t0\t0", "review:PR#3\tgemini-3.8-flash-high\t0\t0\t0")
+    j = json.loads(_run(str(tmp_path), "--json").stdout)
+    assert j["unreported"] == 2 and j["floor"] is True
+    out = _run(str(tmp_path)).stdout.splitlines()
+    assert out[-1].startswith("# floor, not a measure") and "2 calls" in out[-1]
+
+
+def test_a_measured_ledger_is_not_a_floor(tmp_path: Path) -> None:
+    _ledger(tmp_path, [(1, "review:PR#1", "claude:claude-opus-5-5", 500, 0, 0)])
+    _append(tmp_path, "review:PR#2\tgrok-4\t10\t5\t0")   # a non-claude call that did carry a count is a measure
+    j = json.loads(_run(str(tmp_path), "--json").stdout)
+    assert (j["unreported"], j["floor"]) == (0, False)
+    assert not any(ln.startswith("#") for ln in _run(str(tmp_path)).stdout.splitlines())
+
+
+def _verdict(state: Path, *args: str) -> tuple[int, dict]:
+    r = subprocess.run([sys.executable, str(SCRIPTS / "tokens.py"), "verdict", str(state), *args],
+                       capture_output=True, text=True, timeout=30)
+    return r.returncode, json.loads(r.stdout)
+
+
+def test_verdict_passes_under_the_cap(tmp_path: Path) -> None:
+    _ledger(tmp_path, [(1, "review:PR#1", "claude:x", 1000, 0, 0)])
+    code, v = _verdict(tmp_path)
+    assert code == 0 and v["verdict"] == "pass" and v["total"] == 1000 and v["cap"] == 1500000
+
+
+def test_verdict_passes_when_the_top_burner_is_not_a_review(tmp_path: Path) -> None:
+    _ledger(tmp_path, [(1, "dispatch:d1", "claude:x", 2000000, 0, 0), (1, "review:PR#1", "claude:x", 100, 0, 0)])
+    code, v = _verdict(tmp_path)
+    assert code == 0 and v["verdict"] == "pass" and v["top"] == "dispatch:d1"
+
+
+def test_verdict_fails_over_the_cap_with_a_review_on_top(tmp_path: Path) -> None:
+    _ledger(tmp_path, [(1, "review:PR#1", "claude:x", 2000000, 0, 0), (1, "dispatch:d1", "claude:x", 100, 0, 0)])
+    code, v = _verdict(tmp_path)
+    assert code == 1 and v["verdict"] == "fail" and v["top"] == "review:PR#1"
+    assert _verdict(tmp_path, "--cap", "3000000")[1]["verdict"] == "pass"
+
+
+def test_verdict_of_an_empty_ledger_is_not_proven(tmp_path: Path) -> None:
+    code, v = _verdict(tmp_path)
+    assert code == 2 and v["verdict"] == "not-proven" and v["total"] == 0
+    _ledger(tmp_path, [(30, "review:PR#1", "claude:x", 9, 0, 0)])   # only a line outside the window
+    assert _verdict(tmp_path)[1]["verdict"] == "not-proven"
+
+
+def test_verdict_names_a_floor(tmp_path: Path) -> None:
+    _ledger(tmp_path, [(1, "review:PR#1", "grok-4", 0, 0, 0)])
+    _, v = _verdict(tmp_path)
+    assert v["floor"] is True and v["verdict"] == "pass"

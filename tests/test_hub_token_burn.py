@@ -119,3 +119,12 @@ def test_the_view_holds_no_rule(hub):
     mixed = {"over": True, "threshold": 5, "burners": burners(("a:first", 1), ("b:second", 999))}
     t = hub._burn_tip(mixed)
     assert t.index("a:first") < t.index("b:second")
+
+
+def test_a_floor_reading_says_so_in_the_footer(hub):
+    burn = {"window_hours": 24, "threshold": 1000, "over": True, "floor": True, "unreported": 3, "uncounted": 0,
+            "burners": [{"consumer": "review:PR#1", "tokens": 2000, "calls": 1, "uncounted": 0, "models": ["m"]}]}
+    assert hub._burn_fact(burn).endswith("· floor")
+    assert "floor, not a measure" in hub._burn_tip(burn)
+    measured = {**burn, "floor": False, "unreported": 0}
+    assert "floor" not in hub._burn_fact(measured) and "floor" not in hub._burn_tip(measured)
