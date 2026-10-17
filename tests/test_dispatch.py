@@ -51,6 +51,21 @@ def child_outs(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_a_refused_chain_entry_is_recorded_and_its_grant_returned(tmp_path):
+    """#494: the router's first model is refused before it serves a message; the next entry answers, the record names
+    the refusal, and the run still funds the child (a kept grant of the router's max starved it before)."""
+    eng = make(tmp_path, {"router": [{"error": "API Error: 400 The model is not supported", "served": False}, routed(req())],
+                          "route.router.1": CHILD})
+    v = await eng.run()
+    assert v.verdict == "completed"
+    refused = ev(tmp_path, "model_refused")
+    assert len(refused) == 1 and refused[0]["node"] == "router" and refused[0]["model"] == node(router(), "router")["model"]
+    assert "400" in refused[0]["error"]
+    assert eng.budget.unmeasured == pytest.approx(0.0)
+    assert [c.node for c in eng.adapter.calls] == ["router", "router", "route.router.1"]
+
+
+@pytest.mark.anyio
 async def test_one_child_runs_as_its_skill_and_writes_the_three_events_and_the_artifact(tmp_path):
     eng = make(tmp_path, {"router": routed(req()), "route.router.1": CHILD})
     v = await eng.run()

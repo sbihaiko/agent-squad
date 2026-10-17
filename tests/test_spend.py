@@ -37,6 +37,20 @@ async def test_unknown_spend_is_never_counted_as_zero(tmp_path):
     assert eng.budget.available() == pytest.approx(2.0 - 0.1 - 1.0)
 
 
+async def test_a_refusal_before_the_first_message_returns_its_grant(tmp_path):
+    """#494: a provider that refuses the request served nothing, so the grant goes back; the next entry can be funded."""
+    d = doc([agent("a", output_key="x"), agent("b", output_key="y")], ["a", "b"], cap=2.0)
+    d["nodes"][1]["next"] = {"fail": "continue"}
+    eng = run_engine(d, {"a": {"error": "API Error: 400 The 'gpt-5.5' model is not supported", "served": False},
+                         "b": {"output": {"y": 1}, "spend": 0.1}}, tmp_path)
+    await eng.run()
+    a = outs(tmp_path, "a")[0]
+    assert a["outcome"] == "fail" and a["spend"] is None
+    assert eng.budget.unmeasured == pytest.approx(0.0)          # nothing was served, so nothing is unknown
+    assert eng.budget.available() == pytest.approx(2.0 - 0.1)
+    assert [e["spend"] for e in outs(tmp_path, "b")] == [0.1]    # b was funded and ran
+
+
 async def test_an_entry_the_run_cannot_fund_is_not_started_and_the_node_folds_fail(tmp_path):
     d = doc([agent("a", output_key="x"), agent("b", output_key="y")], ["a", "b"], cap=0.5)
     d["nodes"][1]["budget"]["spend"]["max"] = 0.45
