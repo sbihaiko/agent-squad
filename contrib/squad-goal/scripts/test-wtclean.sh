@@ -92,8 +92,34 @@ $G worktree add -q worktrees/child/c-ahead -b gui/c2 HEAD; $G -C worktrees/child
 $G worktree add -q worktrees/child/c-dirty -b gui/c3 HEAD; echo x > worktrees/child/c-dirty/f
 $G worktree add -q worktrees/child/c-busy -b gui/c4 HEAD
 $G worktree add -q worktrees/child/c-run -b gui/c5 HEAD; echo runs/ >> "$T/co/.git/info/exclude"; mkdir -p worktrees/child/c-run/runs/autobug-live; echo '{"event": "call_start"}' > worktrees/child/c-run/runs/autobug-live/record.jsonl; echo "$T/co/worktrees/child/c-run/runs/autobug-live" > "$T/st/active-runs.txt"
+# V (#477): the hold on a wave run's trees is the run's wave marker, wherever the run folder sits. A target that holds the run
+# folder reads clean (runs/ is ignored) and its HEAD may already be in the base, so between the run's verdict and its wave's
+# landing only the marker keeps it. A wave that landed rebased its children, so their shas are on no remote: the patch, read
+# by git cherry, is what says the work is in the base, and then the tree and its branch go. A hold whose wave started longer
+# ago than the hold cap (SG_WAVE_HOLD_MAX_SECONDS) lapses: a marker no landing will clear never holds a tree for good.
+mkdir -p "$T/st/auto"
+$G worktree add -q worktrees/child/c-wave -b gui/c6 HEAD; mkdir -p worktrees/child/c-wave/runs/run-wave/ws
+echo '{"event": "verdict"}' > worktrees/child/c-wave/runs/run-wave/record.jsonl; echo wave/run-wave > "$T/st/auto/wave-run-wave"; date +%s > "$T/st/auto/wave-start-run-wave"
+$G worktree add -q worktrees/child/c-landed -b gui/c7 HEAD; echo landed > worktrees/child/c-landed/landed.txt
+$G -C worktrees/child/c-landed add landed.txt; $G -C worktrees/child/c-landed -c user.email=a@b -c user.name=t commit -q -m "landed work"
+mkdir -p runs/run-wl/ws; $G worktree add -q -b squad/run-wl/child runs/run-wl/ws/w HEAD; echo child > runs/run-wl/ws/w/child.txt
+$G -C runs/run-wl/ws/w add child.txt; $G -C runs/run-wl/ws/w -c user.email=a@b -c user.name=t commit -q -m "child work"
+echo '{"event": "verdict"}' > runs/run-wl/record.jsonl; echo wave/run-wl > "$T/st/auto/waved-run-wl"
+# the wave landed: a rebase put both commits on the base under new shas, so neither tree's HEAD is on any remote
+$G -c user.email=a@b -c user.name=t commit -q --allow-empty -m "the base moved"   # the picks get new parents, so new shas
+$G -c user.email=a@b -c user.name=t cherry-pick "$($G -C worktrees/child/c-landed rev-parse HEAD)" "$($G -C runs/run-wl/ws/w rev-parse HEAD)" >/dev/null
+$G -c user.email=a@b -c user.name=t commit -q --allow-empty -m "after the landing"; $G push -q origin main 2>/dev/null
+$G worktree add -q worktrees/child/c-stale -b gui/c8 HEAD; mkdir -p worktrees/child/c-stale/runs/run-stale
+echo '{"event": "verdict"}' > worktrees/child/c-stale/runs/run-stale/record.jsonl; echo wave/run-stale > "$T/st/auto/wave-run-stale"; echo 1000 > "$T/st/auto/wave-start-run-stale"
 ( cd worktrees/child/c-busy && exec sleep 90 ) & cpid=$!; sleep 1
 out=$(bash "$T/s/wtclean.sh" 2>&1)
+[ -d worktrees/child/c-wave ] && ok "V: a target holding a run whose wave has not landed is kept after the run's verdict" || ko "V: c-wave was removed before its wave landed: $out"
+case "$out" in *"WT HELD wave run-wave c-wave"*) ok "V: the held target's line names the run and the tree";; *) ko "V: no WT HELD line for c-wave: $out";; esac
+[ ! -d worktrees/child/c-landed ] && ! $G rev-parse -q --verify refs/heads/gui/c7 >/dev/null && ok "V: a child tree whose rebased work is in the base goes with its branch" || ko "V: c-landed or gui/c7 kept after the landing: $out"
+[ ! -d runs/run-wl/ws/w ] && ! $G rev-parse -q --verify refs/heads/squad/run-wl/child >/dev/null && ok "V: a landed wave run's child tree goes with its branch, its sha on no remote" || ko "V: run-wl's child kept after its wave landed: $out"
+case "$out" in *"WT UNPUSHED run-wl"*) ko "V: a landed child is reported as unpushed: $out";; *) ok "V: a landed child is not reported as unpushed";; esac
+[ ! -d worktrees/child/c-stale ] && ok "V: a hold past its age cap lapses, and the landed tree goes" || ko "V: c-stale is held past the cap: $out"
+case "$out" in *"WT HOLD LAPSED run-stale"*) ok "V: the lapsed hold says so, naming the run";; *) ko "V: no lapse line for run-stale: $out";; esac
 [ ! -d worktrees/child/c-merged ] && ok "C: merged, clean, unused child tree removed" || ko "C: c-merged kept: $out"
 [ -d worktrees/child/c-ahead ] && ok "C: child tree ahead of the base kept" || ko "C: c-ahead was removed: $out"
 [ -d worktrees/child/c-dirty ] && ok "C: dirty child tree kept" || ko "C: c-dirty was removed: $out"
@@ -102,8 +128,8 @@ out=$(bash "$T/s/wtclean.sh" 2>&1)
 case "$out" in *"WT CLEAN child c-merged"*) ok "C: the decision line names the class and the tree";; *) ko "C: no child decision line: $out";; esac
 # a tree with no submodule is removed with no flag, and its line says no more (#393: every line claimed the --force removal)
 case "$out" in *"WT CLEAN child c-merged"*"submodule tree"*) ko "C: a tree with no submodule is named a submodule tree: $out";; *) ok "C: a plain tree's line names no submodule";; esac
-[ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 5 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 1 ] && ok "C: tally 1/5, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
-kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy c-run; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
+[ "$(jq -r '.total' "$T/st/wt.json" 2>/dev/null)" = 8 ] && [ "$(jq -r '.cleanable' "$T/st/wt.json" 2>/dev/null)" = 3 ] && ok "C: tally 3/8, the ratio the footer reads" || { ko "C: tally wrong: $(cat "$T/st/wt.json" 2>/dev/null)"; }
+kill $cpid 2>/dev/null; for d in c-ahead c-dirty c-busy c-run c-wave c-stale; do rm -rf "$T/co/worktrees/child/$d"; done   # S below measures the tally alone, so the C trees leave first
 # S: a tree whose submodules are CHECKED OUT. `git worktree remove` refuses the whole tree — `fatal: working trees containing
 # submodules cannot be moved or removed` — a line git prints with no run id and no class, so the tree was never freed and the
 # footer's count never dropped for it (#102). The pass answers the class itself: it adds the flag git needs, after the tree is

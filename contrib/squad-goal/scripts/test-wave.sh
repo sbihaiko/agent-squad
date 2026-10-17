@@ -341,6 +341,15 @@ ls "$T/st/cq/"x__y#70-wavestuck* >/dev/null 2>&1 && ok "K: one comment is queued
 [ ! -e "$T/st/auto/wave-run-7" ] && ok "K: the marker is cleared, so the loop stops retrying" || ko "K: the marker is kept after the escalation"
 $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work for the owner" || ko "K: the wave branch is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a failing landing" || ko "K: dev moved"
+# K2 (#477): a landing that exits 2 -- the wave branch is gone, the base is gone, or the checkout failed -- is a landing
+# that failed, so it counts toward the same cap. Below the cap the marker stays and the next cycle tries again; at the cap
+# the marker and the wave start go, so no wave-<run> hold outlives a landing that can never happen.
+mkdir -p "$T/st/auto"; echo wave/run-gone > "$T/st/auto/wave-run-gone"; date +%s > "$T/st/auto/wave-start-run-gone"
+r1=$(land2 run-gone); rc1=$?; r2=$(land2 run-gone); rc2=$?
+[ $rc1 = 2 ] && [ $rc2 = 2 ] && [ -e "$T/st/auto/wave-run-gone" ] && ok "K2: a landing with no wave branch exits 2 and keeps its marker below the cap" || ko "K2: exits $rc1 $rc2, marker $([ -e "$T/st/auto/wave-run-gone" ] && echo kept || echo gone): '$r1'"
+r3=$(land2 run-gone); rc3=$?
+[ $rc3 = 2 ] && [ ! -e "$T/st/auto/wave-run-gone" ] && [ ! -e "$T/st/auto/wave-start-run-gone" ] && ok "K2: the third exit-2 landing clears the hold" || ko "K2: exit $rc3, marker $([ -e "$T/st/auto/wave-run-gone" ] && echo kept || echo gone): '$r3'"
+case "$r3" in *"WAVE NEEDS-HUMAN wave/run-gone"*) ok "K2: the cleared hold is named on one NEEDS-HUMAN line";; *) ko "K2: no NEEDS-HUMAN line: '$r3'";; esac
 
 # L (#378): a wave has an age cap (SG_WAVE_MAX_AGE_SECONDS, 2 h by default, ADR-0145 rule 13). A wave that reaches it
 # lands the children it holds and sends the children still running back to the queue; it takes no new child. The age is
