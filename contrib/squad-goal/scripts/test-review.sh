@@ -220,4 +220,16 @@ out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
   && ko "13 the agy review runs in plan mode with nothing to approve its tools: $(cat "$AGY_ARGS")" \
   || ok "13 the agy review can use its tools headless"
 unset AGY_ARGS
+# 14) the timeout must reach the process the CLI spawns, and the wait must say it is still working. The alarm is
+# set on the CLI, but the CLI execs the model in a child that ignores the alarm, so the review runs past its
+# timeout with no output and no line anywhere to show it is alive (#491 follow-up: a 360 s review ran 9 min, silent).
+printf '#!/bin/bash\n( sleep 61; echo "VERDICT: APPROVE" ) &\nwait\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:hung"],"model_retry_budget":1,"review_timeout_seconds":35,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-gui_9".* "$T/st/cq/"*mtimeout*; t=$(date +%s)
+out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 > "$T/hb"); rc=$?; el=$(( $(date +%s) - t ))
+sleep 1; left=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep -c '[s]leep 61'); who=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep '[s]leep 61')
+[ $rc != 0 ] && [ $el -ge 35 ] && [ $el -lt 60 ] && [ "$left" = 0 ] && /usr/bin/grep -q 'after 35s' "$T/st/cq/"*mtimeout* 2>/dev/null \
+  && ok "14 a child the CLI spawns is killed at the timeout, and nothing it spawned survives (${el}s)" \
+  || ko "14 the spawned child outlives the timeout: rc=$rc ${el}s survivors=$left [$who] $(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
+/usr/bin/grep -q 'still running' "$T/hb" && ok "14 the wait says the review is still running" || ko "14 the wait is silent: $(cat "$T/hb")"
 rm -rf "$T"; exit $fail
