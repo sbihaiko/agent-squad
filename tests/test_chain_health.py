@@ -113,10 +113,32 @@ def test_every_chain_is_read_through_the_resolver(ch, tmp_path, key, models, mar
     assert [o["reason"] for o in s["out"]] == ["usage limit"]
 
 
+def test_every_chain_is_read_through_the_registry(ch, tmp_path):
+    cfg = {"coding_models": ["claude-sonnet-5-5"], "review_models": ["grok-4.7"],
+           "vision_models": ["gpt-5.6-terra"], "router_models": ["grok-4.5"]}
+    s = ch.chains_state(cfg, tmp_path, now=NOON)
+    assert set(s) == {"coding", "review", "vision", "router"}
+    assert (s["coding"]["total"], s["review"]["total"], s["vision"]["total"], s["router"]["total"]) == (1, 1, 1, 1)
+
+
 def test_an_empty_vision_chain_is_reported(ch, tmp_path):
-    s = ch.chain_state({"vision_models": []}, "vision_models", tmp_path, now=NOON)
-    assert s["total"] == 0
-    assert s["banner"] and s["banner"].startswith("vision chain: no model available of 0")
+    s = ch.chains_state(CFG | {"vision_models": []}, tmp_path, now=NOON)
+    assert s["vision"]["total"] == 0
+    assert s["vision"]["banner"] == "vision chain: no model configured"
+
+
+def test_chainhealth_carries_the_seam_header():
+    text = (SCRIPTS / "chainhealth.py").read_text()
+    assert any("modelreg: seam-clean" in line for line in text.splitlines()[:5])
+
+
+def test_the_cli_reports_a_named_chain(tmp_path):
+    models = tmp_path / "models.json"
+    models.write_text(json.dumps(CFG | {"vision_models": []}))
+    p = subprocess.run([sys.executable, str(SCRIPTS / "chainhealth.py"), str(models), str(tmp_path),
+                        "--chain", "vision"], capture_output=True, text=True, timeout=30)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "vision chain: no model configured"
 
 
 def test_the_cli_prints_the_summary_a_status_file_carries(tmp_path):
