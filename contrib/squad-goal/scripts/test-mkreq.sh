@@ -148,6 +148,13 @@ run red && [ -f "$R/red.txt" ] && ok "a body carrying a RED-style ac_command bui
 for w in 'never an ac_command that writes to the worktree' 'no `git checkout <other-ref> -- <file>`' 'no `git stash`' 'never in ac_commands' 'belongs in the issue status comment' 'not a gate input'; do
   $G -qF -- "$w" "$R/red.txt" && ok "PR DONE CHECK states '$w'" || ko "PR DONE CHECK lacks '$w'"
 done
+# 14b. (#496) a wave child commits in its own worktree and never pushes, and the final gate runs in the run's target where
+# its work is landed (ADR-0106): the DONE CHECK names one shape, a plain command, and no retired route (acpr.sh fetches
+# origin/<branch>, which never exists; the fork worktree is gone).
+for w in 'acpr.sh' 'fork worktree'; do
+  $G -qF -- "$w" "$R/red.txt" && ko "DONE CHECK still names the retired shape '$w'" || ok "DONE CHECK names no '$w'"
+done
+$G -qF -- "in the run's target" "$R/red.txt" && ok "DONE CHECK says the gate runs in the run's target" || ko "DONE CHECK does not say where the gate runs"
 # 15. (#44) a path a request only RUNS is not a slice it edits. Every frontier request carries the preamble line
 # `bash contrib/squad-goal/scripts/shell-suites.sh` -- the suite the child must run -- and a fork fix request names the same
 # command; the scan read both as a claim on that file, so the two requests refused each other. On 2026-10-12 forkred-10 held
