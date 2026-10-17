@@ -453,6 +453,14 @@ def branch_ahead_count(n):   # how many of its work branches hold commits the la
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("ahead", "diverged")))
 def branch_in_dev_count(n):   # how many of its work branches are in the landing branch: the tip is an ancestor of dev
     return str(sum(1 for _, g in work_branches().get(str(n), []) if g in ("behind", "identical")))
+_named_in_land = None
+def named_in_land():   # {issue} whose fix is a commit in origin/<land>: its subject ends `(#N)` and is no `TDD RED` (a red test alone fixes nothing). A fix pushed straight to dev reached it (#519). The subject only: a body names issues in passing. One local log a pass, no API call; a checkout with no such ref names none
+    global _named_in_land
+    if _named_in_land is None:
+        r = subprocess.run(["git", "-C", str(co), "log", "-n", "2000", "--format=%s", f"origin/{os.environ.get('SG_LAND_BRANCH') or 'dev'}"], capture_output=True, text=True)
+        _named_in_land = {m.group(1) for line in (r.stdout.splitlines() if r.returncode == 0 else []) if not line.startswith("TDD RED")
+                          for m in [re.search(r"\(#(\d+)\)\s*$", line)] if m}
+    return _named_in_land
 fd = os.environ.get("SG_FORK_DIR"); fb = os.environ.get("SG_FORK_BASE")
 def fork_verdict(n, sha):   # what the fork base says about a `fork-<n>-<sha9>` marker, the close pass's claim that it merged that commit: "landed", "ahead" (a fix commit is still to come), "unwound" (the base no longer holds it and nothing is left to merge), or "unknown" when the fork cannot answer at all -- the marker then stands as the evidence it is
     if not (fd and fb): return "unknown"
@@ -640,6 +648,7 @@ def reconcile_board():
         if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
+        if str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519)
         if branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
