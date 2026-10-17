@@ -16,4 +16,13 @@ echo req-x > "$T/st/auto/disp-601"; touch -t 202001010000 "$T/st/auto/disp-601"
 echo "Nothing ran: vendor/skills is not clean" > "$T/st/req-x.log"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" 2>&1)
 [ ! -e "$T/st/auto/disp-601" ] && ok "K: disp marker of a refused start dropped" || ko "K disp marker kept: $o"
+# #523: a launch.py refusal (the model gate) says `refusing to start`, not `Nothing ran`: it frees the marker the same way.
+echo req-y > "$T/st/auto/disp-601"; touch -t 202001010000 "$T/st/auto/disp-601"
+echo "refusing to start: node 'route' runs m, whose hours window excludes now" > "$T/st/req-y.log"
+o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" 2>&1)
+[ ! -e "$T/st/auto/disp-601" ] && ok "K: disp marker of a launch.py refusal dropped" || ko "K refusal marker kept: $o"
+echo req-z > "$T/st/auto/bug-601"; touch -t 202001010000 "$T/st/auto/bug-601"
+echo "refusing to start: node 'route' runs m, whose hours window excludes now" > "$T/st/req-z.log"
+o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" 2>&1)
+[ ! -e "$T/st/auto/bug-601" ] && ok "K: the autobug marker of a launch.py refusal dropped too (no run folder, so rule J never sees it)" || ko "K refusal bug marker kept: $o"
 rm -rf "$T"; exit $fail
