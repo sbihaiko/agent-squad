@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Janitor: one conservative cleanup pass per watch cycle (JANITOR_DRY=1 prints and acts on nothing). Every action goes to stdout and $SG_STATE/cycle.log.
- A  finished run (has a verdict, 3 min old): kill every process whose cwd is inside its run folder (leftover claude/dotnet/test hosts), as a tree.
+ A  finished run (has a verdict, 3 min old): kill every process whose cwd is inside its run folder (leftover claude/dotnet/test hosts), as a tree;
+    a process a pass of this loop started (childcc.py: the child review, the wave landing) is never a leftover (#497).
  B  finished run (1 h old): kill its idle dashboard_server.
  S  a counted ceiling on this loop's dashboards (JANITOR_DASHBOARD_MAX, default 8; 0 turns it off). B, J and C reap the dashboard of the one
     run the pass knows about, so a run that left active-runs.txt, or a record the pass cannot read, leaves its dashboard behind and the count
@@ -147,6 +148,18 @@ def kill(pidv, why):
         if not dry:
             try: os.kill(q, signal.SIGTERM)
             except OSError: pass
+OWN_PASS = ("childcc.py",)   # the loop's own passes that work inside a finished run's folder by design (#497)
+def own_pass(q):
+    """True when the process or one of its ancestors is a pass of this loop: the child review (childcc.py -> childreview.sh ->
+    review.sh -> the model) and `wave.sh land` run after the run's verdict, in the child's worktree inside the run folder,
+    so rule A read them as leftovers and killed every child review (#497). A process a pass of the loop started is its own
+    to end, never a leftover; a stray process in the same folder still is."""
+    seen = set()
+    while q in procs and q not in seen:
+        seen.add(q); pp, c = procs[q]
+        if any(s in c for s in OWN_PASS): return True
+        q = pp
+    return False
 def folder(r): return pathlib.Path(r) if r.startswith("/") else co / "runs" / r
 def read(f):
     v = False; pidc = None; started_at = None; acc = set(); t = f / "record.jsonl"; ver = None; rs = []; landed = False; rid = f.name; rts = ""
@@ -271,7 +284,7 @@ for r in names:
             continue
         if i["idle"] > 180:
             for q in inside(f):
-                if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"leftover of finished run {n}")
+                if "dashboard_server" not in procs.get(q, (0, ""))[1] and not own_pass(q): kill(q, f"leftover of finished run {n}")
         if i["idle"] > 3600:
             for q, (_, c) in procs.items():
                 if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of finished run {n}")

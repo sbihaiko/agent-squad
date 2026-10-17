@@ -16,10 +16,10 @@ printf 'import subprocess,sys; subprocess.run(["bash", sys.argv[1], sys.argv[2]]
 python3 "$T/s/childcc.py" "$T/s/childreview.sh" "$wt" & own=$!
 # a stray process in the same folder: rule A still kills it
 ( cd "$wt" && exec sleep 60 ) & stray=$!
-sleep 1; cr=$(pgrep -P "$own" | head -1)   # the stub childreview.sh, the pass's child
-SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" >/dev/null 2>&1
+sleep 2; cr=$(pgrep -P "$own" | head -1)   # the stub childreview.sh, the pass's child
+SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" >"$T/out" 2>&1
 sleep 1; o=$(cat "$T/st/cycle.log" 2>/dev/null)   # the summary line on stdout names a count; the kills are in cycle.log
-echo "$o" | /usr/bin/grep -q "pid=$stray .*leftover of finished run run-done" && ok "A: a stray process inside the finished run is a leftover" || ko "A: the stray process was not killed: $o"
+echo "$o" | /usr/bin/grep -q "pid=$stray .*leftover of finished run run-done" && ok "A: a stray process inside the finished run is a leftover" || ko "A: the stray process was not killed: $o $(cat "$T/out")"
 echo "$o" | /usr/bin/grep -q "pid=$cr .*leftover" && ko "A: the loop's own child review was killed as a leftover: $o" || ok "A: the loop's own child review is never a leftover"
 kill -0 "$own" 2>/dev/null && ok "A: the pass is still alive after the janitor" || ko "A: the pass died"
 for k in $(pgrep -P "$own"); do pkill -P "$k" 2>/dev/null; kill "$k" 2>/dev/null; done; kill "$own" "$stray" 2>/dev/null; wait 2>/dev/null
