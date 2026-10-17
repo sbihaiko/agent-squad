@@ -543,6 +543,7 @@ def queue_terminal(n, col, note):   # one comment per terminal entry, through th
 expected = {}   # issue -> (rank, status, why, run_id, run_ts): the column R derived for every card it owns; rule O reads it, never the board
 def door(fn, *a):   # one call through ghcall.sh: (exit code, output). A read is gh_api, a write gh_send (ADR-0277), so this module's own call sites stay as they were
     return _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), fn, *a])
+RUN_PARENT = "run-parent"   # the label of a run's roll-up issue: never work, so no dispatcher takes it (startable) and the board holds no card for it (#500)
 def reconcile_board():
     if not (owner and proj and repo0): return
     shipped = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the loop writes the shipped vocabulary once the board carries it (expand done); until then it writes today's options
@@ -626,7 +627,7 @@ def reconcile_board():
     def startable(labels):   # a dispatcher takes it (#488): autobug a bug or debt issue with no skip label, the frontier one with the go label and no skip label
         if labels & set((os.environ.get("SG_BUG_SKIP_LABELS") or "needs-owner,no-auto,wontfix,question").split(",")): return False
         if labels & {os.environ.get("SG_BUG_LABEL") or "bug", "debt"}: return True
-        return go in labels and not labels & ({"run-parent", "frozen:owner", "frozen:dependency"} | set(filter(None, os.environ.get("SG_FRONTIER_SKIP_LABELS", "").split(","))))
+        return go in labels and not labels & ({RUN_PARENT, "frozen:owner", "frozen:dependency"} | set(filter(None, os.environ.get("SG_FRONTIER_SKIP_LABELS", "").split(","))))
     if oans:
         for n in sorted(olabels, key=int):
             hold = shipped and (bool(olabels[n] & {"needs-owner", "needs-ratification"}) or bool(go) and not startable(olabels[n]))   # frozen by the owner, or no dispatcher takes it: not startable, so Backlog by the floor (the definition: Todo is startable)
@@ -668,6 +669,11 @@ def reconcile_board():
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
+    for n in sorted((k for k in expected if RUN_PARENT in (olabels.get(k) or issue_labels(k))), key=int):   # a run parent is a roll-up in GitHub, never work: it gets no card, and a card it has is removed, only when the board carries one (#500)
+        del expected[n]
+        if str(n) in have_all and board_write(["--remove", owner, str(proj), str(n)], n, "the issue is a run parent"):
+            del have_all[str(n)]
+            say(f"BOARD-RECONCILE #{n}: card removed (run-parent: a roll-up, never work)")
     for n, (_, want, why, run_id, run_ts) in sorted(expected.items(), key=lambda kv: int(kv[0])):
         have = have_all.get(str(n))
         note = None

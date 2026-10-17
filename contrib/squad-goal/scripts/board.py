@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Move Project (v2) cards over REST only (no GraphQL quota): board.py <owner> <project> "<Status>" <issue#>...
        board.py --add <owner> <project> "<Status>" <issue#>...   add the issues to the board first (when missing); idempotent: a refused add is re-read once
+       board.py --remove <owner> <project> <issue#>...   take the issues off the board; an issue with no card is skipped, never written (#500)
        board.py --run-fields <owner> <project> <issue#> <run> <run-started>
        board.py --clear-run <owner> <project> <issue#>
        board.py --test-case <owner> <project> <issue#> <pass|fail> <merge-commit> [ended]   record a finished test pass as one `test case` item (#300)
@@ -31,8 +32,8 @@ A move to the Status the card already carries is skipped: one read of the board,
 Touches $SG_STATE/board-dirty so the hub refreshes within 2 s."""
 import os, pathlib, sys, time
 from issue_state import KindGap, NotCarried, ReadFailure, board_state
-args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]
-args = args[1:] if add or run_fields or clear_run or test_case else args
+args = sys.argv[1:]; add = args[:1] == ["--add"]; run_fields = args[:1] == ["--run-fields"]; clear_run = args[:1] == ["--clear-run"]; test_case = args[:1] == ["--test-case"]; remove = args[:1] == ["--remove"]
+args = args[1:] if add or run_fields or clear_run or test_case or remove else args
 owner, num = args[0], args[1]
 st = pathlib.Path(os.environ["SG_STATE"])
 state = board_state(owner=owner, project=num, kind=None)   # the move is asked for an owner the caller names, so the carrier says whether it is a user or an org (cached a month)
@@ -48,6 +49,17 @@ if run_fields or clear_run:
     except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)
     except NotCarried as e: print(f"#{n}: {e}", file=sys.stderr); sys.exit(1)   # named on stderr, never swallowed: the caller logs what it was given
     (st / "board-dirty").touch(); sys.exit(0)
+if remove:
+    rc = 0
+    for n in map(int, args[2:]):
+        try: iid = state.binding.item_id(n)
+        except ReadFailure as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue
+        if not iid: print(f"#{n} not on the board (nothing removed)"); continue   # no card: the board already holds the wanted value, so no write
+        try: state.binding.api("-X", "DELETE", f"{state.binding.base}/items/{iid}")
+        except RuntimeError as e: print(f"#{n}: {e}", file=sys.stderr); rc = 1; continue
+        state.binding.items_map.pop(str(n), None); state.binding._save_items()
+        print(f"#{n} removed from the board")
+    (st / "board-dirty").touch(); sys.exit(rc)
 status, nums = args[2], [int(x) for x in args[3:]]
 F = state.binding.status_field()
 if status not in F["opt"]: (st / f"rest-fields-{owner}-{num}.json").unlink(missing_ok=True); F = state.binding.status_field()
