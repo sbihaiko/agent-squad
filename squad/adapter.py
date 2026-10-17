@@ -8,7 +8,12 @@ from dataclasses import dataclass
 
 
 class AdapterError(Exception):
-    """The call failed before it produced a result. Its spend is unknown."""
+    """The call failed before it produced a result. Its spend is unknown, unless `served` is False: the provider refused
+    the request before it produced one message, so the call spent nothing and its grant goes back (#494)."""
+
+    def __init__(self, message="", served=True):
+        super().__init__(message)
+        self.served = served
 
 
 class MessageOverCeiling(AdapterError):
@@ -94,7 +99,7 @@ class ScriptedAdapter:
         if step.get("delay"):
             await anyio.sleep(step["delay"])
         if step.get("error"):
-            raise AdapterError(step["error"])
+            raise AdapterError(step["error"], served=step.get("served", True))
         if step.get("effect"):
             step["effect"](req)
         return CallResult(step.get("output"), step.get("spend"), step.get("turns"), step.get("stop_reason"),

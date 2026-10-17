@@ -222,7 +222,7 @@ class SdkAdapter:
 
     async def call(self, req):
         query, _ = self._sdk()
-        result, subagents, output_cap = None, 0, False
+        result, subagents, output_cap, served = None, 0, False, False
         prog = _Progress(req, self.sink, self.progress_seconds)
         watch = StallWatch(req.max_stalls)
         stream = query(prompt=req.prompt, options=self.options(req))
@@ -230,6 +230,7 @@ class SdkAdapter:
             async for m in stream:
                 kind = type(m).__name__
                 if kind == "AssistantMessage":
+                    served = True
                     prog.take(m)
                     for b in getattr(m, "content", None) or []:
                         if type(b).__name__ == "ToolUseBlock":
@@ -261,8 +262,8 @@ class SdkAdapter:
             # error_max_budget_usd). Keep its ResultMessage too: the spend rules end a capped
             # node through its artifact, and the result carries the reason, the spend, and the turns.
             capped = result is not None and getattr(result, "subtype", None) in STOP_REASONS
-            if not output_cap and not capped:   # an error with no result, or an unmapped one: spend unknown
-                raise AdapterError(f"{type(e).__name__}: {e}") from e
+            if not output_cap and not capped:   # an error with no result, or an unmapped one: spend unknown, unless nothing was served (#494)
+                raise AdapterError(f"{type(e).__name__}: {e}", served=served) from e
         finally:
             close = getattr(stream, "aclose", None)
             if close:

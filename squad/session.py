@@ -164,7 +164,10 @@ async def run_call(source, deadline, make_request, *, adapter, record, budget, c
         return CallOutcome("deadline", res, elapsed=hit[0])
     elapsed = clock() - t0
     if "err" in box:
-        budget.settle(res, None)
+        if getattr(box["err"], "served", True):
+            budget.settle(res, None)
+        else:               # refused before one message: nothing was spent, so the grant goes back (#494)
+            budget.release(res)
         return CallOutcome("adapter_error", res, error=box["err"], elapsed=elapsed)
     budget.settle(res, box["r"].spend)
     return CallOutcome("result", res, result=box["r"], elapsed=elapsed)

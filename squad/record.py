@@ -25,6 +25,7 @@ REQUIRED = {
     "spawn_requested": ["parent", "parent_entry", "depth", "proposer_session", "requested"],
     "spawn_accepted": ["request_key", "child", "parent", "depth", "envelope", "reservation", "parent_entry", "definition"],
     "spawn_rejected": ["request_key", "parent", "envelope", "reason"],
+    "model_refused": ["node", "entry", "model", "error"],   # one chain entry the provider refused before it served (#494)
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
     "paused": ["node", "scope", "held", "completed"],
     "resume": ["run_id", "graph_hash", "frontier", "invoker", "engine_options", "preflight"],

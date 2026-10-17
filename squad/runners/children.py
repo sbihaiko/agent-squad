@@ -166,6 +166,8 @@ class Children:
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
         chain = session.model_chain(ctx.node["allow"]["models"], d["model"])
         out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first))
+        for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
+            e.record.append("model_refused", node=name, entry=1, model=m, error=err[:session.CHAIN_LINE])
         if out.kind == "deadline":
             return slot["ev"]
         return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None)

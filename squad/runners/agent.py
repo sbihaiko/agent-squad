@@ -67,6 +67,8 @@ class AgentRunner:
         # refuses to serve one entry must not end the node while the chain still holds an entry nobody tried.
         chain = session.model_chain(ctx.limits(node["name"])["models"] if ctx.is_dispatch_entry(node["name"]) else [], eff["model"])
         out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin))
+        for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
+            ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
         if session.exhausted(chain, tried):    # every entry refused to serve: one fail, naming each entry and its error
             return fin("fail", ["adapter_error"], spend=None, cap=out.res.amount, elapsed=out.elapsed,
                        diagnostic={"error": session.chain_message(tried)}, **who)

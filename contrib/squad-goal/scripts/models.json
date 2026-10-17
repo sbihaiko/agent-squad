@@ -6,19 +6,21 @@
   "anthropic_weekly_reserve_percent": 10,
   "anthropic_models": [],
   "coding_models": [
+    "claude-gpt-5.6-terra",
+    "grok-4.7",
     "claude-sonnet-5-5",
-    "claude-deepseek-v4-flash",
-    "claude-gpt-5.6-terra"
+    "claude-deepseek-v4-flash[1m]"
   ],
   "review_models": [
+    "grok-4.7",
     "gemini-3.8-flash-high",
     "claude:claude-opus-5-5",
-    "gemini-3.8-flash-medium"
+    "claude:claude-deepseek-v4-flash"
   ],
   "vision_models": [
     "grok-4.5",
-    "grok-4.6",
-    "gpt-5.6-terra"
+    "gpt-5.6-terra",
+    "gemini-3.8-flash-low"
   ],
   "review_timeout_seconds": 360,
   "review_delta_max_lines": 3000,
@@ -30,9 +32,6 @@
     },
     "review_models": {
       "claude:claude-opus-5-5": "19-07"
-    },
-    "vision_models": {
-      "claude-sonnet-5-5": "19-07"
     }
   },
   "review_timeout_seconds_by_model": {}
