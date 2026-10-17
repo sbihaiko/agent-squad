@@ -15,7 +15,7 @@
  I  a live run whose accepted issues are ALL closed: when every one was closed as not_planned or is titled "[duplicate…", stop it (kill its process tree and its last call);
     otherwise report RUN-ON-CLOSED-ISSUES once and leave it (a closed issue can still have a finishing fix/land run). Once per run.
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
- K  a disp-<n> marker whose request log says `Nothing ran` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
+ K  a disp-<n> marker whose request log says `Nothing ran` or `refusing to start` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
     A run that landed a change, an issue a live run works, and an issue with an open work branch keeps its marker. The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
@@ -701,11 +701,14 @@ def reconcile_board():
         say(f"TERMINAL-BACKFILL #{n}: settled in {have} with no comment; one queued")
         queue_terminal(n, have, note)
 reconcile_board()
-for d in (st / "auto").glob("disp-*"):
+# an autobug marker of a launch.py refusal too: that refusal makes no run folder, so rule J never sees it (#523)
+for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
     req = d.read_text().strip(); lg = st / f"{req}.log"
-    n = d.name[5:]; lt = lg.read_text() if lg.exists() else ""
-    if now - d.stat().st_mtime < (600 if "Nothing ran" in lt else 1800): continue   # K: a refused start (`Nothing ran`) frees the issue after 10 min
-    if not (("verdict failed" in lt or "Nothing ran" in lt) and n not in byissue): continue
+    n = d.name.split("-", 1)[1]; lt = lg.read_text() if lg.exists() else ""
+    if d.name.startswith("bug-") and "refusing to start" not in lt: continue   # a bug marker of a run that started is rule O's
+    refused = "Nothing ran" in lt or "refusing to start" in lt   # K: squad's own refusal, or launch.py's (the model gate, #523)
+    if now - d.stat().st_mtime < (600 if refused else 1800): continue   # K: a refused start frees the issue after 10 min
+    if not (("verdict failed" in lt or refused) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
     if pr_count(n) != "0":   # a work branch exists: the issue is past dispatch, so the marker stands -- and the pass names the issue, so this decision reads apart from a release (#217)
