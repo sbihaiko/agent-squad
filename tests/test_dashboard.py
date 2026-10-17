@@ -7,7 +7,7 @@ import json
 import re
 import sys
 
-from squad import graph
+from squad import graph, modelreg
 from tests.dashboard_helpers import ROOT, run_node
 
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -28,6 +28,17 @@ def test_the_dashboard_embeds_the_engine_schema_registry_and_served_lists_not_a_
     served = served_lists()
     assert json.dumps(served, sort_keys=True) in text and len(served["hash"]) == 64
     assert {"Read", "claude-deepseek-v4-flash", "medium", "tdd"} <= set(served["tools"] + served["models"] + served["efforts"] + served["skills"])
+
+
+def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
+    """Labels, aliases and display prices come from the one registry, and the served model list is its ids and aliases."""
+    reg = modelreg.default_registry()
+    data = engine_data()["models"]
+    assert data["labels"] == {mid: e.label for mid, e in reg.entries.items()}
+    assert data["aliases"] == dict(reg.aliases)
+    assert data["prices"] == {mid: e.display_price for mid, e in reg.entries.items() if e.display_price}
+    assert json.dumps(data, sort_keys=True).replace("</", "<\\/") in OUT.read_text()
+    assert set(served_lists()["models"]) == set(reg.entries) | set(reg.aliases)
 
 
 def test_every_core_module_is_bundled_once_and_the_runner_and_page_share_the_bundle():

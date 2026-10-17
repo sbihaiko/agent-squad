@@ -1,14 +1,17 @@
-"""Owner ruling: a model name the page presents hides its `claude-` prefix.
+"""The page presents a model by its registry label, and an unknown id raw (SPEC 505 ticket 9).
 
-A dispatch child's card read `tdd · claude-gpt-5.5 medium`. The prefix is the CLI's provider marker: it says which CLI
-serves the id, and it is not part of what a reader compares. The rule lives in the one formatter, `core.fmt`, so the
-child card, the group card, the roster and the harness panel cannot drift apart.
+Every label, alias and display price is inlined from `config/models.registry.json` by the build, so the page and the
+hub cannot drift. An old record names a spelling the registry keeps as an alias, and the alias map finds its label and
+its price. An id the registry does not know renders exactly as the record wrote it: display never guesses, and never
+crashes.
 
-Display only: the record, the graph, an editable field and the editor's own suggestion list keep the id whole. A page that
-showed `gpt-5.5` there would invite a run to be configured with an id no CLI resolves.
+Display only: the record, the graph, an editable field and the editor's own suggestion list keep the id whole. A page
+that showed a label there would invite a run to be configured with a word no CLI resolves.
 """
+import json
 import re
 
+from squad import modelreg
 from tests.dashboard_helpers import CORE_DIR, ROOT, run_node
 
 PAGE = ROOT / "dashboard" / "page"
@@ -19,28 +22,72 @@ def _model(v):
     return run_node([{"op": "fmt", "kind": "model", "value": v}])[0]
 
 
-def test_the_provider_prefix_is_hidden():
-    assert _model("claude-gpt-5.5") == "gpt-5.5"
-    assert _model("claude-sonnet-4-6-thinking") == "sonnet-4-6-thinking"
+def _record(events):
+    return run_node([{"op": "record", "text": "".join(json.dumps(e) + "\n" for e in events)}])[0]
 
 
-def test_an_id_without_the_prefix_is_untouched():
-    for m in ("sonnet", "opus", "haiku", "fable", "gemini-3.8-flash", "gpt-oss-120b-medium"):
+def test_a_registry_id_reads_as_its_label():
+    assert _model("gpt-5.6-terra") == "GPT-5.6 Terra"
+    assert _model("claude-opus-5-5") == "Opus 5.5"
+
+
+def test_an_alias_reads_as_its_registry_label():
+    """An old record or a graph may still name the prefixed spelling; the alias map resolves it."""
+    assert _model("opus") == "Opus 5.5"
+    assert _model("claude-gpt-5.6-terra") == "GPT-5.6 Terra"
+    assert _model("claude-deepseek-v4-flash") == "DeepSeek V4.1 Flash (tools)"
+
+
+def test_an_unknown_id_renders_raw_and_never_crashes():
+    for m in ("claude-gpt-5.5", "gemini-9.9-nova", "claude:a"):
         assert _model(m) == m
 
 
 def test_a_harness_phrase_keeps_everything_after_the_id():
     """`harnessOf` builds `model effort skill`, so the group card's line is a phrase and not a bare id."""
-    assert _model("claude-gpt-5.5 medium tdd") == "gpt-5.5 medium tdd"
+    assert _model("claude-gpt-5.6-terra medium tdd") == "GPT-5.6 Terra medium tdd"
 
 
 def test_a_missing_model_is_a_dash_like_every_other_missing_figure():
     assert _model(None) == DASH and _model("") == DASH
 
 
+def test_an_old_record_re_prices_through_the_alias_map():
+    """The SDK prices a model it does not know at Claude rates, so a gateway call is priced from its tokens.
+    The alias finds the canonical entry, and the canonical entry's display price is the rate."""
+    price = modelreg.display_price("gpt-5.6-terra")
+    parsed = _record([
+        {"event": "run_start", "pos": 1, "run_id": "r", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "main", "plan": []},
+        {"event": "outcome", "pos": 2, "node": "actor", "entry": 1, "outcome": "pass", "reasons": [], "model": "claude-gpt-5.6-terra",
+         "spend": 99.0, "tokens_in": 1000, "tokens_out": 100},
+    ])
+    ev = parsed["events"][1]
+    assert ev["spend"] == (1000 * price["input"] + 100 * price["output"]) / 1e6
+    assert ev["spend_sdk"] == 99.0
+
+
+def test_a_claude_call_keeps_the_sdk_spend_and_an_unknown_id_is_never_re_priced():
+    parsed = _record([
+        {"event": "run_start", "pos": 1, "run_id": "r", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "main", "plan": []},
+        {"event": "outcome", "pos": 2, "node": "a", "entry": 1, "outcome": "pass", "reasons": [], "model": "claude-sonnet-5-5",
+         "spend": 0.0414606, "tokens_in": 1200, "tokens_out": 400},
+        {"event": "outcome", "pos": 3, "node": "b", "entry": 1, "outcome": "pass", "reasons": [], "model": "claude:a",
+         "spend": 1.5, "tokens_in": 1000, "tokens_out": 100},
+    ])
+    assert parsed["events"][1]["spend"] == 0.0414606 and "spend_sdk" not in parsed["events"][1]
+    assert parsed["events"][2]["spend"] == 1.5 and "spend_sdk" not in parsed["events"][2]
+
+
 def test_the_formatter_lives_in_the_core_and_not_in_the_view():
     """The rule is shared by every view, so it sits in the one formatter beside `usd` and `tokens`."""
     assert re.search(r"model: \(m\) =>", (CORE_DIR / "totals.js").read_text()), "core.fmt has no model formatter"
+
+
+def test_the_snapshot_reading_modules_carry_the_seam_header():
+    """A file that reads the registry instead of parsing an id carries the seam header (ADR 505)."""
+    for name in ("record.js", "totals.js"):
+        head = (CORE_DIR / name).read_text().splitlines()[:5]
+        assert any("modelreg: seam-clean" in line for line in head), f"{name} carries no modelreg seam header"
 
 
 def test_every_place_the_page_presents_a_model_goes_through_the_formatter():
