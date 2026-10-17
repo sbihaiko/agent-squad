@@ -135,11 +135,23 @@ def test_a_node_model_outside_its_hours_window_is_refused(tmp_path):
     assert runs == []
 
 
-def test_a_dispatch_default_child_outside_its_window_is_refused(tmp_path):
+def test_a_dispatch_whose_every_model_is_outside_its_window_is_refused(tmp_path):
     hours = {"review_models": {"claude:claude-opus-5-5": _window(1)}}
-    r, runs = launch(tmp_path, graph(router="haiku", allow=("opus", "haiku")), hours=hours)
+    r, runs = launch(tmp_path, graph(router="sonnet", allow=("opus",)), hours=hours)
     assert r.returncode != 0 and "route" in r.stdout + r.stderr
     assert runs == []
+
+
+@pytest.mark.heavy
+def test_a_dispatch_whose_first_model_is_outside_its_window_starts_on_the_next(tmp_path):
+    """#522: the envelope led with DeepSeek, whose window is 07-19, so no run started all night. The request names the first
+    open coding model (mkreq.sh) and the router takes it (#433): a closed first model with an open one after it is a warning."""
+    hours = {"review_models": {"claude:claude-opus-5-5": _window(1)}}
+    r, runs = launch(tmp_path, graph(router="haiku", allow=("opus", "haiku")), hours=hours)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert runs
+    assert "warning" in out and "route" in out and "claude-opus-5-5" in out
 
 
 @pytest.mark.heavy
