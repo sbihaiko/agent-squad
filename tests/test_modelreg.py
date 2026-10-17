@@ -345,7 +345,10 @@ def _cli(*args, cwd=ROOT):
 def test_cli_chain_eligible_tsv_prints_only_the_eligible_rows(tmp_path):
     path = tmp_path / "models.json"
     path.write_text(json.dumps({"coding_models": ["claude-opus-5-5", "grok-4.7"]}))
-    r = _cli("chain", "coding", "--models", str(path), "--eligible", "--tsv")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    r = _cli("chain", "coding", "--models", str(path), "--eligible", "--tsv",
+             "--shared", str(shared), "--now", "1000")
     assert r.returncode == 0, r.stderr
     rows = [line.split("\t") for line in r.stdout.splitlines()]
     assert [row[0] for row in rows] == ["claude-opus-5-5", "grok-4.7"]

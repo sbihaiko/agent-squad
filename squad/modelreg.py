@@ -292,14 +292,14 @@ def model(raw, reg=None):
     return reg.entries.get(ref.id) if ref.known else None
 
 
-def _wire(route, use, raw):
+def _wire(route, raw):
     served = route.get("served") or []
     if raw in served:
         return raw
-    if raw.startswith("claude:") and use in ("cli", "direct"):
-        stripped = raw[len("claude:"):]
-        return stripped if stripped in served else (route.get("model") or stripped)
-    return route.get("model") or raw
+    stripped = raw[len("claude:"):] if raw.startswith("claude:") else raw
+    if stripped in served:
+        return stripped
+    return route.get("model") or stripped
 
 
 def _argv(route, wire, effort, prompt_file):
@@ -317,7 +317,7 @@ def invocation(ref_or_raw, use="gateway", effort=None, prompt_file=None, reg=Non
     route = entry.routes.get(use) if entry else None
     if not route:
         return Inv(route=use, wire=ref.raw, argv=())
-    wire = _wire(route, use, ref.raw)
+    wire = _wire(route, ref.raw)
     return Inv(route=use, wire=wire, argv=_argv(route, wire, effort or ref.effort, prompt_file))
 
 
