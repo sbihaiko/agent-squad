@@ -3,9 +3,9 @@
 #
 # SG_PROMOTE_PROOF names the proof.
 #   ci (the default): the CI of the dev tip. Green promotes; red, running or a missing run promotes nothing.
-#   local: the promotion gate's own status line, $SG_STATE/gate-status. While the account's Actions billing keeps CI from starting,
-#     the full suite in both modes is the proof (owner decision on #439). The run that earns it writes the line through the
-#     existing seam, with the kind gate.sh names for a promotion to stg:
+#   local: the promotion gate's full-result line, $SG_STATE/gate-status-full. While the account's Actions billing keeps CI from
+#     starting, the full suite in both modes is the proof (owner decision on #439). The run that earns it writes the line through
+#     the existing seam, with the kind gate.sh names for a promotion to stg:
 #         SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>'
 #     stg moves only when the line says `full`, `pass`, and names the dev tip exactly. A missing proof, a failed proof and a
 #     proof for another sha each refuse in their own words.
@@ -37,8 +37,8 @@ ci_state() {  # sha -> green | red | running, from the check runs of the commit
 }
 prove() {  # <tip>: refuse unless the proof for this tip is green, each refusal in its own words
   if [ "$proof" = local ]; then
-    IFS=$'\t' read -r _ kind res sha < "$state/gate-status" 2>/dev/null
-    [ "$kind" = full ] || refuse "$1" "not promoted: no local proof: $state/gate-status holds no full-gate result (run the promotion gate: SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>')"
+    IFS=$'\t' read -r _ kind res sha < "$state/gate-status-full" 2>/dev/null
+    [ "$kind" = full ] || refuse "$1" "not promoted: no local proof: $state/gate-status-full holds no full-gate result (run the promotion gate: SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>')"
     [ "$sha" = "$1" ] || refuse "$1" "not promoted: the local proof is for $sha, not the dev tip $1"
     [ "$res" = pass ] || refuse "$1" "not promoted: the local proof is a fail, not a pass"
   else

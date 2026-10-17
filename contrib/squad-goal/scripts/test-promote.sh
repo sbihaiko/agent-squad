@@ -2,7 +2,7 @@
 # The promotion line (ADR-0145, #439): promote-stg.sh moves stg to the dev tip only when the promotion proof is green on that
 # tip, and never otherwise. SG_PROMOTE_PROOF names the proof.
 #   ci (the default): the dev tip's CI. Green promotes; red, running or a missing run promotes nothing.
-#   local: the promotion gate's own status line, $SG_STATE/gate-status, which the run that earns it writes through the existing
+#   local: the promotion gate's full-result line, $SG_STATE/gate-status-full, which the run that earns it writes through the existing
 #     seam: `SG_GATE_KIND=full bash gate.sh bash -c '<the full suite>'` (gate.sh's header names the line and the kind). stg
 #     moves only when that line says `full`, `pass`, and names the dev tip exactly.
 # The owner fast-forwards main to the stg tip with one command, and it refuses when main is not an ancestor of stg
@@ -19,8 +19,8 @@ tip() { git -C "$R" rev-parse "refs/heads/$1"; }
 adv() { $W fetch -q origin; $W checkout -q -B "$1" "origin/$1"; $W commit -q --allow-empty -m "$2"; $W push -q origin "$1"; }
 # ci <green|red|running>: the stub CI seam. It logs the sha it was read for, so a test proves which proof the script used.
 ci() { printf '#!/bin/bash\necho "ci read %s" >> "%s/ci.log"\necho "%s"\n' "$1" "$T" "$1" > "$T/ci"; chmod +x "$T/ci"; export SG_CI_STATE_CMD=$T/ci; }
-# line <kind> <result> <sha>: the promotion gate's own status line, as gate.sh writes it.
-line() { printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" > "$SG_STATE/gate-status"; }
+# line <kind> <result> <sha>: gate.sh keeps the full result apart from the hub's latest status.
+line() { printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" > "$SG_STATE/gate-status"; [ "$1" != full ] || cp "$SG_STATE/gate-status" "$SG_STATE/gate-status-full"; }
 # The promotion proof is a profile setting (#439): the default lives in env.sh after the profile, so a profile that names it
 # wins. The real env.sh is sourced under a throwaway profile directory, so the value is read from the code the loop runs.
 env_proof() {  # $1: the profile's own lines. Prints the SG_PROMOTE_PROOF the real env.sh resolves.
@@ -71,6 +71,13 @@ out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 adv dev four; before=$(tip stg); line full pass "$(tip dev)"
 out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "local: a full pass for the dev tip promotes, and stg moves" || ko "local pass: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
+
+# A later fast gate updates the hub's latest status, but must not replace the full proof for this dev tip.
+adv dev full-then-fast; before=$(tip stg)
+(cd "$T/w" && SG_GATE_KIND=full bash "$d/gate.sh" true)
+(cd "$T/w" && SG_GATE_KIND=fast bash "$d/gate.sh" true)
+out=$(bash "$d/promote-stg.sh" 2>&1); rc=$?
+[ $rc = 0 ] && [ "$(tip stg)" = "$(tip dev)" ] && ok "local: a full pass still promotes after a later fast gate" || ko "local full then fast: rc $rc, stg $(tip stg), dev $(tip dev), out '$out'"
 
 # stg holds work dev lacks: a fast-forward is impossible, so nothing moves, whatever the proof.
 adv stg stg-only; adv dev dev-only; line full pass "$(tip dev)"; before=$(tip stg)
