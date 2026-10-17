@@ -134,8 +134,15 @@ def test_migrate_folds_off_by_chain_on_the_live_shape(tmp_path, reg):
     assert doc["review_order"] == "config"
     review = _by_raw(doc["chains"]["review"])
     assert review["gemini-3.8-flash-medium"]["on"] is False
-    assert review["grok-4.6"]["timeout_s"] == 900
     assert list(review) == ["claude:claude-opus-5-5", "gemini-3.8-flash-medium"]
+
+
+def test_migrate_drops_a_retired_entry_on_the_live_shape(tmp_path, reg):
+    _, result = _migrate(tmp_path, LIVE, reg=reg)
+    dropped = {(d["chain"], d["raw"]): d["reason"] for d in result["dropped"]}
+    assert dropped[("review", "grok-4.6")] == "retired"
+    assert dropped[("vision", "grok-4.5")] == "retired"
+    assert dropped[("coding", "claude-deepseek-flash[1m]")] == "gateway model takes no tools"
 
 
 def test_a_setting_keyed_by_a_spelling_in_no_surviving_chain_is_an_orphan_and_is_never_applied(tmp_path, reg):

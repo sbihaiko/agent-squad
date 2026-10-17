@@ -10,6 +10,7 @@ is the loud door: a JSON parse error is a named failure, and one bad entry is dr
 entries still load.
 """
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -531,6 +532,192 @@ def display_price(entry_or_raw, reg=None):
     return entry.display_price if entry else None
 
 
+# --- compatible and migrate: v1 to v2 ---------------------------------------------------------------------
+
+MIGRATED_KEYS = ("off", "hours", "efforts", "review_timeout_seconds_by_model", "review_no_tools")
+_V1_TO_CANON = {v1: canon for canon, v1 in V1_CHAINS.items()}
+
+
+def compatible(mid, chain_name, reg=None):
+    """Whether one chain offers and keeps a spelling. A retired or unknown id is never compatible."""
+    reg = reg or default_registry()
+    canon = _canonical(chain_name)
+    ref = normalize(mid, reg)
+    entry = reg.entries.get(ref.id) if ref.known else None
+    if entry is None:
+        return (False, "unknown id")
+    if entry.retired:
+        return (False, "retired")
+    if canon in ("coding", "router"):
+        if "gateway" not in entry.routes:
+            return (False, "no gateway route")
+        if not entry.capabilities.get("tools"):
+            return (False, "gateway model takes no tools")
+    elif canon == "review":
+        if not any(name in entry.routes for name in ("cli", "direct", "gateway")):
+            return (False, "no cli, direct or gateway route")
+    elif canon == "vision":
+        if not entry.capabilities.get("vision"):
+            return (False, "no vision capability")
+    return (True, None)
+
+
+def _migrate_route(canon, raw, entry, no_tools):
+    """The explicit route an entry runs today: coding and router through the gateway, review as review.sh runs it."""
+    if canon in ("coding", "router"):
+        return "gateway"
+    if canon == "review" and raw.startswith("claude:") and raw in no_tools:
+        return "direct"
+    return _default_route(canon, entry)
+
+
+def _migrate_entry(canon, raw, ref, entry, settings):
+    out = {"id": ref.id}
+    if raw != ref.id:
+        out["raw"] = raw
+    out["route"] = _migrate_route(canon, raw, entry, settings["no_tools"])
+    effort = settings["efforts"].get(raw) or ref.effort
+    if effort:
+        out["effort"] = effort
+    hrs = settings["hours"].get(raw)
+    if hrs:
+        out["hrs"] = hrs
+    if settings["off"].get(raw):
+        out["on"] = False
+    if canon == "review":
+        timeout = settings["timeouts"].get(raw)
+        if timeout is not None:
+            out["timeout_s"] = timeout
+        if raw in settings["no_tools"]:
+            out["no_tools"] = True
+    return out
+
+
+def _migration_orphans(doc, kept):
+    """Every keyed setting whose spelling survives in no chain: (data, report lines). It is never applied."""
+    orphans, lines = {}, []
+
+    def note(setting, path, spelling, value, canon):
+        if canon is None:
+            orphans.setdefault(setting, {})[path] = value
+            lines.append(f"orphan {setting}.{path}: names no v1 chain")
+        elif path is None:
+            if isinstance(value, list):
+                orphans.setdefault(setting, []).extend(value)
+            else:
+                orphans.setdefault(setting, {})[spelling] = value
+            lines.append(f"orphan {setting}.{spelling}: not in the {canon} chain")
+        else:
+            orphans.setdefault(setting, {}).setdefault(path, {})[spelling] = value
+            lines.append(f"orphan {setting}.{path}.{spelling}: not in the {canon} chain")
+
+    for setting in ("off", "hours", "efforts"):
+        section = doc.get(setting)
+        if not isinstance(section, dict):
+            continue
+        for path, rows in section.items():
+            if not isinstance(rows, dict):
+                continue
+            canon = _V1_TO_CANON.get(path)
+            for spelling, value in rows.items():
+                if canon is not None and spelling in kept[canon]:
+                    continue
+                note(setting, path, spelling, value, canon)
+    timeouts = doc.get("review_timeout_seconds_by_model")
+    if isinstance(timeouts, dict):
+        for spelling, value in timeouts.items():
+            if spelling not in kept["review"]:
+                note("review_timeout_seconds_by_model", None, spelling, value, "review")
+    no_tools = doc.get("review_no_tools")
+    if isinstance(no_tools, list):
+        for spelling in no_tools:
+            if spelling not in kept["review"]:
+                note("review_no_tools", None, spelling, [spelling], "review")
+    return orphans, lines
+
+
+def _atomic_write(path, text):
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _diff(old, new, path):
+    return "".join(difflib.unified_diff(
+        old.splitlines(keepends=True), new.splitlines(keepends=True),
+        fromfile=f"{path} (v1)", tofile=f"{path} (v2)"))
+
+
+def migrate(path, dry_run=False, reg=None):
+    """Convert one v1 models.json to the v2 chain shape.
+
+    The write is atomic, keeps a `.v1.bak`, and prints a diff. A second run on a v2 file is a no-op. A mixed
+    file is refused. An entry whose chain cannot run it is dropped and named; an orphaned setting is kept under
+    `_orphans` and reported, never applied.
+    """
+    reg = reg or default_registry()
+    p = Path(path)
+    text = p.read_text()
+    try:
+        doc = json.loads(text)
+    except ValueError as exc:
+        raise RegistryError(f"models {p}: invalid JSON: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise RegistryError(f"models {p}: the document must be an object")
+    stray = [key for key in V1_CHAINS.values() if key in doc]
+    if isinstance(doc.get("chains"), dict):
+        if stray:
+            raise RegistryError(f"models {p}: mixed file: it carries both v1 chains ({', '.join(stray)}) "
+                                f"and `chains`")
+        return {"path": str(p), "changed": False, "mixed": False, "dropped": [], "orphans": {},
+                "dropped_lines": [], "orphan_lines": [], "diff": ""}
+    chains, kept, dropped, dropped_lines = {}, {}, [], []
+    for canon, v1key in V1_CHAINS.items():
+        settings = {
+            "off": (doc.get("off") or {}).get(v1key) or {},
+            "hours": (doc.get("hours") or {}).get(v1key) or {},
+            "efforts": (doc.get("efforts") or {}).get(v1key) or {},
+            "timeouts": doc.get("review_timeout_seconds_by_model") or {},
+            "no_tools": doc.get("review_no_tools") or [],
+        }
+        entries, surviving = [], set()
+        for raw in doc.get(v1key) or []:
+            ok, reason = compatible(raw, canon, reg)
+            if not ok:
+                dropped.append({"chain": canon, "raw": raw, "reason": reason})
+                dropped_lines.append(f"dropped {canon} {raw}: {reason}")
+                continue
+            ref = normalize(raw, reg)
+            surviving.add(raw)
+            entries.append(_migrate_entry(canon, raw, ref, reg.entries.get(ref.id), settings))
+        chains[canon] = entries
+        kept[canon] = surviving
+    orphans, orphan_lines = _migration_orphans(doc, kept)
+    out = {"schema_version": 2, "chains": chains}
+    for key, value in doc.items():
+        if key in V1_CHAINS.values() or key in MIGRATED_KEYS:
+            continue
+        out[key] = value
+    if orphans:
+        out["_orphans"] = orphans
+    new_text = json.dumps(out, indent=2) + "\n"
+    result = {"path": str(p), "changed": True, "mixed": False, "dropped": dropped, "orphans": orphans,
+              "dropped_lines": dropped_lines, "orphan_lines": orphan_lines,
+              "diff": _diff(text, new_text, p)}
+    if not dry_run:
+        _atomic_write(p.with_name(p.name + ".v1.bak"), text)
+        _atomic_write(p, new_text)
+    return result
+
+
+def migrate_lines(result):
+    """The report a migrate prints: one line per dropped entry, one per orphan, and a no-op line."""
+    lines = result["dropped_lines"] + result["orphan_lines"]
+    if not result["changed"] and not result["mixed"]:
+        lines.append(f"already v2: {result['path']}")
+    return lines
+
+
 # --- check and CLI ----------------------------------------------------------------------------------------
 
 def check(path=None, models=None):
@@ -586,6 +773,9 @@ def main(argv=None):
     m.add_argument("--shared", default=None)
     k = sub.add_parser("check", help="validate the registry and the chains")
     k.add_argument("--models", default=None)
+    g = sub.add_parser("migrate", help="convert a v1 models.json to the v2 chain shape")
+    g.add_argument("models")
+    g.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args(argv)
     try:
         reg = load(ns.registry)
@@ -615,6 +805,17 @@ def main(argv=None):
             print(f"modelreg: {ns.id} has no {ns.use} route", file=sys.stderr)
             return 2
         sys.stdout.write("\0".join(inv.argv))
+        return 0
+    if ns.cmd == "migrate":
+        try:
+            result = migrate(ns.models, dry_run=ns.dry_run, reg=reg)
+        except (OSError, RegistryError) as exc:
+            print(f"modelreg: {exc}", file=sys.stderr)
+            return 1
+        for line in migrate_lines(result):
+            print(line)
+        if result["diff"]:
+            sys.stdout.write(result["diff"])
         return 0
     if ns.cmd == "mark-limited":
         try:
