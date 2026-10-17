@@ -197,10 +197,18 @@ W="$T/child"; /usr/bin/git init -q -b main "$W"; /usr/bin/git -C "$W" -c user.em
 /usr/bin/git -C "$W" checkout -q -b gui/9; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m child
 /usr/bin/git init -q -b main "$T/co"; /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m checkout
 sed -i '' "s|SG_CHECKOUT=$T;|SG_CHECKOUT=$T/co;|" "$T/s/env.sh"
-printf '#!/bin/bash\nsleep 12; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '#!/bin/bash\necho "$*" >> "$GROK_ARGS"; sleep 12; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
 printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
 [ $rc = 0 ] && head -1 "$T/st/review-gui_9.md" | grep -q APPROVE && [ "$(cat "$T/st/review-gui_9.sha" 2>/dev/null)" = "$(/usr/bin/git -C "$W" rev-parse HEAD)" ] \
   && ok "12 a worktree review run from the checkout keeps its verdict for the child's head" \
   || ko "12 a worktree review read the checkout's HEAD: rc=$rc '$(head -1 "$T/st/review-gui_9.md" 2>/dev/null)' sha=$(cat "$T/st/review-gui_9.sha" 2>/dev/null)"
+# 13) the grok leg must not run in plan mode. Headless grok auto-denies a tool that needs the "command" permission
+# and prints nothing, so the review ends "BLOCKED (every review model failed)" with no verdict at all.
+export GROK_ARGS="$T/grok-args"; : > "$GROK_ARGS"; rm -f "$T/st/review-gui_9".*
+out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
+/usr/bin/grep -q -- '--permission-mode plan' "$GROK_ARGS" \
+  && ko "13 the grok review runs in plan mode, which headless grok auto-denies: $(cat "$GROK_ARGS")" \
+  || ok "13 the grok review does not run in plan mode"
+unset GROK_ARGS
 rm -rf "$T"; exit $fail
