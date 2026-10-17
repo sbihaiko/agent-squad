@@ -61,7 +61,7 @@ E
 graph() { # <dir> <max_children> <spend_max>: one root loop holding one dispatch node, with the budget the node carries
   printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":%s,"max_parallel":2,"budget":{"stalls":{"min":2,"max":5},"spend":{"min":0.05,"max":%s}}}]}]}' "$2" "$3" > "$1"
 }
-issues() { printf '%s' "$1" > "$GH_ISSUES"; }
+issues() { printf '%s' "$1" | jq -c '[.[]|if .unready then . else .labels=((.labels//[])+[{"name":"frontier"}]) end]' > "$GH_ISSUES"; }   # a fixture issue carries the frontier label (#485) unless it says "unready"
 four() { issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":42,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":43,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":44,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'; }
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sleep 0.6; }
 spent() { sed -nE 's/.*spend ([0-9.]+).*/\1/p' "$MKLOG.body" | head -1; }

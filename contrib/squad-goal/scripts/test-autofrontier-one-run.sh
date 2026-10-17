@@ -64,7 +64,7 @@ E
   printf '{"number":0,"title":"t","body":"","created_at":"2026-01-01T00:00:00Z"}' > "$GH_ISSUE1"
 }
 five() { issues '[{"number":11,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":12,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":13,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":14,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":15,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'; }
-issues() { printf '%s' "$1" > "$GH_ISSUES"; }
+issues() { printf '%s' "$1" | jq -c '[.[]|if .unready then . else .labels=((.labels//[])+[{"name":"frontier"}]) end]' > "$GH_ISSUES"; }   # a fixture issue carries the frontier label (#485) unless it says "unready"
 issuebody() { printf '{"number":%s,"title":"t","body":"%s","created_at":"2026-01-01T00:00:00Z"}' "$1" "$2" > "$GH_ISSUEDIR/$1.json"; }   # <n> <body>: what the pass pastes into the request for that issue
 real() { MK_REAL=1 SG_FORK_DIR=$FK SG_FORK_BASE=main "$@"; }   # the real slice guard over the throwaway fork
 run() { SG_SINGLE_AUTOFRONTIER=1 bash "$T/scripts/autofrontier.sh" 2>&1; /bin/sleep 0.6; }   # the launch is detached: give it time to count itself
@@ -220,6 +220,14 @@ issues '[{"number":61,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(SG_BOARD_VOCAB=shipped run)
 $G -qE "^(--add )?o 1 Doing( [0-9]+)* 61( |\$)" "$BOARDLOG" && ok "V: a dispatch on the shipped vocabulary writes Doing" || ko "V: the dispatch wrote $(cat "$BOARDLOG")"
 $G -q "In Progress" "$BOARDLOG" && ko "V: the dispatch still writes In Progress on the shipped vocabulary" || ok "V: no In Progress write on the shipped vocabulary"
+
+# W (#485): the frontier takes only an issue that carries its label. #482 (an enhancement kept in the Backlog, no
+# ready-for-agent) went out on the first pass after a loop start, because the list read selected on no label at all.
+scene label
+issues '[{"number":71,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":72,"title":"a","body":"b","labels":[{"name":"enhancement"}]}]'
+r=$(run)
+[ "$(marked 71)" = 0 ] && ok "W: an issue without the frontier label is never dispatched" || ko "W: the unlabelled #71 went out: '$r'"
+[ "$(marked 72)" = 1 ] && ok "W: an issue with the label still goes out" || ko "W: the labelled #72 did not go out: '$r'"
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
