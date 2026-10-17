@@ -95,6 +95,17 @@ Only real defects; no style nits."
   echo "=== DIFF"; tipdiff   # the child's own commits against the landing branch, or a local worktree's against its wave branch
   } > $p
 fi
+# review_no_tools (#504): a model listed there reviews from this prompt alone. With tools, DeepSeek explored the repo turn
+# after turn (833 s, 4.3M cache-read tokens) and never answered inside its timeout; the diff is already above.
+sed -E 's/ Read (surrounding )?code (at the head )?with git show .*$/ You have no tools: judge from the text below alone./' "$p" > "$p.nt"
+notools() { jq -e --arg m "$1" '(.review_no_tools // []) | index($m)' "$cfg" >/dev/null 2>&1; }
+direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $out
+  cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
+    -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$out.api" 2>"$SG_STATE/review-$pr.err"; local r=$?
+  jq '{result: ([.content[]? | select(.type=="text") | .text] | join("")), usage: (.usage // {}),
+       subtype: (if .stop_reason=="end_turn" then "success" else "error_" + (.stop_reason // .type // "unknown") end)}
+      | .is_error = (.subtype != "success")' "$out.api" > "$out" 2>/dev/null || cp "$out.api" "$out"; rm -f "$out.api"; return $r
+}
 tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg")
 # capraw starts the CLI in its own process group and a watchdog beside it. An alarm inside the CLI does not work: the
 # signal kills the shell that set it, and the process the CLI spawned is reparented and keeps running, so a review runs
@@ -196,7 +207,25 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     case $m in
       # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
       # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
-      claude:*) cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err";;
+      # review_no_tools (#504): one direct call to the gateway, thinking off. `claude -p` sends nothing that turns a gateway
+      # model's thinking off, and DeepSeek V4.1 Flash then thinks 32k tokens a turn and never answers; off, it answers in
+      # seconds. The answer is reshaped into the CLI's JSON, so the checks and the token ledger below read one shape.
+      claude:*) if notools "$m"; then
+          jq -Rs --arg m "${m#claude:}" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
+          direct "$p.body"; r=$?
+          # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
+          # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
+          if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$out" > "$out.t" 2>/dev/null \
+             && python3 "$(dirname "$0")/revformat.py" --normalize "$out.t" > "$out.n" 2>/dev/null \
+             && ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out.n" 2>/dev/null) && [ -n "$frem" ]; then
+            mv "$out" "$out.1"
+            jq --rawfile a "$out.t" --arg f "$frem" '.messages += [{role:"assistant", content:$a}, {role:"user", content:("Your answer is outside the shape: " + $f + ". Answer again: the same findings, every line in the shape, nothing else.")}]' "$p.body" > "$p.body2"
+            direct "$p.body2"; r=$?
+            jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$out.1" "$out" > "$out.s" 2>/dev/null && mv "$out.s" "$out"
+          fi; rm -f "$out.t" "$out.n" "$out.1" "$out.s" "$p.body2"; (exit $r)
+        else
+          cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err"
+        fi;;
       grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$out" 2>"$SG_STATE/review-$pr.err";;
       gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$out" 2>"$SG_STATE/review-$pr.err";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \

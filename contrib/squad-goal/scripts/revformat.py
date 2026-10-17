@@ -45,8 +45,9 @@ SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
 THEME = re.compile(r"^#{3,}\s*(\S.*?)\s*$")
 BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 # A section with no finding says so, and that is an empty section, not a malformed bullet (#498): the shape already takes a
-# bare `VERDICT: APPROVE`, and a model that must write the heading under it writes `None.` there. Only its first content.
-EMPTY = re.compile(r"(?i)^(?:none|no findings|nothing|n/?a|nil)[.!]?$|^[—–-]$")
+# bare `VERDICT: APPROVE`, and a model that must write the heading under it writes `None.` there. Only its first content,
+# and it may say why on the same line (`None. The four criteria are met.`, #504); a second line is prose again.
+EMPTY = re.compile(r"(?i)^(?:none|no findings|nothing|n/?a|nil)(?:[.!]?$|[.:;!]?\s+\S|\s*[—–-]\s+\S)|^[—–-]$")
 LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`,]*)`?(?:[\s,;]|$)")  # path:line, or a path alone for a file-level finding; the first field of a bullet (or the second)
 # a finding about the change as a whole, not a file (#443): the branch delivers nothing from its issue, the commit
 # message misstates it -- there is no path to cite. Its place is the diff itself, and a whole-change label names it:

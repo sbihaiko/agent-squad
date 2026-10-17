@@ -34,6 +34,11 @@
       "claude:claude-opus-5-5": "19-07"
     }
   },
-  "review_timeout_seconds_by_model": {},
-  "review_order": "config"
+  "review_timeout_seconds_by_model": {
+    "claude:claude-deepseek-flash": 120
+  },
+  "review_order": "config",
+  "review_no_tools": [
+    "claude:claude-deepseek-flash"
+  ]
 }

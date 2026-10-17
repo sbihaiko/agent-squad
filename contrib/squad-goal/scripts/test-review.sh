@@ -169,13 +169,31 @@ case "$out" in model=claude:slow*) ok "only successful tries order the chain";; 
 : > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".*
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "no record at all: the configured order stands";; *) ko "no-record fallback: '$out'";; esac
-# review_no_tools (#504): a model listed there reviews from the prompt alone -- no tool, and a prompt that does not send it
-# to read more code -- so DeepSeek does not explore the repo for 14 minutes. A model not listed keeps its tools.
+# review_no_tools (#504): a model listed there reviews in one direct call to the gateway, thinking off, from the prompt alone --
+# no tool, and a prompt that does not send it to read more code. Through `claude -p` DeepSeek V4.1 Flash explored the repo
+# for 14 minutes, and with no tools it thought 32k tokens a turn and never answered: the CLI sends nothing that turns its
+# thinking off. A model not listed keeps its tools and the CLI.
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { cp "${2#@}" "$CURL_BODY"; }; shift; done\ncat "$CURL_REPLY"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+export CURL_BODY="$T/curl-body" CURL_REPLY="$T/curl-reply"
+printf '{"type":"message","stop_reason":"end_turn","content":[{"type":"text","text":"VERDICT: APPROVE"}],"usage":{"input_tokens":900,"output_tokens":40}}' > "$CURL_REPLY"
 printf '{"review_models":["claude:nt"],"review_no_tools":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
-: > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".*; export CLAUDE_ARGS="$T/args-nt" CLAUDE_PROMPT="$T/prompt-nt"; : > "$CLAUDE_ARGS"
-GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
-/usr/bin/grep -q -- '--tools  ' "$CLAUDE_ARGS" && ! /usr/bin/grep -q -- '--tools Read' "$CLAUDE_ARGS" && ok "review_no_tools: the call has no tool" || ko "review_no_tools: the call still has tools: $(cat "$CLAUDE_ARGS")"
-! /usr/bin/grep -q 'git show' "$CLAUDE_PROMPT" && /usr/bin/grep -q 'no tools' "$CLAUDE_PROMPT" && ok "review_no_tools: the prompt judges from its own text" || ko "review_no_tools: the prompt still sends it to read code"
+: > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".* "$CURL_BODY"; export CLAUDE_ARGS="$T/args-nt" CLAUDE_PROMPT="$T/prompt-nt"; : > "$CLAUDE_ARGS"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ ! -s "$CLAUDE_ARGS" ] && jq -e '.thinking.type=="disabled" and (has("tools")|not) and .model=="nt"' "$CURL_BODY" >/dev/null 2>&1 && ok "review_no_tools: one direct call, thinking off, no tool" || ko "review_no_tools: not a direct no-thinking call: args=$(cat "$CLAUDE_ARGS") body=$(head -c 200 "$CURL_BODY" 2>/dev/null)"
+jq -r '.messages[0].content' "$CURL_BODY" 2>/dev/null | /usr/bin/grep -q 'no tools' && ! jq -r '.messages[0].content' "$CURL_BODY" | /usr/bin/grep -q 'git show' && ok "review_no_tools: the prompt judges from its own text" || ko "review_no_tools: the prompt still sends it to read code"
+[ $rc = 0 ] && head -1 "$T/st/review-fix_1-x.md" | /usr/bin/grep -q 'VERDICT: APPROVE' && /usr/bin/grep -q 'claude:nt	900	40' "$T/st/token-usage.tsv" && ok "review_no_tools: the answer is the review, and its tokens are counted" || ko "review_no_tools: answer not kept: rc=$rc $(cat "$T/st/review-fix_1-x.md" 2>/dev/null) $(tail -1 "$T/st/token-usage.tsv")"
+printf '{"type":"message","stop_reason":"max_tokens","content":[{"type":"text","text":"VERDICT: APPROVE"}],"usage":{"input_tokens":900,"output_tokens":8000}}' > "$CURL_REPLY"; rm -f "$T/st/review-fix_1-x".*
+GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1; rc=$?
+[ $rc != 0 ] && ! head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' && ok "review_no_tools: an answer cut at max_tokens is no review" || ko "review_no_tools: a cut answer was kept: rc=$rc"
+# one repair turn: DeepSeek writes a sound review with one line outside the shape. The answer goes back once, with the
+# check's own complaint, and the second answer is the review; both calls' tokens are counted.
+printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do [ "$1" = -d ] && { n=$(ls "$CURL_BODY".* 2>/dev/null | wc -l); cp "${2#@}" "$CURL_BODY.$((n+1))"; }; shift; done\nn=$(ls "$CURL_BODY".* | wc -l); cat "$CURL_REPLY.$((n))"\n' > "$T/bin/curl"; chmod +x "$T/bin/curl"
+printf '{"stop_reason":"end_turn","content":[{"type":"text","text":"VERDICT: CHANGES\\n## Blocking\\n- a.py:1 — the tally was retuned; verify it"}],"usage":{"input_tokens":900,"output_tokens":40}}' > "$CURL_REPLY.1"
+printf '{"stop_reason":"end_turn","content":[{"type":"text","text":"VERDICT: CHANGES\\n## Blocking\\n- a.py:1 — the tally was retuned — a wrong count passes — re-anchor it"}],"usage":{"input_tokens":1000,"output_tokens":50}}' > "$CURL_REPLY.2"
+rm -f "$T/st/review-fix_1-x".* "$CURL_BODY".*; : > "$T/st/token-usage.tsv"
+GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1; rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q 're-anchor it' "$T/st/review-fix_1-x.md" && jq -e '(.messages|length)==3 and .messages[1].role=="assistant" and (.messages[2].content|test("line 3"))' "$CURL_BODY.2" >/dev/null 2>&1 && /usr/bin/grep -q 'claude:nt	1900	90' "$T/st/token-usage.tsv" && ok "review_no_tools: an answer outside the shape is repaired once, with the check's complaint" || ko "review_no_tools: no repair turn: rc=$rc $(head -3 "$T/st/review-fix_1-x.md" 2>/dev/null) $(tail -1 "$T/st/token-usage.tsv")"
+rm -f "$T/bin/curl" "$CURL_BODY".* "$CURL_REPLY".*; unset CURL_BODY CURL_REPLY
 printf '{"review_models":["claude:x"],"review_no_tools":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".*; : > "$CLAUDE_ARGS"
 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
