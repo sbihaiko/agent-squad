@@ -16,6 +16,7 @@ REPO = os.environ.get("SG_REPO"); OWNER = os.environ.get("SG_OWNER"); BOARD = in
 if not (REPO and OWNER and BOARD): sys.exit("reconcile: set SG_REPO, SG_OWNER and SG_PROJECT (env.sh exports them)")
 MIN = int(os.environ.get("RECONCILE_MIN", "1102")); APPLY = os.environ.get("RECONCILE") == "apply"
 VOCAB = os.environ.get("SG_BOARD_VOCAB")   # the vocabulary the carrier holds, the switch the janitor reads too: `shipped` writes the shipped names
+MOVES = []   # the cards this pass moves (or would move): the count it prints
 REFUSED = []   # the cards whose write the carrier refused this pass (#454)
 FLOW = {column["name"]: column["flow"] for column in COLUMNS}   # the shipped column order (the flow the page draws left to right): a card moves forward along it and never back
 TERMINAL = {column["name"] for column in COLUMNS if column["terminal"]}   # the columns the work is delivered at, each entered once
@@ -55,6 +56,8 @@ def move(n, to, why):
     if name is None:
         print(f"{'FREEZE' if APPLY else 'WOULD FREEZE'} #{n} {to} ({why}): the shipped board carries it as the owner freeze, whose marker the janitor writes")
         return
+    if cur == name: return   # the card already sits in the column its facts earn: no line and no writer call (#458), checked here and never inside the writer
+    MOVES.append(n)
     print(f"{'MOVE' if APPLY else 'WOULD MOVE'} #{n} {cur} -> {name} ({why})")
     if APPLY: write(n, name)
 def write(n, name, add=False):
@@ -106,4 +109,5 @@ for i in js("api", f"repos/{REPO}/issues?state=open&labels=bug&per_page=100") or
     name = shipped_name(to) or to   # a new card is addable at any column the carrier holds; the shipped name is what it holds
     print(f"{'ADD' if APPLY else 'WOULD ADD'} #{i['number']} to board as {name} (new bug)")
     if APPLY: write(i["number"], name, add=True)
+print(f"moves: {len(MOVES)}")   # the count of cards whose column changes
 sys.exit(1 if REFUSED else 0)   # a pass that could not write what it reported is a failed pass, never a quiet one
