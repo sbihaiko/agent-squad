@@ -47,7 +47,8 @@ def _launch(tmp_path, coding, envelope, shared=None, hours=None):
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
     shutil.copy(SCRIPTS / "router_envelope.py", s / "router_envelope.py")
-    shutil.copy(SCRIPTS / "provkey.py", s / "provkey.py")
+    for name in ("provkey.py", "modelreg.py", "registry.json"):
+        shutil.copy(SCRIPTS / name, s / name)
     (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": [], "hours": {"coding_models": hours or {}}}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [
