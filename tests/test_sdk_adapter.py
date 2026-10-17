@@ -37,6 +37,8 @@ class ToolUseBlock:
 class AssistantMessage:
     content: list = field(default_factory=list)
     usage: dict | None = None
+    model: str = "claude-sonnet-5-5"
+    error: str | None = None
 
 
 @dataclass
@@ -114,6 +116,27 @@ async def test_a_subagent_result_does_not_count_as_the_session_result():
 async def test_a_stream_with_no_result_is_an_adapter_error_not_zero_spend():
     with pytest.raises(AdapterError):
         await adapter([AssistantMessage()]).call(request())
+
+
+@pytest.mark.parametrize("refusal", [AssistantMessage(model="<synthetic>"), AssistantMessage(error="rate_limit")])
+async def test_a_subscription_refusal_is_not_a_served_call(refusal):
+    """#507: the CLI answers a spent subscription ("session limit") with a synthetic assistant message, then an error.
+    The model served nothing, so the grant goes back and the next chain entry can be funded."""
+    async def query(*, prompt, options):
+        yield refusal
+        raise RuntimeError("Claude Code returned an error result: You've hit your session limit")
+    with pytest.raises(AdapterError) as info:
+        await SdkAdapter(query=query, options_cls=Options).call(request())
+    assert info.value.served is False
+
+
+async def test_a_real_assistant_message_before_an_error_is_served():
+    async def query(*, prompt, options):
+        yield AssistantMessage()
+        raise RuntimeError("socket closed")
+    with pytest.raises(AdapterError) as info:
+        await SdkAdapter(query=query, options_cls=Options).call(request())
+    assert info.value.served is True
 
 
 async def test_a_raising_query_is_an_adapter_error():
