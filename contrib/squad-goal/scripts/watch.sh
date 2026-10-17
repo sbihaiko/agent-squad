@@ -39,8 +39,8 @@ tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ]
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
   local run=$1 ran; ran="$SG_STATE/auto/wland-${run##*/}"
   mkdir -p "$SG_STATE/auto"; rm -f "$ran"
-  tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2" && bash "$4" land "$5" && : > "$3"' landwave \
-     "${wme%/*}/childcc.py" "$run" "$ran" "${wme%/*}/wave.sh" "${run##*/}" 2>&1
+  tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2" && bash "$4" land "$5" "$6" && : > "$3"' landwave \
+     "${wme%/*}/childcc.py" "$run" "$ran" "${wme%/*}/wave.sh" "${run##*/}" "$run" 2>&1
   [ -e "$ran" ] && { rm -f "$ran"; return 0; }
   echo "WATCH: ${run##*/} waits: the pass that enters its children or the landing did not get through (a pass runs elsewhere, or one failed), so its wave lands on a later cycle"
   return 1

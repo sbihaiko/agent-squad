@@ -255,9 +255,14 @@ stuck() {
   return 1
 }
 
-land() {   # <run>: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
+land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
   local run=$1 w; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
+  # The run's own folder, as active-runs.txt records it: an absolute path (a loop run lives under its issue worktree) or a bare
+  # name under the checkout's runs/. The caller passes it; without one the name is read as a bare name.
+  local rd=${2:-$run}; case "$rd" in /*) ;; *) rd="runs/${rd##*/}";; esac
+  # A run with no record is named, never read as a run with no issues (#474).
+  [ -f "$rd/record.jsonl" ] || echo "WAVE-NOTE the record of run $run is missing: $rd/record.jsonl is not there, so no issue of the run is read from it" >&2
   # The age cap is read before the landing clears the markers it is read from (#378): a wave that reached it requeues the
   # children of the run that never entered it, once the wave it holds is in the base.
   local capped=0; expired "$run" && capped=1
@@ -278,7 +283,7 @@ land() {   # <run>: the wave's landing pass -- the rebase on the base, the one p
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
   # base moved once more between this rebase and the push -- repeats from the fetch: the moved base is fetched, the wave is
   # rebased on it, and the push goes again (ADR-0145 rule 2). One repeat, as the entry does.
-  local out sha try=1 issues n; local rd=$run; case "$run" in /*) ;; *) rd="runs/$run";; esac
+  local out sha try=1 issues n
   while :; do
     out=$(sc rebase "origin/$base" 2>&1) || { sc rebase --abort >/dev/null 2>&1
       stuck "$run" "$w" "$S" "the rebase of $w on $base conflicts: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
