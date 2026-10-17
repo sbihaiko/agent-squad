@@ -7,15 +7,15 @@
   "anthropic_models": [],
   "coding_models": [
     "claude-gpt-5.6-terra",
+    "claude-deepseek-flash[1m]",
     "claude-grok-4.7",
-    "claude-sonnet-5-5",
-    "claude-deepseek-v4-flash[1m]"
+    "claude-sonnet-5-5"
   ],
   "review_models": [
     "grok-4.7",
+    "claude:claude-deepseek-flash",
     "gemini-3.8-flash-high",
-    "claude:claude-opus-5-5",
-    "claude:claude-deepseek-v4-flash"
+    "claude:claude-opus-5-5"
   ],
   "vision_models": [
     "grok-4.5",

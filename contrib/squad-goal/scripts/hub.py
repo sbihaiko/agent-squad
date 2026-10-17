@@ -2707,7 +2707,7 @@ MODEL_ID = re.compile("^" + MODEL_ID_SRC + "$")
 # gemini/gpt-oss ids are the Antigravity catalogue; refresh them from `agy models` when it moves.
 EXTRA_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
     "claude:claude-opus-5-5", "claude:claude-sonnet-5-5", "claude:claude-fable-5-1",
-    "claude-deepseek-v4-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session",
+    "claude-deepseek-v4-flash", "claude-deepseek-flash", "gpt-5.6-terra", "gpt-6.1-sol", "claude-session",
     "gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
     "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low",
     "gemini-3.6-flash-high", "gemini-3.6-flash-medium", "gemini-3.6-flash-low",
