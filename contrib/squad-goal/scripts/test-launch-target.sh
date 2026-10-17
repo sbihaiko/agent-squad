@@ -63,4 +63,25 @@ case "$argv" in *"--target $co"*) ok "a PR fix run keeps the checkout as its tar
 rm -rf "$co/runs"; o=$(cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$T/fork" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 \
   python3 -I "$T/s/launch.py" "$T/req93.txt" 2>&1); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *"--target $co"*) ok "a fork checkout elsewhere keeps the checkout as the target";; *) ko "target is not $co: $argv";; esac
+
+# #469: the issue branch starts from the landing branch (origin/$SG_BASE), the base the wave is cut from, never a stale local
+# main. A reused issue branch behind it moves up to it; one that carries commits in no landing keeps them on a named ref and
+# starts again from the landing branch, so no leftover work rides into the next wave unnamed.
+git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"
+git init -q --bare "$T/origin.git"; git -C "$co" remote add origin "$T/origin.git"; git -C "$co" push -q origin main:dev
+up=$(mktemp -d); git clone -q -b dev "$T/origin.git" "$up/c"; (cd "$up/c" && echo d > d.txt && git add d.txt && git -c user.email=t@t -c user.name=t commit -qm dev-ahead && git push -q origin HEAD:dev)
+devtip=$(git -C "$T/origin.git" rev-parse dev)
+runb() { (cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$co" SG_FORK_BASE=main SG_BASE=dev \
+    SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$1" 2>&1); }
+o=$(runb "$T/req93.txt")
+[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$devtip" ] && ok "a new issue branch starts from origin/dev, not the local main" || ko "new gui/93 at $(git -C "$wt" rev-parse --short HEAD 2>/dev/null), not origin/dev; out=$o"
+(cd "$up/c" && echo e > e.txt && git add e.txt && git -c user.email=t@t -c user.name=t commit -qm dev-ahead-2 && git push -q origin HEAD:dev); devtip=$(git -C "$T/origin.git" rev-parse dev)
+rm -rf "$co/runs"; o=$(runb "$T/req93.txt")
+[ "$(git -C "$wt" rev-parse HEAD)" = "$devtip" ] && ok "a reused issue branch behind origin/dev moves up to it" || ko "reused gui/93 stayed at $(git -C "$wt" rev-parse --short HEAD); out=$o"
+(cd "$wt" && echo left > left.txt && git add left.txt && git -c user.email=t@t -c user.name=t commit -qm leftover); left=$(git -C "$wt" rev-parse HEAD)
+rm -rf "$co/runs"; o=$(runb "$T/req93.txt")
+[ "$(git -C "$wt" rev-parse HEAD)" = "$devtip" ] && ok "a leftover commit does not ride into the next run" || ko "gui/93 kept the leftover: $(git -C "$wt" log --oneline -1); out=$o"
+git -C "$co" for-each-ref --format='%(objectname)' refs/squad/leftover | /usr/bin/grep -qx "$left" && ok "the leftover commit is kept on a named ref" || ko "no refs/squad/leftover holds $left"
+case "$o" in *leftover*) ok "the launch names the leftover";; *) ko "the leftover is silent: $o";; esac
+rm -rf "$up"
 rm -rf "$T"; exit $fail
