@@ -314,3 +314,23 @@ def test_hubctl_restart_never_stops_something_that_is_not_the_squad_hub(fleet, f
 def _up(port):
     with socket.socket() as s:
         return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def test_each_profile_writes_its_own_board_cache(tmp_path, monkeypatch):
+    """#512: hubmux pinned no SG_BOARD_CACHE, so every hub took the process's one, and all of them wrote one file."""
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    for slug, repo in (("alpha", "x/alpha"), ("beta", "y/beta")):
+        (tmp_path / f"co-{slug}").mkdir()
+        _profile(prof, slug, repo, tmp_path / f"co-{slug}")
+    foreign = tmp_path / "foreign" / "hub-board.json"
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    monkeypatch.setenv("SG_BOARD_CACHE", str(foreign))   # what the shell that started hubmux exported
+    spec = importlib.util.spec_from_file_location("hubmux_board_cache", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    a, b = apps["alpha"]["mod"].BOARD, apps["beta"]["mod"].BOARD
+    assert a != b, f"two profiles on two boards share one cache: {a}"
+    assert foreign not in (a, b), "a hub takes the cache of the shell that started hubmux"

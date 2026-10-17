@@ -126,3 +126,44 @@ def test_the_board_passes_on_its_own_every_sixty_seconds(hub, monkeypatch):
         hub.refresh_board()
     assert len(passes) == 2, "the loop keeps passing on its own"
     assert sleeps[:30] == [2] * 30, "one pass every 60 s: 30 waits of 2 s between passes"
+
+
+def test_a_pass_that_raises_does_not_end_the_refresh_loop(hub, monkeypatch):
+    """#512: one pass that raised ended the refresh thread, and the board stayed frozen until a restart."""
+    passes, sleeps = [], []
+
+    def bad_pass():
+        passes.append(1)
+        if len(passes) == 1:
+            raise FileNotFoundError("the temp file is gone")
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        if len(sleeps) == 31:
+            raise StopIteration
+
+    monkeypatch.setattr(hub, "board_pass", bad_pass)
+    monkeypatch.setattr(hub.time, "sleep", fake_sleep)
+    monkeypatch.setattr(hub, "STATE", Path(tempfile.mkdtemp()))
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+    with pytest.raises(StopIteration):
+        hub.refresh_board()
+    assert len(passes) == 2, "the next pass still runs after a pass raised"
+    assert "temp file is gone" in (hub.board_cache["err"] or ""), "the error of the failed pass is recorded"
+
+
+def test_two_writers_in_one_process_never_share_a_temp_file(hub, monkeypatch):
+    """#512: hubmux runs one hub per profile in one process; a temp name keyed by the pid alone was shared, and one
+    writer's os.replace took the file away from the other."""
+    import threading
+    srcs = []
+    real = os.replace
+    monkeypatch.setattr(hub.subprocess, "run", _fake_gh([]))
+    monkeypatch.setattr(hub, "board_cache", {"t": 1.0, "items": [], "prs": [], "lc": {}, "err": None})
+    monkeypatch.setattr(hub.os, "replace", lambda a, b: (srcs.append(str(a)), real(a, b)))
+    ts = [threading.Thread(target=hub.board_pass) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(srcs) == 2 and srcs[0] != srcs[1], srcs
