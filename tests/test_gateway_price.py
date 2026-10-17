@@ -77,9 +77,18 @@ def test_a_renamed_or_aliased_spelling_keeps_its_table_price():
     table = defaults.load()["prices"]
     assert prices.rates(table, GATEWAY) == FLASH
     assert prices.rates(table, "deepseek-v4-flash") == FLASH
-    assert prices.rates(table, "deepseek-flash") == FLASH
-    assert prices.rates(table, "claude-deepseek-flash[1m]") == FLASH
+    assert prices.rates(table, "claude-deepseek-v4-flash[1m]") == FLASH
     assert prices.rates(table, "claude-sonnet-5-5") is None
+
+
+def test_the_no_tools_flash_spelling_resolves_to_its_own_row_never_the_v4_row():
+    """`deepseek-flash` is its own id, not an alias of the v4 id, so a changed row is never read through the other."""
+    models = defaults.load()["prices"]["models"]
+    own = {**models["claude-deepseek-flash"], "output": 9.99}
+    table = {"client": defaults.load()["prices"]["client"], "models": {**models, "claude-deepseek-flash": own}}
+    assert prices.rates(table, "deepseek-flash") == own
+    assert prices.rates(table, "claude-deepseek-flash[1m]") == own
+    assert prices.rates(table, "claude-deepseek-v4-flash") == FLASH
 
 
 async def test_a_priced_gateway_call_spends_its_table_price_and_names_the_source():
