@@ -10,7 +10,7 @@
 #   SG_TOKEN_BURN_CAP          tokens per window, default 1500000
 #   SG_TOKEN_BURN_WINDOW_H     the window in hours, default 24 (the lookback is bounded by it)
 #   SG_TOKEN_BURN_MIN_SECONDS  the rate tripwire waits this many seconds, default 300
-#   SG_TOKEN_CACHE_WEIGHT      what one cache-read token counts as, default 0.1, the provider's cache-read price ratio
+#   SG_TOKEN_CACHE_WEIGHT      what one cache-read token counts as, default 0: the cap measures new input and output only (owner)
 #                              (#495: a review re-reads its cached context each turn; at full weight one review read as 560k)
 #   SG_TOKEN_BURN_RATE_FLOOR_S the span the rate is read over is never shorter than this, default a quarter of the window
 #                              (#493: one review is a 185k burst in minutes; over 361 s it read as 44M/day, 12% of the cap)
@@ -22,7 +22,7 @@
 : "${SG_TOKEN_BURN_CAP:=1500000}"
 : "${SG_TOKEN_BURN_WINDOW_H:=24}"
 : "${SG_TOKEN_BURN_MIN_SECONDS:=300}"
-: "${SG_TOKEN_CACHE_WEIGHT:=0.1}"
+: "${SG_TOKEN_CACHE_WEIGHT:=0}"
 : "${SG_TOKEN_BURN_RATE_FLOOR_S:=$(( SG_TOKEN_BURN_WINDOW_H * 900 ))}"
 
 here="$(cd "$(dirname "$0")" && pwd)"
