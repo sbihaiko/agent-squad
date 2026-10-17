@@ -35,9 +35,13 @@ def test_drift_names_each_difference_by_name():
         "drift Status: not in the definition Blocked",
         "drift Kind: field missing",
         "drift Outcome: field missing",
+        "drift Run: field missing",
+        "drift Run started: field missing",
         "plan Status: add Doing",
         "plan Kind: create Bug",
         "plan Outcome: create Merged",
+        "plan Run: create text field",
+        "plan Run started: create text field",
     ]
 
 

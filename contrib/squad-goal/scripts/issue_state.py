@@ -55,6 +55,10 @@ BOARD = "board"
 # The kinds an item carries, as the repository names them. A binding that cannot carry one reports it as a gap.
 KINDS = ("bug", "task", "spec", "test case")
 
+# The two text fields a run is named in. They are the binding's, not the shared vocabulary's, so the board definition
+# does not name them and board_define.py creates them from here (#487).
+HOLDER_FIELDS = ("Run", "Run started")
+
 WAVE = re.compile(r"^wave:\d+$")   # the ordering label, and the title of the milestone that carries a delivery
 
 
@@ -419,7 +423,7 @@ class BoardBinding:
         """The two text fields a run is named in: {name: id}."""
         def read_fields():
             fs = json.loads(self.api(f"{self.base}/fields?per_page=100"))
-            return {x.get("name"): x.get("id") for x in fs if x.get("name") in ("Run", "Run started")}
+            return {x.get("name"): x.get("id") for x in fs if x.get("name") in HOLDER_FIELDS}
         return self._cached(f"rest-text-fields-{self.owner}-{self.project}.json", 86400, read_fields)
 
     def items(self):
@@ -618,7 +622,7 @@ class BoardBinding:
         tf = self.text_fields()
         if "Run" not in tf or "Run started" not in tf:
             (self.st / f"rest-text-fields-{self.owner}-{self.project}.json").unlink(missing_ok=True); tf = self.text_fields()
-        missing = [x for x in ("Run", "Run started") if x not in tf]
+        missing = [x for x in HOLDER_FIELDS if x not in tf]
         if missing: raise RuntimeError("no text field " + ", ".join(missing))
         self.api("-X", "PATCH", f"{self.base}/items/{iid}", "--input", "-",
                  inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))

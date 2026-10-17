@@ -2,10 +2,11 @@
 """The live board as an instance of the board definition (ADR-0141): board_define.py --definition <board.json> [--check] [--apply] [--migrate|--contract] <owner> <project>
 The run reads the project's fields once, over REST through the board binding (issue_state), and names each difference
 between the board and the definition by name: an option the definition names and the board lacks, an option the board
-carries and the definition does not name, a field the board lacks. Then it prints the expand plan.
+carries and the definition does not name, a field the board lacks, and a holder text field the binding writes (issue_state.HOLDER_FIELDS) the board lacks.
+Then it prints the expand plan.
 Expand never removes: a missing option is added beside today's options, every option already there keeps its id, name,
 colour and description, so no card loses the value it carries, and no item is written, so no card moves. A missing field
-is created with the definition's options. An option the definition does not name stays, reported as drift; dropping it
+is created with the definition's options; a missing text field is created empty (#487). An option the definition does not name stays, reported as drift; dropping it
 is the definition's applier's, which refuses a column cards still carry.
 With no --apply the run is a dry run: one read, no write. --check exits 1 when the board drifts. --apply is a live write
 on the board and waits for the owner's grant (ADR-0024). The definition is read from its path, never kept here (ADR-0141).
@@ -13,7 +14,7 @@ on the board and waits for the owner's grant (ADR-0024). The definition is read 
 one items read after the writes. --contract drops each Status option the definition does not name, and refuses while a
 card still carries one: no card ever loses the value it carries. Both are dry runs without --apply."""
 import argparse, json, sys
-from issue_state import board_state
+from issue_state import HOLDER_FIELDS, board_state
 import board_migrate
 
 REFUSED = board_migrate.REFUSED
@@ -26,9 +27,11 @@ def text(v):
 
 
 def snapshot(fields):
-    """{field name: {"id": node id, "options": [{id, name, color, description}]}} for the single-select fields."""
+    """{field name: {"id": node id, "options": [{id, name, color, description}]}} for the single-select fields, and
+    {field name: {"id": node id, "options": None}} for the text fields."""
     out = {}
     for f in fields:
+        if f.get("data_type") == "text": out[f["name"]] = {"id": f.get("node_id") or f.get("id"), "options": None}
         if f.get("data_type") != "single_select": continue
         out[f["name"]] = {"id": f.get("node_id") or f.get("id"), "options": [
             {"id": o["id"], "name": text(o["name"]), "color": o.get("color", "GRAY"), "description": text(o.get("description"))}
@@ -37,7 +40,8 @@ def snapshot(fields):
 
 
 def diff(definition, board):
-    """[(field name, entries, board field or None, missing names, extra names)] for each field the definition names."""
+    """[(field name, entries, board field or None, missing names, extra names)] for each field the definition names.
+    A text field has no entries (None) and no options to miss."""
     out = []
     for key in GROUPS:
         name, entries = definition["fieldNames"][key], definition[key]
@@ -46,6 +50,7 @@ def diff(definition, board):
         missing = [e["name"] for e in entries if e["name"] not in have]
         extra = [n for n in have if n not in {e["name"] for e in entries}]
         out.append((name, entries, field, missing, extra))
+    out += [(name, None, board.get(name), [], []) for name in HOLDER_FIELDS]
     return out
 
 
@@ -59,7 +64,8 @@ def report(rows):
         if field is None: lines.append(f"drift {name}: field missing"); continue
         lines += [f"drift {name}: missing {n}" for n in missing] + [f"drift {name}: not in the definition {n}" for n in extra]
     for name, entries, field, missing, extra in rows:
-        if field is None: lines.append(f"plan {name}: create " + ", ".join(e["name"] for e in entries))
+        if field is None and entries is None: lines.append(f"plan {name}: create text field")
+        elif field is None: lines.append(f"plan {name}: create " + ", ".join(e["name"] for e in entries))
         elif missing: lines.append(f"plan {name}: add " + ", ".join(missing))
     return lines
 
@@ -70,7 +76,10 @@ def expand(binding, project_id, rows):
         out = json.loads(binding.api("graphql", "--input", "-", inp=json.dumps({"query": query, "variables": variables})) or "{}")
         if out.get("errors"): raise RuntimeError(json.dumps(out["errors"])[:300])
     for name, entries, field, missing, extra in rows:
-        if field is None:
+        if field is None and entries is None:
+            graphql("mutation($input: CreateProjectV2FieldInput!) { createProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2Field { id } } } }",
+                    {"input": {"projectId": project_id, "dataType": "TEXT", "name": name}})
+        elif field is None:
             graphql("mutation($input: CreateProjectV2FieldInput!) { createProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }",
                     {"input": {"projectId": project_id, "dataType": "SINGLE_SELECT", "name": name, "singleSelectOptions": [option(e) for e in entries]}})
         elif missing:
