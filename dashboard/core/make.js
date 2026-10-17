@@ -10,7 +10,7 @@ function make(ENGINE) {
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
   const { num, sumOf, orNull, lastOf, tokenFigures, runTimeline } = figuresModule();
-  const { parseRecord, parseLive, overlayRows, overlayFor } = recordModule({ graphHash });
+  const { parseRecord, parseLive, overlayRows, overlayFor } = recordModule({ graphHash, models: ENGINE.models });
   const { readDelay, liveState, openCalls } = liveModule({ lastOf, num, orNull });
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
@@ -18,7 +18,7 @@ function make(ENGINE) {
   const { LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush } = sourcesModule({ STATES });
   const { pauseView, controlBody } = controlModule({ lastOf });
   const { scriptDiagram, scriptSvg, guiRun } = scriptModule();
-  const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures });
+  const { runCap, runTotals, totalsCells, issueProgress, progressCells, fmt } = totalsModule({ lastOf, num, sumOf, tokenFigures, models: ENGINE.models });
   const { unresolvedChildren, replayAt, moveCursor } = replayModule({ num, orNull });
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });

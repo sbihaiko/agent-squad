@@ -1,3 +1,4 @@
+# modelreg: seam-clean
 """Build dashboard/agent-squad-run-dashboard.html: one self-contained file with no server.
 
 The schema, the gate registry, the rule constants, and a snapshot of the served lists are read from the
@@ -14,7 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from squad import graph  # noqa: E402
+from squad import graph, modelreg  # noqa: E402
 from squad.gates import GATE_REGISTRY  # noqa: E402
 
 DASH = ROOT / "dashboard"
@@ -28,37 +29,48 @@ def _skill_dirs(base):
 
 
 def served_lists(home=False):
-    """Suggestions for tools, skills, models, and efforts. A snapshot of what the repo uses; unknown values are never blocked."""
+    """Suggestions for tools, skills, models, and efforts. A snapshot of what the repo uses; unknown values are never blocked.
+    The model list is the registry's ids and aliases, so a suggestion always resolves through the one resolver."""
     cfg = yaml.safe_load((ROOT / "config" / "agent-defaults.yaml").read_text())
-    tools, models, efforts = set(graph.WRITE_TOOLS), set(), set()
+    reg = modelreg.default_registry()
+    tools, models, efforts = set(graph.WRITE_TOOLS), set(reg.entries) | set(reg.aliases), set()
     opts = cfg.get("options", {})
     for src in [opts, *cfg.get("roles", {}).values()]:
         tools.update(src.get("allowed_tools") or [])
         tools.update(src.get("disallowed_tools") or [])
-    models.update(m for m in (opts.get("model"), opts.get("fallback_model")) if m)
     efforts.update(e for e in (opts.get("effort"),) if e)
     skills = set(_skill_dirs(ROOT / "vendor" / "skills" / "skills")) | set(_skill_dirs(ROOT / ".claude" / "skills"))
-    sources = ["config/agent-defaults.yaml", "vendor/skills/skills", ".claude/skills", *FIXTURES]
+    sources = ["config/agent-defaults.yaml", "config/models.registry.json", "vendor/skills/skills", ".claude/skills", *FIXTURES]
     if home:
         skills |= set(_skill_dirs(Path.home() / ".claude" / "skills"))
         sources.append("~/.claude/skills")
     for f in FIXTURES:
         for n in json.loads((DESIGN / f"{f}.graph.json").read_text())["nodes"]:
             tools.update(n.get("tools", []))
-            if n.get("model"):
-                models.add(n["model"])
             if n.get("effort"):
                 efforts.add(n["effort"])
             skills.update(s["name"] if isinstance(s, dict) else s for s in n.get("skills", []))
-            for key, bag in (("models", models), ("efforts", efforts), ("tools", tools)):
+            for key, bag in (("efforts", efforts), ("tools", tools)):
                 bag.update((n.get("adapt") or {}).get(key) or [])
     lists = {"tools": sorted(tools), "skills": sorted(skills), "models": sorted(models), "efforts": sorted(efforts), "sources": sources}
     lists["hash"] = hashlib.sha256(json.dumps(lists, sort_keys=True).encode()).hexdigest()
     return lists
 
 
+def model_snapshot():
+    """The registry data the dashboard shows: one label, one alias map, one display price and one provider per entry.
+    `providers` lets the record re-price only a model the SDK cannot price, which is every provider but Claude."""
+    reg = modelreg.default_registry()
+    return {
+        "labels": {mid: e.label for mid, e in reg.entries.items()},
+        "aliases": dict(reg.aliases),
+        "prices": {mid: e.display_price for mid, e in reg.entries.items() if e.display_price},
+        "providers": {mid: e.provider for mid, e in reg.entries.items()},
+    }
+
+
 def engine_data():
-    """What the core needs from the engine: the schema, the registry, and the rule constants."""
+    """What the core needs from the engine: the schema, the registry, the model snapshot, and the rule constants."""
     return {
         "schema": json.loads(graph.SCHEMA_PATH.read_text()),
         "kinds": list(graph.KINDS),
@@ -68,6 +80,7 @@ def engine_data():
         "forbidden_name": graph.FORBIDDEN_NAME.pattern,
         "forbidden_instrument": graph.FORBIDDEN_INSTRUMENT.pattern,
         "gate_registry": GATE_REGISTRY,
+        "models": model_snapshot(),
     }
 
 

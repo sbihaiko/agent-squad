@@ -1,7 +1,9 @@
 // Dashboard core module: The totals bar and the top bar of issue progress.. Moved from rest.js with no change.
+// modelreg: seam-clean
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
-function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
+function totalsModule({ lastOf, num, sumOf, tokenFigures, models }) {
+  const REG = models || {};
   // ---- The totals bar (owner request after #86) ----
   // The cap comes from the run's own options, else from the loaded graph. No cap is null.
   function runCap(start, doc) {
@@ -75,10 +77,16 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures }) {
     count: (v) => !num(v) ? DASH : String(v),
     tokens: (v) => !num(v) ? DASH : v < 1000 ? String(v) : v < 9950 ? (v / 1e3).toFixed(1) + "k" : v < 1e6 ? Math.round(v / 1e3) + "k" : (v / 1e6).toFixed(1) + "M",
     rate: (v) => !num(v) ? DASH : (v === 0 ? "0" : v < 10 ? v.toFixed(1) : String(Math.round(v))) + " tk/s",
-    // A model id is shown without its `claude-` prefix: the prefix is the CLI's provider marker, not part of what a reader
-    // compares. The record, the graph and an editable field keep the id whole. It is safe on a harness phrase, which starts
-    // with the id. An empty value is a dash, like every other missing figure here.
-    model: (m) => m === null || m === undefined || m === "" ? DASH : String(m).replace(/^claude-/, ""),
+    // A model reads as its registry label. An alias resolves to its canonical id first, so an old record still shows the
+    // right name. A harness phrase (`model effort skill`) starts with the id and keeps the rest. An id the registry does
+    // not know renders raw: display never guesses. The record, the graph and an editable field keep the id whole.
+    // An empty value is a dash, like every other missing figure here.
+    model: (m) => {
+      if (m === null || m === undefined || m === "") return DASH;
+      const text = String(m), head = text.split(/\s+/)[0];
+      const id = (REG.aliases || {})[head] || head, label = (REG.labels || {})[id];
+      return label ? label + text.slice(head.length) : text;
+    },
   };
 
   return { runCap, runTotals, totalsCells, issueProgress, progressCells, DASH, fmt };
