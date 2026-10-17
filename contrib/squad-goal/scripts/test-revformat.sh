@@ -227,4 +227,19 @@ python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
 printf 'VERDICT: CHANGES\n## Blocking\n- Whole diff — the branch delivers nothing — the criteria stay unmet — retarget it\n' > "$T/r.md"
 [ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=0" ] && ok "--summary counts a whole-diff Blocking bullet (#443)" || ko "--summary whole-diff: '$(python3 "$src" --summary "$T/r.md")'"
 
+# A section with nothing in it says so (#498): a model that has no finding writes "None.", and that is an empty
+# section, not a malformed bullet. Only the section's first content, and never after a bullet.
+printf 'VERDICT: APPROVE\n## Blocking\nNone.\n## Debt\n- src/a.py:1 — x — y — z\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 0 ] && ok "an empty section says None." || ko "an empty section's None. is rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+printf 'VERDICT: APPROVE\n## Blocking\nNone\n## Debt\nNone\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 0 ] && ok "two empty sections say None" || ko "two empty sections are rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+printf 'VERDICT: CHANGES\n## Debt\n- src/a.py:1 — x — y — z\nNone.\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 0 ] && ok "None. after a bullet stays a bullet continuation, never an empty section" || ko "None. after a bullet broke its bullet: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+printf 'VERDICT: CHANGES\n## Debt\nNo findings.\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
+[ $? = 1 ] && ok "CHANGES with no finding still fails" || ko "CHANGES with no finding was accepted"
+
 rm -rf "$T"; exit $fail
