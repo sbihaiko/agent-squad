@@ -59,6 +59,15 @@ o=$(SG_STATE="$T/st" SG_TOKEN_BURN_RATE_FLOOR_S=3600 bash "$G" 2>&1); rc=$?
 [ $rc = 1 ] && ok "a burst over the cap across the floor span fires" || ko "floor fire: rc=$rc out=$o"
 case "$o" in *184963*1500000*review:BURST*) ok "the rate sentence names total, cap and consumer";; *) ko "rate sentence: $o";; esac
 
+# a cache read is counted at the cache-read price ratio (#495): a repository review re-reads its cached context every
+# turn, so counted at full weight one review read as 560k and stopped the loop; at one tenth the same line is 111k.
+rm -f "$L"; marker 361; line "$(now)" review:CACHE claude:opus 10000 1000 1000000
+o=$(guard); rc=$?
+[ $rc = 0 ] && [ -z "$o" ] && ok "a cache read counts at one tenth, so a review inside the cap does not stop the loop" || ko "cache weight: rc=$rc out=$o"
+o=$(SG_STATE="$T/st" SG_TOKEN_CACHE_WEIGHT=1 bash "$G" 2>&1); rc=$?
+[ $rc = 1 ] && ok "the weight is a setting: at 1 the same line fires" || ko "cache weight 1: rc=$rc out=$o"
+case "$o" in *1011000*) ok "the sentence names the weighted total";; *) ko "weighted total missing: $o";; esac
+
 # a missing ledger: exit 0
 rm -f "$L"; marker 10
 o=$(guard); rc=$?
