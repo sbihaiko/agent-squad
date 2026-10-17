@@ -823,7 +823,9 @@ if fd and fb:
         if not (m and ct.isdigit() and now - int(ct) > 1800): continue
         n = m.group(1); mk = st / "auto" / f"janitor-fixed-{n}-{h}"
         if mk.exists(): continue
-        if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
+        state = sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip()
+        if state == "closed" and not dry: mk.touch()   # settled: the next pass never reads this issue again (#525)
+        if state != "open": continue
         if sh("gh", "api", "-X", "GET", "search/issues", "-f", f"q=repo:{repo} is:pr is:open \"Refs #{n}\"", "-q", ".total_count").strip() != "0": continue   # -X GET is load-bearing here too: a bare `-f` POSTs, and /search/issues answers Not Found (#1981)
         say(f"FIXED-NOT-CLOSED #{n}: fork commit {h} \"{subj[:60]}\" names it, the issue is still open")
         if not dry: mk.touch()
