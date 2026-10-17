@@ -17,7 +17,7 @@ echo base > "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m base
 # A Python script selects its shell suite. baz.py has no suite and the docs change is outside scripts.
 $G -C "$R" checkout -q -b gui/py; echo 1 >> "$S/foo.py"; echo 1 >> "$S/baz.py"; echo 1 >> "$R/docs/x.md"; $G -C "$R" add -A; $G -C "$R" commit -q -m python-work
 py_tip=$(git -C "$R" rev-parse HEAD)
-printf '#!/bin/bash\necho "base-cmd lock=$([ -d "%s/locks/gate" ] && echo held || echo free)" >> "%s/ran.log"\n[ -z "$BASE_FAIL" ]\n' "$SG_STATE" "$T" > "$T/base.sh"; chmod +x "$T/base.sh"
+printf '#!/bin/bash\necho "base-cmd lock=$([ -d "%s/locks/gate" ] && echo held || echo free)" >> "%s/ran.log"\n[ "$BASE_FAIL" = 1 ] && echo "FAILED tests/test_x.py::test_a - boom"\n[ -z "$BASE_FAIL" ]\n' "$SG_STATE" "$T" > "$T/base.sh"; chmod +x "$T/base.sh"
 fg() { rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="$T/base.sh" bash "$d/fast-gate.sh" 2>&1); }
 
 out=$(fg); rc=$?
@@ -37,15 +37,18 @@ out=$(BASE_FAIL=1 fg); rc=$?
 
 # A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests run once
 # more, serially (SG_FAST_RETRY_CMD). Green there, the gate goes on and names it; red there too, the gate fails as before.
-printf '#!/bin/bash\necho "retry-cmd" >> "%s/ran.log"\n[ -z "$RETRY_FAIL" ]\n' "$T" > "$T/retry.sh"; chmod +x "$T/retry.sh"
+printf '#!/bin/bash\necho "retry-cmd $*" >> "%s/ran.log"\n[ -z "$RETRY_FAIL" ]\n' "$T" > "$T/retry.sh"; chmod +x "$T/retry.sh"
 fgr() { rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="$T/base.sh" SG_FAST_RETRY_CMD="$T/retry.sh" bash "$d/fast-gate.sh" 2>&1); }
 out=$(BASE_FAIL=1 fgr); rc=$?
 [ $rc = 0 ] && ok "a base battery red only under load passes once its failed tests pass alone" || ko "saturation retry: rc $rc: $out"
 case "$out" in *saturation*) ok "the gate names the saturation it passed over";; *) ko "the retry is silent: $out";; esac
-/usr/bin/grep -qx "retry-cmd" "$T/ran.log" && /usr/bin/grep -q "test-foo.sh" "$T/ran.log" && ok "the suites still run after a passed retry" || ko "ran: '$(cat "$T/ran.log")'"
+/usr/bin/grep -qx "retry-cmd tests/test_x.py::test_a" "$T/ran.log" && /usr/bin/grep -q "test-foo.sh" "$T/ran.log" && ok "the suites still run after a passed retry" || ko "ran: '$(cat "$T/ran.log")'"
 out=$(BASE_FAIL=1 RETRY_FAIL=1 fgr); rc=$?
 [ $rc -ne 0 ] && ! /usr/bin/grep -q "test-foo.sh" "$T/ran.log" && ok "a failed test that fails alone too fails the gate" || ko "retry red: rc $rc: '$(cat "$T/ran.log")'"
 out=$(fgr); /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ko "a green battery ran the retry" || ok "a green battery runs no retry"
+# pyproject turns the pytest cache off, so --lf names nothing: the retry runs the failed tests the log names, never the battery.
+out=$(BASE_FAIL=lint fgr); rc=$?
+[ $rc -ne 0 ] && ! /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ok "a red that names no failed test (lint, types) runs no retry and fails" || ko "lint red: rc $rc: '$(cat "$T/ran.log")'"
 
 # A shell script selects the same suite on a separate branch from the same base.
 $G -C "$R" checkout -q dev; $G -C "$R" checkout -q -b gui/sh; echo 1 >> "$S/foo.sh"; echo 1 >> "$S/baz.sh"; echo 1 >> "$R/docs/x.md"; $G -C "$R" commit -qam shell-work
