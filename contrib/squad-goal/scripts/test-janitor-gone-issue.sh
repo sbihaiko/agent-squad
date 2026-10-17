@@ -23,13 +23,12 @@ a="$*"; printf '%s\n' "$a" >> "TMPDIR/gh.calls"
 case "$a" in
   *project-write/4660*) printf 'HTTP 410 Gone\n' >&2; exit 1;;
   *project-write/4661*) printf '#4661: HTTP 502 Bad Gateway (retry after 410 ms)\n' >&2; exit 1;;   # a 410 that is no status (#466 review)
-  *'--include repos/x/y/issues/4662'*) printf 'HTTP/2 410 Gone\r\n\r\n{"message":"Could not resolve to an issue"}\n'; exit 1;;
+  *'repos/x/y/issues/4662 -q'*) printf '{"message":"This issue was deleted","documentation_url":"https://docs.github.com/rest","status":"410"}'; exit 1;;   # gh writes the error body to stdout and ignores -q
   *projectsV2/4/fields*) printf 'FID4\n';;
   *projectsV2/4/items*) printf '4660\tCode Complete\thttps://api.github.com/repos/x/y\n4661\tCode Complete\thttps://api.github.com/repos/x/y\n';;
   *graphql*) printf '%s\n' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":4660,"title":"Issue 4660","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}},{"number":4661,"title":"Issue 4661","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}]}}}}';;
   *repos/x/y/branches*) :;;
   *repos/x/y/issues/4660*) printf 'open\t\tIssue 4660\t\n';;
-  *'--include repos/x/y/issues/4661'*) printf 'HTTP/2 502 Bad Gateway\r\nx-ratelimit-remaining: 4103\r\n\r\n{"message":"Server Error"}\n'; exit 1;;   # a transient read whose headers carry 410
   *repos/x/y/issues/4661*) printf 'open\t\tIssue 4661\t\n';;
 esac
 J
@@ -51,6 +50,6 @@ o2=$(run)
 [ "$(/usr/bin/grep -c 'project-write/4661' "$T/gh.calls")" = 2 ] && ok "502: the board write is retried on each pass" || ko "502 writes: $(/usr/bin/grep 'project-write/4661' "$T/gh.calls")"
 [ "$(/usr/bin/grep -c 'BOARD-WRITE-FAILED #4661' "$T/st/cycle.log")" = 2 ] && ok "502: each refusal is reported" || ko "502 reports: $(cat "$T/st/cycle.log")"
 ! /usr/bin/grep -qx 'run-finished-gone' "$T/st/active-runs.txt" && ok "a finished run whose issues are gone leaves active-runs" || ko "active runs: $(cat "$T/st/active-runs.txt")"
-/usr/bin/grep -q -- '--include repos/x/y/issues/4662' "$T/gh.calls" && ok "the gone-run check reads the issue response" || ko "gone-run read: $(cat "$T/gh.calls")"
+/usr/bin/grep -q -- 'repos/x/y/issues/4662 -q' "$T/gh.calls" && ok "the gone-run check reads the issue response" || ko "gone-run read: $(cat "$T/gh.calls")"
 rm -rf "$T"
 exit $fail

@@ -53,13 +53,13 @@ DEADLINE = float(os.environ.get("JANITOR_CALL_TIMEOUT", "60"))   # a call has a 
 # hardcoded path turns a missing tool into a failed pass. The shell resolves it into SG_LSOF (env.sh); this is the same
 # one resolution for a run with no shell around it, and the last entry keeps a tool outside both paths reachable.
 LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
-def _run(a, cwd=None, env=None, timeout=None, include_stderr=False):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
+def _run(a, cwd=None, env=None, timeout=None):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
     """Run one command and return (exit status, stdout), at most DEADLINE seconds. A pipe is never used: a command's
     grandchild that inherits stdout would hold the pipe past the child's exit, and the pass would wait for it for ever
     (the loop stopped for 28 min on 2026-10-13). A deadline miss is one status of 1 and one line in the pass log."""
     with tempfile.TemporaryFile("w+") as f:
         try:
-            rc = subprocess.run(a, stdout=f, stderr=(subprocess.STDOUT if include_stderr else subprocess.DEVNULL), text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
+            rc = subprocess.run(a, stdout=f, stderr=subprocess.DEVNULL, text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
         except subprocess.TimeoutExpired:
             say(f"call timed out after {(DEADLINE if timeout is None else timeout):g}s: {' '.join(a[:3])}")
             return 1, ""
@@ -214,11 +214,17 @@ def mark_killed(f):
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
-GONE = re.compile(r"\bHTTP(?:/[\d.]+)? 410\b|could not resolve to an issue", re.I)   # the 410 status or the stable message, never a bare 410: an issue number, a header or a delay may carry one (#466)
+GONE = re.compile(r"\bHTTP(?:/[\d.]+)? 410\b|could not resolve to an issue|this issue was deleted", re.I)   # the 410 status or GitHub's stable message, never a bare 410: an issue number, a header or a delay may carry one (#466)
 def gone_msg(s): return bool(GONE.search(s or ""))
-def issue_is_gone(x):   # a missing issue is not a transient read refusal: GitHub names it with 410 or this stable message
-    r, out = _run(["gh", "api", "--include", f"repos/{repo0}/issues/{x}"], include_stderr=True)
-    return r != 0 and gone_msg(out)
+_is = {}
+def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title and its labels
+    if x not in _is:
+        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(","))] | @tsv').strip().split("\t")
+        _is[x] = (o + ["", "", "", ""])[:4]
+    return _is[x]
+def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
+    # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
+    return gone_msg("\t".join(issue_read(x)))
 live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 pending = []   # markers of a reaped run, dropped after rule Q has read them
@@ -320,12 +326,6 @@ for x, rs in byissue.items():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
         if not dry: mk.touch()
 base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to count as delivery (#127)
-_is = {}
-def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title and its labels
-    if x not in _is:
-        o = sh("gh", "api", f"repos/{repo0}/issues/{x}", "-q", '[.state, (.state_reason // ""), .title, ([.labels[].name] | join(","))] | @tsv').strip().split("\t")
-        _is[x] = (o + ["", "", "", ""])[:4]
-    return _is[x]
 def issue_info(x):
     return issue_read(x)[:3]
 def issue_labels(x): return set(l for l in issue_read(x)[3].split(",") if l)
