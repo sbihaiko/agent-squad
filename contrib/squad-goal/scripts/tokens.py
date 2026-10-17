@@ -31,7 +31,8 @@ def _n(v):
     return int(float(v))
 
 
-def _rows(state, checkout):
+def _rows(state, checkout, cache_weight=1.0):
+    """cache_weight: what one cache-read token counts as; the guard passes the provider's cache-read price ratio (#495)."""
     try:
         with open(os.path.join(state, "token-usage.tsv"), errors="replace") as f:
             for line in f:
@@ -39,7 +40,7 @@ def _rows(state, checkout):
                 try:
                     if len(p) >= 6:
                         unc = 1 if len(p) > 6 and p[6].strip() else 0   # a 7th field is the mark of a call with no count
-                        yield _epoch(p[0]), p[1], p[2], _n(p[3]) + _n(p[4]) + _n(p[5]), unc
+                        yield _epoch(p[0]), p[1], p[2], _n(p[3]) + _n(p[4]) + int(round(_n(p[5]) * cache_weight)), unc
                 except (ValueError, OverflowError):
                     pass
     except OSError:
@@ -57,7 +58,7 @@ def _rows(state, checkout):
                             continue
                         who = e.get("node") or e.get("child")
                         c = f"run:{folder}" + (f":{who}" if who else "")
-                        t = _n(e.get("tokens_in") or 0) + _n(e.get("tokens_out") or 0) + _n(e.get("cache_read") or 0)
+                        t = _n(e.get("tokens_in") or 0) + _n(e.get("tokens_out") or 0) + int(round(_n(e.get("cache_read") or 0) * cache_weight))
                         yield _epoch(e["ts"]), c, str(e.get("model") or "?"), t, 0
                     except (ValueError, TypeError, KeyError, OverflowError):
                         pass
@@ -65,10 +66,10 @@ def _rows(state, checkout):
             pass
 
 
-def burners(state, checkout, hours):
+def burners(state, checkout, hours, cache_weight=1.0):
     cut = time.time() - hours * 3600
     agg = {}
-    for ts, c, m, t, unc in _rows(state, checkout):
+    for ts, c, m, t, unc in _rows(state, checkout, cache_weight):
         if ts < cut:
             continue
         a = agg.setdefault(c, {"consumer": c, "tokens": 0, "calls": 0, "uncounted": 0, "models": []})
@@ -89,6 +90,7 @@ def main(argv):
     b.add_argument("--hours", type=float, default=24)
     b.add_argument("--threshold", type=int)
     b.add_argument("--json", action="store_true")
+    b.add_argument("--cache-weight", type=float, default=1.0, help="what one cache-read token counts as (the guard passes 0.1)")
     a = ap.parse_args(argv)
     thr = a.threshold
     if thr is None:
@@ -96,7 +98,7 @@ def main(argv):
             thr = int(os.environ.get("SG_TOKEN_ALERT", ""))
         except ValueError:
             thr = DEFAULT_THRESHOLD
-    rows = burners(a.state, a.checkout, a.hours)
+    rows = burners(a.state, a.checkout, a.hours, a.cache_weight)
     total = sum(r["tokens"] for r in rows)
     uncounted = sum(r["uncounted"] for r in rows)
     if a.json:
