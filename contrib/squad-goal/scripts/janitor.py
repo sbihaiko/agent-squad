@@ -589,9 +589,14 @@ def reconcile_board():
     # Every open issue starts at the loop floor. This rank is below every rule above, so current run, marker, branch, landing,
     # closure, or owner-label evidence wins; a Blocked card never preserves a blocking cause that has disappeared.
     oans, olabels = open_issues()
+    go = os.environ.get("SG_FRONTIER_LABEL", "")
+    def startable(labels):   # a dispatcher takes it (#488): autobug a bug or debt issue with no skip label, the frontier one with the go label and no skip label
+        if labels & set((os.environ.get("SG_BUG_SKIP_LABELS") or "needs-owner,no-auto,wontfix,question").split(",")): return False
+        if labels & {os.environ.get("SG_BUG_LABEL") or "bug", "debt"}: return True
+        return go in labels and not labels & ({"run-parent", "frozen:owner", "frozen:dependency"} | set(filter(None, os.environ.get("SG_FRONTIER_SKIP_LABELS", "").split(","))))
     if oans:
         for n in sorted(olabels, key=int):
-            hold = shipped and bool(olabels[n] & {"needs-owner", "needs-ratification"})   # frozen by the owner: not startable, so Backlog by the floor (the definition: Todo is startable)
+            hold = shipped and (bool(olabels[n] & {"needs-owner", "needs-ratification"}) or bool(go) and not startable(olabels[n]))   # frozen by the owner, or no dispatcher takes it: not startable, so Backlog by the floor (the definition: Todo is startable)
             set_expected(n, "Backlog" if hold else os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so it opens in its own column rather than in the loop's queue (#117's
