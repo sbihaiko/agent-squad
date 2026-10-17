@@ -19,7 +19,9 @@ cat > "$T/board.json" <<'J'
  "freeze": [{"name": "Owner", "color": "ORANGE", "fact": "frozen:owner"}],
  "outcomes": [{"name": "Merged", "color": "GREEN", "fact": "In main"}, {"name": "Reverted", "color": "ORANGE", "fact": "Taken back"}]}
 J
-# the board today: a Status field with two options the definition does not name, and a Freeze field missing one option it does not need
+# the board today: a Status field with two options the definition does not name, a Freeze field missing one option it does
+# not need, and the Run text field without its Run started twin: both are the binding's holder fields, which the
+# definition does not name (#487)
 cat > "$T/fields.json" <<'J'
 [{"id": 1, "node_id": "F_TITLE", "name": "Title", "data_type": "title"},
  {"id": 2, "node_id": "F_STATUS", "name": "Status", "data_type": "single_select", "options": [
@@ -54,9 +56,11 @@ for line in "drift Status: missing Backlog" "drift Status: missing Doing" "drift
             "drift Status: not in the definition Blocked" "drift Status: not in the definition Done" \
             "drift Kind: field missing" "drift Outcome: field missing" \
             "plan Status: add Backlog, Doing, Closed" "plan Kind: create Bug, Task" "plan Outcome: create Merged, Reverted" \
+            "drift Run started: field missing" "plan Run started: create text field" \
             "dry run: nothing written"; do
   grep -qxF "$line" <<<"$o" && ok "names: $line" || ko "missing line '$line' in: $o"
 done
+grep -qE "^(drift|plan) Run:" <<<"$o" && ko "a text field the board carries is reported: $o" || ok "a text field the board carries is not reported"
 grep -q "Freeze" <<<"$o" && ko "a field that matches the definition is reported: $o" || ok "a field that matches the definition is not reported"
 grep -q "remove\|drop" <<<"$o" && ko "expand plans a removal: $o" || ok "expand plans no removal"
 
@@ -78,14 +82,15 @@ assert [(o.get("id"), o["name"]) for o in opts] == [("o_block", "Blocked"), ("o_
 assert opts[1] == {"id": "o_todo", "name": "Todo", "color": "GRAY", "description": "today"}, opts[1]
 assert opts[3] == {"name": "Backlog", "color": "GRAY", "description": "Open, not in the schedule"}, opts[3]
 P
-python3 - "$T/graphql.in" <<'P' && ok "--apply creates Kind and Outcome with the definition's options, and touches Freeze not at all" || ko "create payload: $(cat "$T/graphql.in")"
+python3 - "$T/graphql.in" <<'P' && ok "--apply creates Kind and Outcome with the definition's options and Run started as text, and touches Freeze and Run not at all" || ko "create payload: $(cat "$T/graphql.in")"
 import json, sys
 calls = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 made = {c["variables"]["input"]["name"]: c["variables"]["input"] for c in calls if "createProjectV2Field" in c["query"]}
-assert sorted(made) == ["Kind", "Outcome"], made
+assert sorted(made) == ["Kind", "Outcome", "Run started"], made
 assert [o["name"] for o in made["Kind"]["singleSelectOptions"]] == ["Bug", "Task"]
 assert made["Outcome"]["dataType"] == "SINGLE_SELECT"
-assert len(calls) == 3, calls
+assert made["Run started"] == {"projectId": "P_1", "dataType": "TEXT", "name": "Run started"}, made["Run started"]
+assert len(calls) == 4, calls
 assert not any("F_FREEZE" in json.dumps(c) for c in calls)
 P
 grep -qE 'ItemFieldValue|items' "$T/gh.calls" "$T/graphql.in" && ko "--apply writes an item: $(cat "$T/gh.calls")" || ok "--apply moves no card"
@@ -97,6 +102,7 @@ import json, sys
 fs = [{"id": 2, "node_id": "F_STATUS", "name": "Status", "data_type": "single_select", "options": [{"id": "s%d" % i, "name": {"raw": n}, "color": "GRAY", "description": {"raw": ""}} for i, n in enumerate(["Backlog", "Todo", "Doing", "Closed"])]}]
 for i, (f, names) in enumerate([("Kind", ["Bug", "Task"]), ("Freeze", ["Owner"]), ("Outcome", ["Merged", "Reverted"])]):
     fs.append({"id": 10 + i, "node_id": "F_" + f, "name": f, "data_type": "single_select", "options": [{"id": f + n, "name": {"raw": n}, "color": "GRAY", "description": {"raw": ""}} for n in names]})
+fs += [{"id": 20 + i, "node_id": "F_T%d" % i, "name": n, "data_type": "text"} for i, n in enumerate(["Run", "Run started"])]
 json.dump(fs, open(sys.argv[1], "w"))
 P
 rm -f "$T/graphql.in"; o=$(run --check --apply o 4 2>&1); rc=$?
