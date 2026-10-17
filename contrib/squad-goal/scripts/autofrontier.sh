@@ -97,6 +97,8 @@ case "${spend:--}" in -|"") spendarg="a spend the run's own dispatch budget allo
   *) spendarg="spend $spend (the dispatch node's budget: a request over it is rejected whole, spend_outside_budget)";; esac
 [ "$free" -gt 0 ] || exit 0
 cap=$free; case "${room:--}" in -) ;; *) [ "$room" -lt "$cap" ] && cap=$room;; esac   # the children this run may take: the free run slots, and never more than the room the envelope and the child ceilings leave (the tighter of the two bounds wins, never the room alone)
+fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)   # and never more children than one run can fund (#480)
+case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$cap" ] && cap=$fr;; esac
 [ "$cap" -gt 0 ] || exit 0   # the live runs hold every child the machine allows
 # The issues an open work branch already names are past dispatch, so a pass never dispatches one twice (#361). It is a git
 # read of the remote heads (workbranches.sh), never a GitHub call: the work branch is the unit of work now, and the open

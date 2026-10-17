@@ -154,11 +154,19 @@ def read(f):
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
     kids = set(); kid_issue = {}; land_nodes = set(); outs = {}
+    # The spawn batch (#480): the engine answers a dispatch's requests in one batch, then starts the children. Any event after
+    # the last spawn event is past that batch, so the run's choice of children is decided; spawn_ts is when it was made.
+    spawned = decided = False; spawn_ts = 0.0
     if not t.exists(): return None
     for l in t.read_text().splitlines():
         try: d = json.loads(l)
         except ValueError: d = {}
         ev = d.get("event")
+        if ev in ("spawn_requested", "spawn_accepted", "spawn_rejected"):
+            spawned = True; decided = False
+            if isinstance(d.get("ts"), (int, float)): spawn_ts = max(spawn_ts, float(d["ts"]))
+        elif spawned and ev:
+            decided = True
         if ev == "run_start":
             rid = str(d.get("run_id") or rid); rts = str(d.get("ts") or d.get("started_at") or rts)
         if ev == "verdict":   # the fold takes the last verdict event of a resumed record (ADR-0105)
@@ -193,7 +201,7 @@ def read(f):
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
             "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts,
-            "kid_issue": kid_issue, "kid_landed": kid_landed, "kid_out": outs}
+            "kid_issue": kid_issue, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
         return pidc in procs
@@ -510,6 +518,13 @@ def reconcile_board():
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
         if col == "Landing": set_expected(n, col, f"the wave of run {i['run_id']} is approved and its push to dev is pending", i["run_id"], i["run_ts"], 65)
         elif col == "Testing": set_expected(n, col, f"the wave of run {i['run_id']} is in dev and the CI of the dev tip runs", i["run_id"], i["run_ts"], 70); testing.add(n)
+    def unheld(n, f, i):   # a live run holds the issue, but its spawn batch gave it no child (#480): nobody works it, so it is back in the queue and its dispatch marker goes. A marker written after the batch belongs to a newer dispatch and stays
+        set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} gave the issue no child (the router did not choose it, or the engine rejected its spawn)", i["run_id"], i["run_ts"], 20)
+        for k in ("disp", "bug"):
+            m = st / "auto" / f"{k}-{n}"
+            if m.exists() and m.stat().st_mtime <= i["spawn_ts"]:
+                say(f"UNHELD #{n}: run {i['run_id']} gave it no child; {m.name} dropped")
+                if not dry: m.unlink(missing_ok=True)
     def code_complete(n, f, i, why):   # a landing is Code Complete only once the wave, when the run cut one, holds the issue (#467)
         e = wave_entry(n, f, i)
         if e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
@@ -529,6 +544,8 @@ def reconcile_board():
             landed_kid = next((c for c in mine if c in i["kid_landed"]), None) if i else None   # a child that landed its own work: the run's landing is that child's, never every issue the run held (#271)
             if i is None:
                 set_expected(n, "In Progress", f"run {f.name} has dispatch marker", f.name, "", 30)
+            elif not i["verdict"] and i["decided"] and not any(n in v for v in i["kid_issue"].values()):
+                unheld(n, f, i)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif landed_kid:

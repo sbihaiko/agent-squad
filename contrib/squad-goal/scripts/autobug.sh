@@ -153,6 +153,20 @@ gather_bugs() {
 # An issue an open work branch names is past dispatch (#361): the branch is the unit of work, so a git read of the remote
 # heads is the fact, never a GitHub call.
 refs=" $(sg_work_issues) "
+# The blocker gate is stack.sh's, as in the frontier (#479): one aggregate read of the open issues carries each entry's
+# blockers and their states, and a bug is a candidate only when stack.sh answers READY. A WAIT is logged when its reason
+# changes, never on every pass (auto/abwait-<n>).
+F=$(mktemp -d); trap 'rm -rf "$F"' EXIT
+gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || { echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0; }
+ready_now() {   # <issue>: 0 when stack.sh answers READY
+  local n=$1 out w
+  jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
+  out=$(SG_STACK_ISSUE="$F/issue-$n.json" "$here/stack.sh" "$n" 2>/dev/null | /usr/bin/grep -m1 -E '^(READY|WAIT )')
+  case "$out" in READY*) rm -f "$A/abwait-$n"; return 0;; esac
+  w=${out:-WAIT stack.sh gave no answer}
+  [ "$(cat "$A/abwait-$n" 2>/dev/null)" = "$w" ] || { echo "AUTOBUG skip #$n: $w"; printf '%s\n' "$w" > "$A/abwait-$n"; }
+  return 1
+}
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
 cand=(); cj="["
 for sel in "$lab" debt; do
@@ -165,6 +179,7 @@ for sel in "$lab" debt; do
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
     # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.
     sg_not_startable "$n" && { echo "AUTOBUG skip #$n: SQUAD-NOT-STARTABLE among its comments (a failure the loop already repeated)"; continue; }
+    ready_now "$n" || continue
     cand+=("$n")
   done <<<"$list"
 done
@@ -180,7 +195,13 @@ for n in "${cand[@]}"; do
 done
 cj="${cj%,}]"
 cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0   # cluster.py itself never answered: no cluster to trust
-clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[@]} -ge "$free" ] && break; done <<<"$cl"
+# One cluster is one child, and a run funds only so many children (#480): the engine rejects the rest (spend_over_remainder),
+# and their issues would sit in Doing with nobody on them. So the pass asks for no more than the free run slots and the
+# children one run can fund (fundroom.py; "-" when the graph does not say).
+lim=$free; fr=$(cd "$SG_CHECKOUT" && python3 "$here/fundroom.py" "${SG_WORKFLOW:-dynamic}" 2>/dev/null)
+case "$fr" in ''|-|*[!0-9]*) ;; *) [ "$fr" -lt "$lim" ] && lim=$fr;; esac
+[ "$lim" -gt 0 ] || { echo "AUTOBUG: one run funds no child (fundroom.py: $fr); nothing dispatched" >&2; exit 0; }
+clusters=(); while read -r c; do [ -n "$c" ] && clusters+=("$c"); [ ${#clusters[@]} -ge "$lim" ] && break; done <<<"$cl"
 # a cluster is a list of issue numbers, read as one list: the words of a bad payload must never be re-split into issues,
 # and a cluster whose numbers are not all valid is dropped (#1855).
 pick=()
