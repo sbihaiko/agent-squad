@@ -180,6 +180,7 @@ WIRE = [
     ("haiku", "gateway", "haiku"),
     # the live models.json
     ("claude:claude-deepseek-v4-flash[1m]", "cli", "claude-deepseek-v4-flash[1m]"),
+    ("claude:claude-deepseek-v4-flash[1m]", "gateway", "claude-deepseek-v4-flash[1m]"),
     ("gpt-5.6-luna", "cli", "gpt-5.6-luna"),
     ("grok-4.6", "cli", "grok-4.6"),
     ("claude-deepseek-v4-flash", "gateway", "claude-deepseek-v4-flash"),
