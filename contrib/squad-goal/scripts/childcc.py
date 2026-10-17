@@ -30,19 +30,26 @@ def child_worktree(rd, child, d):   # the tree a child worked in, by the engine'
     return rd / "ws" / f"{logical}-{child}"
 def head_of(wt):   # the sha the child's worktree stands on, "" when it has none
     return subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+def claimed(claim, head):   # a review claim [head, pid] holds while its pass is alive; a bare head, or a dead pass, holds nothing (#502)
+    if len(claim) != 2 or claim[0] != head or not claim[1].isdigit(): return False
+    try: os.kill(int(claim[1]), 0)
+    except ProcessLookupError: return False
+    except PermissionError: pass
+    return True
 def reviewed(rd, child, n, wt, rv):
     """The review of the child's own diff, read in the child's worktree against its run's wave branch, before the entry: the
     branch the review lane lists is a pushed `fix/`/`gui/` one, and a child's branch reaches no remote at all (#375), so no
     pass wrote the review the entry waits for and every child of every run was held for good (#448). One review per head
     (marker auto/rvd-<run>-<child> holds the sha it read): a pass that starts while this one reviews does not repeat it, and a
     head that gets a new commit is read again. A review that produced no verdict is not a review: the claim goes, so a chain
-    that was down is tried again on the next pass."""
+    that was down is tried again on the next pass. The claim also names the pass that holds it (#502): a pass killed
+    mid-review (the loop stopped) leaves its claim and no reviewed head, and a claim whose pass is gone is no claim."""
     head = head_of(wt)
-    if rv.exists() and rv.read_text().strip() == head: return
+    if rv.exists() and claimed(rv.read_text().split(), head): return
     md, sha = review_paths(wt)
     if md.is_file() and md.stat().st_size and sha.is_file() and sha.read_text().strip() == head:   # a review of this head is already there: the entry reads it, and nothing is spent twice
         rv.write_text(head + "\n"); return
-    rv.write_text(head + "\n")
+    rv.write_text(f"{head} {os.getpid()}\n")
     e = subprocess.run(["bash", childreview, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
     if out: print(f"CHILD REVIEW {rd.name} {child}: {out}", flush=True)
