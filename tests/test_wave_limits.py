@@ -35,7 +35,7 @@ WAVE_CASES = (
     "L: the child that reached an expired wave does not enter",
     "L: the expired wave lands what it holds (exit 0)",
     "L: the child the wave held is in dev",
-    "L: the card of the held child reads Done",
+    "L: the card of the held child reads Closed",
     "L: the held child's issue is closed",
     "L: the child still running is back in the queue",
     "L: the child back in the queue is not closed",
