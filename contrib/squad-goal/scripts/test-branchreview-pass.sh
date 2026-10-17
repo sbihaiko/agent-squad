@@ -107,7 +107,7 @@ o=$(SG_REVIEW_STOP_TTL=0 OPEN="7 8 10" FAILREV=1 rp)
 # 8c) a missing resolver is a named line, and its stderr is not dropped (#505)
 rm -f "$T/st/auto/"branchreview-tries-gui_10-b-* "$T/st/auto/"branchreview-stop-gui_10-b-* "$T/st/cq/"*"#10-status~mchain"*
 mv "$T/s/modelreg.py" "$T/s/modelreg.py.off"
-for _ in 1 2 3; do rp >/dev/null; done
+for _ in 1 2 3; do OPEN="7 8 10" FAILREV=1 rp >/dev/null; done
 sf=$(ls -t "$T/st/cq/"*"#10-status~mchain"* 2>/dev/null | head -1)
 [ -n "$sf" ] && /usr/bin/grep -q 'REVIEW_CHAIN: chainhealth failed' "$sf" && ok "a missing resolver is a named line" || ko "no chainhealth failure line: '$sf' $(cat "$sf" 2>/dev/null)"
 mv "$T/s/modelreg.py.off" "$T/s/modelreg.py"

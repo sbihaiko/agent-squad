@@ -35,6 +35,13 @@ why_failed() { local f l m r t seen=" " out=
     [ "${#r}" -gt 100 ] && { r="${r:0:100}..."; [ -n "$t" ] && r="$r ($t)"; }
     out+="${out:+; }$m: $r"
   done; printf '%s' "$out"; }
+# chain_summary: the review chain's own words, stderr kept. A resolver that cannot run is a named line, never an empty summary.
+chain_summary() { local out rc
+  out=$(python3 "$here/chainhealth.py" "$here/models.json" "${SG_SHARED:-$SG_STATE}" 2>&1); rc=$?
+  printf '%s\n' "$out"
+  [ "$rc" -eq 0 ] && return 0
+  printf 'REVIEW_CHAIN: chainhealth failed (exit %s)\n' "$rc"
+  printf '%s\n' "$out" >&2; return "$rc"; }
 # review_one <sha> <branch> <issue> <key> <result file>: one review, its count, its lines. Every file it touches is named by the
 # branch key, so jobs for two branches share nothing. A review whose kept sha is not the listed tip (a failed read, or a push
 # that landed while it ran) is a failed try at the listed tip; the next pass lists the new tip, with a new count.
@@ -49,7 +56,7 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
   n=$((n+1)); echo "$n" > "$c"; echo "BRANCHREVIEW FAILED $br ${sha:0:9} (try $n of $tries): $out" >> "$res"
   [ "$n" -ge "$tries" ] && [ ! -e "$s" ] && { touch "$s"
     echo "BRANCHREVIEW STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i")); a new push, or $ttl s, starts a new count" >> "$res"
-    { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; python3 "$here/chainhealth.py" "$here/models.json" "${SG_SHARED:-$SG_STATE}"; } > "$(sg_cq_status "$i" "mchain")" \
+    { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; chain_summary; } > "$(sg_cq_status "$i" "mchain")" \
       || { echo "BRANCHREVIEW CHAINHEALTH $br: chainhealth.py failed (the model resolver is missing or unreadable)" >&2; : > "$A/chainhealth-failed"; }; }
 }
 done=0; now=$(date +%s); jobs_list=
