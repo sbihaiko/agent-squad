@@ -263,6 +263,11 @@ def normalize(review):
             rest.append(left)
     if not verdict:
         return review
+    # A preamble before the first section ("I'll review the branch against ...") is dropped, so a sound review is not
+    # lost to it (owner ruling). Prose that no section follows stays, and the check refuses it.
+    head = next((i for i, line in enumerate(rest) if line.lstrip().startswith("#")), None)
+    if head is not None and all(not line.lstrip().startswith(("-", "*")) for line in rest[:head]):
+        rest = rest[head:]
     return "\n".join([f"VERDICT: {verdict}"] + rest)
 
 
