@@ -214,10 +214,11 @@ def mark_killed(f):
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
 repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+GONE = re.compile(r"\bHTTP(?:/[\d.]+)? 410\b|could not resolve to an issue", re.I)   # the 410 status or the stable message, never a bare 410: an issue number, a header or a delay may carry one (#466)
+def gone_msg(s): return bool(GONE.search(s or ""))
 def issue_is_gone(x):   # a missing issue is not a transient read refusal: GitHub names it with 410 or this stable message
     r, out = _run(["gh", "api", "--include", f"repos/{repo0}/issues/{x}"], include_stderr=True)
-    msg = out.lower()
-    return r != 0 and ("410" in msg or "could not resolve to an issue" in msg)
+    return r != 0 and gone_msg(out)
 live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 pending = []   # markers of a reaped run, dropped after rule Q has read them
@@ -461,7 +462,7 @@ def board_write(args, n, why):   # the one writer of a card: a status write that
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
         err = named or (msg[0] if msg else "no output")
-        if "410" in err or "could not resolve to an issue" in err.lower():
+        if gone_msg(err):
             say(f"GONE-ISSUE #{n}: board write refused because the issue is gone: {err}")
             if not dry: gone.touch()
             return False
