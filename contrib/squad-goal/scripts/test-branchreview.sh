@@ -89,4 +89,12 @@ head -1 "$T/st/review-$ck.md" | /usr/bin/grep -q CHANGES && [ "$(cat "$T/st/revi
 [ "$(cat "$T/st/review-$ck.base" 2>/dev/null)" = wave/run-1 ] && ok "child: the base it was read against is the wave branch" || ko "child: base '$(cat "$T/st/review-$ck.base" 2>/dev/null)'"
 case "$out" in *"squad/run-1/ws-child"*"VERDICT: CHANGES"*) ok "child: the review prints the branch, its head and the verdict";; *) ko "child: '$out'";; esac
 ls "$T/st/cq/"x__y#7-status~* >/dev/null 2>&1 && /usr/bin/grep -q "a.cs:1" "$T/st/cq/"x__y#7-status~* && ok "child: the verdict lands in the issue's one status comment" || ko "child: no status comment: $(cat "$T/st/cq/"* 2>&1)"
+# 7) #483: a review that ended with no verdict for the head (superseded, or every model failed: review.sh exits 1 and keeps
+#    no reviewed head) is no review. childreview.sh exits non-zero, so childcc.py drops its once-per-head claim and the next
+#    pass reviews the head again. It exited 0 on the BLOCKED text alone, and the claim held the child out of its wave for good.
+rm -f "$T/st/review-$ck".*; cp "$T/s/review.sh" "$T/s/review.sh.real"
+printf '#!/bin/bash\n. "$(dirname "$0")/env.sh"\necho "VERDICT: BLOCKED (worktree x head moved during the review)" > "$SG_STATE/review-%s.md"; exit 1\n' "$ck" > "$T/s/review.sh"
+out=$(cd "$T/child" && bash "$T/s/childreview.sh" run-1 7 2>&1); rc=$?
+[ $rc != 0 ] && ok "child: a review with no verdict for the head exits non-zero, so its claim goes" || ko "child: a review with no verdict exited 0: $out"
+mv "$T/s/review.sh.real" "$T/s/review.sh"
 rm -rf "$T"; exit $fail

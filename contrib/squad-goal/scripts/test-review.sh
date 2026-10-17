@@ -190,4 +190,17 @@ rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; export CLAUDE_ARGS="$T/claude-args"
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 /usr/bin/grep -q -- '--strict-mcp-config' "$CLAUDE_ARGS" && ok "the review call sets --strict-mcp-config (no owner MCP servers in a review)" || ko "the review call misses --strict-mcp-config: $(cat "$CLAUDE_ARGS" 2>/dev/null)"
 unset CLAUDE_ARGS
+# 12) #483: a --worktree review watches the child's own HEAD, never the checkout's. The grok and gemini legs run their CLI
+# from SG_CHECKOUT, and the head watch ran there too: it read the checkout's HEAD, called the child's head moved within
+# 10 s, and every such review of a child ended "BLOCKED (head moved during the review)" with no verdict.
+W="$T/child"; /usr/bin/git init -q -b main "$W"; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base
+/usr/bin/git -C "$W" checkout -q -b gui/9; /usr/bin/git -C "$W" -c user.email=a@b -c user.name=t commit -q --allow-empty -m child
+/usr/bin/git init -q -b main "$T/co"; /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m checkout
+sed -i '' "s|SG_CHECKOUT=$T;|SG_CHECKOUT=$T/co;|" "$T/s/env.sh"
+printf '#!/bin/bash\nsleep 12; echo "VERDICT: APPROVE"\n' > "$T/bin/grok"; chmod +x "$T/bin/grok"
+printf '{"review_models":["grok-4.7"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
+[ $rc = 0 ] && head -1 "$T/st/review-gui_9.md" | grep -q APPROVE && [ "$(cat "$T/st/review-gui_9.sha" 2>/dev/null)" = "$(/usr/bin/git -C "$W" rev-parse HEAD)" ] \
+  && ok "12 a worktree review run from the checkout keeps its verdict for the child's head" \
+  || ko "12 a worktree review read the checkout's HEAD: rc=$rc '$(head -1 "$T/st/review-gui_9.md" 2>/dev/null)' sha=$(cat "$T/st/review-gui_9.sha" 2>/dev/null)"
 rm -rf "$T"; exit $fail
