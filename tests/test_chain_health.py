@@ -1,9 +1,10 @@
-"""GitHub issue #431: when the review chain is down to one model, or none, the loop and the hub say which models are out,
-why, and when they come back.
+"""GitHub issue #431: when a chain is down to one model, or none, the loop and the hub say which models are out, why,
+and when they come back.
 
-One reader (`chainhealth.py`) reads the markers review.sh already skips a model over: `codex-limited` and `agy-limited`
-under $SG_SHARED (an epoch), `quota-guard`, and models.json's `off` and `hours`. The hub draws what the reader returns and
-never computes the rule (ADR-0137); branchreviewpass.sh puts the same summary in the issue's status file.
+One reader (`chainhealth.py`) is a thin wrapper over `modelreg.chain` and `modelreg.eligible` for coding, review, vision
+and router: the resolver owns the switch, the window, a subscription marker and the Claude reserve, and the reader names
+no rule of its own (SPEC 505). The hub draws what the reader returns and never computes the rule (ADR-0137);
+branchreviewpass.sh puts the same summary in the issue's status file.
 """
 import datetime as dt
 import importlib.util
@@ -88,15 +89,34 @@ def test_no_model_left_says_so(ch, tmp_path):
     assert s["eligible"] == 0 and s["banner"].startswith("review chain: no model available of 3")
 
 
-def test_the_quota_guard_takes_an_anthropic_model_out(ch, tmp_path):
-    (tmp_path / "quota-guard").write_text("")
-    s = ch.chain_state(CFG | {"anthropic_models": ["claude:claude-opus-5-5"]}, "review_models", tmp_path, now=NOON)
-    assert [o["reason"] for o in s["out"]] == ["weekly quota guard"]
+def test_the_claude_marker_takes_an_anthropic_model_out(ch, tmp_path):
+    (tmp_path / "claude-limited").write_text(str(int(_reset(22, 32))))
+    s = ch.chain_state(CFG, "review_models", tmp_path, now=NOON)
+    assert [o["reason"] for o in s["out"]] == ["usage limit"]
 
 
 def test_a_single_model_chain_has_no_banner(ch, tmp_path):
     s = ch.chain_state({"review_models": ["grok-4.5"]}, "review_models", tmp_path, now=NOON)
     assert s["banner"] is None
+
+
+@pytest.mark.parametrize("key,models,marker", [
+    ("coding_models", ["gpt-5.6-terra"], "codex-limited"),
+    ("review_models", ["gemini-3.8-flash-high"], "agy-limited"),
+    ("vision_models", ["gpt-5.6-terra"], "codex-limited"),
+    ("router_models", ["grok-4.7"], "grok-limited"),
+])
+def test_every_chain_is_read_through_the_resolver(ch, tmp_path, key, models, marker):
+    (tmp_path / marker).write_text(str(int(_reset(22, 32))))
+    s = ch.chain_state({key: models}, key, tmp_path, now=NOON)
+    assert [o["model"] for o in s["out"]] == models
+    assert [o["reason"] for o in s["out"]] == ["usage limit"]
+
+
+def test_an_empty_vision_chain_is_reported(ch, tmp_path):
+    s = ch.chain_state({"vision_models": []}, "vision_models", tmp_path, now=NOON)
+    assert s["total"] == 0
+    assert s["banner"] and s["banner"].startswith("vision chain: no model available of 0")
 
 
 def test_the_cli_prints_the_summary_a_status_file_carries(tmp_path):

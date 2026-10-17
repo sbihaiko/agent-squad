@@ -7,7 +7,7 @@ trap 'rm -rf "$T"' EXIT
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.2   # a review takes a review slot (caps.reviews, #567): a throwaway budget
 capsctl() { PYTHONPATH="$SG_SQUAD" python3 -m squad.caps "$@"; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/provkey.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/provkey.py" "$d/modelreg.py" "$d/registry.json" "$d/models.json" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
@@ -132,4 +132,11 @@ case "$r" in *"waiting"*"caps.reviews"*"other"*"BRANCHREVIEW SKIPPED gui/32-s"*)
 ls "$T/st/auto/" | /usr/bin/grep -q 'branchreview-tries-gui_32-s' && ko "a skipped review counted a failed try" || ok "a skipped review is no failed try"
 capsctl release reviews other; kill $hs 2>/dev/null
 r=$(OPEN="7 8 32" SG_REVIEW_PASS_MAX=1 rp); [ "$(n gui/32-s)" = 1 ] && ok "the next pass reviews the skipped branch" || ko "the skipped branch was not reviewed: '$r'"
+# 12) a missing resolver is a named line on stderr, and the pass exits non-zero; the stderr is never dropped (#431)
+push gui/31-r; mv "$T/s/modelreg.py" "$T/modelreg.py"; : > "$T/review.log"
+o=; rc=0; for _ in 1 2 3; do o+=$(OPEN="7 8 31" FAILREV=1 bash "$T/s/branchreviewpass.sh" 2>&1) || rc=$?; done
+[ "$rc" != 0 ] && ok "a missing resolver makes the pass exit non-zero" || ko "the pass exited 0 with no resolver"
+case "$o" in *"chainhealth: modelreg.py is missing"*) ok "the missing resolver is a named line on stderr";; *) ko "the resolver failure is not named: '$o'";; esac
+case "$o" in *"BRANCHREVIEW CHAINHEALTH gui/31-r"*) ok "the pass names the failed chain summary";; *) ko "the pass drops the chainhealth failure: '$o'";; esac
+mv "$T/modelreg.py" "$T/s/modelreg.py"
 exit $fail
