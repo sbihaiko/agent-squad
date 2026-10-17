@@ -34,7 +34,7 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T
 # both tips, so a second pass with no tip moved reads no compare.
 echo req-c > "$T/st/auto/disp-602"; touch -t 202001010000 "$T/st/auto/disp-602"; echo "verdict failed" > "$T/st/req-c.log"
 echo req-w > "$T/st/auto/disp-603"; touch -t 202001010000 "$T/st/auto/disp-603"; echo "verdict failed" > "$T/st/req-w.log"   # its work branch keeps it: each pass reads the branches
-: > "$T/gh.log"
+: > "$T/gh.log"; rm -f "$T/st/compare-standing.json"
 for i in 1 2; do o=$(GH_LOG="$T/gh.log" SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/s/janitor.py" 2>&1); done
 [ ! -e "$T/st/auto/disp-602" ] && ok "K: the marker of a closed issue is dropped" || ko "closed marker kept: $o"
 [ "$(/usr/bin/grep -c 'issues/602' "$T/gh.log")" = 1 ] && ok "a closed issue's state is read once over two passes" || ko "issue 602 read $(/usr/bin/grep -c 'issues/602' "$T/gh.log") times"

@@ -411,12 +411,24 @@ def work_branches():   # {issue: [(branch, standing)]} for every remote work bra
     if _wb is None:
         _wb = {}
         land = os.environ.get("SG_LAND_BRANCH") or "dev"
-        for l in sh("gh", "api", f"repos/{repo0}/branches?per_page=100", "--paginate", "--jq", r'.[]|"\(.name) \(.commit.sha)"').splitlines():
+        lines = sh("gh", "api", f"repos/{repo0}/branches?per_page=100", "--paginate", "--jq", r'.[]|"\(.name) \(.commit.sha)"').splitlines()
+        # A standing is a function of the landing tip and the branch tip: kept by both in the state dir, a compare is read
+        # only when one moved. One compare per branch on every pass spent the REST quota (#525).
+        ltip = next((l.split()[1] for l in lines if len(l.split()) == 2 and l.split()[0] == land), "")
+        kept = st / "compare-standing.json"
+        try: memo = json.loads(kept.read_text()) if ltip else {}
+        except (OSError, ValueError): memo = {}
+        memo = memo.get(ltip, {}) if isinstance(memo, dict) else {}
+        fresh = {}
+        for l in lines:
             m = re.match(r"(?:fix|gui)/(\d+)(?:\D\S*)? (\S+)$", l); w = re.match(r"wave/(\S+) (\S+)$", l)
             if not (m or w): continue
-            sha = (m or w).group(2); standing = sh("gh", "api", f"repos/{repo0}/compare/{land}...{sha}", "-q", ".status").strip()
+            sha = (m or w).group(2); standing = memo.get(sha) or sh("gh", "api", f"repos/{repo0}/compare/{land}...{sha}", "-q", ".status").strip()
+            if standing: fresh[sha] = standing
             if m: _wb.setdefault(m.group(1), []).append((l.split()[0], standing)); _tips[l.split()[0]] = sha
             else: _wv[w.group(1)] = (sha, standing)
+        if ltip and not dry:
+            tmp = kept.with_suffix(f".{os.getpid()}.tmp"); tmp.write_text(json.dumps({ltip: fresh})); os.replace(tmp, kept)
     return _wb
 def review_of(branch, tip):   # the state of the review of a branch tip, from the verdict branchreview.sh keeps in the state dir: none, approved or waiting
     import board_facts
@@ -710,7 +722,12 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
     if now - d.stat().st_mtime < (600 if refused else 1800): continue   # K: a refused start frees the issue after 10 min
     if not (("verdict failed" in lt or refused) and n not in byissue): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
-    if sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip() != "open": continue
+    state = sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip()
+    if state == "closed":   # a closed issue is never dispatched: its marker only made every pass read its state again (#525)
+        say(f"stale {d.name} (issue closed) removed")
+        if not dry: d.unlink()
+        continue
+    if state != "open": continue
     if pr_count(n) != "0":   # a work branch exists: the issue is past dispatch, so the marker stands -- and the pass names the issue, so this decision reads apart from a release (#217)
         say(f"DISPATCH-FAILED #{n}: request {req} ended failed, but a work branch names the issue; {d.name} kept so the pass never dispatches it again")
         continue
