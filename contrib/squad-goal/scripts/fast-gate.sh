@@ -17,14 +17,18 @@ py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 fastcmd=${SG_FAST_CMD:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n auto -m 'not heavy'"}
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
-# A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests run once
-# more, serially. A red there too fails the gate. The battery output stays in a log that the failure line names.
-retrycmd=${SG_FAST_RETRY_CMD:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20 --lf --lfnf none -m 'not heavy'"}
+# A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests the log
+# names run once more, serially (pyproject turns the pytest cache off, so --lf would rerun the whole battery). A red that
+# names no test (lint, types) or a red there too fails the gate. The battery output stays in a log that the failure line names.
+retrycmd=${SG_FAST_RETRY_CMD:-"$py -m pytest -p no:deepeval -p no:xdist -o heavy_cap_seconds=20"}
 log=${SG_STATE:-${TMPDIR:-/tmp}}/fast-gate-$(git rev-parse --short HEAD 2>/dev/null || echo x).log
 if ! bash -c "$fastcmd" > "$log" 2>&1; then
   tail -n 5 "$log"
-  if bash -c "$retrycmd" >> "$log" 2>&1; then echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($log)"
-  else echo "fast-gate: the base battery failed, and its failed tests fail alone too ($log)"; exit 1; fi
+  ids=$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)
+  [ -n "$ids" ] || { echo "fast-gate: the base battery failed and names no failed test ($log)"; exit 1; }
+  # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
+  set -f; if bash -c "$retrycmd \"\$@\"" retry $ids >> "$log" 2>&1; then echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($log)"
+  else echo "fast-gate: the base battery failed, and its failed tests fail alone too ($log)"; exit 1; fi; set +f
 fi
 suites=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed -n -e 's|^contrib/squad-goal/scripts/\(.*\)\.sh$|\1|p' -e 's|^contrib/squad-goal/scripts/\(.*\)\.py$|\1|p' | grep -v / \
   | sed 's|^test-||' | sort -u)
