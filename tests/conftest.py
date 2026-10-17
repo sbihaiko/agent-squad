@@ -9,10 +9,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 pytest_plugins = ["tests.slowcap", "tests.real_app_guard_plugin"]
 
 
+def drop_live_paths():
+    """The loop exports SG_BOARD_CACHE, and a gate it runs inherits it; hub.py reads it before its own SG_HUB_DIR, so a hub
+    test module would read and write the live board (#521). Without it, each module's board cache is under its SG_HUB_DIR."""
+    os.environ.pop("SG_BOARD_CACHE", None)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _hub_seam_defaults(tmp_path_factory):
     """Give module-scoped hub fixtures the checkout their profile context requires."""
     import os
+    drop_live_paths()
     old = os.environ.get("SG_CHECKOUT")
     if not old:
         os.environ["SG_CHECKOUT"] = str(tmp_path_factory.mktemp("checkout"))
