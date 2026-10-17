@@ -92,4 +92,15 @@ rm -rf "$co/runs"; o=$(runb "$T/req93.txt")
 git -C "$co" for-each-ref --format='%(objectname)' refs/squad/leftover | /usr/bin/grep -qx "$left" && ok "the leftover commit is kept on a named ref" || ko "no refs/squad/leftover holds $left"
 case "$o" in *leftover*) ok "the launch names the leftover";; *) ko "the leftover is silent: $o";; esac
 rm -rf "$up"
+# A run that cuts a wave keeps its landed children for the wave entry (#477, ADR-0106): the launch hands the squad the engine
+# option --keep-children, which the run records at its start, so the hold is the run's wave and never the target's shape. A
+# squad that has no such option would refuse the flag and the start with it, so the launch passes it only when the squad
+# it starts names the option. A run that cuts no wave never gets it.
+rm -rf "$co/runs"; o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+case "$argv" in *--keep-children*) ko "a squad with no keep_children option was handed the flag: $argv";; *) ok "a squad with no keep_children option gets no flag";; esac
+mkdir -p "$T/squad/squad"; printf 'OTHER = ("tier_pin", "expect_graph_hash", "keep_children")\n' > "$T/squad/squad/options.py"
+rm -rf "$co/runs"; o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+case "$argv" in *--keep-children*) ok "a run that cuts a wave starts with --keep-children";; *) ko "the wave run has no --keep-children: $argv";; esac
+rm -rf "$co/runs"; o=$(run "$T/repl.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+case "$argv" in *--keep-children*) ko "a run that cuts no wave got --keep-children: $argv";; *) ok "a run that cuts no wave gets no --keep-children";; esac
 rm -rf "$T"; exit $fail

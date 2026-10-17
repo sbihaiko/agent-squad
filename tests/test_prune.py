@@ -9,6 +9,7 @@ import pytest
 
 from squad import cli, git
 from squad import verdict as V
+from squad.record import read
 from tests.gitrepo import make_repo, sh, sibling_repo
 from tests.test_dispatch import make, req, routed
 from tests.test_waves import lands, writer
@@ -32,24 +33,54 @@ async def test_a_completed_run_prunes_the_landed_childs_branch_and_worktree(tmp_
     assert sh(repo, "git", "status", "--porcelain") == ""
 
 
-def loop_run(tmp_path, script):
+def loop_run(tmp_path, script, **kw):
     """A run of the loop's own shape (#90): a worktree of the issue branch, next to the checkout, with the run folder inside it."""
     repo = make_repo(tmp_path / "repo")
     wt = tmp_path / "wt-as-464"
     sh(repo, "git", "worktree", "add", "-q", "-b", "gui/464", str(wt))
-    return repo, wt, make(wt / "runs" / "run-l1", script, target=wt, run_id="run-l1")
+    return repo, wt, make(wt / "runs" / "run-l1", script, target=wt, run_id="run-l1", **kw)
 
 
 @pytest.mark.anyio
 async def test_a_loop_run_keeps_the_landed_childs_worktree_and_branch_for_the_wave_entry(tmp_path):
-    """The wave entry reads the child's worktree and branch after the run's verdict, so a run whose target is the linked
-    worktree holding its run folder keeps them; the loop's own pass removes them once the wave landed."""
-    repo, wt, eng = loop_run(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")})
+    """The wave entry reads the child's worktree and branch after the run's verdict, so a run that cuts a wave keeps them;
+    the loop's own pass removes them once the wave landed."""
+    repo, wt, eng = loop_run(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")}, options={"keep_children": True})
     assert (await eng.run()).verdict == "completed"
     child = wt / "runs" / "run-l1" / "ws" / "worktrees_child-route.router.1"
     assert child.is_dir() and (child / "a.txt").exists(), "the entry has no worktree to read the child's commits from"
     assert (child / ".git").exists()
     assert "squad/run-l1/worktrees_child-route.router.1" in branches(repo)
+
+
+@pytest.mark.anyio
+async def test_a_wave_run_whose_target_fails_ownership_keeps_the_landed_childs_worktree_and_branch(tmp_path):
+    """The hold reads the run's wave, never the target's shape (#477): a target outside the run area still keeps the child
+    the wave entry reads after the verdict."""
+    repo = sibling_repo(tmp_path)
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")}, target=repo, options={"keep_children": True})
+    assert (await eng.run()).verdict == "completed"
+    child = tmp_path / "ws" / "worktrees_child-route.router.1"
+    assert child.is_dir() and (child / "a.txt").exists()
+    assert any(b.startswith("squad/") for b in branches(repo))
+    start = next(e for e in read(tmp_path / "record.jsonl") if e["event"] == "run_start")
+    assert start["engine_options"].get("keep_children") is True
+
+
+@pytest.mark.anyio
+async def test_a_loop_shaped_run_with_no_wave_prunes_its_landed_children(tmp_path):
+    """The shape of the target is not the hold: a run in the loop's shape that cut no wave prunes as any completed run does."""
+    repo, wt, eng = loop_run(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")})
+    assert (await eng.run()).verdict == "completed"
+    assert not (wt / "runs" / "run-l1" / "ws" / "worktrees_child-route.router.1").exists()
+    assert not any(b.startswith("squad/") for b in branches(repo))
+
+
+def test_keep_children_is_an_engine_option_of_start_and_resume(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "_start", lambda a: seen.append(cli._opts(a)) or 0)
+    assert cli.main(["start", "--target", ".", "--keep-children", "do it"]) == 0
+    assert seen == [{"keep_children": True}]
 
 
 @pytest.mark.anyio
