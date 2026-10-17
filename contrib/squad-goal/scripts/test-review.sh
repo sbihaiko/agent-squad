@@ -25,7 +25,7 @@ esac
 J
 cat > "$T/bin/claude" <<'J'
 #!/bin/bash
-cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_FAIL" ] && { echo "API Error: 529 overloaded_error"; exit 1; }; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
+cat > "${CLAUDE_PROMPT:-/dev/null}"; echo "$*" >> "${CLAUDE_ARGS:-/dev/null}"; [ -n "$CLAUDE_FAIL" ] && { echo "API Error: 529 overloaded_error"; exit 1; }; [ -n "$CLAUDE_RESOLVED" ] && { printf 'VERDICT: APPROVE\n## Resolved\n- a.cs:1 — diverges from ADR-0001 — fixed: the ADR is followed now — UI.Tests/a.cs\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_ERRJSON" ] && case "$*" in *"--model bad"*) printf '{"is_error":true,"subtype":"error_max_turns","result":"I'"'"'ll review the branch against the issue, reading the code.","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0}}\n'; exit 0;; esac; [ -n "$CLAUDE_TAGGED" ] && { printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'; exit 0; }; [ -n "$CLAUDE_NARRATE" ] && { printf "Checking the delta first.\nVERDICT: CHANGES\n1. a finding\nIn summary, close but another round.\n"; exit 0; }; if [ -n "$CLAUDE_SLOW" ]; then touch "$GH_MOVE"; sleep 40; fi; [ -n "$CLAUDE_SLEEP" ] && sleep "$CLAUDE_SLEEP"; echo "VERDICT: APPROVE"
 J
 chmod +x "$T/bin/gh" "$T/bin/claude"; export PATH="$T/bin:$PATH"
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8); rc=$?
@@ -220,6 +220,21 @@ out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
   && ko "13 the agy review runs in plan mode with nothing to approve its tools: $(cat "$AGY_ARGS")" \
   || ok "13 the agy review can use its tools headless"
 unset AGY_ARGS
+# A CLI run that ends in an error is not a review (#501): the JSON carries is_error and the subtype, and .result holds only
+# the preamble the model produced before the run ended. The call is a MODEL_FAIL naming the subtype, the chain moves on,
+# and the raw JSON stays beside the answer so the next occurrence is diagnosed without a re-run.
+export CLAUDE_ERRJSON=1
+printf '{"review_models":["claude:bad"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x.sha" "$T/st/review-fix_1-x.md" "$T/st/review-fix_1-x.json" "$T/st/cq/"*mfail* "$T/st/cq/"*mformat*
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q "I'll review" && ko "an error answer was saved as the review" || ok "an error answer is never saved as the review"
+/usr/bin/grep -q 'error_max_turns' "$T/st/cq/x__y#"*mfail* 2>/dev/null && ok "the MODEL_FAIL names the subtype" || ko "the subtype is lost: $(cat "$T/st/cq/"*mfail* 2>/dev/null)"
+[ -s "$T/st/review-fix_1-x.json" ] && ok "the raw JSON is kept beside the answer" || ko "no raw JSON was kept"
+printf '{"review_models":["claude:bad","claude:good"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x.sha" "$T/st/cq/"*mfail*
+out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && case "$out" in model=claude:good*) ok "the chain moves on to the next model after an error answer";; *) ko "chain after error: '$out'";; esac || ko "chain after error: rc=$rc '$out'"
+unset CLAUDE_ERRJSON
 # 14) the timeout must reach the process the CLI spawns, and the wait must say it is still working. The alarm is
 # set on the CLI, but the CLI execs the model in a child that ignores the alarm, so the review runs past its
 # timeout with no output and no line anywhere to show it is alive (#491 follow-up: a 360 s review ran 9 min, silent).
@@ -232,4 +247,5 @@ sleep 1; left=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep -c '[s]leep 61')
   && ok "14 a child the CLI spawns is killed at the timeout, and nothing it spawned survives (${el}s)" \
   || ko "14 the spawned child outlives the timeout: rc=$rc ${el}s survivors=$left [$who] $(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 /usr/bin/grep -q 'still running' "$T/hb" && ok "14 the wait says the review is still running" || ko "14 the wait is silent: $(cat "$T/hb")"
+
 rm -rf "$T"; exit $fail
