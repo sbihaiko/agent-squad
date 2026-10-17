@@ -18,6 +18,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,7 @@ case "$a" in
       *) echo 0;; esac;;
   *projectsV2/*/fields*) echo FID4;;
   *projectsV2/*/items*) ;;
+  *issues/*"-q .state"*) echo open;;
   *issues/*) echo -e 'open\\t\\tIssue';;
 esac
 """
@@ -60,9 +62,10 @@ def _write(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False) -> Path:
+def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = "", entered: bool = False) -> Path:
     """The janitor with the throttle and the reader beside it, a stub `gh` (the merge scoped to the base answers
-    `scoped`), a stub board.sh, and one finished run for issue #2030."""
+    `scoped`), a stub board.sh, and one finished run for issue #2030. `wave` is "open" (the run's wave is not in the base
+    yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave."""
     for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
@@ -79,6 +82,17 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False) -> Path:
     (run / "record.jsonl").write_text(events)
     (tmp_path / "st/auto").mkdir(parents=True)
     (tmp_path / "st/active-runs.txt").write_text("run-stacked\n")
+    auto = tmp_path / "st/auto"
+    if wave:
+        (auto / "waved-run-stacked").write_text("wave/run-stacked\n")
+    if wave == "open":
+        (auto / "wave-run-stacked").write_text("wave/run-stacked\n")
+    if entered:
+        (auto / f"entered-run-stacked-{N}").touch()
+    (auto / f"disp-{N}").write_text("run-stacked\n")
+    old = time.time() - 3600   # the run ended an hour ago: past every settle window, so its markers are the pass's to read
+    for p in [*run.iterdir(), run, *auto.iterdir()]:
+        os.utime(p, (old, old))
     return tmp_path
 
 
@@ -124,3 +138,36 @@ def test_a_merge_into_a_parent_branch_does_not_move_the_card_to_done(tmp_path):
     log = writes(tmp_path)
     assert f"ADD o 4 Todo {N}" in log, f"the card did not go back to the queue: {log}"
     assert f"Done {N}" not in log, f"the card read Done over a merge the base never took: {log}"
+
+
+@pytest.mark.heavy
+def test_a_landed_child_that_never_entered_a_landed_wave_goes_back_to_the_queue(tmp_path):
+    """The measured defect (#467): a child's own land is in its tree, not in the wave. The run cut a wave, the wave landed,
+    and the child never entered it, so nothing of it is in the base (ADR-0145 rule 12): the card is Todo, never Code
+    Complete, and the dispatch marker goes, so the frontier builds the issue again."""
+    sandbox(tmp_path, "echo 0", landed=True, wave="closed")
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"Code Complete {N}" not in log, f"the card read Code Complete over a child that never entered the wave: {log}"
+    assert f"ADD o 4 Todo {N}" in log, f"the card did not go back to the queue: {log}"
+    assert not (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker held an issue no wave carries"
+
+
+@pytest.mark.heavy
+def test_a_landed_child_that_has_not_entered_an_open_wave_stays_in_progress(tmp_path):
+    """The wave is still open: the child may enter it on a later pass, so the card stays in progress and the marker stays."""
+    sandbox(tmp_path, "echo 0", landed=True, wave="open")
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"Code Complete {N}" not in log, f"the card read Code Complete before the child entered the wave: {log}"
+    assert f"ADD o 4 In Progress {N}" in log, f"the card did not stay in progress: {log}"
+    assert (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker went while the wave could still take the child"
+
+
+@pytest.mark.heavy
+def test_a_child_that_entered_the_wave_reads_code_complete(tmp_path):
+    """The entry record is what Code Complete means for a run that cut a wave."""
+    sandbox(tmp_path, "echo 0", landed=True, wave="open", entered=True)
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"ADD o 4 Code Complete {N}" in log, f"the card did not read Code Complete after the entry: {log}"

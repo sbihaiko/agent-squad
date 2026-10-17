@@ -84,6 +84,8 @@ child 8 g8; r=$(en 8)
 $O rev-list --merges $W | /usr/bin/grep -q . && ko "B: a merge commit entered the wave" || ok "B: the wave history has no merge commit"
 $O merge-base --is-ancestor dev $W && ok "B: the wave branch stays a fast-forward of dev" || ko "B: the wave is not a fast-forward of dev"
 /usr/bin/grep -qx 'o 3 Code Complete 7' "$T/board.log" && /usr/bin/grep -qx 'o 3 Code Complete 8' "$T/board.log" && ok "B: the card of a child that entered reads Code Complete" || ko "B: no Code Complete card: $(cat "$T/board.log" 2>/dev/null)"
+# The entry leaves a durable record per issue (#467): the janitor reads Code Complete from it, never from the run's own land.
+[ -e "$T/st/auto/entered-run-1-7" ] && [ -e "$T/st/auto/entered-run-1-8" ] && ok "B: each entry leaves its entered-<run>-<issue> record" || ko "B: no entered record: $(ls "$T/st/auto")"
 IFS=$'\t' read -r _ kind res at < "$T/st/gate-status" 2>/dev/null
 [ "$kind $res $at" = "fast pass $($G -C "$T/c8" rev-parse HEAD)" ] && ok "B: the entry gate leaves one fast status line: its result and the sha it ran at" || ko "B: status line: '$(cat "$T/st/gate-status" 2>&1)'"
 
@@ -93,6 +95,7 @@ printf 'run-1\n' > "$T/st/auto/disp-9"; child 9 g9; before=$($O rev-parse $W); r
 case "$r" in *"WAVE REQUEUE #9"*gates*) ok "C: the failed gates are said";; *) ko "C: the failure is silent: '$r'";; esac
 [ ! -e "$T/st/auto/disp-9" ] && ok "C: its dispatch marker is dropped, so the frontier builds it again" || ko "C: the marker is kept"
 /usr/bin/grep -qx 'o 3 Todo 9' "$T/board.log" && ok "C: its card is back in the queue" || ko "C: no Todo card for #9"
+[ ! -e "$T/st/auto/entered-run-1-9" ] && ok "C: a child that never entered leaves no entered record" || ko "C: #9 has an entered record"
 
 # The gates run in the child's own worktree, before the entry: a gate that only passes on the child's file proves it.
 child 10 g10; r=$(GATES='test -f g10' en 10)
