@@ -32,4 +32,10 @@ n=$(/usr/bin/grep -c "cycle ran" "$SG_STATE/watch.log" 2>/dev/null)
 # the fast lane dies with the supervisor
 fl=$(cat "$SG_STATE/fastloop.pid" 2>/dev/null)
 { [ -z "$fl" ] || ! /bin/ps -p "$fl" >/dev/null 2>&1; } && ok "the fast lane is gone" || ko "the fast lane is still alive (pid $fl)"
+# a relight after a token stop starts a fresh measurement (#515): the old marker made every start stop again at once
+printf '1\n' > "$SG_STATE/token-guard.since"; echo "Token burn ..." > "$SG_STATE/token-stop"
+bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+[ "$(cat "$SG_STATE/token-guard.since" 2>/dev/null)" != 1 ] && ok "a start drops the old token-guard marker" || ko "the old token-guard marker survived the start"
+[ ! -e "$SG_STATE/token-stop" ] && ok "a start clears the token-stop note" || ko "token-stop survived the start"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do /bin/ps -p "$sup" >/dev/null 2>&1 || break; sleep 1; done
 rm -rf "$T"; exit $fail
