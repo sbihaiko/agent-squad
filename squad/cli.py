@@ -110,6 +110,8 @@ def parser():
             s.add_argument("--from", dest="from_node")
             s.add_argument("--answer", choices=["pass", "fail"])
             s.add_argument("--auto-source", help="an automatic resume: the decision source (`autonomy`). Records one autonomy_resume event with the resume count; refuses at the cap")
+        if name != "resume":
+            s.add_argument("--models", help="models.json for the router chain's on/hrs overlay; a resume never recomputes it")
         s.add_argument("--runs-dir", default="runs")
         s.add_argument("--run-dir")
         s.add_argument("--no-watch", action="store_true", help="start no dashboard page or monitor")
@@ -338,7 +340,8 @@ def _report(a):
 async def _run(a, g=None):
     """Start the run. `g` is a graph already loaded (the `start` command, whose graph file is the run folder's copy); else `a.graph` is the file."""
     graph = g or G.load(a.graph)
-    eng = launch.launch(graph, a.run_dir, runs_dir=a.runs_dir, adapter=_adapter(a), defaults=a.defaults, graph_path=None if g else a.graph,
+    eng = launch.launch(graph, a.run_dir, runs_dir=a.runs_dir, adapter=_adapter(a), defaults=a.defaults, models=getattr(a, "models", None),
+                        graph_path=None if g else a.graph,
                         target=a.target, options=_opts(a), name=getattr(a, "name", None), watch=False if a.no_watch else None)
     if g:
         print(f"run: {eng.run_id}\nrun folder: {Path(eng.run_dir).resolve()}")

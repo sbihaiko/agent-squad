@@ -303,7 +303,7 @@ def _keeps_children():
     except OSError: return False
 keep = ["--keep-children"] if _issue_child_request(req_text) and _keeps_children() else []
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + [
-                        "--target", str(target)] + (["--spent-models", ",".join(spent)] if spent else []) + (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
+                        "--models", str(here / "models.json"), "--target", str(target)] + (["--spent-models", ",".join(spent)] if spent else []) + (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target),
                         env={**os.environ, "SQUAD_HEADLESS": "1"})

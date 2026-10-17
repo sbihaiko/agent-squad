@@ -9,12 +9,14 @@ Guards: `tests/test_launch.py`.
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
-from squad import caps, git, record, workflows
+from squad import caps, git, modelreg, record, workflows
 from squad import defaults as D
 from squad import project_settings as P
 from squad.engine import Engine
+from squad.graph import from_doc
 from squad.options import OptionError
 
 
@@ -116,11 +118,56 @@ def _adapter_and_record(adapter, defaults, project=None, watch=None):
     return adapter, rec, D.autonomy(cfg)    # the autonomy setting is recorded on every run, with the project overlay
 
 
-def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None, graph_path=None, target=None, options=None, shadow=None, invoker="cli", name=None, watch=None, opener=None, ticker=None):
+def _router_open(entry, hour):
+    """Whether the router chain allows one entry at this local hour: its switch first, then its window. An unreadable window is open."""
+    if not entry.on:
+        return False
+    if not entry.hrs:
+        return True
+    try:
+        start, end = int(entry.hrs[:2]), int(entry.hrs[3:5])
+    except (ValueError, IndexError):
+        return True
+    return start <= hour < end if start <= end else (hour >= start or hour < end)
+
+
+def router_overlay(graph, models_path, now=None):
+    """The graph with each dispatch `allow.models` filtered by `chains.router` (its on/hrs, v1 and v2 through `modelreg.chain`).
+
+    A spelling outside the router chain has no switch, so it stays. A dispatch left with no model refuses the run by
+    name: the schema needs one, and the router could ask for none. `now` stands in for the clock (tests). The filtered
+    document is the one the run folder copies and the engine hashes, so a resume reads it and never recomputes it.
+    """
+    try:
+        entries = modelreg.chain(models_path, "router").entries
+    except (OSError, ValueError) as exc:
+        raise OptionError(f"models {models_path}: {exc}") from exc
+    if not entries:
+        return graph
+    hour = time.localtime(now).tm_hour
+    closed = {e.id for e in entries if not _router_open(e, hour)}
+    if not closed:
+        return graph
+    doc = json.loads(json.dumps(graph.doc))
+    for node in doc["nodes"]:
+        if node.get("kind") != "dispatch":
+            continue
+        allow = node.get("allow") or {}
+        kept = [m for m in allow.get("models") or [] if modelreg.normalize(m).id not in closed]
+        if not kept:
+            raise OptionError(f"the router chain in {models_path} leaves no model for dispatch node {node['name']!r}: "
+                              "every entry is switched off or outside its hours window")
+        allow["models"] = kept
+    return from_doc(doc, graph.layout)
+
+
+def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None, models=None, graph_path=None, target=None, options=None, shadow=None, invoker="cli", name=None, watch=None, opener=None, ticker=None):
     """Return an engine ready to `run()`.
 
     `adapter` None builds the SDK adapter from the defaults file (`defaults`, else config/agent-defaults.yaml).
     With an adapter, the defaults are loaded, checked and recorded only when `defaults` names a file.
+    `models` is the models.json whose router chain filters each dispatch envelope before the graph copy is written; the
+    engine never looks for the file, so only the caller that starts a run names it.
     `run_dir` None means `runs_dir/<run id>`. The graph copy `graph.json` is written in the run folder unless it exists.
     `graph_path` None means that copy.
     `name` is the run id and the folder name (the workflow id rule); a name that has a folder is refused before anything is written. No name: a random id.
@@ -130,6 +177,8 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
     """
     data, prec, limits = project_settings(target)                # before any folder exists: an unsound project file refuses the run
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)  # before any folder exists: an unsound file refuses the run
+    if models:
+        graph = router_overlay(graph, models)   # before any folder exists: the copy and the hash carry the filtered doc
     if name is not None:
         run_id = name
         if not workflows.valid_id(name):
