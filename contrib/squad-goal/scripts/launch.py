@@ -139,10 +139,15 @@ if root and gp.exists():
 FALLBACK = "$SG_CHECKOUT"   # the target a run keeps when no issue worktree is resolved, named in the notes without its path
 
 def _issue_named(txt):
-    """The issues a request names: the dispatch header's list first (`GitHub issue(s) N, M`), the plain `issue #N` mention as a fallback."""
-    for pat in (r"GitHub issue\(?s?\)? ?#? ?([0-9][0-9, ]*)", r"\bissue #([0-9]+)"):
-        m = re.search(pat, txt)
-        if m: return [int(x) for x in re.split(r"[^0-9]+", m.group(1)) if x]
+    """The issues a request names, across every `CHILD` block: each block's header list (`GitHub issue(s) N, M`), else the first
+    header anywhere, else the plain `issue #N` mention. A frontier request holds one block per child, so the first block alone
+    would hide the other issues and the run would target one issue's worktree (#470)."""
+    head = r"GitHub issue\(?s?\)? ?#? ?([0-9][0-9, ]*)"
+    for pat in (r"^CHILD[^\n]*?" + head, head, r"\bissue #([0-9]+)"):
+        found = []
+        for m in re.finditer(pat, txt, re.M):
+            found += [int(x) for x in re.split(r"[^0-9]+", m.group(1)) if x and int(x) not in found]
+        if found: return found
     return []
 
 def _issue_child_request(txt):
