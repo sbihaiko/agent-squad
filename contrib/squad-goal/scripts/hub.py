@@ -1239,12 +1239,14 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
-    _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
+    # the temp name is the writer's own (#512): hubmux runs one hub per profile in one process, so the pid alone is shared
+    _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.{threading.get_ident()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
     return board_cache
 def refresh_board():
     """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag)."""
     while True:
-        board_pass()
+        try: board_pass()
+        except Exception as e: board_cache["err"] = str(e)[:80]   # one failed pass never ends the loop (#512): the next one still runs
         for _ in range(30):
             time.sleep(2)
             try:
