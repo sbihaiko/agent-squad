@@ -333,3 +333,40 @@ def test_pyproject_declares_the_sdk_extra_at_an_exact_pin():
     root = Path(__file__).resolve().parent.parent
     extras = tomllib.loads((root / "pyproject.toml").read_text())["project"]["optional-dependencies"]
     assert re.fullmatch(r"claude-agent-sdk==\d+\.\d+\.\d+", extras["sdk"][0]) and len(extras["sdk"]) == 1
+
+
+# --- the run's `models.resolve` flag decides whether the raw spelling is mapped to the wire string ----------
+
+def registry_file(tmp_path, served):
+    """A registry whose `wire-sonnet` entry serves the spellings in `served` and answers on `wire-sonnet`."""
+    doc = {"subscriptions": {"claude": {"label": "Claude"}},
+           "models": [{"id": "wire-sonnet", "label": "Wire Sonnet", "provider": "claude", "subscription": "claude",
+                       "routes": {"gateway": {"auth": "subscription", "model": "wire-sonnet", "served": list(served)}},
+                       "aliases": ["sonnet-x", "sonnet-y"]}]}
+    path = tmp_path / "registry.json"
+    path.write_text(json.dumps(doc))
+    return str(path)
+
+
+async def test_a_run_that_resolves_sends_the_registry_wire_string(tmp_path):
+    seen = []
+    a = SdkAdapter(query=stub([ResultMessage(result="{}")], seen), options_cls=Options,
+                   registry=registry_file(tmp_path, ["wire-sonnet"]), resolve=True)
+    await a.call(request(model="sonnet-x"))
+    assert seen[0][1].kw["model"] == "wire-sonnet"
+
+
+async def test_an_opaque_run_sends_the_raw_spelling(tmp_path):
+    seen = []
+    a = SdkAdapter(query=stub([ResultMessage(result="{}")], seen), options_cls=Options,
+                   registry=registry_file(tmp_path, ["wire-sonnet"]), resolve=False)
+    await a.call(request(model="sonnet-x"))
+    assert seen[0][1].kw["model"] == "sonnet-x"
+
+
+async def test_a_served_spelling_keeps_its_wire_string(tmp_path):
+    seen = []
+    a = SdkAdapter(query=stub([ResultMessage(result="{}")], seen), options_cls=Options,
+                   registry=registry_file(tmp_path, ["wire-sonnet", "sonnet-y"]), resolve=True)
+    await a.call(request(model="sonnet-y"))
+    assert seen[0][1].kw["model"] == "sonnet-y"

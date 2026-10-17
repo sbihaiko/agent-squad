@@ -1,8 +1,10 @@
 """Tickets #33 and #35: the wait node and resume."""
+import json
 from pathlib import Path
 
 import pytest
 
+from squad import modelreg
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine, ResumeRefused
 from squad.graph import from_doc
@@ -21,13 +23,112 @@ def wait_doc(default="pass", deadline=100):
 OK = {"output": {"x": 1, "y": 1}, "spend": 0.1}
 
 
-def make(d, tmp_path, script=None, **kw):
-    ad = ScriptedAdapter(script or {"a": OK, "b": OK}, repeat_last=True)
+def make(d, tmp_path, script=None, adapter=None, **kw):
+    ad = adapter if adapter is not None else ScriptedAdapter(script or {"a": OK, "b": OK}, repeat_last=True)
     return Engine(from_doc(d), ad, tmp_path, **kw), ad
 
 
 def events(tmp_path, kind=None):
     return [e for e in read(tmp_path / "record.jsonl") if kind is None or e["event"] == kind]
+
+
+class ResolveAdapter(ScriptedAdapter):
+    """A scripted adapter that names the resolution flag the engine hands it, as the real SDK adapter does."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.resolve = None
+
+
+def entry(mid, label, alias):
+    return {"id": mid, "label": label, "provider": "claude", "subscription": "claude",
+            "routes": {"gateway": {"auth": "subscription", "model": alias, "served": [alias]}},
+            "aliases": [alias]}
+
+
+def write_registry(path, sonnet_label="Sonnet 5.5", opus_label="Opus 5.5"):
+    """A small registry whose only named entry is the `sonnet` the test graph carries."""
+    path.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}},
+                                "models": [entry("claude-sonnet-5-5", sonnet_label, "sonnet"),
+                                           entry("claude-opus-5-5", opus_label, "opus")]}))
+    return path
+
+
+def strip_models(run):
+    """Rewrite the run_start event as a record from before this key existed."""
+    p = run / "record.jsonl"
+    lines = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+    lines[0].pop("models", None)
+    p.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+@pytest.mark.anyio
+async def test_run_start_records_the_entries_hash_of_the_models_the_graph_names(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    eng, _ = make(wait_doc(), tmp_path / "run", registry=str(reg))
+    await eng.run()
+    start = events(tmp_path / "run", "run_start")[0]
+    assert start["models"] == {"resolve": True, "entries_sha256": modelreg.entries_sha256(["sonnet"], modelreg.load(reg))}
+    assert start["graph_hash"] == eng.g.hash      # the hash still covers the raw graph doc
+
+
+@pytest.mark.anyio
+async def test_a_resume_does_not_refuse_an_unrelated_registry_edit(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, _ = make(wait_doc(), run, registry=str(reg))
+    await eng.run()
+    write_registry(reg, opus_label="Opus 5.5 renamed")
+    eng2, ad2 = make(wait_doc(), run, registry=str(reg))
+    v = await eng2.resume(answer="pass")
+    assert v.verdict == "completed" and [c.node for c in ad2.calls] == ["b"]
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_a_changed_registry_entry_the_graph_names(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, _ = make(wait_doc(), run, registry=str(reg))
+    await eng.run()
+    write_registry(reg, sonnet_label="Sonnet 5.5 renamed")
+    eng2, _ = make(wait_doc(), run, registry=str(reg))
+    with pytest.raises(ResumeRefused, match="model registry"):
+        await eng2.resume(answer="pass")
+
+
+@pytest.mark.anyio
+async def test_a_record_without_the_models_key_resumes_opaque(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, _ = make(wait_doc(), run, registry=str(reg))
+    await eng.run()
+    strip_models(run)
+    write_registry(reg, sonnet_label="Sonnet 5.5 renamed")
+    eng2, ad2 = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
+    v = await eng2.resume(answer="pass")
+    assert v.verdict == "completed" and ad2.resolve is False
+
+
+@pytest.mark.anyio
+async def test_run_start_turns_resolution_on_and_the_resume_reads_it(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, ad = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"a": OK, "b": OK}, repeat_last=True))
+    await eng.run()
+    assert ad.resolve is True
+    eng2, ad2 = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
+    await eng2.resume(answer="pass")
+    assert ad2.resolve is True
+
+
+@pytest.mark.anyio
+async def test_an_outcome_names_the_registry_id_and_the_wire_string(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, _ = make(wait_doc(), run, registry=str(reg))
+    await eng.run()
+    out = [e for e in events(run, "outcome") if e["node"] == "a"][0]
+    assert (out["model"], out["route_model"]) == ("claude-sonnet-5-5", "sonnet")
 
 
 @pytest.mark.anyio

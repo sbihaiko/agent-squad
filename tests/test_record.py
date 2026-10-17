@@ -106,6 +106,15 @@ def test_a_writer_killed_mid_run_leaves_only_whole_events(tmp_path):
     assert [e["pos"] for e in events] == list(range(1, len(events) + 1))
 
 
+def test_an_outcome_keeps_the_model_id_and_the_wire_string(tmp_path):
+    """A run that resolves names the registry id in `model` and the string it sent in `route_model`."""
+    r = record.Record(tmp_path / "r.jsonl")
+    r.append("run_start", **START)
+    ev = r.append("outcome", **{**OUTCOME, "model": "claude-sonnet-5-5", "route_model": "sonnet"})
+    assert (ev["model"], ev["route_model"]) == ("claude-sonnet-5-5", "sonnet")
+    assert record.read(r.path)[1]["route_model"] == "sonnet"
+
+
 def test_a_record_reopens_and_continues_its_positions(tmp_path):
     r = record.Record(tmp_path / "r.jsonl")
     r.append("run_start", **START)
