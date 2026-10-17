@@ -48,3 +48,9 @@ def test_abandoned_names_who_decided_and_why(columns):
 ])
 def test_a_condition_the_facts_do_not_state_is_no_comment(columns, column, facts):
     assert columns.terminal_comment(column, facts) is None
+
+
+@pytest.mark.parametrize("reason", ["not_planned", "duplicate"])
+def test_closed_never_says_completed_for_an_issue_closed_as_not_planned(columns, reason):
+    """#517: a not-planned issue moved into Closed by hand got "closed it as completed", a false record."""
+    assert columns.terminal_comment("Closed", {"base": "dev", "closed_by": "rafael", "reason": reason}) is None
