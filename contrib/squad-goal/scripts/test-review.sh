@@ -203,12 +203,21 @@ out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
 [ $rc = 0 ] && head -1 "$T/st/review-gui_9.md" | grep -q APPROVE && [ "$(cat "$T/st/review-gui_9.sha" 2>/dev/null)" = "$(/usr/bin/git -C "$W" rev-parse HEAD)" ] \
   && ok "12 a worktree review run from the checkout keeps its verdict for the child's head" \
   || ko "12 a worktree review read the checkout's HEAD: rc=$rc '$(head -1 "$T/st/review-gui_9.md" 2>/dev/null)' sha=$(cat "$T/st/review-gui_9.sha" 2>/dev/null)"
-# 13) the grok leg must not run in plan mode. Headless grok auto-denies a tool that needs the "command" permission
-# and prints nothing, so the review ends "BLOCKED (every review model failed)" with no verdict at all.
+# 13) a headless review must not run a CLI in a mode that auto-denies its own tools. grok in --permission-mode plan and
+# agy in --mode plan both print nothing ("a tool required the command permission that headless mode cannot prompt for,
+# so it was auto-denied") and the review ends "BLOCKED (every review model failed)" with no verdict.
 export GROK_ARGS="$T/grok-args"; : > "$GROK_ARGS"; rm -f "$T/st/review-gui_9".*
 out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
 /usr/bin/grep -q -- '--permission-mode plan' "$GROK_ARGS" \
   && ko "13 the grok review runs in plan mode, which headless grok auto-denies: $(cat "$GROK_ARGS")" \
   || ok "13 the grok review does not run in plan mode"
 unset GROK_ARGS
+printf '#!/bin/bash\necho "$*" >> "$AGY_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/agy"; chmod +x "$T/bin/agy"
+printf '{"review_models":["gemini-3.8-flash-medium"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+export AGY_ARGS="$T/agy-args"; : > "$AGY_ARGS"; rm -f "$T/st/review-gui_9".*
+out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
+/usr/bin/grep -q -- '--mode plan' "$AGY_ARGS" && ! /usr/bin/grep -q -- '--dangerously-skip-permissions' "$AGY_ARGS" \
+  && ko "13 the agy review runs in plan mode with nothing to approve its tools: $(cat "$AGY_ARGS")" \
+  || ok "13 the agy review can use its tools headless"
+unset AGY_ARGS
 rm -rf "$T"; exit $fail
