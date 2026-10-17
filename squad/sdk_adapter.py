@@ -230,7 +230,9 @@ class SdkAdapter:
             async for m in stream:
                 kind = type(m).__name__
                 if kind == "AssistantMessage":
-                    served = True
+                    # A spent subscription answers with a synthetic message that carries an error (#507): the model served
+                    # nothing, so it does not make the call served, and the grant goes back.
+                    served = served or not (getattr(m, "error", None) or getattr(m, "model", None) == "<synthetic>")
                     prog.take(m)
                     for b in getattr(m, "content", None) or []:
                         if type(b).__name__ == "ToolUseBlock":
