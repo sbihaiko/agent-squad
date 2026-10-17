@@ -379,6 +379,53 @@ async def test_the_workspace_preflight_applies_to_a_frontier_child(tmp_path):
     assert r["preflight"]["reason"] == "workspace_changed:worktrees/child"
 
 
+REPO_GRAPHS = (DESIGN / "router.graph.json", DESIGN.parent / "workflows" / "spec-to-build.graph.json",
+               DESIGN / "five-phases.graph.json")
+
+
+def _model_names(doc):
+    """Every model a graph names: a node model, the dispatch allow list and an adaptation's set. Strings only."""
+    names = []
+    for n in doc.get("nodes") or []:
+        if isinstance(n.get("model"), str):
+            names.append(n["model"])
+        names += (n.get("allow") or {}).get("models") or []
+        names += (n.get("adapt") or {}).get("models") or []
+    return names
+
+
+def test_repo_graphs_name_registry_ids_the_sdk_sends_unchanged():
+    """SPEC 505 ticket 16: a repo graph names the registry id, and the SDK call sends that string unchanged.
+
+    A legacy spelling resolves to the id but its wire may stay the legacy spelling, so a repo graph names the id;
+    a host graph keeps its own spelling, which `served` passes through. `allow.models` stays a list of strings.
+    """
+    from squad import modelreg
+    reg = modelreg.default_registry()
+    for path in REPO_GRAPHS:
+        doc = json.loads(path.read_text())
+        for raw in _model_names(doc):
+            ref = modelreg.normalize(raw, reg)
+            assert ref.known, f"{path.name}: {raw!r} is not in the registry"
+            base = raw[:-len(f"[{ref.ctx}]")] if ref.ctx else raw
+            assert base == ref.id and base in reg.entries, f"{path.name}: {raw!r} is not the registry id {ref.id!r}"
+            assert modelreg.invocation(ref, "sdk", reg=reg).wire == raw, f"{path.name}: the SDK would send {raw!r} as another string"
+
+
+def test_the_shipped_router_record_names_the_registry_ids_its_graph_allows():
+    """SPEC 505 ticket 16: the record's spawn requests name the registry ids the restamped graph allows."""
+    from squad import modelreg
+    reg = modelreg.default_registry()
+    events = [json.loads(line) for line in (DESIGN / "router.record.jsonl").read_text().splitlines() if line.strip()]
+    graph = json.loads((DESIGN / "router.graph.json").read_text())
+    allow = {modelreg.normalize(raw, reg).id for raw in _model_names(graph)}
+    models = [e["requested"]["model"] for e in events if e["event"] == "spawn_requested"]
+    assert models
+    for m in models:
+        ref = modelreg.normalize(m, reg)
+        assert ref.known and m == ref.id and ref.id in allow, f"the record names {m!r}, not the registry id its graph allows"
+
+
 def test_the_shipped_router_record_is_stamped_to_the_graph_it_ships_beside():
     # #1817/#1830: the record's run_start graph_hash is the contract check_record.py enforces against
     # docs/design/router.graph.json, so a graph edit and the restamp of the record are one change. Named here so a
