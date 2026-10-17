@@ -100,6 +100,10 @@ case "$r" in *"WAVE REQUEUE #9"*gates*) ok "C: the failed gates are said";; *) k
 # The gates run in the child's own worktree, before the entry: a gate that only passes on the child's file proves it.
 child 10 g10; r=$(GATES='test -f g10' en 10)
 [ "$(entered 10)" = yes ] && ok "C: the gates run in the child's own worktree" || ko "C: #10 did not enter with a gate over its own tree: '$r'"
+# The gates read the child rebased on the wave tip, never the stale base it was cut from: a child cut from an old dev failed
+# a gate the wave tip already passes, and every child went back to the queue (#514).
+child 14 g14 origin/dev; r=$(GATES='test -f g7 && test -f g14' en 14)
+[ "$(entered 14)" = yes ] && ok "C: the gates run on the child rebased on the wave tip" || ko "C: #14, cut from an old base, was gated on it: '$r'"
 # No gate command set: the entry is refused whole, so no child ever enters a wave ungated.
 before=$($O rev-parse $W); printf 'run-1\n' > "$T/st/auto/disp-13"; child 13 g13; r=$(GATES= en 13)
 [ "$($O rev-parse $W)" = "$before" ] && [ "$(entered 13)" = no ] && ok "C: no gates set: a child never enters a wave ungated" || ko "C: #13 entered ungated: '$r'"
