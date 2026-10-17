@@ -15,8 +15,8 @@
     "source": "skill:diagnosing-bugs"
   },
   "ego-browser": {
-    "files": 4,
-    "sha256": "7d5f89c5e85197323d345ac37f69141e05acc1ccc8a7313eaac04cefdb9366dc",
+    "files": 6,
+    "sha256": "6e2f590bbd828076549af1066886514fd3adfcef0fab228699c8c110261e7bed",
     "source": "skill:ego-browser"
   },
   "tdd": {
