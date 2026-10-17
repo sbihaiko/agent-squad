@@ -247,8 +247,9 @@ def normalize(review):
     """The review with its verdict as line 1 in the exact form the loop parses.
 
     A model writes the verdict in bold, in lower case, or after a paragraph of narration: the shape's
-    first line is not left to it (`review.sh`, the loop's own passes and `hub.py` read line 1). Whatever stands in the way
-    of the shape stays in the text, where the check reports it.
+    first line is not left to it (`review.sh`, the loop's own passes and `hub.py` read line 1). A prose preamble before
+    the first severity section is dropped; whatever else stands in the way of the shape stays in the text, where the
+    check reports it.
     """
     lines = review.replace("\r\n", "\n").split("\n")
     verdict, rest = "", []
@@ -265,8 +266,9 @@ def normalize(review):
         return review
     # A preamble before the first section ("I'll review the branch against ...") is dropped, so a sound review is not
     # lost to it (owner ruling). Prose that no section follows stays, and the check refuses it.
-    head = next((i for i, line in enumerate(rest) if line.lstrip().startswith("#")), None)
-    if head is not None and all(not line.lstrip().startswith(("-", "*")) for line in rest[:head]):
+    # The cut is the first severity section; a list item before it (a finding) keeps the text whole.
+    head = next((i for i, line in enumerate(rest) if SECTION.match(line.strip())), None)
+    if head is not None and not any(re.match(r"\s*(?:[-*+]|\d+[.)])\s", line) for line in rest[:head]):
         rest = rest[head:]
     return "\n".join([f"VERDICT: {verdict}"] + rest)
 
