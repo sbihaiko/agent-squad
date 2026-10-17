@@ -18,7 +18,15 @@ case "${1:-status}" in
       { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || { bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$!; }
       bash "$(dirname "$me")/watch.sh" >> "$L" 2>&1 & child=$!; wait $child; echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; done;;
   stop) alive || { echo "watchd not running"; rm -f "$P"; exit 0; }
-    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+    # The stop must reach the supervisor, and a signal a process sends to its own group is not delivered to itself: the
+    # guard path runs this stop from inside watch.sh, a child of the supervisor and a member of its group, so
+    # `kill -- -$pid` would spare the supervisor and it would restart the cycle (#489). A stop from outside the group
+    # keeps the group-wide signal; a stop from inside it is handed to a helper that is not in the group.
+    if [ "$(ps -o pgid= -p $$ | tr -d ' ')" = "$pid" ]; then
+      python3 -I -c 'import os,signal,sys; os.kill(int(sys.argv[1]), signal.SIGTERM)' "$pid"
+    else
+      kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+    fi
     for _ in 1 2 3 4 5 6 7 8 9 10; do alive || { rm -f "$P"; echo "watchd stopped"; exit 0; }; sleep 1; done
     echo "watchd did not stop" >&2; exit 1;;
   status) alive && echo "watchd running pid=$pid" || echo "watchd not running";;

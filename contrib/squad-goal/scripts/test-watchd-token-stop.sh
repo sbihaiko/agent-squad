@@ -16,11 +16,9 @@ t=t.replace('"$(dirname "$me")/fastloop.sh"','"%s/no-fastloop.sh"'%f.rsplit("/",
 p.write_text(t)
 PY
 # the stub watch.sh: one line to the log, then the stop the guard path runs, then exit
-printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
+# the pause lets `start` see the supervisor alive before the stop lands, the way a real cycle does
+printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 2\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
 chmod +x "$T/watch.sh" "$T/watchd.sh"
-# watchd.sh names watch.sh beside itself, so the stub stands in its place and the real fastloop.sh is pointed away
-sed -i '' "s#\"\$(dirname \"\$me\")/watch.sh\"#\"$T/watch.sh\"#" "$T/watchd.sh"
-sed -i '' "s#\"\$(dirname \"\$me\")/fastloop.sh\"#\"$T/no-fastloop.sh\"#" "$T/watchd.sh"
 bash "$T/watchd.sh" start >/dev/null
 sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
 # the stop has to land on its own: wait for the supervisor to be gone, never kill it ourselves
