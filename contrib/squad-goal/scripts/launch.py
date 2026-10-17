@@ -23,8 +23,12 @@ def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window
     if not isinstance(w, str) or not re.match(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$", w) or w[:2] == w[3:]: return True
     h = time.localtime().tm_hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
-def _may_run(chain, mid):   # mirrors hub.py's may_run: the panel's switch first, then the model's own window
-    return not (mdoc.get("off") or {}).get(chain, {}).get(mid) and _in_hours(chain, mid)
+def _spent(mid):   # #508: the subscription is spent until the marker's time (codex-limited for gpt-, agy-limited for gemini-), as mkreq.sh reads it
+    f = "codex-limited" if "gpt-" in mid else "agy-limited" if "gemini-" in mid else None
+    try: return bool(f and os.environ.get("SG_SHARED")) and time.time() < int((pathlib.Path(os.environ["SG_SHARED"]) / f).read_text().strip())
+    except (OSError, ValueError): return False
+def _may_run(chain, mid):   # mirrors hub.py's may_run: the panel's switch first, then the model's own window, then its subscription
+    return not (mdoc.get("off") or {}).get(chain, {}).get(mid) and _in_hours(chain, mid) and not _spent(mid)
 cm = mdoc.get("coding_models") or []
 # the model the request must name is the first of the chain that may run now: a window in the hub's models panel
 # (e.g. claude-sonnet-5-5 at night) is honoured here, and so is the row's switch, and the reason is printed when one

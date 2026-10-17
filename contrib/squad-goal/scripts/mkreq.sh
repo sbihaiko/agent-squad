@@ -6,7 +6,13 @@ set -e
 # [0] blindly would ask for a model the hours gate is about to refuse, or quietly use an Anthropic model during the day.
 mjson="$(cd "$(dirname "$0")" && pwd)/models.json"; hh=$((10#$(date +%H)))
 # A model the panel switched off (#1819) is skipped exactly like one outside its window: the request never names it.
+# A model whose subscription is spent (#508) is skipped too: a future codex-limited marker closes a gpt- model, agy-limited a
+# gemini one -- the markers review.sh honors. A refused child otherwise lands nothing until the window resets.
+[ -n "${SG_SHARED:-}" ] || { [ -f "$(dirname "$0")/address.sh" ] && . "$(dirname "$0")/address.sh" && SG_SHARED=$(sg_shared_dir 2>/dev/null); }
+spent() { local f; case $1 in *gpt-*) f=codex-limited;; *gemini-*) f=agy-limited;; *) return 1;; esac
+  [ -s "${SG_SHARED:-/nonexistent}/$f" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/$f")" ]; }
 mayrun() { [ "$(jq -r --arg m "$1" '.off.coding_models[$m] // false' "$mjson")" != true ] || return 1
+  spent "$1" && return 1
   local w; w=$(jq -r --arg m "$1" '.hours.coding_models[$m] // empty' "$mjson"); [ -n "$w" ] || return 0
   local a=$((10#${w%%-*})) b=$((10#${w##*-}))
   if [ "$a" -le "$b" ]; then [ "$hh" -ge "$a" ] && [ "$hh" -lt "$b" ]; else [ "$hh" -ge "$a" ] || [ "$hh" -lt "$b" ]; fi; }
