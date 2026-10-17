@@ -41,9 +41,12 @@ def provider_error(err):
     return bool(PROVIDER_STATUS.search(text)) and any(m in text for m in PROVIDER_MARKERS)
 
 
-def model_chain(models, first):
-    """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`."""
-    return [first] + [m for m in (models or []) if m and m != first]
+def model_chain(models, first, spent=()):
+    """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`.
+    A `spent` id (the engine option the launcher fills from the shared quota markers) is left out: its subscription refuses
+    at once, after a wait. When every entry is spent the whole chain stays, so a marker that is wrong never leaves no model."""
+    chain = [first] + [m for m in (models or []) if m and m != first]
+    return [m for m in chain if m not in spent] or chain
 
 
 def adapter_reason(err):

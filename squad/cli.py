@@ -24,7 +24,8 @@ USAGE = 2
 
 def _opts(a):
     m = {"stop_after": a.stop_after, "spend_cap": a.spend_cap, "deadline": a.deadline, "max_parallel": a.max_parallel, "tier_pin": a.tier_pin,
-         "expect_graph_hash": a.expect_graph_hash}
+         "expect_graph_hash": a.expect_graph_hash,
+         "spent_models": a.spent_models.split(",") if a.spent_models is not None else None}
     return {k: v for k, v in m.items() if v is not None}
 
 
@@ -119,6 +120,7 @@ def parser():
         s.add_argument("--deadline", type=float)
         s.add_argument("--max-parallel", type=int)
         s.add_argument("--tier-pin")
+        s.add_argument("--spent-models", help="comma-separated model ids whose subscription is spent: a call chain leaves them out unless no model remains (an empty value lists none)")
         s.add_argument("--expect-graph-hash", help="refuse the run unless the loaded graph has this sha256 (exit 2, no record written)")
     return p
 

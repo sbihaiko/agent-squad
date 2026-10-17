@@ -79,6 +79,17 @@ def _run_models(doc):   # [(node, model as the graph names it, first: whether it
         if n.get("kind") == "agent" and n.get("model"): yield n["name"], n["model"], True
         if n.get("kind") == "dispatch":
             for i, m in enumerate((n.get("allow") or {}).get("models") or []): yield n["name"], m, i == 0
+# A shared marker (`codex-limited` for `gpt-`, `agy-limited` for `gemini-`) names a subscription that is spent until its epoch. The
+# engine's chain waits for that provider's refusal before it moves on, so the ids the graph runs on a spent provider go to the run
+# as `--spent-models` (ADR-0106): the chain leaves them out. A marker with no readable epoch ahead of now closes nothing.
+SPENT_MARKERS = (("gpt-", "codex-limited"), ("gemini-", "agy-limited"))
+def _spent_models(doc, shared, now=None):
+    now = time.time() if now is None else now
+    def closed(name):
+        try: return float((pathlib.Path(shared) / name).read_text().strip()) > now
+        except (OSError, ValueError): return False
+    ids = {ALIASES.get(m, m) for _, m, _ in _run_models(doc)}
+    return sorted(m for m in ids for prefix, name in SPENT_MARKERS if shared and m.removeprefix("claude-").startswith(prefix) and closed(name))
 off_ids = _off_ids()
 if off_ids:
     try: gdoc = json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text())
@@ -230,8 +241,10 @@ if target:
 runs = (target or cwd) / "runs"
 before = set(p.name for p in runs.glob("run-*")) if runs.exists() else set()
 log = state / (req_file.stem + ".log")
+try: spent = _spent_models(json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text()), os.environ.get("SG_SHARED"))
+except (OSError, ValueError): spent = []   # an absent or malformed graph is the squad's own refusal to make, not this launcher's
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + [
-                        "--target", str(target or cwd), req_text],
+                        "--target", str(target or cwd)] + (["--spent-models", ",".join(spent)] if spent else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target) if target else None,
                         env={**os.environ, "SQUAD_HEADLESS": "1"})

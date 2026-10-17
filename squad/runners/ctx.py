@@ -41,6 +41,10 @@ class RunCtx:
     def route(self, node, outcome):
         return self._e._route(node, outcome)
 
+    @property
+    def spent_models(self):
+        return self._e.options.get("spent_models") or []
+
     def is_dispatch_entry(self, name):
         return name in self._e.entry_of
 

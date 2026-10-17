@@ -38,7 +38,7 @@ def _fn(path, name, **ns_extra):
     return ns[name]
 
 
-def _launch(tmp_path, coding, envelope):
+def _launch(tmp_path, coding, envelope, shared=None):
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
@@ -51,14 +51,14 @@ def _launch(tmp_path, coding, envelope):
         {"name": "route", "kind": "dispatch", "entry": "router", "allow": {"models": envelope, "efforts": ["low"]}},
         {"name": "router", "kind": "agent", "model": envelope[0], "tools": ["Read"]}]}
     (co / "docs/squad/workflows/default.graph.json").write_text(json.dumps(doc))
-    (bin_ / "caffeinate").write_text("#!/bin/bash\nmkdir -p runs/run-20261013-000000-aaaaaa\nexit 0\n")
+    (bin_ / "caffeinate").write_text(f"#!/bin/bash\nmkdir -p runs/run-20261013-000000-aaaaaa\necho \"$@\" > {tmp_path / 'argv'}\nexit 0\n")
     (bin_ / "uv").write_text("#!/bin/bash\necho uv-not-used\n")
     for p in (bin_ / "caffeinate", bin_ / "uv"):
         p.chmod(0o755)
     req = tmp_path / "req.txt"
     req.write_text(f"Coding model: {coding[0]} (no [1m] suffix); fall back to {coding[-1]}.\n--- issue\n")
     e = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
-    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"))
+    e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"), **({"SG_SHARED": str(shared)} if shared else {}))
     return subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)
 
 
@@ -122,3 +122,35 @@ def test_the_shipped_coding_chain_fits_the_shipped_envelope():
     graph = json.loads((ROOT / "docs/design/router.graph.json").read_text())
     env = next(n["allow"]["models"] for n in graph["nodes"] if n.get("kind") == "dispatch")
     assert router_envelope.envelope_blocked(chain, env) == []
+
+
+def _shared(tmp_path, **markers):
+    d = tmp_path / "shared"
+    d.mkdir()
+    for name, epoch in markers.items():
+        (d / name.replace("_", "-")).write_text(str(epoch))
+    return d
+
+
+def test_a_closed_marker_names_the_graph_models_of_its_provider_as_spent(tmp_path):
+    spent = _fn(SCRIPTS / "launch.py", "_spent_models", time=__import__("time"), pathlib=__import__("pathlib"), ALIASES={}, SPENT_MARKERS=(("gpt-", "codex-limited"), ("gemini-", "agy-limited")),
+                _run_models=lambda doc: [("router", "claude-gpt-5.5", True), ("route", "claude-opus-5-5", True), ("route", "claude-gemini-3.8-flash", False), ("route", "claude-gpt-5.6-terra", False)])
+    sh = _shared(tmp_path, codex_limited=2000, agy_limited=500)
+    assert spent({}, sh, now=1000) == ["claude-gpt-5.5", "claude-gpt-5.6-terra"]   # codex is closed until 2000, agy's epoch has passed
+    assert spent({}, sh, now=3000) == []
+    assert spent({}, None, now=1000) == []                                           # no shared dir: nothing is closed
+
+
+@pytest.mark.heavy   # launch.py waits for the run folder, over a second
+def test_the_loop_passes_the_spent_models_to_the_run(tmp_path):
+    sh = _shared(tmp_path, codex_limited=4102444800)
+    r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, shared=sh)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--spent-models claude-gpt-5.6-terra " in (tmp_path / "argv").read_text()
+
+
+@pytest.mark.heavy   # launch.py waits for the run folder, over a second
+def test_the_loop_passes_no_spent_models_flag_without_a_closed_marker(tmp_path):
+    r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, shared=_shared(tmp_path, codex_limited=1))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--spent-models" not in (tmp_path / "argv").read_text()
