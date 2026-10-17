@@ -83,4 +83,16 @@ run lnd 5101 v; wtree lnd; echo wave/lnd > "$T/st/auto/waved-lnd"; : > "$WAVE_CA
 out=$(pass lnd)
 [ ! -s "$WAVE_CALLS" ] && ok "a run whose wave landed enters no child" || ko "enter ran for a landed wave: $(cat "$WAVE_CALLS")"
 grep -q ' 5101$' "$T/moves" 2>/dev/null && ko "a child that never entered reads Code Complete after its wave landed" || ok "a child that never entered is never moved to Code Complete after its wave landed"
+# A review claim left by a pass that died mid-review (#502): the loop stopped, childreview.sh was killed, no review head was
+# kept. The claim names the head, so every later pass skipped the review and the entry held the child for good. A claim
+# whose pass is gone is no claim; one whose pass is alive still is.
+printf '#!/bin/bash\necho "$*" >> "%s/cr.calls"\n' "$T" > "$T/childreview.sh"
+run rvw 5102 n; wtree rvw; echo wave/rvw > "$T/st/auto/wave-rvw"; : > "$T/cr.calls"
+h=$(/usr/bin/git -C "$T/co/runs/rvw/ws/target-c" rev-parse HEAD)
+echo "$h" > "$T/st/auto/rvd-rvw-c"   # the claim as a pass wrote it before it died: the head, and no pass alive behind it
+pass rvw >/dev/null
+[ "$(grep -c '^rvw 5102' "$T/cr.calls")" = 1 ] && ok "a claim whose pass died is no claim: the child is reviewed again" || ko "a dead pass's claim held the review: $(cat "$T/cr.calls")"
+c1=$(grep -c '^rvw 5102' "$T/cr.calls"); sleep 30 & live=$!; echo "$h $live" > "$T/st/auto/rvd-rvw-c"; rm -f "$T/st/auto/cc-rvw-c" "$T/st/auto/requeued-rvw-c"
+pass rvw >/dev/null; kill $live 2>/dev/null
+[ "$(grep -c '^rvw 5102' "$T/cr.calls")" = "$c1" ] && ok "a claim whose pass is alive holds: the review is not repeated" || ko "a live claim was reviewed again: $(cat "$T/cr.calls")"
 rm -rf "$T"; exit $fail
