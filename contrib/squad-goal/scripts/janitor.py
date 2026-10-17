@@ -412,6 +412,11 @@ def wave_facts(n, runs):   # the board facts of issue n whose child entered the 
     tip, standing = _wv.get(run, ("", ""))
     approved = bool(run) and review_of("wave/" + run, tip) == "approved"
     return board_facts.issue_facts(entered=bool(run), standing=standing, approved=approved, dev_running=bool(run) and standing in board_facts.IN_DEV and dev_ci_running(), review_waits=False)
+def wave_entry(n, f, i):   # the wave's say over issue n of a run (#467): None when the run cut no wave, "entered" when its child entered it (wave.sh's entered-<run>-<n>), "open" when the wave can still take it, "out" when the wave landed without it. A child's own land is in its tree, never in the wave, so for a run that cut a wave only the entry is Code Complete (ADR-0145 rule 12)
+    names = {f.name, i["run_id"]}; a = st / "auto"
+    if not any((a / f"waved-{r}").exists() or (a / f"wave-{r}").exists() for r in names): return None
+    if any((a / f"entered-{r}-{n}").exists() for r in names): return "entered"
+    return "open" if any((a / f"wave-{r}").exists() for r in names) else "out"
 def pr_count(n):   # how many remote work branches name the issue: one exists once the issue is past dispatch. The name is kept for its callers; no pull request is read
     return str(len(work_branches().get(str(n), [])))
 def branch_ahead_count(n):   # how many of its work branches hold commits the landing branch lacks
@@ -505,6 +510,13 @@ def reconcile_board():
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
         if col == "Landing": set_expected(n, col, f"the wave of run {i['run_id']} is approved and its push to dev is pending", i["run_id"], i["run_ts"], 65)
         elif col == "Testing": set_expected(n, col, f"the wave of run {i['run_id']} is in dev and the CI of the dev tip runs", i["run_id"], i["run_ts"], 70); testing.add(n)
+    def code_complete(n, f, i, why):   # a landing is Code Complete only once the wave, when the run cut one, holds the issue (#467)
+        e = wave_entry(n, f, i)
+        if e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
+        elif e == "out": set_expected(n, os.environ.get("SG_TODO", "Todo"), f"{why}, but the wave of run {i['run_id']} landed without its child", i["run_id"], i["run_ts"], 20)
+        else:
+            set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
+            wave_column(n, f, i)
     for r in keep:
         f = folder(r); i = read(f); nums = req_issues(f)
         if i: nums |= i["acc"]
@@ -520,8 +532,7 @@ def reconcile_board():
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif landed_kid:
-                set_expected(n, "Code Complete", f"run {i['run_id']} child {landed_kid} landed work locally", i["run_id"], i["run_ts"], 60)
-                wave_column(n, f, i)
+                code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
             elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
                 why = "; ".join(ors) or "no reason recorded"
@@ -530,8 +541,7 @@ def reconcile_board():
                 else:
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["landed"]:
-                set_expected(n, "Code Complete", f"run {i['run_id']} landed work locally", i["run_id"], i["run_ts"], 60)
-                wave_column(n, f, i)
+                code_complete(n, f, i, f"run {i['run_id']} landed work locally")
             elif i["failed"]:
                 why = "; ".join(i["reasons"]) or "nothing landed"
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} failed with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
@@ -647,9 +657,10 @@ for d in (st / "auto").glob("disp-*"):
 if owner and proj and repo0:
     for r in names:   # O: a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
-        if not (i and i["verdict"] and not i["landed"] and i["idle"] > 180): continue   # a run that landed work, or one still moving, keeps its marker
+        if not (i and i["verdict"] and i["idle"] > 180): continue   # a run still moving keeps its marker
         req = f / "request.txt"
         nums = issues_named(req.read_text()) if req.exists() else set()
+        if i["landed"]: nums = {n for n in nums if wave_entry(n, f, i) == "out"}   # a run that landed keeps its markers, but for an issue its landed wave never carried (#467)
         marks = {n: [k for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()] for n in nums}
         marks = {n: m for n, m in marks.items() if m}
         if not marks: continue
