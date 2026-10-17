@@ -80,7 +80,7 @@ test-token-guard.sh 2.8
 test-token-ledger.sh 14.4
 test-watch-cycle.sh 60.2
 test-watch-land.sh 8.5
-test-watchd-token-stop.sh 3.2
+test-watchd-token-stop.sh 6.2
 test-wave-lifecycle.sh 27.5
 test-wave.sh 38.1
 test-wtclean.sh 90.5
