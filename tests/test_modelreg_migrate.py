@@ -170,6 +170,21 @@ def test_orphan_report_lines_name_each_setting(tmp_path, reg):
     assert "orphan review_no_tools.claude:claude-deepseek-flash: not in the review chain" in lines
 
 
+def test_a_setting_under_a_path_that_is_no_v1_chain_keeps_every_spelling(tmp_path, reg):
+    live = json.loads(LIVE.read_text())
+    live["off"]["legacy_models"] = {"old-a": True, "old-b": False}
+    live["hours"]["legacy_models"] = {"old-a": "01-02", "old-b": "03-04"}
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps(live))
+    result = mr.migrate(path, reg=reg)
+    orphans = _doc(path)["_orphans"]
+    assert orphans["off"]["legacy_models"] == {"old-a": True, "old-b": False}
+    assert orphans["hours"]["legacy_models"] == {"old-a": "01-02", "old-b": "03-04"}
+    lines = [line for line in mr.migrate_lines(result) if "legacy_models" in line]
+    assert sorted(lines) == ["orphan hours.legacy_models: names no v1 chain",
+                             "orphan off.legacy_models: names no v1 chain"]
+
+
 # --- write behavior ---------------------------------------------------------------------------------------
 
 def test_a_second_run_is_a_no_op(tmp_path, reg):
