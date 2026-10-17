@@ -10,12 +10,13 @@ is the loud door: a JSON parse error is a named failure, and one bad entry is dr
 entries still load.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 ROUTES = ("cli", "gateway", "direct")
@@ -292,6 +293,14 @@ def model(raw, reg=None):
     return reg.entries.get(ref.id) if ref.known else None
 
 
+def entries_sha256(raws, reg=None):
+    """Hash of the registry entries a list of raw spellings names. An unknown spelling names no entry, so it adds nothing."""
+    reg = reg or default_registry()
+    ids = sorted({ref.id for raw in raws if (ref := normalize(raw, reg)).known})
+    doc = {mid: asdict(reg.entries[mid]) for mid in ids}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _wire(route, raw):
     served = route.get("served") or []
     if raw in served:
@@ -310,11 +319,17 @@ def _argv(route, wire, effort, prompt_file):
 
 
 def invocation(ref_or_raw, use="gateway", effort=None, prompt_file=None, reg=None):
-    """The route and the wire string a caller sends for one spelling. An unknown spelling passes through."""
+    """The route and the wire string a caller sends for one spelling. An unknown spelling passes through.
+
+    `use="sdk"` is the engine's caller: it sends the spelling through the one route that serves it, so a correct
+    spelling keeps its wire string and any other spelling resolves to that route's model.
+    """
     reg = reg or default_registry()
     ref = ref_or_raw if isinstance(ref_or_raw, Ref) else normalize(ref_or_raw, reg)
     entry = reg.entries.get(ref.id) if ref.known else None
     route = entry.routes.get(use) if entry else None
+    if entry and use == "sdk":
+        route = entry.routes.get(_route_for(entry, ref.raw)) or route
     if not route:
         return Inv(route=use, wire=ref.raw, argv=())
     wire = _wire(route, ref.raw)

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import anyio
 
-from squad import adapt, git, skills
+from squad import adapt, git, modelreg, skills
 from squad import options as opt
 from squad import verdict as V
 from squad.adapt import Effective
@@ -39,7 +39,7 @@ from squad.runners.types import Scope as Scope
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
-                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board"):
+                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board", registry=None):
         self.shadow = shadow     # advisory observer: its output is recorded as `diagnostic` and read by nothing
         self.graph_path = graph_path
         self.g, self.adapter, self.run_dir = graph, adapter, Path(run_dir)
@@ -75,6 +75,9 @@ class Engine:
         self.ceiling = ceiling         # squad.caps.Ceiling: the machine-wide run and child slots; None admits without one
         self.defaults = defaults       # {path, sha256, engine}: the per-invocation engine-level defaults, recorded in run_start and resume
         self.state_binding = state_binding  # the issue-state carrier, fixed for this run and checked on resume
+        self.registry = registry       # the model registry path; None is the committed registry (SPEC 505)
+        self._reg = None               # the loaded registry, read once
+        self.models_resolve = False    # run_start asks the SDK adapter to resolve a spelling; an old record stays opaque
         if hasattr(adapter, "bind"):
             adapter.bind(lambda kind, **f: self.record.append(kind, **f))
         self.item_workspaces = self._item_workspaces()
@@ -96,6 +99,28 @@ class Engine:
         return out
 
     # ------------------------------------------------------------ record helpers
+    def _registry(self):
+        """The registry this engine resolves through. A path is read once; None is the committed registry."""
+        if self._reg is None:
+            self._reg = modelreg.load(self.registry) if self.registry else modelreg.default_registry()
+        return self._reg
+
+    def _model_names(self):
+        """Every model spelling the graph names: a node's pick, a dispatch's allow list, and an adaptation range."""
+        out = []
+        for n in self.nodes.values():
+            if isinstance(n.get("model"), str):
+                out.append(n["model"])
+            out += [m for m in (n.get("allow") or {}).get("models") or [] if isinstance(m, str)]
+            out += [m for m in (n.get("adapt") or {}).get("models") or [] if isinstance(m, str)]
+        return out
+
+    def _set_resolve(self, on):
+        """Record the resolution setting and hand it to an adapter that can resolve a spelling (the SDK adapter)."""
+        self.models_resolve = bool(on)
+        if hasattr(self.adapter, "resolve"):
+            self.adapter.resolve = self.models_resolve
+
     def _src(self):
         return {"kind": "run_record", "run": self.run_id, "pos": len(self.record.events)}
 
@@ -111,6 +136,11 @@ class Engine:
 
     def _finish(self, node, entry, sc, outcome, reasons, artifact=None, *, spend=None, turns=None, cap=None, elapsed=None, routed=None, **extra):
         name = node["name"]
+        if isinstance(extra.get("model"), str):     # an outcome names the registry id and the string the call sent
+            raw, reg = extra["model"], self._registry()
+            extra["route_model"] = modelreg.invocation(raw, "sdk", reg=reg).wire if self.models_resolve else raw
+            if self.models_resolve:
+                extra["model"] = modelreg.normalize(raw, reg).id
         routed = routed or self._route(node, outcome)
         fields = dict(reasons=list(reasons), artifact=artifact, spend=spend, turns=turns, cap=cap, elapsed=elapsed, routed=routed, **extra)
         self.outcomes.node(name, entry, sc.item, outcome, **fields)
@@ -233,7 +263,10 @@ class Engine:
         if bad := skills.dirty(self.vendor):   # refuse before run_start, no record
             raise opt.OptionError(f"vendor/skills is not clean: {'; '.join(bad)}. Nothing ran")
         self.preflight = self._preflight_start()
+        self._set_resolve(True)
+        models = {"resolve": True, "entries_sha256": modelreg.entries_sha256(self._model_names(), self._registry())}
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
+                           models=models,
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
@@ -259,6 +292,7 @@ class Engine:
         """Continue one run from its record under the same run id. Return the verdict. The replay is `squad/replay.py`.
         `release`: the person who runs the command releases every hold the control file still holds."""
         self.run_id, self.answer, self.from_node = self.replay.refuse(from_node), answer, from_node
+        self._set_resolve((self.record.events[0].get("models") or {}).get("resolve"))   # a record without the key stays opaque
         if release and self.control.requests():
             self.control.append("resume", source="cli")
         self.facts.run_id = self.run_id

@@ -6,7 +6,7 @@ event, and the conclusion. A reader of pause and resume starts here.
 """
 from pathlib import Path
 
-from squad import git, skills
+from squad import git, modelreg, skills
 from squad.engine_errors import ResumeRefused
 from squad.graph import check_node_names
 
@@ -16,13 +16,16 @@ class Replay:
         self.e = engine
 
     def refuse(self, from_node):
-        """Raise `ResumeRefused` for one of the refusal reasons: no run_start, a graph hash change, a skill hash change, a root exit, a bad `--from` name. Return the run id of the record."""
+        """Raise `ResumeRefused` for one of the refusal reasons: no run_start, a graph hash change, a model registry change, a skill hash change, a root exit, a bad `--from` name. Return the run id of the record."""
         e = self.e
         ev = e.record.events
         if not ev or ev[0]["event"] != "run_start":
             raise ResumeRefused("the record has no run_start event")
         if ev[0]["graph_hash"] != e.g.hash:
             raise ResumeRefused("the graph hash differs from the record's run_start: edit the graph and start a new run")
+        gone = self.model_drift(ev[0])
+        if gone:
+            raise ResumeRefused(gone)
         gone = self.project_drift(ev[0])
         if gone:
             raise ResumeRefused(gone)
@@ -43,6 +46,19 @@ class Replay:
             if bad:
                 raise ResumeRefused(str(bad[0]))
         return ev[0]["run_id"]
+
+    def model_drift(self, start):
+        """A refusal text when the registry entries the graph names changed since the run started, else None.
+        A record with no `models.resolve` resumes opaque, and an edit to an entry the graph does not name never refuses."""
+        rec = start.get("models") or {}
+        if not rec.get("resolve"):
+            return None
+        e = self.e
+        have = modelreg.entries_sha256(e._model_names(), e._registry())
+        if rec.get("entries_sha256") != have:
+            return (f"the model registry entries the graph names changed since the run started: recorded "
+                    f"{rec.get('entries_sha256')}, current {have}: restore the registry or start a new run")
+        return None
 
     def project_drift(self, start):
         """A refusal text when the project settings file changed since the run started, else None. A record with no `project_settings` has none."""

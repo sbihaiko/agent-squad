@@ -138,7 +138,8 @@ async def test_an_agent_outcome_records_the_model_the_effort_and_the_tokens_when
     await eng.run()
     ev = [e for e in record.read(tmp_path / "run" / "record.jsonl") if e["event"] == "outcome"][0]
     assert ev["tokens_in"] == 120 and ev["tokens_out"] == 30
-    assert ev["model"] == adapter.calls[0].model and ev["effort"] == adapter.calls[0].effort
+    assert ev["model"] == "claude-sonnet-5-5" and ev["route_model"] == adapter.calls[0].model   # the id, then the wire string
+    assert ev["effort"] == adapter.calls[0].effort
 
 
 async def test_an_outcome_with_unknown_usage_carries_no_token_field_and_still_reads(tmp_path):

@@ -18,7 +18,7 @@ import time
 
 import anyio
 
-from squad import prices, workcmd
+from squad import modelreg, prices, workcmd
 from squad.adapter import AdapterError, CallResult, MessageOverCeiling
 from squad.stall import StallWatch
 
@@ -177,8 +177,10 @@ class SdkAdapter:
     """`query` and `options_cls` are injectable so a test runs with no SDK and no spend."""
 
     def __init__(self, query=None, options_cls=None, setting_sources=("project",), extra_options=None, hook_cls=None, log_compaction=False,
-                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS, prices=None):
+                 hook_timeout=60, progress_seconds=PROGRESS_SECONDS, prices=None, registry=None, resolve=False):
         self.prices = prices      # the `prices` block of agent-defaults.yaml: {client, models}; None prices no model
+        self.registry, self.resolve = registry, resolve   # the run_start `models` setting: map a spelling only when it is true
+        self._reg = None          # the loaded registry, read once
         self._query, self._options_cls, self._hook_cls = query, options_cls, hook_cls
         self.setting_sources = list(setting_sources)
         self.extra_options = dict(extra_options or {})
@@ -219,9 +221,17 @@ class SdkAdapter:
             self._options_cls = self._options_cls or sdk.ClaudeAgentOptions
         return self._query, self._options_cls
 
+    def _model(self, req):
+        """The model string the SDK sends: the resolver's wire string when run_start asked for resolution, else raw."""
+        if not self.resolve:
+            return req.model
+        if self._reg is None:
+            self._reg = modelreg.load(self.registry) if self.registry else modelreg.default_registry()
+        return modelreg.invocation(req.model, "sdk", reg=self._reg).wire
+
     def options(self, req):
         _, cls = self._sdk()
-        kw: dict[str, object] = dict(cwd=req.workspace, model=req.model, tools=list(req.tools),
+        kw: dict[str, object] = dict(cwd=req.workspace, model=self._model(req), tools=list(req.tools),
                                      max_budget_usd=prices.sdk_budget(self.prices, req.model, req.max_spend), permission_mode="bypassPermissions",
                                      setting_sources=self.setting_sources)
         kw.update(self.extra_options)   # the engine's defaults land first: the node's own pick has the last word
