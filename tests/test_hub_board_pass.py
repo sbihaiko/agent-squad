@@ -179,7 +179,8 @@ def test_a_move_pass_is_read_again_after_the_board_settles(hub, monkeypatch):
 
     def fake_pass():
         passes.append(1)
-        if len(passes) > 1: hub.board_cache["t"] = real_time.time() + 1   # the start pass leaves the touch unanswered
+        if len(passes) > 1:   # the start pass leaves the touch unanswered
+            hub.board_cache["t"] = real_time.time() + 1
 
     def fake_sleep(s):
         sleeps.append(s)
