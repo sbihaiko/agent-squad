@@ -14,13 +14,13 @@ A pull request per work branch put a review step and a CI queue between finished
 
 1. **There are three long-lived branches: `dev`, `stg` and `main`.** Every other branch is a work branch and ends when its work lands.
 2. **A work branch lands in `dev` by a fast-forward push, with no pull request.** The run rebases its branch on `origin/dev`, runs its checks, and pushes the tip to `dev`. A rejected push repeats from the fetch. A run never force-pushes a long-lived branch.
-3. **The loop promotes `dev` to `stg` when the CI of the `dev` tip is green.** It promotes by a fast-forward of `stg` to that tip. A red or missing CI result promotes nothing, and a later green tip carries the earlier work with it.
+3. **The loop promotes `dev` to `stg` on the proof of the `dev` tip.** The proof is the green CI of that tip, or a full local suite in both modes that the loop ran at that exact tip (`SG_PROMOTE_PROOF=local`). It promotes by a fast-forward of `stg` to that tip. A red or missing proof promotes nothing, and a later proven tip carries the earlier work with it.
 4. **The owner promotes `stg` to `main` with one command.** No agent promotes to `main`. The command fast-forwards `main` to the `stg` tip.
 5. **The live copy publishes from `stg`.** It never publishes from `dev` or from a work branch ([ADR-0140](0140-the-live-copy-follows-in-the-cycle.md)).
 6. **A card is Done when its work is in `dev`.** A pull request no longer exists to carry the landing, so the landing is the tip reaching `dev` ([ADR-0143](0143-a-card-only-moves-forward.md)). For a child in a wave, rule 12 sets the meaning.
 7. **CI runs on every push to `dev`, `stg` and `main`,** so each promotion has its own evidence.
 8. **A wave has one branch.** A wave is the set of children that land in `dev` together. The wave branch is the only branch that lands in `dev` for them.
-9. **A child enters the wave by a rebase on the wave tip and `--ff-only`,** after its local gates pass in its own worktree and after the review of its own commits approved them. The review of a run child is read in the child's own worktree, against the wave branch: a child pushes no branch of its own, so no review of a pushed branch can see it. A child that fails its gates or whose review asked for changes never enters the wave; its issue goes back to the queue.
+9. **A child enters the wave by a rebase on the wave tip and `--ff-only`,** wherever its worktree was cut: the rebase at entry places its commits on the wave, so no rule cuts the worktree from the wave branch. It enters after its local gates pass in its own worktree and after the review of its own commits approved them. The review of a run child is read in the child's own worktree, against the wave branch: a child pushes no branch of its own, so no review of a pushed branch can see it. A child that fails its gates or whose review asked for changes never enters the wave; its issue goes back to the queue.
 10. **CI runs once per wave, when the wave lands in `dev`.** A child's entry into the wave starts no CI of its own.
 11. **A red wave CI finds its cause by running each child's suite again against the wave tip, the last entrant first.** The first suite that fails names the child that broke the wave. A wave with nothing ahead of the base lands empty and runs no check: it carries no child commit that a red check could blame.
 12. **Code Complete means the child is in the wave branch; Done means the wave is in `dev`.**
@@ -31,7 +31,7 @@ Rejected: a pull request per work branch. Rejected: a merge commit on promotion.
 
 ## Consequences
 
-- A change in `dev` is not yet trusted. Trust grows along the line: green CI moves it to `stg`, and the owner moves it to `main`.
+- A change in `dev` is not yet trusted. Trust grows along the line: the proof of its tip moves it to `stg`, and the owner moves it to `main`.
 - A defect that reaches `dev` is found by the CI of the `dev` tip, before `stg` carries it.
 
 ## Guard
