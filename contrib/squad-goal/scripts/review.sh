@@ -95,11 +95,27 @@ Only real defects; no style nits."
   echo "=== DIFF"; tipdiff   # the child's own commits against the landing branch, or a local worktree's against its wave branch
   } > $p
 fi
-tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg"); capraw() { perl -e 'alarm shift; exec @ARGV or exit 127' "$tmo" "$@"; }   # SIGALRM -> exit 142
-# cap: capraw, but every 10 s checks that the branch tip is still the reviewed one; a new push kills the model at once (SUPERSEDED, no verdict)
+tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg")
+# capraw starts the CLI in its own process group and a watchdog beside it. An alarm inside the CLI does not work: the
+# signal kills the shell that set it, and the process the CLI spawned is reparented and keeps running, so a review runs
+# on past its timeout. The watchdog is outside the group, so its kill reaches the CLI and everything it spawned.
+exec 3>&1   # the heartbeat in cap() goes here: inside the chain walk, stdout is the model output file
+capraw() { local c w
+  # setpgrp resets the environment, so PATH travels as an argument; <&0 keeps the prompt on stdin (a background job reads /dev/null);
+  # 3>&- so neither the model nor the watchdog holds the script's stdout: a caller that captures it would wait for them.
+  perl -e 'setpgrp(0,0); $ENV{PATH}=$ARGV[0]; shift; exec @ARGV or exit 127' "$PATH" "$@" <&0 3>&- & c=$!
+  ( sleep "$tmo"; kill -TERM -"$c" 2>/dev/null; sleep 2; kill -KILL -"$c" 2>/dev/null ) 2>/dev/null 3>&- & w=$!
+  # cap() kills this wait when the head moves; the model's group is a different one, so pass it on, and take the watchdog along.
+  trap 'kill -TERM -"$c" 2>/dev/null; pkill -P $w 2>/dev/null; kill $w 2>/dev/null' TERM
+  wait $c 2>/dev/null; local r=$?; pkill -P $w 2>/dev/null; kill $w 2>/dev/null; wait $w 2>/dev/null
+  [ $r -gt 128 ] && return 142; return $r; }
+# cap: capraw, but every 10 s checks that the branch tip is still the reviewed one; a new push kills the model at once (SUPERSEDED, no verdict).
+# The wait also says it is alive: a review that runs for minutes otherwise looks stuck, since the model writes nothing until it finishes.
 cap() { capraw "$@" <&0 & local pid=$! n=0   # <&0: a background job would otherwise read /dev/null instead of the prompt file
-  while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1)); [ $((n % 5)) = 0 ] || continue
-    [ "$(curhead 2>/dev/null || echo $head)" = "$head" ] || { touch "$p.superseded"; pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null; break; }; done
+  while kill -0 $pid 2>/dev/null; do sleep 2; n=$((n+1))
+    [ $((n % 15)) = 0 ] && echo "review $m on $lbl still running, $((n*2))s of ${tmo}s" >&3   # fd 3 is the script's own stdout; 1 is the model's output file here
+    [ $((n % 5)) = 0 ] || continue
+    [ "$(curhead 2>/dev/null || echo $head)" = "$head" ] || { touch "$p.superseded"; kill -TERM -$pid 2>/dev/null; pkill -P $pid 2>/dev/null; break; }; done
   wait $pid 2>/dev/null; }
 # hours: a model whose window in models.json's `hours` does not contain the current local hour is skipped
 # (empty window = always; "22-07" wraps midnight, start inclusive, end exclusive). Set from the hub's models panel.
