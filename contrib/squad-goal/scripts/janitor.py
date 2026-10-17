@@ -53,13 +53,13 @@ DEADLINE = float(os.environ.get("JANITOR_CALL_TIMEOUT", "60"))   # a call has a 
 # hardcoded path turns a missing tool into a failed pass. The shell resolves it into SG_LSOF (env.sh); this is the same
 # one resolution for a run with no shell around it, and the last entry keeps a tool outside both paths reachable.
 LSOF = next((p for p in (os.environ.get("SG_LSOF"), "/usr/sbin/lsof", "/usr/bin/lsof") if p and os.path.exists(p)), "lsof")
-def _run(a, cwd=None, env=None, timeout=None):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
+def _run(a, cwd=None, env=None, timeout=None, include_stderr=False):   # the only runner of this module: it writes into a file, never a pipe, so a grandchild
     """Run one command and return (exit status, stdout), at most DEADLINE seconds. A pipe is never used: a command's
     grandchild that inherits stdout would hold the pipe past the child's exit, and the pass would wait for it for ever
     (the loop stopped for 28 min on 2026-10-13). A deadline miss is one status of 1 and one line in the pass log."""
     with tempfile.TemporaryFile("w+") as f:
         try:
-            rc = subprocess.run(a, stdout=f, stderr=subprocess.DEVNULL, text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
+            rc = subprocess.run(a, stdout=f, stderr=(subprocess.STDOUT if include_stderr else subprocess.DEVNULL), text=True, cwd=cwd, env=env, timeout=(DEADLINE if timeout is None else timeout) or None).returncode
         except subprocess.TimeoutExpired:
             say(f"call timed out after {(DEADLINE if timeout is None else timeout):g}s: {' '.join(a[:3])}")
             return 1, ""
@@ -213,6 +213,11 @@ def mark_killed(f):
     _run(["python3", "-m", "squad.killed", str(f)], env=env)
 def inside(f): return [q for q, c in cwd.items() if c == str(f) or c.startswith(str(f) + "/")]
 act = st / "active-runs.txt"; names = act.read_text().split() if act.exists() else []
+repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
+def issue_is_gone(x):   # a missing issue is not a transient read refusal: GitHub names it with 410 or this stable message
+    r, out = _run(["gh", "api", "--include", f"repos/{repo0}/issues/{x}"], include_stderr=True)
+    msg = out.lower()
+    return r != 0 and ("410" in msg or "could not resolve to an issue" in msg)
 live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 pending = []   # markers of a reaped run, dropped after rule Q has read them
@@ -253,6 +258,10 @@ for r in names:
         held |= req_issues(f); keep.append(r); continue
     n = f.name
     if i["verdict"]:
+        nums = req_issues(f) | i["acc"]
+        if nums and all(issue_is_gone(x) for x in nums):
+            say(f"GONE-RUN {n}: every issue ({', '.join('#' + x for x in sorted(nums, key=int))}) is gone; dropped from active-runs")
+            continue
         if i["idle"] > 180:
             for q in inside(f):
                 if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"leftover of finished run {n}")
@@ -309,7 +318,6 @@ for x, rs in byissue.items():
     if len(rs) > 1 and not mk.exists():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
         if not dry: mk.touch()
-repo0 = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
 base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to count as delivery (#127)
 _is = {}
 def issue_read(x):   # one read answers every fact the passes ask of an issue: its state, its reason, its title and its labels
@@ -446,11 +454,17 @@ def refuse_comment(n, refusal, err, why):   # a refused write queues one comment
     if rc: say(f"REFUSAL-COMMENT-FAILED #{n}: {refusal} was not queued for this issue (exit {rc})")
     return rc == 0
 def board_write(args, n, why):   # the one writer of a card: a status write that succeeds updates the card cache, so every later read in this pass sees the column the pass set (#91)
+    gone = st / "auto" / f"janitor-gone-{n}"
+    if gone.exists(): return False
     r = subprocess.run(["bash", str(pathlib.Path(__file__).parent / "board.sh"), *args], capture_output=True, text=True)
     if r.returncode:
         msg = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
         named = next((l for l in msg if l.startswith("#")), None)   # board.py prints a read note beside the refusal (#96): the refusal is the line that names the card
         err = named or (msg[0] if msg else "no output")
+        if "410" in err or "could not resolve to an issue" in err.lower():
+            say(f"GONE-ISSUE #{n}: board write refused because the issue is gone: {err}")
+            if not dry: gone.touch()
+            return False
         say(f"BOARD-WRITE-FAILED #{n}: {why}: {err}")
         if not dry: refuse_comment(n, "BOARD-WRITE-FAILED", err, why)   # a dry run acts on nothing, so it queues nothing
         return False
