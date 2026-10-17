@@ -35,6 +35,18 @@ IFS=$'\t' read -r _ kind res at < "$SG_STATE/gate-status" 2>/dev/null
 out=$(BASE_FAIL=1 fg); rc=$?
 [ $rc -ne 0 ] && [ "$(cat "$T/ran.log")" = "base-cmd lock=held" ] && ok "a red base battery fails the gate and no suite runs" || ko "red base: rc $rc: '$(cat "$T/ran.log" 2>&1)'"
 
+# A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests run once
+# more, serially (SG_FAST_RETRY_CMD). Green there, the gate goes on and names it; red there too, the gate fails as before.
+printf '#!/bin/bash\necho "retry-cmd" >> "%s/ran.log"\n[ -z "$RETRY_FAIL" ]\n' "$T" > "$T/retry.sh"; chmod +x "$T/retry.sh"
+fgr() { rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="$T/base.sh" SG_FAST_RETRY_CMD="$T/retry.sh" bash "$d/fast-gate.sh" 2>&1); }
+out=$(BASE_FAIL=1 fgr); rc=$?
+[ $rc = 0 ] && ok "a base battery red only under load passes once its failed tests pass alone" || ko "saturation retry: rc $rc: $out"
+case "$out" in *saturation*) ok "the gate names the saturation it passed over";; *) ko "the retry is silent: $out";; esac
+/usr/bin/grep -qx "retry-cmd" "$T/ran.log" && /usr/bin/grep -q "test-foo.sh" "$T/ran.log" && ok "the suites still run after a passed retry" || ko "ran: '$(cat "$T/ran.log")'"
+out=$(BASE_FAIL=1 RETRY_FAIL=1 fgr); rc=$?
+[ $rc -ne 0 ] && ! /usr/bin/grep -q "test-foo.sh" "$T/ran.log" && ok "a failed test that fails alone too fails the gate" || ko "retry red: rc $rc: '$(cat "$T/ran.log")'"
+out=$(fgr); /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ko "a green battery ran the retry" || ok "a green battery runs no retry"
+
 # A shell script selects the same suite on a separate branch from the same base.
 $G -C "$R" checkout -q dev; $G -C "$R" checkout -q -b gui/sh; echo 1 >> "$S/foo.sh"; echo 1 >> "$S/baz.sh"; echo 1 >> "$R/docs/x.md"; $G -C "$R" commit -qam shell-work
 out=$(fg); rc=$?
