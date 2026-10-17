@@ -155,7 +155,7 @@ class Dispatch:
                     r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
             self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
                                                    outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
-                                                   effect={"name": "merge_land", "head": r.head, **r.extra})
+                                                   effect={"name": "merge_land", "before": head_before, "head": r.head, **r.extra})   # `before` is read here: the landing check replaces the merge's result
         return False
 
     def prune(self):

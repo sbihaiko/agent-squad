@@ -312,10 +312,12 @@ land() {   # <run>: the wave's landing pass -- the rebase on the base, the one p
       requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue";; esac; done
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
-  # (cqflush.sh keeps one per issue, edited in place, #328). Each card reads Done, which is what the landing means. Only a
+  # (cqflush.sh keeps one per issue, edited in place, #328). Each card reads the delivered column, which is what the landing
+  # means: Closed on the shipped vocabulary, which has no Done (#468), Done otherwise. A refused write is named, never dropped. Only a
   # close the API accepted queues the comment, writes the ledger row and moves the card: a close that fails leaves the issue
   # open, and every one of those three would claim a delivery that did not happen. The close repeats once, as the push does.
   export SG_GH_PASS=wave
+  local col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed
   for n in $issues; do
     local closed= tries=1
     while :; do
@@ -327,7 +329,7 @@ land() {   # <run>: the wave's landing pass -- the rebase on the base, the one p
     mkdir -p "$SG_STATE/cq"
     printf 'Closed #%s after landing %s in %s as %s (one fast-forward push, %s deleted). Refs #%s\n' "$n" "$w" "$base" "$sha" "$w" "$n" > "$(sg_cq_delivery "$n" "wave$$")"
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$sha" "$n" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads
-    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "Done" "$n" >/dev/null 2>&1
+    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | sed "s/^/WAVE-BOARD #$n $col refused: /"
   done
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"

@@ -126,7 +126,8 @@ while read -r sha br i; do
   cat > "$(sg_cq_delivery "$i" "branchland$$")" <<EOT
 Closed #$i after landing $br in $land as $ms (fast-forward push, $br deleted). $green Refs #$i
 EOT
-  $BOARD "$SG_OWNER" "$SG_PROJECT" "Done" "$i" >/dev/null
+  col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed   # the shipped vocabulary has no Done (#468)
+  $BOARD "$SG_OWNER" "$SG_PROJECT" "$col" "$i" >/dev/null
   printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$br" "$ms" "$i" >> "$SG_STATE/landed.tsv"   # the ledger the hub's last-landing fact reads: the landed branch is deleted by the push, so the remote no longer names it. The board draws no lane for it (#384): a landed branch is read from its issue card
   echo "BRANCHLAND LANDED $br as $ms into $land, closed #$i"
 done <<EOT
