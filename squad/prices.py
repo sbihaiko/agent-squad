@@ -7,21 +7,37 @@ names how much context a call may use, never a different price, so the lookup st
 """
 import re
 
+from squad import modelreg
+
 KEYS = ("input", "cache_read", "cache_write", "output")
 CONTEXT_SUFFIX = re.compile(r"\[[^\]]*\]$")
 TABLE_SOURCE = "price_table"
 SDK_SOURCE = "total_cost_usd"
 
 
+def _spellings(model):
+    """The raw key, then the canonical id and the aliases the registry gives it."""
+    yield model
+    yield CONTEXT_SUFFIX.sub("", model or "")
+    try:
+        reg = modelreg.default_registry()
+    except modelreg.RegistryError:      # a broken registry keeps the raw lookup, never stops a call
+        return
+    ref = modelreg.normalize(model, reg)
+    if not ref.known or ref.id not in reg.entries:
+        return
+    yield ref.id
+    yield from reg.entries[ref.id].aliases
+
+
 def rates(table, model):
     """The rates of one model, or None when the table has no entry for it.
 
-    A context suffix (`claude-deepseek-flash[1m]`) is stripped before the read, so both spellings of one model
-    resolve to one entry."""
+    The raw key wins, so a recorded spelling keeps its rate. A context suffix (`claude-deepseek-flash[1m]`) is stripped
+    next, so both spellings of one model resolve to one entry. A renamed or aliased spelling then resolves through
+    the registry: its canonical id, then its aliases."""
     models = (table or {}).get("models") or {}
-    if model in models:
-        return models[model]
-    return models.get(CONTEXT_SUFFIX.sub("", model or ""))
+    return next((models[key] for key in _spellings(model) if key in models), None)
 
 
 def spend(r, usage):
