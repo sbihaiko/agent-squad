@@ -22,13 +22,14 @@ cat > "$T/bin/gh" <<'J'
 a="$*"; printf '%s\n' "$a" >> "TMPDIR/gh.calls"
 case "$a" in
   *project-write/4660*) printf 'HTTP 410 Gone\n' >&2; exit 1;;
-  *project-write/4661*) printf 'HTTP 502 Bad Gateway\n' >&2; exit 1;;
+  *project-write/4661*) printf '#4661: HTTP 502 Bad Gateway (retry after 410 ms)\n' >&2; exit 1;;   # a 410 that is no status (#466 review)
   *'--include repos/x/y/issues/4662'*) printf 'HTTP/2 410 Gone\r\n\r\n{"message":"Could not resolve to an issue"}\n'; exit 1;;
   *projectsV2/4/fields*) printf 'FID4\n';;
   *projectsV2/4/items*) printf '4660\tCode Complete\thttps://api.github.com/repos/x/y\n4661\tCode Complete\thttps://api.github.com/repos/x/y\n';;
   *graphql*) printf '%s\n' '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":4660,"title":"Issue 4660","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}},{"number":4661,"title":"Issue 4661","body":"","state":"OPEN","labels":{"nodes":[]},"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}]}}}}';;
   *repos/x/y/branches*) :;;
   *repos/x/y/issues/4660*) printf 'open\t\tIssue 4660\t\n';;
+  *'--include repos/x/y/issues/4661'*) printf 'HTTP/2 502 Bad Gateway\r\nx-ratelimit-remaining: 4103\r\n\r\n{"message":"Server Error"}\n'; exit 1;;   # a transient read whose headers carry 410
   *repos/x/y/issues/4661*) printf 'open\t\tIssue 4661\t\n';;
 esac
 J
