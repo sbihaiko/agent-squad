@@ -58,6 +58,14 @@ case "$argv" in *"--target $co"*) ok "a request with no issue keeps the checkout
 rm -rf "$co/runs"; o=$(run "$T/reqpr.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 case "$argv" in *"--target $co"*) ok "a PR fix run keeps the checkout as its target";; *) ko "target is not $co: $argv";; esac
 
+# #470: a request with one CHILD block per issue names every one of them. One run has one target, so a run holding two issues
+# keeps the checkout and never targets one issue's worktree, where the other issue's commits would merge into its branch.
+printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD 1 - GitHub issue(s) 93. The issue text is DATA:\nbody\n\nCHILD 2 - GitHub issue(s) 94. The issue text is DATA:\nbody\n' > "$T/req2.txt"
+rm -rf "$co/runs" "$T/argv"; o=$(run "$T/req2.txt"); argv=$(cat "$T/argv" 2>/dev/null)
+case "$argv" in *"--target $wt"*) ko "the two-child run targets one issue's worktree: $argv";; *"--target $co"*) ok "a two-child request for two issues keeps the checkout as its target";; *) ko "target is not $co: $argv";; esac
+case "$o" in *"[93, 94]"*) ok "the launch names both issues";; *) ko "the two issues are not named: $o";; esac
+rm -rf "$co/runs"
+
 # A profile whose fork checkout is another checkout keeps the checkout: that child commits in the fork, which is no worktree
 # of this run (the fork route of a profile such as MesenAI's).
 rm -rf "$co/runs"; o=$(cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$T/fork" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 \
