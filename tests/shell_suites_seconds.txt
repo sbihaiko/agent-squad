@@ -69,7 +69,7 @@ test-refusal-comment.sh 2.1
 test-retire-fork-only.sh 1.6
 test-retired-settings.sh 1.5
 test-revformat.sh 7.9
-test-review.sh 78.2
+test-review.sh 130.0
 test-serial.sh 35.8
 test-shell-suites-gate.sh 4.2
 test-single.sh 16.3
@@ -80,6 +80,7 @@ test-token-guard.sh 2.8
 test-token-ledger.sh 14.4
 test-watch-cycle.sh 60.2
 test-watch-land.sh 8.5
+test-watchd-token-stop.sh 3.2
 test-wave-lifecycle.sh 27.5
 test-wave.sh 38.1
 test-wtclean.sh 90.5
