@@ -26,7 +26,8 @@ case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","cre
 exit 0
 """
 
-STARTABILITY = """sg_not_startable() { return 1; }
+STARTABILITY = """. "$(dirname "${BASH_SOURCE[0]}")/ghcall.sh"   # as the real one: the aggregate read (gh_aggregate) comes through it
+sg_not_startable() { return 1; }
 sg_fork_branch() { echo "gui/$1"; }
 sg_fork_branch_pattern() { echo "gui/%n"; }
 sg_issue_worktree_note() { :; }

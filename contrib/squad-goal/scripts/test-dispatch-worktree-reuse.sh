@@ -4,7 +4,8 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/docs/squad"
 : > "$T/st/active-runs.txt"
-cp "$d"/{autobug.sh,cluster.py,startability.sh,ghcall.sh,address.sh,envelope-spend.sh} "$T/s/"
+cp "$d"/{autobug.sh,cluster.py,startability.sh,ghcall.sh,address.sh,envelope-spend.sh,ghread.py,ghthrottle.py} "$T/s/"
+printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"   # the blocker gate (#479): #65 has no blocker
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 /usr/bin/git init -q -b main "$T/co"
 /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base
@@ -18,6 +19,7 @@ cat > "$T/bin/gh" <<'EOF'
 #!/bin/bash
 case "$*" in
   *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":65,"title":"Issue 65","body":"body","state":"OPEN","labels":{"nodes":[{"name":"bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}' ;;   # the blocker gate's one list read (#479)
   *issues?state=open*labels=bug*) printf '65\037bug\n' ;;
   *issues/65/comments*) echo "" ;;
   *issues/65\ -q*) printf '"Issue 65"\nbody\n' ;;

@@ -33,6 +33,7 @@ r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"AUTOBUG would dispatch"*) ko "a autobug took an autofrontier claim: '$r'";; *) ok "a autobug skips an autofrontier claim";; esac
 rm -f "$T/st/auto/disp-426"
 printf '%s\n' '[{"number":426,"title":"Mutual dispatcher claim","body":"gui/426","labels":["ready-for-agent"]}]' > "$T/issues.json"
+rm -rf "$T/st/gh-cache"   # the open issues changed: case a's cached read (autobug's blocker gate) is stale
 touch "$T/st/auto/bug-426"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *"FRONTIER would dispatch"*) ko "b autofrontier took an autobug claim: '$r'";; *) ok "b autofrontier skips an autobug claim";; esac
