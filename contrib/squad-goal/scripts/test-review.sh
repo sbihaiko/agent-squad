@@ -169,6 +169,12 @@ case "$out" in model=claude:slow*) ok "only successful tries order the chain";; 
 : > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".*
 out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
 case "$out" in model=claude:slow*) ok "no record at all: the configured order stands";; *) ko "no-record fallback: '$out'";; esac
+# review_order "config" (#503): the owner picks the head of the chain (a cheaper model first, so the token cap holds), and the
+# measured latency does not put a faster, dearer model in front of it.
+printf '{"review_models":["claude:slow","claude:fast"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+printf 'x\t1\tclaude:slow\t200\t0\nx\t1\tclaude:fast\t20\t0\n' > "$T/st/review-times.tsv"; rm -f "$T/st/review-fix_1-x".*
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+case "$out" in model=claude:slow*) ok "review_order config: the configured head is tried first, whatever the latency";; *) ko "review_order config: '$out'";; esac
 # a model with no record is ranked after the measured ones, never dropped: the measured head is skipped by quota,
 # and the unmeasured tail must still be reachable (a chain that dropped it would end BLOCKED untried)
 printf '{"review_models":["claude:fast","claude:unmeasured"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":["claude:fast"]}' > "$T/s/models.json"
