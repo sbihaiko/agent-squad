@@ -22,6 +22,7 @@ cat > "$T/issues.json" <<'JSON'
 ]
 JSON
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
+printf 'print("-")\n' > "$T/s/fundroom.py"   # the graph names no funding bound unless a case says so
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
@@ -54,6 +55,35 @@ case "$r" in *"[1228]"*) case "$r" in *"[1400]"*) ko "1 bug+debt one slot still 
 printf 'caps:\n  runs: 2\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[1400]"*) ko "2 extra slot dispatched debt while a bug is startable: '$r'";; *"[1228]"*) ok "2 extra slot: bug only, debt held";; *) ko "2 bug not dispatched: '$r'";; esac
+
+# 2b) (#479) the bug lane asks stack.sh, with the issue's own aggregate entry, and dispatches only on READY: a bug whose
+# blocker is open is held, its WAIT logged once, and it is dispatched once the blocker closes.
+cat > "$T/s/stack.sh" <<'S'
+#!/bin/bash
+jq -e --argjson n "$1" '.number == $n' "$SG_STACK_ISSUE" >/dev/null 2>&1 || { echo "WAIT no aggregate entry for #$1"; exit 0; }
+[ -e "$SG_STATE/blocker-open" ] && { echo "WAIT blocker #9 is open: its work is not in main yet"; exit 0; }
+echo READY
+S
+chmod +x "$T/s/stack.sh"; touch "$T/st/blocker-open"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ko "2b a bug whose blocker is open was dispatched: '$r'";; *) ok "2b a bug whose blocker is open is not dispatched";; esac
+case "$r" in *"AUTOBUG skip #1228: WAIT blocker #9 is open"*) ok "2b the wait is said, with its reason";; *) ko "2b the wait is silent: '$r'";; esac
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG skip #1228"*) ko "2b the same wait is logged again on the next pass: '$r'";; *) ok "2b the same wait is logged once";; esac
+rm -f "$T/st/blocker-open"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "2b the bug is dispatched once its blocker closed (stack.sh read its aggregate entry)";; *) ko "2b the bug stayed held after its blocker closed: '$r'";; esac
+printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
+
+# 2c) (#480) a run funds only so many children: two bugs, two free slots, and a graph that funds one child -> one child.
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.append({"number":1229,"title":"Core: other crash","body":"step zz/q.py","created_at":"2026-09-01T15:30:00Z","labels":["bug"]}); json.dump(d, open(p,"w"))' "$T/issues.json"
+printf 'print(1)\n' > "$T/s/fundroom.py"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 1 cluster(s)"*) ok "2c the pass asks for no more children than one run funds";; *) ko "2c the pass asked past the funded room: '$r'";; esac
+printf 'print("-")\n' > "$T/s/fundroom.py"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"would dispatch 2 cluster(s)"*) ok "2c with no funding bound the free slots decide";; *) ko "2c no funding bound, yet not two children: '$r'";; esac
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"]!=1229], open(p,"w"))' "$T/issues.json"
 
 # 3) no startable bug: debt is dispatched
 python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); json.dump([i for i in d if i["number"]!=1228], open(p,"w"))' "$T/issues.json"
@@ -481,7 +511,7 @@ rm -f "$T/bnowrite"; unset SG_BOARD_READ_BACKOFF SG_BOARD_SETTLE_SECONDS
 # bug and no label; 1501 carries the bug label but kind task (the kind wins); 1502 carries the label and no kind (the
 # label stays the fallback for an item no kind was written on); 1503 carries kind bug and a skip label. Its own sandbox.
 K=$T/k; mkdir -p "$K/bin" "$K/st/auto" "$K/co/docs/squad" "$K/s"
-cp "$d/autobug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$K/s/"
+cp "$d/autobug.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/refusal-names.sh" "$d/ghread.py" "$d/ghthrottle.py" "$K/s/"
 : > "$K/st/active-runs.txt"; printf 'caps:\n  runs: 4\n' > "$K/co/docs/squad/defaults.yaml"
 printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$K/st" "$K/co" > "$K/s/env.sh"
 printf '#!/bin/bash\necho READY\n' > "$K/s/stack.sh"; chmod +x "$K/s/stack.sh"
@@ -500,6 +530,7 @@ for i in json.load(open("$K/issues.json")):
   if sys.argv[1] == "" or sys.argv[1] in i["labels"]: print(str(i["number"])+"\x1f"+",".join(i["labels"]))' "\$1"; }
 case "\$*" in
   *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$K/issues.json" ;;   # the blocker gate's one list read (#479)
   *"issues?state=open"*labels=bug*) list bug ;;
   *"issues?state=open"*labels=debt*) list debt ;;
   *"issues?state=open"*) list "" ;;
