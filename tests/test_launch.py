@@ -12,9 +12,9 @@ import pytest
 
 from squad import cli, defaults, launch, record
 from squad.adapter import ScriptedAdapter
-from squad.graph import from_doc
+from squad.graph import canon_hash, from_doc
 from squad.options import OptionError
-from tests.flows import agent, doc
+from tests.flows import agent, doc, scope_gate
 
 ROOT = Path(__file__).resolve().parent.parent
 OK = {"output": {"x": 1}, "spend": 0.1}
@@ -278,3 +278,105 @@ def test_the_harness_scripts_for_many_runs_pass_watch_off():
         calls = [n for n in ast.walk(ast.parse((ROOT / "scripts" / name).read_text())) if isinstance(n, ast.Call)
                  and isinstance(n.func, ast.Attribute) and n.func.attr == "launch" and getattr(n.func.value, "id", "") == "launch"]
         assert calls and all(any(k.arg == "watch" and getattr(k.value, "value", None) is False for k in c.keywords) for c in calls), name
+
+
+# --- SPEC 505: the router chain's on/hrs overlay, applied once before the graph copy ---
+
+def _window(offset):
+    """A one-hour local window starting `offset` hours from now: 0 holds this hour, 1 does not."""
+    import time
+    h = (time.localtime().tm_hour + offset) % 24
+    return f"{h:02d}-{(h + 1) % 24:02d}"
+
+
+def _router_models(tmp_path, entries, v1=False):
+    """A models.json whose router chain carries `entries` (id, on, hrs), in the v1 or v2 shape."""
+    if v1:
+        doc = {"router_models": [e["id"] for e in entries],
+               "off": {"router_models": {e["id"]: True for e in entries if e.get("on") is False}},
+               "hours": {"router_models": {e["id"]: e["hrs"] for e in entries if e.get("hrs")}}}
+    else:
+        doc = {"schema_version": 2, "chains": {"router": [dict(e) for e in entries]}}
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def _dispatch_node(models, efforts=("low",), when=None):
+    node = {"name": "route", "kind": "dispatch", "entry": "router", "max_depth": 1, "max_children": 2,
+            "max_parallel": 1, "deadline": 60, "join": "all",
+            "allow": {"models": list(models), "efforts": list(efforts), "tools": ["Read"],
+                      "skills": [{"name": "tdd"}], "workspaces": ["ws"]},
+            "budget": {"stalls": {"min": 1, "max": 10}, "spend": {"min": 0.01, "max": 1.0}},
+            "checks": ["gate"]}
+    if when:
+        node["when"] = when
+    return node
+
+
+def _router_agent():
+    node = agent("router", may_spawn=True)
+    del node["next"]          # a dispatch entry is not a loop child, so `repeat` is invalid there
+    return node
+
+
+def _dispatch_graph(models, efforts=("low",)):
+    return from_doc(doc([agent("a", output_key="x"), _dispatch_node(models, efforts), _router_agent(),
+                         scope_gate(fail="exit:fail")], ["a", "route"]))
+
+
+def _allow(doc):
+    return next(n for n in doc["nodes"] if n["kind"] == "dispatch")["allow"]["models"]
+
+
+def test_the_router_chain_filters_the_dispatch_envelope_before_the_copy_and_the_hash(tmp_path):    # SPEC 505
+    models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "on": False}])
+    g = _dispatch_graph(["opus", "sonnet"], efforts=["low", "high"])
+    eng = launch.launch(g, tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
+    copy = json.loads((tmp_path / "r" / "graph.json").read_text())
+    assert _allow(copy) == ["opus"]
+    route = next(n for n in copy["nodes"] if n["kind"] == "dispatch")
+    assert route["allow"]["efforts"] == ["low", "high"] and all(isinstance(m, str) for m in route["allow"]["models"])
+    assert eng.g.doc == copy and eng.g.hash == canon_hash(copy)
+
+
+def test_a_v1_router_chain_filters_by_the_same_on_and_hours_rule(tmp_path):    # SPEC 505
+    models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "hrs": _window(1)}], v1=True)
+    eng = launch.launch(_dispatch_graph(["opus", "sonnet"]), tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
+    assert _allow(eng.g.doc) == ["opus"]
+
+
+def test_an_empty_router_set_refuses_the_start_with_a_named_reason(tmp_path):    # SPEC 505
+    models = _router_models(tmp_path, [{"id": "opus", "on": False}])
+    with pytest.raises(OptionError) as exc:
+        launch.launch(_dispatch_graph(["opus"]), tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
+    assert "route" in str(exc.value) and "router" in str(exc.value)
+    assert not (tmp_path / "r").exists()
+
+
+@pytest.mark.anyio
+async def test_a_resume_after_the_router_window_closes_reads_the_copy_and_completes(tmp_path):    # SPEC 505
+    models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "hrs": _window(0)}])
+    nodes = [agent("a", output_key="x"), {"name": "ask", "kind": "wait", "owner": "rafael", "deadline": 100, "default": "pass"},
+             _dispatch_node(["opus", "sonnet"], when={"fact": "flag", "op": "eq", "value": True}),
+             _router_agent(), scope_gate(fail="exit:fail")]
+    eng = launch.launch(from_doc(doc(nodes, ["a", "ask", "route"])), tmp_path / "r",
+                        adapter=ScriptedAdapter({"a": OK}, repeat_last=True), models=models)
+    assert (await eng.run()).exit_code == 10
+    frozen = json.loads((tmp_path / "r" / "graph.json").read_text())
+    assert _allow(frozen) == ["opus", "sonnet"]
+    # The clock moves past sonnet's window: the same file now excludes it. The resume reads the run folder copy,
+    # so neither the clock nor a recomputed overlay can move the graph hash out from under the record.
+    models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "hrs": _window(1)}])
+    script = tmp_path / "s.json"
+    script.write_text(json.dumps({"script": {"a": OK}, "repeat_last": True}))
+    argv = ["resume", "r", "--run-dir", str(tmp_path / "r"), "--script", str(script), "--answer", "pass"]
+    assert await cli._resume(cli.parser().parse_args(argv)) == 0
+    assert _allow(json.loads((tmp_path / "r" / "graph.json").read_text())) == ["opus", "sonnet"]
+    assert record.read(tmp_path / "r" / "record.jsonl")[0]["graph_hash"] == canon_hash(frozen)
+
+
+def test_the_loop_launch_passes_the_models_path_and_never_the_filtering_rule():    # SPEC 505
+    src = (ROOT / "contrib" / "squad-goal" / "scripts" / "launch.py").read_text()
+    assert '"--models"' in src and 'here / "models.json"' in src
+    assert "modelreg" not in src          # the overlay lives in the one module that starts a run, never in the script
