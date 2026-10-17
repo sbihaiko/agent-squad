@@ -49,6 +49,16 @@ rm -f "$L"; marker 10; line "$(now)" review:R claude:opus 600 400 0
 o=$(SG_STATE="$T/st" SG_TOKEN_BURN_CAP=1500 SG_TOKEN_BURN_MIN_SECONDS=30 bash "$G" 2>&1); rc=$?
 [ $rc = 0 ] && [ -z "$o" ] && ok "the rate tripwire waits for SG_TOKEN_BURN_MIN_SECONDS" || ko "min gate: rc=$rc out=$o"
 
+# one review burst inside the cap does not stop the loop (#493): the rate is read over a floor span (a quarter of the
+# window), never over the few minutes since the marker. Live: 184963 tokens 361 s in, 12% of the cap, read as 44M/day.
+rm -f "$L"; marker 361; line "$(now)" review:BURST claude:opus 150000 34963 0
+o=$(guard); rc=$?
+[ $rc = 0 ] && [ -z "$o" ] && ok "one review burst inside the cap does not stop the loop" || ko "burst: rc=$rc out=$o"
+# ... but a burst that would cross the cap over the floor span still fires, and the floor is a setting
+o=$(SG_STATE="$T/st" SG_TOKEN_BURN_RATE_FLOOR_S=3600 bash "$G" 2>&1); rc=$?
+[ $rc = 1 ] && ok "a burst over the cap across the floor span fires" || ko "floor fire: rc=$rc out=$o"
+case "$o" in *184963*1500000*review:BURST*) ok "the rate sentence names total, cap and consumer";; *) ko "rate sentence: $o";; esac
+
 # a missing ledger: exit 0
 rm -f "$L"; marker 10
 o=$(guard); rc=$?
