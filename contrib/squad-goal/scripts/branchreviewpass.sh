@@ -49,7 +49,8 @@ review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
   n=$((n+1)); echo "$n" > "$c"; echo "BRANCHREVIEW FAILED $br ${sha:0:9} (try $n of $tries): $out" >> "$res"
   [ "$n" -ge "$tries" ] && [ ! -e "$s" ] && { touch "$s"
     echo "BRANCHREVIEW STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i")); a new push, or $ttl s, starts a new count" >> "$res"
-    { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; python3 "$here/chainhealth.py" "$here/models.json" "${SG_SHARED:-$SG_STATE}" 2>/dev/null; } > "$(sg_cq_status "$i" "mchain")"; }
+    { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; python3 "$here/chainhealth.py" "$here/models.json" "${SG_SHARED:-$SG_STATE}"; } > "$(sg_cq_status "$i" "mchain")" \
+      || { echo "BRANCHREVIEW CHAINHEALTH $br: chainhealth.py failed (the model resolver is missing or unreadable)" >&2; : > "$A/chainhealth-failed"; }; }
 }
 done=0; now=$(date +%s); jobs_list=
 while read -r sha br i; do
@@ -69,4 +70,5 @@ $wb_list
 EOT
 wait
 for res in $jobs_list; do cat "$res"; rm -f "$res"; done
+[ -e "$A/chainhealth-failed" ] && { rm -f "$A/chainhealth-failed"; exit 1; }
 exit 0
