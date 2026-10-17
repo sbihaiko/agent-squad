@@ -42,12 +42,13 @@ if [ "$mode" = --branch ]; then
   filesof() { gh_api "repos/$repo/compare/$pbase...$bm" -q '.files[].filename' 2>/dev/null; }
 else
   head=$(git rev-parse HEAD); lbl="worktree $bm" fetchref=""; baseref=$wbase
-  curhead() { git rev-parse HEAD; }
+  wt=$(pwd)   # every read names this worktree: the grok and gemini legs run from SG_CHECKOUT, and the head watch there read the checkout's HEAD (#483)
+  curhead() { git -C "$wt" rev-parse HEAD; }
   # "ahead" on the local side is the same question the remote's compare answers: the reviewed sha is an ancestor of the head.
-  ahead() { git merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
-  deltadiff() { git diff "$1"...HEAD 2>/dev/null; }
-  tipdiff() { git diff "$wbase"...HEAD 2>/dev/null; }
-  filesof() { git diff --name-only "$wbase"...HEAD 2>/dev/null; }
+  ahead() { git -C "$wt" merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
+  deltadiff() { git -C "$wt" diff "$1"...HEAD 2>/dev/null; }
+  tipdiff() { git -C "$wt" diff "$wbase"...HEAD 2>/dev/null; }
+  filesof() { git -C "$wt" diff --name-only "$wbase"...HEAD 2>/dev/null; }
 fi
  last="$SG_STATE/review-$pr.sha"; prevmd="$SG_STATE/review-$pr.prev.md"; delta=""
 if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/review-$pr.md" | grep -q CHANGES && [ "$(cat "$last")" != "$head" ] \

@@ -22,6 +22,9 @@ out=$(SG_REVIEW_BASE=$w bash "$(dirname "$0")/review.sh" --worktree "origin/$w" 
 rm=$(printf '%s\n' "$out" | head -1 | sed -n 's/^model=\([^ ]*\).*/\1/p')
 printf '%s\n' "$w" > "$SG_STATE/review-$key.base"   # the base beside the reviewed head, so the entry can require the wave branch
 [ -s "$SG_STATE/review-$key.md" ] || { echo "CHILDREVIEW $br: no review was written (exit $rc)" >&2; exit 1; }
+# review.sh exits 0 only with a verdict for this head. A superseded review, or a chain where every model failed, writes a
+# BLOCKED line and keeps no reviewed head: that is no review, so the caller drops its once-per-head claim and asks again (#483).
+[ "$rc" = 0 ] || { echo "CHILDREVIEW $br ${sha:0:9}: no verdict for this head ($(head -1 "$SG_STATE/review-$key.md" | tr -d '*'), exit $rc)" >&2; exit 1; }
 v=$(head -1 "$SG_STATE/review-$key.md" | tr -d '*')
 { echo "Status update — child $br @ ${sha:0:9} (run $run): review${rm:+ ($rm)} against $w: $v."; echo; tail -n +2 "$SG_STATE/review-$key.md"; } > "$(sg_cq_status "$iss" "cr$$")"
 echo "$br ${sha:0:9} $v"
