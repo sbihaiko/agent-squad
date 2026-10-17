@@ -131,7 +131,8 @@ joins() {   # one when issue $2 joins a child the picks of its own group already
 # cuts a shared-file slice in two, which is what bounding the picks alone did (#1521, #57).
 cands=()
 # Read every open issue once, through the door: one GraphQL request whose entries carry the labels, the blockers with
-# their states and the not-startable marker. `stack.sh` owns the blocker gate; a label only orders a ready issue and never hides it.
+# their states and the not-startable marker. `stack.sh` owns the blocker gate. Only an issue that carries SG_FRONTIER_LABEL is a
+# candidate (#485): the label is the go signal, and an issue filed for later (an enhancement in the Backlog) never wears it.
 gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || exit 0   # no list, no frontier this pass
 while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r '.[]|select(.pull_request|not)|select((.title // "")|test("^Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+$")|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
 i=0
@@ -144,6 +145,7 @@ while [ $i -lt ${#cands[@]} ]; do
   # A run parent rolls a run's children up and is never work (#340).
   skip=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1;; esac; done
   [ -n "$skip" ] && continue
+  case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) continue;; esac   # no go signal, no dispatch (#485)
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
   # The list's entry decides; only an entry that carried no comments costs the comments read.
