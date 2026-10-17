@@ -496,7 +496,7 @@ def terminal_facts(n, col):   # the facts a terminal comment states (#245), or N
         landed = [b for b, g in work_branches().get(str(n), []) if g in ("behind", "identical")]   # the branch is the delivery (#358): no pull request is read
         if not landed:
             ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
-            return {"base": land, "closed_by": who} if ok else None
+            return {"base": land, "closed_by": who, "reason": issue_info(n)[1]} if ok else None   # the close reason: a not-planned close is never called completed (#517)
         ok, sha = door_read(f"repos/{repo0}/branches/{quote(landed[0], safe='')}", '.commit.sha // ""')
         if not ok: return None
         test = ""

@@ -205,6 +205,8 @@ def terminal_comment(column, facts):
         sha = str(facts.get("sha") or "")[:7]
         test = facts.get("test") or (f"no check ran on merge commit {sha}" if sha else "no merge commit to test")
         body = f"Closed: pull request #{facts['pr']} merged into {facts.get('base') or 'the base'} carries this issue (merge commit {sha or 'unknown'}). Test on the merge: {test}."
+    elif column == "Closed" and facts.get("reason") in ("not_planned", "duplicate"):
+        return None   # it was not delivered: "completed" would be false, and the card belongs in Abandoned (#517)
     elif column == "Closed" and facts.get("closed_by"):
         body = f"Closed: @{facts['closed_by']} closed it as completed; no merged pull request into {facts.get('base') or 'the base'} names it."
     elif column == "Abandoned" and facts.get("who") and facts.get("why"):
