@@ -191,7 +191,7 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   for i in $(seq 1 $tries); do
-    rm -f "$out"; t1=$(date +%s)
+    rm -f "$out"; t1=$(date +%s); bad=""
     case $m in
       # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
       # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
@@ -214,12 +214,21 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
     tu=""; mark=""
     case $m in claude:*) tu=$(jq -r 'select(type=="object" and (.result|type)=="string" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$out" 2>/dev/null)
+      # A claude answer is a review only when the run itself succeeded (#501): the JSON says `is_error` and the `subtype`
+      # (success, error_max_turns, error_during_execution, ...), and `.result` holds whatever the model had said when the run
+      # ended -- a lone preamble included, which the check below would take for an answer of rc 0. The raw JSON is kept
+      # beside the answer, so a run that ended on its own is diagnosed without spending another call.
+      bad=$(jq -r 'select(type=="object" and ((.is_error // false) or ((.subtype // "success") != "success"))) | (.subtype // "error")' "$out" 2>/dev/null)
+      [ -n "$bad" ] && cp "$out" "$SG_STATE/review-$pr.json"
       jq -r .result "$out" > "$out.r" 2>/dev/null && mv "$out.r" "$out"; rm -f "$out.r"
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
       *) tu="0	0	0";;
     esac
     if [ -n "$mark" ]; then printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" "$mark" >> "$tl"
     else printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"; fi
+    # The run ended in an error: no verdict came of it, so the chain moves on as it does for a failed call (the tokens above
+    # are still counted; the answer is not saved as a review).
+    [ -n "$bad" ] && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$out" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$")"; fmt=1; rc=1; continue; }
     [ -e "$p.superseded" ] && { echo "VERDICT: BLOCKED ($lbl head moved during the review)" > "$out"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
