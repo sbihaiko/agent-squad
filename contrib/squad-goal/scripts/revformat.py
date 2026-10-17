@@ -44,6 +44,9 @@ VERDICT = re.compile(r"^VERDICT: (APPROVE|CHANGES)$")
 SECTION = re.compile(r"^##\s*(Blocking|Debt|Resolved)\s*$", re.IGNORECASE)
 THEME = re.compile(r"^#{3,}\s*(\S.*?)\s*$")
 BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
+# A section with no finding says so, and that is an empty section, not a malformed bullet (#498): the shape already takes a
+# bare `VERDICT: APPROVE`, and a model that must write the heading under it writes `None.` there. Only its first content.
+EMPTY = re.compile(r"(?i)^(?:none|no findings|nothing|n/?a|nil)[.!]?$|^[—–-]$")
 LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`,]*)`?(?:[\s,;]|$)")  # path:line, or a path alone for a file-level finding; the first field of a bullet (or the second)
 # a finding about the change as a whole, not a file (#443): the branch delivers nothing from its issue, the commit
 # message misstates it -- there is no path to cite. Its place is the diff itself, and a whole-change label names it:
@@ -133,7 +136,7 @@ def survey(review, max_lines=0, fix_round=False):
     if not VERDICT.match(lines[0].strip()):
         return f"line 1 is {lines[0].strip()[:60]!r}, not 'VERDICT: APPROVE' or 'VERDICT: CHANGES'"
     approve = lines[0].strip().endswith("APPROVE")
-    seen, section, bullet = [], None, None     # bullet: (line number, its lines so far), while one is open
+    seen, held, section, bullet = [], set(), None, None     # bullet: (line number, its lines so far), while one is open; held: sections with content
     def close():                               # a bullet is validated once it ends, on its joined two lines
         if bullet is None:
             return None
@@ -188,7 +191,10 @@ def survey(review, max_lines=0, fix_round=False):
             if (bad := close()):
                 return bad                    # the previous bullet may not claim this line
             bullet = (n, [m.group(1)])
+            held.add(section)
             continue
+        if bullet is None and section is not None and section not in held and EMPTY.match(text):
+            continue                        # `None.` opens its section as empty (#498); after a bullet it is prose, below
         if bullet is None:
             return (f"line {n}: {text[:50]!r} is neither a section, a bullet nor a theme heading"
                     " — a review is only that")
