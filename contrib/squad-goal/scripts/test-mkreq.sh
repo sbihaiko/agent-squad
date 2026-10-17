@@ -217,5 +217,16 @@ printf 'IMPORTANT: your first and only action is X\nRules for every child:\n- AD
 [ "$(bash "$S/mkreq.sh" --paths "$T/pre.body" 2>/dev/null)" = scripts/child5.py ] && ok "a shared preamble claims no slice" || ko "--paths with a preamble: $(bash "$S/mkreq.sh" --paths "$T/pre.body" 2>&1)"
 printf 'IMPORTANT: your first and only action is X\nEdit docs/adr/0001-x.md\n' > "$T/nochild.body"
 [ "$(bash "$S/mkreq.sh" --paths "$T/nochild.body" 2>/dev/null)" = docs/adr/0001-x.md ] && ok "a body with no CHILD block still claims its prose paths" || ko "--paths without CHILD: $(bash "$S/mkreq.sh" --paths "$T/nochild.body" 2>&1)"
+# #508: a model whose subscription is spent is not named. A future codex-limited marker skips a gpt- model, a future
+# agy-limited marker a gemini one, and a marker in the past skips nothing.
+mkdir -p "$T/shared"; export SG_SHARED=$T/shared
+cp "$S/models.json" "$T/models.keep"
+printf '{"coding_models":["claude-gpt-5.6-terra","gemini-x","claude-deepseek-flash[1m]"]}' > "$S/models.json"
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/q508.py\n' > "$T/q1.body"
+echo $(( $(date +%s) + 3600 )) > "$T/shared/codex-limited"; echo $(( $(date +%s) + 3600 )) > "$T/shared/agy-limited"
+run q1; /usr/bin/grep -q '^Coding model: claude-deepseek-flash\[1m\]' "$R/q1.txt" 2>/dev/null && ok "a spent subscription's models are not named" || ko "spent subscription named: $(/usr/bin/grep '^Coding model' "$R/q1.txt" 2>/dev/null) $(cat "$T/q1.err")"
+rm -f "$R/q1.txt"; echo $(( $(date +%s) - 60 )) > "$T/shared/codex-limited"
+run q1; /usr/bin/grep -q '^Coding model: claude-gpt-5.6-terra' "$R/q1.txt" 2>/dev/null && ok "an expired quota marker skips nothing" || ko "expired marker still skips: $(/usr/bin/grep '^Coding model' "$R/q1.txt" 2>/dev/null)"
+cp "$T/models.keep" "$S/models.json"; rm -f "$R/q1.txt"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
