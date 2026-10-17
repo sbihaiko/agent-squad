@@ -598,10 +598,7 @@ def _migration_orphans(doc, kept):
     orphans, lines = {}, []
 
     def note(setting, path, spelling, value, canon):
-        if canon is None:
-            orphans.setdefault(setting, {})[path] = value
-            lines.append(f"orphan {setting}.{path}: names no v1 chain")
-        elif path is None:
+        if path is None:
             if isinstance(value, list):
                 orphans.setdefault(setting, []).extend(value)
             else:
@@ -619,8 +616,12 @@ def _migration_orphans(doc, kept):
             if not isinstance(rows, dict):
                 continue
             canon = _V1_TO_CANON.get(path)
+            if canon is None:
+                orphans.setdefault(setting, {})[path] = dict(rows)
+                lines.append(f"orphan {setting}.{path}: names no v1 chain")
+                continue
             for spelling, value in rows.items():
-                if canon is not None and spelling in kept[canon]:
+                if spelling in kept[canon]:
                     continue
                 note(setting, path, spelling, value, canon)
     timeouts = doc.get("review_timeout_seconds_by_model")
