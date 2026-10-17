@@ -22,6 +22,7 @@ case "$1" in
   --run-fields) echo "RUN $2 $3 $4 $5 $6" >> "TMPDIR/board.calls";;
   --clear-run) echo "CLEAR $2 $3 $4" >> "TMPDIR/board.calls";;
   --add) echo "ADD $2 $3 $4 $5" >> "TMPDIR/board.calls";;
+  --remove) echo "REMOVE $2 $3 $4" >> "TMPDIR/board.calls";;
   *) echo "STATUS $1 $2 $3 $4" >> "TMPDIR/board.calls";;
 esac
 J
@@ -53,10 +54,11 @@ case "$a" in
     for n in 2004 2010 2011 2032; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
     printf '2030\tDone\thttps://api.github.com/repos/x/y\n2031\tAbandoned\thttps://api.github.com/repos/x/y\n2029\tClosed\thttps://api.github.com/repos/x/y\n'   # spec children, and a spec card already Closed
+    printf '2041\tBacklog\thttps://api.github.com/repos/x/y\n'   # a run parent that already has a card
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -71,6 +73,7 @@ case "$a" in
         2027) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2031}]';;
         2028) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2030},{"number":2012}]';;
         2029) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2030},{"number":2002}]';;
+        2040|2041) labs='{"nodes":[{"name":"run-parent"},{"name":"enhancement"}]}';;   # a run parent: the roll-up of a run's children, never work
         2021) labs='{"nodes":[{"name":"spec"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
@@ -226,6 +229,14 @@ done
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
 ! /usr/bin/grep -q 'sub_issues' "$T/gh.calls" 2>/dev/null && ok "no sub-issues route is called" || ko "a sub-issues call: $(/usr/bin/grep sub_issues "$T/gh.calls")"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c graphql "$T/gh.calls")"
+# A run parent (the run-parent label) is the roll-up of a run's children in GitHub, never work (#500): the pass adds no card for
+# one (#2040), removes the card one already has (#2041), and leaves the issue itself alone. Both writes are sent only when the
+# board differs: #2040 has no card to remove, and #2041 has one, so it is removed once and never written a status.
+! /usr/bin/grep -q ' 2040$' "$T/board.calls" 2>/dev/null && ok "a run parent with no card is not added, and nothing is removed" || ko "#2040 written: $(/usr/bin/grep ' 2040$' "$T/board.calls")"
+/usr/bin/grep -q '^REMOVE o 4 2041$' "$T/board.calls" 2>/dev/null && ok "a run parent that has a card loses it" || ko "#2041 card not removed: $(bc) $o"
+[ "$(/usr/bin/grep -c ' 2041$' "$T/board.calls")" = 1 ] && ok "the card of a run parent is removed in one write, never given a status" || ko "#2041 writes: $(/usr/bin/grep ' 2041$' "$T/board.calls")"
+/usr/bin/grep -q 'BOARD-RECONCILE #2041: card removed (run-parent' "$T/st/cycle.log" 2>/dev/null && ok "the removal is named in cycle.log" || ko "#2041 removal not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q 'issues/204[01]\(/comments\| -X \| -f \)' "$T/gh.calls" 2>/dev/null && ok "the roll-up stays in GitHub: its issue is neither closed nor changed" || ko "a run parent issue was written: $(/usr/bin/grep 'issues/204[01]' "$T/gh.calls")"
 rm -f "$T/board.calls" "$T/st/cycle.log"; touch "$T/board-down"
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 ! /usr/bin/grep -q '^\(STATUS\|ADD\|RUN\|CLEAR\)' "$T/board.calls" 2>/dev/null && ok "board down: nothing is written on a guess" || ko "board down, written: $(bc)"
