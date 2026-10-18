@@ -123,19 +123,34 @@ start() {   # <run>: cut wave/<run> from origin/$SG_BASE, unless it is already t
   rm -rf "$S"; return 0
 }
 
+board_write() {   # <column> <issue>: a refused card write is named, so the card's observed column stays clear.
+  local col=$1 n=$2 out rc
+  out=$("$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || printf 'WAVE-BOARD #%s %s refused: %s\n' "$n" "$col" "$out"
+  return 0
+}
+
+freeze_owner() {   # <issue>: the freeze is a marker over the column reached, never a column of its own.
+  local n=$1 out rc
+  out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || printf 'WAVE-FREEZE #%s frozen:owner refused: %s\n' "$n" "$out"
+  return 0
+}
+
 requeue() {   # <issue> <why>: the child never entered, so its issue goes back to the queue and the loop can build it again.
   local n=$1 why=$2 f c cf; cf="$SG_STATE/auto/requeues-$n"
   # The count is the issue's, not the run's: each new run started afresh, and one issue was dispatched 19 times (#532). The
-  # SG_REQUEUE_CAP-th requeue (3 by default) stops it: the marker stays, the card goes to Blocked, and a SQUAD-NOT-STARTABLE
-  # comment is queued, which both dispatch passes read. Removing the counter file and the comment frees the issue.
+  # SG_REQUEUE_CAP-th requeue (3 by default) stops it: the marker stays, the card keeps the column it reached with an owner
+  # freeze, and a SQUAD-NOT-STARTABLE comment is queued, which both dispatch passes read. Removing the counter file and the
+  # comment frees the issue.
   c=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$cf"
   if [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then
-    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "${SG_BLOCKED:-Blocked}" "$n" >/dev/null 2>&1
+    freeze_owner "$n"
     f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && printf 'SQUAD-NOT-STARTABLE: requeued %s times without a child that entered its wave; the loop stops building it. Last: %s\n' "$c" "$why" > "$f"
     echo "WAVE STOP #$n: requeued $c times, so it is not dispatched again: $why"; return 0
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
-  "$BOARD" "$SG_OWNER" "$SG_PROJECT" "${SG_TODO:-Todo}" "$n" >/dev/null 2>&1
+  board_write "${SG_TODO:-Todo}" "$n"
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"
   echo "WAVE REQUEUE #$n: $why"
 }
