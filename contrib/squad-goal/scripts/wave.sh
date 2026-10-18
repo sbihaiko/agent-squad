@@ -214,11 +214,12 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
 # A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
 # production, which no run starts while the account's Actions billing is blocked (#439); the local check at the tip is the
 # same rule and the one that runs today. `SG_WAVE_TIP_GATES` is that check, run in the wave's throwaway clone; the default is
-# the fast gate (the base battery, then the shell suites of what the wave changes) with the checkout's python, as
-# branchland.sh runs it. An empty value turns the local check off and leaves the wave's CI as its only check.
+# the fast gate over the one base battery (base-battery.sh, then the shell suites of what the wave changes) with the
+# checkout's python, as branchland.sh runs it, the changed scripts read against origin/$SG_BASE. An empty value turns the
+# local check off and leaves the wave's CI as its only check.
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
-fastbase="'$py' -m ruff check squad tests && '$py' -m mypy squad && '$py' -m pytest -p no:deepeval -o heavy_cap_seconds=20 -m 'not heavy'"
-tipgate=${SG_WAVE_TIP_GATES-"SG_FAST_BASE=origin/$base SG_FAST_CMD=$(printf '%q' "$fastbase") bash '$here/fast-gate.sh'"}
+. "$here/base-battery.sh"
+tipgate=${SG_WAVE_TIP_GATES-"$(sg_base_gate "origin/$base" "$py")"}
 
 # child_of <clone> <sha>: the issue a commit names, its last `Refs #N`, empty when it names none.
 child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tail -1; }

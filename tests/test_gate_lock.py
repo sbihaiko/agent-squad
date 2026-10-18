@@ -74,7 +74,7 @@ def wave_runner(tmp_path):
     """wave.sh enter in a child's worktree, with a gate that records its run and fails (so nothing is pushed)."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh"), d)
+    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "base-battery.sh"), d)
     co, origin = _repo_with_remote(tmp_path, ["wave/run-1"])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
     (st / "auto").mkdir(parents=True)
@@ -101,8 +101,8 @@ def branchland_runner(tmp_path):
     """One branchland pass over a work branch whose review approved it and whose tip has no check run: the local gate runs."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("gate.sh", "serial.sh", "branchland.sh", "revformat.py", "workbranches.sh", "ffland.sh", "address.sh",
-                    "ghread.py", "ghthrottle.py", "ghcall.sh"), d)
+    _copy(SCRIPTS, ("gate.sh", "serial.sh", "branchland.sh", "base-battery.sh", "revformat.py", "workbranches.sh", "ffland.sh",
+                    "address.sh", "ghread.py", "ghthrottle.py", "ghcall.sh"), d)
     co, origin = _repo_with_remote(tmp_path, [])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
     (st / "auto").mkdir(parents=True)

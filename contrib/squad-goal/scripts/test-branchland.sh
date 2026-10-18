@@ -5,7 +5,7 @@
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so its wait is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/gate.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/gate.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b main "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init && $G branch -q dev)
@@ -213,7 +213,8 @@ case "$lcmd" in *"SG_FAST_BASE=refs/sg-gate/main "*"fast-gate.sh"*) ok "the land
 case "$lbat" in *"ruff check squad tests"*"mypy squad"*"-n 3"*"not heavy"*) ok "the landing check runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "the landing check command: '$lbat'";; esac
 case "$lbat$lcmd" in *"-n auto"*) ko "the landing check runs pytest -n auto";; *) ok "the landing check never runs pytest -n auto";; esac
 /usr/bin/grep -q 'sg_base_gate "refs/sg-gate/\$land"' "$d/branchland.sh" && ok "branchland builds its landing check from the shared definition" || ko "branchland does not use the shared base gate"
-! /usr/bin/grep -v '^[[:space:]]*#' "$d/branchland.sh" | /usr/bin/grep -q 'ruff check squad tests' && ok "branchland keeps no copy of the base battery" || ko "branchland still carries a copy of the base battery"
+# The gate command keeps no copy; the serial rerun below keeps its own lint and types leg, and the names that failed.
+! /usr/bin/grep -v '^[[:space:]]*#' "$d/branchland.sh" | /usr/bin/grep -v '^rerun=' | /usr/bin/grep -q 'ruff check squad tests' && ok "branchland keeps no copy of the base battery" || ko "branchland still carries a copy of the base battery"
 # The rerun of what failed stays serial, and runs only the names the gate failed: the id list, never the battery.
 rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")
 case "$rerunline" in *'$SG_GATE_FAILED'*) ok "the rerun runs only the failed names";; *) ko "the rerun does not take the failed names: '$rerunline'";; esac

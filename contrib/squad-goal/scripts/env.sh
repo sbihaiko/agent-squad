@@ -48,6 +48,9 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 # Actions billing keeps CI from starting; a tip with no proof line is not promoted. It is read here, after the profile, so a
 # profile that names it wins (#439).
 : "${SG_PROMOTE_PROOF:=ci}"
+# The worker count the base battery's pytest runs with (base-battery.sh): six fits a 16 GB machine, where `auto` takes every
+# core and a gate beside a second one saturates it. Read here, after the profile, so a profile that sets it wins.
+: "${SG_GATE_WORKERS:=6}"
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
 if [ -n "${SG_TOOLING_REPO:-}" ]; then
   SG_REPOS=$(sg_repos | tr '\n' ' '); SG_REPOS=${SG_REPOS% }
@@ -56,7 +59,7 @@ if [ -n "${SG_TOOLING_REPO:-}" ]; then
     echo "env.sh: profile $SG_PROFILE sets SG_TOOLING_REPO, which is retired: it is mapped into SG_REPOS for now; name $SG_TOOLING_REPO in SG_REPOS and remove SG_TOOLING_REPO from the profile" >&2; }
   unset SG_TOOLING_REPO
 fi
-export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_WAVE_MAX_AGE_SECONDS SG_PROMOTE_PROOF SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL
+export SG_LSOF SG_FRONTIER_SKIP_LABELS SG_WAVE_GATES SG_WAVE_MAX_AGE_SECONDS SG_PROMOTE_PROOF SG_GATE_WORKERS SG_PROFILE SG_SHARED SG_BOARD_CACHE SG_REPO SG_REPOS SG_OWNER SG_PROJECT SG_CHECKOUT SG_BASE SG_MERGE_METHOD SG_AUTO_MERGE SG_CI_WORKFLOW SG_E2E_DIR SG_E2E_CMD SG_E2E_PASS_REGEX SG_WORKFLOW SG_ROOT_NAME SG_REVIEW_RULES SG_CODING_RULES SG_SQUAD SG_STATE SG_AUTO_BUGFIX SG_BUG_LABEL SG_BUG_SKIP_LABELS SG_BUG_PROJECT SG_BUG_DOING SG_FRONTIER_LABEL SG_FRONTIER_PREAMBLE SG_FORK_DIR SG_FORK_BASE SG_FORK_BRANCH SG_FORK_TEST_CMD SG_E2E_BUILD_DIR SG_E2E_BUILD_CMD SG_FAST_INTERVAL
 BOARD="$here/board.sh"   # board-status.sh + a hub refresh flag
 mkdir -p "$SG_STATE/cq" "$SG_STATE/req" "$SG_SHARED" "$(dirname "$SG_BOARD_CACHE")"
 touch "$SG_STATE/active-runs.txt"

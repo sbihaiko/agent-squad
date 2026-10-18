@@ -42,11 +42,17 @@ def test_every_gate_lints_the_scope_this_repository_owns():
     lints, and it is red at every tip: 1378 findings at ebb70f8, all of them there. The fast gate's default battery drifted
     to `.` while branchland.sh, wave.sh and ci.yml keep the repository's own scope, so a child entering a wave could never
     pass its gate and no wave could land (#447).
+
+    The battery is one definition, `base-battery.sh`: a gate that runs it (`branchland.sh`, `wave.sh`, `fast-gate.sh`)
+    keeps no copy, so the scope is read from the definition the gate names.
     """
+    battery = ROOT / "contrib/squad-goal/scripts/base-battery.sh"
     for f in ("contrib/squad-goal/scripts/branchland.sh", "contrib/squad-goal/scripts/wave.sh",
               "contrib/squad-goal/scripts/fast-gate.sh", ".github/workflows/ci.yml"):
         # The command lines only: the comment above a gate may name the wrong scope it was warned about, and does.
         body = "\n".join(line for line in (ROOT / f).read_text().splitlines() if not line.lstrip().startswith("#"))
+        if "base-battery.sh" in body:
+            body += "\n" + "\n".join(line for line in battery.read_text().splitlines() if not line.lstrip().startswith("#"))
         assert "ruff check squad tests" in body, f"{f} does not lint the scope this repository owns"
         assert "ruff check ." not in body, f"{f} lints a wider scope than the repository owns"
 

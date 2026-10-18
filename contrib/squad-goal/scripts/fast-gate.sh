@@ -10,11 +10,11 @@
 here="$(cd "$(dirname "$0")" && pwd)"
 case ":${SG_SERIAL_HELD:-}:" in *":gate:"*) ;; *) SG_GATE_KIND=fast exec bash "$here/gate.sh" bash "$0" "$@";; esac
 base=${SG_FAST_BASE:-origin/${SG_BASE:-dev}}
-# The base battery is the repository's own rule, the one ci.yml, branchland.sh and wave.sh run: `ruff check squad tests`
-# and `mypy squad`. `ruff check .` lints this loop's own scripts, which no other gate lints, and it is red at every tip:
-# 1378 findings, all under contrib/squad-goal/scripts, so a child could never enter a wave (#447).
+# The base battery is one definition (base-battery.sh), the one branchland.sh's landing check and wave.sh's tip check run
+# over the same fast gate. Its pytest takes a bounded worker count, SG_GATE_WORKERS, never `auto`.
+. "$here/base-battery.sh"
 py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
-fastcmd=${SG_FAST_CMD:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -o heavy_cap_seconds=20 -n auto -m 'not heavy'"}
+fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py")"}
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
 # A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests the log

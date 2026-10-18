@@ -107,7 +107,7 @@ class Wave:
         self.scripts = root / "s"
         for d in (self.state / "auto", self.bin, self.scripts):
             d.mkdir(parents=True)
-        for name in ("wave.sh", "address.sh", "ghcall.sh", "gate.sh", "serial.sh"):
+        for name in ("wave.sh", "address.sh", "ghcall.sh", "gate.sh", "serial.sh", "base-battery.sh"):
             shutil.copy(SCRIPTS / name, self.scripts / name)
         self.origin = root / "origin.git"
         self.co = root / "co"
