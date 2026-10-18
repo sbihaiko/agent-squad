@@ -355,6 +355,23 @@ def test_an_empty_router_set_refuses_the_start_with_a_named_reason(tmp_path):   
 
 
 @pytest.mark.anyio
+async def test_a_router_entry_off_keeps_the_authored_graph_hash(tmp_path):    # #588
+    """The router overlay never changes the authored graph hash: `--expect-graph-hash` still matches."""
+    models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "on": False}])
+    g = _dispatch_graph(["opus", "sonnet"])
+    h = canon_hash(g.doc)
+    router = {"output": {"spawns": [], "done": True}}
+    eng = launch.launch(g, tmp_path / "r", adapter=ScriptedAdapter({"a": OK, "router": router}, repeat_last=True),
+                        models=models, options={"expect_graph_hash": h})
+    assert eng.g.hash == h
+    assert json.loads((tmp_path / "r" / "graph.json").read_text()) == g.doc
+    assert eng.router_overlay == {"route": ["opus"]}
+    await eng.run()
+    start = record.read(tmp_path / "r" / "record.jsonl")[0]
+    assert start["graph_hash"] == h and start["router_overlay"] == {"route": ["opus"]}
+
+
+@pytest.mark.anyio
 async def test_a_resume_after_the_router_window_closes_reads_the_copy_and_completes(tmp_path):    # SPEC 505
     models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "hrs": _window(0)}])
     nodes = [agent("a", output_key="x"), {"name": "ask", "kind": "wait", "owner": "rafael", "deadline": 100, "default": "pass"},
