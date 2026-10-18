@@ -68,7 +68,8 @@ def _rows(state, checkout, cache_weight=1.0):
                             continue
                         who = e.get("node") or e.get("child")
                         c = f"run:{folder}" + (f":{who}" if who else "")
-                        t = _n(e.get("tokens_in") or 0) + _n(e.get("tokens_out") or 0) + int(round(_n(e.get("cache_read") or 0) * cache_weight))
+                        cr = _n(e.get("cache_read") or 0)   # an outcome's tokens_in holds its cache reads (squad/sdk_adapter.py); a ledger line's does not
+                        t = _n(e.get("tokens_in") or 0) - cr + _n(e.get("tokens_out") or 0) + int(round(cr * cache_weight))
                         yield _epoch(e["ts"]), c, str(e.get("model") or "?"), t, 0, 0
                     except (ValueError, TypeError, KeyError, OverflowError):
                         pass
