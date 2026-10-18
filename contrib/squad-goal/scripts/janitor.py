@@ -664,6 +664,15 @@ def reconcile_board():
                 have_cards = cards(proj)[1]
                 col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""))
                 if col: set_expected(n, col, "spec folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
+                # The owner starts a spec by moving its card to Todo, and its children follow it there (#589): a child in Backlog,
+                # or with no column yet, goes to Todo. Forward only: a child past Backlog keeps its column (ADR-0143). The fold
+                # writes nothing below Doing, so the two rules never fight; every rule a run, a label or a closure raises outranks it.
+                # A child whose blockers are open stays held by the dispatch gate, never by its column.
+                todo = os.environ.get("SG_TODO", "Todo")
+                if have_cards.get(n, "") == todo:
+                    for k in _kids.get(n, []):
+                        if k in olabels and have_cards.get(k, "") in ("", "Backlog"):
+                            set_expected(k, todo, f"its spec #{n} sits in {todo}: the owner started it", rank=12)
                 # A spec with at least one sub-issue, every one closed, is done (the owner's rule): the loop closes it with one comment.
                 # A spec with no sub-issue proves nothing and stays open.
                 sub = _subs.get(n) or {}

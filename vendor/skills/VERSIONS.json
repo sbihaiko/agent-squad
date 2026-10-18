@@ -26,7 +26,7 @@
   },
   "to-spec": {
     "files": 2,
-    "sha256": "80d053460999cb68a2c04b1f818e04c4f9a96fdc7779c4c3e04495599eda5868",
+    "sha256": "9da5f8631dccb7f0e1fc979cdcfb831a2e3b8edd4024c799db33e1aa34877259",
     "source": "skill:to-spec"
   },
   "to-test-scenario": {

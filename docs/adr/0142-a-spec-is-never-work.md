@@ -33,18 +33,23 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
    issue only when its card sits in Todo and it carries the go label (`ready-for-agent`). The label
    says only that an agent may take the issue; the owner starts it by moving its card to Todo. A card
    with no column is not in Todo. A spec and its tickets are created with their card in Backlog; a
-   bug is created in Todo. The loop never moves a card into Backlog or Todo; only the owner does. A
-   spec stays below Doing in the column the owner gave it. The column carries no blocking edge — a
-   ticket whose blocker is still open waits on the dispatch's reading of that edge, not on a column
-   of its own.
-6. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
+   bug is created in Todo. The loop never moves a card into Backlog or Todo on its own; only the
+   owner's move starts that. A spec stays below Doing in the column the owner gave it. The column
+   carries no blocking edge — a ticket whose blocker is still open waits on the dispatch's reading of
+   that edge, not on a column of its own.
+6. **The owner starts a spec by moving its card to Todo, and its tickets follow.** When a spec's card
+   sits in Todo, each open ticket of it whose card is in Backlog, or has no column, moves to Todo.
+   The move is forward only (ADR-0143): a ticket past Backlog keeps its column. The spec's column is
+   still a fold over its tickets, and the fold writes nothing below Doing, so the two never fight.
+   A run, an owner label or a closure outranks the follow.
+7. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
    tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
    nothing and stays open. The close carries a comment that names the count, and the card follows
    the issue to Done.
-7. **Every ticket that is not a spec gets the go label at creation.** The skill that cuts tickets
-   does not hold the label back until the blockers close; the repository's `stack.sh` holds a
-   blocked ticket.
-8. **Only the owner approves a spec's breakdown.** The autonomy panel never approves one unless the
+8. **Every ticket that is not a spec gets the go label at creation; a spec never carries it.** The
+   skill that cuts tickets does not hold the label back until the blockers close; the repository's
+   `stack.sh` holds a blocked ticket. The spec needs no label: its card is the signal.
+9. **Only the owner approves a spec's breakdown.** The autonomy panel never approves one unless the
    owner asked for it in the session. With the owner away, the breakdown waits.
 
 ## Consequences
@@ -55,8 +60,8 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
   spec produced are all work the owner did not ask for.
 - A repository that wants a different vocabulary — a different label for "not work yet" — adds it
   to one list. The pass needs no change.
-- The tickets of a spec dispatch once the owner moves their cards to Todo, and a spec is not a
-  blocker: the pass skips it and keeps walking.
+- The tickets of a spec dispatch once the owner moves the spec's card, or their own cards, to Todo,
+  and a spec is not a blocker: the pass skips it and keeps walking.
 
 ## Guard
 
@@ -66,5 +71,6 @@ becomes the child of the run. `tests/test_vendor_skills.py` guards the title pre
 child in the skill that cuts the tickets. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`
 proves the column: a spec with no card is added in Backlog, and a child of it with an open
 blocker is added in Backlog, each in one write; a spec whose every sub-issue is closed is closed,
-and one with an open sub-issue or none stays open. The autofrontier and autobug suites prove the go
+and one with an open sub-issue or none stays open; a spec in Todo moves its Backlog tickets to Todo,
+and a spec in Backlog moves none. The autofrontier and autobug suites prove the go
 signal: a labelled issue whose card is not in Todo is not dispatched.
