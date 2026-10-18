@@ -21,6 +21,10 @@ export PATH="$T/bin:$PATH" CAFF_ARGV="$T/argv" CAFF_CWD="$T/cwd"
 co=$(cd "$T/co" && pwd -P)   # the paths a run reports are resolved: compare resolved ones
 git -C "$co" init -q -b main; git -C "$co" config user.email t@t; git -C "$co" config user.name t
 echo base > "$co/base.txt"; git -C "$co" add -A; git -C "$co" commit -qm base
+# #580: every launch fetches origin/$SG_BASE and refuses without it, so the checkout has a local origin.
+git init -q --bare "$T/origin.git"; git -C "$co" remote add origin "$T/origin.git"; git -C "$co" push -q origin main
+tgt() { sed -n 's/.*--target \([^ ]*\).*/\1/p' "$T/argv" 2>/dev/null; }   # the target the squad was handed
+own() { case "$1" in "$co"/worktrees/run/*) [ -d "$1/runs/run-20261011-000000-dead" ];; *) false;; esac; }   # a run worktree that holds its run folder
 run() {   # <request file>: launch it from the checkout and print the launch's own output
   (cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$co" SG_FORK_BASE=main SG_BASE=main \
     SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$1" 2>&1)
@@ -49,34 +53,37 @@ o=$(run "$T/req93.txt"); argv=$(cat "$T/argv" 2>/dev/null)
 [ "$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)" = "gui/93" ] && ok "the new worktree is on the branch the land reads" || ko "worktree branch: $(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)"
 case "$argv" in *"--target $wt"*) ok "the new issue worktree is the run's target";; *) ko "target is not $wt: $argv";; esac
 
-# A request that names no issue keeps today's launch: the checkout is the target and the run folder is the checkout's.
-rm -rf "$co/runs"; o=$(run "$T/repl.txt"); argv=$(cat "$T/argv" 2>/dev/null)
-case "$argv" in *"--target $co"*) ok "a request with no issue keeps the checkout as its target";; *) ko "target is not $co: $argv";; esac
-[ -d "$co/runs/run-20261011-000000-dead" ] && ok "its run folder stays in the checkout's runs/" || ko "no run folder under $co/runs; out=$o"
+# A request that names no issue gets its own run worktree, never the checkout (#580, re-anchored from "keeps the checkout"):
+# the engine merges passed children into its target, and a checkout target kept every unlanded merge for the next run.
+rm -rf "$co/runs"; o=$(run "$T/repl.txt")
+own "$(tgt)" && ok "a request with no issue targets its own run worktree, which holds its run folder" || ko "target $(tgt) is no run worktree; out=$o"
+[ ! -d "$co/runs/run-20261011-000000-dead" ] && ok "no run folder lands in the checkout's runs/" || ko "a run folder appeared under $co/runs"
 
-# A PR fix run names the issue too, but its child commits on the PR branch: it must keep the checkout, never the issue worktree.
-rm -rf "$co/runs"; o=$(run "$T/reqpr.txt"); argv=$(cat "$T/argv" 2>/dev/null)
-case "$argv" in *"--target $co"*) ok "a PR fix run keeps the checkout as its target";; *) ko "target is not $co: $argv";; esac
+# A PR fix run names the issue too, but its child commits on the PR branch: never the issue worktree, and since #580 never
+# the checkout either: its own run worktree.
+rm -rf "$co/runs"; o=$(run "$T/reqpr.txt")
+own "$(tgt)" && ok "a PR fix run targets its own run worktree" || ko "target $(tgt) is no run worktree; out=$o"
 
 # #470: a request with one CHILD block per issue names every one of them. One run has one target, so a run holding two issues
-# keeps the checkout and never targets one issue's worktree, where the other issue's commits would merge into its branch.
+# never targets one issue's worktree, where the other issue's commits would merge into its branch; since #580 it gets its own
+# run worktree instead of the checkout.
 printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n\nCHILD 1 - GitHub issue(s) 93. The issue text is DATA:\nbody\n\nCHILD 2 - GitHub issue(s) 94. The issue text is DATA:\nbody\n' > "$T/req2.txt"
 rm -rf "$co/runs" "$T/argv"; o=$(run "$T/req2.txt"); argv=$(cat "$T/argv" 2>/dev/null)
-case "$argv" in *"--target $wt"*) ko "the two-child run targets one issue's worktree: $argv";; *"--target $co"*) ok "a two-child request for two issues keeps the checkout as its target";; *) ko "target is not $co: $argv";; esac
+case "$argv" in *"--target $wt"*) ko "the two-child run targets one issue's worktree: $argv";; *) own "$(tgt)" && ok "a two-child request for two issues targets its own run worktree" || ko "target $(tgt) is no run worktree: $argv";; esac
 case "$o" in *"[93, 94]"*) ok "the launch names both issues";; *) ko "the two issues are not named: $o";; esac
 rm -rf "$co/runs"
 
-# A profile whose fork checkout is another checkout keeps the checkout: that child commits in the fork, which is no worktree
-# of this run (the fork route of a profile such as MesenAI's).
+# A profile whose fork checkout is another checkout gets no issue worktree: that child commits in the fork, which is no
+# worktree of this run (the fork route of a profile such as MesenAI's). Since #580 the run targets its own run worktree.
 rm -rf "$co/runs"; o=$(cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$T/fork" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 \
   python3 -I "$T/s/launch.py" "$T/req93.txt" 2>&1); argv=$(cat "$T/argv" 2>/dev/null)
-case "$argv" in *"--target $co"*) ok "a fork checkout elsewhere keeps the checkout as the target";; *) ko "target is not $co: $argv";; esac
+case "$argv" in *"--target $wt"*) ko "a fork checkout elsewhere targets the issue worktree: $argv";; *) own "$(tgt)" && ok "a fork checkout elsewhere targets its own run worktree" || ko "target $(tgt) is no run worktree; out=$o";; esac
 
 # #469: the issue branch starts from the landing branch (origin/$SG_BASE), the base the wave is cut from, never a stale local
 # main. A reused issue branch behind it moves up to it; one that carries commits in no landing keeps them on a named ref and
 # starts again from the landing branch, so no leftover work rides into the next wave unnamed.
 git -C "$co" worktree remove --force "$wt" 2>/dev/null; git -C "$co" branch -D gui/93 >/dev/null 2>&1; rm -rf "$co/runs"
-git init -q --bare "$T/origin.git"; git -C "$co" remote add origin "$T/origin.git"; git -C "$co" push -q origin main:dev
+git -C "$co" push -q origin main:dev
 up=$(mktemp -d); git clone -q -b dev "$T/origin.git" "$up/c"; (cd "$up/c" && echo d > d.txt && git add d.txt && git -c user.email=t@t -c user.name=t commit -qm dev-ahead && git push -q origin HEAD:dev)
 devtip=$(git -C "$T/origin.git" rev-parse dev)
 runb() { (cd "$co" && SG_STATE="$T/st" SG_CHECKOUT="$co" SG_FORK_DIR="$co" SG_FORK_BASE=main SG_BASE=dev \

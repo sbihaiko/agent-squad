@@ -23,10 +23,14 @@ chmod +x "$T/bin/caffeinate"
 printf '#!/bin/bash\necho uv-not-used\n' > "$T/bin/uv"; chmod +x "$T/bin/uv"
 export PATH="$T/bin:$PATH"
 printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n--- issue #9\n' > "$T/req.txt"
+# #580: a run targets its own worktree, cut from origin/$SG_BASE as fetched now, so the checkout is a repository with an origin,
+# and the run folder sits in that worktree: active-runs.txt names it.
+G=/usr/bin/git; $G -C "$T/co" init -q -b main; $G -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+$G init -q --bare "$T/origin.git"; $G -C "$T/co" remote add origin "$T/origin.git"; $G -C "$T/co" push -q origin main
 o=$(cd "$T/co" && SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 \
   python3 -I "$T/s/launch.py" "$T/req.txt" 2>&1) || true
-log="$T/co/runs/run-20261011-000000-dead/launch.log"
-[ -f "$log" ] && ok "launch writes launch.log in the run folder" || ko "no run launch.log; out=$o files=$(ls -la "$T/co/runs/run-20261011-000000-dead" 2>/dev/null)"
+log="$(tail -1 "$T/st/active-runs.txt" 2>/dev/null)/launch.log"
+[ -f "$log" ] && ok "launch writes launch.log in the run folder" || ko "no run launch.log; out=$o log=$log"
 for _ in $(seq 1 20); do /usr/bin/grep -q 'vendor/skills is not clean' "$log" 2>/dev/null && break; sleep 1; done
 /usr/bin/grep -q 'vendor/skills is not clean' "$log" 2>/dev/null && ok "launch.log captures what the squad wrote after the folder appeared" || ko "launch.log contents: $(cat "$log" 2>/dev/null) out=$o"
 # A node of the graph whose model (an alias resolved to its provider id) the panel switched off refuses the start, and no run folder

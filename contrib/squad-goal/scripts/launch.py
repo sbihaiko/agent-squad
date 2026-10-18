@@ -5,7 +5,7 @@ usage: launch.py <request-file>   (run from the target checkout, normally $SG_CH
 Prints the run id. nohup+disown dies with the Bash task; a new session survives.
 Before launching it checks the workflow graph: a root that is not $SG_ROOT_NAME is renamed (root and node name together) and validated.
 While waiting for the run folder it watches the child: if squad exits first, it fails at once with the log tail instead of waiting 3 min."""
-import json, os, pathlib, re, socket, subprocess, sys, time
+import json, os, pathlib, re, secrets, socket, subprocess, sys, time
 
 here = pathlib.Path(__file__).resolve().parent
 if not os.environ.get("SG_SQUAD"):   # env.sh not sourced (SG_PROFILE alone selects a profile, it does not load it): pick up its SG_* values, else the run silently uses the installed plugin instead of the profile's fork
@@ -132,28 +132,14 @@ if co and pathlib.Path(co).resolve() != cwd and not os.environ.get("SG_ALLOW_OTH
     sys.exit(f"launch from $SG_CHECKOUT ({co}), not {cwd}: watch.sh, heartbeat.sh and the hub look for runs there. "
              "Set SG_ALLOW_OTHER_CWD=1 to override (the run is then tracked by its absolute path).")
 
-# workflow graph root check
-wf = os.environ.get("SG_WORKFLOW") or "dynamic"; root = os.environ.get("SG_ROOT_NAME")
-gp = cwd / "docs" / "squad" / "workflows" / f"{wf}.graph.json"
-if root and gp.exists():
-    doc = json.loads(gp.read_text())
-    if doc.get("root") != root:
-        old = doc.get("root")
-        nodes = [n for n in doc.get("nodes", []) if n.get("name") == old]
-        if len(nodes) != 1: sys.exit(f"{gp}: root {old!r} does not name exactly one node; fix the graph by hand")
-        doc["root"] = nodes[0]["name"] = root
-        gp.write_text(json.dumps(doc, indent=2) + "\n")
-        print(f"note: renamed graph root {old!r} -> {root!r} in {gp} (commit it)", file=sys.stderr)
-    chk = subprocess.run(["uv", "run", "--project", squad, "python", "-c",
-                          "import json,sys;from squad import graph;e=graph.validate(json.load(open(sys.argv[1])));print('\\n'.join(map(str,e or [])));sys.exit(1 if e else 0)", str(gp)],
-                         capture_output=True, text=True)
-    if chk.returncode: sys.exit(f"invalid graph {gp}:\n{chk.stdout}{chk.stderr}")
-
 # ADR-0106 rule 4: the engine commits a passing node's target only when the run owns it, a linked worktree that holds the
 # run folder. A loop child works on the branch the land reads, so the run this starts for it has that issue worktree as its
 # target and the run folder lives inside it (#93). Left on the owner checkout, the target is refused as `owner_checkout` and
 # the child's work sits in a worktree outside the run area, so a person had to commit it.
-FALLBACK = "$SG_CHECKOUT"   # the target a run keeps when no issue worktree is resolved, named in the notes without its path
+# #580: no run targets the owner's checkout. The engine cuts children from its target HEAD and merges passed children back into
+# it, so a checkout target collected every unlanded or rejected merge, and the next run inherited them. A run with no issue
+# worktree gets its own linked worktree, cut from origin/$SG_BASE as fetched now; a fetch that fails refuses the start.
+FALLBACK = "its own run worktree"   # the target a run gets when no issue worktree is resolved
 
 def _issue_named(txt):
     """The issues a request names, across every `CHILD` block: each block's header list (`GitHub issue(s) N, M`), else the first
@@ -171,7 +157,7 @@ def _issue_child_request(txt):
     """True when the deliverable is a local commit on the branch the land reads: the dispatch builders mark those runs with a
     `CHILD - GitHub issue` block (`autofrontier.sh`, `autobug.sh`) or a `FORK-ONLY` line, which the retired local land route
     wrote and a run record from before its retirement still carries. A fix run on a PR branch names an issue too, and its
-    child commits on the PR branch: that run keeps today's target."""
+    child commits on the PR branch: that run gets its own run worktree (#580)."""
     return bool(re.search(r"^CHILD[^\n]*GitHub issue", txt, re.M) or re.search(r"^FORK-ONLY", txt, re.M))
 
 def _wave_request(txt):
@@ -184,14 +170,30 @@ def _wave_request(txt):
         + (os.environ.get("SG_BASE") or "the base branch") + " with one push; push no branch of yours.\n"
 
 def _landing_base(co):
-    """`origin/<SG_BASE>`, fetched now: the branch the wave is cut from and lands in, so an issue branch starts where its
-    work lands (#469), never on a stale local main. None when the checkout has no such remote branch."""
-    base = os.environ.get("SG_BASE")
-    if not base: return None
-    subprocess.run(["git", "-C", co, "fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], capture_output=True, timeout=120)
-    ref = f"origin/{base}"
-    ok = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", ref + "^{commit}"], capture_output=True).returncode == 0
-    return ref if ok else None
+    """The commit sha of `origin/<SG_BASE>` (default main), fetched now: the branch the wave is cut from and lands in, so a run
+    starts where its work lands (#469), never on a stale local branch. A fetch that fails, or a remote with no such branch,
+    refuses the start (#580): an old remote-tracking ref or the local HEAD is never the base."""
+    base = os.environ.get("SG_BASE") or "main"
+    try: f = subprocess.run(["git", "-C", co, "fetch", "-q", "origin", f"+refs/heads/{base}:refs/remotes/origin/{base}"], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired: sys.exit(f"refusing to start: the fetch of origin/{base} in {co} timed out; a run never starts from a local branch (#580)")
+    if f.returncode: sys.exit(f"refusing to start: cannot fetch origin/{base} in {co}: {f.stderr.strip()}; a run never starts from a local branch (#580)")
+    r = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", f"origin/{base}^{{commit}}"], capture_output=True, text=True)
+    if r.returncode or not r.stdout.strip(): sys.exit(f"refusing to start: origin/{base} names no commit in {co} after the fetch (#580)")
+    return r.stdout.strip()
+
+def _run_worktree(co, land):
+    """A linked worktree of the checkout that this run alone owns, on a new branch squad/run/<key> cut from `land` (#580). The
+    key is unique per launch, so two launches of one request at once get two trees. The owner's HEAD, index and files never
+    change; the tree sits under the checkout's ignored worktrees/ folder, beside the issue worktrees."""
+    err = ""
+    for _ in range(3):   # two launches at once can race on the repository's worktree lock: a new key, then try again
+        key = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}-{secrets.token_hex(3)}"
+        wt = pathlib.Path(co).resolve() / "worktrees" / "run" / key
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        made = subprocess.run(["git", "-C", co, "worktree", "add", "-q", "-b", f"squad/run/{key}", str(wt), land], capture_output=True, text=True)
+        if made.returncode == 0: return wt
+        err = made.stderr.strip(); time.sleep(0.2)
+    sys.exit(f"refusing to start: cannot make the run's own worktree from {land[:9]} in {co}: {err} (#580)")
 
 def _start_from(wt, br, land):
     """A reused issue worktree starts from the landing branch (#469). A branch behind it moves up by a fast-forward. A branch
@@ -200,7 +202,7 @@ def _start_from(wt, br, land):
     rides into the next wave unnamed. A tree with uncommitted changes is left alone: False, and the run keeps its fallback."""
     g = lambda *a: subprocess.run(["git", "-C", str(wt), *a], capture_output=True, text=True)
     if g("status", "--porcelain", "--untracked-files=no").stdout.strip():
-        print(f"note: {wt} has uncommitted changes: the run keeps {FALLBACK}, and a person must look", file=sys.stderr)
+        print(f"note: {wt} has uncommitted changes: the run gets {FALLBACK}, and a person must look", file=sys.stderr)
         return False
     head = g("rev-parse", "HEAD").stdout.strip()
     extra = g("rev-list", "--count", f"{land}..HEAD").stdout.strip()
@@ -210,7 +212,7 @@ def _start_from(wt, br, land):
         print(f"note: {br} carried {extra} leftover commit(s) not in {land}: kept on {ref}; the run starts from {land}", file=sys.stderr)
     return g("reset", "-q", "--hard", land).returncode == 0
 
-def _issue_worktree(issue):
+def _issue_worktree(issue, land):
     """The linked worktree the child works in, made when it is missing, else None: the checkout's own fork route only.
 
     A profile whose fork checkout is another checkout keeps today's target: the child commits in the fork, which is no
@@ -220,31 +222,52 @@ def _issue_worktree(issue):
     if not co or not fork or pathlib.Path(co).resolve() != pathlib.Path(fork).resolve(): return None
     br = (os.environ.get("SG_FORK_BRANCH") or "gui/%n").replace("%n", str(issue))
     wt = pathlib.Path(co).resolve() / "worktrees" / "child" / br.replace("/", "-")
-    land = _landing_base(co)
     if wt.is_dir():
         cur = subprocess.run(["git", "-C", str(wt), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True)
         if cur.returncode or cur.stdout.strip() != br:
-            print(f"note: {wt} is on {cur.stdout.strip() or 'no branch'}, not {br}: the run keeps {FALLBACK}, and a person must look", file=sys.stderr)
+            print(f"note: {wt} is on {cur.stdout.strip() or 'no branch'}, not {br}: the run gets {FALLBACK}, and a person must look", file=sys.stderr)
             return None
-        return wt if not land or _start_from(wt, br, land) else None
+        return wt if _start_from(wt, br, land) else None
     wt.parent.mkdir(parents=True, exist_ok=True)
-    base = land or os.environ.get("SG_FORK_BASE") or os.environ.get("SG_BASE") or "main"
     have = subprocess.run(["git", "-C", co, "rev-parse", "--verify", "--quiet", f"refs/heads/{br}"], capture_output=True).returncode == 0
     made = subprocess.run(["git", "-C", co, "worktree", "add", "-q", str(wt), br] if have else
-                          ["git", "-C", co, "worktree", "add", "-q", "-b", br, str(wt), base], capture_output=True, text=True)
+                          ["git", "-C", co, "worktree", "add", "-q", "-b", br, str(wt), land], capture_output=True, text=True)
     if made.returncode:
-        print(f"note: cannot make the issue worktree {wt} on {br}: {made.stderr.strip()}: the run keeps {FALLBACK}", file=sys.stderr)
+        print(f"note: cannot make the issue worktree {wt} on {br}: {made.stderr.strip()}: the run gets {FALLBACK}", file=sys.stderr)
         return None
     return wt
 
 req_text = req_file.read_text()
 if _issue_child_request(req_text): req_text = _wave_request(req_text)   # the run cuts a wave below: its children keep their branches local
 issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a run that commits on the branch the land reads
-target = _issue_worktree(issues[0]) if len(issues) == 1 else None
-if len(issues) > 1: print(f"note: the request names {issues}: one run has one target, so this run keeps {FALLBACK}", file=sys.stderr)
+checkout = os.environ.get("SG_CHECKOUT") or str(cwd)
+land = _landing_base(checkout)   # before any tree is made: a fetch that fails refuses the start (#580)
+target = _issue_worktree(issues[0], land) if len(issues) == 1 else None
+if len(issues) > 1: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
 if target:
     print(f"note: the run's target is the issue worktree {target}: the engine commits it (#93, ADR-0106 rule 4)", file=sys.stderr)
-runs = (target or cwd) / "runs"
+else:
+    target = _run_worktree(checkout, land)
+    print(f"note: the run's target is its own worktree {target}, from origin/{os.environ.get('SG_BASE') or 'main'} at {land[:9]} (#580)", file=sys.stderr)
+
+# workflow graph root check: the graph the run reads is the target's, so the owner's files never change (#580)
+wf = os.environ.get("SG_WORKFLOW") or "dynamic"; root = os.environ.get("SG_ROOT_NAME")
+gp = target / "docs" / "squad" / "workflows" / f"{wf}.graph.json"
+if root and gp.exists():
+    doc = json.loads(gp.read_text())
+    if doc.get("root") != root:
+        old = doc.get("root")
+        nodes = [n for n in doc.get("nodes", []) if n.get("name") == old]
+        if len(nodes) != 1: sys.exit(f"{gp}: root {old!r} does not name exactly one node; fix the graph by hand")
+        doc["root"] = nodes[0]["name"] = root
+        gp.write_text(json.dumps(doc, indent=2) + "\n")
+        print(f"note: renamed graph root {old!r} -> {root!r} in {gp} (commit it)", file=sys.stderr)
+    chk = subprocess.run(["uv", "run", "--project", squad, "python", "-c",
+                          "import json,sys;from squad import graph;e=graph.validate(json.load(open(sys.argv[1])));print('\\n'.join(map(str,e or [])));sys.exit(1 if e else 0)", str(gp)],
+                         capture_output=True, text=True)
+    if chk.returncode: sys.exit(f"invalid graph {gp}:\n{chk.stdout}{chk.stderr}")
+
+runs = target / "runs"
 before = set(p.name for p in runs.glob("run-*")) if runs.exists() else set()
 log = state / (req_file.stem + ".log")
 try: spent = _spent_models(json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text()), os.environ.get("SG_SHARED"))
@@ -257,9 +280,9 @@ def _keeps_children():
     except OSError: return False
 keep = ["--keep-children"] if _issue_child_request(req_text) and _keeps_children() else []
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + [
-                        "--target", str(target or cwd)] + (["--spent-models", ",".join(spent)] if spent else []) + [req_text],
+                        "--target", str(target)] + (["--spent-models", ",".join(spent)] if spent else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
-                        cwd=str(target) if target else None,
+                        cwd=str(target),
                         env={**os.environ, "SQUAD_HEADLESS": "1"})
 new = []
 deadline = time.monotonic() + 180   # a short step: the folder is read as soon as it appears, never up to 2 s late per launch
