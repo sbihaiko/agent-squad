@@ -123,7 +123,16 @@ start() {   # <run>: cut wave/<run> from origin/$SG_BASE, unless it is already t
 }
 
 requeue() {   # <issue> <why>: the child never entered, so its issue goes back to the queue and the loop can build it again.
-  local n=$1 why=$2 f
+  local n=$1 why=$2 f c cf; cf="$SG_STATE/auto/requeues-$n"
+  # The count is the issue's, not the run's: each new run started afresh, and one issue was dispatched 19 times (#532). The
+  # SG_REQUEUE_CAP-th requeue (3 by default) stops it: the marker stays, the card goes to Blocked, and a SQUAD-NOT-STARTABLE
+  # comment is queued, which both dispatch passes read. Removing the counter file and the comment frees the issue.
+  c=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$cf"
+  if [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then
+    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "${SG_BLOCKED:-Blocked}" "$n" >/dev/null 2>&1
+    f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && printf 'SQUAD-NOT-STARTABLE: requeued %s times without a child that entered its wave; the loop stops building it. Last: %s\n' "$c" "$why" > "$f"
+    echo "WAVE STOP #$n: requeued $c times, so it is not dispatched again: $why"; return 0
+  fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
   "$BOARD" "$SG_OWNER" "$SG_PROJECT" "${SG_TODO:-Todo}" "$n" >/dev/null 2>&1
   f=$(sg_cq_file "$n-wave$$.md" 2>/dev/null) && printf '%s\n' "$why" > "$f"

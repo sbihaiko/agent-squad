@@ -20,6 +20,6 @@ o=$(bash "$T/s/wave.sh" requeue 7 "the review asked for changes: x")
 /usr/bin/grep -qx 'o 3 Blocked 7' "$T/board.log" && ok "the third requeue moves the card to Blocked" || ko "board: '$(tr '\n' ' ' < "$T/board.log")'"
 [ "$(nsc)" = 1 ] && ok "the third requeue queues a SQUAD-NOT-STARTABLE comment" || ko "no stop comment queued"
 case "$o" in *"WAVE STOP #7"*) ok "the stop is logged on one line";; *) ko "no stop line: '$o'";; esac
-echo req > "$T/st/auto/disp-8"; bash "$T/s/wave.sh" requeue 8 "y" >/dev/null
-[ ! -e "$T/st/auto/disp-8" ] && ok "another issue keeps its own count" || ko "issue 8 was stopped by issue 7's count"
+echo req > "$T/st/auto/disp-8"; o8=$(bash "$T/s/wave.sh" requeue 8 "y" 2>&1)
+[ ! -e "$T/st/auto/disp-8" ] && ok "another issue keeps its own count" || ko "issue 8 was stopped by issue 7's count: $o8"
 rm -rf "$T"; exit $fail
