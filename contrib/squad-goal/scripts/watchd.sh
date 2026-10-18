@@ -13,7 +13,10 @@ case "${1:-status}" in
     echo "watchd failed to start" >&2; exit 1;;
   run) echo $$ > "$P"; child=
     trap '[ -n "$child" ] && kill "$child" 2>/dev/null; rm -f "$P"; exit 0' TERM INT
-    fast=; trap '[ -n "$child" ] && kill "$child" 2>/dev/null; [ -n "$fast" ] && kill "$fast" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; exit 0' TERM INT
+    # The stop reaches every pass of both lanes, not the two lanes alone: a stop from inside the group signals this
+    # supervisor only (#489), and a lane's foreground pass (childcc and its reviews) would run on and spend (#529). The
+    # supervisor ignores the signal itself and sends it to its whole group.
+    fast=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; exit 0' TERM INT
     while :; do
       # the fast lane (childcc every SG_FAST_INTERVAL s) lives beside watch.sh, so a slow cycle step never delays a dispatch
       { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || { bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$!; }

@@ -19,7 +19,7 @@ PY
 # the pause lets `start` see the supervisor alive before the stop lands, the way a real cycle does
 printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 2\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
 # the stub fast lane runs a pass in the foreground, the way fastloop.sh runs childcc: the stop must end the pass too (#529)
-printf '#!/bin/bash\ntrap "" TERM\nbash -c '"'"'echo $$ > "$SG_STATE/pass.pid"; exec sleep 30'"'"'\n' > "$T/no-fastloop.sh"
+printf '#!/bin/bash\ntrap "exit 0" TERM\nbash -c '"'"'echo $$ > "$SG_STATE/pass.pid"; exec sleep 30'"'"'\n' > "$T/no-fastloop.sh"
 chmod +x "$T/watch.sh" "$T/watchd.sh"
 bash "$T/watchd.sh" start >/dev/null
 sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
