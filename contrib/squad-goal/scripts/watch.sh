@@ -26,6 +26,9 @@ W="$SG_STATE/watch-seen.txt"; boot=0; [ -e "$W" ] || { boot=1; : > "$W"; }
 seen=" $(sed -n 's/^seen //p' "$W" | tr '\n' ' ')"; stalled=" $(sed -n 's/^stall //p' "$W" | tr '\n' ' ')"
 # tm <cmd...>: runs a step and appends "HH:MM:SS <step> <secs>s" to $SG_STATE/cycle.log when it took 5 s or more (where the 90 s cycle goes)
 tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ] && echo "$(date +%T) ${1##*/} ${e}s" >> "$SG_STATE/cycle.log"; return 0; }
+# verdicts: the runs of active-runs.txt whose record carries a verdict, one a line. The closing wait reads local files only (#569).
+verdicts() { local r f; for r in $(cat "$SG_STATE/active-runs.txt"); do case "$r" in /*) f=$r/record.jsonl;; *) f=runs/$r/record.jsonl;; esac
+  grep -q '"event": *"verdict"' "$f" 2>/dev/null && echo "$r"; done | sort; }
 # land_wave <run>: the completion of one finished run -- the run's finished children enter its wave, and then the wave lands
 # (#375, ADR-0145 rules 9, 10 and 12). The order is the point: a child enters the wave in childcc's pass, which this cycle
 # reaches after this loop, so a landing attempted first finds a wave without the child in it, refuses it, and -- the run
@@ -150,7 +153,13 @@ if v:
   # (publish-live.sh, one explicit file list). It runs before the vendorguard step, so a drift is read, published and named in the same cycle.
   tm bash "$(dirname "$0")/single.sh" liveguard bash "$(dirname "$0")/live-guard.sh" 2>&1   # the live skill follows the repository copy: the difference is read, published, and named
   tm bash "$(dirname "$0")/single.sh" vendorguard bash "$(dirname "$0")/vendor-guard.sh" 2>&1   # re-vendor drifted personal skills (a drifted vendor makes every squad start refuse)
-  boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1; done; sleep 30
+  # The closing wait is one wait of SG_WATCH_WAIT seconds at most (90 by default), polled every SG_WATCH_POLL (3), and a run verdict that the
+  # wait's start did not see ends it (#569). A verdict already there is no event: a run whose landing failed stays unread and must not spin the cycle.
+  # childcc runs inline at the wait's first and second third (the 30 s and 60 s points) only while the fast lane is down.
+  boot=0; v0=$(verdicts); wn=$(( ${SG_WATCH_WAIT:-90} / ${SG_WATCH_POLL:-3} )); [ "$wn" -ge 1 ] || wn=1
+  for ((i = 1; i <= wn; i++)); do sleep "${SG_WATCH_POLL:-3}"
+    [ -z "$(comm -13 <(echo "$v0") <(verdicts))" ] || { echo "$(date +%T) WAIT ended early: a run verdict"  >> "$SG_STATE/cycle.log"; break; }
+    { [ $((i * 3)) -eq $wn ] || [ $((i * 3)) -eq $((wn * 2)) ]; } && { [ -n "$fast" ] || tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1; }; done
   # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains
   x=$(gh_stretch 90); [ "$x" -gt 0 ] 2>/dev/null && { echo "$(date +%T) QUOTA low: this cycle waits ${x}s more" >> "$SG_STATE/cycle.log"; sleep "$x"; }
   echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc and both dispatches every SG_FAST_INTERVAL s (fastloop.sh when watchd runs it), the rest every 90 s
