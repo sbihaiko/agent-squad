@@ -56,10 +56,12 @@ case "$a" in
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
     printf '2030\tDone\thttps://api.github.com/repos/x/y\n2031\tAbandoned\thttps://api.github.com/repos/x/y\n2029\tClosed\thttps://api.github.com/repos/x/y\n'   # spec children, and a spec card already Closed
     printf '2041\tBacklog\thttps://api.github.com/repos/x/y\n'   # a run parent that already has a card
+    printf '2042\tTodo\thttps://api.github.com/repos/x/y\n2043\tBacklog\thttps://api.github.com/repos/x/y\n2044\tBlocked\thttps://api.github.com/repos/x/y\n'   # the owner moved spec #2042 to Todo
+    printf '2046\tBacklog\thttps://api.github.com/repos/x/y\n2047\tBacklog\thttps://api.github.com/repos/x/y\n'   # spec #2046 still sits in Backlog
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -76,6 +78,11 @@ case "$a" in
         2029) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2030},{"number":2002}]';;
         2040|2041) labs='{"nodes":[{"name":"run-parent"},{"name":"enhancement"}]}';;   # a run parent: the roll-up of a run's children, never work
         2021) labs='{"nodes":[{"name":"spec"}]}';;
+        # The owner starts a spec by moving its card (#589): #2042 sits in Todo, so its children in Backlog (#2043) or with no
+        # card (#2045) follow it; #2044 is past Backlog and keeps its column. #2046 still sits in Backlog, so #2047 stays.
+        2042) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":3,"completed":0}'; kids='[{"number":2043},{"number":2044},{"number":2045}]';;
+        2046) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2047}]';;
+        2043|2044|2045|2047) labs='{"nodes":[{"name":"ready-for-agent"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
       esac
@@ -227,6 +234,14 @@ done
 ! /usr/bin/grep -q ' 2029$' "$T/board.calls" 2>/dev/null && ok "a Closed spec whose child reopened keeps its column" || ko "#2029 moved: $(/usr/bin/grep ' 2029$' "$T/board.calls")"
 /usr/bin/grep -q '^api -X POST repos/x/y/issues/2029/labels -f labels\[\]=reverted$' "$T/gh.calls" 2>/dev/null && ok "it gains the reverted tag" || ko "#2029 not tagged: $(/usr/bin/grep 'issues/2029' "$T/gh.calls")"
 /usr/bin/grep -q 'SPEC-REVERTED #2029' "$T/st/cycle.log" 2>/dev/null && ok "the kept column is named in cycle.log" || ko "#2029 not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# The owner starts a spec by moving its card to Todo, and its children follow it there, forward only (#589). The spec card
+# keeps the owner's column: the fold writes nothing below Doing, so the two rules never fight.
+/usr/bin/grep -q '^STATUS o 4 Todo 2043$' "$T/board.calls" 2>/dev/null && ok "a Backlog child of a spec in Todo follows it to Todo" || ko "#2043 did not follow its spec: $(bc) $o"
+/usr/bin/grep -q '^ADD o 4 Todo 2045$' "$T/board.calls" 2>/dev/null && ok "a child with no card of a spec in Todo is added in Todo" || ko "#2045 not added Todo: $(bc)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2043: card -> Todo (its spec #2042 sits in Todo: the owner started it)' "$T/st/cycle.log" 2>/dev/null && ok "the follow is named in cycle.log" || ko "#2043 follow not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q ' 2044$' "$T/board.calls" 2>/dev/null && ok "a child past Backlog keeps its column" || ko "#2044 moved: $(/usr/bin/grep ' 2044$' "$T/board.calls")"
+! /usr/bin/grep -q ' 204[26]$' "$T/board.calls" 2>/dev/null && ok "the spec card keeps the owner's column" || ko "a spec moved: $(/usr/bin/grep -E ' 204[26]$' "$T/board.calls")"
+! /usr/bin/grep -q ' 2047$' "$T/board.calls" 2>/dev/null && ok "a child of a spec in Backlog stays in Backlog" || ko "#2047 moved: $(/usr/bin/grep ' 2047$' "$T/board.calls")"
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
 ! /usr/bin/grep -q 'sub_issues' "$T/gh.calls" 2>/dev/null && ok "no sub-issues route is called" || ko "a sub-issues call: $(/usr/bin/grep sub_issues "$T/gh.calls")"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c graphql "$T/gh.calls")"
