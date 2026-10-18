@@ -141,4 +141,28 @@ run_cycles 1
 /usr/bin/grep -q "STALL RUN run-done" "$T/watch.out" && ko "9 the watchdog names a finished run as stalled" || ok "9 a run whose record holds its verdict is never named"
 : > "$ST/active-runs.txt"
 
+# 10) (#569) the cycle's closing wait is one wait of at most SG_WATCH_WAIT s that ends early on a NEW run verdict in the run
+# folders, read from local files only. The stubbed `sleep` returns at once, so each case keeps the real one (REAL_SLEEP=1) and
+# runs two cycles: the wait closes the first, and the vendor-guard stub ends the run at the second one's end. A verdict a run
+# already carried when the wait began is no event, so a run whose landing failed and stays unread cannot keep the cycle spinning.
+lane_down; mkdir -p "$T/co/runs/run-wait"; printf '{"event": "call_started"}\n' > "$T/co/runs/run-wait/record.jsonl"
+echo "$T/co/runs/run-wait" > "$ST/active-runs.txt"; rm -f "$ST/cycle.log" "$ST/watch-seen.txt"
+( /bin/sleep 2; printf '{"event": "verdict", "verdict": "pass"}\n' >> "$T/co/runs/run-wait/record.jsonl" ) & vp=$!
+t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=40 SG_WATCH_POLL=1; el=$(( $(date +%s) - t0 )); wait "$vp" 2>/dev/null
+[ "$el" -lt 20 ] && ok "10 a new run verdict ends the wait early (${el}s of a 40 s wait)" || ko "10 the wait ran on after a verdict (${el}s)"
+/usr/bin/grep -q "RUN run-wait verdict=pass" "$T/watch.out" && ok "10 the next cycle reads the verdict that ended the wait" || ko "10 no verdict line: $(tail -3 "$T/watch.out")"
+/usr/bin/grep -Eq ' CYCLE [0-9]+s$' "$ST/cycle.log" && ok "10 the cycle log keeps its CYCLE timing line" || ko "10 no CYCLE line in cycle.log: $(cat "$ST/cycle.log" 2>/dev/null)"
+printf 'seen %s\n' "$T/co/runs/run-wait" > "$ST/watch-seen.txt"   # the run carries its verdict and is read: no event for the wait
+t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=4 SG_WATCH_POLL=1; el=$(( $(date +%s) - t0 ))
+[ "$el" -ge 4 ] && ok "10 with no new verdict the wait runs to its bound (${el}s of a 4 s wait)" || ko "10 the wait ended early with no event (${el}s)"
+printf '#!/bin/bash\n[ "$1" = --stretch ] && echo 3\n' > "$B/ghsnap"; chmod +x "$B/ghsnap"; rm -f "$ST/cycle.log"
+t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=2 SG_WATCH_POLL=1 SG_GHSNAP="$B/ghsnap"; el=$(( $(date +%s) - t0 ))
+[ "$el" -ge 5 ] && /usr/bin/grep -q "QUOTA low: this cycle waits 3s more" "$ST/cycle.log" && ok "10 the quota stretch still follows the wait (${el}s)" || ko "10 no quota stretch after the wait (${el}s): $(cat "$ST/cycle.log" 2>/dev/null)"
+# the inline childcc pass stays inside the wait with the fast lane down: one at the top and one at each third of the wait; lane up, none
+run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=6 SG_WATCH_POLL=1
+[ "$(count childcc)" = 4 ] && ok "10 fast lane down: childcc runs at the top and at the wait's two thirds" || ko "10 childcc ran $(count childcc)× in 2 cycles (4 expected)"
+lane_up; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=6 SG_WATCH_POLL=1; lane_down
+[ "$(count childcc)" = 0 ] && ok "10 fast lane up: the wait runs no childcc pass" || ko "10 childcc ran $(count childcc)× inside the wait with the lane up"
+: > "$ST/active-runs.txt"
+
 rm -rf "$T"; exit $fail

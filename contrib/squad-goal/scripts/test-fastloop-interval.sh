@@ -18,4 +18,24 @@ got() { (cd "$T" && env "$@" perl -e 'alarm 5; exec @ARGV' bash "$d/fastloop.sh"
 [ "$(got SG_PROFILE=beta)" = 45 ] && ok "a profile sets the interval" || ko "profile interval: $(got SG_PROFILE=beta)"
 [ "$(got SG_PROFILE=alpha SG_FAST_INTERVAL=7)" = 7 ] && ok "the environment still wins" || ko "environment interval"
 ! /usr/bin/grep -q 'sleep 30' "$d/fastloop.sh" && ok "no fixed 30 s sleep is left" || ko "sleep 30 remains"
+# (#569) the wait between two beats ends early on a NEW Todo card in the local board cache, and runs to its bound with no event.
+# The lane runs for real in a fixture dir: stubbed passes log a line each, and a beat is one childcc line. No network, no model.
+F=$T/lane; mkdir -p "$F" "$T/lst"; cp "$d/fastloop.sh" "$d/single.sh" "$F/"; BC=$T/lst/board.json; LOG=$T/lane.log
+printf 'export SG_STATE=%s SG_STATE_BASE=%s SG_REPO=x/alpha SG_OWNER=x SG_PROJECT=1 SG_BOARD_CACHE=%s\n' "$T/lst" "$T/cache" "$BC" > "$F/env.sh"
+printf 'open("%s","a").write("beat\\n")\n' "$LOG" > "$F/childcc.py"
+for s in autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$F/$s.sh"; chmod +x "$F/$s.sh"; done
+board() { printf '{"items": [%s]}\n' "$1" > "$BC"; }   # board <items json>: the cache the hub writes
+card() { printf '{"n": %s, "t": "t", "s": "OPEN", "st": "%s", "l": []}' "$1" "$2"; }
+beats() { local c; c=$(/usr/bin/grep -c beat "$LOG" 2>/dev/null); echo "${c:-0}"; }
+lane() { : > "$LOG"; rm -f "$T/lst/fastloop.pid"; env SG_FAST_INTERVAL=$1 SG_FAST_POLL=0.2 bash "$F/fastloop.sh" >"$T/lane.out" 2>&1 & LP=$!; }
+lane_end() { kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null; pkill -P "$LP" 2>/dev/null; return 0; }
+board "$(card 5 Todo),$(card 6 Done)"
+lane 30; /bin/sleep 1.5; b1=$(beats); board "$(card 5 Todo),$(card 6 Done),$(card 7 Todo)"; /bin/sleep 3; b2=$(beats); lane_end
+[ "$b1" = 1 ] && [ "$b2" = 2 ] && ok "a new Todo card in the cache ends the wait early (beats $b1 then $b2 of a 30 s wait)" || ko "new Todo card: beats $b1 then $b2"
+board "$(card 5 Todo),$(card 6 Done)"
+lane 30; /bin/sleep 1.5; board "$(card 5 Todo),$(card 6 Todo)"; /bin/sleep 3; b3=$(beats); lane_end
+[ "$b3" = 2 ] && ok "a card moved into Todo ends the wait early" || ko "card moved to Todo: beats $b3 (2 expected)"
+board "$(card 5 Todo),$(card 6 Done)"
+lane 4; /bin/sleep 1.5; board "$(card 5 Todo),$(card 6 Done),$(card 8 'In Progress')"; /bin/sleep 1; b4=$(beats); /bin/sleep 3; b5=$(beats); lane_end
+[ "$b4" = 1 ] && [ "$b5" = 2 ] && ok "with no new Todo card the wait runs to its bound (beats $b4 then $b5 of a 4 s wait)" || ko "no event: beats $b4 then $b5"
 rm -rf "$T"; exit $fail
