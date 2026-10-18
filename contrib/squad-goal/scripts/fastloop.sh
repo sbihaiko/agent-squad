@@ -6,8 +6,12 @@
 # Each step runs under single.sh, so it never overlaps its own previous run. Pid in $SG_STATE/fastloop.pid.
 # --interval prints the resolved beat and exits (tests). SG_FASTLOOP_ONCE=1 runs one iteration and exits (tests).
 . "$(dirname "$0")/env.sh"; [ "${1:-}" = --interval ] && { echo "$SG_FAST_INTERVAL"; exit 0; }; here="$(dirname "$0")"; P="$SG_STATE/fastloop.pid"
-[ -n "${SG_FASTLOOP_ONCE:-}" ] || { echo $$ > "$P"; trap 'rm -f "$P"; exit 0' TERM INT; }
+# A lane removes the pid file only when the file names it: the lane of a later start may own it by then (#527).
+mine() { [ "$(cat "$P" 2>/dev/null)" = "$$" ] && rm -f "$P"; }
+[ -n "${SG_FASTLOOP_ONCE:-}" ] || { echo $$ > "$P"; trap 'mine; exit 0' TERM INT; }
 while :; do
+  # A lane whose supervisor died exits: else it runs beside the lane of the next watchd start, two of each pass a beat (#527).
+  [ -n "${SG_FASTLOOP_ONCE:-}" ] || { [ "$PPID" != 1 ] && [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "$PPID" ]; } || { mine; exit 0; }
   [ -n "${SG_FASTLOOP_ONCE:-}" ] || echo $$ > "$P"   # every beat: watch.sh reads this file to know the lane is up, and a missing one sent the cycle to run childcc inline (#513)
   bash "$here/single.sh" childcc python3 "$here/childcc.py" 2>&1
   # Both go out detached: a pass ends in a squad start that runs for minutes, and it must not hold the beat. They are called bare, as watch.sh calls them,
