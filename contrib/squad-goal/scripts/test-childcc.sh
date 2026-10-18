@@ -125,4 +125,15 @@ run2 sup 5400 5401; : > "$WAVE_CALLS"; /usr/bin/git -C "$T/co/runs/sup/ws/target
 pass sup >/dev/null; rc=$?
 [ "$(ent sup 5400)" = 0 ] && [ "$(ent sup 5401)" = 1 ] && [ "$rc" = 0 ] && ok "a requeued child on an unchanged head costs no work" \
   || ko "entries with a requeued child: $(cat "$WAVE_CALLS"), exit $rc"
+# A child whose own engine landing failed does not enter its run's wave: its work never reached the run's target, so its
+# issue goes back to the queue with the landing's reason and its card does not move to Code Complete (#592).
+mkdir -p "$T/co/runs/lfail"; { echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #5500"}'
+  echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+  echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "fail", "reasons": ["merge_conflict"], "effect": {"name": "merge_land"}}'; } > "$T/co/runs/lfail/record.jsonl"
+wtree lfail; echo wave/lfail > "$T/st/auto/wave-lfail"; echo wave/lfail > "$T/st/auto/waved-lfail"; : > "$WAVE_CALLS"; rm -f "$T/moves"
+pass lfail >/dev/null
+[ "$(ent lfail 5500)" = 0 ] && ok "a failed land enters no child" || ko "a child whose landing failed was entered: $(cat "$WAVE_CALLS")"
+/usr/bin/grep -q '^requeue 5500 ' "$WAVE_CALLS" && ok "a failed land requeues the issue" || ko "no requeue for a failed land: $(cat "$WAVE_CALLS")"
+/usr/bin/grep -q '^requeue 5500 .*merge_conflict' "$WAVE_CALLS" && ok "the requeue carries the landing's reason" || ko "the requeue carries no landing reason: $(cat "$WAVE_CALLS")"
+/usr/bin/grep -q ' 5500$' "$T/moves" 2>/dev/null && ko "a child whose landing failed moved to Code Complete" || ok "a child whose landing failed moves no card"
 rm -rf "$T"; exit $fail
