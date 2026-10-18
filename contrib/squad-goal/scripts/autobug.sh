@@ -99,7 +99,7 @@ sg_is_issue() { local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1; pri
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
 [ -n "${SG_SINGLE_AUTOBUG:-}" ] || exec env SG_SINGLE_AUTOBUG=1 bash "$here/single.sh" autobug bash "$here/autobug.sh" "$@"
-lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question}
+lab=${SG_BUG_LABEL:-bug}; skip=${SG_BUG_SKIP_LABELS:-needs-owner,no-auto,wontfix,question,frozen:owner,frozen:dependency}   # the frozen labels autofrontier.sh skips too (#530)
 read -r free < <(cd "$SG_CHECKOUT" && python3 - "$SG_STATE/active-runs.txt" <<'PY'
 import os, re, sys, pathlib
 # The free slots come from the machine-wide ceiling caps.runs in squad/caps.py, the one resolution the engine enforces, lowered
