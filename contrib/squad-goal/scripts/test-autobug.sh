@@ -557,11 +557,12 @@ r=$(PATH="$K/bin:$PATH" SG_SQUAD="$SG_SQUAD" AB_DRY=1 bash "$K/s/autobug.sh" 2>&
 case "$r" in *"kinds are not read"*) ok "13 a seam that answers no kinds is reported, never silent";; *) ko "13 no report line when the seam is down: '$r'";; esac
 case "$r" in *1501*1502*|*1502*) ok "13 with the seam down the pass falls back to the label";; *) ko "13 no fallback with the seam down: '$r'";; esac
 
-# 14) A run parent ("Squad run <run id>") is a roll-up, never a bug to fix: the bug pass skips it by title, whatever its labels.
+# 14) A run parent ("Run <start> (<short id>) — <children>", or the old "Squad run <run id>") is a roll-up, never a bug to fix: the bug pass skips it by title, whatever its labels.
 R=$T/runparent; mkdir -p "$R/bin"
 cat > "$R/issues.json" <<'JSON'
 [
-  {"number":60,"title":"Squad run run-20261014-030735-11d7af","labels":[{"name":"bug"}]},
+  {"number":60,"title":"Run 2026-10-14 03:07 (11d7af) — #10, #11","labels":[{"name":"bug"}]},
+  {"number":62,"title":"Squad run run-20261014-030735-11d7af","labels":[{"name":"bug"}]},
   {"number":61,"title":"Squad run report is wrong","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"}]}
 ]
 JSON
@@ -573,6 +574,7 @@ G
 chmod +x "$R/bin/gh"
 r=$(PATH="$R/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[60]"*) ko "14 the bug pass picked a run parent: '$r'";; *) ok "14 a run parent is not a bug candidate";; esac
+case "$r" in *"[62]"*) ko "14 the bug pass picked an old-title run parent: '$r'";; *) ok "14 an old-title run parent is not a bug candidate";; esac
 case "$r" in *"[61]"*) ok "14 an issue whose title only starts alike is still a candidate";; *) ko "14 a look-alike title was skipped: '$r'";; esac
 
 rm -rf "$T"; exit $fail

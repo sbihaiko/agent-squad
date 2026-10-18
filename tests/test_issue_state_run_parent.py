@@ -81,8 +81,8 @@ def test_two_children_link_to_one_parent_that_names_the_run(tmp_path):
     repo = repo_with()
     parent = seam(tmp_path, repo).group_run(RUN, [10, 11])
 
-    assert repo.created == [f"Squad run {RUN}"], "one parent, titled for the run"
-    assert repo.issues[parent]["title"] == f"Squad run {RUN}"
+    assert repo.created == ["Run 2026-10-14 03:07 (11d7af) — #10, #11"], "one parent, titled for the run"
+    assert repo.issues[parent]["title"] == "Run 2026-10-14 03:07 (11d7af) — #10, #11"
     assert [c["number"] for c in repo.subs[parent]] == [10, 11]
     assert {sid for _, sid in repo.link_posts} == {1010, 1011}, "the write names the child's id, never its number"
 
@@ -143,7 +143,7 @@ def test_a_parent_whose_links_did_not_land_is_found_again_without_paging_the_iss
 
     parent = state.group_run(RUN, [10, 11])
 
-    assert repo.created == [f"Squad run {RUN}"], "the retry reuses the parent, never creates a second"
+    assert repo.created == ["Run 2026-10-14 03:07 (11d7af) — #10, #11"], "the retry reuses the parent, never creates a second"
     assert repo.list_reads == reads, "the parent is known from the first pass: no page of every issue"
     assert [c["number"] for c in repo.subs[parent]] == [10, 11]
 
@@ -164,3 +164,33 @@ def test_only_the_children_with_no_parent_are_linked(tmp_path):
     repo.issues[10]["parent_issue_url"] = "https://api.github.com/repos/x/y/issues/352"
     parent = seam(tmp_path, repo).group_run(RUN, [10, 11, 12])
     assert parent and [sid for _, sid in repo.link_posts] == [1011, 1012]
+
+
+def test_the_title_states_the_start_time_the_short_id_and_the_children():
+    title = issue_state.BoardBinding.parent_title("run-20261017-002454-f4c200", [474, 470])
+    assert title == "Run 2026-10-17 00:24 (f4c200) — #470, #474"
+
+
+def test_a_child_list_over_three_names_three_then_the_rest():
+    title = issue_state.BoardBinding.parent_title(RUN, [1, 2, 3, 4, 5])
+    assert title == "Run 2026-10-14 03:07 (11d7af) — #1, #2, #3 +2"
+    assert issue_state.BoardBinding.parent_title(RUN, [1, 2, 3]).endswith("#1, #2, #3")
+
+
+def test_the_new_title_is_a_run_parent_and_the_old_one_still_is():
+    assert issue_state.is_run_parent("Run 2026-10-14 03:07 (11d7af) — #10, #11 +1")
+    assert issue_state.is_run_parent(f"Squad run {RUN}")
+    assert not issue_state.is_run_parent("Run report is wrong")
+
+
+def test_a_group_is_created_under_the_new_title_and_found_again_when_children_grow(tmp_path):
+    repo = repo_with()
+    state = seam(tmp_path, repo)
+    parent = state.group_run(RUN, [10, 11])
+    assert repo.created == ["Run 2026-10-14 03:07 (11d7af) — #10, #11"]
+
+    assert state.group_run(RUN, [10, 11, 12]) == parent
+    assert repo.created == [repo.issues[parent]["title"]], "the title is not rewritten and no second parent is made"
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    assert seam(fresh, repo).binding.parent_of(RUN) == parent, "found by the run, not by the whole title"
