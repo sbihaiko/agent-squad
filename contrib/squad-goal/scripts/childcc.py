@@ -93,7 +93,7 @@ def enter(rd, child, n, d):
     reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}")
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
-    if "WAVE REQUEUE" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha
+    if "WAVE REQUEUE" in out or "WAVE STOP" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
     if e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         why = f"the review of its own diff asked for changes: {first_finding(wt)}"
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True)

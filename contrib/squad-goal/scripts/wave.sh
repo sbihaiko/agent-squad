@@ -3,7 +3,7 @@
 #        wave.sh enter <run> <issue>  from the child's worktree: the local gates, the rebase on the wave tip, the --ff-only entry
 #        wave.sh land <run>           when the run ends: the rebase on the moved base, the one push, and the closes
 #        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
-#        wave.sh requeue <issue> <why>  the child never enters: its issue goes back to the queue and the loop builds it again
+#        wave.sh requeue <issue> <why> [cap]  the child never enters: its issue goes back to the queue and the loop builds it again
 #
 # One branch per wave (ADR-0145). A wave is the set of children that land in $SG_BASE (`dev`) together, and its branch is the
 # only branch that lands there for them, in one fast-forward push with one CI run. A run cuts the branch from `dev` when it
@@ -51,8 +51,11 @@
 # the default). `start` records the epoch it cut the wave in `auto/wave-start-<run>`, and the age is read from that marker,
 # never from a second clock. A wave past its cap lands what it holds and the children of the run that never entered go back
 # to the queue, an empty wave included: `land` reads the run's own record (as childcc.py does) and requeues every dispatched
-# issue that is not ahead of the base. `enter` refuses a new child into an expired wave (its issue goes back to the queue), and the loop lands
-# an expired wave without waiting for the run's verdict (watch.sh). `wave.sh expired <run>` is the predicate it reads.
+# issue that is not ahead of the base. `enter` refuses a new child into an expired wave (its issue goes back to the queue),
+# unless the review already approved the child's current head against the wave (#594): that child waited on the loop's own
+# queue, not on its own work. The loop lands an expired wave without waiting for the run's verdict (watch.sh). `wave.sh
+# expired <run>` is the predicate it reads. A requeue the cap makes is no failure of the child, so it never counts toward
+# SG_REQUEUE_CAP (#594).
 #
 # A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
 # production, which no run can produce while the account's GitHub Actions billing is blocked (issue #439); the local check
@@ -137,14 +140,15 @@ freeze_owner() {   # <issue>: the freeze is a marker over the column reached, ne
   return 0
 }
 
-requeue() {   # <issue> <why>: the child never entered, so its issue goes back to the queue and the loop can build it again.
+requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
   local n=$1 why=$2 f c cf; cf="$SG_STATE/auto/requeues-$n"
   # The count is the issue's, not the run's: each new run started afresh, and one issue was dispatched 19 times (#532). The
   # SG_REQUEUE_CAP-th requeue (3 by default) stops it: the marker stays, the card keeps the column it reached with an owner
   # freeze, and a SQUAD-NOT-STARTABLE comment is queued, which both dispatch passes read. Removing the counter file and the
-  # comment frees the issue.
-  c=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$cf"
-  if [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then
+  # comment frees the issue. A requeue the wave's age cap made (`cap`, #594) is the loop's delay, not a failure of the child:
+  # it neither counts nor stops the issue, and the count real failures left stays as it was.
+  if [ "${3:-}" = cap ]; then c=0; else c=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$cf"; fi
+  if [ "$c" -ge 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then
     freeze_owner "$n"
     f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && printf 'SQUAD-NOT-STARTABLE: requeued %s times without a child that entered its wave; the loop stops building it. Last: %s\n' "$c" "$why" > "$f"
     echo "WAVE STOP #$n: requeued $c times, so it is not dispatched again: $why"; return 0
@@ -160,17 +164,23 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
+  local rk="$SG_STATE/review-$(printf '%s' "$br" | tr / _)" rsha
+  rsha=$($G rev-parse HEAD)
   # A wave past its age cap takes no new child (#378, ADR-0145 rule 13): the child's issue goes back to the queue, so the
-  # loop builds it into a later wave. It is refused before the review and the gates: the wave is closing, whatever the child.
-  expired "$run" && { requeue "$iss" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): the child's issue goes back to the queue"; return 1; }
+  # loop builds it into a later wave, and that requeue is not counted (#594). A child whose review already approved its
+  # current head against this wave still enters (#594): its wait was the loop's queue of reviews, not its own work. Any
+  # other child -- no review yet, one in flight, one of another head or base, or one that did not approve -- is refused
+  # before the gates: the wave is closing.
+  if expired "$run" && ! { [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] && [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] \
+      && head -1 "$rk.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE'; }; then
+    requeue "$iss" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): the child's issue goes back to the queue" cap; return 1
+  fi
   # The review of the child reads only its own commits, against its merge-base with the wave branch (#376), and a verdict that
   # did not approve it keeps it out of the wave. The gate reads three things: the verdict, the base it was read against (the
   # wave branch, never `dev`, which would be the whole wave), and the sha it read. The sha is read before the rebase below:
   # the entry rewrites the child's shas while its own commits stay the same, so what was approved is what enters, rebased.
   # A child that cannot enter is held where it stands -- its branch and its review stay for the fix round -- so nothing is
   # requeued here, unlike a failed gate, a conflict or a refused push.
-  local rk="$SG_STATE/review-$(printf '%s' "$br" | tr / _)" rsha
-  rsha=$($G rev-parse HEAD)
   [ -s "$rk.md" ] || { echo "WAVE HOLD #$iss: no review of $br yet: a child never enters a wave unreviewed"; return 1; }
   [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] || { echo "WAVE HOLD #$iss: the review of $br was read against '$(cat "$rk.base" 2>/dev/null)', not $w: it read the whole wave, not this child's own commits"; return 1; }
   [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] || { echo "WAVE HOLD #$iss: the review of $br read $(cut -c1-9 "$rk.sha" 2>/dev/null), not HEAD ${rsha:0:9}"; return 1; }
@@ -381,7 +391,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # An issue whose non-RED commit the base holds is delivered below, never requeued.
       if [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
-          requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue";; esac; done
+          requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue" cap;; esac; done
       fi
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
       return 0; }
@@ -412,7 +422,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
   if [ "$capped" = 1 ]; then
     for n in $(run_issues "$rd"); do case " $issues " in *" $n "*) ;; *)
-      requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue";; esac; done
+      requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue" cap;; esac; done
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
   # (cqflush.sh keeps one per issue, edited in place, #328). Each card reads the delivered column, which is what the landing
@@ -431,5 +441,5 @@ case "${1:-}" in
   land) shift; land "$@";;
   expired) shift; expired "$@";;
   requeue) shift; requeue "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why>" >&2; exit 2;;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap]" >&2; exit 2;;
 esac

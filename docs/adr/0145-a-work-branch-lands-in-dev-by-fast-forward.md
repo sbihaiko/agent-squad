@@ -24,7 +24,7 @@ A pull request per work branch put a review step and a CI queue between finished
 10. **CI runs once per wave, when the wave lands in `dev`.** A child's entry into the wave starts no CI of its own.
 11. **A red wave CI finds its cause by running each child's suite again against the wave tip, the last entrant first.** The first suite that fails names the child that broke the wave. A wave with nothing ahead of the base lands empty and runs no check: it carries no child commit that a red check could blame.
 12. **Code Complete means the child is in the wave branch; Done means the wave is in `dev`.**
-13. **A wave has an age cap.** A wave that reaches the cap lands as it is; it takes no new child.
+13. **A wave has an age cap.** A wave that reaches the cap lands as it is; it takes no new child, except one whose review already approved its current head against the wave: that child waited on the loop's queue, not on its own work. A requeue the cap makes is no failure of the child, so it never counts toward the requeue cap.
 14. **The wave branch is rebased on `dev` only before the final push.** Between entries the wave tip moves only by child entries.
 
 Rejected: a pull request per work branch. Rejected: a merge commit on promotion. A fast-forward keeps one line in `git log`.
