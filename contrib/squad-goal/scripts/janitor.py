@@ -727,15 +727,29 @@ def reconcile_board():
     for n, have in sorted(have_all.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
         if budget <= 0: break
         if have not in TERMINAL or not str(n).isdigit() or (st / "auto" / f"janitor-terminal-{n}").exists(): continue
+        # A condition the read does not state was read again every pass, and every pass logged the same line (#561): one
+        # report and one marker under $SG_STATE remember it. The marker names the column, so a card the owner moves to
+        # another terminal column is read once more, where its condition may be stated.
+        unread = st / "auto" / f"janitor-terminal-unreadable-{n}"
+        try: memo = unread.read_text().strip()
+        except OSError: memo = ""
+        if memo == have: continue
+        if memo and not dry: unread.unlink(missing_ok=True)
         budget -= 1
         ok, seen = door_read(f"repos/{repo0}/issues/{n}/comments?per_page=100", f'[.[] | select(.body | contains("{TERMINAL_TAG}"))] | length')
         if not ok: continue
         if seen not in ("", "0"):
             if not dry: (st / "auto" / f"janitor-terminal-{n}").write_text(have + "\n")
             continue
-        note = terminal_comment(have, terminal_facts(n, have))
+        facts = terminal_facts(n, have)
+        note = terminal_comment(have, facts)
         if note is None:
-            say(f"TERMINAL-NO-CONDITION #{n}: settled in {have} with no comment, and its condition could not be read")
+            reason = (facts or {}).get("reason")   # the read's own answer: a close by decision belongs to Abandoned, and a terminal card is not moved (ADR-0143, #517)
+            if reason in ("not_planned", "duplicate"):
+                say(f"TERMINAL-NO-CONDITION #{n}: settled in {have}, but the issue is closed as {reason}; its condition is Abandoned, and a terminal card is not moved")
+            else:
+                say(f"TERMINAL-NO-CONDITION #{n}: settled in {have} with no comment, and its condition could not be read")
+            if not dry: unread.write_text(have + "\n")
             continue
         say(f"TERMINAL-BACKFILL #{n}: settled in {have} with no comment; one queued")
         queue_terminal(n, have, note)

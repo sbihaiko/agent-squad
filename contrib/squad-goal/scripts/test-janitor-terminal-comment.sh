@@ -74,6 +74,8 @@ note 2205 | /usr/bin/grep -q 'gui/2205-b' && ok "a settled Closed card with no c
 [ -f "$T/st/auto/janitor-terminal-unreadable-2208" ] && [ "$(cat "$T/st/auto/janitor-terminal-unreadable-2208")" = Closed ] \
   && ok "an unreadable terminal condition is remembered by a marker under SG_STATE" || ko "#2208 marker missing or wrong"
 [ "$(/usr/bin/grep -c 'TERMINAL-NO-CONDITION #2208' "$T/st/cycle.log")" = 1 ] && ok "an unreadable condition is reported once over two passes" || ko "#2208 reported $(/usr/bin/grep -c 'TERMINAL-NO-CONDITION #2208' "$T/st/cycle.log") times: $o$o2"
+/usr/bin/grep -q 'TERMINAL-NO-CONDITION #2208: settled in Closed, but the issue is closed as not_planned; its condition is Abandoned' "$T/st/cycle.log" \
+  && ok "the one report names the condition the issue actually carries" || ko "#2208 report: $(/usr/bin/grep 'TERMINAL-NO-CONDITION #2208' "$T/st/cycle.log")"
 [ "$r1" -gt 0 ] && [ "$r2" = 0 ] && ok "a second pass over the same unreadable issue makes no read" || ko "#2208 reads: first $r1, second $r2: $o$o2"
 [ "$(count 2208)" = 0 ] && ok "a remembered unreadable card gets no terminal comment" || ko "#2208 commented"
 for n in 2201 2202 2203 2205; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
