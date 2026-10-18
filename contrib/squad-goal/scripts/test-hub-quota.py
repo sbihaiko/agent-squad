@@ -196,7 +196,7 @@ row = hub.quota_row("grok", LATER)
 ck(row and (row.get("windows") or [{}])[0].get("pct") == 73.0, "the panel row shows the kept reading before the period end", row)
 ck(row and row.get("asof") == ASOF, "the panel row carries the reading's age", row)
 gk = [p for p in [i for i in hub.foot_items(hub.foot_sources(LATER), LATER) if i["key"] == "subs"][0]["parts"] if p["text"].startswith("GK")][0]
-ck(gk["text"] == "GK 73% 4d 7h", "the footer token reads the same value as the panel", gk)
+ck(gk["text"] == "GK 73%" and "resets in 4d 7h" in (gk.get("tip") or ""), "the footer token reads the same value as the panel", gk)
 ck("read 5h ago" in (gk.get("tip") or ""), "the footer token carries the same age as the panel", gk)
 row = hub.quota_row("grok", END + 60)
 ck(row and row.get("unavailable") is True and row.get("stale") is True, "past the period end the reading is stale", row)

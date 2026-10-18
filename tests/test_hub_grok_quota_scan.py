@@ -37,6 +37,7 @@ def hub():
 def log(hub, tmp_path, monkeypatch):
     p = tmp_path / "unified.jsonl"
     monkeypatch.setattr(hub, "GROK_LOG", p)
+    monkeypatch.setattr(hub, "GROK_KEPT", tmp_path / "hub-grok.json")   # no reading kept from another test (#553)
     return p
 
 
@@ -82,11 +83,11 @@ def test_a_credit_line_a_read_boundary_cuts_in_half_is_still_found(hub, log):
     assert [w["pct"] for w in r["windows"]] == [100.0], r
 
 
-def test_a_log_with_no_credit_line_reads_unavailable_and_names_the_scan(hub, log):
+def test_a_log_with_no_credit_line_reads_unavailable_and_names_its_first_entry(hub, log):
     _filler_mb(log, 1)
     r = hub.q_grok()
     assert r["windows"] == [] and r["unavailable"] is True
-    assert "64 MB" in r["err"]
+    assert "since its first entry at 2026-10-11T13:14:00.000Z" in r["err"] and "64 MB" not in r["err"]
 
 
 def test_a_missing_log_does_not_raise(hub, log):

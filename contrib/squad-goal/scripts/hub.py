@@ -812,8 +812,8 @@ def consumption_tone(pct):
 
 def _subs_parts(subs, now):
     """One part per subscription in SUBS' own order. A token at or above the warn ladder reads `CL 42% 3h 20m`; one
-    below it reads `CL 42%`, with the omitted reset as `resets in 3h 20m` in its tooltip. An unreadable reset is `?` and
-    never hides. The quota and reset are `quota_row()`'s first window, the probe the cost panel already shows. A probe
+    below it reads `CL 42%`, with the omitted reset as `resets in 3h 20m` in its tooltip. The tooltip also carries the
+    reading's age (`read 5h ago`), the age the panel shows. An unreadable reset is `?` and never hides. The quota and reset are `quota_row()`'s first window, the probe the cost panel already shows. A probe
     that did not answer (or names no window) falls back to the percentage the owner typed by hand and reads `?` for the
     reset; a subscription with neither reads `?` alone — neutral, never painted as if it carried a number."""
     out = []
@@ -827,7 +827,10 @@ def _subs_parts(subs, now):
             text = f"{a} {_subs_pct(pct)}"
             part = {"text": f"{text} {reset}" if reset == "?" or pct >= FOOT_WARN_PCT else text,
                     "tone": consumption_tone(pct)}
-            if reset != "?" and pct < FOOT_WARN_PCT: part["tip"] = f"resets in {reset}"
+            tip = [f"resets in {reset}"] if reset != "?" and pct < FOOT_WARN_PCT else []
+            asof = (s.get("probe") or {}).get("asof")   # the age the panel shows beside the same reading
+            if isinstance(asof, (int, float)) and not isinstance(asof, bool): tip.append(f"read {_age(now - asof)} ago")
+            if tip: part["tip"] = " · ".join(tip)
             out.append(part)
         elif isinstance(hand, (int, float)) and not isinstance(hand, bool):
             out.append({"text": f"{a} {_subs_pct(hand)} ?", "tone": consumption_tone(hand)})
@@ -1010,7 +1013,7 @@ def foot_sources(now=None):
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["burn"] = burn_cached(now)
     out["cycle"] = _cycle_state(now)
-    out["subs"] = {k: {"probe": quota_row(k), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
+    out["subs"] = {k: {"probe": quota_row(k, now), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     return out
 
 def foot_refresh(now=None):
@@ -2619,8 +2622,20 @@ def q_codex():
 GROK_LOG = HOME / ".grok/logs/unified.jsonl"
 GROK_SETTINGS = HOME / ".grok/settings_cache.json"   # the config the grok CLI caches at startup
 GROK_SCAN_MAX = 64 * 1024 * 1024   # how far back the probe walks before calling the log blind
-GROK_NO_SOURCE = ("no credit line in ~/.grok/logs/unified.jsonl: the grok CLI writes creditUsagePercent only when its "
-                  "billing extension runs (the TUI's /usage view), and no line in the last 64 MB carries one")
+GROK_KEPT = HUBDIR / "hub-grok.json"   # the newest credit reading seen: the log rotates, and its one credit line with it (#553)
+def grok_no_source(first):
+    """The true reason for no reading: the grok CLI writes creditUsagePercent only when a TUI session starts."""
+    since = f" since its first entry at {first}" if first else ""
+    return f"no credit line in ~/.grok/logs/unified.jsonl{since}: open the grok TUI once to write one"
+def grok_keep(k):
+    """Keep reading k ({pct, start, end, asof}) when it is newer than the kept one. Atomic: tmp, then rename."""
+    try: old = json.loads(GROK_KEPT.read_text())
+    except Exception: old = None
+    if isinstance(old, dict) and (old.get("asof") or 0) >= k["asof"]: return old
+    tmp = GROK_KEPT.with_name(f"{GROK_KEPT.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try: tmp.write_text(json.dumps(k)); os.replace(tmp, GROK_KEPT)
+    except OSError: tmp.unlink(missing_ok=True)
+    return k
 def grok_plan():
     """The plan the grok CLI itself caches; it is also what proves the settings file is being read at all."""
     try: p = json.loads(json.loads(GROK_SETTINGS.read_text())["payload"])
@@ -2630,8 +2645,9 @@ def q_grok():
     """Read the newest log line carrying a BillingConfig: `creditUsagePercent` + `currentPeriod{start,end}`.
     The grok CLI pushes that payload in the line's `ctx.config`, and its message wording drifts between versions
     (`billing: fetched credits config` in older ones), so match the fields and never the text. Finding none is a
-    reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing yesterday's number."""
-    last = None
+    reading of its own — `unavailable` with the reason — so refresh_quota cannot keep showing yesterday's number.
+    The newest reading is kept in GROK_KEPT and read back after the log rotates; `until` is its period end (quota_row)."""
+    last = first = None
     try:
         with open(GROK_LOG, "rb") as fh:
             fh.seek(0, 2); size = fh.tell(); pos = size; floor = max(0, size - GROK_SCAN_MAX)
@@ -2650,15 +2666,23 @@ def q_grok():
                     try: d = json.loads(l)
                     except Exception: continue
                     if not isinstance(d, dict): continue
+                    if first is None and d.get("ts"): first = d["ts"]   # the first line of the oldest chunk read
                     c = (d.get("ctx") or {}).get("config") or {}
                     if c.get("creditUsagePercent") is not None and isinstance(c.get("currentPeriod"), dict): last = (d, c)
     except OSError: pass
-    if not last:
-        return {"windows": [], "unavailable": True, "err": GROK_NO_SOURCE, "plan": grok_plan()}
-    d, c = last; per = c.get("currentPeriod") or {}
-    end = dt.datetime.fromisoformat(per["end"].replace("Z", "+00:00")).timestamp() if per.get("end") else None
-    return {"windows": [{"label": "weekly", "pct": c.get("creditUsagePercent"), "resets": end}], "plan": grok_plan(),
-            "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()}
+    k = None
+    if last:
+        d, c = last; per = c.get("currentPeriod") or {}
+        end = dt.datetime.fromisoformat(per["end"].replace("Z", "+00:00")).timestamp() if per.get("end") else None
+        k = grok_keep({"pct": c.get("creditUsagePercent"), "end": end,
+                       "asof": dt.datetime.fromisoformat(d["ts"].replace("Z", "+00:00")).timestamp()})
+    else:
+        try: k = json.loads(GROK_KEPT.read_text())
+        except Exception: k = None
+    if not isinstance(k, dict) or k.get("pct") is None:
+        return {"windows": [], "unavailable": True, "err": grok_no_source(first), "plan": grok_plan()}
+    return {"windows": [{"label": "weekly", "pct": k["pct"], "resets": k.get("end")}], "plan": grok_plan(),
+            "asof": k.get("asof"), "until": k.get("end")}
 def q_agy():
     """`agy -p /quota` prints one line per model group (no model call): name, `Weekly Limit Remaining`, N%, reset ISO. The Gemini group is the Google plan's."""
     r = subprocess.run(["agy", "-p", "/quota"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
@@ -2700,14 +2724,19 @@ def refresh_quota():
     while True:
         refresh_quota_once(); time.sleep(1200)
 QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
-def quota_row(k):
-    """What the cost panel shows for provider k: the CLI's own reading, or the reason there is no reading.
-    A reading past QUOTA_MAX_AGE is no reading, and says when the last one was taken (the grok log gets a billing line
-    only when the TUI opens /usage, so its last line can be a day old and still look current)."""
-    r = quota.get(k)
+def quota_row(k, now=None):
+    """What the cost panel and the footer show for provider k: the CLI's own reading, or the reason there is no reading.
+    A reading past QUOTA_MAX_AGE is no reading, and says when the last one was taken. A reading with `until` (the kept
+    grok reading: the CLI writes a credit line only when a TUI session starts) holds to its period end, then is stale."""
+    r = quota.get(k); now = time.time() if now is None else now
     if not r: return None
+    if r.get("windows") and r.get("until"):
+        if now <= r["until"]: return r
+        return {"unavailable": True, "stale": True, "asof": r.get("asof"), "plan": r.get("plan"),
+                "err": f"stale: the last reading ({r['windows'][0].get('pct')}%) is for a period that ended "
+                       f"{time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(r['until']))}; open the grok TUI once to write a new one"}
     if r.get("windows"):
-        age = time.time() - r["asof"] if r.get("asof") else 0
+        age = now - r["asof"] if r.get("asof") else 0
         if age <= QUOTA_MAX_AGE: return r
         return {"unavailable": True, "asof": r["asof"], "plan": r.get("plan"),
                 "err": f"no reading: the last one is {round(age / 3600)} h old (the limit is {QUOTA_MAX_AGE // 3600} h), taken {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(r['asof']))}"}
