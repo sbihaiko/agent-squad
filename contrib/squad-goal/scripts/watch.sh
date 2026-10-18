@@ -38,11 +38,15 @@ tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ]
 # in this log) and a landing that failed (a rebase conflict, a push refused twice) each leave the run unread, never a marker.
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
   local run=$1 ran pass L h; ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"
-  mkdir -p "$SG_STATE/auto"; rm -f "$ran" "$pass"
+  mkdir -p "$SG_STATE/auto"; rm -f "$ran" "$pass" "$pass.left"
   # The pass waits a bounded time (SG_LAND_WAIT one-second polls) for the childcc lock the fast lane may hold. The landing runs
   # under its own lock, never the childcc one: its gate wait can last hours, and the fast lane's pass must not queue behind it (#471).
-  SG_SINGLE_WAIT=${SG_LAND_WAIT:-30} tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2" && : > "$3"' landpass \
+  # A pass works one child and exits 3 when it left one for a later pass (#590): that is no pass, `$pass.left` says so, and the
+  # wave waits, as a 0 would land it without that child.
+  SG_SINGLE_WAIT=${SG_LAND_WAIT:-30} tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2"; r=$?; [ $r = 0 ] && : > "$3"; [ $r = 3 ] && : > "$3.left"; exit $r' landpass \
      "${wme%/*}/childcc.py" "$run" "$pass" 2>&1
+  [ -e "$pass.left" ] && { rm -f "$pass.left"
+    echo "WATCH: ${run##*/} waits: its landing is deferred, the childcc pass left children of the run for a later pass, so its wave lands on a later cycle"; return 1; }
   if [ -e "$pass" ]; then
     tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1
     [ -e "$ran" ] && { rm -f "$ran" "$pass"; return 0; }
@@ -132,7 +136,8 @@ if v:
   # runs a step twice. The frontier and bug dispatches ride the fast beat because a dispatch that waits for this cycle's tick appears up
   # to ~6 min late, which is what frontier-idle kept reporting (#1845). Every step moved here keeps its own single.sh lock, so a pass
   # already running in the other lane is skipped rather than started a second time.
-  [ -n "$fast" ] || { tm python3 "$(dirname "$0")/childcc.py" 2>&1
+  # The cycle's own childcc takes the childcc lock as every other pass does (#590): a bare one ran beside the fast lane's pass.
+  [ -n "$fast" ] || { tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1
     tm "$(dirname "$0")/autofrontier.sh" 2>&1   # dispatch the frontier as soon as a blocker falls
     tm "$(dirname "$0")/autobug.sh" 2>&1; }   # open bug issues dispatched automatically
   tm "$(dirname "$0")/autohunt.sh" 2>&1   # idle loop: one read-only bug hunt that files reproducible defects
@@ -145,7 +150,7 @@ if v:
   # (publish-live.sh, one explicit file list). It runs before the vendorguard step, so a drift is read, published and named in the same cycle.
   tm bash "$(dirname "$0")/single.sh" liveguard bash "$(dirname "$0")/live-guard.sh" 2>&1   # the live skill follows the repository copy: the difference is read, published, and named
   tm bash "$(dirname "$0")/single.sh" vendorguard bash "$(dirname "$0")/vendor-guard.sh" 2>&1   # re-vendor drifted personal skills (a drifted vendor makes every squad start refuse)
-  boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || tm python3 "$(dirname "$0")/childcc.py" 2>&1; done; sleep 30
+  boot=0; for _ in 1 2; do sleep 30; [ -n "$fast" ] || tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1; done; sleep 30
   # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains
   x=$(gh_stretch 90); [ "$x" -gt 0 ] 2>/dev/null && { echo "$(date +%T) QUOTA low: this cycle waits ${x}s more" >> "$SG_STATE/cycle.log"; sleep "$x"; }
   echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc and both dispatches every SG_FAST_INTERVAL s (fastloop.sh when watchd runs it), the rest every 90 s

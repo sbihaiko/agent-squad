@@ -13,7 +13,13 @@ The runs the pass works are its arguments, else every live run: watch.sh's compl
 Live runs move at once; a run that already has its verdict (tiny and fork-only runs go pass -> verdict in under 1 s, so they are never seen live) is backfilled once,
 but only when the card is still in Todo/In Progress/Blocked, never past Code Complete; a run with a wave not yet landed is not backfilled by card but by its wave marker, so a child that has not entered still enters. The once-marker is written when the child entered or needs no entry, never after a refused entry: the next pass tries it again. A run with more than one child also gets one parent issue naming the run, each child linked as a sub-issue through the seam (marker auto/parent-<run>). Once per child (marker auto/cc-<run>-<child>); only an open issue moves; queues a comment with the child's first reason.
 Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never overrides a later column: an issue already
-past it is left alone because the marker is written the first time the child is seen passing."""
+past it is left alone because the marker is written the first time the child is seen passing.
+One pass works at most SG_CHILDCC_BUDGET pending children (1 by default, #590): a review and the gates take 2 to 15 min a
+child, and a pass that worked every child held the childcc lock, and every landing behind it, for 14 to 25 min. A child is
+work when its entry reaches the review and the gates; a child its requeue holds on an unchanged head, or that needs no entry,
+costs nothing. The cursor (auto/childcc-cursor) names the last child worked, and the next pass starts after it, so a child
+held on every pass does not take every pass. A pass that leaves a child that had no turn since the last complete pass
+(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
@@ -25,6 +31,9 @@ board = str(pathlib.Path(__file__).resolve().parent / "board.sh")
 wave = str(pathlib.Path(__file__).resolve().parent / "wave.sh")   # the wave's verbs, beside this pass (#375)
 childreview = str(pathlib.Path(__file__).resolve().parent / "childreview.sh")   # the review of the child's own diff, beside this pass (#448)
 state = board_state()   # the dispatch pass asks the seam what state an issue carries, never the carrier (#236)
+BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
+INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
+CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
 def child_worktree(rd, child, d):   # the tree a child worked in, by the engine's own rule (squad/runners/children.py, Children.workspace)
     ws = d.get("workspace") if isinstance(d, dict) else None
     logical = "target" if not ws or ws == "." else str(ws).replace("/", "_")
@@ -65,19 +74,20 @@ def first_finding(wt):   # the first finding of the review the entry read, for t
     except OSError: return "no finding was written"
     return (lines[0] if lines else "no finding was written")[:300]
 def enter(rd, child, n, d):
-    """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why): (None, "") when the
+    """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why, worked): (None, "") when the
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
-    (False, why) when it is in none -- a child that did not enter has no delivery to claim. A child a refused entry requeued
+    (False, why) when it is in none -- a child that did not enter has no delivery to claim. `worked` is True when the
+    review and the gates ran, the work one pass is budgeted for (#590). A child a refused entry requeued
     is not tried again on the same HEAD (marker auto/requeued-<run>-<child>): the gates and the requeue wait for a new commit.
     The child's own diff is reviewed here, once per head, before the entry asks for its verdict. A review that asked for
     CHANGES is not a child held where it stands: nothing behind that hold could fix it (the fix lane reads pushed work
     branches, and a child's branch is pushed nowhere), so its issue goes back to the queue -- live run or not, its next head
     is read again."""
-    if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists(): return None, ""   # `waved-` is the durable record: a landing removes `wave-`, never this
+    if not (A / f"waved-{rd.name}").exists() and not (A / f"wave-{rd.name}").exists(): return None, "", False   # `waved-` is the durable record: a landing removes `wave-`, never this
     wt = child_worktree(rd, child, d)
-    if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there"
+    if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
     rq = A / f"requeued-{rd.name}-{child}"   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
-    if rq.exists() and rq.read_text().strip() == head_of(wt): return False, ""
+    if rq.exists() and rq.read_text().strip() == head_of(wt): return False, "", False
     reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}")
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
@@ -86,13 +96,14 @@ def enter(rd, child, n, d):
         why = f"the review of its own diff asked for changes: {first_finding(wt)}"
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True)
         rq.write_text(head_of(wt) + "\n"); out += f"\nCHILD REVIEW REQUEUE #{n}: {why}"
-    return e.returncode == 0, out or f"WAVE no entry for #{n} (exit {e.returncode})"
+    return e.returncode == 0, out or f"WAVE no entry for #{n} (exit {e.returncode})", True
 def card_status(n):   # the state the card carries, "" when it carries none or the carrier does not answer
     try: return state.read(n)
     except RuntimeError: return ""   # a refusal or a deadline miss is the carrier not answering, not a card that carries nothing
 def issue_from(df):
     n = child_issues.first(df)   # the one reader the janitor's sibling passes share (#555)
     return int(n) if n else None
+pending, runs = [], set()   # every finished child with no marker yet, as (key, run, child, why, issue, finished, definition)
 for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
@@ -109,28 +120,47 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             done.append((d["node"], (d.get("reasons") or [""])[0]))
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             unmapped.append(d["node"])
-    mk = A / f"parent-{pathlib.Path(r).name}"
+    name = pathlib.Path(r).name; runs.add(name)
+    mk = A / f"parent-{name}"
     if not finished and not mk.exists() and len(set(issue.values())) > 1:   # a finished run gets no parent: no backfill (#340)   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
-        try: print(f"RUN PARENT #{state.group_run(pathlib.Path(r).name, issue.values())} ({pathlib.Path(r).name})"); mk.touch()
-        except RunParentChild as e: print(f"RUN PARENT REFUSED {pathlib.Path(r).name}: {e}"); mk.touch()   # asking again can not change it
-        except RuntimeError as e: print(f"RUN PARENT FAILED {pathlib.Path(r).name}: {e}")   # no marker: the next pass asks again
+        try: print(f"RUN PARENT #{state.group_run(name, issue.values())} ({name})"); mk.touch()
+        except RunParentChild as e: print(f"RUN PARENT REFUSED {name}: {e}"); mk.touch()   # asking again can not change it
+        except RuntimeError as e: print(f"RUN PARENT FAILED {name}: {e}")   # no marker: the next pass asks again
     for child, why in done:
-        mk = A / f"cc-{pathlib.Path(r).name}-{child}"
-        if mk.exists(): continue
-        n = issue[child]
-        s = subprocess.run(["gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state"], capture_output=True, text=True).stdout.strip()
-        if s != "open": mk.touch(); continue
-        waved = (A / f"wave-{pathlib.Path(r).name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
-        if (A / f"waved-{pathlib.Path(r).name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
-        if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
-        entered, why = enter(pathlib.Path(r), child, n, defn.get(child))
-        if why: print(why, flush=True)
-        if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
-        mk.touch()
-        if entered is None: subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)   # no wave: the pass moves the card itself
-        (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {pathlib.Path(r).name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
-        print(f"CODE COMPLETE #{n} ({pathlib.Path(r).name} {child})")
+        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child)))
     for child in unmapped:
-        mk = A / f"unmap-{pathlib.Path(r).name}-{child}"
+        mk = A / f"unmap-{name}-{child}"
         if mk.exists(): continue
-        mk.touch(); print(f"CHILDCC UNMAPPED {pathlib.Path(r).name} {child}")
+        mk.touch(); print(f"CHILDCC UNMAPPED {name} {child}")
+# The pass starts after the child the cursor names, in key order, so the work rotates over every pending child (#590).
+pending.sort(key=lambda p: p[0])
+cur = CURSOR.read_text().strip() if CURSOR.exists() else ""
+k0 = next((i for i, p in enumerate(pending) if p[0] > cur), 0)
+spent, visited = 0, set()
+for key, r, child, why, n, finished, d in pending[k0:] + pending[:k0]:
+    if spent >= BUDGET: break   # the budget is spent: the children left wait for the next pass
+    visited.add(key)
+    name = pathlib.Path(r).name; mk = A / f"cc-{name}-{child}"
+    s = subprocess.run(["gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state"], capture_output=True, text=True).stdout.strip()
+    if s != "open": mk.touch(); continue
+    waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
+    if (A / f"waved-{name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
+    if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
+    entered, why, worked = enter(pathlib.Path(r), child, n, d)
+    if worked: spent += 1; CURSOR.write_text(key + "\n")
+    if why: print(why, flush=True)
+    if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
+    mk.touch()
+    if entered is None: subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)   # no wave: the pass moves the card itself
+    (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
+    print(f"CODE COMPLETE #{n} ({name} {child})")
+# The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
+# in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did.
+rnd = set(ROUND.read_text().split("\n")) - {""} if ROUND.exists() else set()
+keys = {p[0] for p in pending}
+left = [k for k in keys - visited if k not in rnd]
+if left:
+    ROUND.write_text("".join(k + "\n" for k in sorted((rnd & keys) | visited | {k for k in rnd if k.split(" ")[0] not in runs})))
+    print(f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}", flush=True)
+    sys.exit(INCOMPLETE)
+ROUND.write_text("".join(k + "\n" for k in sorted(k for k in rnd if k.split(" ")[0] not in runs)))   # this pass closed the round of its runs
