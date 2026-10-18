@@ -25,7 +25,7 @@
 # close the API refuses. The wave branch then goes, its work being in $SG_BASE. Every issue the wave carries is read, after the
 # rebase, from the whole message of each commit the base still lacks (every `Refs #N`, subject or body, named once), and each is closed through the API, has its one delivery comment queued
 # (cqflush.sh posts it), and moves to Done (#375). A close that fails queues no comment, writes no ledger row and moves no
-# card: a delivery the API did not accept is never claimed. A landing that cannot rebase, or whose push is refused, lands
+# card: a delivery the API did not accept is never claimed. That issue stays owed (#475): the landing exits 1 and keeps the wave marker, so a later pass closes it. A landing that cannot rebase, or whose push is refused, lands
 # nothing and closes nothing.
 #
 # The run's completion finds its wave through the marker `start` leaves in $SG_STATE/auto/wave-<run>, and `land` clears it
@@ -255,6 +255,35 @@ stuck() {
   return 1
 }
 
+# deliver <run> <wave> <sha> <issues>: the closes of what a landed wave carries, each with its comment, ledger row and card.
+# An issue that does not close stays owed (#475): its number is kept in $SG_STATE/auto/wowed-<run>, the run keeps its wave
+# marker, and the pass exits 1, so the run is not read as done and the next landing pass tries the close again.
+deliver() {
+  local run=$1 w=$2 sha=$3 issues=$4 n owed=""
+  export SG_GH_PASS=wave
+  local col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed
+  for n in $issues; do
+    local closed= tries=1
+    while :; do
+      gh_send -X PATCH "repos/$SG_REPO/issues/$n" -f state=closed -f state_reason=completed >/dev/null && { closed=1; break; }
+      [ "$tries" = 1 ] || break
+      tries=2
+    done
+    [ -n "$closed" ] || { echo "WAVE-ERROR #$n did not close after the landing of $w: no delivery comment is queued and its card keeps its column"; owed="${owed:+$owed }$n"; continue; }
+    mkdir -p "$SG_STATE/cq"
+    printf 'Closed #%s after landing %s in %s as %s (one fast-forward push, %s deleted). Refs #%s\n' "$n" "$w" "$base" "$sha" "$w" "$n" > "$(sg_cq_delivery "$n" "wave$$")"
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$sha" "$n" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads
+    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/WAVE-BOARD #$n $col refused: /"   # the seam's read note is no refusal (#526)
+  done
+  if [ -n "$owed" ]; then
+    printf '%s\t%s\t%s\n' "$sha" "$w" "$owed" > "$SG_STATE/auto/wowed-$run"
+    echo "WAVE-ERROR $w landed in $base, but ${owed// /, } stays owed: the landing exits 1 and the next pass closes it"
+    return 1
+  fi
+  rm -f "$SG_STATE/auto/wowed-$run" "$SG_STATE/auto/wave-$run"
+  return 0
+}
+
 land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
   local run=$1 w; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
@@ -265,6 +294,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   [ -f "$rd/record.jsonl" ] || echo "WAVE-NOTE the record of run $run is missing: $rd/record.jsonl is not there, so no issue of the run is read from it" >&2
   # The age cap is read before the landing clears the markers it is read from (#378): a wave that reached it requeues the
   # children of the run that never entered it, once the wave it holds is in the base.
+  # An issue an earlier landing could not close is owed (#475): the wave is already in the base, so this pass only closes it.
+  if [ -f "$SG_STATE/auto/wowed-$run" ]; then
+    local osha ow oiss; IFS=$'\t' read -r osha ow oiss < "$SG_STATE/auto/wowed-$run"
+    export SG_GH_PASS=wave
+    deliver "$run" "$ow" "$osha" "$oiss" || return 1
+    echo "WAVE $ow $osha delivered in $base (owed: ${oiss// /, })"; return 0
+  fi
   local capped=0; expired "$run" && capped=1
   local S; S=$(mktemp -d) || { echo "WAVE-ERROR no scratch dir"; return 2; }
   sc() { $G -C "$S" "$@"; }
@@ -314,7 +350,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base: the run's completion has no wave left to land
+  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
   # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
@@ -327,21 +363,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # means: Closed on the shipped vocabulary, which has no Done (#468), Done otherwise. A refused write is named, never dropped. Only a
   # close the API accepted queues the comment, writes the ledger row and moves the card: a close that fails leaves the issue
   # open, and every one of those three would claim a delivery that did not happen. The close repeats once, as the push does.
-  export SG_GH_PASS=wave
-  local col=Done; [ "${SG_BOARD_VOCAB:-}" = shipped ] && col=Closed
-  for n in $issues; do
-    local closed= tries=1
-    while :; do
-      gh_send -X PATCH "repos/$SG_REPO/issues/$n" -f state=closed -f state_reason=completed >/dev/null && { closed=1; break; }
-      [ "$tries" = 1 ] || break
-      tries=2
-    done
-    [ -n "$closed" ] || { echo "WAVE-ERROR #$n did not close after the landing of $w: no delivery comment is queued and its card keeps its column"; continue; }
-    mkdir -p "$SG_STATE/cq"
-    printf 'Closed #%s after landing %s in %s as %s (one fast-forward push, %s deleted). Refs #%s\n' "$n" "$w" "$base" "$sha" "$w" "$n" > "$(sg_cq_delivery "$n" "wave$$")"
-    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$sha" "$n" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads
-    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/WAVE-BOARD #$n $col refused: /"   # the seam's read note is no refusal (#526)
-  done
+  deliver "$run" "$w" "$sha" "$issues" || return 1
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"
   return 0

@@ -261,7 +261,20 @@ ls "$T/st/cq/"x__y#40-delivery~* >/dev/null 2>&1 && ko "E3: a delivery comment i
 /usr/bin/grep -qx "o 3 Closed 40" "$T/board.log" && ko "E3: the card of an issue that did not close reads Closed" || ok "E3: the card of an issue that did not close keeps its column"
 [ -z "$(awk -F'\t' '$4=="40"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "E3: the ledger carries no row for an issue that did not close" || ko "E3: the ledger claims a delivery that did not happen: '$(awk -F'\t' '$4=="40"' "$T/st/landed.tsv")'"
 case "$r" in *"#40"*"did not close"*) ok "E3: the close that failed is named";; *) ko "E3: the failed close is silent: '$r'";; esac
+# E3b (#475): an issue the landing could not close stays owed. The landing exits non-zero, so the run is not marked seen, and
+# the run's wave marker stays; a later pass tries the close again, and the delivery is recorded once the close succeeds.
+[ "$rc" != 0 ] && ok "E3b: a landing that could not close an issue exits non-zero" || ko "E3b: the landing exited 0 with #40 still open"
+[ -e "$T/st/auto/wave-run-3" ] && ok "E3b: the run keeps its wave marker, so a later pass lands it again" || ko "E3b: the wave marker is gone: nothing tries the close again"
 printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+: > "$T/gh.log"; : > "$T/board.log"; : > "$T/pushes.log"; dev0=$($O rev-parse dev)
+r=$(land2 run-3); rc=$?
+[ $rc = 0 ] && ok "E3b: the later pass delivers the owed issue (exit 0)" || ko "E3b: the later pass exited $rc: '$r'"
+[ "$(/usr/bin/grep -c 'issues/40 -f state=closed' "$T/gh.log")" = 1 ] && ok "E3b: the close is tried again on the later pass" || ko "E3b: $(/usr/bin/grep -c 'issues/40 -f state=closed' "$T/gh.log") close attempts on the later pass"
+[ "$(ls "$T/st/cq/"x__y#40-delivery~* 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "E3b: the delivery comment is queued once" || ko "E3b: no single delivery comment for #40"
+/usr/bin/grep -qx "o 3 Closed 40" "$T/board.log" && ok "E3b: the card moves once the close succeeds" || ko "E3b: the card of #40 did not move"
+[ "$(awk -F'\t' '$4=="40"' "$T/st/landed.tsv" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "E3b: the ledger carries one row for #40" || ko "E3b: the ledger row for #40 is not single"
+[ "$($O rev-parse dev)" = "$dev0" ] && [ -z "$(cat "$T/pushes.log")" ] && ok "E3b: the later pass pushes nothing" || ko "E3b: the later pass pushed"
+[ ! -e "$T/st/auto/wave-run-3" ] && ok "E3b: the wave marker goes once the issue is delivered" || ko "E3b: the wave marker stays after delivery"
 
 # E4: the issues a wave carries are read from the whole message of each commit and named once (#375 review). A `Refs #N`
 # that sits in a commit body closes its issue like one in a subject, and an issue two commits (or one commit twice) name is
