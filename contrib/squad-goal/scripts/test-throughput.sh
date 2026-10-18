@@ -8,47 +8,48 @@ d=$(dirname "$0"); src=${1:-$d/throughput.sh}; T=$(mktemp -d); fail=0; ok() { ec
 mkdir -p "$T/s" "$T/co" "$T/st" "$T/bin"
 cp "$src" "$T/s/throughput.sh" 2>/dev/null || { echo "FAIL no throughput.sh at $src"; exit 1; }
 cp "$d/throughput.py" "$d/child_issues.py" "$T/s/" 2>/dev/null
-# The report reads its checkout, state folder and base from the profile, as every pass does: the fixture profile names them.
-cat > "$T/s/env.sh" <<EOF
-export SG_CHECKOUT=\${SG_CHECKOUT:-$T/co} SG_STATE=\${SG_STATE:-$T/st} SG_BASE=\${SG_BASE:-dev}
-EOF
 printf '#!/bin/bash\n: > %s\n' "$T/ghcalled" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 
 # A local clone on the base branch, with commits at known calendar dates. Commit date is the landing date.
 G() { git -c user.name=t -c user.email=t@t "$@"; }
 G init -q -b dev "$T/co"
-stamp() { python3 -c 'import datetime,sys;print((datetime.datetime.now()-datetime.timedelta(days=int(sys.argv[1]))).replace(hour=12,minute=0,second=0,microsecond=0).strftime("%Y-%m-%dT%H:%M:%S"))' "$1"; }
+# A commit must sit in the past: git's --since drops a commit dated after now, and today's own commit is not future-dated.
+ago() { python3 -c 'import datetime,sys
+n=int(sys.argv[1]); now=datetime.datetime.now()
+print((now-datetime.timedelta(seconds=1) if n==0 else now-datetime.timedelta(days=n)).strftime(sys.argv[2]))' "$1" "$2"; }
+stamp() { ago "$1" "%Y-%m-%dT%H:%M:%S"; }
 day() { python3 -c 'import datetime,sys;print((datetime.date.today()-datetime.timedelta(days=int(sys.argv[1]))).isoformat())' "$1"; }
-stampn() { python3 -c 'import datetime,sys;print("run-"+(datetime.datetime.now()-datetime.timedelta(days=int(sys.argv[1]))).strftime("%Y%m%d-%H%M%S"))' "$1"; }
+stampn() { ago "$1" "run-%Y%m%d-%H%M%S"; }
 commit() { local dt; dt=$(stamp "$1"); printf '%s\n' "$2" > "$T/msg"
   GIT_AUTHOR_DATE="$dt" GIT_COMMITTER_DATE="$dt" G -C "$T/co" commit -q --allow-empty -F "$T/msg"; }
 
-commit 0 'Feature A
+commit 5 'Old work
+
+Refs #100'                       # outside the default window, and the root: a history is ordered oldest first
+commit 2 'Feature D
+
+Refs #104
+Refs #105'                       # one commit may name two issues
+commit 1 'Feature C
+
+Refs #103'
+commit 0 'TDD RED: feature A
 
 Refs #101'
-commit 0 'TDD RED: feature A
+commit 0 'Feature A
 
 Refs #101'                       # the same issue twice on one day is one landed issue that day
 commit 0 'Feature B
 
 Refs #102'
-commit 1 'Feature C
-
-Refs #103'
-commit 2 'Feature D
-
-Refs #104
-Refs #105'                       # one commit may name two issues
-commit 5 'Old work
-
-Refs #100'                       # outside the default window
 
 # The run folders whose request names an issue. One names two issues, one has no request, and one is older than the window.
-mkdir -p "$T/co/runs/$(stampn 0)-r1" "$T/co/runs/$(stampn 0)-r2" "$T/co/runs/$(stampn 1)-r3" "$T/co/runs/$(stampn 5)-r4" "$T/co/runs/$(stampn 0)-r5"
-printf 'GitHub issue #101\n' > "$T/co/runs/$(stampn 0)-r1/request.txt"
-printf 'Refs #101\n' > "$T/co/runs/$(stampn 0)-r2/request.txt"
-printf 'GitHub issues 102, 103\n' > "$T/co/runs/$(stampn 1)-r3/request.txt"
-printf 'Refs #104\n' > "$T/co/runs/$(stampn 5)-r4/request.txt"   # outside the window, so issue 104 has no run in it
+R0a=$(stampn 0); R0b=$(stampn 0); R1=$(stampn 1); R5=$(stampn 5); R0c=$(stampn 0)
+mkdir -p "$T/co/runs/$R0a-r1" "$T/co/runs/$R0b-r2" "$T/co/runs/$R1-r3" "$T/co/runs/$R5-r4" "$T/co/runs/$R0c-r5"
+printf 'GitHub issue #101\n' > "$T/co/runs/$R0a-r1/request.txt"
+printf 'Refs #101\n' > "$T/co/runs/$R0b-r2/request.txt"
+printf 'GitHub issues 102, 103\n' > "$T/co/runs/$R1-r3/request.txt"
+printf 'Refs #104\n' > "$T/co/runs/$R5-r4/request.txt"   # outside the window, so issue 104 has no run in it
 
 # The child review lines the review pass writes, and the requeue line a CHANGES verdict appends.
 cat > "$T/st/watch.log" <<'EOF'
@@ -60,7 +61,9 @@ CHILD REVIEW run-20261018-121500-r1 child-4: squad/run-1/ws-child-4 222222222 VE
 watch: a line that is not a child review
 EOF
 
-run() { PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" "$@"; }
+# The loop exports its address to every pass: the fixture names the same three settings, and a `gh` stub first in PATH would
+# record any GitHub call.
+run() { SG_CHECKOUT="$T/co" SG_STATE="$T/st" SG_BASE=dev PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" "$@"; }
 has() { printf '%s\n' "$out" | /usr/bin/grep -qxF -- "$1"; }
 D0=$(day 0); D1=$(day 1); D2=$(day 2); D5=$(day 5)
 before=$(find "$T/co" "$T/st" -type f | sort | while read -r f; do printf '%s %s\n' "$f" "$(cksum < "$f")"; done)
@@ -73,7 +76,7 @@ has "  $D1: 1" && ok "yesterday: one landed issue" || ko "yesterday is not 1: $o
 has "  $D2: 2" && ok "two days ago: one commit naming two issues counts both" || ko "two days ago is not 2: $out"
 has "  total: 5 issues" && ok "the total is the distinct issues of the window" || ko "the total is not 5: $out"
 has "  $D5: 1" && ko "a commit outside the window was counted" || ok "a commit outside the window is left out"
-has "Mean runs per issue: 1.33 (3 runs over 3 issues)" && ok "the mean counts each issue's runs and averages them" || ko "the mean is not 1.33: $out"
+has "Mean runs per issue: 1.33 (4 run-issue pairs over 3 issues)" && ok "the mean counts each issue's runs and averages them" || ko "the mean is not 1.33: $out"
 has "  APPROVE: 2" && ok "two APPROVE lines are counted" || ko "APPROVE is not 2: $out"
 has "  CHANGES: 1" && ok "one CHANGES line is counted" || ko "CHANGES is not 1: $out"
 has "  BLOCKED: 1" && ok "one BLOCKED line is counted" || ko "BLOCKED is not 1: $out"
@@ -88,7 +91,13 @@ out=$(run --days 1 2>&1); rc=$?
 has "  $D0: 2" && ok "--days 1 keeps today" || ko "--days 1 lost today: $out"
 has "  $D1: 1" && ko "--days 1 kept yesterday" || ok "--days 1 drops yesterday"
 has "  total: 2 issues" && ok "--days 1 totals the one day" || ko "--days 1 total is not 2: $out"
-has "Mean runs per issue: 2.00 (2 runs over 1 issue)" && ok "--days 1 averages only the runs it counts" || ko "--days 1 mean is not 2.00: $out"
+has "Mean runs per issue: 2.00 (2 run-issue pairs over 1 issue)" && ok "--days 1 averages only the runs it counts" || ko "--days 1 mean is not 2.00: $out"
+
+# --- a hand run in a checkout names no profile: it reads that checkout on dev and says it read no watch.log ----------
+out=$(cd "$T/co" && PATH="$T/bin:$PATH" bash "$T/s/throughput.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "a hand run with no address exits 0" || ko "a hand run exited $rc: $out"
+has "  $D0: 2" && ok "a hand run reads the checkout it stands in" || ko "a hand run lost the landed issues: $out"
+printf '%s\n' "$out" | /usr/bin/grep -q 'no SG_STATE: no verdict was read' && ok "a hand run says it read no watch.log" || ko "a hand run did not say what it could not read: $out"
 
 # --- the help text names what no local record can answer ----------------------------------------
 out=$(run --help 2>&1); rc=$?

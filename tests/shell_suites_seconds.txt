@@ -94,3 +94,4 @@ test-janitor-own-pass.sh 3.5
 test-janitor-floor-startable.sh 3.6
 test-janitor-gone-issue.sh 1.2
 test-janitor-k.sh 1.3
+test-throughput.sh 2.0
