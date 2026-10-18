@@ -2,12 +2,13 @@
 # Regression test for childcc.py (stub gh + board, no network). usage: bash test-childcc.sh [path/to/childcc.py]
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$T/"
+mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
 a="$*"
 case $a in
+  *"graphql"*) cat "$GH_ISSUES_OPEN";;   # the open-issue list the pass reads once for a loop defect (#596)
   *"-q .state"*) echo open;;
   *"POST"*"/sub_issues"*) echo "link $a" >> "$GH_LOG"; cat >/dev/null;;
   *"/sub_issues"*) echo $GH_KIDS | tr ' ' '\n' | head -n "$(cat "$GH_LOG" 2>/dev/null | grep -c '^link')" || true;;   # the sub-issues read: the children the carrier carries so far, one per link written
@@ -36,7 +37,8 @@ run_def branch c "Create the worktree: git worktree add ~/wt-as-1492 -b gui/1492
 run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
 run_def refs c "Every commit message carries the line \`Refs #1493\` on its own line. GOAL (issue 1493, SPEC 9 child): fix it." pass
-export GH_LOG=$T/gh.log GH_KIDS="2000 2001"; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
+printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
+export GH_LOG=$T/gh.log GH_KIDS="2000 2001" GH_ISSUES_OPEN=$T/issues-open.json; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
@@ -142,4 +144,22 @@ run wst 5600 n; wtree wst; echo wave/wst > "$T/st/auto/wave-wst"; echo wave/wst 
 pass wst >/dev/null; pass wst >/dev/null
 [ "$(cat "$T/st/auto/requeued-wst-c" 2>/dev/null)" = "$(/usr/bin/git -C "$T/co/runs/wst/ws/target-c" rev-parse HEAD)" ] && [ "$(ent wst 5600)" = 1 ] \
   && ok "a stopped child gets the requeued marker and is not entered again on the same head" || ko "WAVE STOP: marker '$(cat "$T/st/auto/requeued-wst-c" 2>/dev/null)', entries $(cat "$WAVE_CALLS")"
+# A loop defect halts delivery too (#596, ADR-0146): a defect in the loop's own machinery is fixed outside the loop, so no
+# child enters a wave and no card moves while one carries `loop-bug`. The pass reads the open issues once, names the issue in
+# the same line the dispatch passes print, and writes nothing else. Closing the issue resumes the entry with no marker.
+run lb 5600 n; wtree lb; echo wave/lb > "$T/st/auto/wave-lb"; echo wave/lb > "$T/st/auto/waved-lb"
+: > "$WAVE_CALLS"; rm -f "$T/moves" "$T/st/auto/cc-lb-c" "$T/st/cycle.log"
+cat > "$T/issues-open.json" <<'JSON'
+{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":596,"title":"The loop cannot land its own fix","body":"","state":"OPEN","labels":{"nodes":[{"name":"loop-bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}
+JSON
+out=$(pass lb)
+[ "$(ent lb 5600)" = 0 ] && ok "a loop defect enters no child" || ko "a child entered while a loop defect is open: $(cat "$WAVE_CALLS")"
+/usr/bin/grep -q ' 5600$' "$T/moves" 2>/dev/null && ko "a loop defect moved a card" || ok "a loop defect moves no card"
+echo "$out" | /usr/bin/grep -q "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" && ok "the pass names the same stop line" || ko "no stop line: $out"
+/usr/bin/grep -qxF "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" "$T/st/cycle.log" 2>/dev/null && ok "the stop is published to the loop log" || ko "cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
+[ ! -e "$T/st/auto/cc-lb-c" ] && ok "the stopped pass leaves no entry marker" || ko "the stopped pass wrote a marker"
+printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
+out=$(pass lb)
+[ "$(ent lb 5600)" = 1 ] && ok "closing the issue resumes the entry with no other action" || ko "entry did not resume: $(cat "$WAVE_CALLS")"
+
 rm -rf "$T"; exit $fail

@@ -6,13 +6,13 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$T/s/"
 unset SG_BOARD_VOCAB   # the loop that runs a child exports it; the cases that need the shipped vocabulary set it themselves
 export SG_GH_AGGREGATE_WINDOW=0   # the open-issue list changes between cases: no snapshot answers a later one
 : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 # exported, as the real env.sh does: the stub mkreq.sh below is a child shell and must still see SG_STATE
-printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n' "$T/st" "$T/co" > "$T/s/env.sh"
+printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent SG_BUG_LABEL=bug\n. "$(dirname "$0")/address.sh"   # the queued comments name their issue through the one seam, as the real env.sh does\n' "$T/st" "$T/co" > "$T/s/env.sh"
 # 1228 is a bug; 1400 is debt (and still carries ready-for-agent, the old filer). 1401 is a frontier-only slice.
 cat > "$T/issues.json" <<'JSON'
 [
@@ -628,5 +628,50 @@ case "$r" in *73*) ko "16 a bug in Todo without the go label was dispatched: '$r
 rm -f "$T/cards.tsv"
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board"*) ok "16 a board that does not answer dispatches nothing, and the pass says so";; *) ko "16 the pass is silent about the board: '$r'";; esac
+
+# 17) (#596, ADR-0146) an open issue carrying `loop-bug` is a defect in the loop's own machinery: the loop cannot dispatch
+# its own fix, so the pass dispatches nothing, names the issue and exits 0. The stop is read from the open issues the pass
+# already reads for its blocker gate, published to the loop log and to the issue's line on the board, and it has no marker:
+# closing the issue is the only action that resumes dispatch.
+rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$T/s/"
+printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"
+printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
+printf 'print("-")\n' > "$T/s/fundroom.py"
+todo 1228 596
+cat > "$T/issues.json" <<'JSON'
+[
+  {"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":596,"title":"The loop cannot land its own fix","body":"step loop.py","created_at":"2026-10-18T08:00:00Z","labels":["bug","ready-for-agent","loop-bug"]}
+]
+JSON
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n596\x1fbug,ready-for-agent,loop-bug\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+: > "$T/st/cycle.log"; rm -f "$T/launched"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "17 a loop defect stops the bug pass with exit 0" || ko "17 the stopped pass exited $rc: '$r'"
+case "$r" in *"LOOP STOP: #596 is a loop defect; the fix lands outside the loop"*) ok "17 the stop names the issue and where the fix lands";; *) ko "17 the stop is not named: '$r'";; esac
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "17 the stopped pass dispatched: '$r'" || ok "17 the stopped pass dispatches nothing"
+m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "17 the stopped pass writes no dispatch marker" || ko "17 markers: ${m[*]##*/}"
+[ -e "$T/launched" ] && ko "17 the stopped pass launched a run" || ok "17 the stopped pass launches no run"
+$G -qxF "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" "$T/st/cycle.log" && ok "17 the stop is published to the loop log" || ko "17 cycle.log: $(cat "$T/st/cycle.log")"
+$G -qxF "LOOP STOP: #596 is a loop defect; the fix lands outside the loop" "$T/st/cq/x__y#596-status~loopstop.md" 2>/dev/null && ok "17 the stop is the issue's line on the board" || ko "17 the board line is missing: $(ls "$T/st/cq" 2>/dev/null)"
+# closing the issue is the only action: no marker to remove
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+todo 1228
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "17 closing the issue resumes dispatch with no other action";; *) ko "17 dispatch did not resume: '$r'";; esac
 
 rm -rf "$T"; exit $fail
