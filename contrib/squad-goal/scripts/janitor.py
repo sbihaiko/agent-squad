@@ -751,12 +751,16 @@ if owner and proj and repo0:
         if not marks: continue
         mk = st / "auto" / f"janitor-demoted-{f.name[-6:]}"
         if mk.exists(): continue
-        if not dry: mk.touch()
+        # The once-only marker is written after the decision, and only when no issue was skipped for a reason that passes (a live
+        # run on it, a state read that did not answer): written first, one such skip held the issue for good (#534).
+        again = False
         why = "; ".join(i["reasons"]) or "no reason recorded"
         for n in sorted(marks, key=int):
-            if n in byissue: continue   # a live run works it: not ours to release
-            if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
-            if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
+            if n in byissue: again = True; continue   # a live run works it: not ours to release, not yet
+            ist = sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip()
+            if ist != "open": again = again or ist != "closed"; continue
+            pc = pr_count(n)
+            if pc != "0": again = again or not pc.isdigit(); continue   # a work branch names it: the issue is past dispatch (a refused read: not yet decided)
             moves = []   # the loop-board card is rule R's (one owner, #91): O reads the column R derived and writes none of its own; the marker is dropped either way, nothing must hold a finished run's issue back
             if bproj and "bug" in marks[n] and card_status(bproj, n) == os.environ.get("SG_BUG_DOING", "Doing"): moves.append([bproj, os.environ.get("SG_BUG_TRIAGE", "To triage")])   # only the column the dispatch set: never downgrade a card another step moved past it
             mks = " and ".join("auto/" + k + "-" + n for k in marks[n])
@@ -768,6 +772,7 @@ if owner and proj and repo0:
                 for k in marks[n]: (st / "auto" / f"{k}-{n}").unlink()
                 (st / "cq" / f"{CQ}#{n}-dispatchfail-{os.getpid()}.md").write_text(
                     f"Run {f.name} ended without a landed change (verdict {i['name']}: {why}). {where[:1].upper() + where[1:]} its {mks} marker dropped, so the next cycle dispatches the issue again.\n")
+        if not again and not dry: mk.touch()
     # O: a missing child-worktree run has no record to read, but its marker still identifies the issue it claimed.
     for r, f in missing:
         marks = {}
