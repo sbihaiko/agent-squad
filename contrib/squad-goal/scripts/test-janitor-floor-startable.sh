@@ -2,7 +2,7 @@
 # The floor puts an open issue in Todo only when a dispatcher takes it (#488): the definition says Todo is startable. With
 # the shipped vocabulary and a frontier label set, autobug takes a bug or debt issue with none of SG_BUG_SKIP_LABELS, and the
 # frontier takes an issue that carries SG_FRONTIER_LABEL and none of its skip labels; every other open issue floors in
-# Backlog. With no frontier label the floor is Todo, as before. Stubbed gh and board.sh; a temp state dir, so the live loop
+# Backlog. A run parent gets no card at all (#500). With no frontier label the floor is Todo, as before. Stubbed gh and board.sh; a temp state dir, so the live loop
 # state and board are never read or written.
 # usage: bash test-janitor-floor-startable.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -36,7 +36,7 @@ case "$a" in
     sep=""; for n in 2201 2202 2203 2204 2205 2206 2207; do
       case $n in
         2201) l='';; 2202) l='"bug","no-auto"';; 2203) l='"bug"';; 2204) l='"ready-for-agent"';; 2205) l='"debt"';;
-        2206) l='"run-parent","enhancement"';; 2207) l='"ready-for-agent","run-parent"';;
+        2206) l='"run-parent","enhancement"';; 2207) l='"ready-for-agent","frozen:dependency"';;
       esac
       labs=$(printf '%s' "[$l]" | jq -c '{nodes:[.[]|{name:.}]}')
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
@@ -56,7 +56,7 @@ has '^STATUS o 4 Backlog 2202$' && ok "a no-auto bug floors in Backlog, never To
 has '^STATUS o 4 Todo 2203$' && ok "a bug autobug takes floors in Todo" || ko "#2203 not Todo: $(bc)"
 has '^STATUS o 4 Todo 2204$' && ok "an issue with the frontier label floors in Todo" || ko "#2204 not Todo: $(bc)"
 has '^STATUS o 4 Todo 2205$' && ok "a debt issue autobug takes floors in Todo" || ko "#2205 not Todo: $(bc)"
-! has ' 2206$' && ok "a run parent stays in Backlog" || ko "#2206 moved: $(bc)"
+has '^STATUS --remove o 4 2206$' && ! has 'STATUS o 4 [A-Za-z ]* 2206$' && ok "a run parent gets no column, and its card is removed (#500)" || ko "#2206 not removed: $(bc)"
 ! has ' 2207$' && ok "the frontier label with a frontier skip label stays in Backlog" || ko "#2207 moved: $(bc)"
 
 o=$(run env -u SG_FRONTIER_LABEL)
