@@ -478,6 +478,24 @@ case "$r" in *"WAVE REQUEUE #211"*) ko "S: the issue dev holds was requeued: '$r
 [ -e "$T/st/auto/disp-211" ] && ok "S: the issue dev holds keeps its dispatch marker" || ko "S: #211 lost its dispatch marker"
 /usr/bin/grep -q 'issues/211 -f state=closed' "$T/gh.log" && ok "S: the issue dev holds is delivered, not requeued" || ko "S: #211 is not closed: $(cat "$T/gh.log")"
 
+# T (#593): a refused Code Complete board write on entry is named, in the shape the landing names its refused write.
+# Before, the entry discarded the write's output, so a refused card move was never named and the card looked moved.
+W14=wave/run-14; start2 run-14 >/dev/null; child 310 g310 "origin/$W14"
+# env.sh names $T/board.sh, so the refusing board replaces it for this case and the working one comes back after it.
+printf '#!/bin/bash\necho "$*" >> "%s/board-refuse.log"\necho "board refused: the project is locked" >&2\nexit 1\n' "$T" > "$T/board.sh"
+chmod +x "$T/board.sh"; REV_BASE=$W14 rev 310; : > "$T/board-refuse.log"
+r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1); rc=$?
+[ $rc = 0 ] && $O merge-base --is-ancestor "$($G -C "$T/c310" rev-parse HEAD)" "$W14" && ok "T: a refused card write does not keep the child out of the wave" || ko "T: exit $rc: '$r'"
+case "$r" in *"WAVE-BOARD #310 Code Complete refused:"*) ok "T: the refused entry card write is named";; *) ko "T: the refused write is silent: '$r'";; esac
+case "$r" in *"board refused: the project is locked"*) ok "T: the refusal names the board's own error";; *) ko "T: the board error is not named: '$r'";; esac
+/usr/bin/grep -qx 'o 3 Code Complete 310' "$T/board-refuse.log" && ok "T: the entry still attempted the Code Complete write" || ko "T: no Code Complete write was attempted"
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" > "$T/board.sh"
+chmod +x "$T/board.sh"
+# A write that worked names no refusal: the seam's read note is not an error.
+r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1); rc=$?
+[ $rc = 0 ] || ko "T: the second entry exited $rc: '$r'"
+case "$r" in *refused*) ko "T: a working board write is named refused: '$r'";; *) ok "T: a working board write names no refusal";; esac
+
 # Q (#575): a gate lock held by another pass never makes an entry or a landing wait for it. The entry and the landing run
 # inline in the fast lane and the watch cycle, so a wait there stops every dispatch and every cycle (a promotion held the
 # lock for 30 min). Both use try mode: the child enters, and the wave lands, on a later pass, with no requeue and no try spent.
