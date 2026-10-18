@@ -37,7 +37,8 @@ frontier_pass() {
   printf '{"run":{"max_parallel":20},"nodes":[{"name":"root","kind":"loop","nodes":[{"name":"route","kind":"dispatch","max_children":24,"max_parallel":2}]}]}' > "$t/co/docs/squad/workflows/dynamic.graph.json"
   printf 'caps:\n  runs: 10\n' > "$t/co/docs/squad/defaults.yaml"
   : > "$t/st/active-runs.txt"
-  jq -n --argjson n "$n" '[range(1;$n+1)|{number:.,title:"work \(.)",body:"Work \(.).",labels:[{name:"wave:01"}]}]' > "$t/fix/rest.json"
+  # each carries SG_FRONTIER_LABEL: the frontier takes only an issue that wears it (#485)
+  jq -n --argjson n "$n" '[range(1;$n+1)|{number:.,title:"work \(.)",body:"Work \(.).",labels:[{name:"wave:01"},{name:"ready-for-agent"}]}]' > "$t/fix/rest.json"
   jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:.labels},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$t/fix/rest.json" > "$t/fix/issues.json"
   cat > "$t/bin/gh" <<'J'
 #!/bin/bash
