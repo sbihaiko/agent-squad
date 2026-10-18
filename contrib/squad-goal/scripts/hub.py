@@ -3115,7 +3115,12 @@ def served_page():
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def own_host(self):
+        """The one Host rule for GET and POST: the hub's own loopback name and port, so a page that rebinds its name to 127.0.0.1 is refused."""
+        return (self.headers.get("Host") or "") in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}")
     def do_GET(self):
+        if not self.own_host():
+            self.send_response(403); self.send_header("Content-Length", "0"); self.end_headers(); return
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
             n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
             try: d = json.loads((T / (n + ".json")).read_text())
@@ -3143,8 +3148,8 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         # loopback only, and a cross-site page must not be able to write: require our own origin and a JSON body
-        host = (self.headers.get("Host") or "").split(":")[0]; org = self.headers.get("Origin") or ""
-        ok = self.path in ("/api/models", "/api/plans") and host in ("127.0.0.1", "localhost") and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
+        org = self.headers.get("Origin") or ""
+        ok = self.path in ("/api/models", "/api/plans") and self.own_host() and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
         try:
             if not ok: out = {"err": "forbidden"}
             else: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}"))
