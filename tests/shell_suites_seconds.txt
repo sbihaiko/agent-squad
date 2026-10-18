@@ -57,6 +57,7 @@ test-janitor-run-fields-unchanged.sh 2.0
 test-janitor-stale-card.sh 1.3
 test-janitor-terminal-comment.sh 4.7
 test-janitor-unlanded-branch.sh 2.5
+test-launch-run-target.sh 3.0
 test-launch-target.sh 12.3
 test-launch.sh 8.3
 test-live-guard.sh 6.5
