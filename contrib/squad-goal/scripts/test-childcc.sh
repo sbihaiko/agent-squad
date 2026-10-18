@@ -195,4 +195,36 @@ export GH_NUMS="5720:In_Progress 5721:In_Progress"
 pass cro >/dev/null
 ! /usr/bin/grep -q 'Code Review' "$T/moves" 2>/dev/null && ok "the old vocabulary gets no Code Review write" || ko "old vocabulary wrote Code Review: '$(cat "$T/moves")'"
 
+# A run reviews its own children (#600, #601): the review gate's verdict is in the child's `land` event. A child its run
+# approved enters its wave with no second review call; a child its run held, whose requeued marker exists, is neither
+# entered, reviewed nor requeued again; a child of a run with no review in its record (a run started before the gate, or a
+# gate that answered no_review) is reviewed here as before. A child approved by its run that its entry still holds (the
+# review file is stale or gone) is reviewed here on the next pass, so it is never held for good.
+rrun() { # name issue land-outcome land-reason verdict(or "-" for no review in the land event, "none" for no land event)
+  mkdir -p "$T/co/runs/$1"; { echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #'$2'"}'
+    echo '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}'
+    case $5 in none) ;; -) echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "'$3'", "reasons": ['$4'], "effect": {"name": "merge_land"}}';;
+      *) echo '{"event": "land", "node": "c", "parent": "route", "entry": 1, "outcome": "'$3'", "reasons": ['$4'], "effect": {"name": "review", "review": {"command": ["runreview.sh"], "elapsed": 1.0, "exit": 0, "verdict": "'$5'", "findings": "x"}}}';;
+    esac; } > "$T/co/runs/$1/record.jsonl"
+  wtree "$1"; echo "wave/$1" > "$T/st/auto/wave-$1"; echo "wave/$1" > "$T/st/auto/waved-$1"; }
+export GH_NUMS="5800:Doing 5801:Doing 5802:Doing 5803:Doing 5300:Doing"
+rrun rap 5800 pass '' approve; : > "$WAVE_CALLS"; : > "$T/cr.calls"; rm -f "$T/moves"
+pass rap >/dev/null
+! /usr/bin/grep -q '^rap ' "$T/cr.calls" && ok "a child its run approved gets no second review call" || ko "an approved child was reviewed again: $(cat "$T/cr.calls")"
+[ "$(ent rap 5800)" = 1 ] && [ -e "$T/st/auto/cc-rap-c" ] && ok "a child its run approved enters its wave" || ko "approved child entry: $(cat "$WAVE_CALLS")"
+rrun rhd 5801 fail '"review_held"' hold; /usr/bin/git -C "$T/co/runs/rhd/ws/target-c" rev-parse HEAD > "$T/st/auto/requeued-rhd-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+pass rhd >/dev/null; pass rhd >/dev/null
+[ "$(ent rhd 5801)" = 0 ] && ok "a child its run held is not entered" || ko "a held child was entered: $(cat "$WAVE_CALLS")"
+! /usr/bin/grep -q '^rhd ' "$T/cr.calls" && ok "a child its run held is not reviewed again" || ko "a held child was reviewed: $(cat "$T/cr.calls")"
+! /usr/bin/grep -q '^requeue 5801' "$WAVE_CALLS" && ok "a child its run held is not requeued again" || ko "a held child was requeued again: $(cat "$WAVE_CALLS")"
+rrun rold 5802 pass '' none; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+pass rold >/dev/null
+[ "$(/usr/bin/grep -c '^rold 5802' "$T/cr.calls")" = 1 ] && [ "$(ent rold 5802)" = 1 ] && ok "a child of a run with no review in its record is reviewed as before" || ko "old run: reviews '$(cat "$T/cr.calls")', entries '$(cat "$WAVE_CALLS")'"
+rrun rnr 5803 pass '' no_review; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+pass rnr >/dev/null
+[ "$(/usr/bin/grep -c '^rnr 5803' "$T/cr.calls")" = 1 ] && ok "a child whose run gate answered no_review is reviewed as before" || ko "no_review: reviews '$(cat "$T/cr.calls")'"
+rrun rst 5300 pass '' approve; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+pass rst >/dev/null; pass rst >/dev/null
+[ "$(/usr/bin/grep -c '^rst 5300' "$T/cr.calls")" = 1 ] && [ "$(ent rst 5300)" = 2 ] && ok "an approved child its entry holds is reviewed here on the next pass" || ko "approved but held: reviews '$(cat "$T/cr.calls")', entries '$(cat "$WAVE_CALLS")'"
+
 rm -rf "$T"; exit $fail
