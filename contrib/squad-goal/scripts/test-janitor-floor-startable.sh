@@ -1,9 +1,8 @@
 #!/bin/bash
-# The floor puts an open issue in Todo only when a dispatcher takes it (#488): the definition says Todo is startable. With
-# the shipped vocabulary and a frontier label set, autobug takes a bug or debt issue with none of SG_BUG_SKIP_LABELS, and the
-# frontier takes an issue that carries SG_FRONTIER_LABEL and none of its skip labels; every other open issue floors in
-# Backlog. A run parent gets no card at all (#500). With no frontier label the floor is Todo, as before. Stubbed gh and board.sh; a temp state dir, so the live loop
-# state and board are never read or written.
+# The floor never moves a card back (#550, ADR-0143): a card that has a column keeps it, whatever its labels, so a no-auto
+# bug the owner put in Todo stays in Todo and a bug in Backlog stays in Backlog. Only an open issue with no card gets a
+# column from the floor, once: Todo for a bug, Backlog for anything else (with the shipped vocabulary). A run parent gets no
+# card at all (#500). Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-floor-startable.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; here="$(cd "$(dirname "$src")" && pwd)"
@@ -19,7 +18,8 @@ esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/s/board.sh"; chmod +x "$T/s/board.sh"
 # 2201 no label, parked in Backlog by the owner (#482); 2202 a no-auto bug the owner set in Code Complete (#466); 2203 a bug;
-# 2204 the frontier label; 2205 debt; 2206 a run parent; 2207 the frontier label and a frontier skip label
+# 2204 the frontier label; 2205 debt; 2206 a run parent; 2207 the frontier label and a frontier skip label; 2209 a no-auto
+# bug in Todo (#550). No card: 2210 a bug, 2211 no label, 2212 the frontier label
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"
@@ -30,13 +30,15 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
     printf '2201\tBacklog\thttps://api.github.com/repos/x/y\n2202\tCode Complete\thttps://api.github.com/repos/x/y\n'
-    for n in 2203 2204 2205 2206 2207 2208; do printf '%s\tBacklog\thttps://api.github.com/repos/x/y\n' "$n"; done;;
+    for n in 2203 2204 2205 2206 2207 2208; do printf '%s\tBacklog\thttps://api.github.com/repos/x/y\n' "$n"; done
+    printf '2209\tTodo\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2201 2202 2203 2204 2205 2206 2207 2208; do
+    sep=""; for n in 2201 2202 2203 2204 2205 2206 2207 2208 2209 2210 2211 2212; do
       case $n in
         2201) l='';; 2202) l='"bug","no-auto"';; 2203) l='"bug"';; 2204) l='"ready-for-agent"';; 2205) l='"debt"';;
         2206) l='"run-parent","enhancement"';; 2207) l='"ready-for-agent","frozen:dependency"';; 2208) l='"bug","frozen:dependency"';;
+        2209) l='"bug","no-auto"';; 2210) l='"bug"';; 2211) l='';; 2212) l='"ready-for-agent"';;
       esac
       labs=$(printf '%s' "[$l]" | jq -c '{nodes:[.[]|{name:.}]}')
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
@@ -51,18 +53,23 @@ has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 bc() { cat "$T/board.calls" 2>/dev/null; }
 
 o=$(run env SG_FRONTIER_LABEL=ready-for-agent)
-! has ' 2201$' && ok "an issue no dispatcher takes stays in Backlog, where the owner put it" || ko "#2201 moved: $(bc) $o"
-has '^STATUS o 4 Backlog 2202$' && ok "a no-auto bug floors in Backlog, never Todo" || ko "#2202 not Backlog: $(bc)"
-has '^STATUS o 4 Todo 2203$' && ok "a bug autobug takes floors in Todo" || ko "#2203 not Todo: $(bc)"
-has '^STATUS o 4 Todo 2204$' && ok "an issue with the frontier label floors in Todo" || ko "#2204 not Todo: $(bc)"
-has '^STATUS o 4 Todo 2205$' && ok "a debt issue autobug takes floors in Todo" || ko "#2205 not Todo: $(bc)"
+! has ' 2201$' && ok "an issue in Backlog stays where the owner put it" || ko "#2201 moved: $(bc) $o"
+! has ' 2202$' && ok "a no-auto bug in Code Complete keeps its column" || ko "#2202 moved: $(bc)"
+! has ' 2203$' && ok "a bug in Backlog keeps its column: the floor never moves a card" || ko "#2203 moved: $(bc)"
+! has ' 2204$' && ok "an issue with the frontier label in Backlog keeps its column" || ko "#2204 moved: $(bc)"
+! has ' 2205$' && ok "a debt issue in Backlog keeps its column" || ko "#2205 moved: $(bc)"
 has '^STATUS --remove o 4 2206$' && ! has 'STATUS o 4 [A-Za-z ]* 2206$' && ok "a run parent gets no column, and its card is removed (#500)" || ko "#2206 not removed: $(bc)"
-! has ' 2207$' && ok "the frontier label with a frontier skip label stays in Backlog" || ko "#2207 moved: $(bc)"
-# #537: a profile skip list without the frozen labels still keeps a frozen bug out of Todo, as autobug.sh does
+! has ' 2207$' && ok "the frontier label with a frontier skip label keeps its column" || ko "#2207 moved: $(bc)"
+! has ' 2209$' && ok "a no-auto bug in Todo stays in Todo, never Backlog (#550)" || ko "#2209 moved: $(bc)"
+has '^ADD o 4 Todo 2210$' && ok "a bug with no card is added in Todo" || ko "#2210 not added in Todo: $(bc)"
+has '^ADD o 4 Backlog 2211$' && ok "an issue with no label and no card is added in Backlog" || ko "#2211 not added in Backlog: $(bc)"
+has '^ADD o 4 Backlog 2212$' && ok "the go label alone adds no card in Todo: the owner moves it there" || ko "#2212 not added in Backlog: $(bc)"
+# #537: a profile skip list without the frozen labels changes nothing on the floor
 o=$(run env SG_FRONTIER_LABEL=ready-for-agent SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question)
-! has ' 2208$' && ok "a frozen:dependency bug stays in Backlog under a profile skip list" || ko "#2208 moved: $(bc)"
+! has ' 2208$' && ok "a frozen:dependency bug keeps its column under a profile skip list" || ko "#2208 moved: $(bc)"
 
 o=$(run env -u SG_FRONTIER_LABEL)
-has '^STATUS o 4 Todo 2201$' && ok "with no frontier label the floor is Todo, as before" || ko "#2201 not Todo without a frontier label: $(bc) $o"
+! has ' 2201$' && ! has ' 2209$' && ok "with no frontier label a card keeps its column too" || ko "a card moved without a frontier label: $(bc) $o"
+has '^ADD o 4 Todo 2210$' && has '^ADD o 4 Backlog 2211$' && ok "with no frontier label a new card is Todo for a bug, Backlog otherwise" || ko "no-card floor wrong without a frontier label: $(bc)"
 
 rm -rf "$T"; [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }
