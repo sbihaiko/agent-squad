@@ -93,7 +93,7 @@ grep -q ' 5101$' "$T/moves" 2>/dev/null && ko "a child that never entered reads 
 # A review claim left by a pass that died mid-review (#502): the loop stopped, childreview.sh was killed, no review head was
 # kept. The claim names the head, so every later pass skipped the review and the entry held the child for good. A claim
 # whose pass is gone is no claim; one whose pass is alive still is.
-printf '#!/bin/bash\necho "$*" >> "%s/cr.calls"\n' "$T" > "$T/childreview.sh"
+printf '#!/bin/bash\necho "$* $(git rev-parse HEAD)" >> "%s/cr.calls"\n' "$T" > "$T/childreview.sh"   # each review names the head it read
 run rvw 5102 n; wtree rvw; echo wave/rvw > "$T/st/auto/wave-rvw"; : > "$T/cr.calls"
 h=$(/usr/bin/git -C "$T/co/runs/rvw/ws/target-c" rev-parse HEAD)
 echo "$h" > "$T/st/auto/rvd-rvw-c"   # the claim as a pass wrote it before it died: the head, and no pass alive behind it
@@ -226,5 +226,18 @@ pass rnr >/dev/null
 rrun rst 5300 pass '' approve; : > "$WAVE_CALLS"; : > "$T/cr.calls"
 pass rst >/dev/null; pass rst >/dev/null
 [ "$(/usr/bin/grep -c '^rst 5300' "$T/cr.calls")" = 1 ] && [ "$(ent rst 5300)" = 2 ] && ok "an approved child its entry holds is reviewed here on the next pass" || ko "approved but held: reviews '$(cat "$T/cr.calls")', entries '$(cat "$WAVE_CALLS")'"
+
+# A dispatch child with fix entries (#570) has one passing `outcome` per entry, entry 1, 2, ... of the same child. The pass
+# works the child once, at its last entry's head: one review and one entry, never one per entry (#611).
+mkdir -p "$T/co/runs/fx"; { echo '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #5900"}'
+  echo '{"event": "outcome", "node": "c", "entry": 1, "outcome": "pass", "reasons": ["one"]}'
+  echo '{"event": "review_round", "node": "c", "round": 1, "head": "h1", "verdict": "fix"}'
+  echo '{"event": "outcome", "node": "c", "entry": 2, "outcome": "pass", "reasons": ["two"]}'; } > "$T/co/runs/fx/record.jsonl"
+wtree fx; /usr/bin/git -C "$T/co/runs/fx/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m entry2
+h2=$(/usr/bin/git -C "$T/co/runs/fx/ws/target-c" rev-parse HEAD); echo wave/fx > "$T/st/auto/wave-fx"; echo wave/fx > "$T/st/auto/waved-fx"
+export GH_NUMS="5900:Doing"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+SG_CHILDCC_BUDGET=5 pass fx >/dev/null
+[ "$(/usr/bin/grep '^fx ' "$T/cr.calls")" = "fx 5900 $h2" ] && ok "a child with a fix entry is reviewed once, at its last entry's head" || ko "fix entries: reviews '$(cat "$T/cr.calls")', want 'fx 5900 $h2'"
+[ "$(/usr/bin/grep '^enter fx ' "$WAVE_CALLS")" = "enter fx 5900" ] && ok "a child with a fix entry enters once" || ko "fix entries: entries '$(cat "$WAVE_CALLS")'"
 
 rm -rf "$T"; exit $fail
