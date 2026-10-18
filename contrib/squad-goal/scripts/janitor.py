@@ -648,11 +648,10 @@ def reconcile_board():
             if holding(n) and n not in expected: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540)
             fresh = (lambda a, m: a and not m.get(str(n)))(*cards(proj))   # an answered read that holds no card for it, or a card with no Status: no column yet
             bug = bool(olabels[n] & {os.environ.get("SG_BUG_LABEL") or "bug"})
-            if fresh: set_expected(n, os.environ.get("SG_TODO", "Todo") if bug or not shipped else "Backlog", "open issue with no card", rank=10)   # today's vocabulary has no Backlog: there a new card is Todo, as before
+            if fresh: set_expected(n, os.environ.get("SG_TODO", "Todo") if bug else "Backlog", "open issue with no card", rank=10)
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
-            # A spec is written and not scheduled, so it opens in its own column rather than in the loop's queue (#117's
-            # sibling ask). The rank sits above the floor and below every rule a run, a marker or a branch raises, so the day
-            # work starts on the spec the card leaves the column by the rule that names that work.
+            # A spec is written and not scheduled, so the floor opens it in Backlog, and the owner starts it (ADR-0142). The fold
+            # moves it forward only. Its rank sits above the floor and below every rule a run, a marker or a branch raises.
             if "spec" in olabels[n]:
                 # A spec's column is a fold over its sub-issues' cards (spec_fold.py): the relation came with the one read above and
                 # the cards are read once per pass, so the fold adds no call. The close rule below closes the spec issue itself.
@@ -660,7 +659,7 @@ def reconcile_board():
                 import spec_fold
                 have_cards = cards(proj)[1]
                 col, reverted = spec_fold.fold([have_cards.get(k, "") for k in _kids.get(n, [])], have_cards.get(n, ""))
-                set_expected(n, col, "spec folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)
+                if col: set_expected(n, col, "spec folds over its sub-issues" + (": a child reopened, the card keeps its column" if reverted else ""), rank=15)   # forward only: below Doing the fold writes nothing, and the spec keeps the owner's column (#550)
                 # A spec with at least one sub-issue, every one closed, is done (the owner's rule): the loop closes it with one comment.
                 # A spec with no sub-issue proves nothing and stays open.
                 sub = _subs.get(n) or {}

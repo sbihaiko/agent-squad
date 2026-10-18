@@ -200,17 +200,17 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open$' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported, and the floor never moves it back" || ko "#2015 Done regression not reported as is: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
-# A spec is written, not scheduled, so its card opens in Open Specs (#117); the tickets /to-tickets cuts from it are work,
-# so every child opens in the loop's queue column, Todo, in ONE write when the card is missing (#86). The child's wave and
-# its `## Blocked by` line do not move it off Todo: the column carries the loop floor, and the gate that holds a wave-2
-# ticket back until its blocker lands is the dispatch's own reading of those edges, never the column (#142).
+# A spec is written, not scheduled (#117). A ticket /to-tickets cuts from it opens in Backlog, in ONE write when the card is
+# missing (#86): Todo is the owner's go signal, so only the owner moves it there (#550). The child's `## Blocked by` line
+# holds no column: the gate that holds a wave-2 ticket back until its blocker lands is the dispatch's own reading of those
+# edges, never the column (#142).
 /usr/bin/grep -q '^ADD o 4 Doing 2017$' "$T/board.calls" 2>/dev/null && ok "a spec with no card is created in Doing, a child of it is in flight" || ko "#2017 not added Open Specs: $(bc) $o"
 ! /usr/bin/grep -q 'Todo 2017' "$T/board.calls" 2>/dev/null && ok "a spec is never created in the queue column" || ko "#2017 read as work: $(bc)"
 /usr/bin/grep -q 'BOARD-RECONCILE #2017: card added -> Doing (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the spec column is named in cycle.log" || ko "#2017 add not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
-/usr/bin/grep -q '^ADD o 4 Todo 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Todo" || ko "#2019 not added Todo: $(bc) $o"
+/usr/bin/grep -q '^ADD o 4 Backlog 2019$' "$T/board.calls" 2>/dev/null && ok "a spec child with no card is created in Backlog" || ko "#2019 not added Backlog: $(bc) $o"
 ! /usr/bin/grep -q 'Blocked 2019' "$T/board.calls" 2>/dev/null && ok "a child whose blocker is still open is not held out of Todo" || ko "#2019 read Blocked: $(bc)"
 # A spec's column is a fold over its sub-issues, read off the relation the one open-issue read already carries and the
-# cards the pass already holds: Backlog with none (or none past the queue), Doing once a child reached Doing or a child was
+# cards the pass already holds: no write with none (or none past the queue), so the floor opens a new spec in Backlog; Doing once a child reached Doing or a child was
 # delivered while another is open (#2028), Closed when every child is terminal and one is Closed, Abandoned when every
 # child is terminal and none is Closed. The pass also closes the spec issue when every child is closed.
 for w in "ADD o 4 Closed 2020" "ADD o 4 Backlog 2021" "ADD o 4 Abandoned 2027" "ADD o 4 Doing 2028"; do

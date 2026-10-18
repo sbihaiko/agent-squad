@@ -81,7 +81,7 @@ has '^STATUS o 4 Doing 2101$' && ok "a live run holds the card: Doing" || ko "#2
 has '^RUN o 4 2101 run-live ' && ok "the Run fields are written while the card is Doing" || ko "#2101 Run fields missing: $(bc)"
 has '^ADD o 4 Doing 2109$' && ok "a spec with a child in Doing folds to Doing" || ko "#2109 not Doing: $(bc)"
 ! has '^RUN o 4 2109 ' && ok "a spec folded to Doing gets no Run fields: no run holds it" || ko "#2109 Run written: $(bc)"
-has '^STATUS o 4 Backlog 2102$' && ok "a spec opens in Backlog, not Open Specs" || ko "#2102 not Backlog: $(bc)"
+! has ' 2102$' && ok "a spec in Todo with no child past it keeps the owner's column (#550)" || ko "#2102 moved: $(bc)"
 ! has ' 2103$' && ok "an owner-label card keeps its column: the freeze is a label, never a move back (#550)" || ko "#2103 moved: $(bc)"
 ! has ' 2104$' && ok "a run that delivered nothing writes no column over the card the dispatch left, and the freeze stands" || ko "#2104 rewritten: $(bc)"
 /usr/bin/grep -q 'issues/2103/labels.*frozen:owner' "$T/gh.calls" && ok "an owner-label card carries the owner freeze" || ko "#2103 freeze not written: $(cat "$T/gh.calls")"
