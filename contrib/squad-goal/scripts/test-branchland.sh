@@ -203,4 +203,19 @@ reset; rm -f "$T/fix.log"; r=$(SG_LOCAL_GATE_CMD="$GATE_KO" SG_LOCAL_GATE_RERUN_
 reset; rm -f "$T/fix.log"; r=$(SG_LOCAL_GATE_CMD="echo '[*] 1 fixable with the --fix option.'; echo 'mypy: 2 errors'; exit 1" SG_LOCAL_GATE_RERUN_CMD="exit 1" SG_RUFF_FIX_CMD="echo f > lintfix" CHECKS='{"check_runs":[]}' bl)
 [ "$($O rev-parse dev)" = "$($O rev-parse main)" ] && case "$r" in *"BRANCHLAND WAIT gui/7-x"*) ok "a fix that does not cure the gate: nothing lands, reported as a failure";; *) ko "silent: '$r'";; esac || ko "landed after a failed fix"
 /usr/bin/grep -q -- '--unsafe-fixes' "$d/branchland.sh" && ko "branchland uses --unsafe-fixes" || ok "branchland never uses --unsafe-fixes"
+# (#566) The landing check is the loop's one base battery -- ruff, mypy and the fast pytest -- read against the branch the
+# tip lands in, in the fast gate, with a bounded worker count instead of `auto`. branchland.sh keeps no copy of it. The count
+# is set here, so this suite reads no profile's default and depends on no worker count.
+. "$d/base-battery.sh" 2>/dev/null
+lcmd=$(SG_GATE_WORKERS=3 sg_base_gate "refs/sg-gate/main" /usr/bin/true 2>/dev/null)
+lbat=$(SG_GATE_WORKERS=3 sg_base_battery /usr/bin/true 2>/dev/null)
+case "$lcmd" in *"SG_FAST_BASE=refs/sg-gate/main "*"fast-gate.sh"*) ok "the landing check reads the changed scripts against refs/sg-gate/\$land";; *) ko "the shared base gate is not the fast gate at refs/sg-gate/\$land: '$lcmd'";; esac
+case "$lbat" in *"ruff check squad tests"*"mypy squad"*"-n 3"*"not heavy"*) ok "the landing check runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "the landing check command: '$lbat'";; esac
+case "$lbat$lcmd" in *"-n auto"*) ko "the landing check runs pytest -n auto";; *) ok "the landing check never runs pytest -n auto";; esac
+/usr/bin/grep -q 'sg_base_gate "refs/sg-gate/\$land"' "$d/branchland.sh" && ok "branchland builds its landing check from the shared definition" || ko "branchland does not use the shared base gate"
+! /usr/bin/grep -v '^[[:space:]]*#' "$d/branchland.sh" | /usr/bin/grep -q 'ruff check squad tests' && ok "branchland keeps no copy of the base battery" || ko "branchland still carries a copy of the base battery"
+# The rerun of what failed stays serial, and runs only the names the gate failed: the id list, never the battery.
+rerunline=$(/usr/bin/grep -E '^rerun=' "$d/branchland.sh")
+case "$rerunline" in *'$SG_GATE_FAILED'*) ok "the rerun runs only the failed names";; *) ko "the rerun does not take the failed names: '$rerunline'";; esac
+case "${rerunline#*pytest}" in *' -n '*) ko "the serial rerun takes workers: '$rerunline'";; *) ok "the serial rerun stays serial";; esac
 rm -rf "$T"; exit $fail

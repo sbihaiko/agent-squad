@@ -69,5 +69,22 @@ out=$(cd "$R" && SG_FAST_BASE=no-such-ref SG_FAST_CMD="$T/base.sh" bash "$d/fast
 [ $rc -ne 0 ] && ok "a base that does not resolve fails the gate: it is never skipped" || ko "unresolved base: rc $rc: $out"
 # The wave entry gate defaults to the fast gate, so a child's own changed scripts are proven before it enters.
 /usr/bin/grep -q 'SG_WAVE_GATES:=.*fast-gate\.sh' "$d/env.sh" && ok "the default wave entry gate is the fast gate" || ko "env.sh: the default SG_WAVE_GATES does not run fast-gate.sh"
+
+# (#566) The default battery is the loop's one definition (base-battery.sh), and its pytest runs with a bounded worker count,
+# SG_GATE_WORKERS, instead of `auto`. A stub python logs the argv of each leg: the count is set here, so this suite reads no
+# profile's default and depends on no worker count.
+printf '#!/bin/bash\necho "$*" >> "%s/py.log"\nexit 0\n' "$T" > "$T/py"; chmod +x "$T/py"
+rm -f "$T/ran.log" "$T/py.log"; $G -C "$R" checkout -q dev   # no script changes at the base: the battery alone runs
+out=$(cd "$R" && SG_FAST_BASE=dev SG_GATE_PY="$T/py" SG_GATE_WORKERS=3 bash "$d/fast-gate.sh" 2>&1); rc=$?
+[ $rc = 0 ] && ok "the default battery passes on a stub python" || ko "default battery: rc $rc: $out"
+/usr/bin/grep -q -- '-m ruff check squad tests' "$T/py.log" && /usr/bin/grep -q -- '-m mypy squad' "$T/py.log" && ok "the default battery runs ruff and mypy" || ko "default battery: '$(cat "$T/py.log" 2>&1)'"
+/usr/bin/grep 'pytest' "$T/py.log" | /usr/bin/grep -q -- '-n 3' && ok "the default battery's pytest runs with SG_GATE_WORKERS" || ko "the worker count: '$(grep pytest "$T/py.log" 2>&1)'"
+/usr/bin/grep -q -- '-n auto' "$T/py.log" && ko "the default battery runs pytest -n auto" || ok "the default battery never runs pytest -n auto"
+/usr/bin/grep -q 'sg_base_battery' "$d/fast-gate.sh" && ok "fast-gate builds its default command from the shared definition" || ko "fast-gate keeps its own copy of the base battery"
+# The retry of what failed stays serial, and runs only the names the battery failed: the id list, never the battery.
+retryline=$(/usr/bin/grep -E '^retrycmd=' "$d/fast-gate.sh")
+case "$retryline" in *'-p no:xdist'*) ok "the retry serializes pytest";; *) ko "the retry is not serial: '$retryline'";; esac
+case "$retryline" in *' -n '*) ko "the serial retry takes workers: '$retryline'";; *) ok "the serial retry stays serial";; esac
+/usr/bin/grep -qE 'SG_GATE_WORKERS:=[0-9]+' "$d/env.sh" && ok "env.sh holds the default worker count" || ko "env.sh: no numeric SG_GATE_WORKERS default"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail

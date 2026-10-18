@@ -479,4 +479,16 @@ rm -rf "$T/st/locks/gate"; kill $hp 2>/dev/null
 r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?
 [ $rc = 0 ] && ok "Q: the wave lands on the next pass, once the lock is free" || ko "Q: exit $rc: '$r'"
 
+# R (#566): the wave tip's check is the loop's one base battery -- ruff, mypy and the fast pytest -- read against
+# origin/$SG_BASE, in the fast gate, with a bounded worker count instead of `auto`. wave.sh keeps no copy of it. The count
+# is set here, so this suite reads no profile's default and depends on no worker count.
+. "$d/base-battery.sh" 2>/dev/null
+wcmd=$(SG_GATE_WORKERS=3 sg_base_gate "origin/dev" /usr/bin/true 2>/dev/null)
+wbat=$(SG_GATE_WORKERS=3 sg_base_battery /usr/bin/true 2>/dev/null)
+case "$wcmd" in *"SG_FAST_BASE=origin/dev "*"fast-gate.sh"*) ok "R: the tip check reads the changed scripts against origin/\$SG_BASE";; *) ko "R: the shared base gate is not the fast gate at origin/\$SG_BASE: '$wcmd'";; esac
+case "$wbat" in *"ruff check squad tests"*"mypy squad"*"-n 3"*"not heavy"*) ok "R: the base gate runs ruff, mypy and the fast pytest with SG_GATE_WORKERS";; *) ko "R: the base gate command: '$wbat'";; esac
+case "$wbat$wcmd" in *"-n auto"*) ko "R: the base gate runs pytest -n auto";; *) ok "R: the base gate never runs pytest -n auto";; esac
+/usr/bin/grep -q 'sg_base_gate "origin/\$base"' "$T/s/wave.sh" && ok "R: wave.sh builds its tip check from the shared definition" || ko "R: wave.sh does not use the shared base gate"
+! /usr/bin/grep -v '^[[:space:]]*#' "$T/s/wave.sh" | /usr/bin/grep -q 'ruff check squad tests' && ok "R: wave.sh keeps no copy of the base battery" || ko "R: wave.sh still carries a copy of the base battery"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
