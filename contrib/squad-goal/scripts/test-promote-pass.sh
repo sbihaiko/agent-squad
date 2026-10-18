@@ -93,7 +93,7 @@ printf '%s\tb\t%s\t1\n' "$(( $(date +%s) - 700 ))" "$t5" >> "$SG_STATE/landed.ts
 adv stg stg-only; adv dev dev-only; t6=$(tip dev); before=$(tip stg); n=$(runs); pass
 [ "$(tip stg)" = "$before" ] && [ "$(runs)" = "$n" ] && [ "$(lines "$t6")" = 1 ] && ok "a dev tip that does not descend from stg runs no suite and says so once" || ko "diverged: stg $(tip stg), runs $(runs), lines $(lines "$t6")"
 
-# The cycle names the pass: watch.sh runs promote-pass.sh as its own single.sh step.
-/usr/bin/grep -qE 'single\.sh" promote [^#]*promote-pass\.sh' "$d/watch.sh" && ok "watch.sh runs the promotion as its own single.sh step" || ko "watch.sh names no single.sh promotion step"
+# The owner starts each promotion (#576, ADR-0145 rule 3): no cycle step runs promote-pass.sh.
+/usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the owner starts it"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 rm -rf "$T"; exit $fail
