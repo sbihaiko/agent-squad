@@ -22,7 +22,18 @@ cat > "$T/issues.json" <<'JSON'
 ]
 JSON
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
-printf 'print("-")\n' > "$T/s/fundroom.py"   # the graph names no funding bound unless a case says so
+printf 'print("-")\n' > "$T/s/fundroom.py"
+# The seam's door, stubbed at the script's own name (#550): the cards are the lines of cards.tsv, one `<issue>\t<state>`
+# each, and a missing cards.tsv is a board that does not answer. The kinds are not read here (the label selects).
+cat > "$T/s/issue_state.py" <<PY
+import sys
+if sys.argv[1:]: sys.exit(1)
+try: sys.stdout.write(open("$T/cards.tsv").read())
+except OSError: print("no board", file=sys.stderr); sys.exit(1)
+PY
+cp "$T/s/issue_state.py" "$T/issue_state-stub.py"
+todo() { local n; : > "$T/cards.tsv"; for n in "$@"; do printf '%s\tTodo\n' "$n" >> "$T/cards.tsv"; done; }   # <issue>...: their cards sit in Todo
+todo 1228 1229 1400 1401 60 61 62 70 71 72   # the graph names no funding bound unless a case says so
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
@@ -452,13 +463,13 @@ chmod +x "$T/s/mkreq.sh" "$T/s/launch.py"
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 a="\$*"
-if [ "\${SG_GH_PASS:-}" = board ]; then   # the calls of the real board.py
+if [ "\${SG_GH_PASS:-}" = board ] || case "\$a" in *projectsV2*|"api users/o") true;; *) false;; esac; then   # the calls of the real board.py, and the pass's own card read (#550)
   echo "\$a" >> "$T/board.calls"
   case "\$a" in *"--input -"*) cat > "$T/board.in";; esac
   case "\$a" in
     "api users/o") echo '{"type":"User"}' ;;
     *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_PROG","name":"In Progress"}]}]' ;;
-    *items?per_page=100\&fields*) [ -e "$T/bseen" ] && printf '1228\t%s\thttps://api.github.com/repos/x/y\n' "\$(cat "$T/bstatus" 2>/dev/null)"; exit 0 ;;   # the seam's tsv row
+    *items?per_page=100\&fields*) printf '1228\t%s\thttps://api.github.com/repos/x/y\n' "\$(cat "$T/bstatus" 2>/dev/null || echo Todo)"; exit 0 ;;   # the seam's tsv row: the owner's card in Todo until the pass moves it
     *items?per_page=100*) [ -e "$T/bseen" ] && printf '[1228,"ITEM1","https://api.github.com/repos/x/y"]\n'; exit 0 ;;
     *repos/x/y/issues/1228*)
       if [ ! -e "$T/b500" ]; then touch "$T/b500"; echo 'gh: HTTP 500' >&2; exit 1; fi   # GitHub's server failed once
@@ -472,7 +483,7 @@ fi
 case "\$a" in
   *pulls?state=open*) echo "" ;;
   *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
-  *"issues?state=open"*) echo "" ;;
+  *"issues?state=open"*) printf '1228\x1fbug\n' ;;   # the unlabelled list the kinds route reads (#550: the seam now answers the kinds)
   *issues/*/comments*) echo "" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
     for x in "\$@"; do case "\$x" in body=@*) cat "\${x#body=@}" >> "$T/filed";; esac; done
@@ -506,6 +517,7 @@ filed=$($G -c '^title=' "$T/filed")
 [ "$filed" = 0 ] && ok "12b a read failure files no bug" || ko "12b a read failure filed $filed bug(s): $(cat "$T/filed")"
 $G -q 'BOARD-READ-FAILED' "$T/st/cycle.log" && ok "12b the read failure is named in the cycle log" || ko "12b cycle.log: $(cat "$T/st/cycle.log")"
 rm -f "$T/bnowrite"; unset SG_BOARD_READ_BACKOFF SG_BOARD_SETTLE_SECONDS
+cp "$T/issue_state-stub.py" "$T/s/issue_state.py"   # the dry cases below read the cards from cards.tsv again
 
 # 13) (#243) the bug pass takes items by the kind the seam answers, never by the platform's issue type. 1500 carries kind
 # bug and no label; 1501 carries the bug label but kind task (the kind wins); 1502 carries the label and no kind (the
@@ -519,6 +531,7 @@ printf '1500\tbug\n1501\ttask\n1503\tbug\n' > "$K/kinds.tsv"
 # the seam's door, stubbed at the script's own name: the pass asks `issue_state.py --kinds` and never names a carrier
 cat > "$K/s/issue_state.py" <<PY
 import os, sys
+if not sys.argv[1:]: sys.stdout.write("".join(f"{n}\\tTodo\\n" for n in (1500, 1501, 1502, 1503))); sys.exit(0)   # every card in Todo (#550)
 if sys.argv[1:] != ["--kinds"]: sys.exit(2)
 if os.path.exists("$K/seam-down"): print("no board", file=sys.stderr); sys.exit(1)
 sys.stdout.write(open("$K/kinds.tsv").read())
@@ -597,5 +610,21 @@ r=$(PATH="$F/bin:$PATH" SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question 
 case "$r" in *"[70]"*) ko "15b a profile skip list let a frozen:dependency issue through: '$r'";; *) ok "15b a profile skip list keeps the frozen:dependency floor";; esac
 case "$r" in *"[71]"*) ko "15b a profile skip list let a frozen:owner issue through: '$r'";; *) ok "15b a profile skip list keeps the frozen:owner floor";; esac
 case "$r" in *"[72]"*) ok "15b a plain bug is still a candidate under a profile skip list";; *) ko "15b the plain bug was skipped: '$r'";; esac
+
+# 16) (#550) the column Todo is the owner's go signal: the bug pass takes a bug only when its card sits in Todo. A bug in
+# Backlog, or with no card, waits for the owner. The cards come from one board read a pass; a board that does not answer
+# dispatches nothing.
+todo 92
+r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[72]"*) ko "16 a bug with no card in Todo was dispatched: '$r'";; *) ok "16 a bug whose card is not in Todo is not dispatched";; esac
+printf '72\tBacklog\n' > "$T/cards.tsv"
+r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[72]"*) ko "16 a bug in Backlog was dispatched: '$r'";; *) ok "16 a bug in Backlog is not dispatched";; esac
+todo 72
+r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[72]"*) ok "16 a bug in Todo is dispatched";; *) ko "16 a bug in Todo was not dispatched: '$r'";; esac
+rm -f "$T/cards.tsv"
+r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board"*) ok "16 a board that does not answer dispatches nothing, and the pass says so";; *) ko "16 the pass is silent about the board: '$r'";; esac
 
 rm -rf "$T"; exit $fail

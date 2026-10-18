@@ -44,6 +44,14 @@ chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
 cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py} "$T/scripts/"   # the pass reads the open-issue list through the door
+# The seam's door, stubbed at the script's own name (#550): one `<issue>\t<state>` line per card. A fixture issue's card is
+# in Todo unless it names its own "card" ("" is no card); CARDS_DOWN is a board that does not answer.
+cat > "$T/scripts/issue_state.py" <<'PY'
+import json, os, sys
+if sys.argv[1:] or os.environ.get("CARDS_DOWN"): print("no board", file=sys.stderr); sys.exit(1)
+for i in json.load(open(os.environ["GH_ISSUES"])):
+    if i.get("card", "Todo"): print(f"{i['number']}\t{i.get('card', 'Todo')}")
+PY
 scene() { # <name> [max_children_of_the_dispatch_node [run_max_children]]: fresh state, its own env.sh and workflow graph
   d=$T/$1; mkdir -p "$d/st/req" "$d/st/cq" "$d/co/docs/squad/workflows" "$d/co/runs" "$d/home"
   : > "$d/gh.log"; : > "$d/st/active-runs.txt"; : > "$d/mk.log"; : > "$d/launch.log"; : > "$d/board.log"
@@ -228,6 +236,22 @@ issues '[{"number":71,"title":"a","body":"b","unready":true,"labels":[{"name":"e
 r=$(run)
 [ "$(marked 71)" = 0 ] && ok "W: an issue without the frontier label is never dispatched" || ko "W: the unlabelled #71 went out: '$r'"
 [ "$(marked 72)" = 1 ] && ok "W: an issue with the label still goes out" || ko "W: the labelled #72 did not go out: '$r'"
+
+# X (#550): the column Todo is the owner's go signal. The frontier takes an issue only when its card sits in Todo AND it
+# carries the frontier label: a labelled issue in Backlog, or one with no card, waits for the owner. The cards come from
+# one board read a pass, never one per issue; a board that does not answer dispatches nothing.
+scene todo
+issues '[{"number":81,"title":"a","body":"b","card":"Backlog","labels":[{"name":"wave:01"}]},{"number":82,"title":"a","body":"b","card":"","labels":[{"name":"wave:01"}]},{"number":83,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":84,"title":"a","body":"b","unready":true,"labels":[{"name":"wave:01"}]}]'
+r=$(run)
+[ "$(marked 81)" = 0 ] && ok "X: a labelled issue whose card is in Backlog is not dispatched" || ko "X: #81 in Backlog went out: '$r'"
+[ "$(marked 82)" = 0 ] && ok "X: a labelled issue with no card is not dispatched" || ko "X: #82 with no card went out: '$r'"
+[ "$(marked 83)" = 1 ] && ok "X: a labelled issue whose card is in Todo goes out" || ko "X: #83 in Todo did not go out: '$r'"
+[ "$(marked 84)" = 0 ] && ok "X: a card in Todo without the frontier label is not dispatched" || ko "X: the unlabelled #84 went out: '$r'"
+scene todo-down
+issues '[{"number":85,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(CARDS_DOWN=1 run)
+[ "$(marked 85)" = 0 ] && [ "$(lines "$LAUNCHLOG")" = 0 ] && ok "X: a board that does not answer dispatches nothing" || ko "X: #85 went out with no board read: '$r'"
+case "$r" in *"board"*) ok "X: the pass says the board did not answer";; *) ko "X: the pass is silent about the board: '$r'";; esac
 
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
