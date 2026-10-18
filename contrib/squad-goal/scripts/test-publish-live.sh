@@ -89,4 +89,36 @@ out=$(bash "$src" --check "$repo" "$live" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "the second --check finds nothing to do" || ko "second --check still differs: $out"
 [ -z "$out" ] && ok "the second --check prints nothing" || ko "second --check printed: $out"
 
+# --- the source must be in SG_SQUAD's history (#605) ----------------------------------------------
+# The live scripts import squad from SG_SQUAD. A publish from a tree ahead of SG_SQUAD ships scripts that call a squad
+# command SG_SQUAD lacks, so it is refused: nonzero, nothing written, one line naming both commits.
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t GIT_CONFIG_GLOBAL=/dev/null
+sq="$T/sq"; wt="$T/wt"; mkdir -p "$sq/contrib/squad-goal/scripts"
+printf 'skill A\n' > "$sq/contrib/squad-goal/SKILL.md"; printf 'watch A\n' > "$sq/contrib/squad-goal/scripts/watch.sh"
+git -C "$sq" init -q -b main && git -C "$sq" add -A && git -C "$sq" commit -qm A
+git -C "$sq" worktree add -q -b ahead "$wt" main
+printf 'skill B\n' > "$wt/contrib/squad-goal/SKILL.md"; git -C "$wt" commit -qam B
+a=$(git -C "$sq" rev-parse --short HEAD); b=$(git -C "$wt" rev-parse --short HEAD)
+snap() { (cd "$1" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "$f"; done); }
+live2="$T/live2"; mkdir -p "$live2/scripts"; printf 'skill v0\n' > "$live2/SKILL.md"
+before=$(snap "$live2")
+out=$(SG_SQUAD="$sq" bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
+[ "$rc" != 0 ] && ok "a source ahead of SG_SQUAD is refused" || ko "a source ahead of SG_SQUAD published (rc $rc): $out"
+[ "$before" = "$(snap "$live2")" ] && ok "a refused publish writes nothing" || ko "a refused publish wrote to the live skill"
+[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1 ] && ok "the refusal is one line" || ko "the refusal is not one line: $out"
+printf '%s' "$out" | /usr/bin/grep -q "$a" && printf '%s' "$out" | /usr/bin/grep -q "$b" && printf '%s' "$out" | /usr/bin/grep -qi 'fast-forward SG_SQUAD' \
+  && ok "the refusal names both commits and the fast-forward" || ko "the refusal line: $out"
+out=$(SG_SQUAD="$sq" bash "$src" "$sq/contrib/squad-goal" "$live2" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill A" ] && ok "SG_SQUAD as the source publishes" || ko "SG_SQUAD as the source (rc $rc): $out"
+git -C "$sq" merge -q --ff-only ahead; printf 'skill v0\n' > "$live2/SKILL.md"
+git -C "$wt" checkout -q --detach HEAD~1
+out=$(SG_SQUAD="$sq" bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill A" ] && ok "a source behind SG_SQUAD publishes" || ko "a source behind SG_SQUAD (rc $rc): $out"
+git -C "$wt" checkout -q ahead; printf 'skill v0\n' > "$live2/SKILL.md"
+out=$(SG_SQUAD="$sq" bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill B" ] && ok "a source equal to SG_SQUAD publishes" || ko "a source equal to SG_SQUAD (rc $rc): $out"
+printf 'skill v0\n' > "$live2/SKILL.md"
+out=$(env -u SG_SQUAD bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill B" ] && ok "no SG_SQUAD publishes as before" || ko "no SG_SQUAD (rc $rc): $out"
+
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }
