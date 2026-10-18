@@ -30,6 +30,7 @@ case "$a" in
   *projectsV2/1/fields*) echo FID1;;
   *projectsV2/4/items*) for n in 801 802 803; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
   *projectsV2/1/items*) for n in 801 802 803; do printf '%s\tDoing\n' "$n"; done;;
+  *issues/806*) [ -e "TMPDIR/806ok" ] && echo open || exit 1;;   # F: the first state read is refused, the next answers
   *issues/80*) echo open;;
 esac
 J
@@ -55,6 +56,10 @@ mkdir -p "$T/co/worktrees/child/autobug-live"
 printf '{"event": "spawn_accepted", "definition": "GitHub issue #805"}\n' > "$T/co/worktrees/child/autobug-live/record.jsonl"
 echo "$T/co/worktrees/child/autobug-live" >> "$T/st/active-runs.txt"
 echo autobug-live > "$T/st/auto/bug-805"
+# F: a failed run that landed nothing, whose issue's state read is refused on the first pass (#534): the next pass releases it
+mk run-flaky 806
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #806 on fix/806-x"}\n{"event": "verdict", "verdict": "failed", "reasons": ["run_spend_cap"], "exit_code": 1}\n' > "$T/co/runs/run-flaky/record.jsonl"
+echo run-flaky > "$T/st/auto/disp-806"
 touch -t 202001010000 "$T/co/runs"/run-*/record.jsonl
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 801$' "$T/board.calls" 2>/dev/null && ok "O: failed run whose only pass is the router's -> card back to Todo" || ko "O #801 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
@@ -68,4 +73,8 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q 'MISSING.*#804.*bug-804.*dropped' "$T/st/cycle.log" 2>/dev/null && ok "O: the missing-run release is named in cycle.log" || ko "O missing-run cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -qx "$T/co/worktrees/child/autobug-20261013-224513" "$T/st/active-runs.txt" 2>/dev/null && ko "O: missing run stays active" || ok "O: a deleted run is dropped from active-runs"
 [ -e "$T/st/auto/bug-805" ] && /usr/bin/grep -qx "$T/co/worktrees/child/autobug-live" "$T/st/active-runs.txt" 2>/dev/null && ok "O: a live child-worktree run keeps its marker" || ko "O bug-805 not kept with live run: $o"
+[ -e "$T/st/auto/disp-806" ] && ok "O: a refused state read keeps the marker on that pass" || ko "O: disp-806 dropped on a refused read"
+touch "$T/806ok"
+o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
+[ ! -e "$T/st/auto/disp-806" ] && ok "O: the next pass releases an issue a refused read skipped (#534)" || ko "O: disp-806 held for good after one refused read: $o"
 rm -rf "$T"; exit $fail
