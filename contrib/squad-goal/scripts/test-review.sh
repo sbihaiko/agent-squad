@@ -271,6 +271,32 @@ rm -f "$T/st/review-fix_1-x.sha" "$T/st/cq/"*mfail*
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 [ $rc = 0 ] && case "$out" in model=claude:good*) ok "the chain moves on to the next model after an error answer";; *) ko "chain after error: '$out'";; esac || ko "chain after error: rc=$rc '$out'"
 unset CLAUDE_ERRJSON
+# 13b) #511: the agy-limited marker takes its reset from `agy -p /quota` (the reading the hub's q_agy uses), never from the
+# error text: the error said "Resets in 1h" while /quota said the Gemini weekly limit was spent for six more days, so the
+# chain tried Gemini at each false reset, failed and marked it again.
+cp "$(dirname "$src")/agyquota.py" "$T/s/" 2>/dev/null
+cat > "$T/bin/agy" <<'J'
+#!/bin/bash
+if [ "$*" = "-p /quota" ]; then
+  printf 'Gemini Models\tWeekly Limit Remaining\t0%%\t%s\n' "$(date -u -r "$AGY_RESET" +%FT%TZ)"
+  printf 'Claude and GPT models\tWeekly Limit Remaining\t100%%\t2030-01-01T00:00:00Z\n'; exit 0; fi
+echo "RESOURCE_EXHAUSTED: Individual quota reached. Resets in 1h0m0s" >&2; exit 1
+J
+export SG_SHARED="$T/st"   # the marker is the suite's own, never the live one under ~/.cache
+chmod +x "$T/bin/agy"; export AGY_RESET=$(( $(date +%s) + 6*86400 + 5*3600 ))
+printf '{"review_models":["gemini-3.8-flash-medium"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-gui_9".* "$T/st/agy-limited" "$T/st/cq/"*
+out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null); rc=$?
+[ "$(cat "$T/st/agy-limited" 2>/dev/null)" = "$AGY_RESET" ] \
+  && ok "13b the agy-limited marker holds the reset /quota reports, not the error's" \
+  || ko "13b the agy-limited marker is the error's false reset: marker=$(cat "$T/st/agy-limited" 2>/dev/null) quota=$AGY_RESET"
+# a /quota that cannot be read leaves the error's own reset, then the 6 h fallback, as before
+printf '#!/bin/bash\n[ "$*" = "-p /quota" ] && exit 1\necho "RESOURCE_EXHAUSTED: Resets in 1h0m0s" >&2; exit 1\n' > "$T/bin/agy"
+rm -f "$T/st/review-gui_9".* "$T/st/agy-limited" "$T/st/cq/"*; t=$(date +%s)
+out=$(cd "$W" && bash "$T/s/review.sh" --worktree main 9 2>/dev/null)
+m=$(cat "$T/st/agy-limited" 2>/dev/null); [ -n "$m" ] && [ "$m" -ge $((t+3500)) ] && [ "$m" -le $((t+3700)) ] \
+  && ok "13b without a /quota reading the error's reset still holds" || ko "13b fallback to the error's reset: marker=$m"
+unset AGY_RESET SG_SHARED; rm -f "$T/bin/agy" "$T/st/agy-limited"
 # 14) the timeout must reach the process the CLI spawns, and the wait must say it is still working. The alarm is
 # set on the CLI, but the CLI execs the model in a child that ignores the alarm, so the review runs past its
 # timeout with no output and no line anywhere to show it is alive (#491 follow-up: a 360 s review ran 9 min, silent).
