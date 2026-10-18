@@ -119,7 +119,7 @@ rec run-write-fails '{"event":"run_start","run_id":"run-write-fails","ts":"2026-
 mk run-closed 2010
 rec run-closed '{"event":"run_start","run_id":"run-closed","ts":"2026-10-13T08:07:00Z"}'
 # #2011 carries a landed-branch marker and nothing else: the marker is not a merged PR into the base, so it does not
-# make the card Done (#239). The card falls to the loop floor.
+# make the card Done (#239). The card keeps Code Complete: the floor never moves a card back (#550).
 touch "$T/st/auto/fork-2011-abcdef123"
 mk run-ratify 2012
 rec run-ratify '{"event":"run_start","run_id":"run-ratify","ts":"2026-10-13T08:09:00Z"}'
@@ -186,7 +186,7 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q '^STATUS o 4 Todo 2023$' "$T/board.calls" 2>/dev/null && ok "a failed child with no branch and no PR stays in the loop's queue" || ko "#2023 did not stay in Todo: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2023: card -> Todo (run run-mixed child route.router.2 fail with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the reason names the child and its own outcome" || ko "child reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q ' 2032$' "$T/board.calls" 2>/dev/null && ok "a card whose fix is a commit in dev keeps Code Complete" || ko "#2032 moved: $(/usr/bin/grep ' 2032$' "$T/board.calls")"
-/usr/bin/grep -q '^STATUS o 4 Todo 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone returns an open card to Todo" || ko "#2011 did not leave Code Complete: $(bc)"
+! /usr/bin/grep -q ' 2011$' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone leaves the card in Code Complete" || ko "#2011 moved: $(bc)"
 ! /usr/bin/grep -q 'Done 2011' "$T/board.calls" 2>/dev/null && ok "landed branch marker alone is not Done" || ko "#2011 read Done from a landed branch marker: $(bc)"
 /usr/bin/grep -q '^ADD o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the item is created with its expected status in one write" || ko "#2013 not added: $(bc) $o"
 ! /usr/bin/grep -q '^STATUS o 4 In Progress 2013$' "$T/board.calls" 2>/dev/null && ok "no card: the status is not written a second time" || ko "#2013 written twice: $(bc)"
@@ -194,10 +194,10 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q '^STATUS o 4 In Progress 2014$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'ADD .* 2014$' "$T/board.calls" && ok "a card with no Status is written, not added again" || ko "#2014: $(bc)"
 ! /usr/bin/grep -q 'ADD .* 2001$' "$T/board.calls" 2>/dev/null && ok "a card that exists is never added again" || ko "#2001 added: $(bc)"
 [ "$(/usr/bin/grep -c 'projectsV2/4/items' "$T/gh.calls")" = 1 ] && ok "the items are read once per pass" || ko "items read $(/usr/bin/grep -c 'projectsV2/4/items' "$T/gh.calls") times"
-# An open issue with no live run, marker, PR, or owner label returns to the loop floor; Blocked only expresses a current human action.
-/usr/bin/grep -q '^STATUS o 4 Todo 2015$' "$T/board.calls" 2>/dev/null && ok "an unclaimed open issue leaves stale Blocked for the dispatch column" || ko "#2015 did not leave stale Blocked: $(bc) $o"
-/usr/bin/grep -q 'BOARD-RECONCILE #2015: card -> Todo' "$T/st/cycle.log" 2>/dev/null && ok "the stale Blocked reconciliation is named in cycle.log" || ko "#2015 reconciliation not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
-/usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open; repaired to Todo' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported and repaired" || ko "#2015 Done regression not repaired: $(cat "$T/st/cycle.log" 2>/dev/null)"
+# An open issue with no live run, marker, PR, or owner label keeps the column its card has: only the owner moves a card
+# back to Todo (#550).
+! /usr/bin/grep -q ' 2015$' "$T/board.calls" 2>/dev/null && ok "an unclaimed open issue keeps its card's column" || ko "#2015 moved: $(bc) $o"
+/usr/bin/grep -q 'STATE-REGRESSION #2015: card is Done but the issue is still open$' "$T/st/cycle.log" 2>/dev/null && ok "Done on an open issue is reported, and the floor never moves it back" || ko "#2015 Done regression not reported as is: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q '^ADD o 4 Blocked 2016$' "$T/board.calls" 2>/dev/null && ok "an open issue carrying needs-owner gets a Blocked card" || ko "#2016 not added Blocked: $(bc) $o"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the open issues are read once per pass, in one request" || ko "open issues read $(/usr/bin/grep -c graphql "$T/gh.calls") times"
 # A spec is written, not scheduled, so its card opens in Open Specs (#117); the tickets /to-tickets cuts from it are work,

@@ -638,19 +638,17 @@ def reconcile_board():
         n = m.name[5:]; holder = m.read_text().strip()
         if n.isdigit() and holder in keep and not (read(folder(holder)) or {}).get("verdict"):   # a holder with a verdict is over: its own record ranks the card (Todo, Blocked, Code Complete), not the marker it left
             set_expected(n, "In Progress", f"{m.name} holds live run {holder}", holder, "", 30)
-    # Every open issue starts at the loop floor. This rank is below every rule above, so current run, marker, branch, landing,
-    # closure, or owner-label evidence wins; a Blocked card never preserves a blocking cause that has disappeared.
+    # The loop floor gives a column only to an open issue with no card, once: Todo for a bug, Backlog for anything else
+    # (#550). A card that has a column keeps it: the floor never moves a card, so it never sends one back to Backlog or Todo
+    # (ADR-0143). Only the owner moves a card there. This rank is below every rule above, so current run, marker, branch,
+    # landing, closure, or owner-label evidence wins.
     oans, olabels = open_issues()
-    go = os.environ.get("SG_FRONTIER_LABEL", "")
-    def startable(labels):   # a dispatcher takes it (#488): autobug a bug or debt issue with no skip label, the frontier one with the go label and no skip label
-        if labels & (set((os.environ.get("SG_BUG_SKIP_LABELS") or "needs-owner,no-auto,wontfix,question").split(",")) | {"frozen:owner", "frozen:dependency"}): return False   # the frozen floor autobug.sh keeps (#537)
-        if labels & {os.environ.get("SG_BUG_LABEL") or "bug", "debt"}: return True
-        return go in labels and not labels & ({RUN_PARENT, "frozen:owner", "frozen:dependency"} | set(filter(None, os.environ.get("SG_FRONTIER_SKIP_LABELS", "").split(","))))
     if oans:
         for n in sorted(olabels, key=int):
             if holding(n) and n not in expected: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540)
-            hold = shipped and (bool(olabels[n] & {"needs-owner", "needs-ratification"}) or bool(go) and not startable(olabels[n]))   # frozen by the owner, or no dispatcher takes it: not startable, so Backlog by the floor (the definition: Todo is startable)
-            set_expected(n, "Backlog" if hold else os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
+            fresh = (lambda a, m: a and not m.get(str(n)))(*cards(proj))   # an answered read that holds no card for it, or a card with no Status: no column yet
+            bug = bool(olabels[n] & {os.environ.get("SG_BUG_LABEL") or "bug"})
+            if fresh: set_expected(n, os.environ.get("SG_TODO", "Todo") if bug or not shipped else "Backlog", "open issue with no card", rank=10)   # today's vocabulary has no Backlog: there a new card is Todo, as before
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)
             # A spec is written and not scheduled, so it opens in its own column rather than in the loop's queue (#117's
             # sibling ask). The rank sits above the floor and below every rule a run, a marker or a branch raises, so the day
@@ -674,7 +672,7 @@ def reconcile_board():
                     if not dry and spec_fold.TAG not in olabels[n]: _run(["bash", "-c", '. "$0"; "$@"', str(pathlib.Path(__file__).parent / "ghcall.sh"), "gh_send", "-X", "POST", f"repos/{repo0}/issues/{n}/labels", "-f", f"labels[]={spec_fold.TAG}"])
             if olabels[n] & {"needs-owner", "needs-ratification"}:
                 set_expected(n, "Blocked", "issue is blocked by owner label", rank=100)
-    for n in sorted(list(expected), key=int):
+    for n in sorted(set(expected) | (set(olabels) if oans else set()), key=int):   # every open issue, as when the floor named each one: a rule below can still move a card forward
         state, reason, _ = issue_info(n)
         if state == "closed": set_expected(n, "Done", "issue is closed", "", "", 90)
         if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
@@ -688,8 +686,8 @@ def reconcile_board():
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
-    for n in sorted((k for k in expected if RUN_PARENT in (olabels.get(k) or issue_labels(k))), key=int):   # a run parent is a roll-up in GitHub, never work: it gets no card, and a card it has is removed, only when the board carries one (#500)
-        del expected[n]
+    for n in sorted((k for k in set(expected) | set(olabels) if RUN_PARENT in (olabels.get(k) or issue_labels(k))), key=int):   # a run parent is a roll-up in GitHub, never work: it gets no card, and a card it has is removed, only when the board carries one (#500)
+        expected.pop(n, None)
         if str(n) in have_all and board_write(["--remove", owner, str(proj), str(n)], n, "the issue is a run parent"):
             del have_all[str(n)]
             say(f"BOARD-RECONCILE #{n}: card removed (run-parent: a roll-up, never work)")
