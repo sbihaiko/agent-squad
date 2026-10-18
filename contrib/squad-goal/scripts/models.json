@@ -1,5 +1,5 @@
 {
-  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. Squad ids must be in the dynamic dispatch envelope in docs/design/router.graph.json; if a chain wants a provider alias, the request must name the allowed id that stands for it. Review ids are codex models unless prefixed 'claude:'. `efforts`, `hours` and `review_timeout_seconds_by_model` are optional {model: value} maps set from the hub's models panel: hours is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
+  "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. Squad ids must be in the dynamic dispatch envelope in docs/design/router.graph.json; if a chain wants a provider alias, the request must name the allowed id that stands for it. Review ids route by name: a 'claude:' prefixed id runs through the claude CLI, 'gemini-*' and 'grok-*' through agy/grok, and every other id through codex. `efforts`, `hours` and `review_timeout_seconds_by_model` are optional {model: value} maps set from the hub's models panel: hours is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
   "stall_timeout_minutes": 15,
   "review_stall_minutes": 60,
   "model_retry_budget": 2,

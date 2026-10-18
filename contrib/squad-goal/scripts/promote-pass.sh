@@ -1,6 +1,6 @@
 #!/bin/bash
-# usage: promote-pass.sh   The cycle's promotion pass (#459, ADR-0145 rule 3): it earns the local proof of the dev tip and promotes it.
-# watch.sh runs it under its own single.sh lock, so two passes never overlap. SG_STATE must be set: the pass never reads the
+# usage: promote-pass.sh   The owner's promotion pass (#459, ADR-0145 rule 3, #576): no cycle step runs it; started by hand, it earns
+# the local proof of the dev tip and promotes it. It runs under its own single.sh lock, so two passes never overlap. SG_STATE must be set: the pass never reads the
 # machine-wide /tmp/sg-state, a different file from the profile's state directory (exit 2).
 # Debounce: no suite for a tip already proved or refused ($SG_STATE/promote-pass.tips, last 50), nor while the latest landing in
 # $SG_STATE/landed.tsv is younger than SG_PROMOTE_QUIET_SECONDS (default 900): a burst of landings earns one proof.

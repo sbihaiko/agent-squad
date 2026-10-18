@@ -201,7 +201,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   while :; do
     sha=$($G rev-parse HEAD)
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
-      "$BOARD" "$SG_OWNER" "$SG_PROJECT" "Code Complete" "$iss" >/dev/null 2>&1
+      board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
       : > "$SG_STATE/auto/entered-$run-$iss"   # the durable record of the entry (#467): the janitor's Code Complete reads it, never the run's own land
       echo "WAVE $br $sha entered $w (#$iss)"; return 0
     fi
