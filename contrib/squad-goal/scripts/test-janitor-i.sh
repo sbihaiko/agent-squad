@@ -14,9 +14,12 @@ J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mk() { mkdir -p "$T/co/runs/$1"; printf '%s\n' "{\"event\": \"spawn_accepted\", \"x\": \"GitHub issue #$2\"}" > "$T/co/runs/$1/record.jsonl"; [ -n "$3" ] && printf '%s\n' "{\"event\": \"spawn_accepted\", \"x\": \"GitHub issue #$3\"}" >> "$T/co/runs/$1/record.jsonl"; echo "$1" >> "$T/st/active-runs.txt"; }
 mk run-a 501 502; mk run-b 503; mk run-c 501 504
+# The router words a child in its own way ("GOAL (issue 501, SPEC 9 child)"); the dispatcher's `Refs #N` line is the link that holds (#551)
+mkdir -p "$T/co/runs/run-d"; printf '%s\n' '{"event": "spawn_accepted", "child": "route.router.1", "definition": {"prompt": "Every commit message carries the line `Refs #501` on its own line.\\n\\nGOAL (issue 501, SPEC 9 child): fix it."}}' > "$T/co/runs/run-d/record.jsonl"; echo run-d >> "$T/st/active-runs.txt"
 run() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_DRY=1 python3 -I "$T/janitor.py" 2>&1; }
 o=$(run)
 echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-a.*stopping' && ok "all duplicate/not_planned -> stop" || ko "run-a not stopped: $o"
 echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-b.*not stopped' && ok "closed as completed -> report only" || ko "run-b: $o"
+echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-d.*stopping' && ok "a child named by its Refs line maps to its issue" || ko "run-d: the Refs #501 child mapped to no issue: $o"
 echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-c' && ko "run with an open issue reported" || ok "run with an open issue untouched"
 rm -rf "$T"; exit $fail
