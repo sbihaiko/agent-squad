@@ -674,4 +674,36 @@ todo 1228
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "17 closing the issue resumes dispatch with no other action";; *) ko "17 dispatch did not resume: '$r'";; esac
 
+# 18) (#556) a selected issue is read once a pass. The validation read and the cluster read used to be two fetches of
+# the same issue, and each fetch paid a Python startup plus a gh call. The stub records the plain issue routes it
+# answers: the pass asks for the issue one time, and the number it validated is the JSON the cluster receives.
+rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
+cp "$d/autobug.sh" "$T/s/"
+printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
+printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
+printf 'print("-")\n' > "$T/s/fundroom.py"
+todo 1228
+cat > "$T/issues.json" <<'JSON'
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
+JSON
+: > "$T/reads"
+cat > "$T/bin/gh" <<J
+#!/bin/bash
+case "\$*" in
+  *pulls?state=open*) echo "" ;;
+  *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
+  *"issues?state=open"*) echo "" ;;
+  *issues/*/comments*) echo "" ;;
+  "api repos/x/y/issues/1228") echo "read" >> "$T/reads"; printf '{"number":1228,"title":"Core: null deref","body":"step a.py"}\n' ;;
+  *issues/*) echo "" ;;
+  *) echo "" ;;
+esac
+J
+chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "18 the pass dispatches its candidate";; *) ko "18 no dispatch: '$r'";; esac
+n=$($G -c '^read$' "$T/reads")
+[ "$n" = 1 ] && ok "18 a selected issue is fetched once a pass" || ko "18 the issue was fetched $n time(s): validation and clustering each read it"
+
 rm -rf "$T"; exit $fail
