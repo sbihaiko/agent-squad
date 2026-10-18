@@ -18,5 +18,6 @@ if ! mkdir "$L" 2>/dev/null; then
   elif [ -z "$h" ] && [ $(( $(date +%s) - $(mtime "$L") )) -gt 10 ]; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # no pid after 10 s: owner died between mkdir and write
   else exit 0; fi
 fi
-echo $$ > "$L/pid"; trap 'rm -rf "$L"' EXIT INT TERM
+# The release is the holder's only: a lock taken over meanwhile names another pid, and removing it would start a pass beside that holder (#531).
+echo $$ > "$L/pid"; trap '[ "$(cat "$L/pid" 2>/dev/null)" = "$$" ] && rm -rf "$L"' EXIT INT TERM
 "$@"

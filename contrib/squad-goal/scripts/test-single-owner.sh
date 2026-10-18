@@ -11,4 +11,4 @@ wait "$a"
 bash "$d/single.sh" job sh -c "echo ran > $T/ran"
 [ -e "$T/ran" ] && ko "a pass started beside the live holder" || ok "no pass starts beside the live holder"
 bash "$d/single.sh" mine true; [ -d "$SG_STATE/locks/single-mine" ] && ko "a holder left its own lock" || ok "a holder still removes its own lock"
-kill "$b" 2>/dev/null; rm -rf "$T"; exit $fail
+kill "$b" 2>/dev/null; wait "$b" 2>/dev/null; rm -rf "$T"; exit $fail
