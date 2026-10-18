@@ -6,7 +6,7 @@ d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok 
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
-cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$T/s/"
+cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$T/s/"
 unset SG_BOARD_VOCAB   # the loop that runs a child exports it; the cases that need the shipped vocabulary set it themselves
 export SG_GH_AGGREGATE_WINDOW=0   # the open-issue list changes between cases: no snapshot answers a later one
 : > "$T/st/active-runs.txt"
@@ -576,5 +576,20 @@ r=$(PATH="$R/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[60]"*) ko "14 the bug pass picked a run parent: '$r'";; *) ok "14 a run parent is not a bug candidate";; esac
 case "$r" in *"[62]"*) ko "14 the bug pass picked an old-title run parent: '$r'";; *) ok "14 an old-title run parent is not a bug candidate";; esac
 case "$r" in *"[61]"*) ok "14 an issue whose title only starts alike is still a candidate";; *) ko "14 a look-alike title was skipped: '$r'";; esac
+
+# 15) A frozen issue waits on its owner or on a dependency outside the repo: the bug pass skips it, as autofrontier does (#530).
+F=$T/frozen; mkdir -p "$F/bin"
+cat > "$F/issues.json" <<'JSON'
+[
+  {"number":70,"title":"Gateway drops a task","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"},{"name":"frozen:dependency"}]},
+  {"number":71,"title":"Owner must pick","body":"y.py","created_at":"2026-10-10T15:01:00Z","labels":[{"name":"bug"},{"name":"frozen:owner"}]},
+  {"number":72,"title":"Plain bug","body":"z.py","created_at":"2026-10-10T15:02:00Z","labels":[{"name":"bug"}]}
+]
+JSON
+sed "s#$R/issues.json#$F/issues.json#g" "$R/bin/gh" > "$F/bin/gh"; chmod +x "$F/bin/gh"
+r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[70]"*) ko "15 the bug pass picked a frozen:dependency issue: '$r'";; *) ok "15 a frozen:dependency issue is not a bug candidate";; esac
+case "$r" in *"[71]"*) ko "15 the bug pass picked a frozen:owner issue: '$r'";; *) ok "15 a frozen:owner issue is not a bug candidate";; esac
+case "$r" in *"[72]"*) ok "15 a plain bug beside them is still a candidate";; *) ko "15 the plain bug was skipped: '$r'";; esac
 
 rm -rf "$T"; exit $fail
