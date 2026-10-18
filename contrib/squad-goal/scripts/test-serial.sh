@@ -20,6 +20,15 @@ out=$(SERIAL_WAIT_SECONDS=4 bash "$src" gui true 2>&1); rc=$?
 printf '%s\n' "$out" | /usr/bin/grep -qx "serial: waited 4s for lock gui held by pid $$" && ok "the give-up names the lock, the budget and the holder" || ko "give-up text: $out"
 [ "$(printf '%s\n' "$out" | /usr/bin/grep -c "^serial: waiting for lock gui held by pid $$")" = 1 ] && ok "the waiter prints one wait line, naming the holder" || ko "wait lines: $out"
 [ "$(SG_SERIAL_HELD=gui SERIAL_WAIT_SECONDS=4 bash "$src" gui sh -c 'echo inner')" = inner ] && ok "a command inside the holder runs without waiting" || ko "re-entry did not run inside the holder"
+# (#459) Try mode: SERIAL_TRY=1 skips a held lock at once with exit 73 and one line, never queues; a free lock runs the command,
+# and the command does not inherit the mode, so a lock it takes inside waits as usual.
+s0=$(date +%s); out=$(SERIAL_TRY=1 SERIAL_WAIT_SECONDS=20 bash "$src" gui sh -c 'echo ran' 2>&1); rc=$?
+[ "$rc" = 73 ] && [ $(( $(date +%s) - s0 )) -lt 3 ] && ok "try mode: a held lock skips at once with exit 73" || ko "try mode on a held lock: rc=$rc after $(( $(date +%s) - s0 ))s"
+case "$out" in *ran*) ko "try mode ran the command beside the holder";; *) ok "try mode does not run the command beside the holder";; esac
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c "^serial: lock gui held by pid $$: skipped")" = 1 ] && ok "try mode says the skip on one line, naming the holder" || ko "try skip line: $out"
+rm -rf "$SG_STATE/locks/gui"
+[ "$(SERIAL_TRY=1 bash "$src" gui sh -c 'echo "${SERIAL_TRY:-unset}"')" = unset ] && ok "try mode on a free lock runs the command, which does not inherit the mode" || ko "try mode leaked into the command or did not run it"
+mkdir -p "$SG_STATE/locks/gui"; echo $$ > "$SG_STATE/locks/gui/pid"
 
 # (#134, ADR-0051) A gate that outlives its run is found without a caller: the holder records the deadline it keeps,
 # and a holder left alive past that deadline with no owner (its parent is pid 1: its run is gone) is reaped by name.
