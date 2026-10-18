@@ -625,7 +625,7 @@ def reconcile_board():
     oans, olabels = open_issues()
     go = os.environ.get("SG_FRONTIER_LABEL", "")
     def startable(labels):   # a dispatcher takes it (#488): autobug a bug or debt issue with no skip label, the frontier one with the go label and no skip label
-        if labels & set((os.environ.get("SG_BUG_SKIP_LABELS") or "needs-owner,no-auto,wontfix,question").split(",")): return False
+        if labels & (set((os.environ.get("SG_BUG_SKIP_LABELS") or "needs-owner,no-auto,wontfix,question").split(",")) | {"frozen:owner", "frozen:dependency"}): return False   # the frozen floor autobug.sh keeps (#537)
         if labels & {os.environ.get("SG_BUG_LABEL") or "bug", "debt"}: return True
         return go in labels and not labels & ({RUN_PARENT, "frozen:owner", "frozen:dependency"} | set(filter(None, os.environ.get("SG_FRONTIER_SKIP_LABELS", "").split(","))))
     if oans:
