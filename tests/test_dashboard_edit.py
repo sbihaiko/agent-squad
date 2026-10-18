@@ -442,6 +442,16 @@ def test_the_suggestion_lists_are_named_per_field_and_never_restrict_a_value():
     assert node(r["doc"], agent["name"])["model"] == "a-model-nobody-listed"
 
 
+def test_a_dispatch_review_sits_in_settings_and_its_shown_value_set_back_leaves_it_unchanged():
+    d = router()
+    route = node(d, "route")
+    route["review"] = "review_gate"
+    fields = {f["key"]: (g["id"], f) for g in groups_of(route) for f in g["fields"]}
+    assert fields["review"][0] == "settings" and fields["review"][1]["value"] == "review_gate"
+    r = set_field(d, "route", "review", fields["review"][1]["value"])
+    assert node(r["doc"], "route") == route
+
+
 def test_an_unknown_field_is_a_node_error_in_both_and_a_field_edit_keeps_it_unchanged():
     d = five()
     agent = [n for n in d["nodes"] if n["kind"] == "agent"][0]["name"]
