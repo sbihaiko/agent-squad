@@ -10,11 +10,11 @@ a="$*"
 case $a in
   *"graphql"*) cat "$GH_ISSUES_OPEN";;   # the open-issue list the pass reads once for a loop defect (#596)
   *"-q .state"*) echo open;;
-  *"POST"*"/sub_issues"*) echo "link $a" >> "$GH_LOG"; cat >/dev/null;;
-  *"/sub_issues"*) echo $GH_KIDS | tr ' ' '\n' | head -n "$(cat "$GH_LOG" 2>/dev/null | grep -c '^link')" || true;;   # the sub-issues read: the children the carrier carries so far, one per link written
+  *"POST"*"/sub_issues"*) echo "link $a $(cat)" >> "$GH_LOG";;   # the body names the child by its id, which is its number here
+  *"/sub_issues"*) sed -n 's/^link .*"sub_issue_id": *\([0-9]*\).*/\1/p' "$GH_LOG" 2>/dev/null;;   # the sub-issues read carries each child linked so far: a read that never carried a link cost the backoff, 7 s a pass (#597)
   *"POST"*"repos/x/y/issues"*) echo "create $(cat)" >> "$GH_LOG"; echo '{"number":900}';;
   *"issues?state=all"*) ;;
-  *"repos/x/y/issues/"*) echo '{"id":1}';;
+  *"repos/x/y/issues/"*) [[ $a =~ issues/([0-9]+) ]]; echo "{\"id\":${BASH_REMATCH[1]}}";;   # an issue's id is its number, so a link names its child
   *"/fields?"*) echo 7;;
   *"/items?"*) for kv in $GH_NUMS; do printf '%s\t%s\n' "${kv%%:*}" "${kv#*:}"; done | tr '_' ' ';;   # the one Status read: number, the state the card carries
 esac
@@ -38,7 +38,7 @@ run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
 run_def refs c "Every commit message carries the line \`Refs #1493\` on its own line. GOAL (issue 1493, SPEC 9 child): fix it." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
-export GH_LOG=$T/gh.log GH_KIDS="2000 2001" GH_ISSUES_OPEN=$T/issues-open.json; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
+export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
 echo "$out" | tail -20 >&2
