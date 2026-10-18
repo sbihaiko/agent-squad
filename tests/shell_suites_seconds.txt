@@ -21,6 +21,7 @@ test-cluster.sh 23.1
 test-cqflush-address.sh 5.0
 test-cqflush-status.sh 4.2
 test-defect-ceiling.sh 15.9
+test-dispatch-hold-wave.sh 10.5
 test-dispatch-mutex.sh 26.8
 test-dispatch-worktree-reuse.sh 5.8
 test-fast-gate.sh 1.7
