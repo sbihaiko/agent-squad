@@ -16,7 +16,6 @@ from squad import caps, git, modelreg, record, workflows
 from squad import defaults as D
 from squad import project_settings as P
 from squad.engine import Engine
-from squad.graph import from_doc
 from squad.options import OptionError
 
 
@@ -132,24 +131,25 @@ def _router_open(entry, hour):
 
 
 def router_overlay(graph, models_path, now=None):
-    """The graph with each dispatch `allow.models` filtered by `chains.router` (its on/hrs, v1 and v2 through `modelreg.chain`).
+    """The models each dispatch `allow.models` keeps under `chains.router` (its on/hrs, v1 and v2 through `modelreg.chain`).
 
-    A spelling outside the router chain has no switch, so it stays. A dispatch left with no model refuses the run by
-    name: the schema needs one, and the router could ask for none. `now` stands in for the clock (tests). The filtered
-    document is the one the run folder copies and the engine hashes, so a resume reads it and never recomputes it.
+    Returns `{dispatch node name: [spelling, ...]}`, empty when every entry is open. A spelling outside the router chain
+    has no switch, so it stays. A dispatch left with no model refuses the run by name: the schema needs one, and the
+    router could ask for none. `now` stands in for the clock (tests). The overlay is recorded in `run_start` and applied
+    at dispatch, so the authored graph keeps its hash and its run-folder copy across a resume.
     """
     try:
         entries = modelreg.chain(models_path, "router").entries
     except (OSError, ValueError) as exc:
         raise OptionError(f"models {models_path}: {exc}") from exc
     if not entries:
-        return graph
+        return {}
     hour = time.localtime(now).tm_hour
     closed = {e.id for e in entries if not _router_open(e, hour)}
     if not closed:
-        return graph
-    doc = json.loads(json.dumps(graph.doc))
-    for node in doc["nodes"]:
+        return {}
+    overlay = {}
+    for node in graph.doc["nodes"]:
         if node.get("kind") != "dispatch":
             continue
         allow = node.get("allow") or {}
@@ -157,8 +157,8 @@ def router_overlay(graph, models_path, now=None):
         if not kept:
             raise OptionError(f"the router chain in {models_path} leaves no model for dispatch node {node['name']!r}: "
                               "every entry is switched off or outside its hours window")
-        allow["models"] = kept
-    return from_doc(doc, graph.layout)
+        overlay[node["name"]] = kept
+    return overlay
 
 
 def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None, models=None, graph_path=None, target=None, options=None, shadow=None, invoker="cli", name=None, watch=None, opener=None, ticker=None):
@@ -177,8 +177,7 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
     """
     data, prec, limits = project_settings(target)                # before any folder exists: an unsound project file refuses the run
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)  # before any folder exists: an unsound file refuses the run
-    if models:
-        graph = router_overlay(graph, models)   # before any folder exists: the copy and the hash carry the filtered doc
+    overlay = router_overlay(graph, models) if models else {}   # before any folder exists: a closed set refuses the start
     if name is not None:
         run_id = name
         if not workflows.valid_id(name):
@@ -193,7 +192,7 @@ def launch(graph, run_dir=None, *, runs_dir="runs", adapter=None, defaults=None,
     ceiling = launch_ceiling(target, rec["path"]) if rec else None   # a missing caps block refuses the run by name, before a folder exists
     eng = Engine(graph, adapter, run_dir, options=_lowered(options, data, graph), target=target, run_id=run_id, invoker=invoker,
                  graph_path=Path(graph_path).resolve() if graph_path else copy, defaults=rec, shadow=shadow, project={"record": prec, "limits": limits}, autonomy=autonomy,
-                 ceiling=ceiling)   # a bad option raises here, before a folder exists
+                 ceiling=ceiling, router_overlay=overlay)   # a bad option raises here, before a folder exists
     run_dir.mkdir(parents=True, exist_ok=True)
     if target:
         keep_runs_out_of_the_target(target, run_dir)
@@ -224,11 +223,14 @@ def keep_runs_out_of_the_target(target, run_dir):
 
 def resume_engine(graph, run_dir, *, adapter=None, defaults=None, target=None, options=None, watch=None, opener=None, ticker=None):
     """The engine for `resume`: the same defaults rules as `launch`, no new folder, no new run id (the replay takes the id from the record).
-    A page already open for the folder is reused."""
+    The router overlay comes from `run_start`, so the clock and the graph copy cannot move it. A page already open for the folder is reused."""
     data, prec, limits = project_settings(target)
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)
+    events = record.read(Path(run_dir) / "record.jsonl")
+    overlay = (events[0].get("router_overlay") or {}) if events and events[0]["event"] == "run_start" else {}
     eng = Engine(graph, adapter, Path(run_dir), options=_lowered(options, data, graph), target=target, invoker="cli", defaults=rec,
-                 project={"record": prec, "limits": limits}, autonomy=autonomy, ceiling=launch_ceiling(target, rec["path"]) if rec else None)
+                 project={"record": prec, "limits": limits}, autonomy=autonomy, ceiling=launch_ceiling(target, rec["path"]) if rec else None,
+                 router_overlay=overlay)
     if rec and rec["watch"]["dashboard"]:
         _watch_page(opener, Path(run_dir), rec, resume=True)
     if rec and rec["watch"].get("monitor"):

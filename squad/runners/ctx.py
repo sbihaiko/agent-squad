@@ -61,9 +61,14 @@ class RunCtx:
     def is_dispatch_entry(self, name):
         return name in self._e.entry_of
 
+    def dispatch_node(self, node):
+        """A dispatch node with this run's router overlay applied. The authored graph, and its hash, stay unchanged."""
+        models = self._e.router_overlay.get(node.get("name")) if node.get("kind") == "dispatch" else None
+        return node if models is None else {**node, "allow": {**(node.get("allow") or {}), "models": list(models)}}
+
     def limits(self, name):
         """The limits a router may ask within: the dispatch's allow lists and budget, as the envelope checks them."""
-        d = self._e.nodes[self._e.entry_of[name]]
+        d = self.dispatch_node(self._e.nodes[self._e.entry_of[name]])
         return {"skills": [s["name"] for s in d["allow"]["skills"]], **{k: d["allow"][k] for k in ("models", "efforts", "tools", "workspaces")},
                 "stalls": d["budget"]["stalls"], "spend": d["budget"]["spend"], "deadline": d["deadline"],
                 "max_children": d["max_children"], "max_parallel": d["max_parallel"], "max_depth": d["max_depth"]}

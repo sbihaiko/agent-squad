@@ -39,7 +39,7 @@ from squad.runners.types import Scope as Scope
 
 class Engine:
     def __init__(self, graph, adapter, run_dir, *, options=None, target=None, time_scale=1.0, clock=time.monotonic,
-                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board", registry=None):
+                 wall=time.time, run_id=None, invoker="cli", graph_path=None, defaults=None, shadow=None, vendor=None, project=None, autonomy=None, ceiling=None, state_binding="board", registry=None, router_overlay=None):
         self.shadow = shadow     # advisory observer: its output is recorded as `diagnostic` and read by nothing
         self.graph_path = graph_path
         self.g, self.adapter, self.run_dir = graph, adapter, Path(run_dir)
@@ -76,6 +76,7 @@ class Engine:
         self.defaults = defaults       # {path, sha256, engine}: the per-invocation engine-level defaults, recorded in run_start and resume
         self.state_binding = state_binding  # the issue-state carrier, fixed for this run and checked on resume
         self.registry = registry       # the model registry path; None is the committed registry (SPEC 505)
+        self.router_overlay = dict(router_overlay or {})   # {dispatch node: models kept}: recorded at run_start, applied at dispatch
         self._reg = None               # the loaded registry, read once
         self.models_resolve = False    # run_start asks the SDK adapter to resolve a spelling; an old record stays opaque
         if hasattr(adapter, "bind"):
@@ -268,7 +269,7 @@ class Engine:
         self._set_resolve(True)
         models = {"resolve": True, "entries_sha256": modelreg.entries_sha256(self._model_names(), self._registry())}
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
-                           models=models,
+                           models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}),
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),

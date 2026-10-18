@@ -352,6 +352,7 @@ class Dispatch:
 
 class DispatchRunner:
     async def run(self, ctx, node, entry, sc):
+        node = ctx.dispatch_node(node)   # the router overlay narrows the envelope here; the authored graph keeps its hash
         d, t0, ent = ctx.dispatch, ctx.clock(), node["entry"]   # wall time of this entry, from reading its entry child to landing
         res = await ctx.exec_node(ent, sc)
         if res.outcome != "pass":

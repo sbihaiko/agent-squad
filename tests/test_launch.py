@@ -315,7 +315,7 @@ def _dispatch_node(models, efforts=("low",), when=None):
 
 
 def _router_agent():
-    node = agent("router", may_spawn=True)
+    node = agent("router", may_spawn=True, output_key="spawns")
     del node["next"]          # a dispatch entry is not a loop child, so `repeat` is invalid there
     return node
 
@@ -329,21 +329,22 @@ def _allow(doc):
     return next(n for n in doc["nodes"] if n["kind"] == "dispatch")["allow"]["models"]
 
 
-def test_the_router_chain_filters_the_dispatch_envelope_before_the_copy_and_the_hash(tmp_path):    # SPEC 505
+def test_the_router_chain_narrows_the_envelope_and_keeps_the_authored_copy(tmp_path):    # SPEC 505
     models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "on": False}])
     g = _dispatch_graph(["opus", "sonnet"], efforts=["low", "high"])
     eng = launch.launch(g, tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
     copy = json.loads((tmp_path / "r" / "graph.json").read_text())
-    assert _allow(copy) == ["opus"]
+    assert copy == g.doc and _allow(copy) == ["opus", "sonnet"]
+    assert eng.router_overlay == {"route": ["opus"]}
     route = next(n for n in copy["nodes"] if n["kind"] == "dispatch")
     assert route["allow"]["efforts"] == ["low", "high"] and all(isinstance(m, str) for m in route["allow"]["models"])
-    assert eng.g.doc == copy and eng.g.hash == canon_hash(copy)
+    assert eng.g.hash == canon_hash(copy)
 
 
 def test_a_v1_router_chain_filters_by_the_same_on_and_hours_rule(tmp_path):    # SPEC 505
     models = _router_models(tmp_path, [{"id": "opus"}, {"id": "sonnet", "hrs": _window(1)}], v1=True)
     eng = launch.launch(_dispatch_graph(["opus", "sonnet"]), tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
-    assert _allow(eng.g.doc) == ["opus"]
+    assert eng.router_overlay == {"route": ["opus"]}
 
 
 def test_an_empty_router_set_refuses_the_start_with_a_named_reason(tmp_path):    # SPEC 505
