@@ -9,6 +9,10 @@ Drive a set of GitHub issues (`$SG_REPO`, board = project `$SG_PROJECT`) from re
 
 The owner may wrap the call in `/goal /squad-goal <issues>` so the loop survives across turns. Either way, **done** = every listed issue closed with evidence, its card in Done, and a green e2e on the final `origin/$SG_BASE`.
 
+**A defect in the loop's own machinery is never dispatched to the loop.** When the task is to monitor the loop while it
+runs (`/goal /autonomy` with a monitoring mandate), read `docs/loop-monitor.md` first: it holds the stop, the `loop-bug`
+label, the external fix and the restart.
+
 ## Operating invariants
 
 These rules are invariants of the delivery loop. They override any tendency to wait, batch bookkeeping, keep important state only in local logs, or create unnecessary agent-squad panels.
