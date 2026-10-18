@@ -16,10 +16,11 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "contrib" / "squad-goal" / "s
 GH = """#!/bin/bash
 # A stub gh: one open issue (#42), no open PR. autobug reads `<number><US>labels>`; autofrontier sorts on
 # `<wave><US><number><US><labels>`, so the two queries answer in their own shape. autobug asks by label;
-# autofrontier reads every open issue and lets stack.sh's blocker gate decide, so a label only orders a candidate.
+# autofrontier reads every open issue, takes only one that carries SG_FRONTIER_LABEL (#485), and lets stack.sh's blocker gate decide.
 case "$*" in *"pulls?state=open"*) exit 0;; esac
 # autofrontier reads the open-issue list once, through the door: one GraphQL request (#383).
-case "$*" in *"issues(states: OPEN"*) printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a bug","body":"b","state":"OPEN","labels":{"nodes":[{"name":"wave:01"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}\\n'; exit 0;; esac
+labels='{"nodes":[{"name":"wave:01"},{"name":"ready-for-agent"}]}'
+case "$*" in *"issues(states: OPEN"*) printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a bug","body":"b","state":"OPEN","labels":%s,"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}\\n' "$labels"; exit 0;; esac
 case "$*" in *"issues?state=open&labels="*) printf '42\\037%s\\n' "$LABELS"; exit 0;; esac
 case "$*" in *"issues?state=open"*) printf 'wave:01\\03742\\037%s\\n' "$LABELS"; exit 0;; esac
 case "$*" in *"issues/42"*) printf '{"number":42,"title":"a bug","body":"b","created_at":"2026-10-11T00:00:00Z"}\\n'; exit 0;; esac
@@ -31,6 +32,8 @@ sg_not_startable() { return 1; }
 sg_fork_branch() { echo "gui/$1"; }
 sg_fork_branch_pattern() { echo "gui/%n"; }
 sg_issue_worktree_note() { :; }
+sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/disp-$1" ]; }   # as the real one: the shared claim
+sg_live_issues() { :; }   # active-runs.txt is empty here: no live run holds an issue
 """
 
 @pytest.fixture(autouse=True)
@@ -53,7 +56,8 @@ def _scripts(tmp_path, cluster_sleep):
     """A scripts folder holding the real dispatchers and single.sh, plus every stub they call."""
     d = tmp_path / "scripts"
     d.mkdir(parents=True)
-    for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py"):
+    for name in ("single.sh", "autobug.sh", "autofrontier.sh", "ghcall.sh", "ghread.py", "ghthrottle.py",
+                 "refusal-names.sh", "workbranches.sh"):
         (d / name).write_text((SCRIPTS / name).read_text())
     (d / "env.sh").write_text("")                       # the test sets every SG_* it needs
     (d / "startability.sh").write_text(STARTABILITY)
@@ -83,7 +87,7 @@ def _state(tmp_path, script):
     (st / "cq").mkdir()
     (st / "active-runs.txt").write_text("")
     (tmp_path / "checkout").mkdir()
-    labels = "wave:01" if script == "autofrontier.sh" else "bug,wave:01"
+    labels = "wave:01,ready-for-agent" if script == "autofrontier.sh" else "bug,wave:01"
     return {
         # the python3 of this suite first: the dispatchers read the free slots through squad/caps.py, which needs PyYAML
         "PATH": f"{tmp_path / 'bin'}:{Path(sys.executable).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
