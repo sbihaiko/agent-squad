@@ -27,20 +27,20 @@ repo=${SG_CHECKOUT:-}/contrib/squad-goal
 # The publish reads the main working tree, and nothing moved that tree to origin: it sat at an old commit while later PRs
 # merged, and the live loop ran old scripts. The source is stg and only stg (ADR-0145): a work branch lands in dev, the loop
 # promotes dev to stg on a green CI, so a defect in dev and not in stg never reaches the running loop. The tree is
-# fast-forwarded first (git only, no GitHub call), ff-only, from origin/stg, and only when it is clean and on stg. A tree on
-# any other branch is not a source: it is named and nothing is published. A dirty tree, a diverged tree and a failed fetch are
-# named, and the tree is never touched. The base here is stg, never $SG_BASE: that one names where work branches start.
+# fast-forwarded first (git only, no GitHub call), ff-only, from origin/stg, and only when it is clean and on stg; the publish runs only from a tree at origin/stg. A tree on
+# any other branch is not a source: it is named and nothing is published. A dirty tree (a file the publish copies; machine config
+# is not dirt), a diverged tree and a failed fetch are named, nothing is published, and the tree is never touched. The base here is stg, never $SG_BASE: that one names where work branches start.
 if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
   base=stg; tree=$SG_CHECKOUT; cur=$(git -C "$tree" branch --show-current)
   if [ "$cur" != "$base" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is on ${cur:-a detached head}, not $base; nothing is published"; exit 0
-  elif [ -n "$(git -C "$tree" status --porcelain --untracked-files=no)" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: it is dirty"
-  elif ! GIT_TERMINAL_PROMPT=0 git -C "$tree" fetch --quiet origin "$base" >/dev/null 2>&1; then echo "LIVE-GUARD main tree $tree not fast-forwarded: git fetch origin $base failed"
+  elif [ -n "$(git -C "$tree" status --porcelain --untracked-files=no -- contrib/squad-goal ':!contrib/squad-goal/scripts/models.json' ':!contrib/squad-goal/scripts/profiles')" ]; then echo "LIVE-GUARD main tree $tree not fast-forwarded: a shipped file is dirty; nothing is published"; exit 0
+  elif ! GIT_TERMINAL_PROMPT=0 git -C "$tree" fetch --quiet origin "$base" >/dev/null 2>&1; then echo "LIVE-GUARD main tree $tree not fast-forwarded: git fetch origin $base failed; nothing is published"; exit 0
   else
     from=$(git -C "$tree" rev-parse --short HEAD)
     if git -C "$tree" merge --ff-only --quiet "origin/$base" >/dev/null 2>&1; then
       to=$(git -C "$tree" rev-parse --short HEAD)
       [ "$from" = "$to" ] || echo "LIVE-GUARD main tree $tree fast-forwarded $base $from..$to"
-    else echo "LIVE-GUARD main tree $tree not fast-forwarded: $base has diverged from origin/$base (not a fast-forward)"; fi
+    else echo "LIVE-GUARD main tree $tree not fast-forwarded: $base has diverged from origin/$base (not a fast-forward); nothing is published"; exit 0; fi
   fi
 fi
 

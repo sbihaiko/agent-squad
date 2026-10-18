@@ -79,16 +79,32 @@ mk dirty; printf 'mine\n' >> "$T/dirty/contrib/squad-goal/SKILL.md"; h=$(G -C "$
 out=$(ffpass dirty)
 [ "$(G -C "$T/dirty" rev-parse HEAD)" = "$h" ] && [ "$(cat "$T/dirty/contrib/squad-goal/SKILL.md")" = "$(printf 'skill v1\nmine')" ] && ok "a dirty tree is left alone" || ko "the dirty tree was touched: $out"
 case "$out" in *LIVE-GUARD*"not fast-forwarded"*dirty*) ok "the dirty tree is reported by name";; *) ko "the dirty tree is not reported: $out";; esac
+[ "$(cat "$T/dirty.live/SKILL.md")" = "skill v1" ] && [ ! -e "$T/dirty.live/board-definition.json" ] && ok "a dirty shipped file publishes nothing" || ko "a dirty tree was published: $out"
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c .)" = 1 ] && ok "the dirty tree is one log line" || ko "the dirty tree did not log one line: $out"
+
+# Machine config the publish never copies is not dirt: the tree still fast-forwards and publishes.
+mk mcfg; w=$T/mcfg.work; mkdir -p "$w/contrib/squad-goal/scripts/profiles"; printf '{}\n' > "$w/contrib/squad-goal/scripts/models.json"; printf 'p\n' > "$w/contrib/squad-goal/scripts/profiles/p.sh"
+G -C "$w" add -A; G -C "$w" commit -qm cfg; G -C "$w" push -q origin HEAD:stg; G -C "$T/mcfg" pull -q --ff-only origin stg
+printf 'mine\n' >> "$T/mcfg/contrib/squad-goal/scripts/models.json"; printf 'mine\n' >> "$T/mcfg/contrib/squad-goal/scripts/profiles/p.sh"
+out=$(ffpass mcfg)
+[ "$(cat "$T/mcfg.live/SKILL.md")" = "skill v2" ] && ok "a machine-config change is not dirt: the publish runs" || ko "machine-config only held the publish: $out"
+
+# An unfetched checkout publishes nothing and names the fetch.
+mk nofetch; G -C "$T/nofetch" remote set-url origin "$T/missing.git"; printf 'skill v0\n' > "$T/nofetch.live/SKILL.md"
+out=$(ffpass nofetch)
+[ "$(cat "$T/nofetch.live/SKILL.md")" = "skill v0" ] && ok "a failed fetch publishes nothing" || ko "a failed fetch was published: $out"
+case "$out" in *LIVE-GUARD*"not fast-forwarded"*fetch*) ok "the failed fetch is named";; *) ko "the failed fetch is not named: $out";; esac
 
 mk other; G -C "$T/other" checkout -q -b topic; h=$(G -C "$T/other" rev-parse HEAD)
 out=$(ffpass other)
 [ "$(G -C "$T/other" rev-parse HEAD)" = "$h" ] && [ "$(G -C "$T/other" branch --show-current)" = topic ] && ok "a tree on another branch is left alone" || ko "the other-branch tree was touched: $out"
 case "$out" in *LIVE-GUARD*"not fast-forwarded"*topic*) ok "the other branch is reported by name";; *) ko "the other branch is not reported: $out";; esac
 
-mk diverged; printf 'local\n' > "$T/diverged/local.txt"; G -C "$T/diverged" add -A; G -C "$T/diverged" commit -qm local; h=$(G -C "$T/diverged" rev-parse HEAD)
+mk diverged; printf 'local\n' > "$T/diverged/local.txt"; G -C "$T/diverged" add -A; G -C "$T/diverged" commit -qm local; printf 'skill v0\n' > "$T/diverged.live/SKILL.md"; h=$(G -C "$T/diverged" rev-parse HEAD)
 out=$(ffpass diverged)
 [ "$(G -C "$T/diverged" rev-parse HEAD)" = "$h" ] && ok "a diverged tree is left alone" || ko "the diverged tree was touched: $out"
 case "$out" in *LIVE-GUARD*"not fast-forwarded"*"fast-forward"*) ok "the divergence is reported by name";; *) ko "the divergence is not reported: $out";; esac
+[ "$(cat "$T/diverged.live/SKILL.md")" = "skill v0" ] && ok "a diverged tree publishes nothing" || ko "a diverged tree was published: $out"
 
 # A commit in dev that is not in stg is never published: the tree sits on stg, origin/dev is a commit ahead of it.
 mk devonly; w=$T/devonly.work; G -C "$w" checkout -q -b dev origin/stg~1 2>/dev/null; G -C "$w" checkout -q -B dev origin/stg
