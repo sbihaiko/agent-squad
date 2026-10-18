@@ -52,6 +52,19 @@ def test_runs_outcome_events_are_consumers(tmp_path: Path) -> None:
     assert r.stdout.splitlines() == ["10\trun:run-1:scout\tm\t1\t0", "7\trun:run-1\tm\t1\t0"]
 
 
+def test_a_run_outcome_counts_its_cache_reads_once_at_their_weight(tmp_path: Path) -> None:
+    # an outcome's tokens_in holds every prompt token, cache reads and writes included (squad/sdk_adapter.py), unlike a
+    # ledger line, whose cache_read is beside tokens_in: 600 in of which 550 cache reads and 40 cache writes, 10 out
+    run = tmp_path / "co/runs/run-1"
+    run.mkdir(parents=True)
+    ev = {"event": "outcome", "ts": _ts(1), "model": "m", "tokens_in": 600, "tokens_out": 10, "cache_read": 550,
+          "cache_write": 40, "node": "c"}
+    (run / "record.jsonl").write_text(json.dumps(ev) + "\n")
+    for weight, total in (("0", 60), ("1", 610)):
+        r = _run(str(tmp_path), "--checkout", str(tmp_path / "co"), "--cache-weight", weight)
+        assert r.stdout.splitlines() == [f"{total}\trun:run-1:c\tm\t1\t0"], weight
+
+
 def test_json_and_threshold(tmp_path: Path) -> None:
     _ledger(tmp_path, [(1, "review:PR#1", "a", 600, 0, 0), (1, "janitor:board", "a", 300, 0, 0)])
     j = json.loads(_run(str(tmp_path), "--json", "--threshold", "500").stdout)
