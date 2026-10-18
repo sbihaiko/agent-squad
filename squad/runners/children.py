@@ -213,7 +213,7 @@ class Children:
         if out.kind == "adapter_error":
             return self.outcome(name, "fail", session.adapter_reason(out.error), None,
                                 {"cap": out.res.amount, "elapsed": out.elapsed,
-                                 "diagnostic": session.adapter_diagnostic(out.error, message)})
+                                 "diagnostic": session.adapter_diagnostic(out.error, message), **session.error_fields(out.error)})
         return self.settle(ctx, name, d, ws, out, model)
 
     def settle(self, ctx, name, d, ws, out, model):

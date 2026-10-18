@@ -51,6 +51,29 @@ def usage_of(result):
     return out
 
 
+def failed_spend(table, model, result):
+    """What a call spent before the provider ended it: the result's measured cost, or its tokens at the model's price.
+
+    The CLI reports a terminal error as a `result` message and then exits non-zero, so a call that did work before it was
+    refused still holds the spend and the tokens of that work. The figure follows the same rule as a normal result: a
+    priced model's tokens at the table rates, else the SDK's `total_cost_usd`. A result with neither is estimated from
+    its tokens at the client rates the SDK borrows. None when there is no result: its spend is unknown, never zero, and
+    the grant stays reserved.
+    """
+    if result is None:
+        return None, None, None
+    usage = usage_of(result)
+    rates = prices.rates(table, model)
+    if rates is not None and usage is not None:
+        return prices.spend(rates, usage), usage, prices.TABLE_SOURCE
+    spend = getattr(result, "total_cost_usd", None)
+    if spend is not None:
+        return spend, usage, prices.SDK_SOURCE
+    if usage is not None and (table or {}).get("client"):
+        return prices.spend(table["client"], usage), usage, prices.TABLE_SOURCE
+    return None, usage, None
+
+
 def extract_json(text):
     """The node artifact: the last fenced JSON object in the text, else the last top-level object. None when absent."""
     if not text:
@@ -249,6 +272,8 @@ class SdkAdapter:
                 else:
                     result = m
         except Exception as e:   # broad on purpose: the SDK raises several types; each becomes AdapterError with its type kept; only a capped result is kept
+            # A refusal after the work carries what the work spent: the result is in hand before the CLI exits non-zero.
+            spend, usage, source = failed_spend(self.prices, req.model, result)
             # Probed 2026-10-11 (run-20261011-171934-888e92, issue #1814): one message past the reader's JSON ceiling
             # ends the read stream inside the transport — `guard()` raises out of its own frame loop — so the frame
             # cannot be dropped and the session cannot go on. The ceiling and the size of that frame are the only facts
@@ -257,15 +282,16 @@ class SdkAdapter:
                 ceiling, size = over
                 raise MessageOverCeiling(
                     f"the transport's reader stopped at its {ceiling}-byte JSON ceiling: the session's message was "
-                    f"{size if size is not None else 'an unmeasured number of'} bytes", ceiling, size) from e
+                    f"{size if size is not None else 'an unmeasured number of'} bytes", ceiling, size,
+                    spend=spend, usage=usage, spend_source=source) from e
             # Probed 2026-09-30: a response past CLAUDE_CODE_MAX_OUTPUT_TOKENS ends the call with an error that follows a measured ResultMessage.
             output_cap = result is not None and OUTPUT_CAP_TEXT in str(e)
             # Probed 2026-10-01: a call stopped at its spend cap raises in the same way (subtype
             # error_max_budget_usd). Keep its ResultMessage too: the spend rules end a capped
             # node through its artifact, and the result carries the reason, the spend, and the turns.
             capped = result is not None and getattr(result, "subtype", None) in STOP_REASONS
-            if not output_cap and not capped:   # an error with no result, or an unmapped one: spend unknown, unless nothing was served (#494)
-                raise AdapterError(f"{type(e).__name__}: {e}", served=served) from e
+            if not output_cap and not capped:   # an unmapped error: its result's spend if it produced one, else unknown, unless nothing was served (#494)
+                raise AdapterError(f"{type(e).__name__}: {e}", served=served, spend=spend, usage=usage, spend_source=source) from e
         finally:
             close = getattr(stream, "aclose", None)
             if close:

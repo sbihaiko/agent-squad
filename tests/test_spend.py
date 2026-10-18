@@ -1,7 +1,7 @@
 """Guards for run spend, caps, funding and the optional floor."""
 import pytest
 
-from squad import record
+from squad import prices, record
 from squad.adapter import ScriptedAdapter
 from squad.budget import Budget
 from squad.engine import Engine
@@ -49,6 +49,32 @@ async def test_a_refusal_before_the_first_message_returns_its_grant(tmp_path):
     assert eng.budget.unmeasured == pytest.approx(0.0)          # nothing was served, so nothing is unknown
     assert eng.budget.available() == pytest.approx(2.0 - 0.1)
     assert [e["spend"] for e in outs(tmp_path, "b")] == [0.1]    # b was funded and ran
+
+
+# The API-equivalent price of GPT-5.6 Terra (config/agent-defaults.yaml): a refused call is priced at its own model,
+# never at the Claude rates the SDK borrows.
+TERRA = {"input": 2.00, "cache_read": 0.20, "cache_write": 2.00, "output": 12.00}
+
+
+async def test_a_refused_call_that_did_work_releases_the_unused_part_of_its_reservation(tmp_path):
+    """#573: the CLI ends a refused call with a ResultMessage that names what the work spent, then exits non-zero.
+    `run_call` settled it with no spend, so its full grant stayed unmeasured, the fallback was not funded, and the
+    run failed on `run_spend_cap`. The reservation is settled with the spend its tokens price at, never held whole."""
+    d = doc([agent("a", output_key="x"), agent("b", output_key="y")], ["a", "b"], cap=2.0)
+    d["nodes"][1]["next"] = {"fail": "continue"}
+    d["nodes"][2]["budget"]["spend"] = {"min": 1.5, "max": 1.5}     # b starts only when a's grant is mostly released
+    usage = {"tokens_in": 100_000, "tokens_out": 10_000}
+    spend = prices.spend(TERRA, usage)                              # 0.32 of the 1.0 grant
+    eng = run_engine(d, {"a": {"error": "ResultError: Claude Code returned an error result: You've hit your session limit",
+                               "served": True, "spend": spend, "usage": usage, "spend_source": "price_table"},
+                         "b": {"output": {"y": 1}, "spend": 0.1}}, tmp_path)
+    await eng.run()
+    a = outs(tmp_path, "a")[0]
+    assert a["outcome"] == "fail" and a["reasons"] == ["adapter_error"]
+    assert a["spend"] == pytest.approx(0.32)                        # the record carries what the refusal spent
+    assert eng.budget.unmeasured == pytest.approx(0.0)              # the unused part is released, not held
+    assert eng.budget.run_spend == pytest.approx(0.42)
+    assert [e["spend"] for e in outs(tmp_path, "b")] == [0.1]       # b is funded and runs
 
 
 async def test_an_entry_the_run_cannot_fund_is_not_started_and_the_node_folds_fail(tmp_path):

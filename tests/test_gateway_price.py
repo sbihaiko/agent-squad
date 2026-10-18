@@ -6,13 +6,13 @@ its real cost, and a node cap stops the call on a price the model does not have.
 import pytest
 
 from squad import defaults, prices, record
-from squad.adapter import ScriptedAdapter
+from squad.adapter import AdapterError, ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
 from squad.sdk_adapter import SdkAdapter
 from tests.flows import agent, doc
 from tests.gitrepo import make_repo
-from tests.test_sdk_adapter import Options, ResultMessage, request, stub
+from tests.test_sdk_adapter import AssistantMessage, Options, ResultMessage, request, stub
 
 pytestmark = pytest.mark.anyio
 
@@ -85,6 +85,32 @@ async def test_a_call_on_a_suffixed_model_spends_its_table_price_not_the_sdk_cos
         request(model="claude-deepseek-flash[1m]"))
     assert r.spend == pytest.approx(0.11 * 0.30 + 10.59 * 0.006 + 0.064 * 1.20)
     assert r.spend_source == "price_table"
+
+
+async def test_a_refusal_after_work_carries_the_spend_of_the_result_it_produced():
+    """#573: the CLI reports a terminal error as a result message and then exits non-zero. That result names what the
+    work spent, so the refusal settles with it instead of holding its whole reservation as unmeasured."""
+    async def query(*, prompt, options):
+        yield AssistantMessage()     # the call did work before the provider refused it
+        yield ResultMessage(total_cost_usd=4.08, usage=USAGE)
+        raise RuntimeError("Claude Code returned an error result: You've hit your session limit")
+    with pytest.raises(AdapterError) as info:
+        await SdkAdapter(query=query, options_cls=Options, prices=TABLE).call(request(model=GATEWAY))
+    assert info.value.served is True
+    assert info.value.spend == pytest.approx(0.11 * 0.30 + 10.59 * 0.006 + 0.064 * 1.20)   # its own price, not the borrowed one
+    assert info.value.spend_source == "price_table"
+
+
+async def test_a_refusal_whose_result_reports_no_cost_is_estimated_from_its_tokens():
+    """#573: a result with no `total_cost_usd` still reports its tokens, so the refusal settles with their price at the
+    client rates the SDK borrows, never with its whole reservation."""
+    async def query(*, prompt, options):
+        yield ResultMessage(total_cost_usd=None, usage=USAGE)
+        raise RuntimeError("Claude Code returned an error result: socket closed")
+    with pytest.raises(AdapterError) as info:
+        await SdkAdapter(query=query, options_cls=Options, prices=TABLE).call(request(model="claude-sonnet-5-5"))
+    assert info.value.spend == pytest.approx(0.11 * 3.0 + 10.59 * 0.30 + 0.064 * 15.0)
+    assert info.value.spend_source == "price_table"
 
 
 async def test_a_model_with_no_entry_keeps_the_sdk_cost_and_its_source():

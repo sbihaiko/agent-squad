@@ -9,11 +9,15 @@ from dataclasses import dataclass
 
 class AdapterError(Exception):
     """The call failed before it produced a result. Its spend is unknown, unless `served` is False: the provider refused
-    the request before it produced one message, so the call spent nothing and its grant goes back (#494)."""
+    the request before it produced one message, so the call spent nothing and its grant goes back (#494). A refusal that
+    did work carries what that work spent: the result's measured cost, or an estimate from its tokens."""
 
-    def __init__(self, message="", served=True):
+    def __init__(self, message="", served=True, spend=None, usage=None, spend_source=None):
         super().__init__(message)
         self.served = served
+        self.spend = spend
+        self.usage = usage
+        self.spend_source = spend_source
 
 
 class MessageOverCeiling(AdapterError):
@@ -24,8 +28,8 @@ class MessageOverCeiling(AdapterError):
     failure so an operator does not have to read the diagnostic text to tell the two apart (issue #1814).
     """
 
-    def __init__(self, message, ceiling, size):
-        super().__init__(message)
+    def __init__(self, message, ceiling, size, **kw):
+        super().__init__(message, **kw)
         self.ceiling, self.size = ceiling, size
 
 
@@ -99,7 +103,8 @@ class ScriptedAdapter:
         if step.get("delay"):
             await anyio.sleep(step["delay"])
         if step.get("error"):
-            raise AdapterError(step["error"], served=step.get("served", True))
+            raise AdapterError(step["error"], served=step.get("served", True), spend=step.get("spend"), usage=step.get("usage"),
+                               spend_source=step.get("spend_source"))
         if step.get("effect"):
             step["effect"](req)
         return CallResult(step.get("output"), step.get("spend"), step.get("turns"), step.get("stop_reason"),

@@ -71,8 +71,8 @@ class AgentRunner:
             ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
         if session.exhausted(chain, tried):    # every entry refused to serve: one fail, naming each entry and its error
-            return fin("fail", ["adapter_error"], spend=None, cap=out.res.amount, elapsed=out.elapsed,
-                       diagnostic={"error": session.chain_message(tried)}, **who)
+            return fin("fail", ["adapter_error"], cap=out.res.amount, elapsed=out.elapsed,
+                       diagnostic={"error": session.chain_message(tried)}, **session.error_fields(out.error), **who)
         if out.kind == "no_funds":
             return fin("fail", ["run_spend_cap"], spend=None, cap=None)
         if out.kind == "expired":
@@ -80,8 +80,8 @@ class AgentRunner:
         if out.kind == "deadline":
             return slot["res"]
         if out.kind == "adapter_error":
-            return fin("fail", session.adapter_reason(out.error), spend=None, cap=out.res.amount, elapsed=out.elapsed,
-                       diagnostic=session.adapter_diagnostic(out.error), **who)
+            return fin("fail", session.adapter_reason(out.error), cap=out.res.amount, elapsed=out.elapsed,
+                       diagnostic=session.adapter_diagnostic(out.error), **session.error_fields(out.error), **who)
         return self.settle(ctx, node, entry, sc, out, eff, who)
 
     async def attempt(self, ctx, node, entry, sc, eff, deadline, model, slot, fin):

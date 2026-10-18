@@ -58,6 +58,14 @@ def adapter_reason(err):
     return ["adapter_error"]
 
 
+def error_fields(err):
+    """What a refused call spent, for its outcome: the measured cost, or the estimate from its tokens, and the source.
+    A call with no data carries `spend: None`, so its grant stays unmeasured and replay keeps it reserved."""
+    spend = getattr(err, "spend", None)
+    source = getattr(err, "spend_source", None) if spend is not None else None
+    return {"spend": spend, **(getattr(err, "usage", None) or {}), **({"spend_source": source} if source else {})}
+
+
 def adapter_diagnostic(err, message=None):
     """What the record says about a call that produced no result, and — for the transport ceiling — what the transport
     allowed. The SDK's reader raises out of its own line framer, so the frame cannot be dropped and the session cannot
@@ -167,8 +175,8 @@ async def run_call(source, deadline, make_request, *, adapter, record, budget, c
         return CallOutcome("deadline", res, elapsed=hit[0])
     elapsed = clock() - t0
     if "err" in box:
-        if getattr(box["err"], "served", True):
-            budget.settle(res, None)
+        if getattr(box["err"], "served", True):     # the work it did before the refusal is spent; no data leaves the grant whole
+            budget.settle(res, getattr(box["err"], "spend", None))
         else:               # refused before one message: nothing was spent, so the grant goes back (#494)
             budget.release(res)
         return CallOutcome("adapter_error", res, error=box["err"], elapsed=elapsed)
