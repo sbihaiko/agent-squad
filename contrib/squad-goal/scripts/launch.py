@@ -256,15 +256,16 @@ proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad
                         cwd=str(target) if target else None,
                         env={**os.environ, "SQUAD_HEADLESS": "1"})
 new = []
-for _ in range(90):
+deadline = time.monotonic() + 180   # a short step: the folder is read as soon as it appears, never up to 2 s late per launch
+while True:
     new = sorted(set(p.name for p in runs.glob("run-*")) - before) if runs.exists() else []
     if new: break
     if proc.poll() is not None:
         tail = "".join(open(log).readlines()[-15:])
         sys.exit(f"squad exited ({proc.returncode}) before creating a run folder; {log}:\n{tail}")
-    time.sleep(2)
-else:
-    sys.exit(f"no run folder appeared in 180 s; see {log}")
+    if time.monotonic() > deadline:
+        sys.exit(f"no run folder appeared in 180 s; see {log}")
+    time.sleep(0.1)
 run = new[-1]
 (runs / run / "request.txt").write_text(req_file.read_text())   # consult.sh reads the request from the run folder
 # One branch per wave (#375, ADR-0145 rules 8 and 10): a run that dispatches children cuts its wave branch from the base
