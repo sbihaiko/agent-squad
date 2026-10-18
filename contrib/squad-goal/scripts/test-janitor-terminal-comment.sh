@@ -31,18 +31,22 @@ case "$a" in
   *--include*issues/2205/comments*) echo '[]';;
   *--include*issues/2206/comments*) echo '[{"body":"<!-- squad-goal:terminal -->\nClosed: earlier note"}]';;
   *--include*issues/2203/events*) echo '[{"event":"labeled","label":{"name":"bug"},"actor":{"login":"x"}},{"event":"closed","actor":{"login":"owner1"},"state_reason":"not_planned"}]';;
+  *--include*issues/2208/events*) echo '[{"event":"closed","actor":{"login":"owner1"},"state_reason":"not_planned"}]';;
+  *--include*issues/2208/comments*) echo '[]';;
   *search/issues*) echo 0;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
     printf '2201\tCode Complete\thttps://api.github.com/repos/x/y\n2202\tTodo\thttps://api.github.com/repos/x/y\n'
     printf '2203\tTodo\thttps://api.github.com/repos/x/y\n2204\tCode Complete\thttps://api.github.com/repos/x/y\n'
-    printf '2205\tClosed\thttps://api.github.com/repos/x/y\n2206\tClosed\thttps://api.github.com/repos/x/y\n';;
+    printf '2205\tClosed\thttps://api.github.com/repos/x/y\n2206\tClosed\thttps://api.github.com/repos/x/y\n'
+    printf '2208\tClosed\thttps://api.github.com/repos/x/y\n';;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
     printf '{"number":2202,"title":"Issue 2202","body":"","state":"OPEN","labels":{"nodes":[{"name":"wontfix"}]},"subIssuesSummary":{"total":0,"completed":0},"comments":{"nodes":[]}}'
     printf ']}}}}';;
   *issues/2201*|*issues/2204*) echo $'closed\tcompleted\tIssue';;
   *issues/2203*) echo $'closed\tnot_planned\tIssue';;
+  *issues/2208*) echo $'closed\tnot_planned\tIssue';;
   *issues/22*) echo $'open\t\tIssue\twontfix';;
 esac
 J
@@ -51,7 +55,7 @@ mkdir -p "$T/co/runs/run-a"; echo run-a > "$T/st/active-runs.txt"
 printf 'CHILD — GitHub issue(s) 2201, 2203, 2204:\n' > "$T/co/runs/run-a/request.txt"
 printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
 run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
-o=$(run); o2=$(run)
+o=$(run); r1=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null); : > "$T/gh.calls"; o2=$(run); r2=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null)
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 note() { cat "$T"/st/cq/x__y#"$1"-terminal-*.md 2>/dev/null; }
 count() { ls "$T"/st/cq/ 2>/dev/null | /usr/bin/grep -c "^x__y#$1-terminal-"; }
@@ -66,6 +70,12 @@ note 2203 | /usr/bin/grep -q 'not planned' && note 2203 | /usr/bin/grep -q '@own
 [ "$(count 2204)" = 0 ] && /usr/bin/grep -q "TERMINAL-NO-CONDITION #2204" "$T/st/cycle.log" && ok "the refused terminal write is named" || ko "#2204 not named: $o"
 note 2205 | /usr/bin/grep -q 'gui/2205-b' && ok "a settled Closed card with no comment is backfilled" || ko "#2205 not backfilled: $(note 2205) $o"
 [ "$(count 2206)" = 0 ] && ok "a settled card that already carries its comment gets none" || ko "#2206 commented twice"
+! has ' 2208$' && ok "a settled card whose condition cannot be stated is not moved" || ko "#2208 written: $(cat "$T/board.calls")"
+[ -f "$T/st/auto/janitor-terminal-unreadable-2208" ] && [ "$(cat "$T/st/auto/janitor-terminal-unreadable-2208")" = Closed ] \
+  && ok "an unreadable terminal condition is remembered by a marker under SG_STATE" || ko "#2208 marker missing or wrong"
+[ "$(/usr/bin/grep -c 'TERMINAL-NO-CONDITION #2208' "$T/st/cycle.log")" = 1 ] && ok "an unreadable condition is reported once over two passes" || ko "#2208 reported $(/usr/bin/grep -c 'TERMINAL-NO-CONDITION #2208' "$T/st/cycle.log") times: $o$o2"
+[ "$r1" -gt 0 ] && [ "$r2" = 0 ] && ok "a second pass over the same unreadable issue makes no read" || ko "#2208 reads: first $r1, second $r2: $o$o2"
+[ "$(count 2208)" = 0 ] && ok "a remembered unreadable card gets no terminal comment" || ko "#2208 commented"
 for n in 2201 2202 2203 2205; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
 [ "$fail" = 0 ] && ok "every terminal entry has exactly one comment after two passes"
 note 2201 | /usr/bin/grep -q 'squad-goal:terminal' && ok "the comment carries the tag the backfill reads" || ko "no tag: $(note 2201)"
