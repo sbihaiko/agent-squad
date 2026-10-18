@@ -74,7 +74,7 @@ def wave_runner(tmp_path):
     """wave.sh enter in a child's worktree, with a gate that records its run and fails (so nothing is pushed)."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("wave.sh", "address.sh", "gate.sh", "serial.sh"), d)
+    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh"), d)
     co, origin = _repo_with_remote(tmp_path, ["wave/run-1"])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
     (st / "auto").mkdir(parents=True)

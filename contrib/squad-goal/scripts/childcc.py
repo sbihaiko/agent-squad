@@ -7,7 +7,7 @@ The child's own diff is reviewed before that entry, here, once per head (childre
 of the child's own commits against the wave branch (#376), and a child's branch is pushed nowhere (#375), so the review lane
 that lists pushed work branches never saw it and every child was held out of its wave for good.
 The child's issue is read from its own spawn prompt, first match wins: "GitHub issue #N", "issue #N",
-"GitHub issues N", "GitHub issue N", then a "gui/N" or "wt-as-N" branch/worktree name.
+"GitHub issues N", "GitHub issue N", "Refs #N", then a "gui/N" or "wt-as-N" branch/worktree name.
 A pass whose prompt names no issue is logged once (CHILDCC UNMAPPED <run> <child>) instead of being skipped silently.
 The runs the pass works are its arguments, else every live run: watch.sh's completion of a finished run hands it that one run, so the children that run finished are in its wave before that same step lands the wave (#375 review).
 Live runs move at once; a run that already has its verdict (tiny and fork-only runs go pass -> verdict in under 1 s, so they are never seen live) is backfilled once,
@@ -16,6 +16,7 @@ Testing starts later (merge + e2e, or a test.sh pass), so Code Complete never ov
 past it is left alone because the marker is written the first time the child is seen passing."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
+import child_issues   # the issues a child's spawn text names (#555)
 from issue_state import board_state, RunParentChild
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
@@ -90,10 +91,8 @@ def card_status(n):   # the state the card carries, "" when it carries none or t
     try: return state.read(n)
     except RuntimeError: return ""   # a refusal or a deadline miss is the carrier not answering, not a card that carries nothing
 def issue_from(df):
-    m = (re.search(r"GitHub issue #(\d+)", df) or re.search(r"\bissue #(\d+)", df)
-         or re.search(r"GitHub issues (\d+)", df) or re.search(r"GitHub issue (\d+)", df)
-         or re.search(r"(?:gui/|wt-as-)(\d+)", df))
-    return int(m.group(1)) if m else None
+    n = child_issues.first(df)   # the one reader the janitor's sibling passes share (#555)
+    return int(n) if n else None
 for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue

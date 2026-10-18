@@ -90,14 +90,14 @@ expired() {
 # its definition prompt), each named once. A run whose directory carries no record names none.
 run_issues() {
   local f="$1/record.jsonl"; [ -f "$f" ] || return 0
-  python3 -c 'import json,re,sys
+  python3 -c 'import json,sys
+sys.path.insert(0, sys.argv[2]); from child_issues import first   # the one reader childcc.py shares (#555)
 for l in open(sys.argv[1]):
     try: d=json.loads(l)
     except Exception: continue
     if d.get("event") != "spawn_accepted": continue
-    t = json.dumps(d.get("definition"))
-    m = re.search(r"GitHub issue #(\d+)", t) or re.search(r"\bissue #(\d+)", t)
-    if m: print(m.group(1))' "$f" 2>/dev/null | sort -un
+    n = first(json.dumps(d.get("definition")))
+    if n: print(n)' "$f" "$here" 2>/dev/null | sort -un
 }
 
 start() {   # <run>: cut wave/<run> from origin/$SG_BASE, unless it is already there. A scratch clone: the owner's checkout is never touched.

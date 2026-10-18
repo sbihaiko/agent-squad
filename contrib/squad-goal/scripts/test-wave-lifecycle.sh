@@ -25,7 +25,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/wave.sh" "$d/gate.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
 cp "$d/watch.sh" "$d/single.sh" "$d/ghread.py" "$d/ghthrottle.py" "$T/s/" 2>/dev/null
 # The fixture's env.sh: the real one resolves a live profile, and this suite must touch no live state.
