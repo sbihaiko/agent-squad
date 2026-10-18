@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.gitrepo import with_origin
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "contrib/squad-goal/scripts"))
 import router_envelope  # noqa: E402
 
@@ -60,6 +62,7 @@ def _launch(tmp_path, coding, envelope, shared=None):
     req.write_text(f"Coding model: {coding[0]} (no [1m] suffix); fall back to {coding[-1]}.\n--- issue\n")
     e = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
     e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"), **({"SG_SHARED": str(shared)} if shared else {}))
+    with_origin(co)   # launch.py fetches origin/main before a run (#580)
     return subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)
 
 

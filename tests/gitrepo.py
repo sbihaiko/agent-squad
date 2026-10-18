@@ -45,3 +45,21 @@ def sibling_repo(run_dir):
     """A git repo next to a run directory, made once: a target for tests whose dispatch children get worktrees."""
     path = Path(str(run_dir) + "-target")
     return path if (path / ".git").exists() else make_repo(path)
+
+
+def with_origin(co, base="main"):
+    """Make `co` a repository whose files are one commit, with a local bare origin that holds `base`: launch.py fetches
+    origin/<base> before a run (#580), so its checkout needs an origin, and a file:// path keeps the fetch off the network."""
+    co = Path(co)
+    origin = co.parent / (co.name + "-origin.git")
+
+    def g(cwd, *a):
+        return sh(cwd, "git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "maintenance.auto=false", *a)
+
+    g(co, "init", "-q", "-b", base)
+    g(co, "add", "-A")
+    g(co, "commit", "-q", "--allow-empty", "-m", "base")
+    g(co.parent, "init", "-q", "--bare", str(origin))
+    g(co, "remote", "add", "origin", origin.resolve().as_uri())
+    g(co, "push", "-q", "origin", base)
+    return co

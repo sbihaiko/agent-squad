@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.gitrepo import with_origin
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 
@@ -61,8 +63,9 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
     e = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
     e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"),
              **(env or {}))
+    with_origin(co)   # launch.py fetches origin/main before a run (#580)
     r = subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)
-    return r, sorted(p.name for p in (co / "runs").glob("run-*"))
+    return r, sorted(p.name for p in co.glob("worktrees/run/*/runs/run-*"))   # the run folder is in its own worktree (#580)
 
 
 def test_a_router_pinned_to_an_alias_that_resolves_to_an_off_model_is_refused(tmp_path):

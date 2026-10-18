@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.gitrepo import with_origin
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "contrib/squad-goal/scripts"
 QWEN = "claude-qwen3.8-flash"
@@ -149,6 +151,7 @@ def _launch(tmp_path, cfg, coding_model):
     e = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "CCP_"))}
     e.update(PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}", SG_STATE=str(st), SG_CHECKOUT=str(co), SG_SQUAD=str(tmp_path / "squad"),
              SG_SHARED=str(tmp_path / "sh"), SG_CCP_CONFIG=str(cfg))
+    with_origin(co)   # launch.py fetches origin/main before a run (#580)
     r = subprocess.run([sys.executable, "-I", str(s / "launch.py"), str(req)], cwd=co, env=e, capture_output=True, text=True, timeout=60)
     argv = tmp_path / "argv"
     return r, argv.read_text() if argv.exists() else ""
@@ -161,7 +164,8 @@ def test_launch_never_chooses_qwen_without_a_key(no_key, tmp_path):
     r, argv = _launch(tmp_path / "b", no_key, "test-model")
     assert r.returncode == 0, r.stderr
     assert f"--spent-models {QWEN}" in argv
-    assert "qwen" not in r.stderr.lower()   # a closed model is no noise: no warning names it
+    # a closed model is no noise: no warning names it (the run worktree path holds the test name, so it is cut first)
+    assert "qwen" not in r.stderr.replace(str(tmp_path), "").lower()
 
 
 @pytest.mark.heavy
