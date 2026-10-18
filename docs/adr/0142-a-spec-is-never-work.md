@@ -32,14 +32,20 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
 5. **The column Todo is the owner's go signal.** A dispatcher (`autofrontier`, `autobug`) takes an
    issue only when its card sits in Todo and it carries the go label (`ready-for-agent`). The label
    says only that an agent may take the issue; the owner starts it by moving its card to Todo. A card
-   with no column is not in Todo. A spec and its tickets open in Backlog, each in one write on the
-   loop's next pass, and a spec stays below Doing in the column the owner gave it. The column carries
-   no blocking edge — a ticket whose blocker is still open waits on the dispatch's reading of that
-   edge, not on a column of its own.
+   with no column is not in Todo. A spec and its tickets are created with their card in Backlog; a
+   bug is created in Todo. The loop never moves a card into Backlog or Todo; only the owner does. A
+   spec stays below Doing in the column the owner gave it. The column carries no blocking edge — a
+   ticket whose blocker is still open waits on the dispatch's reading of that edge, not on a column
+   of its own.
 6. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
    tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
    nothing and stays open. The close carries a comment that names the count, and the card follows
    the issue to Done.
+7. **Every ticket that is not a spec gets the go label at creation.** The skill that cuts tickets
+   does not hold the label back until the blockers close; the repository's `stack.sh` holds a
+   blocked ticket.
+8. **Only the owner approves a spec's breakdown.** The autonomy panel never approves one unless the
+   owner asked for it in the session. With the owner away, the breakdown waits.
 
 ## Consequences
 

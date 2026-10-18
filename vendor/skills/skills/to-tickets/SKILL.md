@@ -61,6 +61,8 @@ Ask the user:
 
 Iterate until the user approves the breakdown.
 
+Only the owner approves a breakdown. The autonomy panel never approves one unless the owner asked for this breakdown in the session. With the owner away, the breakdown waits; do not publish it.
+
 ### 5. Publish the tickets to the configured tracker
 
 Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock-skills` configured; the tickets are the same either way, only the shape of the blocking edges changes:
@@ -75,7 +77,8 @@ Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock
   Write every blocking edge as the platform's own dependency too, so the relation is visible where a reader looks for it and not only in the body: on GitHub, `POST /repos/$OWNER/$REPO/issues/$TICKET/dependencies/blocked_by` with `-F issue_id=<the blocker's numeric id>` says "this ticket is blocked by that one", and the blocker's own panel then answers it as blocking. Read every edge back before moving on. Both relations carry their own weight: the parent link puts the tasks under the parent issue, and the dependencies are what the issue's Relationships panel shows.
   Publish no `relates_to` edge of the parent to its own tickets, and none between tickets on a guess. The parent link already lists them under the parent, with progress; a second copy can only disagree with it. A `relates_to` edge (on GitHub: `POST /repos/$OWNER/$REPO/issues/$TICKET/relates_to` with `-F issue_id=<the numeric id>`) is earned when two tickets touch the same place and neither blocks the other — and only once the reason is known and written in a comment, because the edge itself carries no direction and no proof. Where the repository already defers a startable ticket whose file another holds, that guard is the operational half and no edge replaces it.
   Apply every ticket's labels when it is created: the triage label, its `wave:NN` label and any type label. Before the first issue, make sure each `wave:NN` label you need exists (on GitHub: `gh label create "wave:NN" --color <hex> --description "Wave NN: startable once waves before it are done" --force`, one color per wave or one shared color). If a later edge change moves a ticket to another wave, move its label too: a ticket carries exactly one `wave:` label.
-  Where the dispatch reads the triage label as its go signal, a ticket that is not grabbable yet must not wear it: create it with its `wave:NN` label alone and add the triage label when every blocker of it is closed. The wave labels stay on all of them, so the order is readable and the edges are the same thing the dispatch sorts by.
+  Every ticket gets the triage label (`ready-for-agent`) when it is created, blocked or not. The repository's own guard (for example its `stack.sh`) holds a ticket whose blocker is open; the skill does not withhold the label. The wave labels stay on all of them, so the order is readable and the edges are the same thing the dispatch sorts by.
+  Where the tracker has a board, create each ticket's card in **Backlog** (a bug's card in **Todo**). The loop never moves a card into Backlog or Todo; only the owner does. Todo plus `ready-for-agent` is the dispatcher's go signal, so the owner starts a ticket by moving its card to Todo.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 

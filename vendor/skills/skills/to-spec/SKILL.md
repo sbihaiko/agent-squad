@@ -16,7 +16,9 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage. Where the tracker has a board, create the spec's card in **Backlog**. The loop never moves a card into Backlog or Todo; only the owner does.
+
+A spec is a document, never work. Its breakdown into tickets (`/to-tickets`) needs the owner's approval. The autonomy panel never approves a breakdown unless the owner asked for it in the session; with the owner away, the breakdown waits.
 
 <spec-template>
 
