@@ -25,7 +25,9 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
+export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
+for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
 cp "$d/watch.sh" "$d/single.sh" "$d/ghread.py" "$d/ghthrottle.py" "$T/s/" 2>/dev/null
 # The fixture's env.sh: the real one resolves a live profile, and this suite must touch no live state.
@@ -287,6 +289,12 @@ cycle 2
 pushed=$($G ls-remote "$T/origin.git" 'refs/heads/gui/*')
 [ -z "$pushed" ] && ok "no child branch is pushed to the remote: the entry pushes the wave ref alone" \
   || ko "no child branch is pushed to the remote: $(printf '%s' "$pushed" | tr '\n' ' ')"
+
+# The lifecycle's gates and reviews draw on the one machine-wide budget (#567) and give every slot back: a lease kind folder
+# exists under the throwaway budget, and no live holder is left (a dead holder's file stays until the next take reclaims it).
+ls "$SQUAD_CAPS_DIR" 2>/dev/null | /usr/bin/grep -qE '^(gates|reviews)$' && ok "the lifecycle drew slots from the machine-wide budget" || ko "no gate or review slot was ever taken: $(ls "$SQUAD_CAPS_DIR" 2>&1)"
+occ=$(PYTHONPATH="$T/squad" python3 -m squad.caps 2>&1 | python3 -c 'import json,sys; o=json.load(sys.stdin)["occupancy"]; print(o["gates"]+o["reviews"])' 2>&1)
+[ "$occ" = 0 ] && ok "every slot was given back" || ko "slots still live: $occ"
 
 kill "$HUB" 2>/dev/null; wait "$HUB" 2>/dev/null; rm -rf "$T"
 [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

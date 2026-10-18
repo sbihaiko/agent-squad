@@ -107,7 +107,7 @@ class Wave:
         self.scripts = root / "s"
         for d in (self.state / "auto", self.bin, self.scripts):
             d.mkdir(parents=True)
-        for name in ("wave.sh", "address.sh", "ghcall.sh", "gate.sh", "serial.sh", "base-battery.sh"):
+        for name in ("wave.sh", "address.sh", "ghcall.sh", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh"):
             shutil.copy(SCRIPTS / name, self.scripts / name)
         self.origin = root / "origin.git"
         self.co = root / "co"
@@ -129,6 +129,7 @@ class Wave:
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("SG_")}
         self.env["PATH"] = f"{self.bin}:{os.environ['PATH']}"
         self.env["SG_WAVE_GATES"] = "true"
+        self.env["SG_SQUAD"] = str(SCRIPTS.parent.parent.parent)   # a gate takes gate slots through this repository's squad.caps (#567)
 
     def git(self, *args, cwd=None, check=True):
         full = ["git", "-c", "user.email=a@b", "-c", "user.name=t", *args]

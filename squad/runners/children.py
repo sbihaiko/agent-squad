@@ -135,7 +135,8 @@ class Children:
         d = e.dispatch.children[name]["definition"]
         bound = anyio.current_time() + max(0.0, min(d["deadline"] * e.scale, ctx.dl_at - e.clock()))
         try:
-            lease = await e.ceiling.take("children", f"{e.run_id}:{name}", bound, on_wait=lambda w: e.record.append("ceiling_wait", **w))
+            lease = await e.ceiling.take("children", f"{e.run_id}:{name}", bound, on_wait=lambda w: e.record.append("ceiling_wait", **w),
+                                         on_tick=lambda w: e.record.append("ceiling_wait", **w))   # the record moves while the wait lasts, so heartbeat never reads a waiting child as wedged
         except CeilingWaitExpired as x:
             return self.outcome(name, "fail", [f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"], None, {})
         try:

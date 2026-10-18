@@ -38,6 +38,7 @@ run_def hashfirst c "GitHub issue #1500 and GitHub issue 1487" pass
 run_def unmapped c "a child whose prompt names no issue at all" pass
 run_def refs c "Every commit message carries the line \`Refs #1493\` on its own line. GOAL (issue 1493, SPEC 9 child): fix it." pass
 printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}' > "$T/issues-open.json"
+export SG_SQUAD=$(cd "$(dirname "$src")/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a review takes a review slot (caps.reviews): a throwaway budget, this repository's squad.caps
 export GH_LOG=$T/gh.log GH_ISSUES_OPEN=$T/issues-open.json; export SG_STATE=$T/st SG_REPO=x/y SG_OWNER=x SG_PROJECT=4 PATH="$T/bin:$PATH" GH_NUMS="2:Todo 3:Testing 4:In_Progress 5101:Todo"
 cp "$T/childcc.py" "$T/childcc.py.run"; sed -i.bak "s#^board = .*#board = '$T/board.sh'#" "$T/childcc.py.run"
 out=$(cd "$T/co" && python3 "$T/childcc.py.run" 2>&1)
@@ -101,6 +102,15 @@ pass rvw >/dev/null
 c1=$(grep -c '^rvw 5102' "$T/cr.calls"); sleep 30 & live=$!; echo "$h $live" > "$T/st/auto/rvd-rvw-c"; rm -f "$T/st/auto/cc-rvw-c" "$T/st/auto/requeued-rvw-c"
 pass rvw >/dev/null; kill $live 2>/dev/null
 [ "$(grep -c '^rvw 5102' "$T/cr.calls")" = "$c1" ] && ok "a claim whose pass is alive holds: the review is not repeated" || ko "a live claim was reviewed again: $(cat "$T/cr.calls")"
+# A review takes a review slot in try mode (#567): a full budget skips the review for this pass, with one line naming the
+# ceiling and its holder, and childcc never waits for a slot while it holds its own lock. The child is left for a later pass.
+sleep 60 & held=$!; for i in 0 1 2 3; do PYTHONPATH=$SG_SQUAD python3 -m squad.caps take reviews "other-$i" --pid $held >/dev/null; done
+run rvf 5103 n; wtree rvf; echo wave/rvf > "$T/st/auto/wave-rvf"; : > "$T/cr.calls"
+s0=$(date +%s); out=$(pass rvf); rc=$?; kill $held 2>/dev/null; wait $held 2>/dev/null
+[ "$(( $(date +%s) - s0 ))" -lt 20 ] && ok "a full review budget makes childcc skip, never wait" || ko "childcc waited for a review slot"
+[ ! -s "$T/cr.calls" ] && ok "a full review budget runs no review this pass" || ko "a review ran with every slot held: $(cat "$T/cr.calls")"
+[ "$(printf '%s\n' "$out" | /usr/bin/grep -c 'caps.reviews.*other-0')" = 1 ] && ok "the skip logs one line naming the ceiling and its holder" || ko "skip line: $out"
+[ "$rc" = 3 ] && [ ! -e "$T/st/auto/rvd-rvf-c" ] && ok "the skipped child is left for a later pass, with no claim" || ko "exit $rc, claim: $(/bin/ls "$T/st/auto")"
 # One pass works one pending child (#590): a review and the gates take 2 to 15 min each, and a pass that worked every child
 # held the childcc lock, and every landing behind it, for 14 to 25 min. A pass that leaves a child for later exits 3, never 0,
 # so the landing that waits for its children does not land a wave without them. A cursor kept in auto/ rotates the work, so a

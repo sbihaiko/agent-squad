@@ -26,13 +26,15 @@ POLL = {"SERIAL_POLL_SECONDS": "0.05"}   # a waiter looks at the lock every 50 m
 def _env(state):
     e = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "FG_"))}
     e["SG_STATE"] = str(state)
+    e["SG_SQUAD"] = str(SCRIPTS.parent.parent.parent)   # a gate takes gate slots through this repository's squad.caps (#567)
+    e["SQUAD_CAPS_DIR"] = str(Path(state) / "caps")     # a throwaway budget: no case draws on the machine's live slots
     return e
 
 
 def _tree(tmp_path):
     d = tmp_path / "scripts"
     d.mkdir()
-    for name in ("gate.sh", "serial.sh"):
+    for name in ("gate.sh", "serial.sh", "caps.sh"):
         shutil.copy(SCRIPTS / name, d / name)
     return d
 
@@ -74,7 +76,7 @@ def wave_runner(tmp_path):
     """wave.sh enter in a child's worktree, with a gate that records its run and fails (so nothing is pushed)."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "base-battery.sh",
+    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "caps.sh", "base-battery.sh",
                     "ghcall.sh", "ghread.py", "ghthrottle.py"), d)   # wave.sh sources ghcall.sh, which runs the two readers (#593)
     co, origin = _repo_with_remote(tmp_path, ["wave/run-1"])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
@@ -102,7 +104,7 @@ def branchland_runner(tmp_path):
     """One branchland pass over a work branch whose review approved it and whose tip has no check run: the local gate runs."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("gate.sh", "serial.sh", "branchland.sh", "base-battery.sh", "revformat.py", "workbranches.sh", "ffland.sh",
+    _copy(SCRIPTS, ("gate.sh", "serial.sh", "caps.sh", "branchland.sh", "base-battery.sh", "revformat.py", "workbranches.sh", "ffland.sh",
                     "address.sh", "ghread.py", "ghthrottle.py", "ghcall.sh"), d)
     co, origin = _repo_with_remote(tmp_path, [])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
@@ -140,7 +142,7 @@ def promote_runner(tmp_path):
     """promote-stg.sh with dev one commit ahead of stg and the local proof for the dev tip on the status line: the promotion pushes stg."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("promote-stg.sh", "gate.sh", "serial.sh"), d)
+    _copy(SCRIPTS, ("promote-stg.sh", "gate.sh", "serial.sh", "caps.sh"), d)
     co, origin = _repo_with_remote(tmp_path, ["stg"])
     _git("commit", "-q", "--allow-empty", "-m", "one", cwd=co)
     _git("push", "-q", str(origin), "dev", cwd=co)

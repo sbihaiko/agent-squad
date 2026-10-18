@@ -286,7 +286,8 @@ class Engine:
             dl = self.run_cfg["deadline"]
             try:
                 lease = await self.ceiling.take("runs", self.run_id, None if dl is None else anyio.current_time() + dl * self.scale,
-                                                on_wait=lambda w: self.record.append("ceiling_wait", **w))
+                                                on_wait=lambda w: self.record.append("ceiling_wait", **w),
+                                                on_tick=lambda w: self.record.append("ceiling_wait", **w))   # the record moves while the wait lasts, so heartbeat never reads a waiting run as wedged
             except CeilingWaitExpired as x:
                 self.outcomes.defect(self.g.root, x, reasons=[f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"])
                 return

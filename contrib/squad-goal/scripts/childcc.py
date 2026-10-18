@@ -18,7 +18,8 @@ One pass works at most SG_CHILDCC_BUDGET pending children (1 by default, #590): 
 child, and a pass that worked every child held the childcc lock, and every landing behind it, for 14 to 25 min. A child is
 work when its entry reaches the review and the gates; a child its requeue holds on an unchanged head, or that needs no entry,
 costs nothing. The cursor (auto/childcc-cursor) names the last child worked, and the next pass starts after it, so a child
-held on every pass does not take every pass. A pass that leaves a child that had no turn since the last complete pass
+held on every pass does not take every pass. A review takes one review slot of the machine-wide budget (caps.reviews, squad/caps.py), in try mode: a full budget skips the review for this pass with one log line and leaves the child for a later pass, so this pass never waits for a slot while it holds the childcc lock (SG_LAND_WAIT).
+A pass that leaves a child that had no turn since the last complete pass
 (auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it.
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
 the queue once with the landing's reason, and no card moves (#592)."""
@@ -71,6 +72,12 @@ def claimed(claim, head):   # a review claim [head, pid] holds while its pass is
     except ProcessLookupError: return False
     except PermissionError: pass
     return True
+def caps_cmd(*argv):   # `python3 -m squad.caps <argv>`: the machine-wide budget's one command (SG_SQUAD names the repository, else the one this script lives in)
+    root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
+    return subprocess.run([sys.executable, "-m", "squad.caps", *argv], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", "")})
+def review_slot(holder):   # one review slot, in try mode: (True, "") when taken, (False, the line naming the full ceiling and its holder) when the budget is full
+    e = caps_cmd("take", "reviews", holder, "--try", "--pid", str(os.getpid()))
+    return e.returncode == 0, e.stderr.strip() or f"caps.reviews take exited {e.returncode}"
 def reviewed(rd, child, n, wt, rv):
     """The review of the child's own diff, read in the child's worktree against its run's wave branch, before the entry: the
     branch the review lane lists is a pushed `fix/`/`gui/` one, and a child's branch reaches no remote at all (#375), so no
@@ -80,15 +87,20 @@ def reviewed(rd, child, n, wt, rv):
     that was down is tried again on the next pass. The claim also names the pass that holds it (#502): a pass killed
     mid-review (the loop stopped) leaves its claim and no reviewed head, and a claim whose pass is gone is no claim."""
     head = head_of(wt)
-    if rv.exists() and claimed(rv.read_text().split(), head): return
+    if rv.exists() and claimed(rv.read_text().split(), head): return True
     md, sha = review_paths(wt)
     if md.is_file() and md.stat().st_size and sha.is_file() and sha.read_text().strip() == head:   # a review of this head is already there: the entry reads it, and nothing is spent twice
-        rv.write_text(head + "\n"); return
+        rv.write_text(head + "\n"); return True
+    holder = f"childcc-{rd.name}-{child}-{os.getpid()}"
+    took, why = review_slot(holder)
+    if not took: print(f"CHILD REVIEW SKIPPED {rd.name} {child}: {why}", flush=True); return False
     rv.write_text(f"{head} {os.getpid()}\n")
-    e = subprocess.run(["bash", childreview, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
+    try: e = subprocess.run(["bash", childreview, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
+    finally: caps_cmd("release", "reviews", holder)
     out = (e.stdout + e.stderr).strip()
     if out: print(f"CHILD REVIEW {rd.name} {child}: {out}", flush=True)
     if e.returncode != 0: rv.unlink(missing_ok=True)
+    return True
 def review_paths(wt):   # the verdict and the sha the entry reads, named by the child's own branch (review.sh's rule)
     br = subprocess.run(["git", "-C", str(wt), "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     k = f"{st}/review-{br.replace('/', '_')}"   # the suffix is appended, never set: a child's branch carries dots of its own
@@ -113,7 +125,7 @@ def enter(rd, child, n, d):
     if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
     rq = A / f"requeued-{rd.name}-{child}"   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
     if rq.exists() and rq.read_text().strip() == head_of(wt): return False, "", False
-    reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}")
+    if not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
     if "WAVE REQUEUE" in out or "WAVE STOP" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
@@ -177,6 +189,7 @@ for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
     if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
     entered, why, worked = enter(pathlib.Path(r), child, n, d)
+    if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
     if worked: spent += 1; CURSOR.write_text(key + "\n")
     if why: print(why, flush=True)
     if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue

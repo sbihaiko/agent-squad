@@ -9,8 +9,11 @@
 # Up to SG_REVIEW_PARALLEL (default 3) branches are reviewed at once, each as a background job with its own result file and its own
 # count; the lines print in list order after the jobs end. A stop (SG_REVIEW_TRIES failed tries at one tip) expires after
 # SG_REVIEW_STOP_TTL seconds (default 1800): the marker and the count go, so a transient outage of the review chain heals (#426).
+# A review takes one review slot of the machine-wide budget (caps.reviews, squad/caps.py, #567). A job waits for one, one line naming
+# the full ceiling and its holder, for at most SG_REVIEW_SLOT_WAIT seconds (default 600); a job that gets none is skipped for this
+# pass (BRANCHREVIEW SKIPPED), counts no failed try, and the next pass reviews the branch.
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
-here="$(cd "$(dirname "$0")" && pwd)"
+here="$(cd "$(dirname "$0")" && pwd)"; . "$here/caps.sh"
 export SG_GH_PASS=branchreview
 SG_GHREAD="python3 $here/ghthrottle.py"; . "$here/ghcall.sh"; . "$here/workbranches.sh"
 remote=${SG_LAND_REMOTE:-https://github.com/$SG_REPO.git}; max=${SG_REVIEW_PASS_MAX:-3}
@@ -37,9 +40,13 @@ why_failed() { local f l m r t seen=" " out=
 # that landed while it ran) is a failed try at the listed tip; the next pass lists the new tip, with a new count.
 review_one() { local sha=$1 br=$2 i=$3 key=$4 res=$5 c s n out
   c="$A/branchreview-tries-$key-${sha:0:9}"; s="$A/branchreview-stop-$key-${sha:0:9}"; n=$(cat "$c" 2>/dev/null || echo 0)
-  out=$(bash "$here/branchreview.sh" "$br" "$i" 2>&1 | tail -1)
-  if [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ]; then rm -f "$c" "$s"; echo "BRANCHREVIEW $out" > "$res"; return; fi
-  n=$((n+1)); echo "$n" > "$c"; echo "BRANCHREVIEW FAILED $br ${sha:0:9} (try $n of $tries): $out" > "$res"
+  local holder="branchreview-$key-$$-${BASHPID:-$$}" slot_err slot_rc
+  slot_err=$(sg_caps take reviews "$holder" --pid "${BASHPID:-$$}" --target "$PWD" --wait "${SG_REVIEW_SLOT_WAIT:-600}" 2>&1 >/dev/null); slot_rc=$?
+  [ -z "$slot_err" ] || echo "BRANCHREVIEW $slot_err" > "$res"
+  [ $slot_rc = 0 ] || { echo "BRANCHREVIEW SKIPPED $br ${sha:0:9}: no review slot; the next pass reviews it" >> "$res"; return; }
+  out=$(bash "$here/branchreview.sh" "$br" "$i" 2>&1 | tail -1); sg_caps release reviews "$holder"
+  if [ "$(cat "$SG_STATE/review-$key.sha" 2>/dev/null)" = "$sha" ]; then rm -f "$c" "$s"; echo "BRANCHREVIEW $out" >> "$res"; return; fi
+  n=$((n+1)); echo "$n" > "$c"; echo "BRANCHREVIEW FAILED $br ${sha:0:9} (try $n of $tries): $out" >> "$res"
   [ "$n" -ge "$tries" ] && [ ! -e "$s" ] && { touch "$s"
     echo "BRANCHREVIEW STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i")); a new push, or $ttl s, starts a new count" >> "$res"
     { echo "REVIEW_CHAIN STOP $br: the review of ${sha:0:9} failed $n times ($(why_failed "$i"))."; python3 "$here/chainhealth.py" "$here/models.json" "${SG_SHARED:-$SG_STATE}" 2>/dev/null; } > "$(sg_cq_status "$i" "mchain")"; }

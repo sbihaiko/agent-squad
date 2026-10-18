@@ -4,8 +4,10 @@
 # local remote, temp state dir. One line per case. usage: bash test-branchreview-pass.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
+export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.2   # a review takes a review slot (caps.reviews, #567): a throwaway budget
+capsctl() { PYTHONPATH="$SG_SQUAD" python3 -m squad.caps "$@"; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/provkey.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/caps.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/provkey.py" "$d/models.json" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001
@@ -15,6 +17,7 @@ J
 cat > "$T/s/review.sh" <<J
 #!/bin/bash
 br=\$3; key=\$(printf '%s' "\$br" | tr / _); echo "\$br \$4" >> "$T/review.log"
+echo "\$(ls "$T/caps/reviews" 2>/dev/null | wc -l | tr -d ' ')" >> "$T/slots.log"   # the review slots held while this review runs
 [ -n "\${SLOWREV:-}" ] && { mkdir -p "$T/run"; touch "$T/run/\$\$"; ls "$T/run" | wc -l | tr -d ' ' >> "$T/conc.log"; sleep "\$SLOWREV"; rm -f "$T/run/\$\$"; }
 [ -n "\${FAILREV:-}" ] && { echo "model failed"; exit 1; }   # a failed review keeps no verdict and no sha
 echo "VERDICT: APPROVE" > "$T/st/review-\$key.md"; $G -C "$T/origin.git" rev-parse "\$br" > "$T/st/review-\$key.sha"
@@ -116,4 +119,17 @@ c=$(for i in 21 22 23 24; do cat "$T/st/auto/"branchreview-tries-gui_$i-p-* 2>/d
 [ "$c" = 1111 ] && ok "failed parallel reviews keep one count per branch" || ko "tries per branch: '$c'"
 [ "$(/usr/bin/grep -c '^BRANCHREVIEW FAILED gui/2[1-4]-p ' <<<"$r")" = 4 ] && ok "each failed review prints its own line" || ko "failed lines: '$r'"
 ls "$T/st/auto/" | /usr/bin/grep -q 'branchreview-out' && ko "a result temp file stayed" || ok "no result temp file stays"
+# 10) a review takes a review slot (caps.reviews): the stub sees one slot held while it runs, and none is left after the pass
+for i in 31 32; do push "gui/$i-s"; done; : > "$T/review.log"; rm -f "$T/slots.log"
+r=$(OPEN="7 8 31" SG_REVIEW_PASS_MAX=1 rp)
+[ "$(cat "$T/slots.log" 2>/dev/null)" = 1 ] && ok "a branch review holds one review slot while it runs" || ko "slots held during the review: '$(cat "$T/slots.log" 2>&1)' '$r'"
+[ "$(capsctl | python3 -c 'import json,sys; print(json.load(sys.stdin)["occupancy"]["reviews"])')" = 0 ] && ok "the review gives its slot back" || ko "a review slot stayed"
+# 11) a budget with no free review slot: the pass waits for one (bounded), never counts a failed try, and reviews the branch later
+sleep 60 >/dev/null 2>&1 & hs=$!; capsctl take reviews other --count 4 --pid "$hs" >/dev/null; : > "$T/review.log"
+r=$(OPEN="7 8 32" SG_REVIEW_PASS_MAX=1 SG_REVIEW_SLOT_WAIT=1 rp)
+[ "$(n gui/32-s)" = 0 ] && ok "no review runs while the review slots are full" || ko "a review ran without a slot: '$r'"
+case "$r" in *"waiting"*"caps.reviews"*"other"*"BRANCHREVIEW SKIPPED gui/32-s"*) ok "the wait is logged with the full ceiling and its holder, then the branch is skipped for this pass";; *) ko "no wait/skip lines: '$r'";; esac
+ls "$T/st/auto/" | /usr/bin/grep -q 'branchreview-tries-gui_32-s' && ko "a skipped review counted a failed try" || ok "a skipped review is no failed try"
+capsctl release reviews other; kill $hs 2>/dev/null
+r=$(OPEN="7 8 32" SG_REVIEW_PASS_MAX=1 rp); [ "$(n gui/32-s)" = 1 ] && ok "the next pass reviews the skipped branch" || ko "the skipped branch was not reviewed: '$r'"
 exit $fail

@@ -204,7 +204,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # They run under the machine-wide gate lock (#392), in try mode (#575): the entry runs inline in the fast lane, and a wait
   # there stops every dispatch, so a lock held by another gate holds the child out until a later pass, with no requeue.
   out=$(SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
-  if [ $grc = 73 ] && h=$(held_by "$out"); then echo "WAVE HOLD #$iss: the gate lock is held by pid $h; the child enters on a later pass"; return 1; fi
+  if [ $grc = 73 ] && h=$(held_by "$out"); then
+    case "$h" in slots:*) echo "WAVE HOLD #$iss: the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
+      *) echo "WAVE HOLD #$iss: the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
   [ $grc = 0 ] || {
     requeue "$iss" "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
   local try=1
@@ -234,8 +236,9 @@ tipgate=${SG_WAVE_TIP_GATES-"$(sg_base_gate "origin/$base" "$py")"}
 # child_of <clone> <sha>: the issue a commit names, its last `Refs #N`, empty when it names none.
 child_of() { $G -C "$1" log -1 --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | tail -1; }
 
-# held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575).
-held_by() { printf '%s\n' "$1" | sed -n 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' | head -1 | /usr/bin/grep .; }
+# held_by <output>: the pid named by serial.sh's try-mode skip line, and exit 0, when the output carries one (#575); a try-mode skip of
+# the gate slots (gate.sh, caps.gates) is a hold as well and prints `slots:` and the holders it names (#567).
+held_by() { printf '%s\n' "$1" | sed -n -e 's/^serial: lock gate held by pid \([0-9?]*\): skipped, not queued.*/\1/p' -e 's/^caps: caps\.gates is full ([0-9]* slots), held by \(.*\): .* skipped, not queued (try)$/slots:\1/p' | head -1 | /usr/bin/grep .; }
 
 # child_gate <clone> <from> <to> <issue>: one child's own suite against the wave tip, run in the clone. `SG_WAVE_CHILD_GATES`
 # replaces it (with SG_WAVE_CHILD the issue, SG_WAVE_CHILD_FROM/_TO the child's commit range); the default is the shell suite
@@ -398,7 +401,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
     wave_check "$S" "$w"; rc=$?
-    [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock is held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
+    [ $rc = 3 ] && { echo "WAVE WAIT $w: the gate lock or the gate slots are held by another gate, so the tip's check did not run; the wave lands on a later pass"; rm -rf "$S"; return 1; }
     [ $rc = 0 ] || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }
     sha=$(sc rev-parse HEAD)
     # The issues the wave carries: every `Refs #N` in a commit message, subject or body (a child never writes Closes), each

@@ -1,4 +1,5 @@
-"""The machine-wide ceiling: `caps.runs` live runs and `caps.children` live dispatch children, across every repository and run.
+"""The machine-wide ceiling: `caps.runs` live runs, `caps.children` live dispatch children, `caps.gates` gate worker slots and
+`caps.reviews` live reviews, across every repository and run.
 
 This pair is not the per-run pair (`run.max_parallel`, dispatch `max_children`). Filling the ceiling queues; a wait whose bound
 expires fails by name. A lease whose holder is dead is reclaimed when the slots are counted.
@@ -6,7 +7,10 @@ expires fails by name. A lease whose holder is dead is reclaimed when the slots 
 import json
 import os
 import subprocess
+import sys
+import time
 import types
+from pathlib import Path
 
 import anyio
 import pytest
@@ -47,7 +51,7 @@ def dead_pid():
 
 def test_the_plugin_defaults_hold_the_machine_wide_pair_apart_from_the_per_run_pair():
     cfg = defaults.load()
-    assert cfg["caps"] == {"runs": 10, "children": 20}
+    assert cfg["caps"] == {"runs": 10, "children": 20, "gates": 12, "reviews": 4}
     assert cfg["run"]["max_parallel"] == 20 and "caps" not in cfg["run"]     # the per-run pair stays where it was
 
 
@@ -140,7 +144,7 @@ async def test_a_wait_whose_bound_expires_fails_by_name(tmp_path):
     with pytest.raises(caps.CeilingWaitExpired, match=r"caps\.runs") as e:
         await c.take("runs", "late", deadline_at=anyio.current_time() + 0.05, on_wait=waits.append)
     assert e.value.ceiling == "caps.runs" and e.value.cap == 1
-    assert waits == [{"ceiling": "caps.runs", "cap": 1, "live": 1, "holder": "late"}]
+    assert waits == [{"ceiling": "caps.runs", "cap": 1, "live": 1, "holder": "late", "held_by": ["holder"]}]
 
 
 def make(tmp_path, ceiling, script, tweak=None, **kw):
@@ -180,7 +184,7 @@ async def test_a_child_over_the_ceiling_waits_and_starts_when_a_slot_frees(tmp_p
     assert v.verdict == "completed"
     w = [e for e in events(tmp_path, "ceiling_wait") if e["ceiling"] == "caps.children"]
     assert len(w) == 1 and w[0]["cap"] == 20 and w[0]["live"] == 20 and w[0]["holder"].endswith(":route.router.1")
-    assert c.occupancy() == {"runs": 0, "children": 19, "waiting": []}      # the run and its child gave their slots back
+    assert c.occupancy() == {"runs": 0, "children": 19, "gates": 0, "reviews": 0, "waiting": []}      # the run and its child gave their slots back
 
 
 @pytest.mark.anyio
@@ -228,3 +232,179 @@ def test_the_launch_ceiling_is_the_one_resolution_and_lives_in_the_machine_wide_
     c = launch.launch_ceiling(proj, defaults.PATH)
     assert c.caps == caps.resolve(proj) and c.caps["runs"] == 1
     assert str(c.folder).startswith(os.environ["SQUAD_CAPS_DIR"])
+
+
+# --- gates and reviews: the two kinds a gate and a review take from the same budget -------------------------------------------
+
+ROOT = Path(__file__).resolve().parent.parent
+FOUR = {"runs": 10, "children": 20, "gates": 12, "reviews": 4}
+
+
+def cli(tmp_path, *argv, **env):
+    """`python3 -m squad.caps ...` as a bash script runs it, in the leases folder of this case."""
+    e = {**os.environ, "SQUAD_CAPS_DIR": str(tmp_path / "leases"), "PYTHONPATH": str(ROOT), **env}
+    return subprocess.run([sys.executable, "-m", "squad.caps", *argv], capture_output=True, text=True, env=e, cwd=tmp_path, timeout=60)
+
+
+def test_the_resolution_carries_gates_and_reviews_and_a_project_may_lower_them(tmp_path):
+    r = caps.resolve(project(tmp_path, gates=2, reviews=1))
+    assert (r["gates"], r["reviews"]) == (2, 1) and (r["runs"], r["children"]) == (10, 20)
+
+
+@pytest.mark.parametrize("kind,above", [("gates", 13), ("reviews", 5)])
+def test_a_project_above_the_plugin_default_of_gates_or_reviews_is_refused(tmp_path, kind, above):
+    with pytest.raises(OptionError, match=rf"caps\.{kind}.*may only lower"):
+        caps.resolve(project(tmp_path, **{kind: above}))
+
+
+def test_a_caps_block_without_gates_and_reviews_is_a_named_failure(tmp_path):
+    cfg = defaults.load()
+    cfg["caps"] = {"runs": 10, "children": 20}
+    p = tmp_path / "agent-defaults.yaml"
+    p.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(caps.CapsError, match=r"gates"):
+        caps.resolve(defaults_path=p)
+
+
+def test_gate_slots_are_taken_all_or_none(tmp_path):
+    c = caps.Ceiling(FOUR, tmp_path / "leases")
+    first = c.try_take_many("gates", "gate-a", 6)
+    assert len(first) == 6 and c.occupancy()["gates"] == 6
+    assert c.try_take_many("gates", "gate-b", 7) is None                  # 6 + 7 > 12: no slot of the seven is held
+    assert c.occupancy()["gates"] == 6
+    second = c.try_take_many("gates", "gate-b", 6)
+    assert len(second) == 6 and c.occupancy()["gates"] == 12
+    c.release_many(first)
+    assert c.occupancy()["gates"] == 6
+
+
+def test_the_slots_of_a_dead_holder_are_reclaimed_whatever_the_kind(tmp_path):
+    c = caps.Ceiling({**FOUR, "gates": 6}, tmp_path / "leases")
+    assert len(c.try_take_many("gates", "killed-gate", 6, pid=dead_pid())) == 6
+    assert c.occupancy()["gates"] == 0
+    assert len(c.try_take_many("gates", "next-gate", 6)) == 6
+    c2 = caps.Ceiling({**FOUR, "reviews": 1}, tmp_path / "leases")
+    assert c2.try_take("reviews", "killed-review", pid=dead_pid())
+    assert c2.try_take("reviews", "next-review") is not None
+
+
+@pytest.mark.anyio
+async def test_a_step_waits_while_the_slots_are_full_and_names_the_ceiling_and_its_holder(tmp_path):
+    c = caps.Ceiling({**FOUR, "reviews": 1}, tmp_path / "leases", poll=0.01)
+    held = c.try_take("reviews", "review-of-x")
+    waits = []
+
+    async def free():
+        while not c.waiting():
+            await anyio.sleep(0.01)
+        c.release(held)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(free)
+        lease = await c.take("reviews", "late-review", deadline_at=anyio.current_time() + 30, on_wait=waits.append)
+    assert lease is not None
+    assert waits == [{"ceiling": "caps.reviews", "cap": 1, "live": 1, "holder": "late-review", "held_by": ["review-of-x"]}]
+
+
+@pytest.mark.anyio
+async def test_a_long_wait_ticks_so_the_record_of_the_run_keeps_moving(tmp_path):
+    """A wait inside a run stays inside the call deadline and writes to the record while it lasts, so the heartbeat reads a run
+    that waits for a slot as a run that moves."""
+    c = caps.Ceiling({**FOUR, "reviews": 1}, tmp_path / "leases", poll=0.01)
+    c.try_take("reviews", "holder")
+    ticks = []
+    with pytest.raises(caps.CeilingWaitExpired, match=r"caps\.reviews"):
+        await c.take("reviews", "late", deadline_at=anyio.current_time() + 0.3, on_tick=ticks.append, tick=0.05)
+    assert len(ticks) >= 3 and ticks[0]["ceiling"] == "caps.reviews"
+
+
+def test_try_mode_skips_at_once_with_one_line_naming_the_ceiling_and_its_holder(tmp_path):
+    alive = str(os.getpid())
+    held = cli(tmp_path, "take", "reviews", "first", "--pid", alive)
+    assert held.returncode == 0, held.stderr
+    for i in range(3):
+        cli(tmp_path, "take", "reviews", f"filler-{i}", "--pid", alive)
+    t0 = time.monotonic()
+    r = cli(tmp_path, "take", "reviews", "second", "--try")
+    assert r.returncode == 73 and time.monotonic() - t0 < 5
+    lines = [ln for ln in r.stderr.splitlines() if ln.strip()]
+    assert len(lines) == 1 and "caps.reviews" in lines[0] and "first" in lines[0] and "skipped" in lines[0]
+
+
+def test_a_step_that_waits_logs_one_line_and_expires_with_exit_75(tmp_path):
+    for i in range(4):
+        cli(tmp_path, "take", "reviews", f"filler-{i}", "--pid", str(os.getpid()))
+    r = cli(tmp_path, "take", "reviews", "late", "--wait", "1", SQUAD_CAPS_POLL="0.1")
+    assert r.returncode == 75
+    waiting = [ln for ln in r.stderr.splitlines() if "waiting" in ln]
+    assert len(waiting) == 1 and "caps.reviews" in waiting[0] and "filler-0" in waiting[0] and "4" in waiting[0]
+
+
+def test_the_cli_takes_and_releases_a_count_of_slots(tmp_path):
+    r = cli(tmp_path, "take", "gates", "gate-1", "--count", "6", "--pid", str(os.getpid()))
+    assert r.returncode == 0 and r.stdout.strip() == "6"
+    assert json.loads(cli(tmp_path).stdout)["occupancy"]["gates"] == 6
+    assert cli(tmp_path, "release", "gates", "gate-1").returncode == 0
+    assert json.loads(cli(tmp_path).stdout)["occupancy"]["gates"] == 0
+
+
+def test_a_gate_asking_for_more_than_the_project_ceiling_takes_the_ceiling_and_never_waits(tmp_path):
+    proj = project(tmp_path, gates=2)
+    t0 = time.monotonic()
+    r = cli(tmp_path, "take", "gates", "gate-1", "--count", "6", "--target", str(proj), "--wait", "30", "--pid", str(os.getpid()))
+    assert r.returncode == 0 and r.stdout.strip() == "2" and time.monotonic() - t0 < 10
+    assert "caps.gates" in r.stderr and "2" in r.stderr           # one line says the count was lowered to the ceiling
+
+
+def childcc_fixture(tmp_path):
+    """A run of one passed child that cut a wave, a child worktree, a stub review and a stub wave: childcc.py reaches its review."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    src = ROOT / "contrib" / "squad-goal" / "scripts"
+    for f in ("childcc.py", "issue_state.py", "child_issues.py"):
+        (scripts / f).write_text((src / f).read_text())
+    (scripts / "board.sh").write_text("#!/bin/bash\nexit 0\n")
+    (scripts / "childreview.sh").write_text(f"#!/bin/bash\necho reviewed >> {tmp_path}/reviews\n")
+    (scripts / "wave.sh").write_text("#!/bin/bash\necho 'WAVE HOLD: no review yet'; exit 1\n")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "gh").write_text("#!/bin/bash\ncase \"$*\" in *'-q .state'*) echo open;; esac\n")
+    for f in (*scripts.glob("*.sh"), bin_ / "gh"):
+        f.chmod(0o755)
+    st = tmp_path / "st"
+    (st / "auto").mkdir(parents=True)
+    (st / "auto" / "waved-r1").touch()
+    (st / "auto" / "wave-r1").touch()
+    run = tmp_path / "co" / "runs" / "r1"
+    (st / "active-runs.txt").write_text(f"{run}\n")
+    wt = run / "ws" / "target-c"
+    wt.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(wt)], check=True)
+    (run / "record.jsonl").write_text(
+        json.dumps({"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #77"}) + "\n"
+        + json.dumps({"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}) + "\n")
+    env = {**os.environ, "SG_STATE": str(st), "SG_REPO": "x/y", "SG_OWNER": "x", "SG_PROJECT": "4", "SG_SQUAD": str(ROOT),
+           "PATH": f"{bin_}:{os.environ['PATH']}", "SQUAD_CAPS_DIR": str(tmp_path / "leases"), "SQUAD_CAPS_POLL": "0.1"}
+    return scripts / "childcc.py", tmp_path / "co", env
+
+
+def test_a_review_in_childcc_never_waits_for_a_slot_while_it_holds_the_childcc_lock(tmp_path):
+    script, co, env = childcc_fixture(tmp_path)
+    alive = str(os.getpid())
+    for i in range(4):
+        assert cli(tmp_path, "take", "reviews", f"other-{i}", "--pid", alive).returncode == 0
+    t0 = time.monotonic()
+    r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, cwd=co, timeout=60)
+    assert time.monotonic() - t0 < 20, "childcc waited for a review slot"
+    assert not (tmp_path / "reviews").exists()                                      # the review did not run this pass
+    skips = [ln for ln in r.stdout.splitlines() if "caps.reviews" in ln]
+    assert len(skips) == 1 and "skipped" in skips[0] and "other-0" in skips[0]
+    assert r.returncode == 3                                                        # the child is left for a later pass, never landed without
+    assert not (tmp_path / "st" / "auto" / "rvd-r1-c").exists()                     # no claim: the next pass reviews it
+
+
+def test_a_review_in_childcc_takes_a_review_slot_and_gives_it_back(tmp_path):
+    script, co, env = childcc_fixture(tmp_path)
+    r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, env=env, cwd=co, timeout=60)
+    assert (tmp_path / "reviews").read_text() == "reviewed\n", r.stdout + r.stderr
+    assert json.loads(cli(tmp_path).stdout)["occupancy"]["reviews"] == 0
