@@ -60,6 +60,11 @@ esac
 if [ -n "$q" ]; then jq -r "$q" "$f"; else cat "$f"; fi
 J
   chmod +x "$t/bin/gh"; : > "$t/gh.log"
+  cat > "$t/s/issue_state.py" <<'PY'
+import json, os, sys   # the seam's door, stubbed (#550): one board read a pass, every card in Todo
+if sys.argv[1:]: sys.exit(1)
+for i in json.load(open(os.environ["FIX"] + "/rest.json")): print(f"{i['number']}\tTodo")
+PY
   ( cd "$t" && env SG_SINGLE_AUTOFRONTIER=1 AF_DRY=1 SG_GH_AGGREGATE_WINDOW=0 SG_SQUAD="$(cd "$d/../../.." && pwd)" SQUAD_CAPS_DIR="$t/caps" \
       PATH="$t/bin:$PATH" HOME="$t/home" GHLOG="$t/gh.log" FIX="$t/fix" bash "$t/s/autofrontier.sh" > "$t/out" 2>&1 )
   cp "$t/out" "$T/frontier.out"; [ -n "${DBG:-}" ] && { echo "--- out:" >&2; cat "$t/out" >&2; echo "--- log:" >&2; cut -c1-120 "$t/gh.log" >&2; }; wc -l < "$t/gh.log" | tr -d ' '; }

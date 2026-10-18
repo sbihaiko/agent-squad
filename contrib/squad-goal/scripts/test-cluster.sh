@@ -24,13 +24,18 @@ mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autob
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"   # exported, as the real env.sh does: a pass re-execs itself under single.sh, and an unexported SG_STATE is lost there
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
+cat > "$T/s/issue_state.py" <<PY
+import json, sys   # the seam's door, stubbed (#550): every fixture issue's card sits in Todo, the owner's go signal
+if sys.argv[1:]: sys.exit(1)
+for i in json.load(open("$T/issues.json")): print(f"{i['number']}\\tTodo")
+PY
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*) echo "" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:(.labels//[{name:"ready-for-agent"}])},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;   # the frontier's one list read (#383)
   *"issues?state=open"*wave*) python3 -c 'import json;[print("wave:01\x1f"+str(i["number"])+"\x1fready-for-agent") for i in json.load(open("$T/issues.json"))]' ;;
-  *"issues?state=open"*) python3 -c 'import json;[print(str(i["number"])+"\x1f"+"bug") for i in json.load(open("$T/issues.json"))]' ;;
+  *"issues?state=open"*) python3 -c 'import json;[print(str(i["number"])+"\x1f"+"bug,ready-for-agent") for i in json.load(open("$T/issues.json"))]' ;;
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
   *) echo "" ;;
 esac

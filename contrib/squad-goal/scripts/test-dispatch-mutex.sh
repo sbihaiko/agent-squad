@@ -20,6 +20,8 @@ case "\$*" in
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;
   *"issues?state=open"*labels=bug*) printf '426\037bug,ready-for-agent\n' ;;
   *"issues?state=open"*) printf '426\037bug,ready-for-agent\n' ;;
+  *projectsV2/4/fields*) echo FID4 ;;
+  *projectsV2/4/items*) printf '426\tTodo\n' ;;   # the card sits in Todo, the owner's go signal (#550)
   *issues/*) cat "$T/issues.json" | jq -c '.[0]' ;;
   *) echo "" ;;
 esac

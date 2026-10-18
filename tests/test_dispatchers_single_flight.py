@@ -34,6 +34,7 @@ sg_fork_branch_pattern() { echo "gui/%n"; }
 sg_issue_worktree_note() { :; }
 sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/disp-$1" ]; }   # as the real one: the shared claim
 sg_live_issues() { :; }   # active-runs.txt is empty here: no live run holds an issue
+sg_todo_cards() { echo 42; }   # the card of #42 sits in Todo, the owner's go signal (#550)
 """
 
 @pytest.fixture(autouse=True)
@@ -87,7 +88,7 @@ def _state(tmp_path, script):
     (st / "cq").mkdir()
     (st / "active-runs.txt").write_text("")
     (tmp_path / "checkout").mkdir()
-    labels = "wave:01,ready-for-agent" if script == "autofrontier.sh" else "bug,wave:01"
+    labels = "wave:01,ready-for-agent" if script == "autofrontier.sh" else "bug,wave:01,ready-for-agent"
     return {
         # the python3 of this suite first: the dispatchers read the free slots through squad/caps.py, which needs PyYAML
         "PATH": f"{tmp_path / 'bin'}:{Path(sys.executable).parent}:/usr/bin:/bin:/usr/sbin:/sbin",

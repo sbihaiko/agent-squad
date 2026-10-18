@@ -12,6 +12,15 @@ sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
 # An issue claimed by either dispatcher is unavailable to both passes. The marker is the dispatch lock,
 # so its namespace is intentionally shared even though each pass writes its own name.
 sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/disp-$1" ]; }
+# The column Todo is the owner's go signal (#550, ADR-0142): a dispatcher takes an issue only when its card sits in Todo
+# and it carries the go label. One board read a pass, through the seam's door, never one per issue. It prints one issue a
+# line whose card is in Todo; a card with no column is not in Todo. A read that does not answer returns 1, and the pass
+# then dispatches nothing.
+sg_todo_cards() {
+  local out
+  out=$(python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/issue_state.py" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | awk -F '\t' -v t="${SG_TODO:-Todo}" '$2 == t { print $1 }'
+}
 # Read live child requests once for both dispatchers. Issue text is not structured in spawn_accepted yet,
 # so accept the two request forms that the dispatchers write and return exact decimal issue numbers only.
 # An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker

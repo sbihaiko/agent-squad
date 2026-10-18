@@ -6,6 +6,7 @@ mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/co/docs/squad"
 : > "$T/st/active-runs.txt"
 cp "$d"/{autobug.sh,cluster.py,startability.sh,ghcall.sh,address.sh,envelope-spend.sh,ghread.py,ghthrottle.py} "$T/s/"
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"   # the blocker gate (#479): #65 has no blocker
+printf 'import sys\nif sys.argv[1:]: sys.exit(1)\nprint("65\\tTodo")\n' > "$T/s/issue_state.py"   # the seam's door, stubbed: #65's card sits in Todo (#550)
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 /usr/bin/git init -q -b main "$T/co"
 /usr/bin/git -C "$T/co" -c user.email=a@b -c user.name=t commit -q --allow-empty -m base
@@ -19,8 +20,8 @@ cat > "$T/bin/gh" <<'EOF'
 #!/bin/bash
 case "$*" in
   *pulls?state=open*) echo "" ;;
-  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":65,"title":"Issue 65","body":"body","state":"OPEN","labels":{"nodes":[{"name":"bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}' ;;   # the blocker gate's one list read (#479)
-  *issues?state=open*labels=bug*) printf '65\037bug\n' ;;
+  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":65,"title":"Issue 65","body":"body","state":"OPEN","labels":{"nodes":[{"name":"bug"},{"name":"ready-for-agent"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}' ;;   # the blocker gate's one list read (#479)
+  *issues?state=open*labels=bug*) printf '65\037bug,ready-for-agent\n' ;;
   *issues/65/comments*) echo "" ;;
   *issues/65\ -q*) printf '"Issue 65"\nbody\n' ;;
   *issues/65*) printf '{"number":65,"title":"Issue 65","body":"body","created_at":"2026-10-13T00:00:00Z"}\n' ;;

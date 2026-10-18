@@ -23,9 +23,9 @@ printf '#!/bin/bash\n' > "$T/notify"; chmod +x "$T/s/stack.sh" "$T/s/board.sh" "
 # 536 (bug) and 537 (frontier slice) are run B's; 600 (bug) and 601 (slice) no run holds.
 cat > "$T/issues.json" <<'JSON'
 [
-  {"number":536,"title":"Core: crash","body":"step a.py","created_at":"2026-10-17T15:00:00Z","labels":["bug"]},
+  {"number":536,"title":"Core: crash","body":"step a.py","created_at":"2026-10-17T15:00:00Z","labels":["bug","ready-for-agent"]},
   {"number":537,"title":"Slice: held","body":"b.py","created_at":"2026-10-17T15:00:00Z","labels":["ready-for-agent"]},
-  {"number":600,"title":"Billing: other","body":"step z/q.py","created_at":"2026-09-01T16:00:00Z","labels":["bug"]},
+  {"number":600,"title":"Billing: other","body":"step z/q.py","created_at":"2026-09-01T16:00:00Z","labels":["bug","ready-for-agent"]},
   {"number":601,"title":"Slice: free","body":"c.py","created_at":"2026-10-17T16:00:00Z","labels":["ready-for-agent"]}
 ]
 JSON
@@ -39,7 +39,7 @@ for i in json.load(open("$T/issues.json")):
   *"issues?state=open"*labels=*) ;;
   *repos/x/y/branches*) printf 'main shaM\n' ;;   # no fix/ or gui/ branch names any issue
   *projectsV2/4/fields*) echo FID4 ;;
-  *projectsV2/4/items*) printf '536\tCode Complete\n537\tCode Complete\n' ;;
+  *projectsV2/4/items*) if [ -n "\${CARDS_TODO:-}" ]; then printf '536\tTodo\n537\tTodo\n600\tTodo\n601\tTodo\n'; else printf '536\tCode Complete\n537\tCode Complete\n'; fi ;;   # the dispatchers read every card in Todo (#550): the hold, not the column, is under test
   *"issues/"*comments*) echo "" ;;
   *"issues/"*"-q"*) echo open ;;
   *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
@@ -65,18 +65,18 @@ o=$(jan)
 if /usr/bin/grep -Eq ' Todo (536|537)$' "$T/board.calls" 2>/dev/null; then ko "1 rule R moved a held card to Todo: $(cat "$T/board.calls")"; else ok "1 rule R leaves the card of an issue a pending wave holds"; fi
 [ -e "$T/st/auto/bug-536" ] && ok "1 the janitor keeps the marker a newer run's dispatch wrote" || ko "1 bug-536 dropped: $(cat "$T/st/cycle.log" 2>/dev/null) $o"
 [ -e "$T/st/auto/disp-537" ] && ok "1 the janitor keeps a disp marker whose run is landing its wave" || ko "1 disp-537 dropped: $(cat "$T/st/cycle.log" 2>/dev/null)"
-r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+r=$(CARDS_TODO=1 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[536]"*) ko "2 autobug dispatched #536 while its wave is pending: '$r'";; *"[600]"*) ok "2 autobug holds #536 and still dispatches #600";; *) ko "2 autobug dispatched nothing: '$r'";; esac
-r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
+r=$(CARDS_TODO=1 AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *"#537"*) ko "2 autofrontier dispatched #537 while its wave is pending: '$r'";; *"#601"*) ok "2 autofrontier holds #537 and still dispatches #601";; *) ko "2 autofrontier dispatched nothing: '$r'";; esac
 # the hold stands on the pending wave itself: with no marker at all, the issue is still not dispatched
 rm -f "$T/st/auto/bug-536" "$T/st/auto/disp-537"
-r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+r=$(CARDS_TODO=1 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[536]"*) ko "2 with no marker, autobug dispatched #536 while its wave is pending: '$r'";; *"[600]"*) ok "2 with no marker, the pending wave holds #536";; *) ko "2 no marker: autobug dispatched nothing: '$r'";; esac
-r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
+r=$(CARDS_TODO=1 AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *"#537"*) ko "2 with no marker, autofrontier dispatched #537 while its wave is pending: '$r'";; *"#601"*) ok "2 with no marker, the pending wave holds #537";; *) ko "2 no marker: autofrontier dispatched nothing: '$r'";; esac
 # the wave landed: wave.sh land clears auto/wave-<run>, and the issue is free again
 rm -f "$T/st/auto/wave-$B" "$T/st/auto/wave-start-$B"
-r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+r=$(CARDS_TODO=1 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[536]"*) ok "3 after the landing the issue is dispatchable again";; *) ko "3 #536 held after its wave landed: '$r'";; esac
 rm -rf "$T"; exit $fail

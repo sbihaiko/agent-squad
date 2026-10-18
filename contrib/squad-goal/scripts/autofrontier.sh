@@ -132,8 +132,11 @@ joins() {   # one when issue $2 joins a child the picks of its own group already
 cands=()
 # Read every open issue once, through the door: one GraphQL request whose entries carry the labels, the blockers with
 # their states and the not-startable marker. `stack.sh` owns the blocker gate. Only an issue that carries SG_FRONTIER_LABEL is a
-# candidate (#485): the label is the go signal, and an issue filed for later (an enhancement in the Backlog) never wears it.
+# candidate (#485): the label says an agent may take it. The column Todo is the owner's go signal (#550): a candidate's card
+# sits in Todo too, read once a pass below.
 gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || exit 0   # no list, no frontier this pass
+todo=$(sg_todo_cards) || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
+todo=" $(echo $todo) "   # the issues whose card sits in Todo: the owner's go signal (#550)
 while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)
 i=0
 while [ $i -lt ${#cands[@]} ]; do
@@ -145,7 +148,8 @@ while [ $i -lt ${#cands[@]} ]; do
   # A run parent rolls a run's children up and is never work (#340).
   skip=; for s in "${SG_BUG_LABEL:-bug}" debt run-parent frozen:owner frozen:dependency ${SG_FRONTIER_SKIP_LABELS//,/ }; do case ",$labels," in *",$s,"*) skip=1;; esac; done
   [ -n "$skip" ] && continue
-  case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) continue;; esac   # no go signal, no dispatch (#485)
+  case ",$labels," in *",$SG_FRONTIER_LABEL,"*) ;; *) continue;; esac   # no go label, no dispatch (#485)
+  case "$todo" in *" $n "*) ;; *) continue;; esac   # the card is not in Todo: the owner has not started it (#550)
   case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
   # The list's entry decides; only an entry that carried no comments costs the comments read.

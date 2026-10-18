@@ -1,7 +1,8 @@
 #!/bin/bash
 # usage: autobug.sh   (called by watch.sh every ~6 min; AB_DRY=1 prints what it would dispatch)
 # Automatic bug/debt fixing: every open issue labeled $SG_BUG_LABEL (then, only when none of those is startable, `debt`) that no open work branch names, no dispatch
-# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict) and none of $SG_BUG_SKIP_LABELS is dispatched, all of them in ONE squad start (one child and one
+# marker (auto/bug-<n>), no live run already working it (spawn_accepted in a run without a verdict), none of $SG_BUG_SKIP_LABELS, the go label
+# $SG_FRONTIER_LABEL and a card in Todo (the owner's go signal, #550) is dispatched, all of them in ONE squad start (one child and one
 # per root-cause cluster (cluster.py), TDD with the RED output in the issue status comment), within the free run slots (max_parallel of the workflow graph minus live
 # runs). The marker is never removed after a launch: a run that ends without a pushed branch is surfaced by its RUN verdict, and the
 # coordinator deletes auto/bug-<n> to retry. It IS freed when mkreq.sh refuses the request (#1529): a dispatch that never
@@ -161,6 +162,10 @@ refs=" $(sg_work_issues) "
 # changes, never on every pass (auto/abwait-<n>).
 F=$(mktemp -d); trap 'rm -rf "$F"' EXIT
 gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || { echo "AUTOBUG: the open issues are not readable for the blocker gate; nothing dispatched" >&2; exit 0; }
+# The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
+go=${SG_FRONTIER_LABEL:-ready-for-agent}
+todo=$(sg_todo_cards) || { echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
+todo=" $(echo $todo) "
 ready_now() {   # <issue>: 0 when stack.sh answers READY
   local n=$1 out w
   jq -c --argjson n "$n" '[.[]|select(.number==$n)][0] // empty' "$F/issues.json" > "$F/issue-$n.json" 2>/dev/null
@@ -176,8 +181,10 @@ for sel in "$lab" debt; do
   [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
   if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || exit 0; else list=$(gather "$sel") || exit 0; fi            # refused selection: no candidate, no marker, no request (#1855)
   while IFS=$'\x1f' read -r n labels; do
-    [ -n "$n" ] || continue; sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
+    [ -n "$n" ] || continue; case "$n" in *[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac   # before any gate, so a word is named, never dropped in silence (#1855)
+    sg_dispatch_claimed "$n" && continue; case "$refs" in *" $n "*) continue;; esac; case ",$busy," in *",$n,"*) continue;; esac
     s=0; for k in ${skip//,/ }; do case ",$labels," in *",$k,"*) s=1;; esac; done; [ $s = 1 ] && continue
+    case ",$labels," in *",$go,"*) ;; *) continue;; esac; case "$todo" in *" $n "*) ;; *) continue;; esac   # no go label, or the card is not in Todo: not started
     # ... and an issue the loop itself marked not startable is not a candidate either: a repeated identical failure is a
     # signal the loop already wrote on the issue, and dispatching it again feeds the loop the same input (#1858). The read
     # is one request per candidate that got this far, and it is a refusal-safe read like every other one here.

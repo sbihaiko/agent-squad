@@ -203,6 +203,7 @@ d=$(cd "$(dirname "$src")" && pwd)
 cp "$d/autobug.sh" "$d/single.sh" "$d/startability.sh" "$d/ghthrottle.py" "$S/"
 [ -f "$d/cluster.py" ] && cp "$d/cluster.py" "$S/"
 printf '#!/bin/bash\necho READY\n' > "$S/stack.sh"; chmod +x "$S/stack.sh"   # the blocker gate (#479): #42 has no blocker
+printf 'import sys\nif sys.argv[1:]: sys.exit(1)\nprint("42\\tTodo")\n' > "$S/issue_state.py"   # the seam's door, stubbed: #42's card sits in Todo (#550)
 mkdir -p "$T/huntdisp/co/docs/squad/workflows"
 echo '{"max_parallel": 10}' > "$T/huntdisp/co/docs/squad/workflows/dynamic.graph.json"
 cat > "$T/bin/gh" <<'GH'
@@ -210,8 +211,8 @@ cat > "$T/bin/gh" <<'GH'
 echo "$*" >> "${GHLOG:-/dev/null}"
 case "$*" in
   *pulls*) ;;
-  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a hunt bug","body":"","state":"OPEN","labels":{"nodes":[{"name":"bug"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}';;   # the blocker gate's one list read (#479)
-  *"issues?state=open"*) printf '42\x1fbug\n';;
+  *"issues(states: OPEN"*) echo '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":42,"title":"a hunt bug","body":"","state":"OPEN","labels":{"nodes":[{"name":"bug"},{"name":"ready-for-agent"}]},"blockedBy":{"nodes":[]},"comments":{"nodes":[]}}]}}}}';;   # the blocker gate's one list read (#479)
+  *"issues?state=open"*) printf '42\x1fbug,ready-for-agent\n';;
   *POST*)
     echo "$*" >> "${GHPOST:-/dev/null}"
     echo "{\"number\":${GH_NEW:-42}}";;
