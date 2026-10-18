@@ -17,7 +17,7 @@
  J  a run with no record.jsonl 5 min after its request (the squad refused to start): kill its dashboard, drop it from active-runs, and free every issue named in its request (auto/bug-<n> and auto/disp-<n>) so autobug/autofrontier can dispatch again. Comment once ("run X never started, dispatching again", attempt n of 2) quoting the last lines of the run's launch.log. After 2 never-started runs for the same issue, keep the marker, comment the evidence, raise HEALTH, and do not retry a third time.
  K  a disp-<n> marker whose request log says `Nothing ran` or `refusing to start` (10 min old, no live run on the issue) is dropped like rule E does for `verdict failed`.
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
-    A run that landed a change, an issue a live run works, and an issue with an open work branch keeps its marker. The loop-board card is rule R's: O writes none, and its comment names the column R wrote
+    A run that landed a change, an issue a live run works or a pending wave carries, and an issue with an open work branch keeps its marker; a run drops only a marker its own request wrote (#539). The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
@@ -98,8 +98,8 @@ def free_never_started(f):   # drop auto/bug-<n> and auto/disp-<n> for the issue
     tail = launch_tail(f)
     quoted = f"\n```\n{tail}\n```\n" if tail else "\n"
     for n in sorted(nums, key=int):
-        marks = [st / "auto" / f"{kind}-{n}" for kind in ("bug", "disp")]
-        if not any(m.exists() for m in marks): continue   # nothing dispatched for it: not ours to free, and no comment
+        marks = [m for m in (st / "auto" / f"{kind}-{n}" for kind in ("bug", "disp")) if owns(f, None, m)]
+        if not marks: continue   # nothing this run's request dispatched: not ours to free, and no comment
         ctr = st / "auto" / f"neverstart-{n}"
         try: k = int(ctr.read_text().strip() or "0")
         except (ValueError, OSError): k = 0
@@ -240,12 +240,18 @@ def issue_is_gone(x):   # a missing issue is not a transient read failure. The p
     return gone_msg("\t".join(issue_read(x)))
 live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
+def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
+    try: c = p.read_text().strip()
+    except OSError: return False
+    if c and c in (f.name, (i or {}).get("run_id")): return True
+    try: return (st / "req" / f"{c}.txt").read_bytes() == (f / "request.txt").read_bytes()
+    except OSError: return False
 pending = []   # markers of a reaped run, dropped after rule Q has read them
 def free_reaped(f, i):
     """C: a reaped run frees its leases now, and its dispatch markers after rule Q. Rule Q reads a marker to find the card a
     dead run left In Progress and puts that card back (#62): a marker dropped here, before the read, left the card In
     Progress for ever with nothing to report, which is the drift rule Q exists to stop. Returns the marker paths."""
-    marks = [st / "auto" / f"disp-{n}" for n in req_issues(f) | i["acc"]]
+    marks = [p for p in (st / "auto" / f"disp-{n}" for n in req_issues(f) | i["acc"]) if owns(f, i, p)]
     holder = f.name; leases = []
     caps = pathlib.Path(os.environ.get("SQUAD_CAPS_DIR") or pathlib.Path.home() / ".cache" / "agent-squad" / "caps")
     for kind in ("runs", "children"):
@@ -338,6 +344,17 @@ for x, rs in byissue.items():
     if len(rs) > 1 and not mk.exists():
         say(f"DUP issue #{x} accepted by live runs {', '.join(rs)} (not killed)")
         if not dry: mk.touch()
+# An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker auto/wave-<run>
+# stands (wave.sh clears it when the wave lands) still delivers its issues, and so does a child that entered such a wave.
+# startability.sh's sg_live_issues reads the same markers for both dispatchers. No rule releases an issue it holds.
+delivering = set()
+for m in (st / "auto").glob("entered-*"):
+    hit = re.fullmatch(r"entered-(.+)-(\d+)", m.name)
+    if hit and (st / "auto" / f"wave-{hit.group(1)}").exists(): delivering.add(hit.group(2))
+for r in names:
+    f = folder(r); i = read(f) if f.exists() else None
+    if i and i["verdict"] and any((st / "auto" / f"wave-{x}").exists() for x in {f.name, i["run_id"]} if x): delivering |= req_issues(f) | i["acc"]
+def holding(n): return n in byissue or n in delivering   # a live run works it, or a run still lands its wave
 base = os.environ.get("SG_BASE", "main")   # the branch a merge must land on to count as delivery (#127)
 def issue_info(x):
     return issue_read(x)[:3]
@@ -726,7 +743,7 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
     if d.name.startswith("bug-") and "refusing to start" not in lt: continue   # a bug marker of a run that started is rule O's
     refused = "Nothing ran" in lt or "refusing to start" in lt   # K: squad's own refusal, or launch.py's (the model gate, #523)
     if now - d.stat().st_mtime < (600 if refused else 1800): continue   # K: a refused start frees the issue after 10 min
-    if not (("verdict failed" in lt or refused) and n not in byissue): continue
+    if not (("verdict failed" in lt or refused) and not holding(n)): continue
     repo = os.environ.get("SG_REPO") or sh("bash", "-c", '. "$0/env.sh" >/dev/null; echo $SG_REPO', str(pathlib.Path(__file__).parent)).strip()
     state = sh("gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state").strip()
     if state == "closed":   # a closed issue is never dispatched: its marker only made every pass read its state again (#525)
@@ -746,7 +763,7 @@ if owner and proj and repo0:
         req = f / "request.txt"
         nums = issues_named(req.read_text()) if req.exists() else set()
         if i["landed"]: nums = {n for n in nums if wave_entry(n, f, i) == "out"}   # a run that landed keeps its markers, but for an issue its landed wave never carried (#467)
-        marks = {n: [k for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()] for n in nums}
+        marks = {n: [k for k in ("disp", "bug") if owns(f, i, st / "auto" / f"{k}-{n}")] for n in nums}   # only the markers this run's request wrote (#539)
         marks = {n: m for n, m in marks.items() if m}
         if not marks: continue
         mk = st / "auto" / f"janitor-demoted-{f.name[-6:]}"
@@ -756,7 +773,7 @@ if owner and proj and repo0:
         again = False
         why = "; ".join(i["reasons"]) or "no reason recorded"
         for n in sorted(marks, key=int):
-            if n in byissue: again = True; continue   # a live run works it: not ours to release, not yet
+            if holding(n): again = True; continue   # a live run works it, or a wave still carries it: not ours to release, not yet
             ist = sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip()
             if ist != "open": again = again or ist != "closed"; continue
             pc = pr_count(n)
@@ -780,7 +797,7 @@ if owner and proj and repo0:
             mo = re.fullmatch(r"(disp|bug)-(\d+)", p.name)
             if mo and p.read_text().strip() in (r, f.name): marks.setdefault(mo.group(2), []).append((mo.group(1), p))
         for n in sorted(marks, key=int):
-            if n in byissue or issue_info(n)[0] != "open" or pr_count(n) != "0": continue
+            if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": continue
             mks = " and ".join("auto/" + kind + "-" + n for kind, _ in marks[n])
             say(f"DISPATCH-MISSING #{n}: run {f.name} folder missing; {mks} marker dropped so it dispatches again")
             if not dry:
@@ -794,7 +811,7 @@ if owner and proj and repo0:
     for n, ms0 in freed_markers.items():
         qm.setdefault(n, {}).update(ms0)
     for n, ms in sorted(qm.items(), key=lambda kv: int(kv[0])):
-        if n in held or n in landed_n or any(m is not None and now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
+        if n in held or n in landed_n or n in delivering or any(m is not None and now - m.stat().st_mtime < 600 for m in ms.values()) or list((st / "auto").glob(f"fork-{n}-*")): continue
         seen = st / "auto" / f"janitor-q-seen-{n}"
         if seen.exists() and now - seen.stat().st_mtime < 600: continue
         def no():   # a definite answer that says "not ours": remember it
@@ -853,7 +870,7 @@ if fd and fb:
             n, sha = m.group(1), m.group(2)
             if fork_verdict(n, sha) != "unwound": continue   # honest (the base holds the commit, or its change), ahead (a fix commit is coming and the close retries on the head), or unreadable: not ours
             br = (os.environ.get("SG_FORK_BRANCH") or "issue/%n").replace("%n", n)
-            if n in byissue: continue                        # a live run works it: not ours to release
+            if holding(n): continue                          # a live run works it, or a wave still carries it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
             if card_status(proj, n) not in ("In Progress", "Doing", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded

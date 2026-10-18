@@ -14,22 +14,38 @@ sg_fork_branch_pattern() { echo "${SG_FORK_BRANCH:-gui/%n}"; }
 sg_dispatch_claimed() { [ -e "$SG_STATE/auto/bug-$1" ] || [ -e "$SG_STATE/auto/disp-$1" ]; }
 # Read live child requests once for both dispatchers. Issue text is not structured in spawn_accepted yet,
 # so accept the two request forms that the dispatchers write and return exact decimal issue numbers only.
+# An issue is held from its dispatch until its delivery ends (#539): a run with a verdict whose wave marker
+# auto/wave-<run> stands (wave.sh clears it when the wave lands) still holds its issues, and so does a child that entered
+# such a wave (auto/entered-<run>-<n>), whether or not its run is still listed. A run whose record cannot be read holds
+# the issues its request names: an unknown delivery state keeps the hold.
 sg_live_issues() {   # <active-runs.txt>: print comma-separated issue numbers from live spawn_accepted events
   python3 - "$SG_CHECKOUT" "$1" <<'PY'
 import json, pathlib, re, sys
 root, active = sys.argv[1:]
+auto = pathlib.Path(active).parent / "auto"
 busy = set()
+for m in auto.glob("entered-*"):
+    hit = re.fullmatch(r"entered-(.+)-(\d+)", m.name)
+    if hit and (auto / f"wave-{hit.group(1)}").exists():
+        busy.add(hit.group(2))
 try:
     runs = pathlib.Path(active).read_text().split()
 except OSError:
     runs = []
 for run in runs:
-    record = pathlib.Path(run if run.startswith("/") else pathlib.Path(root) / "runs" / run) / "record.jsonl"
-    if not record.is_file():
-        continue
+    folder = pathlib.Path(run if run.startswith("/") else pathlib.Path(root) / "runs" / run)
+    record = folder / "record.jsonl"
     try:
         lines = record.read_text().splitlines()
     except OSError:
+        try:
+            request = (folder / "request.txt").read_text()
+        except OSError:
+            continue
+        for line in request.splitlines():
+            if line.startswith("CHILD"):
+                for listed in re.findall(r"GitHub issue(?:\(s\))? #?([0-9][0-9, ]*)", line):
+                    busy.update(re.findall(r"\d+", listed))
         continue
     events = []
     for line in lines:
@@ -38,7 +54,7 @@ for run in runs:
         except json.JSONDecodeError:
             continue
         events.append(event)
-    if any(isinstance(event, dict) and event.get("event") == "verdict" for event in events):
+    if any(isinstance(event, dict) and event.get("event") == "verdict" for event in events) and not (auto / f"wave-{folder.name}").exists():
         continue
     for event in events:
         if not isinstance(event, dict) or event.get("event") != "spawn_accepted":

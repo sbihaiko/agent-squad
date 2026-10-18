@@ -19,9 +19,9 @@ esac
 J
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 req() { printf 'CHILD — GitHub issue(s) %s (bug)\n--- issue #%s\nfix it; see issue #900 for context\n' "$1" "$1"; }
-mkrun() { # <run> <issue>
-  mkdir -p "$T/co/runs/$1"
-  req "$2" > "$T/co/runs/$1/request.txt"
+mkrun() { # <run> <issue> <request name>: the request mkreq.sh wrote, copied into the run folder as launch.py does (#539)
+  mkdir -p "$T/co/runs/$1" "$T/st/req"
+  req "$2" > "$T/st/req/$3.txt"; cp "$T/st/req/$3.txt" "$T/co/runs/$1/request.txt"
   echo '{"root":"x"}' > "$T/co/runs/$1/graph.json"
   printf 'squad refused: vendor/skills is not clean\nNothing ran\n' > "$T/co/runs/$1/launch.log"
   touch -t 202001010000 "$T/co/runs/$1/request.txt"
@@ -30,7 +30,7 @@ mkrun() { # <run> <issue>
 runj() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 
 # 1. first never-started autobug run: drop auto/bug-N, queue attempt 1 of 2
-mkrun run-never-a 1492
+mkrun run-never-a 1492 autobug-x
 echo autobug-x > "$T/st/auto/bug-1492"
 echo autobug-other > "$T/st/auto/bug-900"   # only mentioned in the request body prose, never dispatched here
 o=$(runj)
@@ -45,7 +45,7 @@ cq=$(ls "$T/st/cq"/*#1492-*.md 2>/dev/null | wc -l | tr -d ' ')
 
 # 2. second never-started run for the same issue: keep the marker, evidence + HEALTH, no third retry
 rm -f "$T/st/cq"/*#1492-*.md
-mkrun run-never-b 1492
+mkrun run-never-b 1492 autobug-y
 echo autobug-y > "$T/st/auto/bug-1492"
 o=$(runj)
 [ -e "$T/st/auto/bug-1492" ] && ok "second never-started run keeps auto/bug-N" || ko "bug marker dropped on second: $o"
@@ -54,14 +54,14 @@ o=$(runj)
   && ok "evidence comment quotes launch.log (attempt 2 of 2)" || ko "evidence: $(cat "$T/st/cq"/*#1492-*.md 2>/dev/null)"
 # a third janitor pass on a new never-started folder must not drop the marker either
 rm -f "$T/st/cq"/*#1492-*.md
-mkrun run-never-c 1492
+mkrun run-never-c 1492 autobug-z
 echo autobug-z > "$T/st/auto/bug-1492"
 o=$(runj)
 [ -e "$T/st/auto/bug-1492" ] && ok "no third retry: marker stays" || ko "third pass dropped the marker: $o"
 [ "$(ls "$T/st/cq"/*#1492-*.md 2>/dev/null | wc -l | tr -d ' ')" = 0 ] && ok "no third comment queued" || ko "third comment: $(ls "$T/st/cq")"
 
 # 3. same shape for auto/disp-N (autofrontier)
-mkrun run-never-d 77
+mkrun run-never-d 77 frontier-x
 echo frontier-x > "$T/st/auto/disp-77"
 o=$(runj)
 [ ! -e "$T/st/auto/disp-77" ] && ok "first never-started run drops auto/disp-N" || ko "disp marker kept: $o"
