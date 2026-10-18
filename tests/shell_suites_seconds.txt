@@ -25,6 +25,7 @@ test-dispatch-mutex.sh 26.8
 test-dispatch-worktree-reuse.sh 5.8
 test-fast-gate.sh 1.7
 test-fastloop-interval.sh 0.2
+test-fastloop-orphan.sh 0.5
 test-gate-lock.sh 5.8
 test-gh-pass-bounded.sh 12.3
 test-ghcache.sh 8.4
