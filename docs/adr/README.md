@@ -44,7 +44,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0142](0142-a-spec-is-never-work.md) | A spec is a document, never a unit of work: the dispatch skips every label a profile names as not-work, and only its tickets are children of a run; the column Todo is the owner's go signal |
 | [0143](0143-a-card-only-moves-forward.md) | A card only moves forward along the axis, and the loop moves no card into Backlog or Todo except a run's own claim undone; Closed and Abandoned are terminal, and an old Status option is removed only once the migration plan has emptied it |
 | [0144](0144-the-carrier-is-the-project-field.md) | The state of a card stays on the Project Status field; a write is sent only when the value changes |
-| [0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) | A work branch lands in `dev` by a fast-forward push, with no pull request; the loop promotes `dev` to `stg`, the owner promotes `stg` to `main`, and the live copy publishes from `stg`; a wave is one branch, a child enters it by a rebase and `--ff-only`, and CI runs once when the wave lands in `dev` |
+| [0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) | A work branch lands in `dev` by a fast-forward push, with no pull request; the owner promotes `dev` to `stg` and `stg` to `main`, and the live copy publishes from `stg`; a wave is one branch, a child enters it by a rebase and `--ff-only`, and CI runs once when the wave lands in `dev` |
 
 ## Adding an ADR
 
