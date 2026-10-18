@@ -591,5 +591,11 @@ r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[70]"*) ko "15 the bug pass picked a frozen:dependency issue: '$r'";; *) ok "15 a frozen:dependency issue is not a bug candidate";; esac
 case "$r" in *"[71]"*) ko "15 the bug pass picked a frozen:owner issue: '$r'";; *) ok "15 a frozen:owner issue is not a bug candidate";; esac
 case "$r" in *"[72]"*) ok "15 a plain bug beside them is still a candidate";; *) ko "15 the plain bug was skipped: '$r'";; esac
+# 15b) (#537) a profile sets its own SG_BUG_SKIP_LABELS, and env.sh exports it: the frozen labels are a floor, never a default
+# a profile list replaces. The live profile named the four old labels, so the pass dispatched a frozen:dependency issue.
+r=$(PATH="$F/bin:$PATH" SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+case "$r" in *"[70]"*) ko "15b a profile skip list let a frozen:dependency issue through: '$r'";; *) ok "15b a profile skip list keeps the frozen:dependency floor";; esac
+case "$r" in *"[71]"*) ko "15b a profile skip list let a frozen:owner issue through: '$r'";; *) ok "15b a profile skip list keeps the frozen:owner floor";; esac
+case "$r" in *"[72]"*) ok "15b a plain bug is still a candidate under a profile skip list";; *) ko "15b the plain bug was skipped: '$r'";; esac
 
 rm -rf "$T"; exit $fail
