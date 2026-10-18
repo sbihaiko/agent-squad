@@ -457,6 +457,27 @@ case "$r" in *"dispatched for #20, #201, #202, #203"*) ok "P: the empty wave nam
 /usr/bin/grep -qE 'issues/(203|20) -f state=closed' "$T/gh.log" && ko "P: an issue with no commit in the base is closed" || ok "P: an issue with no commit in the base stays open"
 [ -n "$(awk -F'\t' '$4=="201"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "P: the ledger carries the delivered issue" || ko "P: no ledger row for #201"
 
+# S (#591): an empty wave past its age cap requeues the issues of its run that `dev` does not hold, as a non-empty capped
+# wave does. Before, the empty branch returned before the age-cap requeue, so a capped run whose children never entered left
+# their issues in Doing with their dispatch markers, unless `dev` already held them.
+W13=wave/run-13; start2 run-13 >/dev/null
+rm -rf "$T/out13"; $G clone -q "$T/origin.git" "$T/out13" 2>/dev/null
+(cd "$T/out13" && $G checkout -q dev && echo h > o211 && $G add o211 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 211" -m "Refs #211" && $G push -q origin HEAD:dev)
+printf 'run-13\n' > "$T/st/auto/disp-211"; printf 'run-13\n' > "$T/st/auto/disp-212"
+mkdir -p "$T/co/runs/run-13"
+printf '%s\n%s\n' \
+  '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #211 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #212 work"}}' > "$T/co/runs/run-13/record.jsonl"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-13"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(land2 run-13); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "S: an empty capped wave lands empty (exit 0)";; *) ko "S: not an empty landing: '$r'";; esac || ko "S: exit $rc: '$r'"
+[ ! -e "$T/st/auto/disp-212" ] && /usr/bin/grep -qx 'o 3 Todo 212' "$T/board.log" && ok "S: the issue dev does not hold is back in the queue" || ko "S: #212 was not requeued: '$r'"
+case "$r" in *"WAVE REQUEUE #212"*"age cap"*) ok "S: the requeue names the age cap";; *) ko "S: no cap reason for #212: '$r'";; esac
+case "$r" in *"WAVE REQUEUE #211"*) ko "S: the issue dev holds was requeued: '$r'";; *) ok "S: the issue dev holds is not requeued";; esac
+[ -e "$T/st/auto/disp-211" ] && ok "S: the issue dev holds keeps its dispatch marker" || ko "S: #211 lost its dispatch marker"
+/usr/bin/grep -q 'issues/211 -f state=closed' "$T/gh.log" && ok "S: the issue dev holds is delivered, not requeued" || ko "S: #211 is not closed: $(cat "$T/gh.log")"
+
 # Q (#575): a gate lock held by another pass never makes an entry or a landing wait for it. The entry and the landing run
 # inline in the fast lane and the watch cycle, so a wait there stops every dispatch and every cycle (a promotion held the
 # lock for 30 min). Both use try mode: the child enters, and the wave lands, on a later pass, with no requeue and no try spent.
