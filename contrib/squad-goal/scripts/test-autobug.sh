@@ -698,4 +698,27 @@ case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "18 the pass dispatches its
 n=$($G -c '^read$' "$T/reads")
 [ "$n" = 1 ] && ok "18 a selected issue is fetched once a pass" || ko "18 the issue was fetched $n time(s): validation and clustering each read it"
 
+# 19) (#562) an interim limit until the review moves into the run: childcc writes the count of finished children that wait
+# for review to $SG_STATE/childcc-waiting. Over SG_DISPATCH_MAX_WAITING the pass dispatches nothing and says why; at or
+# under the cap, with no cap, with no count file or with a stale one (over 30 min), it dispatches as before.
+hold() { # <count or -> <cap or -> [age in minutes]: one dry pass on fresh state
+  rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; : > "$T/st/cycle.log"
+  rm -f "$T/st/childcc-waiting"; [ "$1" = - ] || echo "$1" > "$T/st/childcc-waiting"
+  [ -z "${3:-}" ] || touch -t "$(date -r $(( $(date +%s) - $3 * 60 )) +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$(( $(date +%s) - $3 * 60 ))" +%Y%m%d%H%M.%S)" "$T/st/childcc-waiting"
+  if [ "$2" = - ]; then (unset SG_DISPATCH_MAX_WAITING; AB_DRY=1 bash "$T/s/autobug.sh" 2>&1); else SG_DISPATCH_MAX_WAITING=$2 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1; fi
+}
+r=$(hold 3 2); rc=$?
+[ "$rc" = 0 ] && ok "19 a hold exits 0" || ko "19 the held pass exited $rc: '$r'"
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "19 over the cap the pass dispatched: '$r'" || ok "19 over the cap the pass dispatches nothing"
+$G -qxF "DISPATCH HOLD: 3 children wait for review (cap 2); no new run this pass" <<<"$r" && ok "19 the hold names the count and the cap" || ko "19 no hold line: '$r'"
+$G -qxF "DISPATCH HOLD: 3 children wait for review (cap 2); no new run this pass" "$T/st/cycle.log" && ok "19 the hold is published to the loop log" || ko "19 cycle.log: $(cat "$T/st/cycle.log")"
+r=$(hold 2 2); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 at the cap the pass dispatches";; *) ko "19 at the cap: '$r'";; esac
+r=$(hold 0 2); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 under the cap the pass dispatches";; *) ko "19 under the cap: '$r'";; esac
+r=$(hold 9 -); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 no cap is no limit";; *) ko "19 no cap: '$r'";; esac
+r=$(hold 9 ""); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 an empty cap is no limit";; *) ko "19 an empty cap: '$r'";; esac
+r=$(hold - 0); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 a missing count file holds nothing";; *) ko "19 a missing count file: '$r'";; esac
+r=$(hold 9 0 31)
+case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 a stale count file holds nothing";; *) ko "19 a stale count file: '$r'";; esac
+$G -q "stale childcc" <<<"$r" && ok "19 a stale count file is logged" || ko "19 the stale count is not logged: '$r'"
+
 rm -rf "$T"; exit $fail

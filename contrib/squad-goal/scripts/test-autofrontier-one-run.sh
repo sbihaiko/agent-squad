@@ -269,6 +269,20 @@ issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 91)" = 1 ] && ok "Y: closing the issue resumes dispatch with no other action" || ko "Y: dispatch did not resume: '$r'"
 
+# Z (#562): an interim limit until the review moves into the run. childcc writes the count of finished children that wait
+# for review to $SG_STATE/childcc-waiting; over SG_DISPATCH_MAX_WAITING the frontier pass dispatches nothing and says why,
+# and at the cap it dispatches as before. The other edges (no cap, no file, a stale file) are the shared helper's, in
+# test-autobug.sh case 19.
+scene hold
+issues '[{"number":95,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+echo 4 > "$d/st/childcc-waiting"
+r=$(SG_DISPATCH_MAX_WAITING=3 run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 95)" = 0 ] && ok "Z: over the cap the frontier pass dispatches nothing" || ko "Z: the pass dispatched over the cap: '$r'"
+$G -qxF "DISPATCH HOLD: 4 children wait for review (cap 3); no new run this pass" <<<"$r" && ok "Z: the hold names the count and the cap" || ko "Z: no hold line: '$r'"
+echo 3 > "$d/st/childcc-waiting"
+r=$(SG_DISPATCH_MAX_WAITING=3 run)
+[ "$(marked 95)" = 1 ] && ok "Z: at the cap the frontier pass dispatches" || ko "Z: no dispatch at the cap: '$r'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1

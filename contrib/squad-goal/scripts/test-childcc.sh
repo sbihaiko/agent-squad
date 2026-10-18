@@ -124,9 +124,11 @@ run2 bud 5200 5201; : > "$WAVE_CALLS"
 pass bud >/dev/null; rc=$?
 [ "$(( $(ent bud 5200) + $(ent bud 5201) ))" = 1 ] && ok "one pass works one pending child" || ko "entries in one pass: $(cat "$WAVE_CALLS")"
 [ "$rc" = 3 ] && ok "a pass that leaves a child for later exits 3" || ko "a pass that left a child exited $rc"
+[ "$(cat "$T/st/childcc-waiting" 2>/dev/null)" = 1 ] && ok "the pass writes the count of children that wait for review (#562)" || ko "childcc-waiting after a deferred child: '$(cat "$T/st/childcc-waiting" 2>/dev/null)'"
 pass bud >/dev/null; rc=$?
 [ "$(ent bud 5200)" = 1 ] && [ "$(ent bud 5201)" = 1 ] && ok "the next pass works the child left" || ko "entries after two passes: $(cat "$WAVE_CALLS")"
 [ "$rc" = 0 ] && ok "a pass that leaves no child exits 0" || ko "the last pass exited $rc"
+[ "$(cat "$T/st/childcc-waiting" 2>/dev/null)" = 0 ] && ok "a pass that leaves no child writes the count 0 (#562)" || ko "childcc-waiting after no child left: '$(cat "$T/st/childcc-waiting" 2>/dev/null)'"
 [ -e "$T/st/auto/cc-bud-a" ] && [ -e "$T/st/auto/cc-bud-b" ] && ok "both children got their marker" || ko "markers: $(/bin/ls "$T/st/auto")"
 # a held child (5300, no requeue: it is tried on every pass) does not take every pass: the other child gets its turn
 run2 fair 5300 5301; : > "$WAVE_CALLS"
