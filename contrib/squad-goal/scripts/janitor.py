@@ -616,6 +616,7 @@ def reconcile_board():
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif landed_kid:
                 code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
+            elif holding(n) and (bool(mine and i["kid_landed"]) or not i["landed"]): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
             elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
                 why = "; ".join(ors) or "no reason recorded"
@@ -647,6 +648,7 @@ def reconcile_board():
         return go in labels and not labels & ({RUN_PARENT, "frozen:owner", "frozen:dependency"} | set(filter(None, os.environ.get("SG_FRONTIER_SKIP_LABELS", "").split(","))))
     if oans:
         for n in sorted(olabels, key=int):
+            if holding(n) and n not in expected: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540)
             hold = shipped and (bool(olabels[n] & {"needs-owner", "needs-ratification"}) or bool(go) and not startable(olabels[n]))   # frozen by the owner, or no dispatcher takes it: not startable, so Backlog by the floor (the definition: Todo is startable)
             set_expected(n, "Backlog" if hold else os.environ.get("SG_TODO", "Todo"), "open issue with no current blocking cause", rank=10)
             if shipped and "wontfix" in olabels[n]: set_expected(n, "Abandoned", "issue carries wontfix", rank=95)

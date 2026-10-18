@@ -6,6 +6,7 @@
 #  (1) the janitor never drops a dispatch marker another run's request wrote;
 #  (2) a run with a verdict whose wave marker (auto/wave-<run>) stands still holds its issues, for both dispatchers, with or
 #      without a marker; an unrelated issue still dispatches;
+#  (4) rule R leaves the card of an issue a pending wave holds, whatever an older run recorded (#540);
 #  (3) once the wave landed (its marker gone), the issue is free again.
 # Offline: stub gh, a temp state dir. usage: bash test-dispatch-hold-wave.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -60,6 +61,8 @@ echo autobug-20261018-011000 > "$T/st/auto/bug-536"; echo autobug-20261018-01100
 echo "wave/$B" > "$T/st/auto/wave-$B"; echo "wave/$B" > "$T/st/auto/waved-$B"; date +%s > "$T/st/auto/wave-start-$B"; : > "$T/st/auto/entered-$B-536"
 jan() { SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_TODO=Todo SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(jan)
+# rule R (#540): run A's "nothing landed" never moves the card of an issue run B's pending wave holds
+if /usr/bin/grep -Eq ' Todo (536|537)$' "$T/board.calls" 2>/dev/null; then ko "1 rule R moved a held card to Todo: $(cat "$T/board.calls")"; else ok "1 rule R leaves the card of an issue a pending wave holds"; fi
 [ -e "$T/st/auto/bug-536" ] && ok "1 the janitor keeps the marker a newer run's dispatch wrote" || ko "1 bug-536 dropped: $(cat "$T/st/cycle.log" 2>/dev/null) $o"
 [ -e "$T/st/auto/disp-537" ] && ok "1 the janitor keeps a disp marker whose run is landing its wave" || ko "1 disp-537 dropped: $(cat "$T/st/cycle.log" 2>/dev/null)"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
