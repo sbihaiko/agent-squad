@@ -145,10 +145,11 @@ ck(close["parts"][0]["text"] == "CL 42%" and close["parts"][0].get("tip") == "re
 ck(hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()) == "codex reset 05:01 · agy ok",
    "the quota block keeps its reset time", hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()))
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
-ck(len(items) == 2, "the fact joins the landing the line already has", [i["key"] for i in items])
-ck(items and items[-1]["key"] == "subs" and all(a in items[-1]["text"] for a in ("CL", "GK", "GPT", "GEM"))
-   and not any(a in " ".join(i["text"] for i in items[:-1]) for a in ("CL 42%", "GK 88%")),
-   "all four tokens are one fact, so the row's own drop takes them whole and no token is cut", items[-1]["text"])
+ck([i["key"] for i in items] == ["landing", "subs", "loop"], "the fact joins the landing the line already has, and the loop state ends the line (#554)", [i["key"] for i in items])
+sub = next((i for i in items if i["key"] == "subs"), {"text": ""})
+ck(all(a in sub["text"] for a in ("CL", "GK", "GPT", "GEM"))
+   and not any(a in " ".join(i["text"] for i in items if i is not sub) for a in ("CL 42%", "GK 88%")),
+   "all four tokens are one fact, so the row's own drop takes them whole and no token is cut", sub["text"])
 ck(set(hub.SUB_ACR) == set(hub.SUBS) and all(2 <= len(v) <= 3 for v in hub.SUB_ACR.values()),
    "one 2-3 letter short form per subscription, defined beside SUBS", hub.SUB_ACR)
 # The percentage is the panel's own number, the time the page's own `rel()` shape — and neither is ever invented.
@@ -159,16 +160,16 @@ ck(f["subs"].startswith("CL 6.5% ?"),
 ck(f["subs"].split(" · ")[-1] == "GEM ?", "nothing readable is ? alone: no digit is conjured for it", f["subs"])
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 3 * 3600 + 20 * 60}], "asof": NOW}
 hub.SUB_ACR["gpt"] = "XX"
-ck(hub.foot_items(hub.foot_sources(NOW), NOW)[-1]["text"].count("XX") == 1,
+ck({i["key"]: i["text"] for i in hub.foot_items(hub.foot_sources(NOW), NOW)}["subs"].count("XX") == 1,
    "the acronym is read from the one map, never spelled out at the use site")
 hub.SUB_ACR["gpt"] = "GPT"
 asked = []
 hub.QUOTA_PROBES = {k: (lambda k=k: asked.append(k)) for k in hub.SUBS}
 hub.foot_refresh(NOW)
 ck(not asked, "the pass the sampler already runs costs no probe", asked)
-ck((hub.LOAD_STATE.get("facts") or [])[-1]["text"].startswith("CL 42%"),
-   "so the tokens reach the page through the same facts source as the rest of the line",
-   (hub.LOAD_STATE.get("facts") or [{}])[-1].get("text"))
+subs_fact = next((i for i in hub.LOAD_STATE.get("facts") or [] if i["key"] == "subs"), {})
+ck(subs_fact.get("text", "").startswith("CL 42%"),
+   "so the tokens reach the page through the same facts source as the rest of the line", subs_fact.get("text"))
 
 print("== 7. a kept grok reading survives a log rotation, shows its age, and goes stale at its period end (#553)")
 KEPT = TMP / "hub/hub-grok.json"
