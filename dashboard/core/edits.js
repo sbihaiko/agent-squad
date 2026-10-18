@@ -22,13 +22,14 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // Every key a node holds sits in exactly one group; a key the schema does not know sits in "unknown" and is kept as written.
   const GROUPS = [
     { id: "identity", title: "Identity", open: true, keys: ["name", "kind"] },
-    { id: "settings", title: "Settings", open: true, keys: ["model", "effort", "skill", "tools", "workspace", "output_key", "owner", "default", "effect", "items", "mode", "join", "entry", "checks", "may_propose", "may_spawn"] },
+    { id: "settings", title: "Settings", open: true, keys: ["model", "effort", "skill", "tools", "workspace", "output_key", "owner", "default", "effect", "items", "mode", "join", "entry", "checks", "review", "may_propose", "may_spawn"] },
     { id: "instructions", title: "Instructions", open: true, keys: ["instructions"] },
     { id: "limits", title: "Limits", open: true, keys: ["budget", "deadline", "max", "max_by", "stall_after", "max_parallel", "max_depth", "max_children"] },
     { id: "control", title: "Control", open: true, keys: ["when", "next", "children", "adapt"] },
     { id: "files", title: "Files and envelope", open: false, keys: ["reads", "writes", "allow"] },
     { id: "gate", title: "Gate (read-only)", open: true, keys: ["check", "params"] },
   ];
+  const GROUPED = new Set(GROUPS.flatMap((g) => g.keys));
   const SUGGEST = { model: "models", effort: "efforts", tools: "tools", skill: "skills" };
 
   function propsOf(kind) {
@@ -87,7 +88,8 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     if (key === "name") return { error: "Use Rename: it updates every reference." };
     if (key === "kind") return { error: "Use Change kind." };
     const props = propsOf(old.kind);
-    const type = fieldType(key, props[key]);
+    // A key in no group is shown as JSON in "unknown", so it is read back as JSON, whatever its schema type.
+    const type = GROUPED.has(key) ? fieldType(key, props[key]) : "json";
     const t = String(text);
     let value;
     if (t.trim() === "") value = undefined;
@@ -162,6 +164,9 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     return { doc: { ...doc, nodes }, name };
   }
 
+  // The nodes a dispatch names: its entry, its checks, and its review when it has one.
+  const dispatchLinks = (n) => [n.entry, ...(Array.isArray(n.checks) ? n.checks : []), ...("review" in n ? [n.review] : [])];
+
   function removeNode(doc, name) {
     const gone = doc.nodes.find((n) => isObj(n) && n.name === name);
     if (!gone) return { error: `No node named ${name}.` };
@@ -173,12 +178,12 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
         warnings.push({ node: n.name, message: `${n.name} no longer lists child ${name}` });
         return { ...n, children: n.children.filter((c) => c !== name) };
       }
-      if (n.kind === "dispatch" && (n.entry === name || (n.checks || []).includes(name))) {
-        warnings.push({ node: n.name, message: `${n.name} still names ${name} as its ${n.entry === name ? "entry" : "check"}: choose another` });
+      if (n.kind === "dispatch" && dispatchLinks(n).includes(name)) {
+        warnings.push({ node: n.name, message: `${n.name} still names ${name} as its ${n.entry === name ? "entry" : n.review === name ? "review" : "check"}: choose another` });
       }
       return n;
     });
-    const orphans = [...(gone.children || []), ...(gone.kind === "dispatch" ? [gone.entry, ...(gone.checks || [])] : [])];
+    const orphans = [...(gone.children || []), ...(gone.kind === "dispatch" ? dispatchLinks(gone) : [])];
     for (const c of orphans) if (nodes.some((n) => isObj(n) && n.name === c)) warnings.push({ node: c, message: `${c} has no parent now: it is an orphan until you give it one` });
     return { doc: { ...doc, nodes }, warnings };
   }
@@ -194,7 +199,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // Both are pure and return a new document. The rules of validate() judge the result, so a gap shows on the node.
   const NAME_RE = new RegExp(SCHEMA.$defs.name.pattern);
 
-  // The places a node name is written: root, children, a dispatch's entry and checks, a `when` or a `sees` entry named outcome:<node>.
+  // The places a node name is written: root, children, a dispatch's entry, checks and review, a `when` or a `sees` entry named outcome:<node>.
   function renameNode(doc, old, neu) {
     const list = Array.isArray(doc.nodes) ? doc.nodes : [];
     if (!list.some((n) => isObj(n) && n.name === old)) return { error: `No node named ${old}.` };
@@ -210,6 +215,7 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
       if (Array.isArray(n.children)) m.children = n.children.map(swap);
       if (n.entry === old) m.entry = neu;
       if (Array.isArray(n.checks)) m.checks = n.checks.map(swap);
+      if (n.review === old) m.review = neu;
       if (isObj(n.when) && typeof n.when.fact === "string") m.when = { ...n.when, fact: swapFact(n.when.fact) };
       if (isObj(n.adapt) && Array.isArray(n.adapt.sees)) m.adapt = { ...n.adapt, sees: n.adapt.sees.map(swapFact) };
       return m;
@@ -252,10 +258,10 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     if (seen.has(from) || !byName[from]) return false;
     seen.add(from);
     const n = byName[from];
-    const kids = [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(Array.isArray(n.checks) ? n.checks : [])] : [])];
+    const kids = [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? dispatchLinks(n) : [])];
     return kids.some((c) => reaches(byName, c, to, seen));
   }
-  const hasParent = (nodes, name) => nodes.some((n) => isObj(n) && ((Array.isArray(n.children) && n.children.includes(name)) || (n.kind === "dispatch" && (n.entry === name || (n.checks || []).includes(name)))));
+  const hasParent = (nodes, name) => nodes.some((n) => isObj(n) && ((Array.isArray(n.children) && n.children.includes(name)) || (n.kind === "dispatch" && dispatchLinks(n).includes(name))));
 
   function connect(doc, from, to) {
     const byName = Object.fromEntries(doc.nodes.filter(isObj).map((n) => [n.name, n]));
