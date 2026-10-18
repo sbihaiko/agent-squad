@@ -15,14 +15,15 @@ def _load():
     return module
 
 
-# the child columns, as the board names them: a worked table, never recomputed from the fold's own sets
+# the child columns, as the board names them: a worked table, never recomputed from the fold's own sets. None is no write:
+# below Doing the spec keeps the column the owner gave it (#550)
 CASES = [
-    ([], "Backlog"),
-    (["Todo"], "Todo"),   # the owner started the spec: a queued child puts it in the queue (ADR-0142)
-    (["Backlog", "Todo"], "Todo"),
-    (["Backlog"], "Backlog"),
-    ([""], "Backlog"),
-    (["Blocked", "Todo"], "Todo"),
+    ([], None),
+    (["Todo"], None),
+    (["Backlog", "Todo"], None),
+    (["Backlog"], None),
+    ([""], None),
+    (["Blocked", "Todo"], None),
     (["In Progress"], "Doing"),
     (["Code Complete", "Todo"], "Doing"),
     (["Testing", "Done"], "Doing"),
@@ -33,7 +34,7 @@ CASES = [
     (["Abandoned", "Done", "Abandoned"], "Closed"),
     (["Abandoned"], "Abandoned"),
     (["Abandoned", "Abandoned"], "Abandoned"),
-    (["Abandoned", "Todo"], "Todo"),
+    (["Abandoned", "Todo"], None),
     (["Abandoned", "In Progress"], "Doing"),
     (["Landing", "Todo"], "Doing"),
     (["Merging", "Todo"], "Doing"),   # the live board's name for the column before the Pushing rename (#548)
@@ -49,11 +50,21 @@ def test_the_column_is_the_fold_of_the_children(children, column):
     assert _load().fold(children)[0] == column
 
 
-def test_every_combination_of_child_columns_gets_one_of_the_four_columns():
+def test_every_combination_of_child_columns_folds_forward_or_writes_nothing():
     fold = _load().fold
     for size in range(0, 4):
-        for kids in itertools.product(["Todo", "In Progress", "Done", "Abandoned"], repeat=size):
-            assert fold(list(kids))[0] in {"Backlog", "Todo", "Doing", "Closed", "Abandoned"}
+        for kids in itertools.product(["Backlog", "Todo", "In Progress", "Done", "Abandoned"], repeat=size):
+            assert fold(list(kids))[0] in {None, "Doing", "Closed", "Abandoned"}
+
+
+@pytest.mark.parametrize("current", ["Backlog", "Todo", "Doing", ""])
+def test_a_spec_whose_children_are_below_doing_keeps_the_owners_column(current):
+    assert _load().fold(["Todo", "Backlog"], current) == (None, False)
+
+
+@pytest.mark.parametrize("current", ["Closed", "Abandoned"])
+def test_a_terminal_spec_whose_child_reopens_to_todo_keeps_its_column_and_is_tagged(current):
+    assert _load().fold(["Todo", "Abandoned"], current) == (current, True)
 
 
 @pytest.mark.parametrize("current", ["Closed", "Abandoned"])
