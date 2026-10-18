@@ -2,8 +2,6 @@
 
 An option may name nodes and may lower a run-block value. It never sets a node's model or budget.
 """
-from squad.graph import check_node_names
-
 LOWER = {"spend_cap": "spend_cap", "deadline": "deadline", "max_parallel": "max_parallel"}
 NODE_OPTIONS = ("stop_after",)
 OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "keep_children")
@@ -16,6 +14,7 @@ class OptionError(ValueError):
 
 def resolve(graph, options):
     """Return (options, run_cfg) for one run. Raise OptionError for a refused option. The graph is never changed."""
+    from squad.graph import check_node_names  # lazy: the free-slot count imports this module and never resolves an option
     opts, cfg = dict(options or {}), dict(graph.run)
     for k in opts:
         if k not in (*LOWER, *NODE_OPTIONS, *OTHER):

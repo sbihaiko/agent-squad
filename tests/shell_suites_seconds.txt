@@ -1,7 +1,7 @@
 # Measured run time in seconds of each shell suite, one 'name seconds' per line; the runner reads it (tests/shell_suites.py).
 # 1 s or more: heavy. Over 15 s: also a slow reason. A suite not listed counts as fast. Only suites of 1 s or more are listed.
 test-address.sh 7.2
-test-autobug.sh 56.8
+test-autobug.sh 19.2
 test-autofrontier-envelope.sh 7.3
 test-autofrontier-one-run.sh 44.9
 test-autohunt.sh 30.5

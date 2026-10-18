@@ -7,6 +7,10 @@ export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps"
 G=/usr/bin/grep
 mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"
 cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/refusal-names.sh" "$d/workbranches.sh" "$d/address.sh" "$T/s/"
+# The fixture reaches no network (#556): `sg_work_issues` runs `git ls-remote` on the repository's https remote,
+# and an unset remote took every pass to github.com -- 0.7 s per pass at best, a stall at worst. git refuses the
+# transport itself, so the read answers "no branch" at once, the same fact a 404 gives, and no pass leaves the machine.
+export GIT_ALLOW_PROTOCOL=file
 unset SG_BOARD_VOCAB   # the loop that runs a child exports it; the cases that need the shipped vocabulary set it themselves
 export SG_GH_AGGREGATE_WINDOW=0   # the open-issue list changes between cases: no snapshot answers a later one
 : > "$T/st/active-runs.txt"
@@ -39,20 +43,10 @@ cat > "$T/bin/gh" <<J
 case "\$*" in
   *pulls?state=open*) echo "" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$T/issues.json" ;;   # the frontier's one list read (#383)
-  *"issues?state=open"*labels=bug*) python3 -c 'import json
-for i in json.load(open("$T/issues.json")):
-  labs=",".join(i.get("labels") or [])
-  if "bug" in (i.get("labels") or []): print(str(i["number"])+"\x1f"+labs)' ;;
-  *"issues?state=open"*labels=debt*) python3 -c 'import json
-for i in json.load(open("$T/issues.json")):
-  labs=",".join(i.get("labels") or [])
-  if "debt" in (i.get("labels") or []): print(str(i["number"])+"\x1f"+labs)' ;;
-  *"issues?state=open"*wave*|*labels=ready-for-agent*) python3 -c 'import json
-for i in json.load(open("$T/issues.json")):
-  labs=",".join(i.get("labels") or [])
-  if "ready-for-agent" in (i.get("labels") or []):
-    print("wave:01\x1f"+str(i["number"])+"\x1f"+labs)' ;;
-  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$T/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
+  *"issues?state=open"*labels=bug*) jq -r '.[]|select((.labels // [])|index("bug"))|"\(.number)\u001f\(.labels|join(","))"' "$T/issues.json" ;;   # pure jq: a python startup per call is a measured cost (#556)
+  *"issues?state=open"*labels=debt*) jq -r '.[]|select((.labels // [])|index("debt"))|"\(.number)\u001f\(.labels|join(","))"' "$T/issues.json" ;;
+  *"issues?state=open"*wave*|*labels=ready-for-agent*) jq -r '.[]|select((.labels // [])|index("ready-for-agent"))|"wave:01\u001f\(.number)\u001f\(.labels|join(","))"' "$T/issues.json" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$T/issues.json" ;;
   *) echo "" ;;
 esac
 J
@@ -538,16 +532,14 @@ sys.stdout.write(open("$K/kinds.tsv").read())
 PY
 cat > "$K/bin/gh" <<J
 #!/bin/bash
-list() { python3 -c 'import json,sys
-for i in json.load(open("$K/issues.json")):
-  if sys.argv[1] == "" or sys.argv[1] in i["labels"]: print(str(i["number"])+"\x1f"+",".join(i["labels"]))' "\$1"; }
+list() { jq -r --arg l "\$1" '.[]|select(\$l == "" or ((.labels // [])|index(\$l)))|"\(.number)\u001f\(.labels|join(","))"' "$K/issues.json"; }
 case "\$*" in
   *pulls?state=open*) echo "" ;;
   *"issues(states: OPEN"*) jq '{data:{repository:{issues:{pageInfo:{hasNextPage:false},nodes:[.[]|{number,title,body,state:"OPEN",labels:{nodes:[(.labels//[])[]|{name:.}]},blockedBy:{nodes:[]},comments:{nodes:[]}}]}}}}' "$K/issues.json" ;;   # the blocker gate's one list read (#479)
   *"issues?state=open"*labels=bug*) list bug ;;
   *"issues?state=open"*labels=debt*) list debt ;;
   *"issues?state=open"*) list "" ;;
-  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); python3 -c 'import json,sys;print(json.dumps([i for i in json.load(open("$K/issues.json")) if i["number"]==int(sys.argv[1])][0]))' "\$n" ;;
+  *issues/*) n=\$(echo "\$*" | /usr/bin/grep -oE 'issues/[0-9]+' | cut -d/ -f2); jq -c --argjson n "\$n" '.[]|select(.number==\$n)' "$K/issues.json" ;;
   *) echo "" ;;
 esac
 J

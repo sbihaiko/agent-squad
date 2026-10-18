@@ -94,7 +94,14 @@ sg_write() {   # <refusal name> <address> <concerns> <guard> -- <command…>: th
   return "$rc"
 }
 # The candidate list is validated, never assumed (#1855): a decimal issue number AND an issue that is not a pull request.
-sg_is_issue() { local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1; printf '%s' "$j" | grep -q '"pull_request"' && return 1; printf '%s' "$j" | grep -q "\"number\":[[:space:]]*$1\b"; }
+# The read that validates an issue is the read the cluster then carries, so the issue is fetched once, never twice (#556):
+# the body prints on exit 0, exit 2 names an answer that is not this non-PR issue, and exit 1 a read GitHub did not answer.
+sg_issue_body() {
+  local j; j=$(gh_api "repos/$SG_REPO/issues/$1") || return 1
+  printf '%s' "$j" | grep -q '"pull_request"' && return 2
+  printf '%s' "$j" | grep -q "\"number\":[[:space:]]*$1\b" || return 2
+  printf '%s' "$j"
+}
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
@@ -202,12 +209,13 @@ done
 # "issues" -- so the check is on the whole cluster, never on the number alone (#1855).
 for n in "${cand[@]}"; do
   case "$n" in ''|*[!0-9]*) echo "AUTOBUG: dropping candidate '$n': not a decimal issue number" >&2; exit 0;; esac
-  sg_is_issue "$n" || { echo "AUTOBUG: dropping candidate #$n: ${gh_api_err:-not a readable non-PR issue}; nothing dispatched" >&2; exit 0; }
-  j=$(gh_api "repos/$SG_REPO/issues/$n") || { echo "AUTOBUG: issue #$n is not readable: $gh_api_err; nothing dispatched" >&2; exit 0; }
+  j=$(sg_issue_body "$n"); rc=$?
+  [ "$rc" -eq 0 ] || { echo "AUTOBUG: dropping candidate #$n: ${gh_api_err:-not a readable non-PR issue}; nothing dispatched" >&2; exit 0; }
   cj+="$j,"
 done
 cj="${cj%,}]"
-cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0   # cluster.py itself never answered: no cluster to trust
+# One candidate is already one cluster of one, so the pass spends no Python startup on cluster.py for it (#556).
+if [ ${#cand[@]} -eq 1 ]; then cl=${cand[0]}; else cl=$(python3 "$here/cluster.py" <<<"$cj" 2>/dev/null) || exit 0; fi   # cluster.py itself never answered: no cluster to trust
 # One cluster is one child, and a run funds only so many children (#480): the engine rejects the rest (spend_over_remainder),
 # and their issues would sit in Doing with nobody on them. So the pass asks for no more than the free run slots and the
 # children one run can fund (fundroom.py; "-" when the graph does not say).
