@@ -454,4 +454,26 @@ case "$r" in *"dispatched for #20, #201, #202, #203"*) ok "P: the empty wave nam
 /usr/bin/grep -qE 'issues/(203|20) -f state=closed' "$T/gh.log" && ko "P: an issue with no commit in the base is closed" || ok "P: an issue with no commit in the base stays open"
 [ -n "$(awk -F'\t' '$4=="201"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "P: the ledger carries the delivered issue" || ko "P: no ledger row for #201"
 
+# Q (#575): a gate lock held by another pass never makes an entry or a landing wait for it. The entry and the landing run
+# inline in the fast lane and the watch cycle, so a wait there stops every dispatch and every cycle (a promotion held the
+# lock for 30 min). Both use try mode: the child enters, and the wave lands, on a later pass, with no requeue and no try spent.
+W30=wave/run-30; start2 run-30 >/dev/null; child 301 q1 "origin/$W30"
+sleep 60 & hp=$!; mkdir -p "$T/st/locks/gate"; echo "$hp" > "$T/st/locks/gate/pid"; : > "$T/board.log"
+t0=$(date +%s); r=$(REV_BASE=$W30 rev 301; cd "$T/c301" && SERIAL_WAIT_SECONDS=8 SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-30 301 2>&1); rc=$?; t1=$(date +%s)
+[ $rc != 0 ] && [ $((t1 - t0)) -lt 6 ] && ok "Q: an entry under a held gate lock returns at once" || ko "Q: entry exit $rc after $((t1 - t0)) s: '$r'"
+case "$r" in *"WAVE HOLD #301"*"gate lock"*) ok "Q: the entry names the held gate lock";; *) ko "Q: no hold line: '$r'";; esac
+case "$r" in *"WAVE REQUEUE"*) ko "Q: a held gate lock requeued the child: '$r'";; *) ok "Q: a held gate lock requeues nothing";; esac
+/usr/bin/grep -q " 301$" "$T/board.log" && ko "Q: the card moved: $(cat "$T/board.log")" || ok "Q: the card does not move"
+rm -rf "$T/st/locks/gate"; en2 run-30 301 >/dev/null
+mkdir -p "$T/st/locks/gate"; echo "$hp" > "$T/st/locks/gate/pid"; before=$($O rev-parse dev)
+t0=$(date +%s); r=$(SERIAL_WAIT_SECONDS=8 SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?; t1=$(date +%s)
+[ $rc != 0 ] && [ $((t1 - t0)) -lt 6 ] && ok "Q: a landing under a held gate lock returns at once" || ko "Q: land exit $rc after $((t1 - t0)) s: '$r'"
+case "$r" in *"WAVE WAIT $W30"*"gate lock"*) ok "Q: the landing names the held gate lock";; *) ko "Q: no wait line: '$r'";; esac
+case "$r" in *"WAVE CHECK RED"*) ko "Q: a held gate lock read as a red tip: '$r'";; *) ok "Q: a held gate lock is no red tip";; esac
+[ ! -e "$T/st/auto/wland-tries-run-30" ] && ok "Q: a held gate lock spends no landing try" || ko "Q: a try was counted"
+[ "$($O rev-parse dev)" = "$before" ] && ok "Q: dev does not move while the lock is held" || ko "Q: dev moved"
+rm -rf "$T/st/locks/gate"; kill $hp 2>/dev/null
+r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?
+[ $rc = 0 ] && ok "Q: the wave lands on the next pass, once the lock is free" || ko "Q: exit $rc: '$r'"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
