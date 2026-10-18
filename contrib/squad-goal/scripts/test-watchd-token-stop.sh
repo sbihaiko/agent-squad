@@ -12,14 +12,16 @@ f,st=sys.argv[1],sys.argv[2]
 p=pathlib.Path(f); t=p.read_text()
 t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%f.rsplit("/",1)[0])
-t=t.replace('"$(dirname "$me")/fastloop.sh"','"%s/no-fastloop.sh"'%f.rsplit("/",1)[0])
 p.write_text(t)
 PY
 # the stub watch.sh: one line to the log, then the stop the guard path runs, then exit
 # the pause lets `start` see the supervisor alive before the stop lands, the way a real cycle does
 printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 2\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
-# the stub fast lane runs a pass in the foreground, the way fastloop.sh runs childcc: the stop must end the pass too (#529)
-printf '#!/bin/bash\ntrap "exit 0" TERM\nbash -c '"'"'echo $$ > "$SG_STATE/pass.pid"; exec sleep 30'"'"'\n' > "$T/no-fastloop.sh"
+# the real fast lane, beside stub passes: its childcc runs in the background (#590), and a stub childcc.py starts a child of
+# its own, as a review does. The stop must end the pass and its child too (#529).
+cp "$d/fastloop.sh" "$d/single.sh" "$T/"; printf 'export SG_STATE=%s; SG_FAST_INTERVAL=60\n' "$SG_STATE" > "$T/env.sh"
+for f in autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$T/$f.sh"; chmod +x "$T/$f.sh"; done
+printf 'import os,subprocess\np=subprocess.Popen(["sleep","30"])\nopen(os.environ["SG_STATE"]+"/pass.pid","w").write("%%d %%d\\n" %% (os.getpid(), p.pid))\np.wait()\n' > "$T/childcc.py"
 chmod +x "$T/watch.sh" "$T/watchd.sh"
 bash "$T/watchd.sh" start >/dev/null
 sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
@@ -35,8 +37,9 @@ n=$(/usr/bin/grep -c "cycle ran" "$SG_STATE/watch.log" 2>/dev/null)
 fl=$(cat "$SG_STATE/fastloop.pid" 2>/dev/null)
 { [ -z "$fl" ] || ! /bin/ps -p "$fl" >/dev/null 2>&1; } && ok "the fast lane is gone" || ko "the fast lane is still alive (pid $fl)"
 ps_=$(cat "$SG_STATE/pass.pid" 2>/dev/null)
-for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$ps_" ] && /bin/ps -p "$ps_" >/dev/null 2>&1 || break; sleep 0.2; done
-[ -n "$ps_" ] && ! /bin/ps -p "$ps_" >/dev/null 2>&1 && ok "the fast lane's pass stops with the supervisor" || { ko "the fast lane's pass still runs after the stop (pid ${ps_:-none})"; kill "$ps_" 2>/dev/null; }
+up() { for p in $ps_; do /bin/ps -p "$p" >/dev/null 2>&1 && return 0; done; return 1; }
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$ps_" ] && up || break; sleep 0.2; done
+[ -n "$ps_" ] && ! up && ok "the fast lane's background childcc and its child stop with the supervisor" || { ko "the fast lane's pass still runs after the stop (pids ${ps_:-none})"; kill $ps_ 2>/dev/null; }
 rm -f "$SG_STATE/pass.pid"
 # a relight after a token stop starts a fresh measurement (#515): the old marker made every start stop again at once
 printf '1\n' > "$SG_STATE/token-guard.since"; echo "Token burn ..." > "$SG_STATE/token-stop"

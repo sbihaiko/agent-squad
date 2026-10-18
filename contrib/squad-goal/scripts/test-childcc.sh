@@ -65,11 +65,12 @@ cat > "$T/wave.sh" <<'W'
 #!/bin/bash
 echo "$*" >> "$WAVE_CALLS"
 [ -e "$WAVE_FAIL" ] && { echo "WAVE REQUEUE #$3: the local gates failed: x"; exit 1; }
+[ "$3" = 5300 ] && { echo "WAVE HOLD #$3: no review yet"; exit 1; }   # a held child: no requeue, so every pass tries it again
 echo "WAVE gui/$3 entered (#$3)"
 W
 export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail; : > "$WAVE_CALLS"
-wtree() { # run: the child's worktree, a git repo with one commit
-  local d="$T/co/runs/$1/ws/target-c"; mkdir -p "$d"; /usr/bin/git -C "$d" init -q . && /usr/bin/git -C "$d" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one; }
+wtree() { # run [child]: the child's worktree, a git repo with one commit
+  local d="$T/co/runs/$1/ws/target-${2:-c}"; mkdir -p "$d"; /usr/bin/git -C "$d" init -q . && /usr/bin/git -C "$d" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one; }
 pass() { : > "$T/st/active-runs.txt"; echo "$T/co/runs/$1" >> "$T/st/active-runs.txt"; (cd "$T/co" && python3 "$T/childcc.py.run" 2>&1); }
 run wv 5100 n; wtree wv; echo wave/wv > "$T/st/auto/wave-wv"; echo wave/wv > "$T/st/auto/waved-wv"; : > "$WAVE_FAIL"
 pass wv; pass wv; pass wv
@@ -97,4 +98,31 @@ pass rvw >/dev/null
 c1=$(grep -c '^rvw 5102' "$T/cr.calls"); sleep 30 & live=$!; echo "$h $live" > "$T/st/auto/rvd-rvw-c"; rm -f "$T/st/auto/cc-rvw-c" "$T/st/auto/requeued-rvw-c"
 pass rvw >/dev/null; kill $live 2>/dev/null
 [ "$(grep -c '^rvw 5102' "$T/cr.calls")" = "$c1" ] && ok "a claim whose pass is alive holds: the review is not repeated" || ko "a live claim was reviewed again: $(cat "$T/cr.calls")"
+# One pass works one pending child (#590): a review and the gates take 2 to 15 min each, and a pass that worked every child
+# held the childcc lock, and every landing behind it, for 14 to 25 min. A pass that leaves a child for later exits 3, never 0,
+# so the landing that waits for its children does not land a wave without them. A cursor kept in auto/ rotates the work, so a
+# child held on every pass does not take every pass; a child whose requeue holds it on an unchanged head costs no work.
+run2() { # name issue-a issue-b: a live run of two finished children, a and b, with a wave and a worktree each
+  mkdir -p "$T/co/runs/$1"; { for c in a:$2 b:$3; do echo '{"event": "spawn_accepted", "child": "'${c%%:*}'", "definition": "GitHub issue #'${c#*:}'"}'; done
+    for c in a b; do echo '{"event": "outcome", "node": "'$c'", "outcome": "pass", "reasons": ["ok"]}'; done; } > "$T/co/runs/$1/record.jsonl"
+  wtree "$1" a; wtree "$1" b; echo "wave/$1" > "$T/st/auto/wave-$1"; echo "wave/$1" > "$T/st/auto/waved-$1"; }
+ent() { /usr/bin/grep -c "^enter $1 $2" "$WAVE_CALLS"; }
+run2 bud 5200 5201; : > "$WAVE_CALLS"
+pass bud >/dev/null; rc=$?
+[ "$(( $(ent bud 5200) + $(ent bud 5201) ))" = 1 ] && ok "one pass works one pending child" || ko "entries in one pass: $(cat "$WAVE_CALLS")"
+[ "$rc" = 3 ] && ok "a pass that leaves a child for later exits 3" || ko "a pass that left a child exited $rc"
+pass bud >/dev/null; rc=$?
+[ "$(ent bud 5200)" = 1 ] && [ "$(ent bud 5201)" = 1 ] && ok "the next pass works the child left" || ko "entries after two passes: $(cat "$WAVE_CALLS")"
+[ "$rc" = 0 ] && ok "a pass that leaves no child exits 0" || ko "the last pass exited $rc"
+[ -e "$T/st/auto/cc-bud-a" ] && [ -e "$T/st/auto/cc-bud-b" ] && ok "both children got their marker" || ko "markers: $(/bin/ls "$T/st/auto")"
+# a held child (5300, no requeue: it is tried on every pass) does not take every pass: the other child gets its turn
+run2 fair 5300 5301; : > "$WAVE_CALLS"
+pass fair >/dev/null; pass fair >/dev/null; rc=$?
+[ "$(ent fair 5300)" = 1 ] && [ "$(ent fair 5301)" = 1 ] && ok "a held child does not take every pass" || ko "entries for a held child and its sibling: $(cat "$WAVE_CALLS")"
+[ "$rc" = 0 ] && ok "once each child had its turn, the pass exits 0" || ko "the pass after each child's turn exited $rc"
+# a child whose requeue holds it on an unchanged head costs no work: its sibling is worked in the same pass
+run2 sup 5400 5401; : > "$WAVE_CALLS"; /usr/bin/git -C "$T/co/runs/sup/ws/target-a" rev-parse HEAD > "$T/st/auto/requeued-sup-a"
+pass sup >/dev/null; rc=$?
+[ "$(ent sup 5400)" = 0 ] && [ "$(ent sup 5401)" = 1 ] && [ "$rc" = 0 ] && ok "a requeued child on an unchanged head costs no work" \
+  || ko "entries with a requeued child: $(cat "$WAVE_CALLS"), exit $rc"
 rm -rf "$T"; exit $fail

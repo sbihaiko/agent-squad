@@ -23,7 +23,8 @@ chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 # Every step the cycle runs, stubbed: the cycle costs its own wiring, not a pass of the loop.
 for s in autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh branchland.sh consult.sh; do
   printf '#!/bin/bash\nexit 0\n' > "$S/$s"; chmod +x "$S/$s"; done
-printf 'pass\n' > "$S/childcc.py"; printf 'pass\n' > "$S/reconcile.py"
+# The childcc stub logs its call, and exits 3 (a pass that left children for later, #590) while a `ccinc` file is in the fixture.
+printf 'import os,sys\nopen(os.environ["STEPS"],"a").write("childcc\\n")\nsys.exit(3 if os.path.exists("%s/ccinc") else 0)\n' "$T" > "$S/childcc.py"; printf 'pass\n' > "$S/reconcile.py"
 # The landing pass is what a run's completion reaches: the stub logs the call, and nothing else is read from it.
 # A `landfail` file in the fixture makes the stub land exit 1, as a rebase conflict or a refused push does.
 printf '#!/bin/bash\necho "wave $*" >> "%s"\n[ -e "%s/locks/single-childcc" ] && echo "childcc-lock-held-during-land" >> "%s"\n[ -e "%s/landfail" ] && exit 1\nexit 0\n' "$STEPS" "$ST" "$STEPS" "$T" > "$S/wave.sh"; chmod +x "$S/wave.sh"
@@ -106,9 +107,21 @@ SG_LAND_WAIT=2 run_cycle 1
 /usr/bin/grep -E 'WATCH: run-6 waits' "$T/watch.out" | /usr/bin/grep -q "childcc lock.*pid $holder" \
   && ok "the log names the run and the holder of the lock" || ko "no line names run-6 and the lock holder: '$(cat "$T/watch.out")'"
 /usr/bin/grep -q "run-6" "$ST/watch-seen.txt" 2>/dev/null && ko "a deferred run was read as seen" || ok "a deferred run stays unread"
+/usr/bin/grep -qx childcc "$STEPS" && ko "the cycle's own childcc ran beside the held lock" || ok "the cycle's own childcc goes through the childcc lock (#590)"
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null; rm -rf "$ST/locks/single-childcc"
 run_cycle 1
 [ "$(/usr/bin/grep -cxE 'wave land run-6 /.*/run-6' "$STEPS")" = 1 ] && ok "the next pass lands the deferred run" || ko "the deferred run was not landed on the next pass: '$(cat "$STEPS")'"
 /usr/bin/grep -q 'childcc-lock-held-during-land' "$STEPS" && ko "the landing ran inside the childcc lock" || ok "the landing holds no childcc lock"
+
+# 7) (#590) a childcc pass that left children for a later pass (exit 3) is no pass: the wave does not land and the run stays
+# unread, and the log says the landing is deferred. The pass that leaves none lands it.
+run run-7 pass; printf 'wave/run-7\n' > "$ST/auto/wave-run-7"; printf '%s\n' "$T/run-7" > "$ST/active-runs.txt"
+: > "$T/ccinc"; run_cycle 1
+/usr/bin/grep -q 'wave land run-7' "$STEPS" && ko "a wave landed on an incomplete childcc pass" || ok "an incomplete childcc pass does not land the wave"
+/usr/bin/grep -q "run-7" "$ST/watch-seen.txt" 2>/dev/null && ko "an incomplete pass marked the run seen" || ok "an incomplete pass leaves the run unread"
+/usr/bin/grep -E 'WATCH: run-7 waits' "$T/watch.out" | /usr/bin/grep -q deferred && ok "the log names the landing deferred" || ko "no deferred line for run-7: '$(cat "$T/watch.out")'"
+rm -f "$T/ccinc"; run_cycle 1
+[ "$(/usr/bin/grep -cxE 'wave land run-7 /.*/run-7' "$STEPS")" = 1 ] && ok "the pass that completes lands the wave" || ko "run-7 not landed after a complete pass: '$(cat "$STEPS")'"
+/usr/bin/grep -q "run-7" "$ST/watch-seen.txt" 2>/dev/null && ok "and the run is read" || ko "run-7 not in watch-seen.txt"
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
