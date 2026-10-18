@@ -919,7 +919,8 @@ def _burn_fact(b):
     if not rows: return ""
     total, hours, thr = _burn_window(b)
     over = f"over {_tok(thr)}" if thr is not None else "over the cap"
-    return f"tokens {_tok(total)}/{hours}h · {len(rows)} {over}"[:BURN_MAX_CHARS]
+    floor = " · floor" if b.get("floor") else ""   # no count came from some calls: the number is a floor, not a measure
+    return f"tokens {_tok(total)}/{hours}h · {len(rows)} {over}{floor}"[:BURN_MAX_CHARS]
 
 def _burn_tip(b):
     """What the block no longer says out loud, on hover: how many calls crossed the threshold in the window, the worst
@@ -929,7 +930,8 @@ def _burn_tip(b):
     _, hours, thr = _burn_window(b)
     lead = f"{len(rows)} calls, each over {_tok(thr)}" if thr is not None else f"{len(rows)} calls, each over the cap"
     names, rest = [_burn_row(x) for x in rows[:BURN_SHOWN]], len(rows) - BURN_SHOWN
-    return lead + f" in {hours}h · " + ", ".join(names) + (f" +{rest} more" if rest > 0 else "")
+    return lead + f" in {hours}h · " + ", ".join(names) + (f" +{rest} more" if rest > 0 else "") \
+        + (" · floor, not a measure: some calls carried no token count" if b.get("floor") else "")
 
 def foot_items(src, now=None):
     """The facts, in the order the line reads them, each carrying its palette colour and the parts it paints: a

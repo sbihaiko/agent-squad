@@ -236,8 +236,8 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
     # call whose answer carries no usage is not a zero, it is a FLOOR: a claude:* call -- a model that reports tokens -- whose
     # answer carried none (a refusal, an error, a zeroed .usage, an old CLI's plain text) gets a 7th field `no-usage`, so a reader
-    # can tell a call that never answered from a model that never reports. grok, agy and codex print no token count on the plain
-    # path this script reads, so they log 0 with NO mark: their silence is expected, and the call is still counted and named.
+    # can tell a call that never answered from a model that never reports (both make the total a floor). grok, agy and codex print no token count on the plain
+    # path this script reads, so they log 0 with NO mark: the call is still counted and named, and tokens.py reads it as `unreported`, so the total is a floor.
     # The mark is APPENDED, never substituted into a count field: the six fields keep their order and their meaning, so a reader
     # that stops at six (tokens.py reads len(p) >= 6) is untouched, and a count field holding a word would make that reader drop
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
