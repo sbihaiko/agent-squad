@@ -16,7 +16,7 @@ printf 'export SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_STATE=%s SG_BASE=main SG_C
 # 1228 is a bug; 1400 is debt (and still carries ready-for-agent, the old filer). 1401 is a frontier-only slice.
 cat > "$T/issues.json" <<'JSON'
 [
-  {"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]},
+  {"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]},
   {"number":1400,"title":"Debt: retry has no backoff","body":"<!-- debt-key:abcd -->","created_at":"2026-10-10T16:00:00Z","labels":["debt","ready-for-agent"]},
   {"number":1401,"title":"Slice: a frontier ticket","body":"UI/Logic/Foo.cs","created_at":"2026-10-10T17:00:00Z","labels":["ready-for-agent"]}
 ]
@@ -33,7 +33,7 @@ except OSError: print("no board", file=sys.stderr); sys.exit(1)
 PY
 cp "$T/s/issue_state.py" "$T/issue_state-stub.py"
 todo() { local n; : > "$T/cards.tsv"; for n in "$@"; do printf '%s\tTodo\n' "$n" >> "$T/cards.tsv"; done; }   # <issue>...: their cards sit in Todo
-todo 1228 1229 1400 1401 60 61 62 70 71 72   # the graph names no funding bound unless a case says so
+todo 1228 1229 1400 1401 60 61 62 70 71 72 73   # the graph names no funding bound unless a case says so
 cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
@@ -87,7 +87,7 @@ case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "2b the bug is dispatched o
 printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
 
 # 2c) (#480) a run funds only so many children: two bugs, two free slots, and a graph that funds one child -> one child.
-python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.append({"number":1229,"title":"Core: other crash","body":"step zz/q.py","created_at":"2026-09-01T15:30:00Z","labels":["bug"]}); json.dump(d, open(p,"w"))' "$T/issues.json"
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.append({"number":1229,"title":"Core: other crash","body":"step zz/q.py","created_at":"2026-09-01T15:30:00Z","labels":["bug","ready-for-agent"]}); json.dump(d, open(p,"w"))' "$T/issues.json"
 printf 'print(1)\n' > "$T/s/fundroom.py"
 r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"would dispatch 1 cluster(s)"*) ok "2c the pass asks for no more children than one run funds";; *) ko "2c the pass asked past the funded room: '$r'";; esac
@@ -201,7 +201,7 @@ m=($(find "$T/st/auto" -name 'bug-*' 2>/dev/null)); [ ${#m[@]} -eq 0 ] && ok "6c
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 cat > "$T/issues.json" <<'JSON'
-[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 cp "$d/autobug.sh" "$T/s/"
 printf '#!/bin/bash\n[ -n "\${AB_DRY:-}" ] && exit 0\ntouch %s/launched\n' "$T" > "$T/s/launch.py"; chmod +x "$T/s/launch.py"
@@ -210,7 +210,7 @@ held() {   # $1: the body of the issue's comments, one line each
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
   *"issues?state=open"*) echo "" ;;
   *issues/*/comments*) printf '%s' "$1" ;;
   *issues/*) printf '{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z"}\n' ;;
@@ -237,7 +237,7 @@ rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
 cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
-[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho %s/req.json\n' "$T" > "$T/s/mkreq.sh"
@@ -248,7 +248,7 @@ cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
   *"issues?state=open"*) echo "" ;;
   *issues/*/comments*) echo "" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
@@ -308,7 +308,7 @@ for mark in title body; do
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
   *"issues?state=open"*) echo "" ;;
   *issues/*/comments*) echo "" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"; echo '{"number":901}' ;;
@@ -336,7 +336,7 @@ rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
 cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
-[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 : > "$T/board.calls"
 cat > "$T/s/board.sh" <<J
@@ -352,7 +352,7 @@ cat > "$T/bin/gh" <<J
 #!/bin/bash
 case "\$*" in
   *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
   *"issues?state=open"*) echo "" ;;
   *issues/*/comments*) echo "" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
@@ -385,7 +385,7 @@ unset SG_BUG_PROJECT SG_BUG_DOING SG_BOARD_VOCAB
 rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
 cp "$d/autobug.sh" "$d/autohunt.sh" "$T/s/"
 cat > "$T/issues.json" <<'JSON'
-[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 : > "$T/board.calls"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> %s/board.calls\necho "#1228: GitHub refused the card write (HTTP 403)" >&2\nexit 1\n' "$T" > "$T/s/board.sh"
@@ -421,7 +421,7 @@ rm -rf "$T/st/auto"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"
 cp "$d/autobug.sh" "$T/s/"
 printf 'caps:\n  runs: 1\n' > "$T/co/docs/squad/defaults.yaml"
 cat > "$T/issues.json" <<'JSON'
-[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug"]}]
+[{"number":1228,"title":"Core: null deref","body":"step a.py","created_at":"2026-10-10T15:00:00Z","labels":["bug","ready-for-agent"]}]
 JSON
 printf '#!/bin/bash\ncp "$2" %s/req.body\necho %s/req.json\n' "$T" "$T" > "$T/s/mkreq.sh"
 printf '#!/bin/bash\ntouch %s/launched\n' "$T" > "$T/s/launch.py"
@@ -432,7 +432,7 @@ cat > "$T/bin/gh" <<J
 prog=; prev=; for a in "\$@"; do [ "\$prev" = "-q" ] && prog="\$a"; prev="\$a"; done
 case "\$*" in
   *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
   *"issues?state=open"*) echo "" ;;
   *issues/*/comments*) echo "" ;;
   *issues/*)
@@ -482,8 +482,8 @@ if [ "\${SG_GH_PASS:-}" = board ] || case "\$a" in *projectsV2*|"api users/o") t
 fi
 case "\$a" in
   *pulls?state=open*) echo "" ;;
-  *"issues?state=open"*labels=bug*) printf '1228\x1fbug\n' ;;
-  *"issues?state=open"*) printf '1228\x1fbug\n' ;;   # the unlabelled list the kinds route reads (#550: the seam now answers the kinds)
+  *"issues?state=open"*labels=bug*) printf '1228\x1fbug,ready-for-agent\n' ;;
+  *"issues?state=open"*) printf '1228\x1fbug,ready-for-agent\n' ;;   # the unlabelled list the kinds route reads (#550: the seam now answers the kinds)
   *issues/*/comments*) echo "" ;;
   *"--method POST"*) printf '%s\n' "\$@" >> "$T/filed"
     for x in "\$@"; do case "\$x" in body=@*) cat "\${x#body=@}" >> "$T/filed";; esac; done
@@ -554,10 +554,10 @@ J
 chmod +x "$K/bin/gh"
 cat > "$K/issues.json" <<'JSON'
 [
-  {"number":1500,"title":"Core: a","body":"a.py","created_at":"2026-10-10T10:00:00Z","labels":[]},
-  {"number":1501,"title":"Core: b","body":"b.py","created_at":"2026-10-10T11:00:00Z","labels":["bug"]},
-  {"number":1502,"title":"Core: c","body":"c.py","created_at":"2026-10-10T12:00:00Z","labels":["bug"]},
-  {"number":1503,"title":"Core: d","body":"d.py","created_at":"2026-10-10T13:00:00Z","labels":["no-auto"]}
+  {"number":1500,"title":"Core: a","body":"a.py","created_at":"2026-10-10T10:00:00Z","labels":["ready-for-agent"]},
+  {"number":1501,"title":"Core: b","body":"b.py","created_at":"2026-10-10T11:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":1502,"title":"Core: c","body":"c.py","created_at":"2026-10-10T12:00:00Z","labels":["bug","ready-for-agent"]},
+  {"number":1503,"title":"Core: d","body":"d.py","created_at":"2026-10-10T13:00:00Z","labels":["no-auto","ready-for-agent"]}
 ]
 JSON
 r=$(PATH="$K/bin:$PATH" SG_SQUAD="$SG_SQUAD" AB_DRY=1 bash "$K/s/autobug.sh" 2>&1)
@@ -574,9 +574,9 @@ case "$r" in *1501*1502*|*1502*) ok "13 with the seam down the pass falls back t
 R=$T/runparent; mkdir -p "$R/bin"
 cat > "$R/issues.json" <<'JSON'
 [
-  {"number":60,"title":"Run 2026-10-14 03:07 (11d7af) — #10, #11","labels":[{"name":"bug"}]},
-  {"number":62,"title":"Squad run run-20261014-030735-11d7af","labels":[{"name":"bug"}]},
-  {"number":61,"title":"Squad run report is wrong","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"}]}
+  {"number":60,"title":"Run 2026-10-14 03:07 (11d7af) — #10, #11","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},
+  {"number":62,"title":"Squad run run-20261014-030735-11d7af","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},
+  {"number":61,"title":"Squad run report is wrong","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"}]}
 ]
 JSON
 cat > "$R/bin/gh" <<G
@@ -594,9 +594,10 @@ case "$r" in *"[61]"*) ok "14 an issue whose title only starts alike is still a 
 F=$T/frozen; mkdir -p "$F/bin"
 cat > "$F/issues.json" <<'JSON'
 [
-  {"number":70,"title":"Gateway drops a task","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"},{"name":"frozen:dependency"}]},
-  {"number":71,"title":"Owner must pick","body":"y.py","created_at":"2026-10-10T15:01:00Z","labels":[{"name":"bug"},{"name":"frozen:owner"}]},
-  {"number":72,"title":"Plain bug","body":"z.py","created_at":"2026-10-10T15:02:00Z","labels":[{"name":"bug"}]}
+  {"number":70,"title":"Gateway drops a task","body":"x.py","created_at":"2026-10-10T15:00:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"frozen:dependency"}]},
+  {"number":71,"title":"Owner must pick","body":"y.py","created_at":"2026-10-10T15:01:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"},{"name":"frozen:owner"}]},
+  {"number":72,"title":"Plain bug","body":"z.py","created_at":"2026-10-10T15:02:00Z","labels":[{"name":"bug"},{"name":"ready-for-agent"}]},
+  {"number":73,"title":"Bug with no go label","body":"w.py","created_at":"2026-10-10T15:03:00Z","labels":[{"name":"bug"}]}
 ]
 JSON
 sed "s#$R/issues.json#$F/issues.json#g" "$R/bin/gh" > "$F/bin/gh"; chmod +x "$F/bin/gh"
@@ -620,9 +621,10 @@ case "$r" in *"[72]"*) ko "16 a bug with no card in Todo was dispatched: '$r'";;
 printf '72\tBacklog\n' > "$T/cards.tsv"
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ko "16 a bug in Backlog was dispatched: '$r'";; *) ok "16 a bug in Backlog is not dispatched";; esac
-todo 72
+todo 72 73; printf 'caps:\n  runs: 4\n' > "$T/co/docs/squad/defaults.yaml"   # room for both: only the label holds #73
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ok "16 a bug in Todo is dispatched";; *) ko "16 a bug in Todo was not dispatched: '$r'";; esac
+case "$r" in *73*) ko "16 a bug in Todo without the go label was dispatched: '$r'";; *) ok "16 a bug in Todo without the go label is not dispatched";; esac
 rm -f "$T/cards.tsv"
 r=$(PATH="$F/bin:$PATH" AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
 case "$r" in *"[72]"*) ko "16 a bug went out with no board read: '$r'";; *"board"*) ok "16 a board that does not answer dispatches nothing, and the pass says so";; *) ko "16 the pass is silent about the board: '$r'";; esac
