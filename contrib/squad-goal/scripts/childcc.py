@@ -30,7 +30,8 @@ A run reviews its own children (#601): the verdict of its review gate is in the 
 enters with no second review here; a child its run held, with its requeued marker, is neither entered, reviewed nor requeued
 again; a child of a run with no review in its record is reviewed here as before. An approved child that its entry still
 holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
-never held for good (#600)."""
+never held for good (#600).
+A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611)."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
@@ -171,7 +172,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
     finished = '"event": "verdict"' in rec.read_text()
-    issue, seen, done, unmapped, defn, failed, verdict = {}, set(), [], [], {}, {}, {}
+    issue, seen, done, unmapped, defn, failed, verdict = {}, set(), {}, [], {}, {}, {}   # done: one item per child, its last passing entry (#611)
     for l in rec.open():
         if '"spawn_accepted"' not in l and '"outcome"' not in l and '"land"' not in l: continue
         try: d = json.loads(l)
@@ -180,9 +181,9 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             seen.add(d["child"]); defn[d["child"]] = d.get("definition"); n = issue_from(json.dumps(d.get("definition")))
             if n is not None: issue[d["child"]] = n
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in issue:
-            done.append((d["node"], (d.get("reasons") or [""])[0]))
+            done.pop(d["node"], None); done[d["node"]] = (d.get("reasons") or [""])[0]   # a fix entry (#570) is entry 2, 3, ... of the same child: the last one stands, and its worktree holds its head
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
-            unmapped.append(d["node"])
+            if d["node"] not in unmapped: unmapped.append(d["node"])
         elif d.get("event") == "land" and d.get("node") in seen:
             rv = (d.get("effect") or {}).get("review") if isinstance(d.get("effect"), dict) else None
             if isinstance(rv, dict): verdict[d["node"]] = rv.get("verdict")   # the run's own review of the child (#599, #601)
@@ -193,7 +194,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
         try: print(f"RUN PARENT #{state.group_run(name, issue.values())} ({name})"); mk.touch()
         except RunParentChild as e: print(f"RUN PARENT REFUSED {name}: {e}"); mk.touch()   # asking again can not change it
         except RuntimeError as e: print(f"RUN PARENT FAILED {name}: {e}")   # no marker: the next pass asks again
-    for child, why in done:
+    for child, why in done.items():
         if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve"))
     for child in unmapped:
         mk = A / f"unmap-{name}-{child}"
