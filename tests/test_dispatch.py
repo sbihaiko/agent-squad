@@ -394,11 +394,12 @@ def _model_names(doc):
     return names
 
 
-def test_repo_graphs_name_registry_ids_the_sdk_sends_unchanged():
-    """SPEC 505 ticket 16: a repo graph names the registry id, and the SDK call sends that string unchanged.
+def test_repo_graphs_name_registry_ids_the_gateway_serves():
+    """SPEC 505 ticket 17 (#586): a repo graph names the registry id, and the SDK wire is a name its gateway route serves.
 
-    A legacy spelling resolves to the id but its wire may stay the legacy spelling, so a repo graph names the id;
-    a host graph keeps its own spelling, which `served` passes through. `allow.models` stays a list of strings.
+    The registry id is the canonical spelling the graph carries; the gateway route may serve it under another name
+    (`claude-gpt-5.6-terra` for `gpt-5.6-terra`), so the SDK call maps the id to that route's wire string.
+    `allow.models` stays a list of strings.
     """
     from squad import modelreg
     reg = modelreg.default_registry()
@@ -409,7 +410,10 @@ def test_repo_graphs_name_registry_ids_the_sdk_sends_unchanged():
             assert ref.known, f"{path.name}: {raw!r} is not in the registry"
             base = raw[:-len(f"[{ref.ctx}]")] if ref.ctx else raw
             assert base == ref.id and base in reg.entries, f"{path.name}: {raw!r} is not the registry id {ref.id!r}"
-            assert modelreg.invocation(ref, "sdk", reg=reg).wire == raw, f"{path.name}: the SDK would send {raw!r} as another string"
+            wire = modelreg.invocation(ref, "sdk", reg=reg).wire
+            gateway = reg.entries[ref.id].routes.get("gateway") or {}
+            served = gateway.get("served") or []
+            assert wire in served, f"{path.name}: the SDK wire would send {wire!r}, but the gateway route serves {served!r}"
 
 
 def test_the_shipped_router_record_names_the_registry_ids_its_graph_allows():
