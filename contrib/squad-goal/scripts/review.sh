@@ -264,7 +264,11 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_SHARED/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
     if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$SG_STATE/review-$pr.err" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
-      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_SHARED/agy-limited"
+      # the reset is the one /quota reports (what the hub card reads); the error's own "Resets in" is only the fallback, and 6 h the last
+      qr=$(cd "$SG_CHECKOUT" && perl -e 'alarm 60; exec @ARGV' agy -p /quota </dev/null 2>/dev/null | python3 "$(dirname "$0")/agyquota.py" 2>/dev/null)
+      if [ -n "$qr" ]; then echo "$qr" > "$SG_SHARED/agy-limited"
+      else
+      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_SHARED/agy-limited"; fi
       printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$")"
       rc=99; break; fi
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$")"; break; }

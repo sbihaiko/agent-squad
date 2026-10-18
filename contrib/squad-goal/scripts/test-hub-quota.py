@@ -5,7 +5,7 @@ that finds nothing must record the reason instead of leaving yesterday's reading
 Usage: python3 contrib/squad-goal/scripts/test-hub-quota.py
 No browser, no network and no CLI call: HOME points at a throwaway tree holding fixture logs.
 """
-import datetime as dt, importlib.util, json, os, pathlib, sys, tempfile
+import datetime as dt, importlib.util, json, os, pathlib, sys, tempfile, time
 
 HERE = pathlib.Path(__file__).resolve().parent
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="hub-quota-"))
@@ -102,7 +102,7 @@ ck(isinstance(row, dict) and row.get("unavailable") is True, "the row the panel 
 ck(bool(row.get("err")), "the row carries the reason", row)
 ck('chip err">unavailable' in hub.PAGE and "esc(a.err)" in hub.PAGE and "aq.unavailable" in hub.PAGE,
    "the cost panel renders the unavailable row (chip + reason, and routes it into the bar)")
-hub.quota["grok"] = {"windows": [{"label": "weekly", "pct": 7.5, "resets": RESET}], "asof": 2.0}
+hub.quota["grok"] = {"windows": [{"label": "weekly", "pct": 7.5, "resets": RESET}], "asof": time.time()}
 ck(hub.quota_row("grok").get("windows")[0]["pct"] == 7.5, "a good reading still passes through unchanged")
 ck(hub.quota_row("claude") is None, "an unseen provider has no row")
 

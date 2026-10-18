@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import chainhealth, router_envelope   # the one envelope source, shared with launch.py (#436)
+import agyquota, chainhealth, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2255,14 +2255,13 @@ const rel=t=>{if(!t)return"";const x=t-Date.now()/1000;if(x<=0)return"resets now
 const lvl=p=>p>=90?"lv-err":p>=60?"lv-warn":"lv-ok",fpct=p=>p<10&&p>0?p.toFixed(1):String(Math.round(p));
 const qbar=(label,pct,resets,sm,tip)=>`<div class="qw${sm?" sm":""}"><div class=ql><span>${esc(label)} <b>${fpct(pct)}%</b></span>${resets?`<span class=rst title="${esc(rs(resets))}">${rel(resets)}</span>`:""}</div><div class=tr title="${esc(tip)}"><div class="fl ${lvl(pct)}" style="width:${Math.min(pct,100)}%"></div></div></div>`;
 const autoq=a=>{const QT="Quota used, read from the provider's own CLI. 100% = quota exhausted.";if(a.unavailable)return `<div class=fr><span class="chip err">unavailable</span><span class=fs title="${esc(a.err)}">${esc(a.err)}</span>${a.asof?`<span class=fs>· last probed ${ago(a.asof)}</span>`:""}</div>`;return a.windows.map((w,i)=>qbar(w.label,w.pct,w.resets,i>0,QT)).join("")+`<div class=fr>${a.reached?`<span class="chip err">limit reached</span>`:""}<span class=fs>CLI · ${ago(a.asof)}</span></div>`};
-const SUBL={claude:"Claude Team",grok:"SuperGrok",gpt:"ChatGPT Plus",gemini:"Google AI Plus"};
 const CUR={"R$":"BRL","U$":"USD","US$":"USD","$":"USD","€":"EUR","£":"GBP","¥":"JPY"},curOf=v=>{v=v.trim().toUpperCase();return CUR[v]||v};
 const money=(a,c)=>{try{return new Intl.NumberFormat(undefined,{style:"currency",currency:c}).format(a)}catch(e){return a+" "+c}};
 async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae=document.activeElement;if(ae&&ae.closest&&ae.closest("#subs")&&ae.tagName==="INPUT")return;
  const tot=Object.values(d.subs).reduce((a,v)=>a+(v.saved||0),0),any=Object.values(d.subs).some(v=>v.saved!=null);$("#plsr").textContent=any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices";
  $("#cash").textContent="at API list prices (API-equivalent) · cash this month: "+(any||d.api?`plans ${usd(d.plans)} + API ${usd(d.api)} = ${usd(d.total)}`:"set plan prices");
  $("#stsr").textContent=`month ${usdc(d.total)}`;
- $("#subs").innerHTML=`<div class=subx>Per subscription: API-equivalent usage vs the plan price so far.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
+ $("#subs").innerHTML=`<div class=subx>Per subscription: quota used, as each provider's CLI reports it. With no reading, the bar is the API-equivalent usage vs the plan price.</div><datalist id=curs>${["USD","BRL","EUR","GBP","ARS","MXN","CAD","JPY"].map(c=>`<option value=${c}>`).join("")}</datalist>`+Object.entries(d.subs).map(([k,v])=>{const ok=v.saved!=null,pl=v.plan,pr=d.presets[k],custom=pl&&pl.plan==="custom";
   const sel=`<select data-plan=${k} data-f=plan><option value="" ${pl?"":"selected"}>choose a plan…</option>${Object.entries(pr).map(([i,p])=>`<option value=${i} ${pl&&pl.plan===i?"selected":""}>${esc(p.name)} · US$${p.usd}</option>`).join("")}<option value=custom ${custom?"selected":""}>Custom amount…</option></select>`;
   const cust=custom?`<span class=pr><span>amount</span><input data-plan=${k} data-f=amount type=number min=0 step=0.01 value="${pl.amount}"> <input data-plan=${k} data-f=cur list=curs value="${esc(pl.currency)}" placeholder="BRL" title="R$, U$, € or any 3-letter code"></span>`:"";
   const note=v.noRate?`<span class=warn>no exchange rate for ${esc(pl.currency)} right now</span>`:(pl&&pl.currency!=="USD"&&v.usd!=null?`<span class=dt>≈ <b>US$${v.usd}</b> / month · ${(+v.rate).toFixed(2)} ${esc(pl.currency)} per US$</span>`:"");
@@ -2270,7 +2269,7 @@ async function pollSubs(){try{const d=await (await fetch("/api/subs")).json(),ae
   const MT="Fill: API-equivalent used by squad runs ÷ monthly plan price (partial: other uses of the plan are not seen). 100% = plan paid off. Tick: how much of the month has passed.";
   const bar=aw||(aq&&aq.unavailable)?autoq(aq):q!=null?qbar(win||"quota used",q,null,false,"Quota % entered by hand. 100% = quota exhausted."):pct!=null?`<div class=qw><div class=ql><span>used <b>${fpct(pct)}%</b> of plan value</span><span class=rst>month ${Math.round(today)}%${pct>=100?" · paid off ✓":""}</span></div><div class=tr title="${MT}"><div class="fl ${ok?(v.saved>=0?"lv-ok":"lv-err"):"lv-est"}" style="width:${Math.min(pct,100)}%"></div><div class=tk style="left:${Math.min(today,100)}%"></div></div></div>`:"";
   const man=aw||!pl?"":`<div class=pr><span>quota used</span><input data-plan=${k} data-f=quota type=number min=0 max=100 step=1 value="${q??""}" placeholder="%" style="width:60px"><input data-plan=${k} data-f=qwin value="${esc(win)}" placeholder="window, e.g. weekly · all models" maxlength=40 style="flex:1;min-width:0"></div>`;
-  return `<div class=sub><div class=hd><span class=nm>${SUBL[k]}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")}catch(e){console.error(e)}}
+  return `<div class=sub><div class=hd><span class=nm>${esc(v.name)}</span>${ok?"":`<span class="sv none">choose a plan</span>`}</div><div class=pr>${sel}</div>${cust}${note}${bar}${man}</div>`}).join("")}catch(e){console.error(e)}}
 $("#subs").addEventListener("change",async e=>{const k=e.target.dataset.plan;if(!k)return;const row=e.target.closest(".sub");let body;
  const f=e.target.dataset.f,pick=row.querySelector("[data-f=plan]").value;
  if(f==="quota"||f==="qwin"){const x=row.querySelector("[data-f=quota]").value,w=row.querySelector("[data-f=qwin]").value.trim();body={quota:x===""?null:+x,qwin:w||null}}
@@ -2663,11 +2662,8 @@ def q_grok():
 def q_agy():
     """`agy -p /quota` prints one line per model group (no model call): name, `Weekly Limit Remaining`, N%, reset ISO. The Gemini group is the Google plan's."""
     r = subprocess.run(["agy", "-p", "/quota"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
-    for l in r.stdout.splitlines():
-        c = l.split("\t")
-        if len(c) >= 4 and c[0].startswith("Gemini"):
-            return {"windows": [{"label": "weekly", "pct": 100 - float(c[2].rstrip("%")), "resets": dt.datetime.fromisoformat(c[3].replace("Z", "+00:00")).timestamp()}]}
-    return None
+    w = agyquota.gemini_window(r.stdout)   # review.sh reads the agy-limited reset through the same module
+    return {"windows": [{"label": "weekly", "pct": w[0], "resets": w[1]}]} if w else None
 WEEKS = HUBDIR / "hub-weeks.json"
 try: weeks = json.loads(WEEKS.read_text())
 except Exception: weeks = {}
@@ -2703,13 +2699,28 @@ def refresh_quota():
     """Every 20 min, one refresh_quota_once pass (the age of the last good value is shown on the row)."""
     while True:
         refresh_quota_once(); time.sleep(1200)
+QUOTA_MAX_AGE = 3 * 3600   # a probe repolls every 20 min; a reading older than this stopped tracking the account
 def quota_row(k):
-    """What the cost panel shows for provider k: the CLI's own reading, or the reason there is no reading."""
+    """What the cost panel shows for provider k: the CLI's own reading, or the reason there is no reading.
+    A reading past QUOTA_MAX_AGE is no reading, and says when the last one was taken (the grok log gets a billing line
+    only when the TUI opens /usage, so its last line can be a day old and still look current)."""
     r = quota.get(k)
     if not r: return None
-    if r.get("windows"): return r
+    if r.get("windows"):
+        age = time.time() - r["asof"] if r.get("asof") else 0
+        if age <= QUOTA_MAX_AGE: return r
+        return {"unavailable": True, "asof": r["asof"], "plan": r.get("plan"),
+                "err": f"no reading: the last one is {round(age / 3600)} h old (the limit is {QUOTA_MAX_AGE // 3600} h), taken {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(r['asof']))}"}
     if r.get("err"): return {"unavailable": True, "err": r["err"], "asof": r.get("asof"), "plan": r.get("plan")}
     return None
+
+BRANDS = {"claude": "Claude", "grok": "Grok", "gpt": "ChatGPT", "gemini": "Google"}
+def sub_name(k, plan, detected):
+    """The card name comes from the account: the plan the probe detected, else the plan chosen in the card, else the provider."""
+    name = detected or (PRESETS[k].get(plan["plan"], (None,))[0] if plan else None)
+    if not name: return BRANDS[k]
+    name = str(name); name = name[:1].upper() + name[1:]
+    return name if BRANDS[k].lower() in name.lower() else f"{BRANDS[k]} {name}"
 
 def subs_month():
     """Per subscription, this month: API-equivalent used so far, the plan price prorated to today, and the saving."""
@@ -2729,7 +2740,9 @@ def subs_month():
         pr = round(usd * frac, 2) if usd is not None else None
         out[k] = {"plan": plan, "usd": round(usd, 2) if usd is not None else None, "rate": rt, "noRate": bool(plan and not rt), "eq": eq, "qval": week_value(k, usd, days, mstart), "prorated": pr, "saved": round(eq - pr, 2) if pr is not None else None, "x": round(eq / pr, 1) if pr else None}
     plans = sum(v["usd"] for v in out.values() if v["usd"] is not None)
-    for k in out: out[k]["quota"] = quota_row(k)
+    for k in out:
+        out[k]["quota"] = quota_row(k)
+        out[k]["name"] = sub_name(k, out[k]["plan"], (quota.get(k) or {}).get("plan"))
     return {"subs": out, "frac": round(frac, 3), "plans": round(plans, 2), "api": round(api, 2), "total": round(plans + api, 2)}
 
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"

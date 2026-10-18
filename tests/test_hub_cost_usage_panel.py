@@ -375,9 +375,9 @@ _POST = """
 const PAYLOAD = { frac: 0.34, plans: 255, api: 28, total: 283,
   presets: { grok: { g1: { name: "SuperGrok", usd: 30 } }, claude: { c1: { name: "Max 20x", usd: 200 } } },
   subs: {
-    grok:  { saved: null, usd: null, rate: 1, noRate: false, eq: 0, plan: null,
+    grok:  { name: "SuperGrok", saved: null, usd: null, rate: 1, noRate: false, eq: 0, plan: null,
              quota: { unavailable: true, err: "cli probe failed", asof: 1 } },
-    claude:{ saved: 10, usd: 200, rate: 1, noRate: false, eq: 250,
+    claude:{ name: "Claude Max 20x", saved: 10, usd: 200, rate: 1, noRate: false, eq: 250,
              plan: { plan: "max20", amount: 200, currency: "USD" },
              quota: { windows: [ { label: "weekly", pct: 77, resets: 2 } ], asof: 1 } } } };
 globalThis.fetch = async () => ({ json: async () => PAYLOAD, ok: true });
@@ -402,5 +402,5 @@ def test_a_quota_probe_with_no_windows_still_renders_the_subscriptions_panel():
     out = json.loads(_node(_PRE + _subs_slice() + _POST).split("RESULT")[-1])
     assert not out["err"], out["err"]
     assert "SuperGrok" in out["subs"] and "unavailable" in out["subs"], out["subs"][:300]
-    assert "Claude Team" in out["subs"], out["subs"][:300]
+    assert "Claude Max 20x" in out["subs"] and "Claude Team" not in out["subs"], out["subs"][:300]   # the name comes from the row (#511)
     assert "77%" in out["subs"], out["subs"][:300]

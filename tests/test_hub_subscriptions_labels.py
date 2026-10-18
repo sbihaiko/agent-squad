@@ -81,7 +81,7 @@ def test_the_card_name_with_no_plan_known_is_the_provider(hub, cache):
 
 def test_the_page_takes_the_name_from_the_row_and_titles_the_bars_for_what_they_show():
     assert "SUBL[k]" not in HUB_SRC and "v.name" in HUB_SRC
-    assert "API-equivalent usage vs the plan price" not in HUB_SRC
+    assert "Per subscription: API-equivalent usage" not in HUB_SRC
     assert "Per subscription: quota used, as each provider's CLI reports it" in HUB_SRC
 
 
