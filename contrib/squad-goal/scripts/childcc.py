@@ -36,6 +36,29 @@ state = board_state()   # the dispatch pass asks the seam what state an issue ca
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
+def loop_defect():
+    """The open issue that marks a defect in the loop's own machinery (#596, ADR-0146), or None. One bounded read of the
+    open issues through the seam for the whole pass; a refusal or a failure answers None, so a read the pass could not
+    prove never stops it and keeps the knowledge the pass already had."""
+    try:
+        import ghread   # the one GitHub door (ADR-0277), beside this script; a bare `gh api` would read a refusal as a list
+        os.environ.setdefault("SG_GH_PASS", "childcc")
+        r = ghread.read(f"repos/{repo}/issues?state=open")
+    except Exception:
+        return None
+    if not r.is_answer or not isinstance(r.answer, list): return None
+    for i in r.answer:
+        names = [l.get("name") if isinstance(l, dict) else l for l in (i.get("labels") or [])]
+        if "loop-bug" in names:
+            try: return int(i["number"])
+            except (KeyError, TypeError, ValueError): return None
+    return None
+n = loop_defect()
+if n is not None:   # the loop cannot deliver its own fix: no child enters while one is open (#596, ADR-0146)
+    line = f"LOOP STOP: #{n} is a loop defect; the fix lands outside the loop"
+    print(line, flush=True)
+    with (st / "cycle.log").open("a") as f: f.write(line + "\n")   # the loop log, which the hub reads
+    sys.exit(0)
 def child_worktree(rd, child, d):   # the tree a child worked in, by the engine's own rule (squad/runners/children.py, Children.workspace)
     ws = d.get("workspace") if isinstance(d, dict) else None
     logical = "target" if not ws or ws == "." else str(ws).replace("/", "_")

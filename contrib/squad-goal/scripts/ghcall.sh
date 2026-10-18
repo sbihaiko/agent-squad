@@ -86,6 +86,25 @@ _gh_refusal_line() {   # the one line a caller logs when GitHub refused: GitHub'
   printf 'refused: GitHub refused: %s\n' "$(printf '%s' "$1" | jq -r '.message // .errors[0].message // "no message"' 2>/dev/null)"
 }
 
+# gh_loop_stop <issues.json>   A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): while an
+# open issue carries `loop-bug`, a dispatch pass dispatches nothing, because the loop cannot deliver its own fix. The stop
+# is read from the open-issue list the pass already reads, never from a marker, so closing the issue resumes dispatch at
+# the next pass with no other action. Returns 0 and prints the one line when an open `loop-bug` issue is present, 1 when
+# there is none. The line is published to the loop log and to the issue's line on the board, not only to stdout.
+gh_loop_stop() {
+  local j=${1:?gh_loop_stop: an issues file is required} n line f
+  n=$(jq -r '[.[]|select(any(.labels[]?; ((.name? // .) == "loop-bug")))][0].number // empty' "$j" 2>/dev/null) || return 1
+  [ -n "$n" ] || return 1
+  line="LOOP STOP: #$n is a loop defect; the fix lands outside the loop"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >> "${SG_STATE:?gh_loop_stop: no state directory}/cycle.log"   # the loop log
+  if declare -F sg_cq_status >/dev/null 2>&1; then   # the board's one status line for the issue, edited in place by cqflush (#328)
+    f=$(sg_cq_status "$n" loopstop 2>/dev/null) || f=""
+    [ -z "$f" ] || { mkdir -p "${f%/*}" 2>/dev/null; printf '%s\n' "$line" > "$f" 2>/dev/null; }
+  fi
+  return 0
+}
+
 # gh_api <route> [-q <jq filter>]   A read. Answers on stdout with exit 0; a refusal is exit 2 and its line is not an
 # answer; a failure is exit 1. A caller that only ever learns from an answer keeps what it already knew.
 gh_api() {
