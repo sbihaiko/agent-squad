@@ -74,7 +74,8 @@ def wave_runner(tmp_path):
     """wave.sh enter in a child's worktree, with a gate that records its run and fails (so nothing is pushed)."""
     d = tmp_path / "s"
     d.mkdir()
-    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "base-battery.sh"), d)
+    _copy(SCRIPTS, ("wave.sh", "child_issues.py", "address.sh", "gate.sh", "serial.sh", "base-battery.sh",
+                    "ghcall.sh", "ghread.py", "ghthrottle.py"), d)   # wave.sh sources ghcall.sh, which runs the two readers (#593)
     co, origin = _repo_with_remote(tmp_path, ["wave/run-1"])
     st, marker = tmp_path / "st", tmp_path / "gate.ran"
     (st / "auto").mkdir(parents=True)
@@ -154,7 +155,7 @@ def promote_runner(tmp_path):
 
 @pytest.mark.slow(reason="each case builds a git remote and runs a whole runner script")
 @pytest.mark.heavy
-@pytest.mark.parametrize("fixture", ["wave_runner", "branchland_runner", "promote_runner"])
+@pytest.mark.parametrize("fixture", ["branchland_runner", "promote_runner"])   # the wave entry holds, never waits (#575): below
 def test_each_gate_runner_waits_for_a_held_gate_lock_and_then_runs(fixture, request, tmp_path):
     """A runner that names gate.sh but bypasses it would run beside a holder. Each runner is started while the `gate` lock is
     held: it says it waits, its gate has not run when the holder lets go, and it runs after that."""
@@ -188,6 +189,32 @@ def test_each_gate_runner_waits_for_a_held_gate_lock_and_then_runs(fixture, requ
     assert WAIT_LINE.search(out), f"the runner never said it waits for the held lock: {out}"
     assert log.read_text().split() == ["clean"], f"the runner's gate ran beside the holder: {log.read_text()!r}"
     assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the runner never ran its gate after the holder: {out}"
+
+
+@pytest.mark.slow(reason="builds a git remote and runs wave.sh twice")
+@pytest.mark.heavy
+def test_a_wave_entry_under_a_held_gate_lock_holds_the_child_and_enters_on_a_later_pass(wave_runner, tmp_path):
+    """The wave entry runs its gate in try mode (#575): a held `gate` lock holds the child out with one `WAVE HOLD` line, and its
+    gate never runs beside the holder. The next pass, with the lock free, runs the gate."""
+    cmd, cwd, env, st, ran, _marker = wave_runner
+    release = tmp_path / "release"
+    holder = subprocess.Popen(["bash", str(SCRIPTS / "serial.sh"), "gate", "bash", "-c", f"while [ ! -e {release} ]; do sleep 0.02; done"],
+                              env=_env(st), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        pid = st / "locks" / "gate" / "pid"
+        deadline = time.time() + 10
+        while not (pid.exists() and pid.read_text().strip()) and time.time() < deadline:
+            time.sleep(0.02)
+        assert pid.exists(), "the holder never took the gate lock"
+        held = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
+        out = held.stdout + held.stderr
+        assert held.returncode != 0 and re.search(r"^WAVE HOLD #1: the gate lock is held by pid [0-9]+", out, re.M), out
+        assert subprocess.run(["bash", "-c", ran]).returncode != 0, f"the entry ran its gate beside the holder: {out}"
+    finally:
+        release.touch()
+        holder.wait(timeout=60)
+    later = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=60)
+    assert subprocess.run(["bash", "-c", ran]).returncode == 0, f"the later pass never ran its gate: {later.stdout}{later.stderr}"
 
 
 @pytest.mark.parametrize("name", ["test-gate-lock.sh", "test-serial.sh"])
