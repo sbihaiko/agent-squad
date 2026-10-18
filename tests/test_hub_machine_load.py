@@ -808,21 +808,24 @@ def test_each_subscription_token_is_painted_by_its_own_consumption_not_the_block
                      "gpt": {"probe": {"windows": [{"pct": hub.FOOT_ERR_PCT, "resets": None}]}, "quota": None},
                      "gemini": {"probe": None, "quota": None}})
     parts = _subs_parts(hub, src)
-    assert [p["text"] for p in parts] == ["CL 20%", "GK 80% ?", "GPT 95% ?", "GEM ?"]
+    assert [p["text"] for p in parts] == ["CL 20% 1.0h", "GK 80% ?", "GPT 95% ?", "GEM ?"]
     assert [p.get("tip") for p in parts] == ["resets in 1h 0m", None, None, None]
     assert [p["tone"] for p in parts] == ["ok", "warn", "err", hub.FOOT_NEUTRAL]
 
 
-def test_subscription_reset_span_follows_the_warn_ladder_and_keeps_its_token_tooltip(hub):
+def test_subscription_reset_span_shows_on_every_tone_in_decimal_days(hub):
+    """The owner reads the time to every reset, green tokens too, in one compact rung with one decimal: `5.5d` from a day
+    up, `3.3h` under it, `40m` under an hour. The tooltip keeps the exact span."""
     w = hub.FOOT_WARN_PCT
-    cases = ((w - 0.1, "CL 80%", "resets in 3h 20m"),
-             (w, "CL 80% 3h 20m", None),
-             (w + 0.1, "CL 80% 3h 20m", None))
-    for pct, text, tip in cases:
+    for pct in (w - 0.1, w, w + 0.1):
         part = _subs_parts(hub, _subs_src(hub, pct, resets=NOW + 3 * 3600 + 20 * 60))[0]
-        assert (part["text"], part.get("tip")) == (text, tip)
+        assert (part["text"], part.get("tip")) == ("CL 80% 3.3h", "resets in 3h 20m"), pct
+    days = _subs_parts(hub, _subs_src(hub, w - 0.1, resets=NOW + 5 * 86400 + 12 * 3600))[0]
+    assert (days["text"], days.get("tip")) == ("CL 80% 5.5d", "resets in 5d 12h")
     close = _subs_parts(hub, _subs_src(hub, w - 0.1, resets=NOW + 60))[0]
-    assert (close["text"], close.get("tip")) == ("CL 80%", "resets in 1m")
+    assert (close["text"], close.get("tip")) == ("CL 80% 1m", "resets in 1m")
+    assert [hub._subs_span(x) for x in (59, 40 * 60, 3600, 23.5 * 3600, 86400, 5.5 * 86400)] \
+        == ["0m", "40m", "1.0h", "23.5h", "1.0d", "5.5d"]
 
 
 def test_subscription_question_reset_and_quota_reset_are_never_hidden(hub):
