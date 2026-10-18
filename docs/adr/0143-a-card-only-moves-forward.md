@@ -17,6 +17,13 @@ column its work never reached.
    column, and a freeze never moves it. A card whose landing fails keeps
    its column and carries a badge; it never moves back. A card is Done when its branch is in `dev`
    ([ADR-0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md)).
+   The loop never moves a card into Backlog or Todo; only the owner does. An open issue with no card
+   gets a column once, when the loop first sees it: Todo for a bug, Backlog for anything else. A card
+   that has a column keeps it until work moves it forward.
+   **The one backward move:** a run that ends with nothing delivered returns its card from Doing to
+   Todo. The dispatch moved the card out of Todo, so the loop undoes its own claim.
+   A spec folds forward only: Doing, Closed or Abandoned. Below Doing it keeps the column the owner
+   gave it.
 2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays. A closed card
    that still carries an old option lands in Closed, whatever its option said.
 3. **A migration plan names every move before any write.** It is a dry run: each card on an old
@@ -42,3 +49,5 @@ column its work never reached.
 ## Guard
 
 `contrib/squad-goal/scripts/test-board-migrate.sh` and `tests/test_board_migrate.py`.
+`contrib/squad-goal/scripts/test-janitor-floor-startable.sh` and `tests/test_spec_fold.py` guard the
+floor and the fold.

@@ -600,6 +600,9 @@ def reconcile_board():
         else:
             set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
             wave_column(n, f, i)
+    # Rank 20, a run that ended with nothing delivered: Doing back to Todo. It is the one backward move the loop makes, and it
+    # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
+    # back into Todo or Backlog: only the owner does.
     for r in keep:
         f = folder(r); i = read(f); nums = req_issues(f)
         if i: nums |= i["acc"]

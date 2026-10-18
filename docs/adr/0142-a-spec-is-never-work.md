@@ -29,12 +29,13 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
 4. **A child of a spec carries the spec's number in its title**, `[SPEC <n>] <title>`. The prefix is
    a reading aid for a person; the sub-issue link is the fact, and it is the relation the tracker
    carries.
-5. **A spec's card sits in the board's spec column, never in the column a startable card waits
-   in.** A card's column says who acts next; for a spec that is its owner. Its tickets are its
-   opposite: their cards open in the column the loop's next work comes from, and a missing card is
-   added in that column, in one write, on the loop's next pass. The column carries no blocking edge
-   — a ticket whose blocker is still open waits on the dispatch's reading of that edge, not on a
-   column of its own.
+5. **The column Todo is the owner's go signal.** A dispatcher (`autofrontier`, `autobug`) takes an
+   issue only when its card sits in Todo and it carries the go label (`ready-for-agent`). The label
+   says only that an agent may take the issue; the owner starts it by moving its card to Todo. A card
+   with no column is not in Todo. A spec and its tickets open in Backlog, each in one write on the
+   loop's next pass, and a spec stays below Doing in the column the owner gave it. The column carries
+   no blocking edge — a ticket whose blocker is still open waits on the dispatch's reading of that
+   edge, not on a column of its own.
 6. **A spec whose tickets are all closed is done, and the loop closes it.** The proof is the
    tracker's count: at least one sub-issue, and every one closed. A spec with no sub-issue proves
    nothing and stays open. The close carries a comment that names the count, and the card follows
@@ -48,8 +49,8 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
   spec produced are all work the owner did not ask for.
 - A repository that wants a different vocabulary — a different label for "not work yet" — adds it
   to one list. The pass needs no change.
-- The tickets of a spec dispatch as they always did, and a spec is not a blocker: the pass skips it
-  and keeps walking.
+- The tickets of a spec dispatch once the owner moves their cards to Todo, and a spec is not a
+  blocker: the pass skips it and keeps walking.
 
 ## Guard
 
@@ -57,6 +58,7 @@ answer, one closed as not-work. Each is startable by its labels and none is a un
 spec, one issue that waits on the owner and one plain ticket in the same walk, and the ticket alone
 becomes the child of the run. `tests/test_vendor_skills.py` guards the title prefix of a spec's
 child in the skill that cuts the tickets. `contrib/squad-goal/scripts/test-janitor-board-reconcile.sh`
-proves the column: a spec with no card is added in Open Specs, and a child of it with an open
-blocker is added in Todo, each in one write; a spec whose every sub-issue is closed is closed,
-and one with an open sub-issue or none stays open.
+proves the column: a spec with no card is added in Backlog, and a child of it with an open
+blocker is added in Backlog, each in one write; a spec whose every sub-issue is closed is closed,
+and one with an open sub-issue or none stays open. The autofrontier and autobug suites prove the go
+signal: a labelled issue whose card is not in Todo is not dispatched.
