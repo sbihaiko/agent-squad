@@ -47,10 +47,10 @@ def gated(cmd, deadline=30):
     return tweak
 
 
-def run_one(tmp_path, code, sleep=0, deadline=30):
+def run_one(tmp_path, code, sleep=0, deadline=30, **request):
     repo = sibling_repo(tmp_path / "t")
     base = git.head(repo)
-    eng = make(tmp_path, {"router": routed(req(task="issue #599")), "route.router.1": writer("a.txt")},
+    eng = make(tmp_path, {"router": routed(req(**(request or {"task": "issue #599"}))), "route.router.1": writer("a.txt")},
                tweak=gated(stub(tmp_path, code, sleep), deadline), target=repo)
     return eng, repo, base
 
@@ -77,6 +77,16 @@ async def test_an_approved_child_is_reviewed_once_in_its_worktree_then_merged(tm
     assert rv["command"] == [str(tmp_path / "review.sh"), eng.run_id, "route.router.1", "599", str(wt), base]
     assert rv["exit_code"] == 0 and rv["verdict"] == "approve" and rv["elapsed"] >= 0
     assert rv["findings"] == "blocking: a.txt lacks a test\nblocking: no docs\n"
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_the_review_names_the_childs_refs_issue_not_a_blocker_its_prompt_names_first(tmp_path):
+    prompt = "Check how #599 added the review gate, then build the view.\nThe commit message carries `Refs #602` (never Closes)."
+    eng, repo, base = run_one(tmp_path, 0, prompt=prompt)
+    assert (await eng.run()).verdict == "completed"
+    [land] = ev(tmp_path, "land")
+    assert land["effect"]["review"]["command"][3] == "602"
 
 
 @pytest.mark.anyio
