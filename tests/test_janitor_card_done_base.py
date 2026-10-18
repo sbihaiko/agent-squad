@@ -41,7 +41,7 @@ case "$a" in
       *"Refs #@N@"*) echo 1;;
       *) echo 0;; esac;;
   *projectsV2/*/fields*) echo FID4;;
-  *projectsV2/*/items*) ;;
+  *projectsV2/*/items*) @ITEMS@;;
   *issues/*"-q .state"*) echo open;;
   *issues/*) echo -e 'open\\t\\tIssue';;
 esac
@@ -62,15 +62,19 @@ def _write(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
-def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = "", entered: bool = False) -> Path:
+def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = "", entered: bool = False, card: str = "",
+            live: bool = False) -> Path:
     """The janitor with the throttle and the reader beside it, a stub `gh` (the merge scoped to the base answers
     `scoped`), a stub board.sh, and one finished run for issue #2030. `wave` is "open" (the run's wave is not in the base
-    yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave."""
-    for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py"):
+    yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave. `card` is the column
+    the board answers the issue's card in, none when empty; `live` leaves the run with no verdict."""
+    for name in ("janitor.py", "ghthrottle.py", "ghread.py", "issue_state.py", "board_columns.py", "board-definition.json",
+                 "board_facts.py", "spec_fold.py"):
         shutil.copy(SCRIPTS / name, tmp_path / name)
     (tmp_path / "bin").mkdir()
     calls = tmp_path / "calls"
-    _write(tmp_path / "bin/gh", STUB.replace("@N@", str(N)).replace("@SCOPED@", scoped).replace("@CALLS@", str(calls)))
+    items = f"printf '%s\\t%s\\thttps://api.github.com/repos/x/y\\n' {N} '{card}'" if card else ":"
+    _write(tmp_path / "bin/gh", STUB.replace("@N@", str(N)).replace("@SCOPED@", scoped).replace("@CALLS@", str(calls)).replace("@ITEMS@", items))
     _write(tmp_path / "board.sh", BOARD.replace("@CALLS@", str(calls)))
     run = tmp_path / "co/runs/run-stacked"
     run.mkdir(parents=True)
@@ -78,7 +82,8 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
     events = '{"event":"run_start","run_id":"run-stacked","ts":"2026-10-13T08:12:00Z"}\n'
     if landed:
         events += '{"event":"land","outcome":"pass"}\n'
-    events += '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}\n'
+    if not live:
+        events += '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}\n'
     (run / "record.jsonl").write_text(events)
     (tmp_path / "st/auto").mkdir(parents=True)
     (tmp_path / "st/active-runs.txt").write_text("run-stacked\n")
@@ -96,7 +101,7 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
     return tmp_path
 
 
-def janitor(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def janitor(tmp_path: Path, **extra: str) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "FG_"))}  # a live loop's SG_* never leaks in: the pass reads only this sandbox
     env.update(
         {
@@ -108,6 +113,7 @@ def janitor(tmp_path: Path) -> subprocess.CompletedProcess[str]:
             "SG_PROJECT": "4",
             "SG_BASE": "main",
             "SG_HUB_DIR": str(tmp_path / "st"),
+            **extra,
         }
     )
     return subprocess.run(["python3", "-I", str(tmp_path / "janitor.py")], capture_output=True, text=True, env=env, check=False)
@@ -171,3 +177,51 @@ def test_a_child_that_entered_the_wave_reads_code_complete(tmp_path):
     janitor(tmp_path)
     log = writes(tmp_path)
     assert f"ADD o 4 Code Complete {N}" in log, f"the card did not read Code Complete after the entry: {log}"
+
+
+# Code Review (#603): with the shipped vocabulary, a child of an ended run whose code is done and that has not entered its
+# open wave is in Code Review, the column of the review that holds it. The reconcile never moves a card back from a later
+# column; a run that delivered nothing still sends the card to Todo, and the entry still means Code Complete.
+SHIPPED = {"SG_BOARD_VOCAB": "shipped"}
+
+
+@pytest.mark.heavy
+def test_a_landed_child_waiting_for_its_open_wave_is_in_code_review(tmp_path):
+    sandbox(tmp_path, "echo 0", landed=True, wave="open", card="Doing")
+    janitor(tmp_path, **SHIPPED)
+    log = writes(tmp_path)
+    assert f"STATUS o 4 Code Review {N}" in log, f"the card did not move to Code Review: {log}"
+    assert (tmp_path / f"st/auto/disp-{N}").exists(), "the dispatch marker went while the wave could still take the child"
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize("later", ["Code Complete", "Pushing", "Testing"])
+def test_the_reconcile_never_moves_a_later_card_back_to_code_review(tmp_path, later):
+    sandbox(tmp_path, "echo 0", landed=True, wave="open", card=later)
+    janitor(tmp_path, **SHIPPED)
+    log = writes(tmp_path)
+    assert f"Code Review {N}" not in log and f"Doing {N}" not in log, f"a {later} card moved back: {log}"
+
+
+@pytest.mark.heavy
+def test_a_live_run_never_moves_a_code_review_card_back_to_doing(tmp_path):
+    sandbox(tmp_path, "echo 0", wave="open", card="Code Review", live=True)
+    janitor(tmp_path, **SHIPPED)
+    log = writes(tmp_path)
+    assert f"Doing {N}" not in log, f"a Code Review card went back to Doing: {log}"
+
+
+@pytest.mark.heavy
+def test_a_run_that_delivered_nothing_still_sends_a_code_review_card_to_todo(tmp_path):
+    sandbox(tmp_path, "echo 0", card="Code Review")
+    janitor(tmp_path, **SHIPPED)
+    log = writes(tmp_path)
+    assert f"STATUS o 4 Todo {N}" in log, f"the requeue did not send the card to Todo: {log}"
+
+
+@pytest.mark.heavy
+def test_the_wave_entry_still_moves_a_code_review_card_to_code_complete(tmp_path):
+    sandbox(tmp_path, "echo 0", landed=True, wave="open", entered=True, card="Code Review")
+    janitor(tmp_path, **SHIPPED)
+    log = writes(tmp_path)
+    assert f"STATUS o 4 Code Complete {N}" in log, f"the entry did not move the card to Code Complete: {log}"

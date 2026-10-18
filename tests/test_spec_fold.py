@@ -26,6 +26,7 @@ CASES = [
     (["Blocked", "Todo"], None),
     (["In Progress"], "Doing"),
     (["Code Complete", "Todo"], "Doing"),
+    (["Code Review", "Todo"], "Doing"),   # a child whose review holds it is past Doing (#603)
     (["Testing", "Done"], "Doing"),
     (["Done", "In Progress"], "Doing"),
     (["Done"], "Closed"),

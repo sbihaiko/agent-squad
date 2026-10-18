@@ -9,8 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "59eeb76bda53f9696dbed1964e4e13e70a83e3b55841a42dce8dce7155890418"
-SHIPPED = ["Backlog", "Todo", "Doing", "Code Complete", "Pushing", "Testing", "Closed", "Abandoned"]
+PINNED = "c10560aba624f76713860ac9286149e9d38dc84df1c43213a4b61ff39cefd114"
+SHIPPED = ["Backlog", "Todo", "Doing", "Code Review", "Code Complete", "Pushing", "Testing", "Closed", "Abandoned"]
 
 
 def _load(directory):
@@ -25,10 +25,20 @@ def columns():
     return _load(SCRIPTS)
 
 
-def test_the_pinned_copy_names_the_eight_shipped_columns_in_order(columns):
+def test_the_pinned_copy_names_the_nine_shipped_columns_in_order(columns):
     assert columns.PIN_SHA256 == PINNED
     assert [c["name"] for c in columns.shipped_columns()] == SHIPPED
     assert [c["name"] for c in columns.shipped_columns() if c["terminal"]] == ["Closed", "Abandoned"]
+
+
+def test_code_review_sits_between_doing_and_code_complete_with_its_fact_and_actor(columns):
+    """The child's code is done and its review or a fix round holds it (#603): Doing no longer names the review wait."""
+    by = {c["name"]: c for c in columns.shipped_columns()}
+    names = list(by)
+    assert names.index("Doing") + 1 == names.index("Code Review") == names.index("Code Complete") - 1
+    assert by["Code Review"]["fact"] == "The child's code is done; its review or a fix round holds it"
+    assert by["Code Review"]["actor"] == "The review" and not by["Code Review"]["terminal"]
+    assert "review" not in by["Doing"]["fact"].lower()
 
 
 def test_an_edited_pinned_copy_is_refused(tmp_path):
@@ -67,7 +77,9 @@ def test_the_pin_command_exits_one_on_a_mismatch(tmp_path):
     ({"spec": True, "child_live": False}, "Backlog", None),
     ({}, "Todo", None),
     ({"run_live": True}, "Doing", None),
-    ({"review_wait": True}, "Doing", None),
+    ({"review_wait": True}, "Code Review", None),
+    ({"review_wait": True, "run_live": True}, "Code Review", None),
+    ({"review_wait": True, "wave_branch": True}, "Code Complete", None),
     ({"wave_branch": True}, "Code Complete", None),
     ({"landing": True}, "Pushing", None),
     ({"dev_ci": True}, "Testing", None),

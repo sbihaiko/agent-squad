@@ -144,10 +144,10 @@ def test_a_filter_change_recomputes_the_collapse_without_a_reload(hub):
 
 # ---- one colour per board column (#1793) -----------------------------------------------------------
 
-# The decision, not a starting point: the eight shipped statuses and the one open-PR lane (#247, #384, #440), each with
+# The decision, not a starting point: the nine shipped statuses and the one open-PR lane (#247, #384, #440), each with
 # the one colour the column header's dot, the card's left border and the hidden: strip's number all wear.
 NAMED = {
-    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Complete": "#f5b041", "Pushing": "#b087f9",
+    "Backlog": "#9aa4b1", "Todo": "#79b8ff", "Doing": "#e8d44d", "Code Review": "#fdba74", "Code Complete": "#f5b041", "Pushing": "#b087f9",
     "Testing": "#f78fb3", "Closed": "#3ecf8e", "Abandoned": "#ff6b6b", "Open PRs": "#5aa9ff",
 }
 RING = ["#a3e635", "#d8b4fe", "#ff9ecd", "#7dd3fc"]   # reserved for the columns the Project gained later
@@ -230,7 +230,7 @@ def test_no_column_colour_is_written_a_second_time_in_the_board_script(hub):
 def test_the_named_columns_carry_exactly_the_decided_colours(hub):
     got = _col(hub, "Object.fromEntries(Object.keys(COLORS).map(n=>[n,colOf(n,[])]))")
     assert got == NAMED, "the named columns and lane carry colours the table does not"
-    assert len(NAMED) == 9 and got["Open PRs"] == "#5aa9ff", "the open-PR lane is the live queue's own blue"
+    assert len(NAMED) == 10 and got["Open PRs"] == "#5aa9ff", "the open-PR lane is the live queue's own blue"
     assert _mute(hub) not in got.values(), "a muted column is a caption, not a column"
 
 

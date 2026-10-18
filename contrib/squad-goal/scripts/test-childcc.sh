@@ -174,4 +174,25 @@ printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes
 out=$(pass lb)
 [ "$(ent lb 5600)" = 1 ] && ok "closing the issue resumes the entry with no other action" || ko "entry did not resume: $(cat "$WAVE_CALLS")"
 
+# Code Review (#603): with the shipped vocabulary, childcc moves a Doing card to Code Review when it starts the review of a
+# child and when it defers a child that waits for review, through board.sh, once per child. A card past Code Review (Code
+# Complete) and a card a requeue sent to Todo are never moved; the old vocabulary has no Code Review and gets no write.
+crv() { cat "$T/moves" 2>/dev/null | /usr/bin/grep -c "^x 4 Code Review $1\$"; }
+run2 crv 5700 5701; : > "$WAVE_CALLS"; : > "$T/cr.calls"; rm -f "$T/moves"
+export GH_NUMS="5700:Doing 5701:Doing"
+SG_BOARD_VOCAB=shipped pass crv >/dev/null
+[ "$(crv 5700)" = 1 ] && /usr/bin/grep -q '^crv 5700' "$T/cr.calls" && ok "the review start moves the child's card to Code Review" || ko "review start: moves '$(cat "$T/moves" 2>/dev/null)', reviews '$(cat "$T/cr.calls")'"
+[ "$(crv 5701)" = 1 ] && ! /usr/bin/grep -q '^crv 5701' "$T/cr.calls" && ok "a child deferred for review moves its card to Code Review" || ko "defer: moves '$(cat "$T/moves" 2>/dev/null)'"
+SG_BOARD_VOCAB=shipped pass crv >/dev/null
+[ "$(crv 5700)" = 1 ] && [ "$(crv 5701)" = 1 ] && ok "Code Review is written once per child" || ko "Code Review writes after two passes: '$(cat "$T/moves" 2>/dev/null)'"
+run2 crl 5710 5711; : > "$WAVE_CALLS"; rm -f "$T/moves"
+export GH_NUMS="5710:Code_Complete 5711:Todo"
+SG_BOARD_VOCAB=shipped pass crl >/dev/null; SG_BOARD_VOCAB=shipped pass crl >/dev/null
+[ "$(crv 5710)" = 0 ] && ok "a card in Code Complete never goes back to Code Review" || ko "Code Complete card moved back: '$(cat "$T/moves")'"
+[ "$(crv 5711)" = 0 ] && ok "a card a requeue sent to Todo is not moved to Code Review" || ko "Todo card moved: '$(cat "$T/moves")'"
+run2 cro 5720 5721; : > "$WAVE_CALLS"; rm -f "$T/moves"
+export GH_NUMS="5720:In_Progress 5721:In_Progress"
+pass cro >/dev/null
+! /usr/bin/grep -q 'Code Review' "$T/moves" 2>/dev/null && ok "the old vocabulary gets no Code Review write" || ko "old vocabulary wrote Code Review: '$(cat "$T/moves")'"
+
 rm -rf "$T"; exit $fail

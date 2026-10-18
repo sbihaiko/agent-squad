@@ -1,6 +1,6 @@
 #!/bin/bash
 # The reconciler writes the shipped vocabulary (ADR-0141): with SG_BOARD_VOCAB=shipped the janitor writes Backlog, Todo,
-# Doing, Code Complete, Pushing, Testing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging or Landing. An owner
+# Doing, Code Review, Code Complete, Pushing, Testing, Closed and Abandoned, and never Blocked, In Progress, Done, Open Specs, Merging or Landing. An owner
 # label is a freeze marker over the column the work reached (the frozen:owner label), never a column of its own, and a spec
 # opens in Backlog. Stubbed gh and board.sh; a temp state dir, so the live loop state and board are never read or written.
 # usage: bash test-janitor-board-vocab.sh [janitor.py]
@@ -14,7 +14,8 @@ import sys
 
 statuses = {status["name"]: status["fact"] for status in json.load(open(sys.argv[1]))["statuses"]}
 expected = {
-    "Doing": "A live run holds it; a review wait, or a spec whose child is live work, is marked here",
+    "Doing": "A live run holds it; a spec whose child is live work is marked here",
+    "Code Review": "The child's code is done; its review or a fix round holds it",
     "Code Complete": "A child is in the wave branch",
     "Pushing": "The wave is approved and the push to dev is in progress",
     "Testing": "CI runs on the dev tip",
@@ -24,7 +25,7 @@ if any(statuses.get(name) != fact for name, fact in expected.items()) or "Mergin
     print("FAIL ADR-0145 board vocabulary", file=sys.stderr)
     sys.exit(1)
 PY
-[ $? = 0 ] && ok "ADR-0145 columns name the wave and dev path" || ko "ADR-0145 board vocabulary"
+[ $? = 0 ] && ok "ADR-0145 columns name the wave and dev path, and Code Review the child's review (#603)" || ko "ADR-0145 board vocabulary"
 cat > "$T/s/board.sh" <<'J'
 #!/bin/bash
 case "$1" in

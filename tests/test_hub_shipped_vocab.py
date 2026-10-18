@@ -57,6 +57,7 @@ CARDS = [  # (item, the column the table names, the freeze marker)
     (_item(11, "Abandoned", state="closed"), "Abandoned", None),
     (_item(12, "Todo", state="closed"), "Closed", None),
     (_item(13, "Doing", labels=["frozen:owner"]), "Doing", "frozen:owner"),
+    (_item(14, "Code Review"), "Code Review", None),   # the child's review holds it (#603)
 ]
 
 
