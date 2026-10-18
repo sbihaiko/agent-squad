@@ -75,6 +75,7 @@ test-serial.sh 35.8
 test-shell-suites-gate.sh 4.2
 test-single.sh 16.3
 test-single-owner.sh 0.8
+test-wave-requeue-cap.sh 0.3
 test-stack.sh 1.3
 test-state-isolation.sh 2
 test-state-split.sh 2.9
