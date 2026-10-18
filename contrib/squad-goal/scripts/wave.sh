@@ -50,8 +50,8 @@
 # A wave has an age cap (#378, ADR-0145 rule 13): SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, set by a profile (env.sh holds
 # the default). `start` records the epoch it cut the wave in `auto/wave-start-<run>`, and the age is read from that marker,
 # never from a second clock. A wave past its cap lands what it holds and the children of the run that never entered go back
-# to the queue: `land` reads the run's own record (as childcc.py does) and requeues every dispatched issue that is not
-# ahead of the base. `enter` refuses a new child into an expired wave (its issue goes back to the queue), and the loop lands
+# to the queue, an empty wave included: `land` reads the run's own record (as childcc.py does) and requeues every dispatched
+# issue that is not ahead of the base. `enter` refuses a new child into an expired wave (its issue goes back to the queue), and the loop lands
 # an expired wave without waiting for the run's verdict (watch.sh). `wave.sh expired <run>` is the predicate it reads.
 #
 # A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
@@ -376,6 +376,13 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
       sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
+      # An empty wave past its age cap follows the capped landing's rule too (#591): every issue of the run that `dev` does
+      # not hold goes back to the queue, so a child that never entered is built into a later wave instead of staying in Doing.
+      # An issue whose non-RED commit the base holds is delivered below, never requeued.
+      if [ "$capped" = 1 ]; then
+        for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
+          requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue";; esac; done
+      fi
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
       return 0; }
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
