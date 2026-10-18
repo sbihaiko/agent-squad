@@ -106,6 +106,29 @@ def test_a_writer_killed_mid_run_leaves_only_whole_events(tmp_path):
     assert [e["pos"] for e in events] == list(range(1, len(events) + 1))
 
 
+@pytest.mark.anyio
+async def test_a_run_keeps_the_raw_graph_spelling_in_model_and_the_registry_id_apart(tmp_path):
+    """#587: a resolving run keeps the graph spelling in `model`; the registry id goes in its own field.
+
+    Driven through `Engine` as `tests/test_resume.py` drives it, so the format cannot change under a green record test.
+    """
+    from squad.adapter import ScriptedAdapter
+    from squad.engine import Engine
+    from squad.graph import from_doc
+    from tests.flows import agent, doc
+    reg = tmp_path / "registry.json"
+    reg.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}},
+                               "models": [{"id": "claude-sonnet-5-5", "label": "Sonnet 5.5", "provider": "claude",
+                                           "subscription": "claude", "aliases": ["sonnet"],
+                                           "routes": {"gateway": {"auth": "subscription", "model": "sonnet", "served": ["sonnet"]}}}]}))
+    d = doc([agent("a", output_key="x", next={"fail": "exit:fail"})], ["a"])
+    eng = Engine(from_doc(d), ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1}}), tmp_path / "run", registry=str(reg))
+    await eng.run()
+    out = [e for e in record.read(tmp_path / "run" / "record.jsonl") if e["event"] == "outcome"][0]
+    assert out["model"] == "sonnet"
+    assert out["model_id"] == "claude-sonnet-5-5"
+
+
 def test_an_outcome_keeps_the_model_id_and_the_wire_string(tmp_path):
     """A run that resolves names the registry id in `model` and the string it sent in `route_model`."""
     r = record.Record(tmp_path / "r.jsonl")
