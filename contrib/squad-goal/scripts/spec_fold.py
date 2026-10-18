@@ -10,7 +10,7 @@ moves backwards.
 DOING, CLOSED, ABANDONED = "Doing", "Closed", "Abandoned"
 TAG = "reverted"   # the tag a card carries when its delivery was taken back (reconcile.py's TAG)
 _CLOSED = {"Done", CLOSED}   # the shipped terminal column of a delivered issue, and the spec vocabulary's name for it
-_REACHED_DOING = {"In Progress", "Code Complete", "Landing", "Merging", "Pushing", "Testing", DOING} | _CLOSED   # the child columns from which the work is under way or past it
+_REACHED_DOING = {"In Progress", "Code Review", "Code Complete", "Landing", "Merging", "Pushing", "Testing", DOING} | _CLOSED   # the child columns from which the work is under way or past it
 _TERMINAL = _CLOSED | {ABANDONED}
 _BACK = {None: 0, DOING: 1, CLOSED: 2, ABANDONED: 2}
 

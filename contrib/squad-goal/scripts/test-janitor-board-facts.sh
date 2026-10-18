@@ -57,7 +57,7 @@ has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
 has '^STATUS o 4 Pushing 2301$' && ok "an approved wave ahead of dev: its child's card is Pushing" || ko "#2301 not Pushing: $(bc) $o"
 has '^STATUS o 4 Code Complete 2302$' && ok "a wave ahead of dev with no approval: Code Complete" || ko "#2302 not Code Complete: $(bc)"
 has '^STATUS o 4 Testing 2303$' && ok "a wave in dev while the dev tip's CI runs: Testing" || ko "#2303 not Testing: $(bc) $o"
-has '^STATUS o 4 Doing 2305$' && ok "a work branch whose review waits: Doing" || ko "#2305 not Doing: $(bc)"
+has '^STATUS o 4 Code Review 2305$' && ok "a work branch whose review waits: Code Review (#603)" || ko "#2305 not Code Review: $(bc)"
 has '^STATUS o 4 Code Complete 2306$' && ok "a work branch with no review yet keeps Code Complete" || ko "#2306 lost Code Complete: $(bc)"
 /usr/bin/grep -q 'commits/dev/check-runs' "$T/gh.calls" && ok "the dev tip's CI is read once through the door" || ko "no check-runs read"
 [ "$(/usr/bin/grep -c 'commits/dev/check-runs' "$T/gh.calls")" -le 1 ] && ok "the dev tip's CI is read at most once a pass" || ko "check-runs read more than once"

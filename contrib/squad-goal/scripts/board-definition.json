@@ -33,8 +33,15 @@
     {
       "name": "Doing",
       "color": "YELLOW",
-      "fact": "A live run holds it; a review wait, or a spec whose child is live work, is marked here",
+      "fact": "A live run holds it; a spec whose child is live work is marked here",
       "actor": "The run",
+      "terminal": false
+    },
+    {
+      "name": "Code Review",
+      "color": "ORANGE",
+      "fact": "The child's code is done; its review or a fix round holds it",
+      "actor": "The review",
       "terminal": false
     },
     {

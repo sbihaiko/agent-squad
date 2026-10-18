@@ -23,12 +23,13 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "59eeb76bda53f9696dbed1964e4e13e70a83e3b55841a42dce8dce7155890418"
+PIN_SHA256 = "c10560aba624f76713860ac9286149e9d38dc84df1c43213a4b61ff39cefd114"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.
 SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Pushing", "Landing": "Pushing"}
 FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
+CODE_REVIEW = "Code Review"   # the child's code is done, and its review or a fix round holds it (#603)
 
 
 def _pinned_text():
@@ -55,14 +56,16 @@ def column_for(facts):
 
     The furthest the work reached sets the column; a freeze never moves it (the definition's own rule). Facts are booleans,
     each missing one false: abandoned, closed, dev_ci, landing, wave_branch, run_live, spec, child_live (a spec whose
-    sub-issue is live work), owner (an owner label), gated (another item gates it), and review_wait (a marker on Doing)."""
+    sub-issue is live work), owner (an owner label), gated (another item gates it), and review_wait (the child's code is
+    done and its review or a fix round holds it: Code Review, #603)."""
     freeze = FREEZE_LABEL["owner"] if facts.get("owner") else FREEZE_LABEL["gated"] if facts.get("gated") else None
     if facts.get("abandoned"): return "Abandoned", freeze
     if facts.get("closed"): return "Closed", freeze
     if facts.get("dev_ci"): return "Testing", freeze
     if facts.get("landing"): return "Pushing", freeze
     if facts.get("wave_branch"): return "Code Complete", freeze
-    if facts.get("run_live") or facts.get("review_wait") or facts.get("child_live"): return "Doing", freeze
+    if facts.get("review_wait"): return CODE_REVIEW, freeze
+    if facts.get("run_live") or facts.get("child_live"): return "Doing", freeze
     # A spec is a document, never work (ADR-0142): the child_live fact above moves the spec's card, and never a dispatch.
     if facts.get("spec") or freeze: return "Backlog", freeze
     return "Todo", None
@@ -82,10 +85,22 @@ ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Back
 SPEC_LABEL = "spec"
 
 
+# A column whose GitHub colour another column already wears takes its own hex here: the hub draws one colour per column.
+COLUMN_HEX = {CODE_REVIEW: "#fdba74"}
+
+
 def view_columns():
     """The shipped columns in the definition's order, each with the hex the hub draws it in."""
-    return [{"name": s["name"], "terminal": s["terminal"], "color": HEX[s["color"]]}
+    return [{"name": s["name"], "terminal": s["terminal"], "color": COLUMN_HEX.get(s["name"], HEX[s["color"]])}
             for s in json.loads(_pinned_text())["statuses"]]
+
+
+def past(have, want):
+    """True when the card's column `have` is further along the shipped axis than `want` (ADR-0143): a write of `want`
+    would move the card back. An old name is read as its shipped name; a name the axis does not hold is never past."""
+    order = [s["name"] for s in json.loads(_pinned_text())["statuses"]]
+    have = SHIPPED_NAME.get(have, have) if have else have
+    return have in order and want in order and order.index(have) > order.index(want)
 
 
 def view_column(status, closed, labels=()):

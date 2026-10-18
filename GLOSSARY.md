@@ -88,6 +88,10 @@ _Avoid_: delegation, handoff, task, subagent call
 The tree hash of one vendored skill, from `vendor/skills/VERSIONS.json`. It is the skill's version. A run records the hash of every skill it can load, and a resume refuses when one differs.
 _Avoid_: skill version, skill revision
 
+**Code Review**:
+The board column for an issue whose child's code is done while its review, or a fix round, holds it. It sits between Doing and Code Complete, and a card in it never goes back to Doing; a requeue sends it to Todo.
+_Avoid_: review wait (as a mark on Doing)
+
 **Pushing**:
 The board column for a wave that is approved and whose push to `dev` is in progress.
 _Avoid_: landing (the column)

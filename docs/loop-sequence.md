@@ -4,7 +4,7 @@ The trip of one issue from a Todo card to Closed in `dev`: every actor, what eac
 
 Source: `contrib/squad-goal/scripts/*` (live copy `~/.claude/skills/squad-goal/scripts`) and the engine `squad/`. State: `$SG_STATE` (`~/.cache/squad-goal/agent-squad`).
 Profile for this repository: `SG_BASE=dev`, `SG_FORK_DIR=$SG_CHECKOUT`, `SG_FORK_BRANCH=gui/%n`, `SG_PROMOTE_PROOF=local`, `SG_BOARD_VOCAB=shipped`.
-Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Complete, Pushing, Testing, Closed, Abandoned. Blocked is no column: it is the `frozen:owner` label over the column the work reached (`board_columns.py`).
+Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Review, Code Complete, Pushing, Testing, Closed, Abandoned. Blocked is no column: it is the `frozen:owner` label over the column the work reached (`board_columns.py`).
 
 `watchd.sh` supervises two lanes:
 

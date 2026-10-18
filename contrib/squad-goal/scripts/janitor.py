@@ -39,7 +39,9 @@
     With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
-    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Pushing, Testing, Doing). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
+    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Pushing, Testing, Code Review, Doing).
+    A child of an ended run whose code is done and that has not entered the run's open wave is in Code Review, and no live run or
+    review moves a card back from a later column (#603, ADR-0143). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
@@ -569,7 +571,7 @@ def reconcile_board():
     TERMINAL = ()
     if shipped:
         sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # board_columns sits beside this script; -I keeps the script's directory off sys.path
-        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for
+        from board_columns import SHIPPED_NAME, FREEZE_LABEL, TERMINAL, TERMINAL_TAG, terminal_comment, column_for, past, CODE_REVIEW
     doing = "Doing" if shipped else "In Progress"
     testing = set()   # issues whose wave is in dev while the CI of the dev tip runs: Done waits for the CI to end
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
@@ -594,7 +596,8 @@ def reconcile_board():
                 if not dry: m.unlink(missing_ok=True)
     def code_complete(n, f, i, why):   # a landing is Code Complete only once the wave, when the run cut one, holds the issue (#467)
         e = wave_entry(n, f, i)
-        if e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
+        if e == "open" and shipped: set_expected(n, CODE_REVIEW, f"{why}; its child's code is done and its review holds it out of the open wave of run {i['run_id']}", i["run_id"], i["run_ts"], 35)   # #603
+        elif e == "open": set_expected(n, "In Progress", f"{why}; its child has not entered the open wave of run {i['run_id']} yet", i["run_id"], i["run_ts"], 30)
         elif e == "out": set_expected(n, os.environ.get("SG_TODO", "Todo"), f"{why}, but the wave of run {i['run_id']} landed without its child", i["run_id"], i["run_ts"], 20)
         else:
             set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
@@ -711,6 +714,7 @@ def reconcile_board():
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
+        if shipped and want in (doing, CODE_REVIEW) and past(have, want): want = have   # a card only moves forward (ADR-0143, #603): a live run or a review never moves it back
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
@@ -722,7 +726,7 @@ def reconcile_board():
             held = (holders(proj) or {}).get(str(n))
             if run_id and held != {"run": run_id, "started": run_ts or ""}:   # only a holder or a start the card does not carry is written (#327)
                 if board_write(["--run-fields", owner, str(proj), str(n), run_id, run_ts], n, f"write Run fields for {why}") and holders(proj) is not None: holders(proj)[str(n)] = {"run": run_id, "started": run_ts or ""}   # every pass: the field names the run that holds the card now; a card no run holds (a spec folded to Doing) gets no Run value
-        elif have in ("In Progress", "Doing"):
+        elif have in ("In Progress", "Doing", "Code Review") and have != want:
             board_write(["--clear-run", owner, str(proj), str(n)], n, f"clear Run fields, the card left {have} for {want}")   # only on the way out, so a card already past In Progress is not written again every cycle
     for n in sorted(frozen, key=int):   # the owner freeze is a label on the issue, written once; the owner removes it, the pass never does
         if expected.get(n, (0, ""))[1] in ("Closed", "Abandoned") or FREEZE_LABEL["owner"] in issue_labels(n): continue
@@ -899,7 +903,7 @@ if fd and fb:
             if holding(n): continue                          # a live run works it, or a wave still carries it: not ours to release
             if sh("gh", "api", f"repos/{repo0}/issues/{n}", "-q", ".state").strip() != "open": continue
             if pr_count(n) != "0": continue   # a work branch names it: the issue is past dispatch
-            if card_status(proj, n) not in ("In Progress", "Doing", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
+            if card_status(proj, n) not in ("In Progress", "Doing", "Code Review", "Code Complete", os.environ.get("SG_TESTING", "Testing")): continue   # only what the landing set: a card another step moved past it is never downgraded
             km = st / "auto" / f"janitor-unwound-{n}-{sha[:9]}"
             if km.exists(): continue
             marks = [mk.name] + [f"{k}-{n}" for k in ("disp", "bug") if (st / "auto" / f"{k}-{n}").exists()]
@@ -932,7 +936,7 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
                     say(f"STATE-REGRESSION #{n}: card is Done but the issue is still open{repair}")
                     if not dry: mk.touch()
             continue
-        if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Complete")): continue
+        if not (op and stt in ("Todo", "Blocked", "In Progress", "Doing", "Code Review", "Code Complete")): continue
         cm = [x.split("\t", 1) for x in sh("gh", "api", f"repos/{repo}/issues/{n}/comments?per_page=100", "--paginate", "--jq", r'.[]|[.created_at,(.body|gsub("\n";" "))]|join("\t")').splitlines() if "\t" in x]
         reds = 0
         for _, b in cm:

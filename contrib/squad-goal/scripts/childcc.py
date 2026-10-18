@@ -22,7 +22,10 @@ held on every pass does not take every pass. A review takes one review slot of t
 A pass that leaves a child that had no turn since the last complete pass
 (auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it.
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
-the queue once with the landing's reason, and no card moves (#592)."""
+the queue once with the landing's reason, and no card moves (#592).
+With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
+Doing to Code Review through board.sh, once per child (marker auto/crv-<run>-<child>): a card in any other column, past
+Code Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, ADR-0144)."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
@@ -35,6 +38,7 @@ wave = str(pathlib.Path(__file__).resolve().parent / "wave.sh")   # the wave's v
 childreview = str(pathlib.Path(__file__).resolve().parent / "childreview.sh")   # the review of the child's own diff, beside this pass (#448)
 state = board_state()   # the dispatch pass asks the seam what state an issue carries, never the carrier (#236)
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
+SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
 def loop_defect():
@@ -72,6 +76,19 @@ def claimed(claim, head):   # a review claim [head, pid] holds while its pass is
     except ProcessLookupError: return False
     except PermissionError: pass
     return True
+def code_review(name, child, n, why):
+    """Move the card of a child its review holds from Doing to Code Review, once per child (#603). Only a Doing card moves:
+    a later column is never moved back, and a Todo card is a requeue's. A carrier that does not answer leaves no marker,
+    so the next pass asks again; a refused write is named, never dropped."""
+    mk = A / f"crv-{name}-{child}"
+    if not SHIPPED or mk.exists(): return
+    have = card_status(n)
+    if not have: return
+    mk.touch()
+    if have not in ("Doing", "In Progress"): return
+    e = subprocess.run([board, owner, proj, "Code Review", str(n)], capture_output=True, text=True)
+    if e.returncode: print(f"CHILDCC-BOARD #{n} Code Review refused: {(e.stdout + e.stderr).strip()[:300]}", flush=True)
+    else: print(f"CODE REVIEW #{n} ({name} {child}): {why}", flush=True)
 def caps_cmd(*argv):   # `python3 -m squad.caps <argv>`: the machine-wide budget's one command (SG_SQUAD names the repository, else the one this script lives in)
     root = os.environ.get("SG_SQUAD") or str(pathlib.Path(__file__).resolve().parents[3])
     return subprocess.run([sys.executable, "-m", "squad.caps", *argv], capture_output=True, text=True, env={**os.environ, "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", "")})
@@ -95,6 +112,7 @@ def reviewed(rd, child, n, wt, rv):
     took, why = review_slot(holder)
     if not took: print(f"CHILD REVIEW SKIPPED {rd.name} {child}: {why}", flush=True); return False
     rv.write_text(f"{head} {os.getpid()}\n")
+    code_review(rd.name, child, n, "its review starts")
     try: e = subprocess.run(["bash", childreview, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     finally: caps_cmd("release", "reviews", holder)
     out = (e.stdout + e.stderr).strip()
@@ -207,6 +225,9 @@ left = [k for k in keys - visited if k not in rnd]
 # pass, 0 when none wait, and atomically, so a reader never sees a half-written count.
 WAITING = st / "childcc-waiting"
 _tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f"{len(keys - visited)}\n"); os.replace(_tmp, WAITING)
+for key, r, child, why, n, finished, d, lwhy in pending:   # a child that waits for review: its card reads Code Review (#603)
+    name = pathlib.Path(r).name
+    if key not in visited and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
 if left:
     ROUND.write_text("".join(k + "\n" for k in sorted((rnd & keys) | visited | {k for k in rnd if k.split(" ")[0] not in runs})))
     print(f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}", flush=True)
