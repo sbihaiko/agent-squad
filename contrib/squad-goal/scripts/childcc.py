@@ -25,7 +25,12 @@ A child whose own engine landing failed never enters: its work did not reach the
 the queue once with the landing's reason, and no card moves (#592).
 With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
 Doing to Code Review through board.sh, once per child (marker auto/crv-<run>-<child>): a card in any other column, past
-Code Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, ADR-0144)."""
+Code Review or sent back to Todo by a requeue, is never moved (#603, ADR-0143, ADR-0144).
+A run reviews its own children (#601): the verdict of its review gate is in the child's `land` event. A child its run approved
+enters with no second review here; a child its run held, with its requeued marker, is neither entered, reviewed nor requeued
+again; a child of a run with no review in its record is reviewed here as before. An approved child that its entry still
+holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
+never held for good (#600)."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
@@ -128,7 +133,7 @@ def first_finding(wt):   # the first finding of the review the entry read, for t
     try: lines = [l.strip() for l in md.read_text().splitlines()[1:] if l.strip()]
     except OSError: return "no finding was written"
     return (lines[0] if lines else "no finding was written")[:300]
-def enter(rd, child, n, d):
+def enter(rd, child, n, d, approved=False):
     """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why, worked): (None, "") when the
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
     (False, why) when it is in none -- a child that did not enter has no delivery to claim. `worked` is True when the
@@ -143,9 +148,12 @@ def enter(rd, child, n, d):
     if not wt.is_dir(): return False, f"WAVE no entry for #{n}: the child's worktree {wt} is not there", False
     rq = A / f"requeued-{rd.name}-{child}"   # the sha a refused entry left the child on: the same sha would fail the same gates again, so the pass waits for a new commit
     if rq.exists() and rq.read_text().strip() == head_of(wt): return False, "", False
-    if not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
+    hold = A / f"apphold-{rd.name}-{child}"   # its run approved it, but the entry held it once: the review here takes over (#600)
+    approved = approved and not hold.exists()
+    if not approved and not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
+    if approved and "WAVE HOLD" in out: hold.touch()
     if "WAVE REQUEUE" in out or "WAVE STOP" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
     if e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         why = f"the review of its own diff asked for changes: {first_finding(wt)}"
@@ -163,7 +171,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
     finished = '"event": "verdict"' in rec.read_text()
-    issue, seen, done, unmapped, defn, failed = {}, set(), [], [], {}, {}
+    issue, seen, done, unmapped, defn, failed, verdict = {}, set(), [], [], {}, {}, {}
     for l in rec.open():
         if '"spawn_accepted"' not in l and '"outcome"' not in l and '"land"' not in l: continue
         try: d = json.loads(l)
@@ -175,8 +183,10 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             done.append((d["node"], (d.get("reasons") or [""])[0]))
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             unmapped.append(d["node"])
-        elif d.get("event") == "land" and d.get("node") in seen and d.get("outcome") != "pass":
-            failed[d["node"]] = (d.get("reasons") or ["the landing failed"])[0]   # the child's own engine landing: its work is not in the run's target (#592)
+        elif d.get("event") == "land" and d.get("node") in seen:
+            rv = (d.get("effect") or {}).get("review") if isinstance(d.get("effect"), dict) else None
+            if isinstance(rv, dict): verdict[d["node"]] = rv.get("verdict")   # the run's own review of the child (#599, #601)
+            if d.get("outcome") != "pass": failed[d["node"]] = (d.get("reasons") or ["the landing failed"])[0]   # the child's own engine landing: its work is not in the run's target (#592)
     name = pathlib.Path(r).name; runs.add(name)
     mk = A / f"parent-{name}"
     if not finished and not mk.exists() and len(set(issue.values())) > 1:   # a finished run gets no parent: no backfill (#340)   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
@@ -184,7 +194,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
         except RunParentChild as e: print(f"RUN PARENT REFUSED {name}: {e}"); mk.touch()   # asking again can not change it
         except RuntimeError as e: print(f"RUN PARENT FAILED {name}: {e}")   # no marker: the next pass asks again
     for child, why in done:
-        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child)))
+        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve"))
     for child in unmapped:
         mk = A / f"unmap-{name}-{child}"
         if mk.exists(): continue
@@ -194,7 +204,7 @@ pending.sort(key=lambda p: p[0])
 cur = CURSOR.read_text().strip() if CURSOR.exists() else ""
 k0 = next((i for i, p in enumerate(pending) if p[0] > cur), 0)
 spent, visited = 0, set()
-for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
+for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
     if spent >= BUDGET: break   # the budget is spent: the children left wait for the next pass
     visited.add(key)
     name = pathlib.Path(r).name; mk = A / f"cc-{name}-{child}"
@@ -208,7 +218,7 @@ for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
     if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
-    entered, why, worked = enter(pathlib.Path(r), child, n, d)
+    entered, why, worked = enter(pathlib.Path(r), child, n, d, ok)
     if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
     if worked: spent += 1; CURSOR.write_text(key + "\n")
     if why: print(why, flush=True)
@@ -227,7 +237,7 @@ left = [k for k in keys - visited if k not in rnd]
 # pass, 0 when none wait, and atomically, so a reader never sees a half-written count.
 WAITING = st / "childcc-waiting"
 _tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f"{len(keys - visited)}\n"); os.replace(_tmp, WAITING)
-for key, r, child, why, n, finished, d, lwhy in pending:   # a child that waits for review: its card reads Code Review (#603)
+for key, r, child, why, n, finished, d, lwhy, _ in pending:   # a child that waits for review: its card reads Code Review (#603)
     name = pathlib.Path(r).name
     if key not in visited and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
 if left:
