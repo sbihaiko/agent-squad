@@ -8,6 +8,8 @@
 # dest the live skill (default: $SG_LIVE_DIR, else $HOME/.claude/skills/squad-goal).
 # --check changes nothing, prints one `copy <file>` / `drop <scripts/name>` line per difference and exits 1; with no
 # difference it prints nothing and exits 0. A publish prints each retired name it drops and a one-line count.
+# A publish refuses (exit 3, nothing written, one line naming both commits) when the source HEAD is not in the history of
+# $SG_SQUAD's HEAD, the repository the live scripts import squad from (#605). SG_SQUAD unset or the source repo: no check.
 #
 # The retired names (#122, #134, #361) are the routes the repository no longer ships: the fork-only route and, from the #361
 # landing, the pull-request route. The fork names are split in the source so this list is not itself a call site:
@@ -47,6 +49,18 @@ src=${args[0]:-$(cd "$here/.." && pwd)}
 dest=${args[1]:-${SG_LIVE_DIR:-$HOME/.claude/skills/squad-goal}}
 [ -d "$src" ] || { echo "publish-live: no source tree at $src" >&2; exit 2; }
 [ -d "$dest" ] || { echo "publish-live: no live skill at $dest" >&2; exit 2; }
+
+# The live scripts import squad from SG_SQUAD (caps.sh, childcc.py). A source tree ahead of SG_SQUAD ships scripts that call
+# a squad command SG_SQUAD lacks (#605), so a publish refuses unless the source HEAD is in SG_SQUAD's history. No check
+# when SG_SQUAD is unset, is the source repository itself, or either side has no git.
+if [ -z "$check" ] && [ -n "${SG_SQUAD:-}" ]; then
+  srctop=$(git -C "$src" rev-parse --show-toplevel 2>/dev/null); sqtop=$(git -C "$SG_SQUAD" rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$srctop" ] && [ -n "$sqtop" ] && [ "$(cd "$srctop" && pwd -P)" != "$(cd "$sqtop" && pwd -P)" ]; then
+    sh=$(git -C "$src" rev-parse HEAD); qh=$(git -C "$SG_SQUAD" rev-parse HEAD)
+    git -C "$SG_SQUAD" merge-base --is-ancestor "$sh" "$qh" 2>/dev/null || {
+      echo "publish-live: refused: source $srctop at ${sh:0:8} is not in the history of SG_SQUAD $sqtop at ${qh:0:8}; fast-forward SG_SQUAD first" >&2; exit 3; }
+  fi
+fi
 
 # The files the repository ships: SKILL.md and scripts/*, minus machine config (models.json, per-repo profiles).
 # scripts/profiles/example.sh is the template, so it ships; every other profile is machine config.
