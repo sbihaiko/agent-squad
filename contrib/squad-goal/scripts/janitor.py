@@ -205,8 +205,10 @@ def read(f):
             # took several writes them as a list. A hashed-only read lost the run's own issues: rule I and free_reaped read
             # this set (#66).
             found = set()
-            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)", l):
-                found.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or "") if x)
+            # Both dispatchers make every child carry `Refs #N` (autofrontier.sh, autobug.sh), whatever words the router picks around it:
+            # a router that wrote "issue 548" matched neither form above, so a live child read as unheld and lost its marker (#551).
+            for m in re.finditer(r"GitHub issues? #?([0-9][0-9, ]*)|\bissue #(\d+)|\bRefs #(\d+)", l):
+                found.update(x for x in re.split(r"[^0-9]+", m.group(1) or m.group(2) or m.group(3) or "") if x)
             acc |= found
             if d.get("child") is not None:   # the issues one accept line names belong to the child that line accepted, never to the whole run (#271)
                 kids.add(str(d["child"]))
