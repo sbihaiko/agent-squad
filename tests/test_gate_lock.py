@@ -146,7 +146,7 @@ def promote_runner(tmp_path):
     st = tmp_path / "st"
     st.mkdir()
     dev = subprocess.run([GIT, "-C", str(co), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    (st / "gate-status").write_text(f"{int(time.time())}\tfull\tpass\t{dev}\n")
+    (st / "gate-status-full").write_text(f"{int(time.time())}\tfull\tpass\t{dev}\n")   # the promotion reads the full proof here, which a fast gate never overwrites (#472)
     env = _env(st) | POLL | {"SG_PROMOTE_REMOTE": str(origin), "SG_REPO": "x/y", "SG_PROMOTE_PROOF": "local"}
     ran = f'test "$({GIT} -C {origin} rev-parse stg)" = "$({GIT} -C {origin} rev-parse dev)"'
     return (["bash", str(d / "promote-stg.sh")], tmp_path, env, st, ran, None)
