@@ -149,7 +149,7 @@ def enter(rd, child, n, d):
     if "WAVE REQUEUE" in out or "WAVE STOP" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
     if e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
         why = f"the review of its own diff asked for changes: {first_finding(wt)}"
-        subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True)
+        subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
         rq.write_text(head_of(wt) + "\n"); out += f"\nCHILD REVIEW REQUEUE #{n}: {why}"
     return e.returncode == 0, out or f"WAVE no entry for #{n} (exit {e.returncode})", True
 def card_status(n):   # the state the card carries, "" when it carries none or the carrier does not answer
@@ -205,7 +205,7 @@ for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
     if lwhy is not None and (A / f"requeued-{name}-{child}").exists():   # its run's own review held it and requeued it already (#601): never twice
         print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592)
-        subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True)
+        subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": name})
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
     if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
     entered, why, worked = enter(pathlib.Path(r), child, n, d)

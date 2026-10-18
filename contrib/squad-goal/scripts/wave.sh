@@ -4,6 +4,7 @@
 #        wave.sh land <run>           when the run ends: the rebase on the moved base, the one push, and the closes
 #        wave.sh expired <run>        exit 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS)
 #        wave.sh requeue <issue> <why> [cap]  the child never enters: its issue goes back to the queue and the loop builds it again
+#        wave.sh fail <issue> <run> <why>     the run ended with nothing delivered for the issue: one failed dispatch (#609)
 #
 # One branch per wave (ADR-0145). A wave is the set of children that land in $SG_BASE (`dev`) together, and its branch is the
 # only branch that lands there for them, in one fast-forward push with one CI run. A run cuts the branch from `dev` when it
@@ -140,18 +141,54 @@ freeze_owner() {   # <issue>: the freeze is a marker over the column reached, ne
   return 0
 }
 
+# landed_key <issue>: the newest non-RED `Refs #N` commit in origin/$SG_BASE of the checkout, the evolution key of the count
+# (#609, ADR-0134): the work the base holds for the issue. A RED commit carries the same line and proves nothing.
+landed_key() {
+  $G -C "${SG_CHECKOUT:-/nonexistent}" log -n 500 --format='%H%x1f%B%x1e' -E --grep="Refs #$1([^0-9]|\$)" "origin/$base" 2>/dev/null \
+    | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
+}
+
+# count <issue> <run> <why>: one failed dispatch of the issue (#609). The count is the issue's (#532), in auto/requeues-<n>,
+# and auto/requeues-<n>.runs lists each one: the run, the evolution key, the reason. The run is the key: one run counts once,
+# whether a requeue or the janitor's `fail` reports it. Evolution starts the count again at one: a new key (a non-RED commit
+# in the base names the issue), or a new run after the freeze, which only the owner lets start. A different reason is no
+# evolution: the reasons change while nothing reaches the base. Sets c (the count) and fresh (1: this call added a line).
+count() {
+  local n=$1 run=$2 why=$3 cf lf key last; cf="$SG_STATE/auto/requeues-$n"; lf="$cf.runs"; fresh=0
+  mkdir -p "$SG_STATE/auto"
+  c=$(cat "$cf" 2>/dev/null); case "$c" in ''|*[!0-9]*) c=0;; esac
+  if [ -n "$run" ] && cut -f1 "$lf" 2>/dev/null | /usr/bin/grep -qxF -- "$run"; then return 0; fi
+  key=$(landed_key "$n"); last=$(tail -1 "$lf" 2>/dev/null)
+  if { [ "$last" = frozen ] && [ -n "$run" ]; } || { [ -n "$last" ] && [ "$last" != frozen ] && [ "$(printf '%s' "$last" | cut -f2)" != "$key" ]; }; then
+    rm -f "$lf"; c=0
+  fi
+  printf '%s\t%s\t%s\n' "$run" "$key" "$(printf '%s' "$why" | head -1 | tr '\t' ' ')" >> "$lf"
+  c=$((c + 1)); echo "$c" > "$cf"; fresh=1
+}
+
+# stop <issue> <why>: the count reached SG_REQUEUE_CAP (3 by default). The card keeps the column it reached with an owner
+# freeze (ADR-0029), and one SQUAD-NOT-STARTABLE comment lists every run counted and its reason; both dispatch passes read
+# the label and the comment. The owner frees the issue by removing both.
+stop() {
+  local n=$1 why=$2 lf="$SG_STATE/auto/requeues-$1.runs" f
+  freeze_owner "$n"
+  f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && {
+    printf 'SQUAD-NOT-STARTABLE: %s failed dispatches with no change in the work the base holds for it; the loop stops building it (ADR-0134).\n\nRuns:\n' "$c"
+    awk -F'\t' '$1 != "frozen" { printf "- %s: %s\n", ($1 == "" ? "(no run named)" : $1), $3 }' "$lf" 2>/dev/null; } > "$f"
+  echo frozen >> "$lf"
+  echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
+}
+
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
-  local n=$1 why=$2 f c cf; cf="$SG_STATE/auto/requeues-$n"
-  # The count is the issue's, not the run's: each new run started afresh, and one issue was dispatched 19 times (#532). The
-  # SG_REQUEUE_CAP-th requeue (3 by default) stops it: the marker stays, the card keeps the column it reached with an owner
-  # freeze, and a SQUAD-NOT-STARTABLE comment is queued, which both dispatch passes read. Removing the counter file and the
-  # comment frees the issue. A requeue the wave's age cap made (`cap`, #594) is the loop's delay, not a failure of the child:
-  # it neither counts nor stops the issue, and the count real failures left stays as it was.
-  if [ "${3:-}" = cap ]; then c=0; else c=$(( $(cat "$cf" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$cf"; fi
-  if [ "$c" -ge 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then
-    freeze_owner "$n"
-    f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && printf 'SQUAD-NOT-STARTABLE: requeued %s times without a child that entered its wave; the loop stops building it. Last: %s\n' "$c" "$why" > "$f"
-    echo "WAVE STOP #$n: requeued $c times, so it is not dispatched again: $why"; return 0
+  local n=$1 why=$2 f
+  # The run is SG_REQUEUE_RUN (enter and land set it; childcc and runreview pass it). A requeue the wave's age cap made
+  # (`cap`, #594) is the loop's delay, not a failure of the child: it neither counts nor stops the issue. The run behind it
+  # is counted once at its end, by the janitor's `fail`, when it delivered nothing.
+  if [ "${3:-}" != cap ]; then
+    count "$n" "${SG_REQUEUE_RUN:-}" "$why"
+    if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then stop "$n" "$why"; return 0; fi
+    if [ "$fresh" = 0 ] && [ "$(tail -1 "$SG_STATE/auto/requeues-$n.runs" 2>/dev/null)" = frozen ]; then
+      echo "WAVE STOP #$n: already frozen, so it is not dispatched again: $why"; return 0; fi
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
   board_write "${SG_TODO:-Todo}" "$n"
@@ -159,8 +196,17 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
   echo "WAVE REQUEUE #$n: $why"
 }
 
+fail() {   # <issue> <run> <why>: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
+  local n=$1 run=$2 why=$3
+  { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
+  count "$n" "$run" "$why"
+  [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
+  [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ] && { stop "$n" "$why"; return 0; }
+  echo "WAVE FAILED #$n: $c of ${SG_REQUEUE_CAP:-3} failed dispatches with no change (run $run): $why"
+}
+
 enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on the wave tip, and the --ff-only entry.
-  local run=$1 iss=$2 w br sha files out; w=$(wave_of "$run")
+  local run=$1 iss=$2 w br sha files out SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
   { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "WAVE-ERROR wave.sh enter <run> <issue>"; return 2; }
   br=$($G symbolic-ref --quiet --short HEAD) || { echo "WAVE-ERROR $PWD is on no branch (#$iss)"; return 2; }
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
@@ -331,7 +377,7 @@ deliver() {
 }
 
 land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, the one push, and the closes of what it carries.
-  local run=$1 w; w=$(wave_of "$run")
+  local run=$1 w SG_REQUEUE_RUN=$1; w=$(wave_of "$run")
   [ -n "$run" ] || { echo "WAVE-ERROR wave.sh land wants the run's name"; return 2; }
   # The run's own folder, as active-runs.txt records it: an absolute path (a loop run lives under its issue worktree) or a bare
   # name under the checkout's runs/. The caller passes it; without one the name is read as a bare name.
@@ -444,5 +490,6 @@ case "${1:-}" in
   land) shift; land "$@";;
   expired) shift; expired "$@";;
   requeue) shift; requeue "$@";;
-  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap]" >&2; exit 2;;
+  fail) shift; fail "$@";;
+  *) echo "usage: wave.sh start <run> | wave.sh enter <run> <issue> | wave.sh land <run> | wave.sh expired <run> | wave.sh requeue <issue> <why> [cap] | wave.sh fail <issue> <run> <why>" >&2; exit 2;;
 esac

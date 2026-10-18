@@ -41,7 +41,7 @@ f=$(printf '%s\n' "$f" | /usr/bin/grep -v '^## Blocking' | /usr/bin/grep -v '^[[
 if [ "$(cat "$mk" 2>/dev/null)" = "$head" ]; then
   echo "RUNREVIEW $run $child: ${head:0:9} was already requeued (#$iss)" >&2
 else
-  bash "$here/wave.sh" requeue "$iss" "the review of its own diff in run $run asked for changes (VERDICT: $v) at ${head:0:9}:
+  SG_REQUEUE_RUN=$run bash "$here/wave.sh" requeue "$iss" "the review of its own diff in run $run asked for changes (VERDICT: $v) at ${head:0:9}:
 $f" >&2
   mkdir -p "$SG_STATE/auto"; printf '%s\n' "$head" > "$mk"
 fi

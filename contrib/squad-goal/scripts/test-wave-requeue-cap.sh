@@ -48,7 +48,7 @@ case "$o" in *"WAVE STOP"*) ko "the second run stopped the issue: '$o'";; *) ok 
 o=$(w fail 11 r3 "the wave of run r3 landed without its child")
 case "$o" in *"WAVE STOP #11"*) ok "the third failed run stops the issue, whatever its reason";; *) ko "no stop at the third run: '$o'";; esac
 [ "$(gl 11)" = 1 ] && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/11/labels -f labels[]=frozen:owner' "$T/gh.log" && ok "the stop freezes the issue for the owner once" || ko "freeze #11: '$(tr '\n' ' ' < "$T/gh.log")'"
-c11=$(cat "$T"/st/cq/*11-* 2>/dev/null)
+c11=$(cat "$T"/st/cq/*11-wavestop* 2>/dev/null)
 case "$c11" in SQUAD-NOT-STARTABLE:*r1*"the review asked for changes: a"*r2*merge_conflict*r3*"landed without its child"*) ok "the stop comment lists every run and its reason";;
   *) ko "stop comment: '$c11'";; esac
 o=$(w fail 11 r3 "the wave of run r3 landed without its child")

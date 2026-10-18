@@ -19,6 +19,7 @@
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
     A run that landed a change, an issue a live run works or a pending wave carries, and an issue with an open work branch keeps its marker; a run drops only a marker its own request wrote (#539). The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
+    Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
@@ -786,14 +787,27 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
         continue
     say(f"stale {d.name} (request {req} ended failed, issue open, no work branch) removed")
     if not dry: d.unlink()
+def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered for issue n is one failed dispatch, counted
+    # by wave.sh fail (one count per issue, keyed by the run, frozen at SG_REQUEUE_CAP), whether or not it still holds a marker.
+    # A run the ledger lists is not sent again, so a pass costs no call for a run already counted.
+    try:
+        if any(l.split("\t")[0] == f.name for l in (st / "auto" / f"requeues-{n}.runs").read_text().splitlines()): return
+    except OSError: pass
+    if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": return
+    why = f"the wave of run {i['run_id']} landed without its child" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
+    if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why})"); return
+    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why])[1].strip()
+    if out: say(f"FAILED-DISPATCH #{n}: {out}")
 if owner and proj and repo0:
-    for r in names:   # O: a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
+    for r in names:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it
         f = folder(r); i = read(f)
         if not (i and i["verdict"] and i["idle"] > 180): continue   # a run still moving keeps its marker
         req = f / "request.txt"
         nums = issues_named(req.read_text()) if req.exists() else set()
         if i["landed"]: nums = {n for n in nums if wave_entry(n, f, i) == "out"}   # a run that landed keeps its markers, but for an issue its landed wave never carried (#467)
-        marks = {n: [k for k in ("disp", "bug") if owns(f, i, st / "auto" / f"{k}-{n}")] for n in nums}   # only the markers this run's request wrote (#539)
+        if i["name"] != "needs-human":   # needs-human is the owner's already (ADR-0029)
+            for n in sorted(nums, key=int): count_failed(n, f, i)
+        marks ={n: [k for k in ("disp", "bug") if owns(f, i, st / "auto" / f"{k}-{n}")] for n in nums}   # only the markers this run's request wrote (#539)
         marks = {n: m for n, m in marks.items() if m}
         if not marks: continue
         mk = st / "auto" / f"janitor-demoted-{f.name[-6:]}"
