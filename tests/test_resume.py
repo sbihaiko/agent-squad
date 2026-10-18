@@ -122,13 +122,13 @@ async def test_run_start_turns_resolution_on_and_the_resume_reads_it(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_an_outcome_names_the_registry_id_and_the_wire_string(tmp_path):
+async def test_an_outcome_keeps_the_raw_spelling_and_names_the_registry_id(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
     eng, _ = make(wait_doc(), run, registry=str(reg))
     await eng.run()
     out = [e for e in events(run, "outcome") if e["node"] == "a"][0]
-    assert (out["model"], out["route_model"]) == ("claude-sonnet-5-5", "sonnet")
+    assert (out["model"], out["model_id"], out["route_model"]) == ("sonnet", "claude-sonnet-5-5", "sonnet")
 
 
 @pytest.mark.anyio

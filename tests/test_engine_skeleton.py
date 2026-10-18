@@ -138,7 +138,7 @@ async def test_an_agent_outcome_records_the_model_the_effort_and_the_tokens_when
     await eng.run()
     ev = [e for e in record.read(tmp_path / "run" / "record.jsonl") if e["event"] == "outcome"][0]
     assert ev["tokens_in"] == 120 and ev["tokens_out"] == 30
-    assert ev["model"] == "claude-sonnet-5-5" and ev["route_model"] == adapter.calls[0].model   # the id, then the wire string
+    assert ev["model"] == "sonnet" and ev["model_id"] == "claude-sonnet-5-5" and ev["route_model"] == adapter.calls[0].model   # the graph spelling, the id, the wire
     assert ev["effort"] == adapter.calls[0].effort
 
 
