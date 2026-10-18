@@ -20,6 +20,7 @@ ITEMS = [
     {"n": 7, "st": "Todo", "s": "OPEN", "l": []},
     {"n": 8, "st": "Doing", "s": "OPEN", "l": []},
     {"n": 9, "st": "Merging", "s": "OPEN", "l": []},
+    {"n": 10, "st": "Landing", "s": "OPEN", "l": []},
 ]
 
 
@@ -50,12 +51,11 @@ def test_a_blocked_card_lands_where_its_work_reached_with_the_owner_marker(mig):
     assert _move(plan, 4)["new"] == "Backlog"
 
 
-def test_in_progress_done_and_merging_take_their_shipped_names(mig):
+def test_merging_and_landing_take_their_shipped_name_pushing(mig):
     plan = mig.plan(ITEMS)
 
-    assert _move(plan, 5)["new"] == "Doing"
-    assert _move(plan, 6)["new"] == "Closed"
-    assert _move(plan, 9)["new"] == "Landing"
+    assert _move(plan, 9)["new"] == "Pushing"
+    assert _move(plan, 10)["new"] == "Pushing"
 
 
 def test_a_card_on_a_shipped_column_is_never_moved(mig):

@@ -25,8 +25,8 @@ def test_a_child_in_the_wave_branch_is_code_complete():
     assert _column() == "Code Complete"
 
 
-def test_an_approved_wave_still_ahead_of_dev_is_landing():
-    assert _column(approved=True) == "Landing"
+def test_an_approved_wave_still_ahead_of_dev_is_pushing():
+    assert _column(approved=True) == "Pushing"
 
 
 def test_a_wave_in_dev_with_a_running_ci_is_testing():
