@@ -233,7 +233,13 @@ class Dispatch:
         return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), params["deadline"] * e.scale, REVIEW_TICK_S, tick, env))
 
     def issue(self, d):
-        """The child's issue: the first `#<n>` in its task, else in its prompt, else the run's own issue; empty when none is known."""
+        """The child's issue: the `Refs #<n>` line of its task or prompt (the line the loop counts as delivery), else the
+        first `#<n>` in its task, else in its prompt, else the run's own issue; empty when none is known. A prompt may name a
+        blocker before its own issue, so `Refs` wins (#613)."""
+        for text in (d.get("task"), d.get("prompt")):
+            m = re.search(r"\bRefs #(\d+)", text) if isinstance(text, str) else None
+            if m:
+                return m.group(1)
         for text in (d.get("task"), d.get("prompt")):
             m = re.search(r"#(\d+)", text) if isinstance(text, str) else None
             if m:
