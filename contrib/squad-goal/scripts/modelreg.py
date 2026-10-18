@@ -330,7 +330,9 @@ def invocation(ref_or_raw, use="gateway", effort=None, prompt_file=None, reg=Non
     entry = reg.entries.get(ref.id) if ref.known else None
     route = entry.routes.get(use) if entry else None
     if entry and use == "sdk":
-        route = entry.routes.get(_route_for(entry, ref.raw)) or route
+        # The SDK adapter reaches the gateway: the gateway route decides the wire, so a registry id maps to the name
+        # that route serves (`gpt-5.6-terra` -> `claude-gpt-5.6-terra`) instead of the CLI route that serves the id bare.
+        route = entry.routes.get("gateway") or entry.routes.get(_route_for(entry, ref.raw)) or route
     if not route:
         return Inv(route=use, wire=ref.raw, argv=())
     wire = _wire(route, ref.raw)
