@@ -77,6 +77,7 @@ r = hub.q_grok()
 ck(((r or {}).get("windows") or [{}])[0].get("pct") == 61.0, "the newest credit line wins", r)
 
 print("== 3. a log with no usable line: an unavailable reading that names the reason")
+(TMP / "hub/hub-grok.json").unlink(missing_ok=True)   # no reading ever kept
 write_log("".join(line(ts, msg, src=src, ctx=ctx) for ts, msg, src, ctx in (
     ("2026-10-11T09:00:00.000Z", "session created", "grok-shell", {"sid": "01a1"}),
     ("2026-10-11T09:05:00.000Z", "shell.turn.inference_done", "grok-shell", {"ok": True}),
@@ -86,6 +87,13 @@ ck(isinstance(r, dict), "an empty probe still returns a reading", r)
 ck(not (r or {}).get("windows"), "no windows are invented", r)
 ck((r or {}).get("unavailable") is True, "the reading is marked unavailable", r)
 ck(bool((r or {}).get("err")), "the reading carries why", r)
+ck("2026-10-11T09:00:00" in (r or {}).get("err", "") and "open the grok TUI once" in (r or {}).get("err", ""),
+   "the reason names the log's first entry and the one step that writes a line", r)
+ck("64 MB" not in (r or {}).get("err", ""), "the reason never names a scan size the log does not have", r)
+write_log("")
+r = hub.q_grok()
+ck("no credit line" in (r or {}).get("err", "") and "open the grok TUI once" in (r or {}).get("err", ""),
+   "an empty log reads as no credit line, with the same step", r)
 
 print("== 4. the state file carries the reason, so a dead probe cannot pass as a fresh reading")
 hub.QUOTA_PROBES = {"grok": hub.q_grok}      # only the grok probe; claude/gpt/gemini are not called here
@@ -123,7 +131,7 @@ subs = [i for i in items if i["key"] == "subs"]
 ck(len(subs) == 1, "one subscription fact reaches the line", [i["key"] for i in items])
 ck(subs and subs[0]["text"] == "CL 42% · GK 88% 1d 2h · GPT 61% ? · GEM ?",
    "a token below the warn ladder moves its reset span out of the line", subs[0]["text"] if subs else None)
-ck(subs and subs[0]["parts"][0].get("tip") == "resets in 3h 20m",
+ck(subs and subs[0]["parts"][0].get("tip") == "resets in 3h 20m · read 0s ago",
    "the hidden reset span is the token tooltip", subs[0]["parts"][0] if subs else None)
 # The warn boundary draws the span, but an unreadable reset always stays visible. A reset only one minute away does not
 # override the ladder; quota markers keep their absolute reset time.
@@ -132,7 +140,7 @@ boundary = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] ==
 ck(boundary["parts"][0]["text"] == "CL 80% 3h 20m", "the warn boundary keeps the reset span", boundary["parts"][0])
 hub.quota["claude"] = {"windows": [{"label": "weekly", "pct": 42, "resets": NOW + 60}], "asof": NOW}
 close = [i for i in hub.foot_items(hub.foot_sources(NOW), NOW) if i["key"] == "subs"][0]
-ck(close["parts"][0]["text"] == "CL 42%" and close["parts"][0].get("tip") == "resets in 1m",
+ck(close["parts"][0]["text"] == "CL 42%" and close["parts"][0].get("tip") == "resets in 1m · read 0s ago",
    "a reset minutes away stays hidden below the ladder", close["parts"][0])
 ck(hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()) == "codex reset 05:01 · agy ok",
    "the quota block keeps its reset time", hub._quota_fact({"codex": NOW + 60, "agy": None}, NOW, subs=()))
@@ -161,6 +169,44 @@ ck(not asked, "the pass the sampler already runs costs no probe", asked)
 ck((hub.LOAD_STATE.get("facts") or [])[-1]["text"].startswith("CL 42%"),
    "so the tokens reach the page through the same facts source as the rest of the line",
    (hub.LOAD_STATE.get("facts") or [{}])[-1].get("text"))
+
+print("== 7. a kept grok reading survives a log rotation, shows its age, and goes stale at its period end (#553)")
+KEPT = TMP / "hub/hub-grok.json"
+KEPT.unlink(missing_ok=True)
+REAL = ('{"ts":"2026-10-18T06:37:37.069Z","src":"shell","pid":1,"ver":"1.0.62","lvl":"info","msg":"billing: fetched credits config",'
+        '"ctx":{"config":{"creditUsagePercent":73.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY",'
+        '"start":"2026-10-15T18:51:01.060398+00:00","end":"2026-10-22T18:51:01.060398+00:00"}},"subscriptionTier":"SuperGrok"}}\n')
+ASOF = dt.datetime(2026, 10, 18, 6, 37, 37, 69000, tzinfo=dt.timezone.utc).timestamp()
+END = dt.datetime(2026, 10, 22, 18, 51, 1, 60398, tzinfo=dt.timezone.utc).timestamp()
+write_log(line("2026-10-18T06:00:00.000Z", "session created", ctx={"sid": "01a1"}) + REAL)
+r = hub.q_grok()
+ck(((r or {}).get("windows") or [{}])[0].get("pct") == 73.0, "the real credit line reads 73%", r)
+kept = json.loads(KEPT.read_text()) if KEPT.exists() else {}
+ck(kept.get("pct") == 73.0 and kept.get("asof") == ASOF, "the reading is kept in HUBDIR with its asof", kept)
+ck(not list((TMP / "hub").glob("*.tmp")), "the kept file is written through a tmp file and a rename")
+write_log(line("2026-10-18T11:00:00.000Z", "session created", ctx={"sid": "01a2"}))   # the log rotated
+r = hub.q_grok()
+w = ((r or {}).get("windows") or [{}])[0]
+ck(w.get("pct") == 73.0 and w.get("resets") == END and (r or {}).get("asof") == ASOF,
+   "after a rotation the kept reading comes back, with its own asof and reset", r)
+ck(not (r or {}).get("unavailable"), "a kept reading is not unavailable", r)
+hub.quota = {"grok": dict(r, asof=ASOF)}
+LATER = ASOF + 5 * 3600   # past QUOTA_MAX_AGE, before the period end
+row = hub.quota_row("grok", LATER)
+ck(row and (row.get("windows") or [{}])[0].get("pct") == 73.0, "the panel row shows the kept reading before the period end", row)
+ck(row and row.get("asof") == ASOF, "the panel row carries the reading's age", row)
+gk = [p for p in [i for i in hub.foot_items(hub.foot_sources(LATER), LATER) if i["key"] == "subs"][0]["parts"] if p["text"].startswith("GK")][0]
+ck(gk["text"] == "GK 73% 4d 7h", "the footer token reads the same value as the panel", gk)
+ck("read 5h ago" in (gk.get("tip") or ""), "the footer token carries the same age as the panel", gk)
+row = hub.quota_row("grok", END + 60)
+ck(row and row.get("unavailable") is True and row.get("stale") is True, "past the period end the reading is stale", row)
+ck(row and "2026-10-22" in row.get("err", ""), "the stale reason names the period end", row)
+gk = [p for p in [i for i in hub.foot_items(hub.foot_sources(END + 60), END + 60) if i["key"] == "subs"][0]["parts"] if p["text"].startswith("GK")][0]
+ck(gk["text"] == "GK ?", "the footer token reads the stale reading as ? too", gk)
+older = line("2026-10-17T06:00:00.000Z", "billing: credits config", ctx={"config": {
+    "creditUsagePercent": 10.0, "currentPeriod": {"start": "2026-10-15T18:51:01Z", "end": "2026-10-22T18:51:01Z"}}})
+write_log(older)
+ck(hub.q_grok()["windows"][0]["pct"] == 73.0, "a log line older than the kept reading does not replace it")
 
 print(f"\n{checks - len(fails)}/{checks} checks passed")
 if fails:
