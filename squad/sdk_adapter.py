@@ -230,6 +230,7 @@ class SdkAdapter:
         for name, var in (("max_output_tokens", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"), ("context_tokens", "CLAUDE_CODE_AUTO_COMPACT_WINDOW")):
             if getattr(req, name, None):    # the project settings file reaches the call
                 kw["env"] = {**kw.get("env", {}), var: str(getattr(req, name))}
+        kw["env"] = {**kw.get("env", {}), **workcmd.bounded_env(workcmd.child_workers())}   # the actor's pytest runs a bounded worker count (#608)
         if "VIRTUAL_ENV" in os.environ:     # the actor's Bash reaches the project's python3, as a gate command does
             clean = workcmd.clean_env(os.environ)
             kw["env"] = {**kw.get("env", {}), "VIRTUAL_ENV": "", "PATH": clean["PATH"]}

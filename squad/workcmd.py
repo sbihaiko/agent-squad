@@ -9,11 +9,20 @@ recorded `ac_failed:timeout after 120 s` and failed a run whose code was green. 
 `SG_AC_TIMEOUT`; a command is still asked to be the narrowest one that proves the done condition, so the common case
 stays fast (a wide command is a choice, never the default).
 
+A command takes `SG_CHILD_TEST_WORKERS` (default 2) `gates` slots of the machine-wide budget before it starts (squad/caps.py,
+#608), all at once or none, and runs with that count in `SQUAD_GATE_WORKERS` and `PYTEST_XDIST_AUTO_NUM_WORKERS`, so a run's
+children never start one pytest worker per core each. A full budget makes it wait and say so on stderr, never fail. A wait past
+`SG_CHILD_SLOT_WAIT` (default 1800 s) runs it with 1 worker and says so. Inside a gate holder it takes none, as gate.sh does.
+
 Guards: `tests/test_workcmd.py`.
 """
+import contextlib
 import os
 import re
 import subprocess
+import sys
+import time
+import uuid
 from dataclasses import dataclass
 
 TIMEOUT_S = 300           # the default cap for one acceptance command, in seconds (>= 300: see the module docstring)
@@ -117,6 +126,57 @@ def clean_env(environ):
     return env
 
 
+def _num(env, var, default):
+    try:
+        v = float(env.get(var, ""))
+    except (TypeError, ValueError):
+        return default
+    return v if v > 0 else default
+
+
+def child_workers(environ=None):
+    """The pytest worker count of one child: `SG_CHILD_TEST_WORKERS`, else 2."""
+    return int(_num(os.environ if environ is None else environ, "SG_CHILD_TEST_WORKERS", 2))
+
+
+def bounded_env(n):
+    """The variables that bound a child's pytest to `n` workers: the battery reads one, pytest-xdist's `-n auto` the other."""
+    return {"SQUAD_GATE_WORKERS": str(n), "PYTEST_XDIST_AUTO_NUM_WORKERS": str(n)}
+
+
+@contextlib.contextmanager
+def gate_slots(cwd):
+    """Hold `gates` slots of the machine-wide budget while a command runs; yield the worker count it may use."""
+    env = os.environ
+    if "gate" in env.get("SG_SERIAL_HELD", "").split(":"):      # a gate holder took the slots already (gate.sh)
+        yield int(_num(env, "SQUAD_GATE_WORKERS", child_workers(env)))
+        return
+    from squad import caps
+    from squad.options import OptionError
+    try:
+        c = caps.ceiling(cwd)
+    except OptionError as e:
+        print(f"workcmd: no machine-wide budget ({e}); the command runs with {child_workers(env)} worker(s) and no slot", file=sys.stderr)
+        yield child_workers(env)
+        return
+    n, holder = min(child_workers(env), c.caps["gates"]), f"child-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    bound, poll, t0, said = _num(env, "SG_CHILD_SLOT_WAIT", 1800.0), _num(env, "SQUAD_CAPS_POLL", 1.0), time.monotonic(), False
+    while (leases := c.try_take_many("gates", holder, n)) is None:
+        held = ", ".join(c.holders("gates")) or "?"
+        if not said:
+            print(f"workcmd: {holder} is waiting for {n} slot(s): caps.gates is full ({c.caps['gates']} slots), held by {held}", file=sys.stderr)
+            said = True
+        if time.monotonic() - t0 >= bound:
+            print(f"workcmd: {holder} waited {bound:g}s for caps.gates, held by {held}; the command runs with 1 worker and no slot", file=sys.stderr)
+            yield 1
+            return
+        time.sleep(poll)
+    try:
+        yield n
+    finally:
+        c.release_many(leases)
+
+
 @dataclass
 class CmdResult:
     ok: bool
@@ -135,10 +195,11 @@ def run(cmd, cwd, timeout=None):
     syntax = subprocess.run(["/bin/sh", "-n", "-c", cmd], capture_output=True, cwd=cwd)
     if syntax.returncode != 0:
         return CmdResult(False, evidence_of(syntax.stderr), malformed=True)
-    try:
-        r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env=clean_env(os.environ))
-    except subprocess.TimeoutExpired:
-        return CmdResult(False, f"timeout after {timeout:g} s")
+    with gate_slots(cwd) as n:
+        try:
+            r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, timeout=timeout, env={**clean_env(os.environ), **bounded_env(n)})
+        except subprocess.TimeoutExpired:
+            return CmdResult(False, f"timeout after {timeout:g} s")
     if r.returncode == 0:
         return CmdResult(True, counts=counts_of(r.stdout + r.stderr))
     return CmdResult(False, evidence_of(r.stdout + r.stderr), counts=counts_of(r.stdout + r.stderr))
