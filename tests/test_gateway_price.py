@@ -20,6 +20,10 @@ GATEWAY = "claude-deepseek-v4-flash"
 FLASH = {"input": 0.30, "cache_read": 0.006, "cache_write": 0.30, "output": 1.20}
 CLIENT = {"input": 3.0, "cache_read": 0.30, "cache_write": 3.75, "output": 15.0}
 TABLE = {"client": CLIENT, "models": {GATEWAY: FLASH}}
+TERRA = "claude-gpt-5.6-terra"
+# The API-equivalent price of GPT-5.6 Terra, as the hub's PRICES row reads it (cache hit, cache miss, output); it runs on
+# the owner's subscription, so this is what it would cost, never what the SDK borrows at Claude rates.
+TERRA_RATES = {"input": 2.00, "cache_read": 0.20, "cache_write": 2.00, "output": 12.00}
 # The usage of a real gateway child: tokens_in holds every prompt token, cache reads included.
 USAGE = {"input_tokens": 110_000, "cache_read_input_tokens": 10_590_000, "cache_creation_input_tokens": 0, "output_tokens": 64_000}
 
@@ -32,6 +36,24 @@ def test_the_defaults_file_holds_one_price_table_seeded_with_the_flash_peak_pric
     cfg = defaults.load()
     assert cfg["prices"]["models"][GATEWAY] == FLASH
     assert set(cfg["prices"]["client"]) == set(prices.KEYS)
+    assert defaults.check(cfg) == []
+
+
+def test_a_context_suffix_resolves_to_the_bare_id_price():
+    """#574: `claude-deepseek-flash[1m]` is the same model as `claude-deepseek-flash`. The suffix names how much context
+    a call may use, never a different price, so both spellings read one entry of the default table."""
+    cfg = defaults.load()["prices"]
+    assert prices.rates(cfg, "claude-deepseek-flash[1m]") == prices.rates(cfg, "claude-deepseek-flash") == FLASH
+    assert prices.rates(cfg, "claude-sonnet-5-5[1m]") is None     # a bare id with no entry stays unpriced
+
+
+def test_terra_has_an_explicit_subscription_price_so_the_cap_never_reads_it_at_claude_rates():
+    """#574: GPT-5.6 Terra runs on the owner's subscription. Without an entry the SDK prices it at the Claude client
+    rates, about 1.3 times its output price, so the cap stops it early; the entry names its API-equivalent price."""
+    cfg = defaults.load()
+    r = cfg["prices"]["models"][TERRA]
+    assert r == TERRA_RATES
+    assert r["output"] < CLIENT["output"]     # never the borrowed Claude rate
     assert defaults.check(cfg) == []
 
 
@@ -52,6 +74,15 @@ def test_the_price_counts_each_token_once_with_cache_tokens_split_out_of_tokens_
 
 async def test_a_priced_gateway_call_spends_its_table_price_and_names_the_source():
     r = await adapter([ResultMessage(total_cost_usd=4.08, usage=USAGE)]).call(request(model=GATEWAY))
+    assert r.spend == pytest.approx(0.11 * 0.30 + 10.59 * 0.006 + 0.064 * 1.20)
+    assert r.spend_source == "price_table"
+
+
+async def test_a_call_on_a_suffixed_model_spends_its_table_price_not_the_sdk_cost():
+    """#574: the overnight DeepSeek calls came back at 1.44 and 1.52 USD because `[1m]` hid the entry, so the call
+    kept `total_cost_usd` at Claude rates. The real cost is about 0.08 USD."""
+    r = await adapter([ResultMessage(total_cost_usd=1.44, usage=USAGE)], table=defaults.load()["prices"]).call(
+        request(model="claude-deepseek-flash[1m]"))
     assert r.spend == pytest.approx(0.11 * 0.30 + 10.59 * 0.006 + 0.064 * 1.20)
     assert r.spend_source == "price_table"
 

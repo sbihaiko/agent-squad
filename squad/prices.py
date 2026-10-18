@@ -2,16 +2,26 @@
 
 The SDK prices a model it does not know at Claude rates (`prices.client` in config/agent-defaults.yaml). For a model
 with an entry in `prices.models`, the spend of a call is its tokens times the entry's rates, in USD per 1M tokens.
-A model with no entry keeps the SDK's `total_cost_usd`.
+A model with no entry keeps the SDK's `total_cost_usd`. A model id may carry a context suffix (`[1m]`); the suffix
+names how much context a call may use, never a different price, so the lookup strips it.
 """
+import re
+
 KEYS = ("input", "cache_read", "cache_write", "output")
+CONTEXT_SUFFIX = re.compile(r"\[[^\]]*\]$")
 TABLE_SOURCE = "price_table"
 SDK_SOURCE = "total_cost_usd"
 
 
 def rates(table, model):
-    """The rates of one model, or None when the table has no entry for it."""
-    return ((table or {}).get("models") or {}).get(model)
+    """The rates of one model, or None when the table has no entry for it.
+
+    A context suffix (`claude-deepseek-flash[1m]`) is stripped before the read, so both spellings of one model
+    resolve to one entry."""
+    models = (table or {}).get("models") or {}
+    if model in models:
+        return models[model]
+    return models.get(CONTEXT_SUFFIX.sub("", model or ""))
 
 
 def spend(r, usage):
