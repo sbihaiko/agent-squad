@@ -30,13 +30,13 @@ case "$a" in
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/4/items*)
     printf '2201\tBacklog\thttps://api.github.com/repos/x/y\n2202\tCode Complete\thttps://api.github.com/repos/x/y\n'
-    for n in 2203 2204 2205 2206 2207; do printf '%s\tBacklog\thttps://api.github.com/repos/x/y\n' "$n"; done;;
+    for n in 2203 2204 2205 2206 2207 2208; do printf '%s\tBacklog\thttps://api.github.com/repos/x/y\n' "$n"; done;;
   *graphql*)
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2201 2202 2203 2204 2205 2206 2207; do
+    sep=""; for n in 2201 2202 2203 2204 2205 2206 2207 2208; do
       case $n in
         2201) l='';; 2202) l='"bug","no-auto"';; 2203) l='"bug"';; 2204) l='"ready-for-agent"';; 2205) l='"debt"';;
-        2206) l='"run-parent","enhancement"';; 2207) l='"ready-for-agent","frozen:dependency"';;
+        2206) l='"run-parent","enhancement"';; 2207) l='"ready-for-agent","frozen:dependency"';; 2208) l='"bug","frozen:dependency"';;
       esac
       labs=$(printf '%s' "[$l]" | jq -c '{nodes:[.[]|{name:.}]}')
       printf '%s{"number":%s,"title":"Issue %s","body":"","state":"OPEN","labels":%s,"subIssuesSummary":{"total":0,"completed":0},"subIssues":{"nodes":[]},"comments":{"nodes":[]}}' "$sep" "$n" "$n" "$labs"; sep=,; done
@@ -58,6 +58,9 @@ has '^STATUS o 4 Todo 2204$' && ok "an issue with the frontier label floors in T
 has '^STATUS o 4 Todo 2205$' && ok "a debt issue autobug takes floors in Todo" || ko "#2205 not Todo: $(bc)"
 has '^STATUS --remove o 4 2206$' && ! has 'STATUS o 4 [A-Za-z ]* 2206$' && ok "a run parent gets no column, and its card is removed (#500)" || ko "#2206 not removed: $(bc)"
 ! has ' 2207$' && ok "the frontier label with a frontier skip label stays in Backlog" || ko "#2207 moved: $(bc)"
+# #537: a profile skip list without the frozen labels still keeps a frozen bug out of Todo, as autobug.sh does
+o=$(run env SG_FRONTIER_LABEL=ready-for-agent SG_BUG_SKIP_LABELS=needs-owner,no-auto,wontfix,question)
+! has ' 2208$' && ok "a frozen:dependency bug stays in Backlog under a profile skip list" || ko "#2208 moved: $(bc)"
 
 o=$(run env -u SG_FRONTIER_LABEL)
 has '^STATUS o 4 Todo 2201$' && ok "with no frontier label the floor is Todo, as before" || ko "#2201 not Todo without a frontier label: $(bc) $o"
