@@ -5,7 +5,7 @@
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 trap 'rm -rf "$T"' EXIT
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"
-cp "$d/branchreviewpass.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/branchreviewpass.sh" "$d/workbranches.sh" "$d/branchreview.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$d/chainhealth.py" "$d/provkey.py" "$d/models.json" "$T/s/" 2>/dev/null
 cat > "$T/s/env.sh" <<J
 export SG_STATE=$T/st SG_REPO=x/y SG_BASE=main SG_LAND_BRANCH=dev SG_CHECKOUT=$T/co SG_LAND_REMOTE=\${SG_LAND_REMOTE:-$T/origin.git}
 export SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001

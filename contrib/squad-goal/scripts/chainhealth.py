@@ -3,10 +3,12 @@
 
 One reader of what review.sh already skips a model over: `codex-limited` (a usage limit; every model that is not claude:,
 grok- or gemini-) and `agy-limited` (gemini-), each an epoch under the shared dir, `quota-guard` with `anthropic_models`,
-and models.json's `off` and `hours`. The hub draws what `chain_state` returns and never computes the rule (ADR-0137);
+models.json's `off` and `hours`, and a provider key that is absent (provkey.py). The hub draws what `chain_state` returns and never computes the rule (ADR-0137);
 branchreviewpass.sh prints `summary` into the issue's status file.
 usage: chainhealth.py <models.json> <shared dir> [now epoch]   prints the banner, else the notice, else nothing."""
 import json, pathlib, sys, time
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import provkey   # a model whose provider needs an absent key (#482)
 
 def _bare(m): return m[len("claude:"):] if m.startswith("claude:") else m
 
@@ -33,6 +35,7 @@ def chain_state(cfg, key="review_models", shared=".", now=None, hour=None):
         why, until = None, None
         if not m.startswith(("claude:", "grok-", "gemini-")) and codex: why, until = "usage limit", codex
         elif m.startswith("gemini-") and agy: why, until = "usage limit", agy
+        elif provkey.closed(m): why = provkey.reason(m)
         elif guard and m in (cfg.get("anthropic_models") or []): why = "weekly quota guard"
         elif ((cfg.get("off") or {}).get(key) or {}).get(m): why = "switched off"
         else:

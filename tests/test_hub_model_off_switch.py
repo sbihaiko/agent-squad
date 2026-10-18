@@ -178,7 +178,10 @@ def _launch_predicate(doc):
     """launch.py's own gate, sliced out and run: `_may_run(chain, mid)` over the models.json this test hands it."""
     block = LAUNCH.read_text()
     block = block[block.index("def _in_hours("):block.index('cm = mdoc.get("coding_models")')]
-    ns = {"mdoc": doc, "re": re, "time": __import__("time")}
+    spec = importlib.util.spec_from_file_location("provkey", SCRIPTS / "provkey.py")
+    provkey = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(provkey)
+    ns = {"mdoc": doc, "re": re, "time": __import__("time"), "provkey": provkey}   # the key gate launch.py loads beside itself (#482)
     exec(compile(block, str(LAUNCH), "exec"), ns)      # noqa: S102 -- the shipped predicate, not a copy of it
     return ns["_may_run"]
 

@@ -5,7 +5,7 @@
 # usage: bash test-launch.sh [launch.py]
 src=${1:-$(dirname "$0")/launch.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/s" "$T/st" "$T/co/runs" "$T/squad"
-cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$T/s/router_envelope.py"
+cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$T/s/"
 # models.json: one coding model, no hours window. SG_ALLOW_MODEL skips the gate anyway.
 printf '{"coding_models":["test-model"],"hours":{}}\n' > "$T/s/models.json"
 printf 'print("hub")\n' > "$T/s/hub.py"

@@ -9,7 +9,9 @@ mjson="$(cd "$(dirname "$0")" && pwd)/models.json"; hh=$((10#$(date +%H)))
 # A model whose subscription is spent (#508) is skipped too: a future codex-limited marker closes a gpt- model, agy-limited a
 # gemini one -- the markers review.sh honors. A refused child otherwise lands nothing until the window resets.
 [ -n "${SG_SHARED:-}" ] || { [ -f "$(dirname "$0")/address.sh" ] && . "$(dirname "$0")/address.sh" && SG_SHARED=$(sg_shared_dir 2>/dev/null); }
-spent() { local f; case $1 in *gpt-*) f=codex-limited;; *gemini-*) f=agy-limited;; *) return 1;; esac
+# A model whose provider needs a key that is absent (#482, provkey.py: qwen without an OpenCode Go key) is closed the same way.
+keyless() { case $1 in *qwen*) python3 "$(dirname "$0")/provkey.py" "$1";; *) return 1;; esac; }
+spent() { local f; keyless "$1" && return 0; case $1 in *gpt-*) f=codex-limited;; *gemini-*) f=agy-limited;; *) return 1;; esac
   [ -s "${SG_SHARED:-/nonexistent}/$f" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/$f")" ]; }
 mayrun() { [ "$(jq -r --arg m "$1" '.off.coding_models[$m] // false' "$mjson")" != true ] || return 1
   spent "$1" && return 1
@@ -20,7 +22,7 @@ cm=""; fb=""
 for m in $(jq -r '.coding_models[]' "$mjson"); do mayrun "$m" || continue
   if [ -z "$cm" ]; then cm=$m; elif [ -z "$fb" ]; then fb=$m; fi; done
 [ -n "$cm" ] || cm=$(jq -r '.coding_models[0] // empty' "$mjson")   # every entry off or out of window: name [0], launch.py refuses loudly
-[ -n "$fb" ] || fb=$(jq -r --arg c "$cm" 'first(.coding_models[]|select(.!=$c)) // empty' "$mjson")
+[ -n "$fb" ] || for m in $(jq -r --arg c "$cm" '.coding_models[]|select(.!=$c)' "$mjson"); do keyless "$m" || { fb=$m; break; }; done   # a keyless model is never the fallback either (#482)
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"
 # The request lands in the state directory of the repository it is for (#25); a request builder sources env.sh, which

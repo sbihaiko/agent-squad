@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, router_envelope   # the one envelope source, shared with launch.py (#436)
+import agyquota, chainhealth, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2841,7 +2841,7 @@ def router_known():
 
     A queue entry is handed to the engine, which runs every call through the gateway, so the box offers only what the
     gateway's catalogue holds. The other CLIs' ids (codex, agy, grok) stay in `known`, for the role chains."""
-    return sorted({m for m in gateway_models() if MODEL_ID.match(m)})
+    return sorted({m for m in gateway_models() if MODEL_ID.match(m) and not provkey.closed(m)})   # no key, never offered (#482)
 
 
 ANTHROPIC_ID = re.compile(r"^claude-(opus|sonnet|haiku|fable)-[0-9][0-9a-z.\-]*$")
@@ -2877,7 +2877,7 @@ def known_models(d):
     for k in CHAINS: out += d.get(k, [])
     try: out += list(json.loads((pathlib.Path.home() / ".claude" / "settings.json").read_text()).get("modelSettings", {}))
     except Exception: pass
-    return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in runnable_models(out) if MODEL_ID.match(m)})
+    return sorted({bare_id(ALIAS.sub(r"\1-", m)) for m in runnable_models(out) if MODEL_ID.match(m) and not provkey.closed(m)})   # no key, never offered (#482)
 EFFORTS = ("low", "medium", "high", "max")
 # local hours a model may run, "HH-HH", start inclusive, end exclusive, wrapping midnight (22-07). Absent = always.
 HOURS = re.compile(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$")
@@ -2908,7 +2908,7 @@ def may_run(d, chain, mid, when=None):
 
     One predicate for both reasons, because the consumers do not care which one it was -- `in_hours` and `model_off`
     are only apart in the panel, where the row shows which of the two it is."""
-    return not model_off(d, chain, mid) and in_hours(d, chain, mid, when)
+    return not model_off(d, chain, mid) and in_hours(d, chain, mid, when) and not provkey.closed(mid)   # a provider key that is absent closes it too (#482)
 def hours_of(d):
     """Per-chain {model-id: "HH-HH"} from models.json's optional top-level `hours`; only entries whose model is in that chain."""
     h = d.get("hours") if isinstance(d.get("hours"), dict) else {}

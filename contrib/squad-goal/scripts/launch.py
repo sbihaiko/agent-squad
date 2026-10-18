@@ -16,6 +16,10 @@ state = pathlib.Path(os.environ["SG_STATE"])
 state.mkdir(parents=True, exist_ok=True); (state / "cq").mkdir(exist_ok=True)
 req_file = pathlib.Path(sys.argv[1]).resolve(); cwd = pathlib.Path.cwd().resolve(); runs = cwd / "runs"
 
+import importlib.util   # provkey.py sits beside this script: a model whose provider needs an absent key is closed (#482)
+_pk_spec = importlib.util.spec_from_file_location("provkey", here / "provkey.py")
+provkey = importlib.util.module_from_spec(_pk_spec); _pk_spec.loader.exec_module(provkey)
+
 # the coding model comes from models.json (the hub's "squad models" panel), never from memory or a doc
 mdoc = json.load(open(here / "models.json"))
 def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window, local hour, "" = always
@@ -24,6 +28,7 @@ def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window
     h = time.localtime().tm_hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
 def _spent(mid):   # #508: the subscription is spent until the marker's time (codex-limited for gpt-, agy-limited for gemini-), as mkreq.sh reads it
+    if provkey.closed(mid): return True   # #482: no key is a provider that never answers, so it is closed like a spent one
     f = "codex-limited" if "gpt-" in mid else "agy-limited" if "gemini-" in mid else None
     try: return bool(f and os.environ.get("SG_SHARED")) and time.time() < int((pathlib.Path(os.environ["SG_SHARED"]) / f).read_text().strip())
     except (OSError, ValueError): return False
@@ -89,7 +94,8 @@ def _spent_models(doc, shared, now=None):
         try: return float((pathlib.Path(shared) / name).read_text().strip()) > now
         except (OSError, ValueError): return False
     ids = {ALIASES.get(m, m) for _, m, _ in _run_models(doc)}
-    return sorted(m for m in ids for prefix, name in SPENT_MARKERS if shared and m.removeprefix("claude-").startswith(prefix) and closed(name))
+    return sorted({m for m in ids for prefix, name in SPENT_MARKERS if shared and m.removeprefix("claude-").startswith(prefix) and closed(name)}
+                  | {m for m in ids if provkey.closed(m)})   # #482: a model with no key leaves the chain the same way
 off_ids = _off_ids()
 if off_ids:
     try: gdoc = json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text())

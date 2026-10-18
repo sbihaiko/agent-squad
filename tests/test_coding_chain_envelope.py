@@ -44,6 +44,7 @@ def _launch(tmp_path, coding, envelope, shared=None):
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
     shutil.copy(SCRIPTS / "router_envelope.py", s / "router_envelope.py")
+    shutil.copy(SCRIPTS / "provkey.py", s / "provkey.py")
     (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": []}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [
@@ -134,6 +135,7 @@ def _shared(tmp_path, **markers):
 
 def test_a_closed_marker_names_the_graph_models_of_its_provider_as_spent(tmp_path):
     spent = _fn(SCRIPTS / "launch.py", "_spent_models", time=__import__("time"), pathlib=__import__("pathlib"), ALIASES={}, SPENT_MARKERS=(("gpt-", "codex-limited"), ("gemini-", "agy-limited")),
+                provkey=__import__("types").SimpleNamespace(closed=lambda m: False),   # no keyed model here (#482)
                 _run_models=lambda doc: [("router", "claude-gpt-5.5", True), ("route", "claude-opus-5-5", True), ("route", "claude-gemini-3.8-flash", False), ("route", "claude-gpt-5.6-terra", False)])
     sh = _shared(tmp_path, codex_limited=2000, agy_limited=500)
     assert spent({}, sh, now=1000) == ["claude-gpt-5.5", "claude-gpt-5.6-terra"]   # codex is closed until 2000, agy's epoch has passed

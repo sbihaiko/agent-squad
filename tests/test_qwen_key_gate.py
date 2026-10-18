@@ -89,7 +89,7 @@ def test_the_hub_never_offers_qwen_without_a_key(hub, no_key):
 
 
 def test_the_hub_offers_qwen_with_a_key(hub, with_key):
-    assert "qwen3.8-flash" in hub.known_models(CHAINS)
+    assert QWEN in hub.known_models(CHAINS)
     assert QWEN in hub.router_known()
     assert hub.may_run(CHAINS, "coding_models", QWEN)
 
@@ -110,10 +110,11 @@ def _mkreq(tmp_path, cfg, env_key=None):
     (tmp_path / "b.body").write_text("IMPORTANT: your first and only action is X\nPANEL: p\nEdit scripts/a.py\n")
     e = {k: v for k, v in os.environ.items() if not k.startswith(("SG_", "CCP_"))}
     e.update(HOME=str(home), SG_STATE=str(tmp_path / "st"), SG_SHARED=str(tmp_path / "sh"), SG_CCP_CONFIG=str(cfg))
-    if env_key: e["CCP_OPENCODE_API_KEY"] = env_key
+    if env_key:
+        e["CCP_OPENCODE_API_KEY"] = env_key
     r = subprocess.run(["bash", str(s / "mkreq.sh"), "b", str(tmp_path / "b.body")], env=e, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
-    return next(l for l in (tmp_path / "st/req/b.txt").read_text().splitlines() if l.startswith("Coding model:"))
+    return next(line for line in (tmp_path / "st/req/b.txt").read_text().splitlines() if line.startswith("Coding model:"))
 
 
 def test_a_request_never_names_qwen_without_a_key(no_key, tmp_path):
@@ -153,6 +154,7 @@ def _launch(tmp_path, cfg, coding_model):
     return r, argv.read_text() if argv.exists() else ""
 
 
+@pytest.mark.heavy
 def test_launch_never_chooses_qwen_without_a_key(no_key, tmp_path):
     r, _ = _launch(tmp_path, no_key, QWEN)
     assert r.returncode != 0 and "'test-model'" in r.stderr + r.stdout
@@ -162,6 +164,7 @@ def test_launch_never_chooses_qwen_without_a_key(no_key, tmp_path):
     assert "qwen" not in r.stderr.lower()   # a closed model is no noise: no warning names it
 
 
+@pytest.mark.heavy
 def test_launch_chooses_qwen_with_a_key(with_key, tmp_path):
     r, argv = _launch(tmp_path, with_key, QWEN)
     assert r.returncode == 0, r.stderr
