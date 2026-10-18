@@ -62,7 +62,7 @@ HOLDER_FIELDS = ("Run", "Run started")
 WAVE = re.compile(r"^wave:\d+$")   # the ordering label, and the title of the milestone that carries a delivery
 
 
-RUN_PARENT_TITLE = re.compile(r"^Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+$")   # the shell passes (frontier, bug) filter on the same pattern, in jq
+RUN_PARENT_TITLE = re.compile(r"^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \([0-9a-f]+\)( — .*)?)$")   # the old title stays a run parent; the shell passes (frontier, bug) filter on the same pattern, in jq
 
 
 def is_run_parent(title):
@@ -314,7 +314,7 @@ class State:
         found = self.binding.parent_of(run)
         kids = [k for k in kids if self.binding.parent(k) in (None, found)]   # GitHub gives an issue one parent: a child under a spec is left out (#368)
         if len(kids) < 2: return found
-        parent = found or self.binding.create_parent(run)
+        parent = found or self.binding.create_parent(run, kids)
         for k in kids: self.link(parent, k)
         return parent
 
@@ -628,26 +628,39 @@ class BoardBinding:
                  inp=json.dumps({"fields": [{"id": tf["Run"], "value": run}, {"id": tf["Run started"], "value": started}]}))
 
     @staticmethod
-    def parent_title(run):
-        return f"Squad run {run}"
+    def parent_title(run, children=()):
+        """`Run 2026-10-17 00:24 (f4c200) — #470, #474`: the run id's own start stamp (local time), its short id, and
+        the first three children, then `+N`. A pure function of the run id and the children."""
+        m = re.match(r"^run-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}-([0-9a-f]+)$", run)
+        head = f"Run {m[1]}-{m[2]}-{m[3]} {m[4]}:{m[5]} ({m[6]})" if m else f"Run {run}"
+        kids = sorted({int(c) for c in children})
+        if not kids: return head
+        more = f" +{len(kids) - 3}" if len(kids) > 3 else ""
+        return f"{head} — {', '.join(f'#{k}' for k in kids[:3])}{more}"
+
+    @classmethod
+    def _is_parent_of(cls, title, run):
+        """True when `title` is a run parent title for `run`. The children in a title change as the run grows, so the
+        run is matched by its head (start stamp and short id), never by the whole title."""
+        head = cls.parent_title(run)
+        return title == head or title.startswith(head + " — ") or title == f"Squad run {run}"   # the old title: a parent made before the change is still found
 
     def parent_of(self, run):
         """The number of the issue titled for `run`, None when the run has none. A parent this seam made or found is
         remembered under $SG_STATE and read back by number, so a retry never pages every issue. Otherwise read off the
         issues route, which is not the search index: the index lags a new issue, and a lag here would create a second parent."""
-        title = self.parent_title(run)
         known = self.st / f"run-parent-{run}"
         if known.exists():
             n = known.read_text().strip()
             try:
-                if n.isdigit() and json.loads(self.api(f"repos/{self.repo}/issues/{n}")).get("title") == title: return int(n)
+                if n.isdigit() and self._is_parent_of(json.loads(self.api(f"repos/{self.repo}/issues/{n}")).get("title") or "", run): return int(n)
             except (RuntimeError, ValueError): pass   # a read that fails or does not match: the page below decides
         out = self.api("--paginate", f"repos/{self.repo}/issues?state=all&per_page=100", "--jq",
                        '.[]|select(.pull_request==null)|[.number,.title]|@json')
         for l in out.splitlines():
             if l.strip():
                 n, t = json.loads(l)
-                if t == title: known.write_text(str(n)); return n
+                if self._is_parent_of(t, run): known.write_text(str(n)); return n
         return None
 
     def title(self, issue):
@@ -659,11 +672,11 @@ class BoardBinding:
         u = json.loads(self.api(f"repos/{self.repo}/issues/{issue}")).get("parent_issue_url") or ""
         return int(u.rstrip("/").rsplit("/", 1)[1]) if u else None
 
-    def create_parent(self, run):
-        """One POST of the parent issue, titled for the run. Returns its number, which is remembered for `parent_of`."""
+    def create_parent(self, run, children=()):
+        """One POST of the parent issue, titled for the run and its children. Returns its number, which is remembered for `parent_of`."""
         body = f"The children of squad run {run}. Each child is a sub-issue; the progress rolls up here."
         n = json.loads(self.api("-X", "POST", f"repos/{self.repo}/issues", "--input", "-",
-                                inp=json.dumps({"title": self.parent_title(run), "body": body, "labels": ["run-parent", "enhancement"]})))["number"]   # the label keeps it out of dispatch (#340)
+                                inp=json.dumps({"title": self.parent_title(run, children), "body": body, "labels": ["run-parent", "enhancement"]})))["number"]   # the label keeps it out of dispatch (#340)
         (self.st / f"run-parent-{run}").write_text(str(n))
         return n
 
