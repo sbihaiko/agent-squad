@@ -3,12 +3,14 @@
 # loop workflow's review gate runs in a passed child's worktree, before the run merges it. It wraps childreview.sh, takes one
 # `reviews` slot of the machine-wide budget (waiting, on one line), says "no review here" (exit 3) when the run has no wave,
 # and on CHANGES or BLOCKED requeues the issue at once, with every blocking finding, and writes the marker childcc honors.
+# When its run offers a fix round (SQUAD_REVIEW_FIX=1, #570), a CHANGES whose findings are new or changed exits 4 ("fix") and
+# requeues nothing; findings left as they were count toward the stall (ADR-0134), and at the cap the issue is requeued once.
 # Stubs: childreview.sh and wave.sh record their argv; the budget is a throwaway SQUAD_CAPS_DIR. No network, no model.
 # usage: bash test-runreview.sh [scripts dir]
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/squad"
-cp "$d/runreview.sh" "$d/caps.sh" "$T/s/" 2>/dev/null
+cp "$d/runreview.sh" "$d/caps.sh" "$d/revformat.py" "$T/s/" 2>/dev/null
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 export SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.05
 cat > "$T/s/env.sh" <<EOF
@@ -22,7 +24,8 @@ br=\$(git symbolic-ref --quiet --short HEAD); key=\$(printf '%s' "\$br" | tr / _
 case "\${STUB_VERDICT:-APPROVE}" in
   NONE) exit 1;;
   APPROVE) printf 'VERDICT: APPROVE\n' > "$T/st/review-\$key.md";;
-  *) printf '**VERDICT: %s**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding\n## Nits\n- c.py:3 a nit\n' "\$STUB_VERDICT" > "$T/st/review-\$key.md";;
+  *) printf '**VERDICT: %s**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding%s\n## Nits\n- c.py:3 a nit\n' "\$STUB_VERDICT" "\${STUB_EXTRA:+
+- \$STUB_EXTRA}" > "$T/st/review-\$key.md";;
 esac
 git rev-parse HEAD > "$T/st/review-\$key.sha"; printf 'wave/%s\n' "\$1" > "$T/st/review-\$key.base"
 echo "\$br \$(git rev-parse --short=9 HEAD) VERDICT: \${STUB_VERDICT:-APPROVE}"
@@ -32,7 +35,7 @@ chmod +x "$T/s/childreview.sh" "$T/s/wave.sh"
 $G init -q -b squad/run-1/target-route.1.1 "$T/wt"; (cd "$T/wt" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m "work (Refs #7)")
 head=$($G -C "$T/wt" rev-parse HEAD)
 rr() { (cd "$T/wt" && bash "$T/s/runreview.sh" "$@"); }
-reset() { : > "$T/rev.log"; : > "$T/wave.log"; rm -f "$T/st/auto/requeued-"* "$T/st/review-"*; }
+reset() { : > "$T/rev.log"; : > "$T/wave.log"; rm -f "$T/st/auto/requeued-"* "$T/st/auto/runfix-"* "$T/st/review-"*; }
 
 # A) the run has no wave: "no review here" (3), no review and no slot; the child lands in the run as today.
 reset; out=$(rr run-1 route.1.1 7 2>&1); rc=$?
@@ -86,5 +89,33 @@ kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null; wait "$W"
 [ "$(cat "$T/g.rc")" = 0 ] && [ "$(cat "$T/rev.log")" = "childreview run-1 7" ] && ok "G: the review runs once a slot frees" || ko "G: rc '$(cat "$T/g.rc")', rev.log '$(cat "$T/rev.log")'"
 occ=$(PYTHONPATH="$T/squad" python3 -m squad.caps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["occupancy"]["reviews"])')
 [ "$occ" = 0 ] && ok "G: the slot is given back" || ko "G: reviews still held: $occ"
+
+# H) a fix round on offer (#570): a first CHANGES exits 4 with the full review and requeues nothing.
+fx() { (cd "$T/wt" && SQUAD_REVIEW_FIX=1 STUB_VERDICT=${V:-CHANGES} SG_RUN_FIX_STALLS=2 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>/dev/null); }
+reset; out=$(fx); rc=$?
+[ "$rc" = 4 ] && ok "H: a first CHANGES with a fix round on offer exits 4 (fix)" || ko "H: exit $rc"
+[ ! -s "$T/wave.log" ] && [ ! -e "$T/st/auto/requeued-run-1-route.1.1" ] && ok "H: a fix round requeues nothing" || ko "H: wave.log '$(cat "$T/wave.log")'"
+[ "$out" = "$(printf '**VERDICT: CHANGES**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding\n## Nits\n- c.py:3 a nit')" ] \
+  && ok "H: stdout is the full review, the fix round's input" || ko "H: out '$out'"
+# the same findings again: one failed round with no change, under the cap of 2, so another fix round
+out=$(fx); rc=$?
+[ "$rc" = 4 ] && [ ! -s "$T/wave.log" ] && ok "H: one round with the same findings is under the stall cap" || ko "H: exit $rc, wave.log '$(cat "$T/wave.log")'"
+# changed findings start the count again
+out=$(STUB_EXTRA="d.py:9 a new finding" fx); rc=$?
+[ "$rc" = 4 ] && ok "H: changed findings are a change" || ko "H: exit $rc"
+out=$(STUB_EXTRA="d.py:9 a new finding" fx); rc=$?
+[ "$rc" = 4 ] && ok "H: the count starts again after a change" || ko "H: exit $rc"
+# a second round in a row with those findings reaches the cap: requeued once, exit 1
+out=$(STUB_EXTRA="d.py:12 a new finding" fx); rc=$?
+[ "$rc" = 1 ] && [ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && [ "$(cat "$T/st/auto/requeued-run-1-route.1.1")" = "$head" ] \
+  && ok "H: at the stall cap the issue is requeued once (a moved line is no change)" || ko "H: exit $rc, wave.log '$(cat "$T/wave.log")'"
+
+# I) BLOCKED with a fix round on offer: requeued, no fix round.
+reset; out=$(V=BLOCKED fx); rc=$?
+[ "$rc" = 1 ] && /usr/bin/grep -q '^wave.sh requeue 7 .*(VERDICT: BLOCKED)' "$T/wave.log" && ok "I: BLOCKED requeues with no fix round" || ko "I: exit $rc, wave.log '$(cat "$T/wave.log")'"
+
+# J) no fix round on offer (the run cannot fund it, or an older engine): CHANGES requeues as before.
+reset; out=$(cd "$T/wt" && SQUAD_REVIEW_FIX=0 STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" run-1 route.1.1 7 2>/dev/null); rc=$?
+[ "$rc" = 1 ] && [ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && ok "J: with no fix round on offer, CHANGES requeues" || ko "J: exit $rc"
 
 rm -rf "$T"; exit $fail
