@@ -19,7 +19,9 @@ child, and a pass that worked every child held the childcc lock, and every landi
 work when its entry reaches the review and the gates; a child its requeue holds on an unchanged head, or that needs no entry,
 costs nothing. The cursor (auto/childcc-cursor) names the last child worked, and the next pass starts after it, so a child
 held on every pass does not take every pass. A pass that leaves a child that had no turn since the last complete pass
-(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it."""
+(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it.
+A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
+the queue once with the landing's reason, and no card moves (#592)."""
 import json, os, pathlib, re, subprocess, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
@@ -108,9 +110,9 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
     rec = pathlib.Path(r if r.startswith("/") else "runs/" + r) / "record.jsonl"
     if not rec.exists(): continue
     finished = '"event": "verdict"' in rec.read_text()
-    issue, seen, done, unmapped, defn = {}, set(), [], [], {}
+    issue, seen, done, unmapped, defn, failed = {}, set(), [], [], {}, {}
     for l in rec.open():
-        if '"spawn_accepted"' not in l and '"outcome"' not in l: continue
+        if '"spawn_accepted"' not in l and '"outcome"' not in l and '"land"' not in l: continue
         try: d = json.loads(l)
         except Exception: continue
         if d.get("event") == "spawn_accepted":
@@ -120,6 +122,8 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             done.append((d["node"], (d.get("reasons") or [""])[0]))
         elif d.get("event") == "outcome" and d.get("outcome") == "pass" and d.get("node") in seen:
             unmapped.append(d["node"])
+        elif d.get("event") == "land" and d.get("node") in seen and d.get("outcome") != "pass":
+            failed[d["node"]] = (d.get("reasons") or ["the landing failed"])[0]   # the child's own engine landing: its work is not in the run's target (#592)
     name = pathlib.Path(r).name; runs.add(name)
     mk = A / f"parent-{name}"
     if not finished and not mk.exists() and len(set(issue.values())) > 1:   # a finished run gets no parent: no backfill (#340)   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
@@ -127,7 +131,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
         except RunParentChild as e: print(f"RUN PARENT REFUSED {name}: {e}"); mk.touch()   # asking again can not change it
         except RuntimeError as e: print(f"RUN PARENT FAILED {name}: {e}")   # no marker: the next pass asks again
     for child, why in done:
-        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child)))
+        if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child)))
     for child in unmapped:
         mk = A / f"unmap-{name}-{child}"
         if mk.exists(): continue
@@ -137,7 +141,7 @@ pending.sort(key=lambda p: p[0])
 cur = CURSOR.read_text().strip() if CURSOR.exists() else ""
 k0 = next((i for i, p in enumerate(pending) if p[0] > cur), 0)
 spent, visited = 0, set()
-for key, r, child, why, n, finished, d in pending[k0:] + pending[:k0]:
+for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
     if spent >= BUDGET: break   # the budget is spent: the children left wait for the next pass
     visited.add(key)
     name = pathlib.Path(r).name; mk = A / f"cc-{name}-{child}"
@@ -145,6 +149,9 @@ for key, r, child, why, n, finished, d in pending[k0:] + pending[:k0]:
     if s != "open": mk.touch(); continue
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
     if (A / f"waved-{name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
+    if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592)
+        subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True)
+        print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue
     if finished and not waved and card_status(n) not in ("Todo", "In Progress", "Blocked"): mk.touch(); continue   # backfill never moves a card past (or out of) its column
     entered, why, worked = enter(pathlib.Path(r), child, n, d)
     if worked: spent += 1; CURSOR.write_text(key + "\n")
