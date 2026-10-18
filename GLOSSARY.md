@@ -88,6 +88,10 @@ _Avoid_: delegation, handoff, task, subagent call
 The tree hash of one vendored skill, from `vendor/skills/VERSIONS.json`. It is the skill's version. A run records the hash of every skill it can load, and a resume refuses when one differs.
 _Avoid_: skill version, skill revision
 
+**Pushing**:
+The board column for a wave that is approved and whose push to `dev` is in progress.
+_Avoid_: landing (the column)
+
 **Landing**:
 Code merges a passing write child of a dispatch into the target, in request order, and logs a `land` event. A model never merges. A conflict fails that child with `merge_conflict`; the children that landed before it stay landed.
 _Avoid_: merge step, integration child

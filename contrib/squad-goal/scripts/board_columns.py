@@ -23,11 +23,11 @@ BY_FACT = {column["fact"]: column["name"] for column in COLUMNS}
 
 # The shipped vocabulary (ADR-0141): a copy of the published board definition beside this file, pinned by hash, so an edit
 # by hand is refused and a change in the published file is reported by `board_pin.py`, never adopted silently.
-PIN_SHA256 = "5af439f883a0e9d4c283c186cb57773e5224fcbfa5b20af52e9bb7c77c9dabe9"
+PIN_SHA256 = "59eeb76bda53f9696dbed1964e4e13e70a83e3b55841a42dce8dce7155890418"
 PINNED_COPY = Path(__file__).resolve().parent / "board-definition.json"
 # What each old column is called in the shipped vocabulary. Blocked has no column: it is the owner freeze over the column
 # the work reached, so it maps to None and the reconciler writes the marker instead.
-SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Landing"}
+SHIPPED_NAME = {"In Progress": "Doing", "Open Specs": "Backlog", "Done": "Closed", "Blocked": None, "Merging": "Pushing", "Landing": "Pushing"}
 FREEZE_LABEL = {"owner": "frozen:owner", "gated": "frozen:dependency"}
 
 
@@ -60,7 +60,7 @@ def column_for(facts):
     if facts.get("abandoned"): return "Abandoned", freeze
     if facts.get("closed"): return "Closed", freeze
     if facts.get("dev_ci"): return "Testing", freeze
-    if facts.get("landing"): return "Landing", freeze
+    if facts.get("landing"): return "Pushing", freeze
     if facts.get("wave_branch"): return "Code Complete", freeze
     if facts.get("run_live") or facts.get("review_wait") or facts.get("child_live"): return "Doing", freeze
     # A spec is a document, never work (ADR-0142): the child_live fact above moves the spec's card, and never a dispatch.

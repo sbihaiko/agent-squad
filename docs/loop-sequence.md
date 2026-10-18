@@ -4,7 +4,7 @@ The trip of one issue from a Todo card to Closed (in `dev`) and on to `stg`: eve
 
 Source: `contrib/squad-goal/scripts/*` (live copy `~/.claude/skills/squad-goal/scripts`, engine `squad/`), state `~/.cache/squad-goal/agent-squad`.
 Profile `agent-squad.sh`: `SG_BASE=dev`, `SG_FORK_DIR=$SG_CHECKOUT`, `SG_FORK_BASE=main`, `SG_FORK_BRANCH=gui/%n`, `SG_PROMOTE_PROOF=local`, `SG_BOARD_VOCAB=shipped`.
-Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Complete, Landing, Testing, Closed, Abandoned.
+Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Complete, Pushing, Testing, Closed, Abandoned.
 
 Two lanes run side by side. The fast lane (`fastloop.sh`, every `SG_FAST_INTERVAL` s, 120 by default) runs childcc, then autofrontier and autobug, on every beat. The slow lane (`watch.sh`, about 90 s) reads verdicts, lands waves and runs the housekeeping steps. An arrow to `GitHub` below is a fetch, a push or an API call; a review, a rebase, a gate and a scratch clone run on the local machine.
 

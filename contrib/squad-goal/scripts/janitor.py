@@ -39,7 +39,7 @@
     With SG_BOARD_VOCAB=shipped every terminal entry carries its condition in one queued comment (#245): Closed names the branch in the landing line (or who closed it, when no branch names it); Abandoned names who decided and why (wontfix, closed as not planned or as a duplicate).
     A terminal write whose condition no read answers is not made (TERMINAL-NO-CONDITION), and a card settled in a terminal column with no tagged comment
     gets one, once (TERMINAL-BACKFILL, JANITOR_TERMINAL_BACKFILL per pass, default 5).
-    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Landing, Testing, Doing). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
+    With SG_BOARD_VOCAB=shipped R is also the one producer of the board facts (board_facts.py, ADR-0145): a run's wave branch on the remote, the review of its tip, and the check runs of the dev tip give wave_branch, landing and dev_ci, and a work branch whose review waits gives review_wait; board_columns.column_for names the column (Code Complete, Pushing, Testing, Doing). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
@@ -581,10 +581,10 @@ def reconcile_board():
         old = expected.get(n)
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
-    def wave_column(n, f, i):   # the facts producer (ADR-0145): Landing and Testing come from the run's wave branch, its approval and the CI of the dev tip, and the table names the column
+    def wave_column(n, f, i):   # the facts producer (ADR-0145): Pushing and Testing come from the run's wave branch, its approval and the CI of the dev tip, and the table names the column
         if not shipped: return
         col, _ = column_for(wave_facts(n, {f.name, i["run_id"]}))
-        if col == "Landing": set_expected(n, col, f"the wave of run {i['run_id']} is approved and its push to dev is pending", i["run_id"], i["run_ts"], 65)
+        if col == "Pushing": set_expected(n, col, f"the wave of run {i['run_id']} is approved and its push to dev is pending", i["run_id"], i["run_ts"], 65)
         elif col == "Testing": set_expected(n, col, f"the wave of run {i['run_id']} is in dev and the CI of the dev tip runs", i["run_id"], i["run_ts"], 70); testing.add(n)
     def unheld(n, f, i):   # a live run holds the issue, but its spawn batch gave it no child (#480): nobody works it, so it is back in the queue and its dispatch marker goes. A marker written after the batch belongs to a newer dispatch and stays
         set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} gave the issue no child (the router did not choose it, or the engine rejected its spawn)", i["run_id"], i["run_ts"], 20)
@@ -686,7 +686,7 @@ def reconcile_board():
         if branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
-        if n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Landing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
+        if n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Pushing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)

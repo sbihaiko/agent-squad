@@ -45,7 +45,7 @@
       "terminal": false
     },
     {
-      "name": "Landing",
+      "name": "Pushing",
       "color": "PURPLE",
       "fact": "The wave is approved and the push to dev is in progress",
       "actor": "The landing",

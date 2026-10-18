@@ -62,7 +62,7 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_live_child_reads_doing():
-    for child in ("Doing", "Code Complete", "Landing", "Testing"):
+    for child in ("Doing", "Code Complete", "Pushing", "Testing"):
         assert columns.column_for(_spec(child))[0] == "Doing"
 
 

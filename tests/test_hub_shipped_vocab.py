@@ -49,7 +49,7 @@ CARDS = [  # (item, the column the table names, the freeze marker)
     (_item(3, "Open Specs", labels=["spec"]), "Backlog", None),
     (_item(4, "Blocked"), "Backlog", "frozen:owner"),
     (_item(5, "Code Complete"), "Code Complete", None),
-    (_item(6, "Landing"), "Landing", None),
+    (_item(6, "Landing"), "Pushing", None),
     (_item(7, "Testing"), "Testing", None),
     (_item(8, None), "Backlog", None),
     (_item(9, "Todo"), "Todo", None),

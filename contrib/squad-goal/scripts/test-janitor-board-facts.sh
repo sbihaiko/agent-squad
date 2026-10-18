@@ -54,7 +54,7 @@ printf 'VERDICT: APPROVE\n' > "$T/st/review-fix_2305-x.md"; printf 'old\n' > "$T
 o=$(SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
 bc() { cat "$T/board.calls" 2>/dev/null; }
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
-has '^STATUS o 4 Landing 2301$' && ok "an approved wave ahead of dev: its child's card is Landing" || ko "#2301 not Landing: $(bc) $o"
+has '^STATUS o 4 Pushing 2301$' && ok "an approved wave ahead of dev: its child's card is Pushing" || ko "#2301 not Pushing: $(bc) $o"
 has '^STATUS o 4 Code Complete 2302$' && ok "a wave ahead of dev with no approval: Code Complete" || ko "#2302 not Code Complete: $(bc)"
 has '^STATUS o 4 Testing 2303$' && ok "a wave in dev while the dev tip's CI runs: Testing" || ko "#2303 not Testing: $(bc) $o"
 has '^STATUS o 4 Doing 2305$' && ok "a work branch whose review waits: Doing" || ko "#2305 not Doing: $(bc)"

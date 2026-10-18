@@ -9,8 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
-PINNED = "5af439f883a0e9d4c283c186cb57773e5224fcbfa5b20af52e9bb7c77c9dabe9"
-SHIPPED = ["Backlog", "Todo", "Doing", "Code Complete", "Landing", "Testing", "Closed", "Abandoned"]
+PINNED = "59eeb76bda53f9696dbed1964e4e13e70a83e3b55841a42dce8dce7155890418"
+SHIPPED = ["Backlog", "Todo", "Doing", "Code Complete", "Pushing", "Testing", "Closed", "Abandoned"]
 
 
 def _load(directory):
@@ -69,7 +69,7 @@ def test_the_pin_command_exits_one_on_a_mismatch(tmp_path):
     ({"run_live": True}, "Doing", None),
     ({"review_wait": True}, "Doing", None),
     ({"wave_branch": True}, "Code Complete", None),
-    ({"landing": True}, "Landing", None),
+    ({"landing": True}, "Pushing", None),
     ({"dev_ci": True}, "Testing", None),
     ({"dev_ci": True, "closed": True}, "Closed", None),
     ({"closed": True}, "Closed", None),

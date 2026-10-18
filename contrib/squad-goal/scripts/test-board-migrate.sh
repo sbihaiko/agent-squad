@@ -8,17 +8,18 @@ here="$(cd "$(dirname "$src")" && pwd)"; mkdir -p "$T/s"; cp "$src" "$T/s/board_
 cat > "$T/all.json" <<'J'
 [{"n":1,"st":"Open Specs","s":"OPEN","l":[]},{"n":3,"st":"Blocked","s":"OPEN","l":[],"facts":{"wave_branch":true}},
  {"n":4,"st":"Blocked","s":"OPEN","l":[]},{"n":5,"st":"In Progress","s":"OPEN","l":[]},{"n":6,"st":"Done","s":"CLOSED","l":[]},
- {"n":7,"st":"Todo","s":"OPEN","l":[]},{"n":8,"st":"Merging","s":"OPEN","l":[]}]
+ {"n":7,"st":"Todo","s":"OPEN","l":[]},{"n":8,"st":"Merging","s":"OPEN","l":[]},{"n":9,"st":"Landing","s":"OPEN","l":[]}]
 J
 echo '[{"n":7,"st":"Todo","s":"OPEN","l":[]},{"n":8,"st":"Doing","s":"OPEN","l":[]}]' > "$T/clean.json"
 before=$(ls "$T" | sort)
 out=$(python3 "$T/s/board_migrate.py" --plan "$T/all.json" 2>&1); rc=$?
 [ $rc = 0 ] && ok "dry run exits 0" || ko "dry run exits $rc"
-[ "$(echo "$out" | grep -c '^MOVE #')" = 6 ] && ok "every move is listed" || ko "moves: $out"
-for o in Blocked "In Progress" Done "Open Specs" Merging; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
+[ "$(echo "$out" | grep -c '^MOVE #')" = 7 ] && ok "every move is listed" || ko "moves: $out"
+for o in Blocked "In Progress" Done "Open Specs" Merging Landing; do echo "$out" | grep -q "^REMOVE option $o" && ok "removal listed: $o" || ko "removal missing: $o"; done
 echo "$out" | grep -q '^MOVE #1 Open Specs -> Backlog +spec' && ok "Open Specs -> Backlog with the spec label" || ko "open specs: $out"
 echo "$out" | grep -q '^MOVE #3 Blocked -> Code Complete +frozen:owner' && ok "Blocked -> the column reached, owner marker" || ko "blocked: $out"
-echo "$out" | grep -q '^MOVE #8 Merging -> Landing' && ok "Merging -> Landing" || ko "merging: $out"
+echo "$out" | grep -q '^MOVE #8 Merging -> Pushing' && ok "Merging -> Pushing" || ko "merging: $out"
+echo "$out" | grep -q '^MOVE #9 Landing -> Pushing' && ok "Landing -> Pushing" || ko "landing: $out"
 [ "$(ls "$T" | sort)" = "$before" ] && ok "the dry run wrote nothing" || ko "the dry run wrote a file"
 err=$(python3 "$T/s/board_migrate.py" --check "$T/all.json" 2>&1 >/dev/null); rc=$?
 [ $rc = 3 ] && ok "removal refused while a card carries an old option" || ko "check exit $rc"
