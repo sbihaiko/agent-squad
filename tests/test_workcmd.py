@@ -130,3 +130,75 @@ def test_the_sdk_adapter_hands_the_actor_a_clean_environment(tmp_path, monkeypat
                           session_id=None, node="n")
     opts = SdkAdapter(query=object(), options_cls=lambda **kw: SimpleNamespace(**kw)).options(req)
     assert opts.env["VIRTUAL_ENV"] == "" and opts.env["PATH"] == "/usr/bin:/bin"
+
+
+# A child's test command takes `gates` slots of the machine-wide budget (squad/caps.py, #567) before it runs, and runs with
+# the worker count it took (#608): a full budget makes it wait and say so, never fail.
+BOUNDED = 'test "$PYTEST_XDIST_AUTO_NUM_WORKERS" = {n} && test "$SQUAD_GATE_WORKERS" = {n}'
+
+
+def budget_env(monkeypatch):
+    for var in ("SG_SERIAL_HELD", "SQUAD_GATE_WORKERS", "SG_CHILD_TEST_WORKERS", "SG_CHILD_SLOT_WAIT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("SQUAD_CAPS_POLL", "0.05")
+
+
+def hold_every_gate_slot():
+    from squad import caps
+    holder = subprocess.Popen(["sleep", "30"])
+    c = caps.ceiling()
+    assert c.try_take_many("gates", "other-gate", c.caps["gates"], pid=holder.pid)
+    return c, holder
+
+
+def test_a_child_test_command_waits_for_gate_slots_says_so_and_runs_with_the_count_it_took(tmp_path, monkeypatch, capsys):
+    import threading
+    import time
+    budget_env(monkeypatch)
+    c, holder = hold_every_gate_slot()
+    try:
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", workcmd.run(BOUNDED.format(n=2), str(tmp_path))))
+        t.start()
+        time.sleep(0.3)
+        assert t.is_alive() and "r" not in out          # the budget is full: the command has not started
+        c.release_holder("gates", "other-gate")
+        t.join(5)
+        assert out["r"].ok, out["r"].evidence
+    finally:
+        holder.kill()
+    assert "waiting" in capsys.readouterr().err and "other-gate" not in [w["holder"] for w in c.waiting()]
+    assert c.occupancy()["gates"] == 0                  # the slots go back when the command ends
+
+
+def test_a_wait_past_its_bound_runs_the_command_with_one_worker_and_never_fails_it(tmp_path, monkeypatch, capsys):
+    budget_env(monkeypatch)
+    monkeypatch.setenv("SG_CHILD_SLOT_WAIT", "0.2")
+    c, holder = hold_every_gate_slot()
+    try:
+        r = workcmd.run(BOUNDED.format(n=1), str(tmp_path))
+    finally:
+        holder.kill()
+    assert r.ok, r.evidence
+    assert "1 worker" in capsys.readouterr().err
+
+
+def test_inside_a_gate_holder_a_command_takes_no_slot_and_keeps_the_holder_count(tmp_path, monkeypatch):
+    budget_env(monkeypatch)
+    monkeypatch.setenv("SG_SERIAL_HELD", "gate")
+    monkeypatch.setenv("SQUAD_GATE_WORKERS", "5")
+    c, holder = hold_every_gate_slot()
+    try:
+        r = workcmd.run(BOUNDED.format(n=5), str(tmp_path), timeout=5)
+    finally:
+        holder.kill()
+    assert r.ok, r.evidence
+
+
+def test_the_sdk_adapter_bounds_the_actor_pytest_workers(tmp_path, monkeypatch):
+    budget_env(monkeypatch)
+    monkeypatch.setenv("SG_CHILD_TEST_WORKERS", "3")
+    req = SimpleNamespace(workspace=str(tmp_path), model="m", tools=[], max_stalls=1, max_spend=1, effort=None, instructions=None,
+                          session_id=None, node="n")
+    opts = SdkAdapter(query=object(), options_cls=lambda **kw: SimpleNamespace(**kw)).options(req)
+    assert opts.env["PYTEST_XDIST_AUTO_NUM_WORKERS"] == "3" and opts.env["SQUAD_GATE_WORKERS"] == "3"
