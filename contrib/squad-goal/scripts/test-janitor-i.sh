@@ -22,4 +22,12 @@ echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-a.*stopping' && ok "all d
 echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-b.*not stopped' && ok "closed as completed -> report only" || ko "run-b: $o"
 echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-d.*stopping' && ok "a child named by its Refs line maps to its issue" || ko "run-d: the Refs #501 child mapped to no issue: $o"
 echo "$o" | /usr/bin/grep -q 'RUN-ON-CLOSED-ISSUES run-c' && ko "run with an open issue reported" || ok "run with an open issue untouched"
+# #585: a run keeps its folder in its own worktree (#580); active-runs.txt names it by its absolute path, and the stop reaches
+# the processes inside that folder, never a <checkout>/runs/<name> that does not exist
+T=$(cd "$T" && pwd -P); w="$T/co/worktrees/run/k1/runs/run-w"; mkdir -p "$w"
+printf '%s\n' '{"event": "spawn_accepted", "x": "GitHub issue #502"}' > "$w/record.jsonl"; printf '%s\n' "$w" > "$T/st/active-runs.txt"
+(cd "$w" && exec sleep 30) & pw=$!; sleep 0.3
+o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_BASE=main python3 -I "$T/janitor.py" 2>&1)
+for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pw" 2>/dev/null || break; sleep 0.2; done
+kill -0 "$pw" 2>/dev/null && { ko "#585: the process inside a worktree run on closed duplicates survived: $o $(tail -3 "$T/st/cycle.log" 2>/dev/null)"; kill "$pw"; } || ok "#585: the stop reaches the processes inside a worktree run's folder"
 rm -rf "$T"; exit $fail

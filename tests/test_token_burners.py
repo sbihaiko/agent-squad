@@ -52,6 +52,17 @@ def test_runs_outcome_events_are_consumers(tmp_path: Path) -> None:
     assert r.stdout.splitlines() == ["10\trun:run-1:scout\tm\t1\t0", "7\trun:run-1\tm\t1\t0"]
 
 
+def test_a_run_in_a_run_or_child_worktree_is_a_consumer(tmp_path: Path) -> None:
+    # #580 keeps a loop run's folder in its own worktree, and a fork route's in its child tree (#585)
+    for rel, n in (("co/worktrees/run/k1/runs/run-a", 3), ("co/worktrees/child/gui-9/runs/run-b", 2)):
+        run = tmp_path / rel
+        run.mkdir(parents=True)
+        ev = {"event": "outcome", "ts": _ts(1), "model": "m", "tokens_in": n, "tokens_out": 0, "node": "c"}
+        (run / "record.jsonl").write_text(json.dumps(ev) + "\n")
+    r = _run(str(tmp_path), "--checkout", str(tmp_path / "co"))
+    assert r.stdout.splitlines() == ["3\trun:run-a:c\tm\t1\t0", "2\trun:run-b:c\tm\t1\t0"]
+
+
 def test_a_run_outcome_counts_its_cache_reads_once_at_their_weight(tmp_path: Path) -> None:
     # an outcome's tokens_in holds every prompt token, cache reads and writes included (squad/sdk_adapter.py), unlike a
     # ledger line, whose cache_read is beside tokens_in: 600 in of which 550 cache reads and 40 cache writes, 10 out

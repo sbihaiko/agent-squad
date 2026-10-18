@@ -90,3 +90,19 @@ def test_run_list_fallback_poll_refreshes_only_when_due(hub, monkeypatch):
     monkeypatch.setattr(hub, "RUN_POLL_SECS", 0.0)
     hub.run_list()
     assert len(calls) == 2, "a list older than RUN_POLL_SECS is rebuilt by the fallback poll"
+
+
+def test_project_dirs_and_last_model_read_worktree_runs(hub, tmp_path, monkeypatch):
+    # #580 keeps a loop run's folder in its own worktree, and a fork route's in its child tree (#585)
+    co = tmp_path / "co"
+    roots = [co / "runs", co / "worktrees/run/k1/runs", co / "worktrees/child/gui-9/runs"]
+    for d in roots:
+        d.mkdir(parents=True)
+    monkeypatch.setattr(hub, "CHECKOUT", str(co))
+    monkeypatch.setattr(hub, "sh", lambda *a: "")
+    monkeypatch.delenv("SG_PROJECTS", raising=False)
+    assert set(hub.project_dirs()) == set(roots)
+    rec = co / "worktrees/run/k1/runs/run-1/record.jsonl"
+    rec.parent.mkdir()
+    write_event(rec, {"event": "outcome", "node": "route.router.1", "model": "m-wt", "ts": 1.0})
+    assert hub.last_coding_model() == "m-wt"

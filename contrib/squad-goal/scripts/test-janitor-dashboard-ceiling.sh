@@ -65,5 +65,15 @@ alive "$p_fin" && ok "B: the newest orphan survives: the count is back at the ce
 o=$(pass 99 "")
 echo "$o" | /usr/bin/grep -q 'DASHBOARD-CEILING' && ko "D: an under-ceiling pass fired: $o" || ok "D: an under-ceiling pass is silent"
 alive "$p_live" && alive "$p_fin" && ok "D: the dashboards under the ceiling survive" || ko "D: an under-ceiling pass killed a dashboard"
-kill "$p_live" "$p_fin" 2>/dev/null
+# (E) #585: a run keeps its folder in its own worktree (#580) or a fork route's child tree; its dashboard is this loop's too
+for w in run/k1 run/k2 child/gui-9; do d="$T/co/worktrees/$w/runs/run-w"; mkdir -p "$d"; printf 'CHILD — GitHub issue(s) 709 (bug)\n' > "$d/request.txt"
+  printf '{"event": "verdict", "verdict": "pass", "reasons": []}\n' > "$d/record.jsonl"; done
+pw1=$(dash "$T/co/worktrees/run/k1/runs/run-w"); pw2=$(dash "$T/co/worktrees/run/k2/runs/run-w"); pw3=$(dash "$T/co/worktrees/child/gui-9/runs/run-w")
+sleep 0.3
+o=$(pass 3 1)
+echo "$o" | /usr/bin/grep -q "5 dashboards of this loop over the ceiling of 3" && ok "E: dashboards of runs in run and child worktrees are counted" || ko "E: worktree dashboards not counted: $o"
+pass 3 "" >/dev/null
+died "$pw1" && ok "E: the oldest worktree run's dashboard goes down to the ceiling" || ko "E: pid $pw1 (worktree run) survived"
+alive "$p_live" && ok "E: the live run's dashboard survives" || ko "E: the live run's dashboard was killed"
+kill "$p_live" "$p_fin" "$pw1" "$pw2" "$pw3" 2>/dev/null
 rm -rf "$T"; exit $fail

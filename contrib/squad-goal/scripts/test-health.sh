@@ -118,6 +118,12 @@ printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) en
 /usr/bin/grep -q 'issues/10/comments' "$T/comments.calls" 2>/dev/null && ok "the report is written on the issue the runs were on" || ko "no comment on #10: $(cat "$T/comments.calls" 2>/dev/null)"
 bash "$T/s/health.sh" >/dev/null; n2=$(/usr/bin/grep -c 'issues/10/comments' "$T/comments.calls" 2>/dev/null); [ "${n2:-0}" = 1 ] && ok "the same repetition comments once" || ko "commented $n2 time(s)"
 rep r4 10 a_different_reason; o=$(bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'runs-repeating-failure cleared' && ok "a different reason breaks the streak -> cleared" || ok "the streak re-arms only when the group drops below the count"
+# #585: a run keeps its folder in its own worktree (#580) or in a fork route's child tree; the repetition reads those runs too
+reset; rm -rf "$T/st/auto/health-runs-repeating-failure"; : > "$T/comments.calls"
+repw() { local d="$T/co/worktrees/$1/runs/$2"; mkdir -p "$d"; printf '{"ts":1,"event": "spawn_accepted", "text": "GitHub issue #11"}\n{"ts":2,"event": "verdict", "verdict": "failed", "reasons": ["wt_reason", "why"]}\n' > "$d/record.jsonl"; }
+repw run/k1 w1; repw run/k2 w2; repw child/gui-11 w3; o=$(bash "$T/s/health.sh")
+printf '%s' "$o" | /usr/bin/grep -qF "HEALTH runs-repeating-failure: 3 run(s) ended failed with the same reason 'wt_reason'" && ok "#585: failed runs in run and child worktrees are a repetition" || ko "#585 worktree repeat: $o"
+rm -rf "$T/co/worktrees"
 reset; : > "$T/st/active-runs.txt"; rm -rf "$T/co/runs" "$T/st/auto/health-loops-duplicated"; mkdir -p "$T/co/runs"
 printf '#!/bin/bash\nsleep 60\n' > "$T/s/watch.sh"; bash "$T/s/watch.sh" & w1=$!; SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh" >/dev/null
 o=$(SG_WATCH_CMD_RE="$T/s/watch\.sh$" bash "$T/s/health.sh"); echo "$o" | /usr/bin/grep -q 'loops-duplicated' && ko "one loop alerted: $o" || ok "one watch.sh is not a duplication"
