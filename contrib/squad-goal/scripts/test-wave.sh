@@ -154,14 +154,17 @@ hold() { SG_STATE=$T/st bash "$T/s/serial.sh" gate sh -c "sleep 10; echo holder 
     kill -0 "$holder" 2>/dev/null || return 1   # the holder is gone: it never came to hold the lock
     sleep 0.1; done
   return 1; }
-# I (#392): the entry gate takes the machine-wide gate lock: it waits for a holder, says so on one line, and then runs.
+# I (#392, #575): the entry gate takes the machine-wide gate lock and never runs beside its holder. It does not wait for it
+# either (try mode): the entry runs inline in the fast lane, so it holds the child out, and the next pass, after the holder, enters it.
 printf 'run-1\n' > "$T/st/auto/disp-24"; child 24 g24; rev 24; rm -f "$T/gl"
 # The runner is started by a path relative to another cwd, as the loop does (`bash scripts/wave.sh` from the repository root), and
 # enter works in the child's worktree: the gate.sh beside wave.sh is found by wave.sh's own folder, never by a path after the cd.
 if hold; then
-  r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter run-1 24 2>&1); wait
-  [ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "I: the entry gate waits for the holder of the gate lock, then runs" || ko "I: gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
-  [ "$(printf '%s\n' "$r" | /usr/bin/grep -c '^serial: waiting for lock gate held by pid')" = 1 ] && ok "I: the wait shows on one line" || ko "I: wait lines: '$r'"
+  r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter run-1 24 2>&1)
+  case "$r" in *"WAVE HOLD #24"*) ok "I: under a held gate lock the entry holds the child out, on one line";; *) ko "I: no hold: '$r'";; esac
+  /usr/bin/grep -q gate "$T/gl" 2>/dev/null && ko "I: the entry gate ran beside the holder" || ok "I: the entry gate never runs beside the holder"
+  wait; rev 24; r=$(cd "$T/c24" && SG_WAVE_GATES="echo gate >> $T/gl" bash "../s/wave.sh" enter run-1 24 2>&1)
+  [ "$(tr '\n' ' ' < "$T/gl")" = "holder gate " ] && ok "I: the next pass, after the holder, runs the entry gate" || ko "I: gate order '$(tr '\n' ' ' < "$T/gl")': '$r'"
   [ "$(entered 24)" = yes ] && ok "I: the waiting gate is not dropped: the child enters" || ko "I: #24 did not enter"
 else
   wait 2>/dev/null   # drain the holder, if it is still there, so no stray writer touches $T/gl later
