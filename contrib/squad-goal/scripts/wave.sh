@@ -30,7 +30,7 @@
 #
 # The run's completion finds its wave through the marker `start` leaves in $SG_STATE/auto/wave-<run>, and `land` clears it
 # when the wave is in $SG_BASE: the loop's cycle runs `land` for a finished run that has a wave, and never for a run that cut
-# none (#375). That completion runs the run's child-completion pass first, inside the same single-flight lock, so the wave
+# none (#375). That completion runs the run's child-completion pass first (in the childcc single-flight lock, waited for a bounded time), then lands under a lock of its own, so the wave
 # `land` is handed is one the run's finished children are in: a landing attempted before that entry finds an empty wave,
 # refuses it, and the run -- read once -- would leave the work of its children on wave/<run> for good.
 #

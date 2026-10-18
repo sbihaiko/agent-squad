@@ -8,6 +8,10 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # would be a second dialect of the state rule the seam owns (test_squad_goal_state_split).
 if [ -z "${SG_STATE:-}" ]; then . "$(dirname "$0")/address.sh"; SG_STATE=$(sg_state_base); fi
 st=$SG_STATE; n=$1; shift; L="$st/locks/single-$n"; mkdir -p "$st/locks"
+# SG_SINGLE_WAIT=<polls>: a caller that must not skip its step in silence waits up to that many one-second polls for the holder
+# (#471), and still exits 0 when the lock stays held; the caller reads the holder from $L/pid to say why.
+w=${SG_SINGLE_WAIT:-0}
+while [ "$w" -gt 0 ] && [ -d "$L" ] && h=$(cat "$L/pid" 2>/dev/null) && [ -n "$h" ] && kill -0 "$h" 2>/dev/null; do sleep 1; w=$((w-1)); done
 if ! mkdir "$L" 2>/dev/null; then
   h=$(cat "$L/pid" 2>/dev/null)
   if [ -n "$h" ] && ! kill -0 "$h" 2>/dev/null; then rm -rf "$L"; mkdir "$L" 2>/dev/null || exit 0   # stale: take over

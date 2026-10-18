@@ -37,12 +37,25 @@ tm() { local s=$(date +%s); "$@"; local e=$(( $(date +%s) - s )); [ "$e" -ge 5 ]
 # children had their pass and the wave is in $SG_BASE: a pass still running elsewhere, a pass that failed (its traceback is
 # in this log) and a landing that failed (a rebase conflict, a push refused twice) each leave the run unread, never a marker.
 land_wave() {   # <run>: 0 the wave is done (landed), 1 the pass that enters its children, or the landing, did not get through, so the run stays unread
-  local run=$1 ran; ran="$SG_STATE/auto/wland-${run##*/}"
-  mkdir -p "$SG_STATE/auto"; rm -f "$ran"
-  tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2" && bash "$4" land "$5" "$6" && : > "$3"' landwave \
-     "${wme%/*}/childcc.py" "$run" "$ran" "${wme%/*}/wave.sh" "${run##*/}" "$run" 2>&1
-  [ -e "$ran" ] && { rm -f "$ran"; return 0; }
-  echo "WATCH: ${run##*/} waits: the pass that enters its children or the landing did not get through (a pass runs elsewhere, or one failed), so its wave lands on a later cycle"
+  local run=$1 ran pass L h; ran="$SG_STATE/auto/wland-${run##*/}"; pass="$ran.pass"; L="$SG_STATE/locks/single-childcc"
+  mkdir -p "$SG_STATE/auto"; rm -f "$ran" "$pass"
+  # The pass waits a bounded time (SG_LAND_WAIT one-second polls) for the childcc lock the fast lane may hold. The landing runs
+  # under its own lock, never the childcc one: its gate wait can last hours, and the fast lane's pass must not queue behind it (#471).
+  SG_SINGLE_WAIT=${SG_LAND_WAIT:-30} tm bash "${wme%/*}/single.sh" childcc sh -c 'python3 "$1" "$2" && : > "$3"' landpass \
+     "${wme%/*}/childcc.py" "$run" "$pass" 2>&1
+  if [ -e "$pass" ]; then
+    tm bash "${wme%/*}/single.sh" wland sh -c 'bash "$1" land "$2" "$3" && : > "$4"' landwave "${wme%/*}/wave.sh" "${run##*/}" "$run" "$ran" 2>&1
+    [ -e "$ran" ] && { rm -f "$ran" "$pass"; return 0; }
+    h=$(cat "$SG_STATE/locks/single-wland/pid" 2>/dev/null)
+    echo "WATCH: ${run##*/} waits: its wave did not land (the landing lock is held by pid ${h:-none}, or the landing failed), so it lands on a later cycle"
+    rm -f "$pass"; return 1
+  fi
+  h=$(cat "$L/pid" 2>/dev/null)
+  if [ -n "$h" ] && kill -0 "$h" 2>/dev/null; then
+    echo "WATCH: ${run##*/} waits: the childcc lock is held by pid $h (another pass is entering children), so its wave lands on a later cycle"
+  else
+    echo "WATCH: ${run##*/} waits: the pass that enters its children did not get through (it failed; its traceback is in this log), so its wave lands on a later cycle"
+  fi
   return 1
 }
 while :; do
