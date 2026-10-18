@@ -17,12 +17,28 @@
 # own SKILL.md). A profile whose checkout is another repository ships no copy of this skill and the pass says nothing.
 # Destination: publish-live.sh's own default ($SG_LIVE_DIR, else $HOME/.claude/skills/squad-goal).
 # Exit 0 always: a drift, and a publish that could not land, are reported, never raised as a failure of the cycle.
+#
+# The cycle runs this pass every cycle, and the publish check walks both trees (~2 s here). So the pass keeps a key of
+# its input in $SG_STATE and returns at once when the key is unchanged (#568): no check, no publish, no write. The key
+# is the tree's HEAD and status, origin/stg after the fetch, and the live copy's own state -- a hand edit of the live
+# copy alone still runs the pass. The fetch stays above the skip: only the publish check after it is skipped. The key
+# is kept after a pass that resolved every difference, never after one the publish could not land, so a drift the
+# publish cannot resolve is named every cycle (ADR-0140). A checkout with no git has no cheap key and is read as before.
 . "$(dirname "$0")/env.sh" 2>/dev/null || exit 0
 here="$(cd "$(dirname "$0")" && pwd)"
 live=${SG_LIVE_DIR:-$HOME/.claude/skills/squad-goal}
 repo=${SG_CHECKOUT:-}/contrib/squad-goal
 [ -n "${SG_CHECKOUT:-}" ] && [ -f "$repo/SKILL.md" ] || exit 0                  # this checkout does not ship the skill
 [ -d "$live" ] || exit 0                                                       # no live copy on this machine: nothing to keep in step
+digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
+mode_of() { if stat -f '%Lp' / >/dev/null 2>&1; then xargs -0 stat -f '%Lp %N'; else xargs -0 stat -c '%a %n'; fi; }
+live_state() { # every file the live copy holds, by name, mode and content: a hand edit there is an input too (ADR-0140)
+  local h; if command -v sha256sum >/dev/null 2>&1; then h=sha256sum; else h="shasum -a 256"; fi
+  { ( cd "$live" && find . -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | mode_of ) 2>/dev/null
+    ( cd "$live" && find . -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | xargs -0 $h ) 2>/dev/null
+  } | digest; }
+key_now() { { git -C "$tree" rev-parse HEAD; git -C "$tree" status --porcelain --untracked-files=no
+  git -C "$tree" rev-parse "origin/$base"; live_state; } 2>/dev/null | digest; }
 
 # The publish reads the main working tree, and nothing moved that tree to origin: it sat at an old commit while later PRs
 # merged, and the live loop ran old scripts. The source is stg and only stg (ADR-0145): a work branch lands in dev, and the
@@ -45,13 +61,26 @@ if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
   fi
 fi
 
+kf=$SG_STATE/live-guard.key; key=
+if git -C "$SG_CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
+  key=$(key_now)
+  [ -n "$key" ] && [ "$(cat "$kf" 2>/dev/null)" = "$key" ] && exit 0    # nothing the pass reads changed: no check, no publish, no write
+fi
+
 diff=$(bash "$here/publish-live.sh" --check "$repo" "$live")
-[ -z "$diff" ] && exit 0                                    # the two copies agree: nothing read, nothing to say
-echo "LIVE-GUARD the live skill differs from the repository copy: $(printf '%s' "$diff" | tr '\n' ' ')"
-out=$(bash "$here/publish-live.sh" "$repo" "$live" 2>&1); rc=$?
-[ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/LIVE-GUARD /'
-[ "$rc" = 0 ] || echo "LIVE-GUARD the publish exited $rc"
-left=$(bash "$here/publish-live.sh" --check "$repo" "$live")
-[ -z "$left" ] && { echo "LIVE-GUARD the live skill now matches the repository copy"; exit 0; }
-echo "LIVE-GUARD the publish could not resolve: $(printf '%s' "$left" | tr '\n' ' ')"
+if [ -n "$diff" ]; then
+  echo "LIVE-GUARD the live skill differs from the repository copy: $(printf '%s' "$diff" | tr '\n' ' ')"
+  out=$(bash "$here/publish-live.sh" "$repo" "$live" 2>&1); rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/LIVE-GUARD /'
+  [ "$rc" = 0 ] || echo "LIVE-GUARD the publish exited $rc"
+  left=$(bash "$here/publish-live.sh" --check "$repo" "$live")
+  if [ -n "$left" ]; then
+    echo "LIVE-GUARD the publish could not resolve: $(printf '%s' "$left" | tr '\n' ' ')"   # named every cycle: the key is not kept
+    exit 0
+  fi
+  echo "LIVE-GUARD the live skill now matches the repository copy"
+fi
+if [ -n "$key" ] && [ -n "${SG_STATE:-}" ]; then                      # keep the key the next cycle reads
+  mkdir -p "$SG_STATE"; next=$(key_now); [ -n "$next" ] && { printf '%s\n' "$next" > "$kf.$$" && mv "$kf.$$" "$kf"; }
+fi
 exit 0

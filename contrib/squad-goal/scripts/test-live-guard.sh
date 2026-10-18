@@ -11,7 +11,7 @@ mkdir -p "$S" "$repo/scripts/profiles" "$live/scripts/profiles" "$T/st"
 cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"
 # The pass reads its checkout and its live skill from the profile, as every pass does: the fixture profile names both.
 cat > "$S/env.sh" <<EOF
-export SG_CHECKOUT=\${SG_CHECKOUT:-$co} SG_LIVE_DIR=\${SG_LIVE_DIR:-$live} SG_STATE=$T/st
+export SG_CHECKOUT=\${SG_CHECKOUT:-$co} SG_LIVE_DIR=\${SG_LIVE_DIR:-$live} SG_STATE=\${SG_STATE:-$T/st}
 EOF
 # The repository copy and the live copy, a version apart.
 printf 'skill v2\n' > "$repo/SKILL.md"; printf 'hub v2\n' > "$repo/scripts/hub.py"
@@ -119,6 +119,39 @@ for br in dev main; do
   [ "$(cat "$T/on$br.live/SKILL.md")" = "skill v1" ] && ok "a tree on $br is not published" || ko "a tree on $br was published: $out"
   case "$out" in *LIVE-GUARD*"not fast-forwarded"*"not stg"*) ok "the $br tree is reported as not on stg";; *) ko "the $br tree is not reported: $out";; esac
 done
+
+# --- unchanged input: the pass returns at once and does no work (issue #568) ----------------------
+# The cycle runs this pass every cycle, and the publish check walks both trees. The pass keys its input -- the tree's
+# HEAD and status, origin/stg after the fetch, and the live copy's own state -- in $SG_STATE and returns at once when
+# the key is unchanged. The live state is part of the key: a hand edit there alone still runs the pass.
+mk keyed; stk=$T/st.keyed; calls=$T/keyed.calls; mkdir -p "$stk"
+cp "$S/publish-live.sh" "$S/publish-live.real.sh"
+cat > "$S/publish-live.sh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$calls"
+exec bash "$S/publish-live.real.sh" "\$@"
+EOF
+kpass() { SG_STATE=$stk SG_CHECKOUT=$T/keyed SG_LIVE_DIR=$T/keyed.live bash "$S/live-guard.sh" 2>&1; }
+snap() { ( cd "$T/keyed.live" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "$f"; done ); }
+
+out=$(kpass)                                    # no key yet: the pass reads the difference and publishes it
+case "$out" in *LIVE-GUARD*"copy SKILL.md"*) ok "the first pass reads the difference";; *) ko "the first pass did not read: $out";; esac
+[ "$(cat "$T/keyed.live/SKILL.md")" = "skill v2" ] && ok "the first pass publishes" || ko "the first pass did not publish: $out"
+
+: > "$calls"; before=$(snap)
+out=$(kpass)                                    # the input did not change: the pass returns at once
+[ -z "$out" ] && ok "unchanged key: the pass says nothing" || ko "an unchanged key printed: $out"
+[ ! -s "$calls" ] && ok "unchanged key: the publish check (the costly step) did not run" || ko "unchanged key still ran the check: $(cat "$calls")"
+[ "$before" = "$(snap)" ] && ok "unchanged key: the pass makes no write" || ko "unchanged key wrote into the live copy"
+
+# A hand edit of the live copy alone is an input (ADR-0140): the live state is in the key, so the pass runs.
+printf 'hand edit\n' > "$T/keyed.live/scripts/hub.py"
+out=$(kpass)
+case "$out" in *LIVE-GUARD*"copy scripts/hub.py"*) ok "a hand edit of the live copy alone runs the pass";; *) ko "the live-only edit was not read: $out";; esac
+[ "$(cat "$T/keyed.live/scripts/hub.py")" = "hub" ] && ok "the pass republishes over the hand edit" || ko "the hand edit stood: $out"
+
+: > "$calls"; out=$(kpass)
+[ -z "$out" ] && [ ! -s "$calls" ] && ok "after a publish the key is stored: the next pass skips" || ko "the pass did not skip after a publish (check calls: $(cat "$calls")): $out"
 
 # --- a checkout that ships no copy of the skill: nothing to read, nothing to publish --------------
 out=$(SG_CHECKOUT=$T/elsewhere bash "$S/live-guard.sh" 2>&1); rc=$?

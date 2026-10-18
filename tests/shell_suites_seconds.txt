@@ -85,6 +85,7 @@ test-state-isolation.sh 2
 test-state-split.sh 2.9
 test-token-guard.sh 2.8
 test-token-ledger.sh 14.4
+test-vendor-guard.sh 1.4
 test-watch-cycle.sh 60.2
 test-watch-land.sh 8.5
 test-watchd-token-stop.sh 8.4

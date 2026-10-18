@@ -1,9 +1,11 @@
 """Build vendor/skills: the local plugin of researched skills that agent nodes load.
 
-Usage: python3 scripts/build_vendor_skills.py [--check] [--config FILE] [--out DIR]
+Usage: python3 scripts/build_vendor_skills.py [--check] [--key] [--config FILE] [--out DIR]
 Copies each skill in config/vendor-skills.yaml (a `skill:NAME` source is found by name) into <out>/skills/<name>/, writes the plugin manifest, and writes
 VERSIONS.json with a tree hash per skill. `--check` builds nothing: it exits 1 if a source differs from the copy, or
-the copy differs from VERSIONS.json. Update the copy when a skill changes, and commit the result.
+the copy differs from VERSIONS.json. `--key` builds nothing: it prints one digest of everything the build reads (the
+config, the personal skills, the vendor tree and VERSIONS.json), so a guard can skip the build when nothing changed.
+Update the copy when a skill changes, and commit the result.
 """
 import hashlib
 import json
@@ -80,12 +82,39 @@ def build(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "
     return [], versions
 
 
+def guard_key(config=ROOT / "config" / "vendor-skills.yaml", out=ROOT / "vendor" / "skills"):
+    """One digest of everything the build reads: the config, the personal skills' sources, the vendor tree and VERSIONS.json.
+
+    vendor-guard.sh runs this every cycle and skips the build when the digest equals the one it kept in $SG_STATE.
+    """
+    out = Path(out)
+    h = hashlib.sha256()
+
+    def feed(label, data):
+        h.update(label.encode() + b"\0" + data + b"\0")
+
+    feed("config", Path(config).read_bytes())
+    for s in yaml.safe_load(Path(config).read_text())["skills"]:
+        src = resolve(s["source"])
+        rels = files(src) if src.exists() else None
+        feed("source:" + s["name"], tree_hash(src, rels).encode() if rels is not None else b"missing")
+    rels = [p.relative_to(out) for p in sorted(out.rglob("*"))
+            if p.is_file() and p.relative_to(out).as_posix() != "VERSIONS.json"]
+    feed("vendor", tree_hash(out, rels).encode())
+    versions = out / "VERSIONS.json"
+    feed("versions", versions.read_bytes() if versions.exists() else b"missing")
+    return h.hexdigest()
+
+
 def main(argv):
     check = "--check" in argv
     kw = {}
     for flag in ("--config", "--out"):
         if flag in argv:
             kw[flag[2:]] = argv[argv.index(flag) + 1]
+    if "--key" in argv:
+        print(guard_key(**kw))
+        return 0
     problems, versions = build(check=check, **kw)
     for p in problems:
         print(f"vendor skills: {p}", file=sys.stderr)
