@@ -30,8 +30,16 @@ def stub(tmp_path, code, sleep=0):
     return str(p)
 
 
+def bare(d):
+    """The router graph without the review gate it ships for the loop (#601): the graph with no review step."""
+    name = node(d, "route").pop("review", None)
+    d["nodes"] = [n for n in d["nodes"] if n["name"] != name]
+    d["gates"] = [g for g in d["gates"] if g["id"] != "review-command"]
+
+
 def gated(cmd, deadline=30):
     def tweak(d):
+        bare(d)
         d["gates"].append({"id": "review-command", "params": ["argv", "deadline"]})
         d["nodes"].append({"name": "child_review", "kind": "gate", "check": "review-command",
                            "params": {"argv": [cmd, *ARGV], "deadline": deadline}})
@@ -103,7 +111,7 @@ async def test_the_no_review_exit_merges_the_child_as_today(tmp_path):
 @pytest.mark.anyio
 async def test_a_graph_with_no_review_gate_lands_as_today(tmp_path):
     repo = sibling_repo(tmp_path / "t")
-    eng = make(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")}, target=repo)
+    eng = make(tmp_path, {"router": routed(req()), "route.router.1": writer("a.txt")}, tweak=bare, target=repo)
     assert (await eng.run()).verdict == "completed"
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "pass" and "review" not in land["effect"]

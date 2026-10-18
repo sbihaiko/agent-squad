@@ -13,6 +13,9 @@ def drop_live_paths():
     """The loop exports SG_BOARD_CACHE, and a gate it runs inherits it; hub.py reads it before its own SG_HUB_DIR, so a hub
     test module would read and write the live board (#521). Without it, each module's board cache is under its SG_HUB_DIR."""
     os.environ.pop("SG_BOARD_CACHE", None)
+    # The loop exports SG_RUN_REVIEW too (#601): the shipped router graph's review gate runs the script it names, so a run a
+    # test drives would review its children through the live loop's runreview.sh. Without it, the gate answers "no review here".
+    os.environ.pop("SG_RUN_REVIEW", None)
 
 
 @pytest.fixture(scope="session", autouse=True)

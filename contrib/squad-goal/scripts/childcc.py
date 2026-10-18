@@ -202,6 +202,8 @@ for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
     if s != "open": mk.touch(); continue
     waved = (A / f"wave-{name}").exists()   # the run's wave is not landed yet: its marker, not the card, says the child still has an entry to make
     if (A / f"waved-{name}").exists() and not waved: mk.touch(); continue   # the wave is landed and this child is not in it: its issue went back to the queue, so no card moves (never the direct Code Complete move)
+    if lwhy is not None and (A / f"requeued-{name}-{child}").exists():   # its run's own review held it and requeued it already (#601): never twice
+        print(f"CHILD HELD #{n} ({name} {child}): its run's review requeued it", flush=True); mk.touch(); continue
     if lwhy is not None:   # the child's own engine landing failed: its work never reached the run's target, so no entry and no card move (#592)
         subprocess.run(["bash", wave, "requeue", str(n), f"its landing failed: {lwhy}"], capture_output=True)
         print(f"CHILD LAND REQUEUE #{n} ({name} {child}): {lwhy}", flush=True); mk.touch(); continue

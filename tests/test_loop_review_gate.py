@@ -60,3 +60,10 @@ def test_env_names_the_run_review_beside_it():
     text = (SCRIPTS / "env.sh").read_text()
     assert 'SG_RUN_REVIEW:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runreview.sh' in text
     assert "SG_RUN_REVIEW" in next(line for line in text.splitlines() if line.startswith("export SG_LSOF"))
+
+
+def test_a_test_run_never_reaches_the_live_loops_review(monkeypatch):
+    from tests.conftest import drop_live_paths
+    monkeypatch.setenv("SG_RUN_REVIEW", "/live/runreview.sh")
+    drop_live_paths()
+    assert "SG_RUN_REVIEW" not in os.environ
