@@ -705,7 +705,7 @@ FOOT_SEP = " · "
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
 FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none",
-                     "quota": "none", "cycle": "wait", "subs": "run"}  # subs last, and teal: it shares with landing, which is not its neighbour
+                     "quota": "none", "cycle": "wait", "subs": "run", "loop": "none"}  # subs teal: it shares with landing, which is not its neighbour; loop ends the line (#554)
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
 FORK_MARKER = re.compile(r"fork-(\d+)-([0-9a-f]{7,40})")   # the close pass's marker, the name janitor.py's rule P reads
@@ -953,8 +953,10 @@ def foot_items(src, now=None):
                    parts=gate or None, tip=(gate[0].get("tip") if gate else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
              _fact("cycle", _cycle_fact(src.get("cycle"), now)),
-             # subs last, so a narrow window drops the block whole
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
+    if "loop" in src:   # the loop state ends the line (the owner's ask, #554): one word read across the room, so it survives a narrow window
+        on = bool(src["loop"])
+        items.append(_fact("loop", "Loop:ON" if on else "Loop:OFF", bad=not on, parts=[{"text": "Loop:ON" if on else "Loop:OFF", "tone": "ok" if on else "err"}]))
     return [i for i in items if i["text"]]   # a block with nothing to say draws no lone `·`
 
 def foot_line(items):
@@ -1003,6 +1005,16 @@ def _newest_mtime(*paths):
         except OSError: pass
     return max(ts) if ts else None
 
+def _loop_on(pid_file=None):
+    """True while the supervisor's pid file (watchd.sh writes $SG_STATE/watchd.pid) names a live process: a signal 0, never a `ps`."""
+    try: pid = int(_read(pid_file or STATE / "watchd.pid").split()[0])
+    except (ValueError, IndexError): return False
+    try: os.kill(pid, 0)
+    except ProcessLookupError: return False
+    except PermissionError: return True   # alive, owned by another user
+    except OSError: return False
+    return True
+
 def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
@@ -1013,6 +1025,7 @@ def foot_sources(now=None):
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
     out["burn"] = burn_cached(now)
     out["cycle"] = _cycle_state(now)
+    out["loop"] = _loop_on()
     out["subs"] = {k: {"probe": quota_row(k, now), "quota": (plans.get(k) or {}).get("quota")} for k in SUBS}
     return out
 
