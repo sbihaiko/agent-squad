@@ -66,6 +66,7 @@ cat > "$T/wave.sh" <<'W'
 echo "$*" >> "$WAVE_CALLS"
 [ -e "$WAVE_FAIL" ] && { echo "WAVE REQUEUE #$3: the local gates failed: x"; exit 1; }
 [ "$3" = 5300 ] && { echo "WAVE HOLD #$3: no review yet"; exit 1; }   # a held child: no requeue, so every pass tries it again
+[ "$3" = 5600 ] && { echo "WAVE STOP #$3: requeued 3 times, so it is not dispatched again: x"; exit 1; }   # the requeue cap stopped it
 echo "WAVE gui/$3 entered (#$3)"
 W
 export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail; : > "$WAVE_CALLS"
@@ -136,4 +137,9 @@ pass lfail >/dev/null
 /usr/bin/grep -q '^requeue 5500 ' "$WAVE_CALLS" && ok "a failed land requeues the issue" || ko "no requeue for a failed land: $(cat "$WAVE_CALLS")"
 /usr/bin/grep -q '^requeue 5500 .*merge_conflict' "$WAVE_CALLS" && ok "the requeue carries the landing's reason" || ko "the requeue carries no landing reason: $(cat "$WAVE_CALLS")"
 /usr/bin/grep -q ' 5500$' "$T/moves" 2>/dev/null && ko "a child whose landing failed moved to Code Complete" || ok "a child whose landing failed moves no card"
+# A child the requeue cap stopped (WAVE STOP) is a requeue too (#594): the same head is never entered again.
+run wst 5600 n; wtree wst; echo wave/wst > "$T/st/auto/wave-wst"; echo wave/wst > "$T/st/auto/waved-wst"; : > "$WAVE_CALLS"
+pass wst >/dev/null; pass wst >/dev/null
+[ "$(cat "$T/st/auto/requeued-wst-c" 2>/dev/null)" = "$(/usr/bin/git -C "$T/co/runs/wst/ws/target-c" rev-parse HEAD)" ] && [ "$(ent wst 5600)" = 1 ] \
+  && ok "a stopped child gets the requeued marker and is not entered again on the same head" || ko "WAVE STOP: marker '$(cat "$T/st/auto/requeued-wst-c" 2>/dev/null)', entries $(cat "$WAVE_CALLS")"
 rm -rf "$T"; exit $fail

@@ -26,4 +26,14 @@ case "$o" in *"WAVE STOP #7"*) ok "the stop is logged on one line";; *) ko "no s
 echo req > "$T/st/auto/disp-8"; o8=$(PATH="$T/bin:$PATH" BOARD_REFUSE=1 bash "$T/s/wave.sh" requeue 8 "y" 2>&1)
 [ ! -e "$T/st/auto/disp-8" ] && ok "another issue keeps its own count" || ko "issue 8 was stopped by issue 7's count: $o8"
 case "$o8" in *"WAVE-BOARD #8 Todo refused: board refused"*) ok "a refused card write is reported";; *) ko "the refused card write was dropped: '$o8'";; esac
+# A requeue the wave's age cap made (#594) is no failure of the child: the loop's own queue made it late. It never counts
+# toward the cap and never stops the issue, and the count real failures left stays as it was.
+for i in 1 2 3 4; do echo req > "$T/st/auto/disp-9"; o9=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 9 "the wave reached its age cap" cap); done
+[ ! -e "$T/st/auto/disp-9" ] && [ "$(cat "$T/st/auto/requeues-9" 2>/dev/null || echo 0)" = 0 ] && case "$o9" in *"WAVE REQUEUE #9"*) true;; *) false;; esac \
+  && ok "cap requeues never count and never stop the issue" || ko "cap requeues: count '$(cat "$T/st/auto/requeues-9" 2>/dev/null)', last '$o9'"
+for i in 1 2; do echo req > "$T/st/auto/disp-10"; PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 10 "the local gates failed: x" >/dev/null; done
+echo req > "$T/st/auto/disp-10"; PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 10 "the wave reached its age cap" cap >/dev/null
+[ "$(cat "$T/st/auto/requeues-10" 2>/dev/null)" = 2 ] && [ ! -e "$T/st/auto/disp-10" ] && ok "a cap requeue keeps the count real failures left" || ko "count after a cap requeue: '$(cat "$T/st/auto/requeues-10" 2>/dev/null)'"
+echo req > "$T/st/auto/disp-10"; o10=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 10 "the local gates failed: x")
+case "$o10" in *"WAVE STOP #10"*) ok "real failures still stop the issue at the third";; *) ko "no stop at the third real failure: '$o10'";; esac
 rm -rf "$T"; exit $fail

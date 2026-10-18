@@ -369,18 +369,27 @@ printf '%s\n%s\n' \
 bash "$T/s/wave.sh" expired run-8 >/dev/null 2>&1 && ko "L: a wave younger than its cap is expired" || ok "L: a wave younger than its cap is not expired"
 printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-8"
 bash "$T/s/wave.sh" expired run-8 >/dev/null 2>&1 && ok "L: a wave past its cap is expired" || ko "L: a wave past its cap is not expired"
-# an expired wave takes no new child: its entry sends the child's issue back to the queue
-before=$($O rev-parse $W8); child 82 g82 "origin/$W8"; REV_BASE=$W8 rev 82
+# an expired wave takes no new child: an entry with no approval of its current head sends the child's issue back to the
+# queue, and that requeue does not count toward the requeue cap (#594)
+before=$($O rev-parse $W8); child 82 g82 "origin/$W8"; REV_BASE=$W8 REV_SHA=0000000000000000000000000000000000000000 rev 82
 r=$(cd "$T/c82" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-8 82 2>&1); rc=$?
-[ $rc = 1 ] && case "$r" in *"WAVE REQUEUE #82"*"age cap"*) ok "L: an expired wave takes no new child, and its issue is back in the queue";; *) ko "L: no cap reason: '$r'";; esac || ko "L: the entry exited $rc: '$r'"
-[ "$($O rev-parse $W8)" = "$before" ] && ok "L: the child that reached an expired wave does not enter" || ko "L: the wave tip moved on an expired wave"
+[ $rc = 1 ] && case "$r" in *"WAVE REQUEUE #82"*"age cap"*) ok "L: an expired wave takes no child with a stale approval, and its issue is back in the queue";; *) ko "L: no cap reason: '$r'";; esac || ko "L: the entry exited $rc: '$r'"
+[ "$($O rev-parse $W8)" = "$before" ] && ok "L: the child with a stale approval does not enter" || ko "L: the wave tip moved on an expired wave"
+[ ! -e "$T/st/auto/requeues-82" ] && ok "L: a cap requeue does not count toward the requeue cap" || ko "L: the cap requeue was counted: $(cat "$T/st/auto/requeues-82")"
+# an approved child (its review approved its current head, read against the wave) still enters a capped wave (#594): the
+# wait was the loop's queue, not its own work
+child 83 g83 "origin/$W8"; REV_BASE=$W8 rev 83
+r=$(cd "$T/c83" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-8 83 2>&1); rc=$?
+[ $rc = 0 ] && $O cat-file -e $W8:g83 2>/dev/null && ok "L: an approved child still enters an expired wave" || ko "L: the approved child did not enter: '$r' (exit $rc)"
 : > "$T/gh.log"; : > "$T/board.log"
 r=$(land2 run-8); rc=$?
 [ $rc = 0 ] && ok "L: the expired wave lands what it holds (exit 0)" || ko "L: exit $rc: '$r'"
 $O cat-file -e dev:g80 2>/dev/null && ok "L: the child the wave held is in dev" || ko "L: the held child is not in dev"
 /usr/bin/grep -qx 'o 3 Closed 80' "$T/board.log" && ok "L: the card of the held child reads Closed" || ko "L: no Closed card for #80"
 /usr/bin/grep -q 'issues/80 -f state=closed' "$T/gh.log" && ok "L: the held child's issue is closed" || ko "L: #80 was not closed"
+$O cat-file -e dev:g83 2>/dev/null && ok "L: the approved late child is in dev" || ko "L: #83 is not in dev"
 [ ! -e "$T/st/auto/disp-81" ] && /usr/bin/grep -qx 'o 3 Todo 81' "$T/board.log" && ok "L: the child still running is back in the queue" || ko "L: #81 was not requeued"
+[ ! -e "$T/st/auto/requeues-81" ] && ok "L: the landing's cap requeue does not count toward the requeue cap" || ko "L: the landing's cap requeue was counted"
 /usr/bin/grep -q 'issues/81 -f state=closed' "$T/gh.log" && ko "L: an issue that never entered the wave was closed" || ok "L: the child back in the queue is not closed"
 [ ! -e "$T/st/auto/wave-start-run-8" ] && ok "L: the landed wave clears its start marker" || ko "L: the wave start marker outlives the landing"
 
