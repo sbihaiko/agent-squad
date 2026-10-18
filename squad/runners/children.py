@@ -52,13 +52,13 @@ class Children:
         p = self.workspace(name, d)
         return {"name": d["workspace"], "child": name, "path": str(p), "head": git.head(p), "state": git.state(p)} if p.exists() else None
 
-    def outcome(self, name, outcome, reasons, artifact, extra):
+    def outcome(self, name, outcome, reasons, artifact, extra, entry=1):
         e = self.e
         acc = e.dispatch.children[name]
         res = e.dispatch.held.pop(name, None)
         if res is not None:          # a child that never ran returns its grant
             e.budget.release(res)
-        return e.outcomes.child(name, outcome, reasons, artifact, extra, parent=acc["parent"], depth=acc["depth"])
+        return e.outcomes.child(name, outcome, reasons, artifact, extra, parent=acc["parent"], depth=acc["depth"], entry=entry)
 
     def run_checks(self, disp, output, cwd):
         """The `checks` gates run after every child. A child cannot omit or edit them."""
@@ -126,21 +126,27 @@ class Children:
         ctx.results.append((name, done["outcome"], done["reasons"]))
         await self.run_all(ctx, e.dispatch.accepted(name, 1))
 
-    async def admitted(self, ctx, name):
+    async def fix(self, node, name, entry, review, dl_at):
+        """One fix round of a child its review asked to fix (#570): entry `entry` of the same child, in its own worktree, with
+        the child's caps and the full review as input. Its commits stay on the child's branch. Return its outcome event."""
+        ctx = SimpleNamespace(node=node, dl_at=dl_at)
+        return await self.admitted(ctx, name, entry, review)
+
+    async def admitted(self, ctx, name, entry=1, review=None):
         """One child inside one slot of the machine-wide child ceiling, keyed on its `spawn_accepted` name. A full ceiling waits,
         bounded by the child's call deadline; a wait that expires fails the child by name. The slot returns when the child ends."""
         e = self.e
         if not e.ceiling:
-            return await self.session(ctx, name)
+            return await self.session(ctx, name, entry, review)
         d = e.dispatch.children[name]["definition"]
         bound = anyio.current_time() + max(0.0, min(d["deadline"] * e.scale, ctx.dl_at - e.clock()))
         try:
             lease = await e.ceiling.take("children", f"{e.run_id}:{name}", bound, on_wait=lambda w: e.record.append("ceiling_wait", **w),
                                          on_tick=lambda w: e.record.append("ceiling_wait", **w))   # the record moves while the wait lasts, so heartbeat never reads a waiting child as wedged
         except CeilingWaitExpired as x:
-            return self.outcome(name, "fail", [f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"], None, {})
+            return self.outcome(name, "fail", [f"ceiling_wait_expired:{x.ceiling}", f"cap:{x.cap}"], None, {}, entry)
         try:
-            return await self.session(ctx, name)
+            return await self.session(ctx, name, entry, review)
         finally:
             e.ceiling.release(lease)
 
@@ -159,34 +165,35 @@ class Children:
                 bad.append(dep)
         return bad
 
-    async def session(self, ctx, name):
-        """One child: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift."""
+    async def session(self, ctx, name, entry=1, review=None):
+        """One child entry: its worktree, the metered call in `squad/session.py`, then its checks and its spawn lift.
+        Entry 1 cuts the worktree; a fix entry (2, 3, ...) works in it again with the review that asked for it."""
         e, d, slot = self.e, self.e.dispatch.children[name]["definition"], {}
         dl, ws = min(d["deadline"] * e.scale, ctx.dl_at - e.clock()), str(self.workspace(name, d))
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
         chain = session.model_chain(ctx.node["allow"]["models"], d["model"], e.options.get("spent_models") or [])
-        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first))
+        out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
-            e.record.append("model_refused", node=name, entry=1, model=m, error=err[:session.CHAIN_LINE])
+            e.record.append("model_refused", node=name, entry=entry, model=m, error=err[:session.CHAIN_LINE])
             limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
         if out.kind == "deadline":
             return slot["ev"]
-        return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None)
+        return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None, entry)
 
-    async def attempt(self, name, d, ws, dl, model, slot, first):
+    async def attempt(self, name, d, ws, dl, model, slot, first, entry=1, review=None):
         """One model's call for one child: the worktree is cut for the first attempt, and a later entry reuses it."""
         e = self.e
 
         def hit_deadline(res, el):
-            slot.update(ev=self.outcome(name, "deadline", ["deadline"], None, {"cap": res.amount, "elapsed": el}))
+            slot.update(ev=self.outcome(name, "deadline", ["deadline"], None, {"cap": res.amount, "elapsed": el}, entry))
 
         def cancelled(res, el):
-            return self.outcome(name, "fail", ["cancelled"], None, {"cap": res.amount, "elapsed": el})
+            return self.outcome(name, "fail", ["cancelled"], None, {"cap": res.amount, "elapsed": el}, entry)
 
         out = await session.run_call(
             lambda: e.dispatch.held.pop(name, None) or e.budget.hold(d["spend"]),   # a resume checks the funding again
-            dl, lambda res: self.request(name, d, res, ws, dl, model), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
+            dl, lambda res: self.request(name, d, res, ws, dl, model, entry, review), adapter=e.adapter, record=e.record, budget=e.budget, clock=e.clock,
             wall=e.wall, prepare=(lambda res: self.prepare(name, d, dl)) if first else None,
             on_deadline=hit_deadline, on_cancel=cancelled)
         return out, model
@@ -197,26 +204,27 @@ class Children:
             if not made.ok:
                 return ["child_workspace_failed", *made.reasons]
 
-    def request(self, name, d, res, ws, dl, model=None):
-        return CallRequest(name, 1, None, f"/{d['skill']['name']} {d['prompt']}", model or d["model"], d["effort"], d["tools"], min(d["stalls"], self.e.limits.get("max_stalls", d["stalls"])),
+    def request(self, name, d, res, ws, dl, model=None, entry=1, review=None):
+        prompt = f"/{d['skill']['name']} {d['prompt']}" + (fix_input(review) if review else "")
+        return CallRequest(name, entry, None, prompt, model or d["model"], d["effort"], d["tools"], min(d["stalls"], self.e.limits.get("max_stalls", d["stalls"])),
                            res.amount, ws, dl, new_session_id(self.e.run_id), d["skill"]["name"], None,
                            self.e.limits.get("max_output_tokens"), self.e.limits.get("context_tokens"))
 
-    def close(self, ctx, name, d, ws, out, model, message=None):
+    def close(self, ctx, name, d, ws, out, model, message=None, entry=1):
         """The outcome of a child whose call ended without a deadline. `message` is the one line an exhausted chain reports."""
         if out.kind == "no_funds":
-            return self.outcome(name, "fail", ["run_spend_cap"], None, {})
+            return self.outcome(name, "fail", ["run_spend_cap"], None, {}, entry)
         if out.kind == "expired":
-            return self.outcome(name, "deadline", ["deadline", "run_deadline"], None, {})
+            return self.outcome(name, "deadline", ["deadline", "run_deadline"], None, {}, entry)
         if out.kind == "prepare_failed":
-            return self.outcome(name, "fail", out.reasons, None, {})
+            return self.outcome(name, "fail", out.reasons, None, {}, entry)
         if out.kind == "adapter_error":
             return self.outcome(name, "fail", session.adapter_reason(out.error), None,
                                 {"cap": out.res.amount, "elapsed": out.elapsed,
-                                 "diagnostic": session.adapter_diagnostic(out.error, message), **session.error_fields(out.error)})
-        return self.settle(ctx, name, d, ws, out, model)
+                                 "diagnostic": session.adapter_diagnostic(out.error, message), **session.error_fields(out.error)}, entry)
+        return self.settle(ctx, name, d, ws, out, model, entry)
 
-    def settle(self, ctx, name, d, ws, out, model):
+    def settle(self, ctx, name, d, ws, out, model, entry=1):
         """Derive the outcome from the artifact, run the checks, snapshot the worktree, and lift the child's own spawns."""
         e, disp, r, res = self.e, ctx.node, out.result, out.res
         outcome, reasons, diag_cap = session.agent_outcome({}, r, session.cap_reason(r.stop_reason, res.amount))
@@ -224,19 +232,19 @@ class Children:
         if not isinstance(r.output, dict) and r.ended:      # an artifact_missing outcome says how the session ended
             extra["diagnostic"] = {"ended": r.ended}
         if isinstance(r.output, dict):
-            rel = e.artifacts.put(name, None, 1, r.output, None)
+            rel = e.artifacts.put(name, None, entry, r.output, None)
             outcome, reasons = self.check(disp, r.output, ws, outcome, reasons, extra)
         if diag_cap:      # a cap that left a valid artifact: the child passes, and the cap rides in the record
             extra["diagnostic"] = {**extra.get("diagnostic", {}), "cap": diag_cap}
         if self.isolated(d):    # #84: a child's own worktree is committed by the engine when the child passed, before its snapshot
-            node_commit.commit_after(e, node=name, entry=1, item=None, logical=d["workspace"] or "target", path=ws, outcome=outcome)
+            node_commit.commit_after(e, node=name, entry=entry, item=None, logical=d["workspace"] or "target", path=ws, outcome=outcome)
         snap = self.snapshot(name, d)
         if snap:
             extra["workspace"] = snap
-        if isinstance(r.output, dict) and "spawns" in r.output:
+        if isinstance(r.output, dict) and "spawns" in r.output and entry == 1:      # a fix round fixes its own work: it spawns nothing
             e.dispatch.lift(disp, name, 1, e.dispatch.children[name]["depth"] + 1, r.output["spawns"], d["tools"], max(0.0, res.amount - (r.spend or 0)),
                             min(d["deadline"] - out.elapsed / e.scale, (ctx.dl_at - e.clock()) / e.scale), r.session_id or "unknown")
-        return self.outcome(name, outcome, reasons, rel, {"spend": r.spend, "turns": r.turns, "cap": res.amount, "elapsed": out.elapsed, **extra})
+        return self.outcome(name, outcome, reasons, rel, {"spend": r.spend, "turns": r.turns, "cap": res.amount, "elapsed": out.elapsed, **extra}, entry)
 
     def check(self, disp, output, ws, outcome, reasons, extra):
         """Run the `checks` gates over a child's artifact. A failed gate fails a passing child. Write the gate results into `extra`."""
@@ -249,3 +257,9 @@ class Children:
         if evidence:      # the record keeps it; the ledger reads `checks` only, so no router prompt carries it
             extra["evidence"] = evidence
         return outcome, reasons
+
+
+def fix_input(review):
+    """What a fix entry reads after the child's own task: the full review of its last head (#570), never its first line only."""
+    return ("\n\nThe review of your work in this worktree asked for changes. Fix every blocking finding here; your commits stay on"
+            f" this branch, and the new head is reviewed again. The full review:\n\n{review.get('findings') or ''}")

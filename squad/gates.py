@@ -140,6 +140,7 @@ def learning_check(_params, inp):
 
 
 REVIEW_NONE_EXIT = 3       # the one exit a review command gives for "no review here": the child lands as if no gate were named
+REVIEW_FIX_EXIT = 4        # "fix": the review asks for changes the run may fix in a next entry of the child (#570); never given unless offered
 REVIEW_PLACEHOLDERS = ("run_id", "child", "issue", "worktree", "base")
 FINDINGS_MAX = 65536       # characters of a review's stdout the record keeps; a longer output keeps its head and names the cut
 TERM_GRACE_S = 2.0
@@ -175,14 +176,16 @@ def _stop(proc):
             continue
 
 
-def review_command(argv, cwd, deadline, tick=60.0, on_tick=None):
+def review_command(argv, cwd, deadline, tick=60.0, on_tick=None, env=None):
     """Run one review command in `cwd` with a deadline (ADR-0051). Call `on_tick(elapsed)` at least once per `tick` seconds
-    while it runs, so its run's record moves. Exit 0 approves, REVIEW_NONE_EXIT is "no review here", any other exit holds.
+    while it runs, so its run's record moves. Exit 0 approves, REVIEW_NONE_EXIT is "no review here", REVIEW_FIX_EXIT asks
+    for a fix round, any other exit holds. `env` adds variables to the command's environment (the round and the fix offer).
     Return the review as the record keeps it: command, elapsed, exit code, verdict, findings (stdout) and a stderr tail."""
     t0 = time.monotonic()
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         try:
-            proc = subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err, stdin=subprocess.DEVNULL, start_new_session=True)
+            proc = subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err, stdin=subprocess.DEVNULL, start_new_session=True,
+                                    env={**os.environ, **env} if env else None)
         except OSError as x:
             return {"command": argv, "elapsed": 0.0, "exit_code": None, "verdict": "hold", "findings": "", "stderr": f"review_not_started: {x}"}
         code = None
@@ -196,7 +199,8 @@ def review_command(argv, cwd, deadline, tick=60.0, on_tick=None):
             except subprocess.TimeoutExpired:
                 if on_tick and time.monotonic() - t0 < deadline:
                     on_tick(round(time.monotonic() - t0, 3))
-        verdict = "deadline" if code is None else "approve" if code == 0 else "no_review" if code == REVIEW_NONE_EXIT else "hold"
+        verdict = ("deadline" if code is None else "approve" if code == 0 else "no_review" if code == REVIEW_NONE_EXIT
+                   else "fix" if code == REVIEW_FIX_EXIT else "hold")
         return {"command": argv, "elapsed": round(time.monotonic() - t0, 3), "exit_code": code, "verdict": verdict,
                 "findings": _read(out), "stderr": _read(err)[-1500:]}
 

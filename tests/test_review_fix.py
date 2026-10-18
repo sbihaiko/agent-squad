@@ -76,7 +76,7 @@ async def test_a_fix_exit_starts_entry_2_in_the_worktree_with_the_full_review_an
     assert rounds(tmp_path) == [(CHILD, 1, h1, "fix"), (CHILD, 2, h2, "approve")]
     assert ev(tmp_path, "review_round")[0]["review"]["findings"] == review_text(1)
     assert entries(tmp_path) == [(1, "pass"), (2, "pass")]
-    assert git.run(["rev-list", "--count", f"{h1}..{h2}"], wt).stdout.strip() == "1"     # the fix commit sits on the child's branch
+    assert git.run(["rev-list", "--count", f"{h1}..{h2}"], repo).stdout.strip() == "1"     # the fix commit sits on the child's branch
     assert (repo / "a.txt").exists() and (repo / "b.txt").exists()
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "pass" and land["effect"]["rounds"] == 2 and land["effect"]["review"]["verdict"] == "approve"
@@ -113,7 +113,7 @@ async def test_a_round_the_budget_cannot_fund_is_told_so_and_no_fix_entry_starts
     assert line.split()[1:3] == ["1", "0"]                     # round 1, no fix round on offer
     assert [r[3] for r in rounds(tmp_path)] == ["hold"]
     [land] = ev(tmp_path, "land")
-    assert land["outcome"] == "fail" and land["reasons"] == ["review_fix_unfunded"]
+    assert land["outcome"] == "fail" and land["reasons"] == ["review_held", "review_fix_unfunded"]
     assert eng.budget.reserved == pytest.approx(0.0)
 
 

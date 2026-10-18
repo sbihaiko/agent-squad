@@ -8,12 +8,17 @@
 # no issue, no wave for the run yet or at all, a slot wait past its bound, or a review that wrote no verdict; 1 CHANGES or
 # BLOCKED: the issue goes back to the queue at once (wave.sh requeue) with every blocking finding, and the marker
 # auto/requeued-<run>-<child> holds the reviewed head, so childcc never requeues it a second time. The run holds the child.
+# 4 "fix" (#570): the run offers a fix round (SQUAD_REVIEW_FIX=1: it holds the grant of the child's next entry) and the review
+# is CHANGES whose findings are new or changed. Nothing is requeued; the run fixes the child in its worktree and reviews the new
+# head again (SQUAD_REVIEW_ROUND names the round). Findings a round left as they were count toward the stall (revformat.py,
+# markers auto/runfix-fp-<branch key> and -same-, ADR-0134); at SG_RUN_FIX_STALLS (default 3) the issue is requeued once, exit 1.
+# BLOCKED, or CHANGES with no fix round on offer, requeues as above. SG_REQUEUE_CAP in wave.sh stays the outer bound.
 # A requeue frees the issue while other children of the same run are still live; that is accepted.
 # The review takes one `reviews` slot of the machine-wide budget (squad/caps.py), waiting for it: caps says so on one line.
 # Stdout is the review (the run record keeps it as the gate's findings).
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/env.sh"; . "$here/caps.sh"
-run=$1 child=$2 iss=$3; NONE=3
+run=$1 child=$2 iss=$3; NONE=3 FIX=4
 { [ -n "$run" ] && [ -n "$child" ]; } || { echo "usage: runreview.sh <run> <child> <issue>" >&2; exit 2; }
 [ -n "$iss" ] || { echo "RUNREVIEW $run $child: no issue, no review here" >&2; exit $NONE; }
 [ -e "$SG_STATE/auto/wave-$run" ] || { echo "RUNREVIEW $run $child: the run has no wave, no review here (#$iss)" >&2; exit $NONE; }
@@ -34,6 +39,15 @@ case "$v" in
   CHANGES|BLOCKED) ;;
   *) echo "RUNREVIEW $run $child: verdict '$v' is none of APPROVE, CHANGES, BLOCKED: no review here (#$iss)" >&2; exit $NONE;;
 esac
+if [ "$v" = CHANGES ] && [ "${SQUAD_REVIEW_FIX:-0}" = 1 ]; then
+  fp=$(python3 "$here/revformat.py" --fingerprint "$md") && same=$(python3 "$here/revformat.py" --stall "$SG_STATE/auto" runfix "$key" "$fp") || same=
+  if [ -n "$same" ] && [ "$same" -lt "${SG_RUN_FIX_STALLS:-3}" ]; then
+    python3 "$here/revformat.py" --record-stall "$SG_STATE/auto" runfix "$key" "$fp" "$same"
+    echo "RUNREVIEW $run $child: CHANGES at ${head:0:9}, round ${SQUAD_REVIEW_ROUND:-?}, $same failed rounds with no change before it: fix round (#$iss)" >&2
+    exit $FIX
+  fi
+  echo "RUNREVIEW $run $child: ${same:-?} fix rounds left the same findings at ${head:0:9}: the fix rounds stop (ADR-0134) (#$iss)" >&2
+fi
 # Every blocking finding: the `## Blocking` section when the review has one, else the whole body.
 f=$(awk 'NR==1{next} /^## /{b=($0 ~ /^## Blocking/)} b' "$md")
 [ -n "$f" ] || f=$(tail -n +2 "$md")

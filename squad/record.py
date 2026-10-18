@@ -27,6 +27,7 @@ REQUIRED = {
     "spawn_rejected": ["request_key", "parent", "envelope", "reason"],
     "model_refused": ["node", "entry", "model", "error"],   # one chain entry the provider refused before it served (#494)
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
+    "review_round": ["node", "round", "head", "verdict", "offered", "review"],   # #570: one review of a child's head; `fix` starts its next entry
     "review_progress": ["node", "gate", "elapsed"],   # #599: a dispatch child's review gate is still running; the record moves so the heartbeat never kills it
     "paused": ["node", "scope", "held", "completed"],
     "resume": ["run_id", "graph_hash", "frontier", "invoker", "engine_options", "preflight"],

@@ -15,6 +15,7 @@ from squad.engine_errors import Frontier
 
 REVIEW_TICK_S = 60.0                      # a review in flight writes one `review_progress` event at least this often (the heartbeat's quiet window is 5 min)
 REVIEW_NONE_EXIT = gates.REVIEW_NONE_EXIT  # the review command's "no review here": the child lands as today
+REVIEW_FIX_EXIT = gates.REVIEW_FIX_EXIT    # the review command's "fix": the run starts the child's next entry in its worktree (#570)
 
 
 class Dispatch:
@@ -120,6 +121,13 @@ class Dispatch:
         n = len(spawns) if isinstance(spawns, list) else 0
         return n > len(prior) or any(self.decision(e["pos"]) is None for e in prior)
 
+    def last(self, name):
+        """The outcome event of a child's last entry: 1, or the last fix round its review asked for (#570). None before entry 1."""
+        n = 1
+        while self.e.outcomes.recorded(name, n + 1):
+            n += 1
+        return self.e.outcomes.event(name, n)
+
     def landable(self, name):
         d = self.children[name]["definition"]
         return self.e.has_git and self.e.runs.isolated(d) and (name, 1, None) in self.e.done and self.e.done[(name, 1, None)]["outcome"] == "pass"
@@ -145,11 +153,12 @@ class Dispatch:
             if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
                 self.ac_before, _ = await self.ac_survey()
             head_before = git.head(self.e.target)
-            review = await self.review(node, name, d, path, head_before) if node.get("review") and path.exists() else None
+            review, rounds, why = (await self.rounds(node, name, d, path, head_before, sc)
+                                   if node.get("review") and path.exists() else (None, 0, None))
             if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
                 r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
-            elif review and review["verdict"] in ("hold", "deadline"):      # a held child is not merged: its worktree stays for a fix
-                r = actions.ActionResult(False, [f"review_{'deadline' if review['verdict'] == 'deadline' else 'held'}"], head_before)
+            elif why:                  # a held child is not merged: its worktree stays, with every fix round on its branch
+                r = actions.ActionResult(False, why, head_before)
             else:
                 try:
                     r = await anyio.to_thread.run_sync(actions.merge_land, self.e.target, path, branch, f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)
@@ -161,22 +170,67 @@ class Dispatch:
                     r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
             self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
                                                    outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
-                                                   effect={"name": "review" if r.reasons[:1] in (["review_held"], ["review_deadline"]) else "merge_land",
+                                                   effect={"name": "review" if r.reasons and r.reasons[0].startswith("review_") else "merge_land",
                                                            "before": head_before, "head": r.head, **r.extra,
-                                                           **({"review": review} if review else {})})   # `before` is read here: the landing check replaces the merge's result
+                                                           **({"review": review, "rounds": rounds} if review else {})})   # `before` is read here: the landing check replaces the merge's result
         return False
 
-    async def review(self, node, name, d, path, base):
+    async def rounds(self, node, name, d, path, base, sc):
+        """Review one passed child, and fix it while its review asks (#570). Round n reviews the head of entry n; a `fix`
+        verdict starts entry n+1 of the same child in its worktree with the full review, and its new head is round n+1.
+        The command decides fix or hold (its stall rule, ADR-0134); code offers a round only when it already holds the next
+        entry's grant from the run budget (ADR-0108), and there is no cap on rounds. Each round is a `review_round` event;
+        a resume replays the recorded rounds and fix entries and reviews only a head with no recorded round (ADR-0107).
+        Return (the last review, the rounds, the reasons that hold the child or None)."""
+        e, n = self.e, 1
+        while True:
+            fund, rec = None, next((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name and x["round"] == n), None)
+            if rec is None:
+                fund = e.budget.hold(self.children[name]["definition"]["spend"])
+                review = await self.review(node, name, d, path, base, n, fund is not None)
+                if review["verdict"] == "fix" and fund is None:      # a fix the run did not offer is a hold
+                    review["verdict"] = "hold"
+                rec = e.record.append("review_round", node=name, round=n, head=git.head(path), verdict=review["verdict"],
+                                      offered=fund is not None, review=review)
+            review = rec["review"]
+            if rec["verdict"] != "fix":
+                if fund is not None:
+                    e.budget.release(fund)
+                if rec["verdict"] == "deadline":
+                    return review, n, ["review_deadline"]
+                if rec["verdict"] == "hold":
+                    return review, n, ["review_held", *([] if rec["offered"] else ["review_fix_unfunded"])]
+                return review, n, None
+            out = e.outcomes.event(name, n + 1)
+            if out is None and any(x["event"] == "call_start" and x["node"] == name and x["entry"] == n + 1 for x in e.record.events):
+                if fund is not None:
+                    e.budget.release(fund)
+                cap = self.children[name]["reservation"]      # a fix entry that crashed mid-session is not run again under its grant
+                out = e.runs.outcome(name, "fail", ["crashed", "launched_no_outcome"], None, {"cap": cap}, n + 1)
+                e.budget.unmeasured += cap
+            elif out is None:
+                if fund is not None:
+                    self.held[name] = fund      # the fix entry's call takes this grant
+                out = await e.runs.fix(node, name, n + 1, review, sc.deadline_at)
+            elif fund is not None:
+                e.budget.release(fund)
+            if out["outcome"] != "pass":
+                return review, n, ["review_fix_failed", *out["reasons"]]
+            n += 1
+
+    async def review(self, node, name, d, path, base, n=1, offer=False):
         """Run the dispatch's review gate on one passed child, in its worktree, before its merge. The command is graph data:
         its argv template gets the run id, the child, the child's issue, its worktree and the target HEAD it would land on.
+        Its environment names the round (`SQUAD_REVIEW_ROUND`) and whether the run offers a fix round (`SQUAD_REVIEW_FIX`).
         While it runs, a `review_progress` event moves the record, so the heartbeat never reads it as wedged (ADR-0051)."""
         e, gate = self.e, node["review"]
         params = e.nodes[gate]["params"]
         argv = gates.review_argv(params["argv"], {"run_id": e.run_id, "child": name, "issue": self.issue(d), "worktree": path, "base": base})
+        env = {"SQUAD_REVIEW_ROUND": str(n), "SQUAD_REVIEW_FIX": "1" if offer else "0"}
 
         def tick(elapsed):
             anyio.from_thread.run_sync(lambda: e.record.append("review_progress", node=name, gate=gate, elapsed=elapsed))
-        return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), params["deadline"] * e.scale, REVIEW_TICK_S, tick))
+        return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), params["deadline"] * e.scale, REVIEW_TICK_S, tick, env))
 
     def issue(self, d):
         """The child's issue: the first `#<n>` in its task, else in its prompt, else the run's own issue; empty when none is known."""
@@ -251,7 +305,7 @@ class Dispatch:
         rows = []
         for acc in [e for e in self.e.record.events if e["event"] == "spawn_accepted" and e["envelope"] == disp]:
             name = acc["child"]
-            out = self.e.done.get((name, 1, None))
+            out = self.last(name)
             if out is None:
                 continue
             art = self.e.artifacts.get(name, None)

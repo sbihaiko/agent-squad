@@ -49,10 +49,11 @@ class Outcomes:
             raise Halt("stop", name)
         return ev
 
-    def child(self, name, outcome, reasons, artifact, extra, *, parent, depth):
-        """Record a dispatch child's outcome. A child has one entry and no item, and makes no fact."""
+    def child(self, name, outcome, reasons, artifact, extra, *, parent, depth, entry=1):
+        """Record a dispatch child's outcome. A child has no item and makes no fact. Its entry is 1, and 2, 3, ... for the
+        fix rounds its review asked for (#570)."""
         fields = {"spend": None, "turns": None, "cap": None, "elapsed": None, **extra}
-        ev = self.record.append("outcome", node=name, entry=1, outcome=outcome, reasons=list(reasons), artifact=artifact,
+        ev = self.record.append("outcome", node=name, entry=entry, outcome=outcome, reasons=list(reasons), artifact=artifact,
                                 parent=parent, depth=depth, **fields)
         self._keep(ev, None)
         return ev
