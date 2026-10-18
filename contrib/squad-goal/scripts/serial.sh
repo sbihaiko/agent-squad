@@ -6,6 +6,8 @@ mtime() { if stat --version >/dev/null 2>&1; then stat -c %Y "$1" 2>/dev/null ||
 # "application exited (0) before the hook came up". The lock is a directory with the holder's pid; a lock whose pid is gone is stale and taken over.
 # Re-entrant: a command already running under this lock (SG_SERIAL_HELD names it) that asks for it again just runs, so a gate inside a gui-suite holder cannot deadlock.
 # SERIAL_POLL_SECONDS (default 3) is the pause between a waiter's looks at the lock; a test lowers it to a fraction of a second.
+# SERIAL_TRY=1 is try mode (#459): a lock held by a live holder is skipped at once (exit 73, one line), never queued; the command
+# does not inherit the mode, so a lock it takes inside waits as usual.
 # SERIAL_WAIT_SECONDS (default 1800) bounds the wait, and a waiter prints one line naming its holder before it waits, so a gate
 # held up by another gate says so instead of reading as a hang; the command's exit code is passed through (75 when the wait ran out).
 #
@@ -52,12 +54,13 @@ until mkdir "$L" 2>/dev/null; do
     kill -TERM "$h" 2>/dev/null; sleep 1; kill -KILL "$h" 2>/dev/null; rm -rf "$L"; continue; fi
   # One line, the first time this process has to wait, naming what it waits for: a gate that waits for another gate has to say so
   # once -- silence reads as a hang. `said` keeps it to one line however long the wait runs.
+  [ -n "${SERIAL_TRY:-}" ] && { echo "serial: lock $n held by pid ${h:-?}: skipped, not queued (SERIAL_TRY)" >&2; exit 73; }
   [ $said = 1 ] || { echo "serial: waiting for lock $n held by pid ${h:-?}" >&2; said=1; }
   [ $(( $(date +%s) - t0 )) -gt "$w" ] && { echo "serial: waited ${w}s for lock $n held by pid ${h:-?}" >&2; exit 75; }
   sleep "${SERIAL_POLL_SECONDS:-3}"; done
 hpid=$$; due=$(( $(date +%s) + hold ))
 echo "$hpid" > "$L/pid"; printf '%s\n' "$cmdn" > "$L/cmd"; echo "$due" > "$L/due"; inc_of "$hpid" > "$L/inc"
-export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"' EXIT INT TERM
+unset SERIAL_TRY; export SG_SERIAL_HELD="${SG_SERIAL_HELD:+$SG_SERIAL_HELD:}$n"; trap 'rm -rf "$L"' EXIT INT TERM
 # The deadline reaches the command itself: past it the holder stops the command's whole process tree and releases the lock
 # (exit 75). Without this the cap lives only in the waiter's head, where an orphaned holder can never read it.
 set -m   # each background job leads its own process group, so the watchdog stops the command and its children together

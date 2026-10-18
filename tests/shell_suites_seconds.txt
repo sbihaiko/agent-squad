@@ -63,6 +63,7 @@ test-merge-audit.sh 1.5
 test-mkreq.sh 12.3
 test-pass-deadline.sh 16
 test-prepush.sh 1.4
+test-promote-pass.sh 11.1
 test-promote.sh 14.0
 test-publish-live.sh 1.7
 test-reconcile.sh 1.5
