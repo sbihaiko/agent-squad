@@ -138,6 +138,8 @@ gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || exit 0   #
 # A defect in the loop's own machinery is fixed outside the loop (#596, ADR-0146): the pass already holds the open issues,
 # so the stop costs no second read, and it has no marker -- closing the issue resumes dispatch with no other action.
 gh_loop_stop "$F/issues.json" && exit 0
+# Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
+gh_dispatch_hold && exit 0
 todo=$(sg_todo_cards) || { echo "FRONTIER: the board did not answer; nothing dispatched this pass" >&2; exit 0; }
 todo=" $(echo $todo) "   # the issues whose card sits in Todo: the owner's go signal (#550)
 while IFS=$'\x1f' read -r w n labels; do [ -n "$n" ] && cands+=("$w"$'\x1f'"$n"$'\x1f'"$labels"); done < <(jq -r '.[]|select(.pull_request|not)|select((.title // "")|test("^(Squad run run-[0-9]{8}-[0-9]{6}-[0-9a-f]+|Run [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} \\([0-9a-f]+\\)( — .*)?)$")|not)|[([.labels[].name|select(startswith("wave:"))][0]//"wave:99"),(.number|tostring),([.labels[].name]|join(","))]|join("\u001f")' "$F/issues.json" 2>/dev/null | sort)

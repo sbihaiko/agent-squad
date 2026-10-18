@@ -105,6 +105,30 @@ gh_loop_stop() {
   return 0
 }
 
+# gh_dispatch_hold   An interim limit until the review moves into the run (#562): childcc writes the count of finished
+# children that wait for review to $SG_STATE/childcc-waiting on every pass. When SG_DISPATCH_MAX_WAITING is set (a
+# non-negative integer) and the count is greater than it, a dispatch pass dispatches nothing, because a new run only adds
+# children that outlive the wave age cap unreviewed. Returns 0 and prints the one line on a hold, 1 when the pass may go on.
+# No cap, a cap that is not a number, a missing or unreadable count, or a count older than 30 min (a stale childcc) never
+# holds: the loop is never blocked on a file it cannot trust.
+gh_dispatch_hold() {
+  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line
+  [ -n "$m" ] || return 1
+  case "$m" in *[!0-9]*) echo "DISPATCH HOLD: SG_DISPATCH_MAX_WAITING='$m' is not a non-negative integer; no limit"; return 1;; esac
+  [ -r "$f" ] || return 1
+  n=$(head -n 1 "$f" 2>/dev/null | tr -d '[:space:]')
+  case "$n" in ''|*[!0-9]*) return 1;; esac
+  t=$(date -r "$f" +%s 2>/dev/null) || return 1
+  if [ $(( $(date +%s) - t )) -gt 1800 ]; then
+    echo "DISPATCH HOLD skipped: the childcc count is older than 30 min (stale childcc); no limit this pass"; return 1
+  fi
+  [ $((10#$n)) -gt $((10#$m)) ] || return 1
+  line="DISPATCH HOLD: $((10#$n)) children wait for review (cap $((10#$m))); no new run this pass"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+  return 0
+}
+
 # gh_api <route> [-q <jq filter>]   A read. Answers on stdout with exit 0; a refusal is exit 2 and its line is not an
 # answer; a failure is exit 1. A caller that only ever learns from an answer keeps what it already knew.
 gh_api() {

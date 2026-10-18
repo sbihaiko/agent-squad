@@ -202,6 +202,11 @@ for key, r, child, why, n, finished, d, lwhy in pending[k0:] + pending[:k0]:
 rnd = set(ROUND.read_text().split("\n")) - {""} if ROUND.exists() else set()
 keys = {p[0] for p in pending}
 left = [k for k in keys - visited if k not in rnd]
+# The children that wait for review: every pending child this pass did not work, deferred or out of the budget's reach. The
+# dispatch passes read the count (gh_dispatch_hold, #562) and start no new run while too many wait; it is written on every
+# pass, 0 when none wait, and atomically, so a reader never sees a half-written count.
+WAITING = st / "childcc-waiting"
+_tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f"{len(keys - visited)}\n"); os.replace(_tmp, WAITING)
 if left:
     ROUND.write_text("".join(k + "\n" for k in sorted((rnd & keys) | visited | {k for k in rnd if k.split(" ")[0] not in runs})))
     print(f"CHILDCC DEFERRED {len(left)} child(ren) wait for a later pass: {', '.join(sorted(left))}", flush=True)
