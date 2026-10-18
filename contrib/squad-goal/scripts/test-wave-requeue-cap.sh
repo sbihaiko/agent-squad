@@ -34,4 +34,40 @@ o9=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 9 "the wave reached its age
   && ok "a cap requeue never counts and never stops the issue" || ko "cap requeue: count '$(cat "$T/st/auto/requeues-9")', '$o9'"
 echo req > "$T/st/auto/disp-9"; o9=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 9 "the local gates failed: x")
 case "$o9" in *"WAVE STOP #9"*) ok "real failures still stop the issue at the third";; *) ko "no stop at the third real failure: '$o9'";; esac
+# #609: one count of failed dispatches, keyed by the run (ADR-0134). A run counts once per issue, whether a requeue or the
+# janitor's `fail` (the run ended with nothing delivered) reports it; at the cap the issue is frozen with one comment that
+# lists every run and its reason. A different reason is no evolution; a new `Refs #N` commit in origin/$SG_BASE is.
+w() { PATH="$T/bin:$PATH" bash "$T/s/wave.sh" "$@"; }
+gl() { /usr/bin/grep -c "issues/$1/labels" "$T/gh.log" 2>/dev/null; }
+SG_REQUEUE_RUN=r1 w requeue 11 "the review asked for changes: a" >/dev/null
+SG_REQUEUE_RUN=r1 w requeue 11 "the local gates failed: b" >/dev/null
+o=$(w fail 11 r1 "ended failed: run_spend_cap")
+[ "$(cat "$T/st/auto/requeues-11" 2>/dev/null)" = 1 ] && ok "one run counts once, however many times it fails the issue" || ko "run key: count '$(cat "$T/st/auto/requeues-11" 2>/dev/null)', '$o'"
+o=$(w fail 11 r2 "ended failed: merge_conflict")
+case "$o" in *"WAVE STOP"*) ko "the second run stopped the issue: '$o'";; *) ok "a second failed run is below the cap";; esac
+o=$(w fail 11 r3 "the wave of run r3 landed without its child")
+case "$o" in *"WAVE STOP #11"*) ok "the third failed run stops the issue, whatever its reason";; *) ko "no stop at the third run: '$o'";; esac
+[ "$(gl 11)" = 1 ] && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/11/labels -f labels[]=frozen:owner' "$T/gh.log" && ok "the stop freezes the issue for the owner once" || ko "freeze #11: '$(tr '\n' ' ' < "$T/gh.log")'"
+c11=$(cat "$T"/st/cq/*11-* 2>/dev/null)
+case "$c11" in SQUAD-NOT-STARTABLE:*r1*"the review asked for changes: a"*r2*merge_conflict*r3*"landed without its child"*) ok "the stop comment lists every run and its reason";;
+  *) ko "stop comment: '$c11'";; esac
+o=$(w fail 11 r3 "the wave of run r3 landed without its child")
+[ "$(gl 11)" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a run already counted freezes nothing again" || ko "repeat of r3: '$o', labels $(gl 11)"
+o=$(w fail 11 r4 "ended failed: x")
+[ "$(cat "$T/st/auto/requeues-11")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new run after the freeze (the owner let it start) counts from one" || ko "after the freeze: count '$(cat "$T/st/auto/requeues-11")', '$o'"
+# Evolution: a new non-RED `Refs #12` commit in origin/dev restarts the count; a RED one does not.
+R="$T/co"; /usr/bin/git init -q "$R"; gc() { /usr/bin/git -C "$R" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1" && /usr/bin/git -C "$R" update-ref refs/remotes/origin/dev HEAD; }
+gc "start"
+SG_CHECKOUT="$R" w fail 12 ra "ended failed: a" >/dev/null; SG_CHECKOUT="$R" w fail 12 rb "ended failed: b" >/dev/null
+gc "TDD RED: a test for it
+
+Refs #12"
+o=$(SG_CHECKOUT="$R" w fail 12 rc "ended failed: c")
+case "$o" in *"WAVE STOP #12"*) ok "a RED commit is no evolution";; *) ko "a RED commit reset the count: '$o'";; esac
+SG_CHECKOUT="$R" w fail 13 ra "ended failed: a" >/dev/null; SG_CHECKOUT="$R" w fail 13 rb "ended failed: b" >/dev/null
+gc "Part of the fix
+
+Refs #13"
+o=$(SG_CHECKOUT="$R" w fail 13 rc "ended failed: c")
+[ "$(cat "$T/st/auto/requeues-13")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new commit in the base restarts the count" || ko "evolution: count '$(cat "$T/st/auto/requeues-13")', '$o'"
 rm -rf "$T"; exit $fail
