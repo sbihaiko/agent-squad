@@ -340,9 +340,21 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the
     # landing of a wave that carries nothing (#449: it ran anyway, and four runs went needs-human on it).
     [ "$(sc rev-list --count "origin/$base..HEAD")" -gt 0 ] || {
+      # The run's work may have reached the base outside this wave (#533): the run's children merged into its target and
+      # their trees are gone, so no entry exists. The issues the run was dispatched for are named, and each one whose
+      # non-RED `Refs #N` commit the base holds (an ancestor of origin/$base by construction) is delivered. A RED commit
+      # carries the same line and proves nothing, so it never counts.
+      local dispatched="" delivered=""
+      for n in $(run_issues "$rd"); do
+        dispatched="${dispatched:+$dispatched, }#$n"
+        sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "origin/$base" 2>/dev/null \
+          | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
+      done
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      rm -rf "$S"; rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"
-      echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted)"; return 0; }
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"
+      echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
+      if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
+      return 0; }
     # The wave tip's check (#377, ADR-0145 rule 11): a red tip names the child that broke it, and that child leaves the wave
     # before it lands. A tip that stays red with no child named is a landing that failed, as any other cause is.
     wave_check "$S" "$w" || { stuck "$run" "$w" "$S" "the check at the tip of $w is red and no child's own suite names the cause"; rm -rf "$S"; return 1; }

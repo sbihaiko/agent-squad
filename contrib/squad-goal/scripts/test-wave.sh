@@ -430,4 +430,28 @@ r=$(cd "$T/co" && bash "$T/s/wave.sh" land run-11 "$T/wt/child/gui-110/runs/run-
 [ $rc = 0 ] && ok "O: a landing whose run record is missing still lands (exit 0)" || ko "O: exit $rc: '$r'"
 [ "$(printf '%s\n' "$r" | /usr/bin/grep -c 'WAVE-NOTE.*run-11.*record')" = 1 ] && ok "O: the missing run record is named in one log line" || ko "O: no single named line: '$r'"
 
+# P (#533): a wave that lands empty because the run's work reached the base outside the wave names the issues the run was
+# dispatched for, and closes only those whose non-RED commit (a `Refs #N` line) the base holds. #201 has a fix commit,
+# #202 has only a TDD RED commit, #203 has no commit, and #20 must not match the commit of #201 by its prefix.
+W12=wave/run-12; start2 run-12 >/dev/null
+rm -rf "$T/out"; $G clone -q "$T/origin.git" "$T/out" 2>/dev/null
+(cd "$T/out" && $G checkout -q dev && cd . \
+  && echo a > o201 && $G add o201 && $G -c user.email=a@b -c user.name=t commit -q -m "fix 201" -m "Refs #201" \
+  && echo b > o202 && $G add o202 && $G -c user.email=a@b -c user.name=t commit -q -m "TDD RED: case for 202" -m "Refs #202" \
+  && $G push -q origin HEAD:dev)
+mkdir -p "$T/co/runs/run-12"
+printf '%s\n%s\n%s\n%s\n' \
+  '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #201 work"}}' \
+  '{"event": "spawn_accepted", "child": "b", "definition": {"prompt": "GitHub issue #202 work"}}' \
+  '{"event": "spawn_accepted", "child": "c", "definition": {"prompt": "GitHub issue #203 work"}}' \
+  '{"event": "spawn_accepted", "child": "d", "definition": {"prompt": "GitHub issue #20 work"}}' > "$T/co/runs/run-12/record.jsonl"
+: > "$T/gh.log"; : > "$T/board.log"; rm -f "$T/st/landed.tsv"
+r=$(land2 run-12 2>&1); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "P: the wave lands empty (exit 0)";; *) ko "P: not an empty landing: '$r'";; esac || ko "P: exit $rc: '$r'"
+case "$r" in *"dispatched for #20, #201, #202, #203"*) ok "P: the empty wave names the issues its run was dispatched for";; *) ko "P: the dispatched issues are not named: '$r'";; esac
+/usr/bin/grep -q 'issues/201 -f state=closed' "$T/gh.log" && ok "P: the issue with a fix commit in the base is closed" || ko "P: #201 is not closed: $(cat "$T/gh.log")"
+/usr/bin/grep -q 'issues/202 -f state=closed' "$T/gh.log" && ko "P: an issue with only a TDD RED commit is closed" || ok "P: a TDD RED commit is no delivery"
+/usr/bin/grep -qE 'issues/(203|20) -f state=closed' "$T/gh.log" && ko "P: an issue with no commit in the base is closed" || ok "P: an issue with no commit in the base stays open"
+[ -n "$(awk -F'\t' '$4=="201"' "$T/st/landed.tsv" 2>/dev/null)" ] && ok "P: the ledger carries the delivered issue" || ko "P: no ledger row for #201"
+
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }
