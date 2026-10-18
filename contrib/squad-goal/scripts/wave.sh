@@ -340,7 +340,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     mkdir -p "$SG_STATE/cq"
     printf 'Closed #%s after landing %s in %s as %s (one fast-forward push, %s deleted). Refs #%s\n' "$n" "$w" "$base" "$sha" "$w" "$n" > "$(sg_cq_delivery "$n" "wave$$")"
     printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$w" "$sha" "$n" >> "$SG_STATE/landed.tsv"   # the ledger the hub's Landed branches lane reads
-    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | sed "s/^/WAVE-BOARD #$n $col refused: /"
+    "$BOARD" "$SG_OWNER" "$SG_PROJECT" "$col" "$n" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/WAVE-BOARD #$n $col refused: /"   # the seam's read note is no refusal (#526)
   done
   local named=""; for n in $issues; do named="${named:+$named, }#$n"; done
   echo "WAVE $w $sha landed in $base (${named:-no issue named: the wave carries no Refs})"

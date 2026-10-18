@@ -212,6 +212,6 @@ log="$SG_STATE/$name.log"
 for n in "${live[@]}"; do
   printf "Dispatched automatically as soon as its blockers fell (autofrontier, request %s, children: %s). Run id in %s once it starts.\n" "$name" "$(printf '[%s] ' "${kids[@]}")" "${log##*/}" > "$(sg_cq_file "$n-frontier$$.md")"; done
 doing="In Progress"; [ "${SG_BOARD_VOCAB:-}" = shipped ] && doing=Doing   # "In Progress" is no column on the shipped vocabulary (#249, #468)
-$BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${live[@]}" 2>&1 >/dev/null | sed "s/^/FRONTIER-BOARD $doing refused: /"   # a refused write is named, never dropped (#468)
+$BOARD --add $SG_OWNER $SG_PROJECT "$doing" "${live[@]}" 2>&1 >/dev/null | grep -v '^issue_state\.py: items read ' | sed "s/^/FRONTIER-BOARD $doing refused: /"   # a refused write is named, never dropped (#468)
 echo "FRONTIER dispatched ${live[*]/#/#} in one run ($name)"
 [ -n "$full" ] && echo "FRONTIER envelope full: $name asks for $cap children, its limit; startable issues past them wait for the next run" || true
