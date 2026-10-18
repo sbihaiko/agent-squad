@@ -42,9 +42,10 @@ test-janitor-board-reconcile.sh 5.1
 test-janitor-board-vocab.sh 2.8
 test-janitor-branch-state.sh 2.6
 test-janitor-dashboard-ceiling.sh 2.9
-test-janitor-deadline.sh 7.3
+test-janitor-cleanup.sh 15
+test-janitor-deadline.sh 14
 test-janitor-disp-expiry.sh 1.3
-test-janitor-env-hermetic.sh 10.6
+test-janitor-env-hermetic.sh 30
 test-janitor-f.sh 2.9
 test-janitor-failed-dispatch.sh 1.2
 test-janitor-h.sh 1.1
