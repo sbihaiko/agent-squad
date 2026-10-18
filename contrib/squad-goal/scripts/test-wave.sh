@@ -24,7 +24,8 @@ cp "$d/wave.sh" "$d/address.sh" "$d/gate.sh" "$d/serial.sh" "$d/ghcall.sh" "$T/s
   printf 'export SG_BOARD_VOCAB=shipped\n'   # the vocabulary every wave profile runs on (#468): its columns are the ones the landing writes
   printf '. %s/address.sh\n' "$T/s"
 } > "$T/s/env.sh"
-printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
+# The seam notes each items read on stderr (issue_state.py); the stub does too, so a write that worked is never read as refused (#526).
+printf '#!/bin/bash\necho "$*" >> "%s/board.log"\necho "issue_state.py: items read 3; project total: none on the REST items route" >&2\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 $G init -q -b dev "$T/co"; (cd "$T/co" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m init)
 $G clone -q --bare "$T/co" "$T/origin.git"; O="$G -C $T/origin.git"; W=wave/run-1
 # Every ref a push writes is logged by the remote itself (<old> <new> <ref>, one line per ref): the landing pass pushes
@@ -184,6 +185,7 @@ $O merge-base --is-ancestor "$en30head" $W && ok "J: the entry of a child is wha
 r=$(land run-1); rc=$?
 case "$r" in "WAVE $W "*) ok "J: land names the wave branch and its sha";; *) ko "J: land said nothing: '$r' (exit $rc)";; esac
 [ $rc = 0 ] && ok "J: the wave landed (exit 0)" || ko "J: exit $rc: '$r'"
+case "$r" in *refused*) ko "J: a board move that worked is logged as refused: '$r'";; *) ok "J: a board move that worked names no refusal";; esac
 # One push to dev, and it is a fast-forward of the dev that moved: the tip lands whole, in one update.
 [ "$(pushes refs/heads/dev | wc -l | tr -d ' ')" = 1 ] && ok "J: the wave lands in dev with one push" || ko "J: $(pushes refs/heads/dev | wc -l | tr -d ' ') pushes to dev: $(pushes refs/heads/dev)"
 [ "$(pushes refs/heads/dev | cut -d' ' -f1)" = "$moved" ] && ok "J: the one push starts from the dev that moved" || ko "J: the push started from '$(pushes refs/heads/dev | cut -d' ' -f1)', not the moved dev '$moved'"
