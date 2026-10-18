@@ -240,7 +240,7 @@ def issue_read(x):   # one read answers every fact the passes ask of an issue: i
 def issue_is_gone(x):   # a missing issue is not a transient read failure. The pass's one cached read of the issue says it: `gh api`
     # writes GitHub's error body to stdout and ignores -q on a refusal, so a deleted issue reads as GitHub's stable message, no extra call
     return gone_msg("\t".join(issue_read(x)))
-live = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
+live = {}; livef = {}; keep = []; held = set(); landed_n = set(); freed_markers = {}; missing = []   # held: issues a run still in active-runs may be working (a run in its launch window has no record yet); landed_n: issues a finished run landed
 def req_issues(f): return issues_named((f / "request.txt").read_text()) if (f / "request.txt").exists() else set()
 def owns(f, i, p):   # a dispatch marker names the request that wrote it (or its run): a run releases only a marker its own request wrote, never a newer run's (#539)
     try: c = p.read_text().strip()
@@ -306,7 +306,7 @@ for r in names:
         for q, (_, c) in procs.items():
             if "dashboard_server" in c and str(f) in c: kill(q, f"dashboard of zombie run {n}")
         continue
-    held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i
+    held |= req_issues(f) | i["acc"]; keep.append(r); live[n] = i; livef[n] = f
 if not dry and keep != names: act.write_text("\n".join(keep) + "\n")
 # S: the counted ceiling beside the per-run reap. B, J and C each kill the dashboard of one run the pass knows about, so when any of
 # them stops working for any other reason -- a run that left active-runs.txt, a record the pass cannot read -- nothing bounds the
@@ -315,11 +315,10 @@ if not dry and keep != names: act.write_text("\n".join(keep) + "\n")
 # kills the oldest no live run owns, down to the ceiling. It does not read active-runs.txt to find them: that is what makes it
 # independent of the per-run reap.
 DASH_MAX = int(os.environ.get("JANITOR_DASHBOARD_MAX", "8") or 0)   # 0 turns the ceiling off, as JANITOR_CALL_TIMEOUT=0 does for a hand run
-runsd = co / "runs"
-def ours(p):   # a dashboard of this loop serves a run folder under this checkout's runs; one another project started is not ours
+def ours(p):   # a dashboard of this loop serves a run folder under this checkout's runs, or a run or child worktree's runs (#580, #585); one another project started is not ours
     try: q = pathlib.Path(p).resolve()
     except OSError: return False
-    return q != runsd and runsd in q.parents
+    return q.parent.name == "runs" and (q.parent.parent == co or q.parent.parent.parent in (co / "worktrees" / "run", co / "worktrees" / "child"))
 def live_run(f):   # a run still going owns its dashboard; a run with no record yet is in its launch window and owns it too
     i = read(f)
     if i is not None: return not i["verdict"]
@@ -392,7 +391,7 @@ for n, i in live.items():
     if dup:
         say(f"RUN-ON-CLOSED-ISSUES {n}: every issue ({nums}) is closed as a duplicate / not planned; stopping the run")
         if not dry:
-            mk.touch(); f = folder(n if n.startswith("/") else str(co / "runs" / n))
+            mk.touch(); f = livef[n]   # the folder active-runs.txt named, a run worktree's too (#585)
             for q in inside(f):
                 if "dashboard_server" not in procs.get(q, (0, ""))[1]: kill(q, f"run {n} works only closed duplicate issues")
             if i["pid"] and same_process(i["pid"], i["started_at"]): kill(i["pid"], f"last call of run {n}")

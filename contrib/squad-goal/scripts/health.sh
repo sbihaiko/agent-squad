@@ -58,7 +58,7 @@ done
 if [ -n "${ready// /}" ]; then
   brs=" $(sg_work_issues) "
   free=""; for n in $ready; do case "$brs" in *" $n "*) ;; *) free="$free $n";; esac; done
-  nv2=$(sed 's|.*/runs/||' "$SG_STATE/active-runs.txt" 2>/dev/null | sort -u | while read -r r; do d="$SG_CHECKOUT/runs/$r"; [ -d "$d" ] || continue
+  nv2=$(sort -u "$SG_STATE/active-runs.txt" 2>/dev/null | while read -r r; do d=$r; [ "${r#/}" = "$r" ] && d="$SG_CHECKOUT/runs/$r"; [ -d "$d" ] || continue   # an absolute entry stands: a run worktree's folder too (#580, #585)
     grep -q '"event": *"verdict"' "$d/record.jsonl" 2>/dev/null || { [ -n "$(find "$d/request.txt" -mmin -30 2>/dev/null)" ] && echo x; }; done | wc -l | tr -d ' ')
   [ -n "${free// /}" ] && [ "$nv2" = 0 ] && add frontier-idle "startable$free with no work branch and no run started in 30 min: the frontier is starved (autofrontier finds nothing, usually an auto/disp-<n> marker that never expires)"
 fi
@@ -114,14 +114,14 @@ fi
 # machine reason of their verdict (reasons[0] -- the free text around it rewords itself, the machine reason does not) and report
 # a group that reaches SG_HEALTH_REPEAT_COUNT. The report is posted ON the issues those runs were on, so the next dispatch reads
 # it before it starts (the SQUAD-NOT-STARTABLE line) and the loop stops re-feeding itself the same input.
-rr=$(python3 -I - "$SG_CHECKOUT/runs" "$now" "$(( ${SG_HEALTH_REPEAT_MINUTES:-120} * 60 ))" "$(( ${SG_HEALTH_REPEAT_COUNT:-3} ))" <<'PY'
-import json, os, sys
-runs, now, win, need = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+rr=$(python3 -I - "$SG_CHECKOUT" "$now" "$(( ${SG_HEALTH_REPEAT_MINUTES:-120} * 60 ))" "$(( ${SG_HEALTH_REPEAT_COUNT:-3} ))" <<'PY'
+import glob, json, os, sys
+co, now, win, need = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 groups = {}
-try: dirs = os.listdir(runs)
-except OSError: dirs = []
-for d in dirs:
-    p = os.path.join(runs, d, "record.jsonl")
+# a run folder is <checkout>/runs/<run>, or in a run or child worktree (#580, #585)
+recs = [r for rel in (("runs",), ("worktrees", "run", "*", "runs"), ("worktrees", "child", "*", "runs"))
+        for r in glob.glob(os.path.join(glob.escape(co), *rel, "*", "record.jsonl"))]
+for p in recs:
     last = None
     try:
         if now - os.stat(p).st_mtime > win: continue

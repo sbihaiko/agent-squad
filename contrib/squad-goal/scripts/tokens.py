@@ -3,7 +3,7 @@
 
 usage: tokens.py burners <state-dir> [--checkout DIR] [--hours N] [--threshold N] [--json]
 Sources: <state-dir>/token-usage.tsv (ts, consumer, model, in, out, cache_read[, mark]) and
-<checkout>/runs/*/record.jsonl `outcome` events (consumer run:<folder>[:<node|child>]).
+<checkout>/runs/*/record.jsonl (and worktrees/{run,child}/*/runs/*) `outcome` events (consumer run:<folder>[:<node|child>]).
 Total tokens = in + out + cache_read. Threshold: --threshold, else $SG_TOKEN_ALERT, else DEFAULT_THRESHOLD.
 The total is a FLOOR, never a measure: a ledger line whose 7th field is set (the word review.sh writes is `no-usage`)
 carried no token count from a model that reports one -- a refused call, a zeroed usage -- so it weighs 0 and the burn
@@ -57,7 +57,9 @@ def _rows(state, checkout, cache_weight=1.0):
         pass
     if not checkout:
         return
-    for rec in sorted(glob.glob(os.path.join(glob.escape(checkout), "runs", "*", "record.jsonl"))):
+    co = glob.escape(checkout)   # a run folder is <checkout>/runs/<run>, or in a run or child worktree (#580, #585)
+    for rec in sorted(r for rel in (("runs",), ("worktrees", "run", "*", "runs"), ("worktrees", "child", "*", "runs"))
+                      for r in glob.glob(os.path.join(co, *rel, "*", "record.jsonl"))):
         folder = os.path.basename(os.path.dirname(rec))
         try:
             with open(rec, errors="replace") as f:

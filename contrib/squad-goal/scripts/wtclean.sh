@@ -111,7 +111,7 @@ for rel in worktrees/child .worktrees; do
     done < "$SG_STATE/active-runs.txt"; fi
     # A run in flight that names this tree is the other case a merged tree is still in use: the child may not have started, so
     # no process sits inside it yet. Same test as the fork rule below, and the same lesson (gui/1227).
-    if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
+    if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-* "$SG_CHECKOUT"/worktrees/run/*/runs/run-* "$SG_CHECKOUT"/worktrees/child/*/runs/run-*; do   # a worktree run too (#585)
       f="$r/record.jsonl"; [ -f "$f" ] || continue
       grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue
       [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue
@@ -152,7 +152,7 @@ if [ -n "$SG_FORK_DIR" ] && [ -d "$SG_FORK_DIR" ]; then
     # ac_command then failed with "cd: No such file or directory" (gui/1227, run 45a682, 2026-10-10).
     live=0
     in_use "$w" && live=1
-    if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-*; do
+    if [ $live = 0 ]; then for r in "$SG_CHECKOUT"/runs/run-* "$SG_CHECKOUT"/worktrees/run/*/runs/run-* "$SG_CHECKOUT"/worktrees/child/*/runs/run-*; do   # a worktree run too (#585)
       f="$r/record.jsonl"; [ -f "$f" ] || continue
       grep -q '"event": *"verdict"' "$f" 2>/dev/null && continue   # a run that has ended owns nothing
       [ $(( now - $(mtime "$f") )) -lt $(( ${SG_FORK_ORPHAN_MINUTES:-20} * 60 )) ] || continue

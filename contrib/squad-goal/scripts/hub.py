@@ -231,10 +231,14 @@ def state_of(r, age):
     if ver == "failed" and r["land"] and reasons and all(str(x).startswith("ac-verify:no_ac_commands") for x in reasons): return "unverified"   # work landed, but the final gate had no acceptance command to run
     return ver
 
+def run_roots(co):   # where a checkout keeps run folders: its runs/, and each run or child worktree's runs/ (#580, #585)
+    co = pathlib.Path(co)
+    return [co / "runs", *(w / "runs" for kind in ("run", "child") for w in sorted((co / "worktrees" / kind).glob("*")))]
+
 def project_dirs():
-    ds = {pathlib.Path(CHECKOUT) / "runs"}
+    ds = set(run_roots(CHECKOUT))
     for x in os.environ.get("SG_PROJECTS", "").split(":"):
-        if x: ds.add(pathlib.Path(x) / "runs")
+        if x: ds.update(run_roots(x))
     for l in sh("/bin/ps", "-axwwo", "command=").splitlines():
         m = re.search(r"squad\.dashboard_server\s+(\S+)", l)
         if m: ds.add(pathlib.Path(m.group(1)).parent)
@@ -2833,8 +2837,7 @@ def last_coding_model(limit=15):
     router was pinned to a model whose provider had stopped serving (2026-10-11). A child's outcome event carries
     its model (`route.router.N`), so the last one is read from the records, newest run first.
     """
-    runs = pathlib.Path(CHECKOUT) / "runs"
-    try: ds = sorted((d for d in runs.glob("run-*")), key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+    try: ds = sorted((d for runs in run_roots(CHECKOUT) for d in runs.glob("run-*")), key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
     except OSError: return ""
     for d in ds:
         rec = d / "record.jsonl"
