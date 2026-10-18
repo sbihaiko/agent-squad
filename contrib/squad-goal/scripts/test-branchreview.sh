@@ -6,6 +6,7 @@
 # against their merge-base with the wave branch, never the whole wave, and the base is kept beside the verdict.
 # The child of a run (#448) is reviewed the same way but from its own worktree: its branch is pushed nowhere, so review.sh
 # --worktree reads HEAD and the three-dot diff against the wave ref, and childreview.sh keeps the files the entry reads.
+# A child of the loop is reviewed by its own run (#601): runreview.sh wraps childreview.sh as the run's review gate.
 # usage: bash test-branchreview.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset SG_REVIEW_BASE   # each case decides the base the review is read against; an ambient one from a live loop must not
@@ -97,4 +98,15 @@ printf '#!/bin/bash\n. "$(dirname "$0")/env.sh"\necho "VERDICT: BLOCKED (worktre
 out=$(cd "$T/child" && bash "$T/s/childreview.sh" run-1 7 2>&1); rc=$?
 [ $rc != 0 ] && ok "child: a review with no verdict for the head exits non-zero, so its claim goes" || ko "child: a review with no verdict exited 0: $out"
 mv "$T/s/review.sh.real" "$T/s/review.sh"
+# 8) #601, ADR-0145 rule 9: a child of the loop is reviewed by its own run. runreview.sh, the loop workflow's review gate,
+#    wraps childreview.sh in the child's worktree: CHANGES requeues the issue at once with every blocking finding of the
+#    review (never the first line only), writes the marker childcc honors, and exits non-zero so the run holds the child.
+cp "$d/runreview.sh" "$d/caps.sh" "$T/s/" 2>/dev/null; mkdir -p "$T/st/auto"; echo wave/run-1 > "$T/st/auto/wave-run-1"
+printf '#!/bin/bash\nprintf "wave.sh %%s\\n" "$*" >> "%s/wave.log"\n' "$T" > "$T/s/wave.sh"; rm -f "$T/st/review-$ck".*
+out=$(cd "$T/child" && SQUAD_CAPS_DIR="$T/caps" SG_SQUAD="$(cd "$d/../../.." && pwd)" CLAUDE_CHANGES=1 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
+[ "$rc" != 0 ] && [ "$rc" != 3 ] && ok "run: CHANGES exits non-zero, so the run holds the child" || ko "run: runreview exited $rc: $out"
+/usr/bin/grep -q '^wave.sh requeue 7 ' "$T/wave.log" && /usr/bin/grep -qx -- '- a.cs:1 — diverges from ADR-0001 — wrong — fix' "$T/wave.log" \
+  && ok "run: the issue is requeued with the review's blocking finding" || ko "run: wave.log '$(cat "$T/wave.log" 2>/dev/null)'"
+[ "$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)" = "$(cd "$T/child" && $G rev-parse HEAD)" ] && ok "run: the requeued marker holds the reviewed head" \
+  || ko "run: marker '$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)'"
 rm -rf "$T"; exit $fail

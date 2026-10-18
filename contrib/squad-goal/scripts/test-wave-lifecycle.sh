@@ -25,7 +25,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
 export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
@@ -234,6 +234,37 @@ out=$(STUB_VERDICT=CHANGES childcc)
 out=$(STUB_VERDICT=CHANGES childcc)
 [ "$(wc -l < "$T/rev.log" | tr -d ' ')" = 1 ] && ok "L9: the review is read once per head, never on every pass" \
   || ko "L9: the review ran again: '$(cat "$T/rev.log" 2>/dev/null)'"
+
+# 3f) A child of the loop is reviewed by its own run (#601, ADR-0145 rule 9): the loop workflow's review gate runs
+# runreview.sh in the child's worktree before the run merges it. An approved child then enters its wave in childcc's pass
+# with no second review: the review of its head is already there.
+R7=run-20261014-000000-bbb777
+: > "$T/rev.log"; : > "$T/board.log"
+launch "$R7" 73 >/dev/null 2>&1; CHILD_NO_REVIEW=1 child "$R7" 73 g73
+out=$(cd "$(run_dir "$R7" 73)/ws/worktrees_child-route.router.1" && . "$T/s/env.sh" && bash "$T/s/runreview.sh" "$R7" route.router.1 73 2>&1); rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$T/rev.log")" = "childreview $R7 73" ] && ok "L10: the run's review gate reviews the child through childreview.sh" \
+  || ko "L10: exit $rc, rev.log '$(cat "$T/rev.log")': $out"
+out=$(childcc)
+[ "$(wtip "$R7")" = "$(child_head "$R7" 73)" ] && ok "L10: the child its run approved enters its wave" \
+  || ko "L10: the wave tip is '$(wtip "$R7")' and the child's head '$(child_head "$R7" 73)': '$(printf '%s' "$out" | tail -3)'"
+[ "$(wc -l < "$T/rev.log" | tr -d ' ')" = 1 ] && ok "L10: the entry asks for no second review" || ko "L10: the review ran again: '$(cat "$T/rev.log")'"
+
+# 3g) CHANGES in the run's own review requeues the issue at once, once: the run holds the child (its land event says
+# review_held), and childcc, which honors the requeued marker, neither requeues it again nor reviews it again.
+R8=run-20261014-000000-bbb888
+: > "$T/rev.log"; : > "$T/board.log"
+launch "$R8" 74 >/dev/null 2>&1; CHILD_NO_REVIEW=1 child "$R8" 74 g74; before=$(wtip "$R8")
+out=$(cd "$(run_dir "$R8" 74)/ws/worktrees_child-route.router.1" && . "$T/s/env.sh" && STUB_VERDICT=CHANGES bash "$T/s/runreview.sh" "$R8" route.router.1 74 2>&1); rc=$?
+[ "$rc" != 0 ] && [ "$rc" != 3 ] && ok "L11: CHANGES exits non-zero, so the run holds the child" || ko "L11: exit $rc: $out"
+[ "$(/usr/bin/grep -cx 'o 3 Todo 74' "$T/board.log")" = 1 ] && ok "L11: the issue goes back to the queue at once" \
+  || ko "L11: board '$(cat "$T/board.log")'"
+printf '{"event": "land", "node": "route.router.1", "outcome": "fail", "reasons": ["review_held"]}\n' >> "$(run_dir "$R8" 74)/record.jsonl"
+out=$(childcc); out2=$(childcc)
+[ "$(/usr/bin/grep -cx 'o 3 Todo 74' "$T/board.log")" = 1 ] && ok "L11: childcc never requeues the held child a second time" \
+  || ko "L11: board '$(cat "$T/board.log")': '$(printf '%s\n%s' "$out" "$out2" | tail -4)'"
+[ "$(wc -l < "$T/rev.log" | tr -d ' ')" = 1 ] && [ "$(wtip "$R8")" = "$before" ] && ok "L11: the held child is neither reviewed again nor entered" \
+  || ko "L11: rev.log '$(cat "$T/rev.log")', tip '$(wtip "$R8")'"
+rm -f "$T/st/auto/wave-$R7" "$T/st/auto/wave-$R8"; /usr/bin/grep -v -e "$R7" -e "$R8" "$T/st/active-runs.txt" > "$T/st/active-runs.new"; mv "$T/st/active-runs.new" "$T/st/active-runs.txt"
 
 # 4) A run that ended lands the wave its finished child is in, through the loop's own cycle. The child reaches the wave in
 # the completion that lands it -- never after it -- because a landing attempted first finds an empty wave, refuses it, and
