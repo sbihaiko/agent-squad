@@ -806,6 +806,13 @@ def _subs_reset(resets, now):
     if x <= 0: return "now"
     return _rel_span(x)
 
+def _subs_span(x):
+    """The footer's time to a reset, in one compact rung with one decimal: `5.5d` from a day up, `3.3h` under it, `40m`
+    under an hour. The owner reads it on every token, green ones too; the tooltip keeps the exact two-rung span."""
+    if x >= 86400: return f"{x / 86400:.1f}d"
+    if x >= 3600: return f"{x / 3600:.1f}h"
+    return f"{int(x // 60)}m"
+
 def consumption_tone(pct):
     """The tone one consumption reading earns (#1843), on the ladder the load strip already draws (#1816): green under
     the warn threshold, amber at or above it, red at or above the ceiling. A reading the hub cannot verify — a string, a
@@ -815,8 +822,8 @@ def consumption_tone(pct):
     return "err" if f >= FOOT_ERR_PCT else ("warn" if f >= FOOT_WARN_PCT else "ok")
 
 def _subs_parts(subs, now):
-    """One part per subscription in SUBS' own order. A token at or above the warn ladder reads `CL 42% 3h 20m`; one
-    below it reads `CL 42%`, with the omitted reset as `resets in 3h 20m` in its tooltip. The tooltip also carries the
+    """One part per subscription in SUBS' own order. Every token reads its reset in one compact rung, `CL 42% 3.3h`
+    (`_subs_span`), whatever its tone; the exact span is `resets in 3h 20m` in its tooltip. The tooltip also carries the
     reading's age (`read 5h ago`), the age the panel shows. An unreadable reset is `?` and never hides. The quota and reset are `quota_row()`'s first window, the probe the cost panel already shows. A probe
     that did not answer (or names no window) falls back to the percentage the owner typed by hand and reads `?` for the
     reset; a subscription with neither reads `?` alone — neutral, never painted as if it carried a number."""
@@ -827,11 +834,11 @@ def _subs_parts(subs, now):
         pct = w.get("pct") if isinstance(w, dict) else None
         hand = s.get("quota")
         if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-            reset = _subs_reset(w.get("resets"), now)
-            text = f"{a} {_subs_pct(pct)}"
-            part = {"text": f"{text} {reset}" if reset == "?" or pct >= FOOT_WARN_PCT else text,
-                    "tone": consumption_tone(pct)}
-            tip = [f"resets in {reset}"] if reset != "?" and pct < FOOT_WARN_PCT else []
+            r = w.get("resets")
+            reset = _subs_reset(r, now)
+            short = reset if reset in ("?", "now") else _subs_span(r - now)
+            part = {"text": f"{a} {_subs_pct(pct)} {short}", "tone": consumption_tone(pct)}
+            tip = [f"resets in {reset}"] if reset not in ("?", "now") else []
             asof = (s.get("probe") or {}).get("asof")   # the age the panel shows beside the same reading
             if isinstance(asof, (int, float)) and not isinstance(asof, bool): tip.append(f"read {_age(now - asof)} ago")
             if tip: part["tip"] = " · ".join(tip)
