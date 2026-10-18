@@ -176,6 +176,11 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     return errs;
   }
 
+  function reviewParamsOk(p) {
+    const argv = p.argv, dl = p.deadline;
+    return Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === "string" && a.length > 0) && typeof dl === "number" && dl > 0;
+  }
+
   function dispatchErrors(doc, n, nodes) {
     const nm = n.name, errs = [];
     const e = nodes[n.entry];
@@ -185,6 +190,7 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
       if ("when" in e) errs.push(E(nm, `entry ${n.entry} carries a when, which would bypass the dispatch`));
     }
     for (const c of n.checks) if (nodes[c] && nodes[c].kind !== "gate") errs.push(E(nm, `check ${c} is not a gate`));
+    if ("review" in n && nodes[n.review] && nodes[n.review].check !== "review-command") errs.push(E(nm, `review ${n.review} is not a review-command gate`));
     for (const key of ["stalls", "spend"]) if (n.budget[key].min > n.budget[key].max) errs.push(E(nm, `child ${key} min above max`));
     if (n.max_parallel > doc.run.max_parallel) errs.push(E(nm, "max_parallel above the run block"));
     const names = n.allow.skills.map((x) => x.name);
@@ -246,13 +252,14 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
     const entries = {};
     for (const n of Object.values(nodes)) {
       if (n.kind !== "dispatch") continue;
-      for (const c of [n.entry, ...n.checks]) {
+      for (const c of [n.entry, ...n.checks, ...("review" in n ? [n.review] : [])]) {
         if (!nodes[c]) { errs.push(E(n.name, `unknown entry or check ${c}`)); continue; }
         if (c in parents) errs.push(E(c, "two parents"));
         parents[c] = n.name;
       }
       entries[n.entry] = n.name;
     }
+    const reviews = new Set(Object.values(nodes).filter((n) => n.kind === "dispatch" && "review" in n).map((n) => n.review));
     const run = doc.run;
     const minSpend = Object.values(nodes).filter((n) => ["agent", "dispatch"].includes(n.kind)).map((n) => n.budget.spend.min);
     if (minSpend.length && run.spend_cap < Math.max(...minSpend)) errs.push(E(null, `run spend cap ${run.spend_cap} is below an agent's spend minimum ${Math.max(...minSpend)}`));
@@ -268,6 +275,8 @@ function schemaModule({ ENGINE, isObj, canonText, same, pyFloat }) {
         else {
           const ps = new Set(Object.keys(n.params));
           if (ps.size !== gateIds[n.check].size || ![...ps].every((p) => gateIds[n.check].has(p))) errs.push(E(nm, "params differ from the gates registry"));
+          else if (n.check === "review-command" && !reviews.has(nm)) errs.push(E(nm, "a review-command gate runs only as a dispatch's review"));
+          else if (n.check === "review-command" && !reviewParamsOk(n.params)) errs.push(E(nm, "review-command params: argv is a non-empty list of strings, deadline is seconds above 0"));
         }
       } else if (k === "each") {
         if (!(n.items in factDefs) && !BUILTIN.has(n.items)) errs.push(E(nm, "items is not a registered fact"));

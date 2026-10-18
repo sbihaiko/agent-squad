@@ -27,6 +27,7 @@ REQUIRED = {
     "spawn_rejected": ["request_key", "parent", "envelope", "reason"],
     "model_refused": ["node", "entry", "model", "error"],   # one chain entry the provider refused before it served (#494)
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
+    "review_progress": ["node", "gate", "elapsed"],   # #599: a dispatch child's review gate is still running; the record moves so the heartbeat never kills it
     "paused": ["node", "scope", "held", "completed"],
     "resume": ["run_id", "graph_hash", "frontier", "invoker", "engine_options", "preflight"],
     "autonomy_resume": ["count", "source"],   # ticket #182: one per automatic resume; `count` is its number, `source` who decided (the autonomy skill)

@@ -191,7 +191,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
     for n in nodes.values():
         if n["kind"] != "dispatch":
             continue
-        for c in [n["entry"]] + n["checks"]:
+        for c in [n["entry"], *n["checks"], *([n["review"]] if "review" in n else [])]:
             if c not in nodes:
                 errs.append(GraphError(n["name"], f"unknown entry or check {c}"))
                 continue
@@ -199,6 +199,7 @@ def validate(doc, gate_registry=GATE_REGISTRY):
                 errs.append(GraphError(c, "two parents"))
             parents[c] = n["name"]
         entries[n["entry"]] = n["name"]
+    reviews = {n["review"] for n in nodes.values() if n["kind"] == "dispatch" and "review" in n}
     run = doc["run"]
     min_spend = [n["budget"]["spend"]["min"] for n in nodes.values() if n["kind"] in ("agent", "dispatch")]
     if min_spend and run["spend_cap"] < max(min_spend):
@@ -218,6 +219,10 @@ def validate(doc, gate_registry=GATE_REGISTRY):
                 errs.append(GraphError(nm, f"unknown check {n['check']}"))
             elif set(n["params"]) != gate_ids[n["check"]]:
                 errs.append(GraphError(nm, "params differ from the gates registry"))
+            elif n["check"] == "review-command" and nm not in reviews:
+                errs.append(GraphError(nm, "a review-command gate runs only as a dispatch's review"))
+            elif n["check"] == "review-command" and not _review_params_ok(n["params"]):
+                errs.append(GraphError(nm, "review-command params: argv is a non-empty list of strings, deadline is seconds above 0"))
         elif k == "each":
             if n["items"] not in fact_defs and n["items"] not in BUILTIN_FACTS:
                 errs.append(GraphError(nm, "items is not a registered fact"))
@@ -243,6 +248,12 @@ def validate(doc, gate_registry=GATE_REGISTRY):
     return errs + _file_errors(nodes)
 
 
+def _review_params_ok(p):
+    argv, dl = p.get("argv"), p.get("deadline")
+    return (isinstance(argv, list) and bool(argv) and all(isinstance(a, str) and a for a in argv)
+            and isinstance(dl, (int, float)) and not isinstance(dl, bool) and dl > 0)
+
+
 def _dispatch_errors(doc, n, nodes):
     nm, errs = n["name"], []
     e = nodes.get(n["entry"])
@@ -256,6 +267,8 @@ def _dispatch_errors(doc, n, nodes):
     for c in n["checks"]:
         if c in nodes and nodes[c]["kind"] != "gate":
             errs.append(GraphError(nm, f"check {c} is not a gate"))
+    if "review" in n and n["review"] in nodes and nodes[n["review"]].get("check") != "review-command":
+        errs.append(GraphError(nm, f"review {n['review']} is not a review-command gate"))
     for key in ("stalls", "spend"):
         if n["budget"][key]["min"] > n["budget"][key]["max"]:
             errs.append(GraphError(nm, f"child {key} min above max"))
@@ -341,7 +354,7 @@ def load(path):
 
 
 def plan_order(doc):
-    """Node names in walk order: a parent, then its children, then a dispatch's entry and checks."""
+    """Node names in walk order: a parent, then its children, then a dispatch's entry, checks and review."""
     nodes = {n["name"]: n for n in doc["nodes"]}
     out = []
 
@@ -351,7 +364,7 @@ def plan_order(doc):
         for c in n.get("children", []):
             walk(c)
         if n["kind"] == "dispatch":
-            for c in [n["entry"], *n["checks"]]:
+            for c in [n["entry"], *n["checks"], *([n["review"]] if "review" in n else [])]:
                 walk(c)
 
     walk(doc["root"])

@@ -805,6 +805,10 @@
           "minItems": 1,
           "uniqueItems": true
         },
+        "review": {
+          "description": "A gate node with check review-command. Code runs it on each passed child, after its checks and before its merge, in request order. Exit 0 merges; exit 3 is no review here and merges; any other exit holds the child.",
+          "$ref": "#/$defs/name"
+        },
         "when": {
           "$ref": "#/$defs/when"
         },

@@ -19,6 +19,7 @@ An authored flow fixes the graph, and a model may only tune settings (ADR-0103).
    - `allow`: the model list, effort list, tool ceiling, skill list with a pinned version for each, and the workspace scope.
    - a child budget: the stall and spend minimum and maximum for one child.
    - `checks`: gate node names. Code runs them after every child and before any guarded action. A child cannot omit or edit them.
+   - `review`: optional, one gate node with the check `review-command`. Its params are an argv template (`{run_id}`, `{child}`, `{issue}`, `{worktree}`, `{base}`) and a `deadline`. Code runs it in each passed child's worktree, after its checks and before its merge, in request order. Exit 0 merges the child. Exit 3 means "no review here" and merges it. Any other exit, or the deadline, holds it: no merge, and the `land` event carries the review (command, elapsed, exit code, verdict, findings from stdout) with the reason `review_held` or `review_deadline`. A held child folds `fail`. While the command runs, code writes a `review_progress` event at least once a minute, so the heartbeat never kills it (ADR-0051). A dispatch with no `review` lands as before.
 3. **A spawn request is free-form inside the envelope.** It holds a prompt, a skill name, and optional model, effort, tools, stall cap, spend cap, deadline, a `task` key, an `after` list, and input artifact names. Code checks every value against `allow`. A value may only narrow. A child gets the intersection of its parent's tools and the lesser of its parent's remaining spend and time. An input names an artifact already in the run record or a declared file (ADR-0109). The request never picks `checks` or the workspace.
 4. **Code assigns identity.** A model never mints an id. The request key is the record position of the `spawn_requested` event. The child name is `<dispatch>.<entry>.<n>`. It carries `parent`, `depth`, and `skill`. `task` names the work item a child advances. It is content, not identity, and it narrows nothing.
 5. **A request that exceeds any limit is rejected whole.** No clamp and no partial apply. A rejection changes no node outcome.
@@ -59,4 +60,4 @@ Rejected: templates only (they pre-author the child shapes the owner wants unwri
 
 ## Guard
 
-`tests/test_dispatch.py`, `tests/test_waves.py`, `tests/test_graph.py`, `tests/test_envelope.py`, `tests/test_verdict.py`. A change to this rule changes its tests in the same commit (ADR-0018).
+`tests/test_dispatch.py`, `tests/test_waves.py`, `tests/test_review_gate.py`, `tests/test_graph.py`, `tests/test_envelope.py`, `tests/test_verdict.py`. A change to this rule changes its tests in the same commit (ADR-0018).

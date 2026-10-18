@@ -4,13 +4,17 @@
 baseline. It decides spawn requests ("decide these requests") and lands finished children ("land these
 children"). It reads and writes the spawn, land, and ledger events. The engine runs the children's sessions.
 """
+import re
 import subprocess
 
 import anyio
 
-from squad import actions, envelope, git, session, workcmd
+from squad import actions, envelope, gates, git, node_commit, session, workcmd
 from squad import verdict as V
 from squad.engine_errors import Frontier
+
+REVIEW_TICK_S = 60.0                      # a review in flight writes one `review_progress` event at least this often (the heartbeat's quiet window is 5 min)
+REVIEW_NONE_EXIT = gates.REVIEW_NONE_EXIT  # the review command's "no review here": the child lands as today
 
 
 class Dispatch:
@@ -141,8 +145,11 @@ class Dispatch:
             if self.ac_before is None:      # the first landing of this walk or resume: the target as it stands is the baseline
                 self.ac_before, _ = await self.ac_survey()
             head_before = git.head(self.e.target)
+            review = await self.review(node, name, d, path, head_before) if node.get("review") and path.exists() else None
             if not path.exists():      # a passed writer whose worktree is gone: its work cannot land, and the record says so
                 r = actions.ActionResult(False, ["land_workspace_missing"], head_before)
+            elif review and review["verdict"] in ("hold", "deadline"):      # a held child is not merged: its worktree stays for a fix
+                r = actions.ActionResult(False, [f"review_{'deadline' if review['verdict'] == 'deadline' else 'held'}"], head_before)
             else:
                 try:
                     r = await anyio.to_thread.run_sync(actions.merge_land, self.e.target, path, branch, f"squad: land {name} ({self.e.run_id})", 300 * self.e.scale)
@@ -154,8 +161,31 @@ class Dispatch:
                     r.extra["held_out"] = "pass" if self.ac_before[name] else "fail"
             self.landed[name] = self.e.record.append("land", node=name, parent=node["name"], entry=entry,
                                                    outcome="pass" if r.ok else "fail", reasons=list(r.reasons),
-                                                   effect={"name": "merge_land", "before": head_before, "head": r.head, **r.extra})   # `before` is read here: the landing check replaces the merge's result
+                                                   effect={"name": "review" if r.reasons[:1] in (["review_held"], ["review_deadline"]) else "merge_land",
+                                                           "before": head_before, "head": r.head, **r.extra,
+                                                           **({"review": review} if review else {})})   # `before` is read here: the landing check replaces the merge's result
         return False
+
+    async def review(self, node, name, d, path, base):
+        """Run the dispatch's review gate on one passed child, in its worktree, before its merge. The command is graph data:
+        its argv template gets the run id, the child, the child's issue, its worktree and the target HEAD it would land on.
+        While it runs, a `review_progress` event moves the record, so the heartbeat never reads it as wedged (ADR-0051)."""
+        e, gate = self.e, node["review"]
+        params = e.nodes[gate]["params"]
+        argv = gates.review_argv(params["argv"], {"run_id": e.run_id, "child": name, "issue": self.issue(d), "worktree": path, "base": base})
+
+        def tick(elapsed):
+            anyio.from_thread.run_sync(lambda: e.record.append("review_progress", node=name, gate=gate, elapsed=elapsed))
+        return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), params["deadline"] * e.scale, REVIEW_TICK_S, tick))
+
+    def issue(self, d):
+        """The child's issue: the first `#<n>` in its task, else in its prompt, else the run's own issue; empty when none is known."""
+        for text in (d.get("task"), d.get("prompt")):
+            m = re.search(r"#(\d+)", text) if isinstance(text, str) else None
+            if m:
+                return m.group(1)
+        run = node_commit.issue_of(self.e.g.doc)
+        return "" if run is None else str(run)
 
     def prune(self):
         """Remove the branch and worktree of every child that landed. The work is in the target's history now.

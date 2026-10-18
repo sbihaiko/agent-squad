@@ -4,6 +4,11 @@ The registry is the one source. The graph validator and the editor read it; a gr
 lists the ids it uses and they must match. A check reads artifacts and facts only. It never
 calls a model, and its thresholds never change at run time.
 """
+import os
+import signal
+import subprocess
+import tempfile
+import time
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 
@@ -19,6 +24,7 @@ GATE_REGISTRY = {
     "ac-verify": ["commands_from"],
     "visual-guard": [],
     "learning-check": [],
+    "review-command": ["argv", "deadline"],
 }
 
 
@@ -133,10 +139,79 @@ def learning_check(_params, inp):
     return GateResult(n == 0, [] if n == 0 else [f"blocking_learnings:{n}"])
 
 
+REVIEW_NONE_EXIT = 3       # the one exit a review command gives for "no review here": the child lands as if no gate were named
+REVIEW_PLACEHOLDERS = ("run_id", "child", "issue", "worktree", "base")
+FINDINGS_MAX = 65536       # characters of a review's stdout the record keeps; a longer output keeps its head and names the cut
+TERM_GRACE_S = 2.0
+
+
+def review_argv(template, values):
+    """Fill each `{name}` placeholder of the argv template. A brace that names no placeholder stays as it is."""
+    out = []
+    for arg in template:
+        for k in REVIEW_PLACEHOLDERS:
+            arg = arg.replace("{" + k + "}", str(values.get(k, "")))
+        out.append(arg)
+    return out
+
+
+def _read(f):
+    f.seek(0)
+    text = f.read().decode(errors="replace")
+    return text if len(text) <= FINDINGS_MAX else text[:FINDINGS_MAX] + f"\n[{len(text) - FINDINGS_MAX} more characters cut]\n"
+
+
+def _stop(proc):
+    """End the command's whole process group: TERM, a grace, then KILL."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            proc.wait(timeout=TERM_GRACE_S)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def review_command(argv, cwd, deadline, tick=60.0, on_tick=None):
+    """Run one review command in `cwd` with a deadline (ADR-0051). Call `on_tick(elapsed)` at least once per `tick` seconds
+    while it runs, so its run's record moves. Exit 0 approves, REVIEW_NONE_EXIT is "no review here", any other exit holds.
+    Return the review as the record keeps it: command, elapsed, exit code, verdict, findings (stdout) and a stderr tail."""
+    t0 = time.monotonic()
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        try:
+            proc = subprocess.Popen(argv, cwd=cwd, stdout=out, stderr=err, stdin=subprocess.DEVNULL, start_new_session=True)
+        except OSError as x:
+            return {"command": argv, "elapsed": 0.0, "exit_code": None, "verdict": "hold", "findings": "", "stderr": f"review_not_started: {x}"}
+        code = None
+        while code is None:
+            left = deadline - (time.monotonic() - t0)
+            if left <= 0:
+                _stop(proc)
+                break
+            try:
+                code = proc.wait(timeout=min(tick, left))
+            except subprocess.TimeoutExpired:
+                if on_tick and time.monotonic() - t0 < deadline:
+                    on_tick(round(time.monotonic() - t0, 3))
+        verdict = "deadline" if code is None else "approve" if code == 0 else "no_review" if code == REVIEW_NONE_EXIT else "hold"
+        return {"command": argv, "elapsed": round(time.monotonic() - t0, 3), "exit_code": code, "verdict": verdict,
+                "findings": _read(out), "stderr": _read(err)[-1500:]}
+
+
+def review_check(params, inp):
+    """The review gate as a plain check: the dispatch runs it through `review_command` with its placeholders and progress."""
+    r = review_command(review_argv(params["argv"], {"worktree": inp.cwd}), inp.cwd, params["deadline"])
+    ok = r["verdict"] in ("approve", "no_review")
+    return GateResult(ok, [] if ok else [f"review_{r['verdict']}"], {} if ok else {f"review_{r['verdict']}": r["findings"]})
+
+
 CHECKS = {
     "spec-shape": spec_shape, "ac-command-shape": ac_command_shape, "plan-semantics": plan_semantics, "spend-floor": spend_floor,
     "scope": scope, "security": security, "ac-verify": ac_verify, "visual-guard": visual_guard,
-    "learning-check": learning_check,
+    "learning-check": learning_check, "review-command": review_check,
 }
 assert set(CHECKS) == set(GATE_REGISTRY)
 

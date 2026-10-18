@@ -20,6 +20,13 @@ def test_valid_fixtures_raise_no_error_in_the_dashboard():
 WAIT = {"name": "stray", "kind": "wait", "reason": "x", "next": {}}
 
 
+def _review(d):
+    """#599: a dispatch's review gate, a review-command gate the dispatch names as its `review`."""
+    d["gates"].append({"id": "review-command", "params": ["argv", "deadline"]})
+    d["nodes"].append({"name": "child_review", "kind": "gate", "check": "review-command", "params": {"argv": ["review", "{child}"], "deadline": 60}})
+    node(d, "route")["review"] = "child_review"
+
+
 def _rule_cases():
     """One mutation per rule: every GraphError site of squad/graph.py has a case here."""
     c = []
@@ -84,6 +91,10 @@ def _rule_cases():
     d = router(); node(d, "router")["may_spawn"] = False; add("entry lacks may_spawn", d)
     d = router(); node(d, "router")["when"] = {"fact": "git", "op": "eq", "value": True}; add("entry carries a when", d)
     d = router(); node(d, "main")["children"].append("router"); add("dispatch two parents", d)
+    d = router(); _review(d); node(d, "route")["review"] = "scope_gate"; add("dispatch review not a review-command gate", d)
+    d = router(); _review(d); del node(d, "route")["review"]; node(d, "route")["checks"].append("child_review"); add("review-command gate outside a review", d)
+    d = router(); _review(d); node(d, "child_review")["params"]["argv"] = []; add("review-command argv empty", d)
+    d = router(); _review(d); node(d, "child_review")["params"]["deadline"] = 0; add("review-command deadline zero", d)
     return c
 
 
