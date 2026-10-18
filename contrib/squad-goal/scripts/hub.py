@@ -3113,13 +3113,15 @@ def served_page():
     return PAGE.replace("__REPO__", REPO).replace('"__MODELID__"', json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
 
 
+def own_host(h):
+    """The one Host rule for GET and POST: the hub's own loopback name and port, so a page that rebinds its name to 127.0.0.1 is refused. `h` is any handler, the mux's too, which runs these routes."""
+    return (h.headers.get("Host") or "") in (f"127.0.0.1:{h.server.server_port}", f"localhost:{h.server.server_port}")
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
-    def own_host(self):
-        """The one Host rule for GET and POST: the hub's own loopback name and port, so a page that rebinds its name to 127.0.0.1 is refused."""
-        return (self.headers.get("Host") or "") in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}")
     def do_GET(self):
-        if not self.own_host():
+        if not own_host(self):
             self.send_response(403); self.send_header("Content-Length", "0"); self.end_headers(); return
         if self.path.startswith("/test/"):   # a test.sh pass: its log, refreshed while it runs
             n = re.sub(r"[^\w-]", "", self.path[6:]); T = STATE / "tests"
@@ -3149,7 +3151,7 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         # loopback only, and a cross-site page must not be able to write: require our own origin and a JSON body
         org = self.headers.get("Origin") or ""
-        ok = self.path in ("/api/models", "/api/plans") and self.own_host() and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
+        ok = self.path in ("/api/models", "/api/plans") and own_host(self) and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
         try:
             if not ok: out = {"err": "forbidden"}
             else: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}"))
