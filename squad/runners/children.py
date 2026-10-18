@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import anyio
 
-from squad import actions, git, node_commit, session
+from squad import actions, git, limits, node_commit, session
 from squad.adapter import CallRequest, new_session_id
 from squad.caps import CeilingWaitExpired
 from squad.engine_errors import Frontier
@@ -168,6 +168,7 @@ class Children:
         out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             e.record.append("model_refused", node=name, entry=1, model=m, error=err[:session.CHAIN_LINE])
+            limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
         if out.kind == "deadline":
             return slot["ev"]
         return self.close(ctx, name, d, ws, out, model, session.chain_message(tried) if session.exhausted(chain, tried) else None)

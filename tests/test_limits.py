@@ -9,7 +9,7 @@ until that time. A refusal with no readable reset time writes nothing, so the ch
 import ast
 import pathlib
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -27,12 +27,14 @@ LAUNCH = ROOT / "contrib/squad-goal/scripts/launch.py"
 # The subscription's own refusal, as the CLI prints it: no HTTP status, and the reset it names in its own words.
 SESSION_LIMIT = ("ResultError: Claude Code returned an error result: "
                  "You've hit your session limit · resets 6:49am (America/Sao_Paulo) (exit code: 1)")
+LIMIT_UTC = ("ResultError: Claude Code returned an error result: "
+             "You've hit your session limit · resets 6:49am (UTC) (exit code: 1)")   # the same refusal on a clock a test can name
 NO_RESET = "ResultError: Claude Code returned an error result: You've hit your session limit (exit code: 1)"
 
 TERRA = "claude-gpt-5.6-terra"
 # 05:57 UTC on the day the loop named terra again; the refusal says 06:49, so the marker is that same morning.
-NOW = datetime(2026, 10, 18, 5, 57, tzinfo=timezone.utc).timestamp()
-RESET = datetime(2026, 10, 18, 6, 49, tzinfo=timezone.utc).timestamp()
+NOW = datetime(2026, 10, 18, 5, 57, tzinfo=UTC).timestamp()
+RESET = datetime(2026, 10, 18, 6, 49, tzinfo=UTC).timestamp()
 
 REQUEST = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": TERRA, "effort": "medium",
            "tools": ["Read", "Edit"], "stalls": 4, "spend": 1.0, "deadline": 100, "workspace": "worktrees/child"}
@@ -66,7 +68,7 @@ def engine(tmp_path, script):
 
 
 def test_a_session_limit_names_the_epoch_of_its_reset():
-    assert limits.reset_epoch(SESSION_LIMIT, now=NOW) == RESET
+    assert limits.reset_epoch(LIMIT_UTC, now=NOW) == RESET
 
 
 def test_a_session_limit_without_a_zone_reads_the_local_clock():
@@ -77,8 +79,8 @@ def test_a_session_limit_without_a_zone_reads_the_local_clock():
 
 
 def test_a_reset_time_already_past_is_the_next_time_that_clock_comes_round():
-    later = datetime(2026, 10, 18, 7, 0, tzinfo=timezone.utc).timestamp()   # the refusal came after its own reset clock
-    assert limits.reset_epoch(SESSION_LIMIT, now=later) == datetime(2026, 10, 19, 6, 49, tzinfo=timezone.utc).timestamp()
+    later = datetime(2026, 10, 18, 7, 0, tzinfo=UTC).timestamp()   # the refusal came after its own reset clock
+    assert limits.reset_epoch(LIMIT_UTC, now=later) == datetime(2026, 10, 19, 6, 49, tzinfo=UTC).timestamp()
 
 
 def test_a_refusal_with_no_reset_time_names_no_epoch():
@@ -93,7 +95,7 @@ def test_the_marker_names_the_provider_account_never_the_model():
 
 
 def test_a_refusal_with_a_reset_time_writes_the_marker_until_it(tmp_path):
-    path = limits.write(TERRA, SESSION_LIMIT, shared=tmp_path, now=NOW)
+    path = limits.write(TERRA, LIMIT_UTC, shared=tmp_path, now=NOW)
     assert path == tmp_path / "codex-limited"
     assert int(path.read_text()) == RESET                                # the same epoch format review.sh writes
 
@@ -111,6 +113,23 @@ def test_a_model_with_no_provider_marker_writes_nothing(tmp_path):
 def test_no_shared_directory_writes_no_marker(tmp_path, monkeypatch):
     monkeypatch.delenv("SG_SHARED", raising=False)
     assert limits.write(TERRA, SESSION_LIMIT) is None
+
+
+@pytest.mark.anyio
+async def test_an_agent_node_refused_for_its_session_limit_writes_the_marker(tmp_path, monkeypatch):
+    """The other call site: an agent node, not a dispatch child, is refused for the same account."""
+    shared = tmp_path / "shared"
+    monkeypatch.setenv("SG_SHARED", str(shared))
+    d = router()
+    d["run"]["deadline"] = 7200
+    next(n for n in d["nodes"] if n["name"] == "router")["model"] = TERRA
+    eng = Engine(from_doc(d), ScriptedAdapter({"router": [{"error": SESSION_LIMIT}]}, repeat_last=True),
+                 tmp_path, target=sibling_repo(tmp_path))   # the router answers on the envelope's chain: every entry refuses
+    v = await eng.run()
+    assert v.verdict == "failed"
+    marker = shared / "codex-limited"
+    soon = time.time()
+    assert marker.is_file() and soon < int(marker.read_text()) <= soon + 24 * 3600
 
 
 @pytest.mark.anyio

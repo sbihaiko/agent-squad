@@ -3,7 +3,7 @@ import json
 
 import anyio
 
-from squad import adapt, session
+from squad import adapt, limits, session
 from squad.adapter import CallRequest, new_session_id
 
 
@@ -69,6 +69,7 @@ class AgentRunner:
         out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin))
         for m, err in tried:    # every refusal is on the record, exhausted chain or not (#494)
             ctx.record.append("model_refused", node=node["name"], entry=entry, model=m, error=err[:session.CHAIN_LINE])
+            limits.write(m, err)    # a refusal that names its reset closes that account until then (#572)
         if session.exhausted(chain, tried):    # every entry refused to serve: one fail, naming each entry and its error
             return fin("fail", ["adapter_error"], spend=None, cap=out.res.amount, elapsed=out.elapsed,
                        diagnostic={"error": session.chain_message(tried)}, **who)
