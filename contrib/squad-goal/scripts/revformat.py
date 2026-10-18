@@ -31,12 +31,25 @@ is the shape and the debt-only path sees blocking=0 (ADR-0273 Decision 3/5). A b
 --summary output the loop's own passes read, and the debt filer asks it, so no two readers can
 disagree.
 
+A review's findings are also read by their fingerprint (ADR-0134): the fix pass stops a branch's
+rounds when a round leaves the findings as they were, and a child fix round asks the same rule. --fingerprint
+drops line 1, a moved line number, a sha and whitespace, the reading `branchfixpass.sh` kept, so its
+markers still match; --stall counts the failed rounds in a row for one marker set (`<dir>/<prefix>-fp-<key>`
+and `-same-<key>`, so each pass keeps its own), and --record-stall keeps the round for the next pass.
+
 usage: revformat.py [--max-lines N] [--fix-round] <review>
                                            exit 0 = the shape holds; 1 = one reason on stdout
        revformat.py --summary <review>     prints "blocking=N debt=N" (0 when the shape is broken)
        revformat.py --shape [--fix-round]  prints the answer shape of that mode, and checks nothing (#1835)
+       revformat.py --fingerprint <review> prints the fingerprint of the review's findings
+       revformat.py --stall <dir> <prefix> <key> <fingerprint>
+                                           prints the failed rounds in a row for that marker set (ADR-0134)
+       revformat.py --record-stall <dir> <prefix> <key> <fingerprint> <rounds>
+                                           keeps this round's findings and count for the next pass
 """
 import argparse
+import hashlib
+import os
 import re
 import sys
 
@@ -120,6 +133,52 @@ def count(review):
         if is_finding(section, text):
             counts[section] += 1
     return counts
+
+
+def findings_fingerprint(review):
+    """The fingerprint of a review's findings: a round that fixed nothing keeps it (ADR-0134). `review` is its bytes.
+
+    Line 1 (the verdict) is dropped, a line number after a colon and a sha are removed, and whitespace is squeezed to
+    one space, so a moved line or a new sha is not a change; SHA-1 of the result, cut to 16 characters. The bytes are
+    the ones branchfixpass.sh read before the reading moved here, so a marker that pass kept still matches.
+    """
+    body = review.split(b"\n", 1)[1] if b"\n" in review else b""   # tail -n +2: the verdict line is not a finding
+    body = re.sub(rb":[0-9]+", b":", body)                          # a line number that moved
+    body = re.sub(rb"[0-9a-f]{7,40}", b"", body)                    # a sha, short or whole
+    body = re.sub(rb"[ \t\n]+", b" ", body)                         # whitespace of any kind, squeezed (tr -s)
+    return hashlib.sha1(body).hexdigest()[:16]
+
+
+def _marker(path):
+    """A marker's text, without the newline the writer gave it; '' when there is no marker."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().rstrip("\n")
+    except OSError:
+        return ""
+
+
+def stall_rounds(markers, prefix, key, fingerprint):
+    """The failed rounds in a row that this round carries, counted as branchfixpass.sh counted them (ADR-0134).
+
+    A round fails when the findings are the ones the last round left, and the count rises by one. A changed fingerprint
+    restarts the count at zero: the next round with those findings counts one. The prefix and the key name the markers
+    (`<markers>/<prefix>-fp-<key>` and `-same-<key>`), so each pass keeps its own.
+    """
+    if _marker(os.path.join(markers, f"{prefix}-fp-{key}")) != fingerprint:
+        return 0
+    try:
+        return int(_marker(os.path.join(markers, f"{prefix}-same-{key}"))) + 1
+    except ValueError:
+        return 1                    # a marker that carries no count is no count: the round before it was the first
+
+
+def record_stall(markers, prefix, key, fingerprint, rounds):
+    """Keep this round's findings and its count for the next pass, as branchfixpass.sh kept them."""
+    os.makedirs(markers, exist_ok=True)
+    for name, value in ((f"{prefix}-fp-{key}", fingerprint), (f"{prefix}-same-{key}", rounds)):
+        with open(os.path.join(markers, name), "w", encoding="utf-8") as f:
+            f.write(f"{value}\n")
 
 
 def survey(review, max_lines=0, fix_round=False):
@@ -287,12 +346,27 @@ def main(argv=None):
     p.add_argument("--shape", action="store_true",
                    help="print the answer shape of this mode (with --fix-round, the fix round's), and check nothing:"
                    " what review.sh embeds in the prompt, verbatim (#1835)")
+    p.add_argument("--fingerprint", action="store_true",
+                   help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
+    p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),
+                   help="print the failed rounds in a row for that marker set (0 when the findings changed)")
+    p.add_argument("--record-stall", nargs=5, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT", "ROUNDS"),
+                   help="keep this round's findings and count for the next pass")
     a = p.parse_args(argv)
+    if a.stall:
+        print(stall_rounds(*a.stall))
+        return 0
+    if a.record_stall:
+        record_stall(*a.record_stall)
+        return 0
     if a.shape:
         print(shape(a.fix_round))
         return 0
     if not a.review:
-        p.error("a review is required (or - for stdin), unless --shape is asked for")
+        p.error("a review is required (or - for stdin), unless --shape, --stall or --record-stall is asked for")
+    if a.fingerprint:
+        print(findings_fingerprint(sys.stdin.buffer.read() if a.review == "-" else open(a.review, "rb").read()))
+        return 0
     text = sys.stdin.read() if a.review == "-" else open(a.review, encoding="utf-8", errors="replace").read()
     if a.normalize:
         print(normalize(text), end="" if text.endswith("\n") else "\n")

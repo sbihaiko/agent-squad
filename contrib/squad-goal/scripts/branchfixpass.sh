@@ -24,8 +24,8 @@ A="$SG_STATE/auto"; mkdir -p "$A"
 # run. The labels come from the open-issue list sg_work_branches already read, so this costs no call.
 held=" $(printf '%s' "$wb_issues" | jq -r --arg s "${SG_FRONTIER_SKIP_LABELS:-}" '($s|split(",")|map(select(.!=""))) as $k
   | .[] | select([.labels[]?.name] | any(. as $l | $k | index($l))) | .number' 2>/dev/null | tr '\n' ' ') "
-# The findings of a review, read so that a moved line or a new sha is not a change.
-findings() { tail -n +2 "$1" | sed -E 's/:[0-9]+/:/g; s/[0-9a-f]{7,40}//g' | tr -s ' \t\n' ' ' | shasum | cut -c1-16; }
+# The fingerprint of a review's findings and the failed rounds in a row are revformat.py's reading (ADR-0134), so a
+# child fix round asks the same rule: a moved line or a new sha is not a change.
 done=0
 while read -r sha br i; do
   [ -n "$br" ] && [ "$done" -lt "$max" ] || continue
@@ -36,8 +36,7 @@ while read -r sha br i; do
   # a CHANGES with no Blocking finding (debt only) is an approval: no fix round, as the loop's own passes treat it (revformat.py count)
   python3 "$here/revformat.py" --summary "$f" 2>/dev/null | grep -q '^blocking=0 ' && continue
   [ -e "$A/branchfix-$key-$s9" ] && continue
-  fp=$(findings "$f"); same=0
-  [ "$(cat "$A/branchfix-fp-$key" 2>/dev/null)" = "$fp" ] && same=$(( $(cat "$A/branchfix-same-$key" 2>/dev/null || echo 0) + 1 ))
+  fp=$(python3 "$here/revformat.py" --fingerprint "$f"); same=$(python3 "$here/revformat.py" --stall "$A" branchfix "$key" "$fp")
   if [ "$same" -ge "$cap" ]; then
     [ "$(cat "$A/branchfix-stop-$key" 2>/dev/null)" = "$fp" ] && continue
     printf 'Status update — branch %s @ %s: %s fix rounds left the same review findings, so the loop stopped its fix rounds (ADR-0134). The card is frozen for the owner (frozen:owner). A push with other findings restarts the rounds.\n' "$br" "$s9" "$same" > "$(sg_cq_status "$i" "branchfix$$")"
@@ -55,7 +54,7 @@ while read -r sha br i; do
   run=$(cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req" 2>/dev/null | tail -1)
   [ -n "$run" ] || { echo "BRANCHFIX $br @ $s9: launch.py printed no run id, so no fix run started; the next pass retries"; continue; }
   /usr/bin/git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place
-  echo "$run" > "$A/branchfix-$key-$s9"; echo "$fp" > "$A/branchfix-fp-$key"; echo "$same" > "$A/branchfix-same-$key"; rm -f "$A/branchfix-stop-$key"
+  echo "$run" > "$A/branchfix-$key-$s9"; python3 "$here/revformat.py" --record-stall "$A" branchfix "$key" "$fp" "$same"; rm -f "$A/branchfix-stop-$key"
   find "$A" -maxdepth 1 -name "branchfix-$key-?????????" ! -name "*-$s9" -delete 2>/dev/null
   echo "BRANCHFIX $br @ $s9 (issue #$i): fix round dispatched ($same failed rounds with no change before it) -> $run"
 done <<EOT
