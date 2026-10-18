@@ -20,7 +20,7 @@ r=$(CL_MODE=files python3 "$d/cluster.py" <<<"$I"); echo "$r" | /usr/bin/grep -q
 # autobug: clusters become children. single.sh and startability.sh travel with the dispatchers: both run the pass under
 # single.sh (#1514) and source startability.sh (which sources ghcall.sh beside it), so a sandbox without them cannot start
 # a pass at all. envelope-spend.sh is what the request builder reads its child's spend from; address.sh is the seam.
-mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$d/envelope-spend.sh" "$T/s/"; : > "$T/st/active-runs.txt"
+mkdir -p "$T/bin" "$T/st/auto" "$T/co/docs/squad/workflows" "$T/s"; cp "$d/autobug.sh" "$d/autofrontier.sh" "$d/cluster.py" "$d/single.sh" "$d/startability.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/address.sh" "$d/envelope-spend.sh" "$d/refusal-names.sh" "$d/workbranches.sh" "$T/s/"; : > "$T/st/active-runs.txt"
 printf 'caps:\n  runs: 10\n' > "$T/co/docs/squad/defaults.yaml"   # the project lowers the machine-wide caps.runs
 printf 'export SG_REPO=x/y SG_STATE=%s SG_BASE=main SG_CHECKOUT=%s SG_FRONTIER_LABEL=ready-for-agent\n' "$T/st" "$T/co" > "$T/s/env.sh"   # exported, as the real env.sh does: a pass re-execs itself under single.sh, and an unexported SG_STATE is lost there
 printf '%s' "$I" > "$T/issues.json"; printf '#!/bin/bash\necho READY\n' > "$T/s/stack.sh"; chmod +x "$T/s/stack.sh"
@@ -42,9 +42,10 @@ r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1); case "$r" in *"[1301 1302]"*) ca
 # One fork-only slice that shares a file with another fork-only pick is ONE child / ONE branch, exactly as the base-branch
 # picks above (#1521): gui/1497, gui/1498 and gui/1502 each landed their own branch on contrib/squad-goal/scripts/hub.py,
 # and the three of them stopped the merge until a hand resolved them.
-FK='[{"number":1500,"title":"Hub: cost panel","body":"contrib/squad-goal/scripts/hub.py in the spend header","labels":[{"name":"squad-only"}],"created_at":"2026-10-11T09:00:00Z"},
-{"number":1501,"title":"Hub: run badge","body":"also contrib/squad-goal/scripts/hub.py, the badge","labels":[{"name":"squad-only"}],"created_at":"2026-10-11T09:01:00Z"},
-{"number":1502,"title":"Hub: another panel","body":"nothing to do with the others","labels":[{"name":"squad-only"}],"created_at":"2026-10-11T09:02:00Z"}]'
+# Each carries SG_FRONTIER_LABEL: the frontier takes only an issue that wears it (#485).
+FK='[{"number":1500,"title":"Hub: cost panel","body":"contrib/squad-goal/scripts/hub.py in the spend header","labels":[{"name":"squad-only"},{"name":"ready-for-agent"}],"created_at":"2026-10-11T09:00:00Z"},
+{"number":1501,"title":"Hub: run badge","body":"also contrib/squad-goal/scripts/hub.py, the badge","labels":[{"name":"squad-only"},{"name":"ready-for-agent"}],"created_at":"2026-10-11T09:01:00Z"},
+{"number":1502,"title":"Hub: another panel","body":"nothing to do with the others","labels":[{"name":"squad-only"},{"name":"ready-for-agent"}],"created_at":"2026-10-11T09:02:00Z"}]'
 printf '%s' "$FK" > "$T/issues.json"
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *"[1500 1501]"*) ok "frontier: fork-only issues naming one file share one child";; *) ko "fork-only cluster: '$r'";; esac
