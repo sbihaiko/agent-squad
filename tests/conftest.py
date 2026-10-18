@@ -67,6 +67,15 @@ def _stop_test_dashboard_servers(tmp_path_factory):
     stop_test_dashboard_servers(tmp_path_factory.getbasetemp())
 
 
+@pytest.fixture(autouse=True)
+def _stop_dashboard_servers_per_test(tmp_path_factory):
+    """A test that starts a run or a dashboard leaves no server when it ends: each server idles up to 2 h, and a suite that starts one per test piles them up.
+    A worker's basetemp is its own, so the stop reaches no server of another worker or session."""
+    yield
+    from tests.dashstop import stop_dashboards_by_state
+    stop_dashboards_by_state(tmp_path_factory.getbasetemp())
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
