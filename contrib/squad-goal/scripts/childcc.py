@@ -20,7 +20,9 @@ work when its entry reaches the review and the gates; a child its requeue holds 
 costs nothing. The cursor (auto/childcc-cursor) names the last child worked, and the next pass starts after it, so a child
 held on every pass does not take every pass. A review takes one review slot of the machine-wide budget (caps.reviews, squad/caps.py), in try mode: a full budget skips the review for this pass with one log line and leaves the child for a later pass, so this pass never waits for a slot while it holds the childcc lock (SG_LAND_WAIT).
 A pass that leaves a child that had no turn since the last complete pass
-(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it.
+(auto/childcc-round) exits 3, never 0: the landing waits for that child, and a 0 would land the wave without it. A child
+its entry held (WAVE HOLD: neither entered nor requeued) is no ruling either, so it stays left until its wave reaches its
+age cap; SG_HOLD_TRIES review holds on one head (3 by default) requeue it with that reason, so the wave can land (#620).
 A child whose own engine landing failed never enters: its work did not reach the run's target, so its issue goes back to
 the queue once with the landing's reason, and no card moves (#592).
 With the shipped vocabulary a child whose review starts, or that is deferred while it waits for review, moves its card from
@@ -45,6 +47,8 @@ childreview = str(pathlib.Path(__file__).resolve().parent / "childreview.sh")   
 state = board_state()   # the dispatch pass asks the seam what state an issue carries, never the carrier (#236)
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
 SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
+HOLD_TRIES = int(os.environ.get("SG_HOLD_TRIES") or 3)   # the review holds on one head before the child is requeued (#620)
+HOLDS = set()   # the children this pass held out of their wave, neither entered nor requeued: the landing waits for them (#620)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
 NOW = A / "childcc-now.json"   # what the hub shows of this pass (#598): its pid and start, and each child it holds with its step and since when it waits
@@ -177,6 +181,18 @@ def enter(rd, child, n, d, approved=False):
         why = f"the review of its own diff asked for changes: {first_finding(wt)}"
         subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
         rq.write_text(head_of(wt) + "\n"); out += f"\nCHILD REVIEW REQUEUE #{n}: {why}"
+    elif e.returncode != 0 and "WAVE HOLD" in out:   # held, not requeued: the wave waits for it (#620)
+        HOLDS.add(f"{rd.name} {child}")
+        if re.search(r"WAVE HOLD #\d+: (no review|the review of)", out):   # a review hold, never a gate one: bounded per head, so a dead review chain never holds the wave for its whole age cap
+            hk, h = A / f"holds-{rd.name}-{child}", head_of(wt)
+            try: was, k = hk.read_text().split()
+            except (OSError, ValueError): was, k = "", "0"
+            k = int(k) + 1 if was == h else 1
+            hk.write_text(f"{h} {k}\n")
+            if k >= HOLD_TRIES:
+                why = f"its review held it {k} times on head {h[:9]} with no verdict"
+                subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})
+                rq.write_text(h + "\n"); hk.unlink(); HOLDS.discard(f"{rd.name} {child}"); out += f"\nCHILD HOLD REQUEUE #{n}: {why}"
     return e.returncode == 0, out or f"WAVE no entry for #{n} (exit {e.returncode})", True
 def card_status(n):   # the state the card carries, "" when it carries none or the carrier does not answer
     try: return state.read(n)
@@ -242,13 +258,16 @@ for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
     if worked is None: visited.discard(key); continue   # the review budget was full: this child had no turn, so the pass leaves it (exit 3) and the next one tries it first
     if worked: spent += 1; CURSOR.write_text(key + "\n")
     if why: print(why, flush=True)
+    if key in HOLDS and subprocess.run(["bash", wave, "expired", name], capture_output=True).returncode:   # a held child is no ruling: it stays left, so the pass exits 3 and the wave waits, until its age cap (#620)
+        visited.discard(key)
     if entered is False: continue   # the child never entered the wave: no marker, so the next pass tries it again; no card moves, its issue went back to the queue
     mk.touch()
     if entered is None: subprocess.run([board, owner, proj, "Code Complete", str(n)], capture_output=True)   # no wave: the pass moves the card itself
     (st / "cq" / f"{CQ}#{n}-cc-{mk.name}.md").write_text(f"Child {child} of squad run {name} finished: pass. Card -> Code Complete (Testing starts with the merge/e2e or the fork suite). {why[:600]}\n")
     print(f"CODE COMPLETE #{n} ({name} {child})")
 # The round holds the children worked since the last complete pass. A pass is complete when every child it left had its turn
-# in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did.
+# in the round: a child that fails on every pass then still lets the landing go on, as one pass over every child did. A held
+# child is never in `visited` (#620): it holds the landing until its hold is requeued or its wave reaches its age cap.
 rnd = set(ROUND.read_text().split("\n")) - {""} if ROUND.exists() else set()
 keys = {p[0] for p in pending}
 left = [k for k in keys - visited if k not in rnd]

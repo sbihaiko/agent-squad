@@ -429,6 +429,9 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       local dispatched="" delivered=""
       for n in $(run_issues "$rd"); do
         dispatched="${dispatched:+$dispatched, }#$n"
+        # A child that entered this wave (entered-<run>-<n>) and still leaves it empty reached the base by another route,
+        # whatever its message says: the entry is the proof, so it is delivered, never requeued (#620).
+        [ -e "$SG_STATE/auto/entered-$run-$n" ] && { delivered="${delivered:+$delivered }$n"; continue; }
         sc log --format=%B%x1e -E --grep="Refs #$n([^0-9]|\$)" "origin/$base" 2>/dev/null \
           | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
       done
