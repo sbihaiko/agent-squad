@@ -228,5 +228,10 @@ run q1; /usr/bin/grep -q '^Coding model: claude-deepseek-flash\[1m\]' "$R/q1.txt
 rm -f "$R/q1.txt"; echo $(( $(date +%s) - 60 )) > "$T/shared/codex-limited"
 run q1; /usr/bin/grep -q '^Coding model: claude-gpt-5.6-terra' "$R/q1.txt" 2>/dev/null && ok "an expired quota marker skips nothing" || ko "expired marker still skips: $(/usr/bin/grep '^Coding model' "$R/q1.txt" 2>/dev/null)"
 cp "$T/models.keep" "$S/models.json"; rm -f "$R/q1.txt"
+# (#658) every request, the coding child's and the fix run's, forbids a write outside the worktree and the live skill copy.
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/q658.py\n' > "$T/w658.body"
+run w658; /usr/bin/grep -qF 'Never write outside your worktree; never run publish-live.sh and never touch ~/.claude/skills' "$R/w658.txt" 2>/dev/null \
+  && ok "the request forbids writes outside the worktree and the live skill copy" || ko "no live-copy line in the request: $(cat "$T/w658.err")"
+rm -f "$R/w658.txt"
 [ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
 cat "$log"; rm -rf "$T"; exit $fail
