@@ -1,6 +1,7 @@
 #!/bin/bash
 # Regression test for childcc.py (stub gh + board, no network). usage: bash test-childcc.sh [path/to/childcc.py]
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
+unset SG_BOARD_VOCAB   # the old-vocabulary case needs it unset; a caller that exports it must not turn the suite red
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -56,11 +57,10 @@ echo "$m" | /usr/bin/grep -q ' 1493$' && ok "Refs #N, the dispatchers' own link:
 echo "$m" | /usr/bin/grep -q ' 1500$' && ok "hash pattern still wins first" || ko "hash pattern lost first-match"
 echo "$out" | /usr/bin/grep -q 'CHILDCC UNMAPPED unmapped c' && ok "unmapped child logged once" || ko "unmapped child not logged: $out"
 echo "$out" | /usr/bin/grep -c 'CHILDCC UNMAPPED unmapped c' | /usr/bin/grep -qx 1 && ok "unmapped child logged once only" || ko "unmapped child logged more than once"
-grep -c '^create' "$T/gh.log" | grep -qx 1 && ok "two children: one parent created, none for the one-child run" || ko "parent creates: $(cat "$T/gh.log" 2>/dev/null)"
-[ "$(grep -c '^link' "$T/gh.log")" = 2 ] && ok "two children: both linked as sub-issues" || ko "links: $(cat "$T/gh.log" 2>/dev/null)"
-echo "$out" | /usr/bin/grep -q 'RUN PARENT #900 (two)' && ok "the run's parent is reported" || ko "no parent report: $out"
-grep '^create' "$T/gh.log" | grep -q '"labels": \["run-parent", "enhancement"\]' && ok "the parent carries its run and type labels, so no pass dispatches it (#340)" || ko "parent create body: $(grep '^create' "$T/gh.log")"
-echo "$out" | /usr/bin/grep -q 'RUN PARENT .*(fin-two)' && ko "a finished run got a parent (#340)" || ok "a finished run gets no parent (#340)"
+# No run parent (#559): a run of two children creates no issue and links no sub-issue; the run's summary rides the janitor's terminal comment.
+[ ! -s "$T/gh.log" ] || ! grep -q '^create' "$T/gh.log" && ok "two children: no issue is created" || ko "creates: $(cat "$T/gh.log" 2>/dev/null)"
+! grep -q '^link' "$T/gh.log" 2>/dev/null && ok "two children: no child is linked as a sub-issue" || ko "links: $(cat "$T/gh.log" 2>/dev/null)"
+echo "$out" | /usr/bin/grep -q 'RUN PARENT' && ko "a run parent is reported: $out" || ok "no pass reports a run parent"
 
 # A run with a wave (#375): the entry is wave.sh's, stubbed here. A child that its gates refused is tried again only on a new
 # HEAD, and a run whose wave landed (wave-<run> gone, waved-<run> kept) never moves a child's card to Code Complete.

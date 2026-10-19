@@ -53,7 +53,7 @@ J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 mkdir -p "$T/co/runs/run-a"; echo run-a > "$T/st/active-runs.txt"
 printf 'CHILD — GitHub issue(s) 2201, 2203, 2204:\n' > "$T/co/runs/run-a/request.txt"
-printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
+printf '%s\n' '{"event":"run_start","run_id":"run-a","ts":"2026-10-14T08:00:00Z"}' '{"event":"spawn_accepted","child":"a","definition":"GitHub issue #2201"}' '{"event":"spawn_accepted","child":"b","definition":"GitHub issue #2203"}' '{"event":"verdict","verdict":"pass","reasons":[],"exit_code":0}' > "$T/co/runs/run-a/record.jsonl"
 run() { SG_BOARD_VOCAB=shipped SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_LAND_BRANCH=dev SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1; }
 o=$(run); r1=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null); : > "$T/gh.calls"; o2=$(run); r2=$(/usr/bin/grep -c 'issues/2208' "$T/gh.calls" 2>/dev/null)
 has() { /usr/bin/grep -q "$1" "$T/board.calls" 2>/dev/null; }
@@ -81,4 +81,11 @@ note 2205 | /usr/bin/grep -q 'gui/2205-b' && ok "a settled Closed card with no c
 for n in 2201 2202 2203 2205; do [ "$(count $n)" = 1 ] || ko "#$n has $(count $n) terminal comments after two passes, not one"; done
 [ "$fail" = 0 ] && ok "every terminal entry has exactly one comment after two passes"
 note 2201 | /usr/bin/grep -q 'squad-goal:terminal' && ok "the comment carries the tag the backfill reads" || ko "no tag: $(note 2201)"
+# The run's summary rides each child's terminal comment, so a run parent is never needed (#559): the run id, the other
+# children, the verdict and the dashboard command. A card no run holds gets the plain comment.
+for n in 2201 2203; do other=2203; [ $n = 2203 ] && other=2201
+  note $n | /usr/bin/grep -q 'run-a' && note $n | /usr/bin/grep -q "#$other" && note $n | /usr/bin/grep -q 'pass' && note $n | /usr/bin/grep -q 'dashboard run-a' \
+    && ok "#$n's terminal comment carries the run id, the other child #$other, the verdict and the dashboard command" || ko "#$n comment has no run summary: $(note $n)"
+done
+note 2205 | /usr/bin/grep -q 'dashboard' && ko "#2205 belongs to no run but its comment names a dashboard: $(note 2205)" || ok "a card no run holds gets no run summary"
 [ "$fail" = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

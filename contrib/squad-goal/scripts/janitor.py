@@ -555,10 +555,21 @@ def terminal_facts(n, col):   # the facts a terminal comment states (#245), or N
         ok, who = door_read(f"repos/{repo0}/issues/{n}/events?per_page=100", CLOSER)
         return {"who": who, "why": "closed as a duplicate (superseded by another issue)" if reason == "duplicate" else "closed as not planned"} if ok else None
     return None
+def run_summary(n):   # the run that worked issue n as a child, as text for its terminal comment (#559): the run id, the other children, the verdict and the dashboard command; "" when no run held it
+    best = None
+    for r in keep:
+        i = read(folder(r))
+        if not i or not any(str(n) in v for v in i["kid_issue"].values()): continue
+        if best is None or str(i["run_ts"]) >= str(best["run_ts"]): best = i
+    if best is None: return ""
+    others = sorted({int(x) for v in best["kid_issue"].values() for x in v} - {int(n)})
+    return (f"Run {best['run_id']}: other children {', '.join(f'#{k}' for k in others) or 'none'}; verdict {best['name']}. "
+            f"Dashboard: `squad dashboard {best['run_id']}`.\n")
 def queue_terminal(n, col, note):   # one comment per terminal entry, through the queue cqflush.sh posts from; the marker keeps a repeat pass from queuing it twice
     mk = st / "auto" / f"janitor-terminal-{n}"
     if mk.exists() and mk.read_text().strip() == col: return
     say(f"TERMINAL-COMMENT #{n}: {col} -> {note.splitlines()[-1]}")
+    note += run_summary(n)   # the run's summary rides the comment this pass already posts: no other write path
     if dry: return
     (st / "cq").mkdir(exist_ok=True)
     (st / "cq" / f"{CQ}#{n}-terminal-{os.getpid()}.md").write_text(note)

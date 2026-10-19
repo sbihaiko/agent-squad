@@ -37,7 +37,7 @@ A dispatch child with fix entries (#570) has one passing `outcome` per entry: th
 import json, os, pathlib, re, subprocess, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
-from issue_state import board_state, RunParentChild
+from issue_state import board_state
 st = pathlib.Path(os.environ["SG_STATE"]); A = st / "auto"; A.mkdir(parents=True, exist_ok=True)
 repo, owner, proj = os.environ["SG_REPO"], os.environ["SG_OWNER"], os.environ["SG_PROJECT"]
 CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <owner>__<repo>#<n>-<tag>.md: cqflush.sh posts it to the repository it names
@@ -223,11 +223,6 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             if isinstance(rv, dict): verdict[d["node"]] = rv.get("verdict")   # the run's own review of the child (#599, #601)
             if d.get("outcome") != "pass": failed[d["node"]] = (d.get("reasons") or ["the landing failed"])[0]   # the child's own engine landing: its work is not in the run's target (#592)
     name = pathlib.Path(r).name; runs.add(name)
-    mk = A / f"parent-{name}"
-    if not finished and not mk.exists() and len(set(issue.values())) > 1:   # a finished run gets no parent: no backfill (#340)   # a run that dispatched more than one child: one parent names the run, the seam writes and proves the links (#304)
-        try: print(f"RUN PARENT #{state.group_run(name, issue.values())} ({name})"); mk.touch()
-        except RunParentChild as e: print(f"RUN PARENT REFUSED {name}: {e}"); mk.touch()   # asking again can not change it
-        except RuntimeError as e: print(f"RUN PARENT FAILED {name}: {e}")   # no marker: the next pass asks again
     for child, why in done.items():
         if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve"))
     for child in unmapped:
