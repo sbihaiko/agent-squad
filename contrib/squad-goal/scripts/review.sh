@@ -50,7 +50,28 @@ else
   tipdiff() { git -C "$wt" diff "$wbase"...HEAD 2>/dev/null; }
   filesof() { git -C "$wt" diff --name-only "$wbase"...HEAD 2>/dev/null; }
 fi
- last="$SG_STATE/review-$pr.sha"; prevmd="$SG_STATE/review-$pr.prev.md"; delta=""
+# #624: one review of a branch at a time. runreview.sh and childcc.py both review a child through childreview.sh, and two
+# chains on the same files read each other's answer: one chain's BLOCKED line became the other model's MODEL_FORMAT, or a
+# model wrote to a file the other had unlinked. The lock is a kernel lock on fd 9 (flock): it goes when the review exits, a
+# killed one included. fd 9 is closed for the model's process group (capraw), so an orphaned CLI never holds it. The wait is
+# bounded (SG_REVIEW_LOCK_WAIT, default 3600 s, beyond a whole chain of review_timeout_seconds).
+out="$SG_STATE/review-$pr.md"; last="$SG_STATE/review-$pr.sha"
+exec 9>>"$SG_STATE/review-$pr.lock"
+python3 -c 'import fcntl, sys, time
+d = time.time() + float(sys.argv[1])
+while True:
+    try: fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+    except BlockingIOError:
+        if time.time() > d: sys.exit(1)
+        time.sleep(1)' "${SG_REVIEW_LOCK_WAIT:-3600}" || { echo "REVIEW $lbl: another review of this branch held it past ${SG_REVIEW_LOCK_WAIT:-3600}s" >&2; exit 1; }
+# The review this one waited for may have ruled on this very head: its verdict is reused, and no model is called again.
+if [ -s "$last" ] && [ "$(cat "$last")" = "$head" ] && head -1 "$out" 2>/dev/null | grep -qE '^VERDICT: (APPROVE|CHANGES)'; then
+  echo "model=$(cat "$SG_STATE/review-$pr.model" 2>/dev/null || echo unknown) (reused: this head was reviewed) $(head -1 "$out")"; exit 0; fi
+# Each try writes private files ($o and its siblings); only a verdict, or the BLOCKED line, is published to $out, by a rename.
+o="$out.$$"; e="$o.err"
+trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".*' EXIT
+publish() { printf '%s\n' "$1" > "$o.pub" && mv -f "$o.pub" "$out"; }
+prevmd="$SG_STATE/review-$pr.prev.md"; delta=""
 if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/review-$pr.md" | grep -q CHANGES && [ "$(cat "$last")" != "$head" ] \
    && ahead "$(cat "$last")" "$head"; then
   delta=$(deltadiff "$(cat "$last")" "$head")
@@ -99,12 +120,12 @@ fi
 # after turn (833 s, 4.3M cache-read tokens) and never answered inside its timeout; the diff is already above.
 sed -E 's/ Read (surrounding )?code (at the head )?with git show .*$/ You have no tools: judge from the text below alone./' "$p" > "$p.nt"
 notools() { jq -e --arg m "$1" '(.review_no_tools // []) | index($m)' "$cfg" >/dev/null 2>&1; }
-direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $out
+direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
   cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
-    -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$out.api" 2>"$SG_STATE/review-$pr.err"; local r=$?
+    -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
   jq '{result: ([.content[]? | select(.type=="text") | .text] | join("")), usage: (.usage // {}),
        subtype: (if .stop_reason=="end_turn" then "success" else "error_" + (.stop_reason // .type // "unknown") end)}
-      | .is_error = (.subtype != "success")' "$out.api" > "$out" 2>/dev/null || cp "$out.api" "$out"; rm -f "$out.api"; return $r
+      | .is_error = (.subtype != "success")' "$o.api" > "$o" 2>/dev/null || cp "$o.api" "$o"; rm -f "$o.api"; return $r
 }
 tmo=$(jq -r '.review_timeout_seconds // 480' "$cfg")
 # capraw starts the CLI in its own process group and a watchdog beside it. An alarm inside the CLI does not work: the
@@ -114,8 +135,8 @@ exec 3>&1   # the heartbeat in cap() goes here: inside the chain walk, stdout is
 capraw() { local c w
   # setpgrp resets the environment, so PATH travels as an argument; <&0 keeps the prompt on stdin (a background job reads /dev/null);
   # 3>&- so neither the model nor the watchdog holds the script's stdout: a caller that captures it would wait for them.
-  perl -e 'setpgrp(0,0); $ENV{PATH}=$ARGV[0]; shift; exec @ARGV or exit 127' "$PATH" "$@" <&0 3>&- & c=$!
-  ( sleep "$tmo"; kill -TERM -"$c" 2>/dev/null; sleep 2; kill -KILL -"$c" 2>/dev/null ) 2>/dev/null 3>&- & w=$!
+  perl -e 'setpgrp(0,0); $ENV{PATH}=$ARGV[0]; shift; exec @ARGV or exit 127' "$PATH" "$@" <&0 3>&- 9>&- & c=$!
+  ( sleep "$tmo"; kill -TERM -"$c" 2>/dev/null; sleep 2; kill -KILL -"$c" 2>/dev/null ) 2>/dev/null 3>&- 9>&- & w=$!
   # cap() kills this wait when the head moves; the model's group is a different one, so pass it on, and take the watchdog along.
   trap 'kill -TERM -"$c" 2>/dev/null; pkill -P $w 2>/dev/null; kill $w 2>/dev/null' TERM
   wait $c 2>/dev/null; local r=$?; pkill -P $w 2>/dev/null; kill $w 2>/dev/null; wait $w 2>/dev/null
@@ -140,7 +161,7 @@ off_ok() { [ "$(jq -r --arg k "$1" --arg m "$2" '.off[$k][$m] // false' "$cfg" 2
 may_run() { hours_ok "$1" "$2" && off_ok "$1" "$2"; }
 # a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
 python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_SHARED/codex-limited"
-out="$SG_STATE/review-$pr.md"; tries=$(jq -r .model_retry_budget "$cfg"); prev=""
+tries=$(jq -r .model_retry_budget "$cfg"); prev=""
 # A branch pass may pin the review to one model and one try (SG_REVIEW_CHAIN_DEPTH): an old branch may not
 # spend the whole chain again, and the model that answers is the one that measures best, not the one that times out.
 [ -n "${SG_REVIEW_RETRY_BUDGET:-}" ] && tries=$SG_REVIEW_RETRY_BUDGET
@@ -187,27 +208,27 @@ eligible() { local m=$1
   return 0; }
 reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
 used=0
-for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
+for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
   case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
   # until the reset the error itself names, instead of spending one dead try per review round
   case $m in gemini-*) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
   # a spent grok balance (402) has no reset: grok is skipped until the owner tops it up and removes the marker (#622)
-  case $m in grok-*) [ -e "$SG_SHARED/grok-limited" ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$")"; continue; };; esac
+  case $m in grok-*) [ -e "$SG_SHARED/grok-limited" ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; };; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
-  off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on branch %s: switched off in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "moff$$")"; continue; }
-  hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on branch %s: outside its window in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mhours$$")"; continue; }
+  off_ok review_models "$m" || { printf "MODEL_OFF review %s skipped on branch %s: switched off in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "moff$$-$ms")"; continue; }
+  hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on branch %s: outside its window in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mhours$$-$ms")"; continue; }
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
   echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
-  [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$")"
+  [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$-$ms")"
   tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   for i in $(seq 1 $tries); do
-    rm -f "$out"; t1=$(date +%s); bad=""
+    rm -f "$o"; t1=$(date +%s); bad=""
     case $m in
       # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
       # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
@@ -219,21 +240,21 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
           direct "$p.body"; r=$?
           # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
           # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
-          if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$out" > "$out.t" 2>/dev/null \
-             && python3 "$(dirname "$0")/revformat.py" --normalize "$out.t" > "$out.n" 2>/dev/null \
-             && ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out.n" 2>/dev/null) && [ -n "$frem" ]; then
-            mv "$out" "$out.1"
-            jq --rawfile a "$out.t" --arg f "$frem" '.messages += [{role:"assistant", content:$a}, {role:"user", content:("Your answer is outside the shape: " + $f + ". Answer again: the same findings, every line in the shape, nothing else.")}]' "$p.body" > "$p.body2"
+          if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$o" > "$o.t" 2>/dev/null \
+             && python3 "$(dirname "$0")/revformat.py" --normalize "$o.t" > "$o.n" 2>/dev/null \
+             && ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$o.n" 2>/dev/null) && [ -n "$frem" ]; then
+            mv "$o" "$o.1"
+            jq --rawfile a "$o.t" --arg f "$frem" '.messages += [{role:"assistant", content:$a}, {role:"user", content:("Your answer is outside the shape: " + $f + ". Answer again: the same findings, every line in the shape, nothing else.")}]' "$p.body" > "$p.body2"
             direct "$p.body2"; r=$?
-            jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$out.1" "$out" > "$out.s" 2>/dev/null && mv "$out.s" "$out"
-          fi; rm -f "$out.t" "$out.n" "$out.1" "$out.s" "$p.body2"; (exit $r)
+            jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
+          fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
         else
-          cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$out" 2>"$SG_STATE/review-$pr.err"
+          cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$o" 2>"$e"
         fi;;
-      grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$out" 2>"$SG_STATE/review-$pr.err";;
-      gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$out" 2>"$SG_STATE/review-$pr.err";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
+      grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
+      gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
-           --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" -o "$out" - < $p > "$SG_STATE/review-$pr.err" 2>&1;;
+           --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" -o "$o" - < $p > "$e" 2>&1;;
     esac
     rc=$?
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
@@ -247,14 +268,14 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
     tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
     tu=""; mark=""
-    case $m in claude:*) tu=$(jq -r 'select(type=="object" and (.result|type)=="string" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$out" 2>/dev/null)
+    case $m in claude:*) tu=$(jq -r 'select(type=="object" and (.result|type)=="string" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
       # A claude answer is a review only when the run itself succeeded (#501): the JSON says `is_error` and the `subtype`
       # (success, error_max_turns, error_during_execution, ...), and `.result` holds whatever the model had said when the run
       # ended -- a lone preamble included, which the check below would take for an answer of rc 0. The raw JSON is kept
       # beside the answer, so a run that ended on its own is diagnosed without spending another call.
-      bad=$(jq -r 'select(type=="object" and ((.is_error // false) or ((.subtype // "success") != "success"))) | (.subtype // "error")' "$out" 2>/dev/null)
-      [ -n "$bad" ] && cp "$out" "$SG_STATE/review-$pr.json"
-      jq -r .result "$out" > "$out.r" 2>/dev/null && mv "$out.r" "$out"; rm -f "$out.r"
+      bad=$(jq -r 'select(type=="object" and ((.is_error // false) or ((.subtype // "success") != "success"))) | (.subtype // "error")' "$o" 2>/dev/null)
+      [ -n "$bad" ] && cp "$o" "$SG_STATE/review-$pr.json"
+      jq -r .result "$o" > "$o.r" 2>/dev/null && mv "$o.r" "$o"; rm -f "$o.r"
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
       *) tu="0	0	0";;
     esac
@@ -262,40 +283,40 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
     else printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"; fi
     # The run ended in an error: no verdict came of it, so the chain moves on as it does for a failed call (the tokens above
     # are still counted; the answer is not saved as a review).
-    [ -n "$bad" ] && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$out" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$")"; fmt=1; rc=1; continue; }
-    [ -e "$p.superseded" ] && { echo "VERDICT: BLOCKED ($lbl head moved during the review)" > "$out"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
+    [ -n "$bad" ] && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$o" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"; fmt=1; rc=1; continue; }
+    [ -e "$p.superseded" ] && { publish "VERDICT: BLOCKED ($lbl head moved during the review)"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
-    if grep -q "hit your usage limit" "$SG_STATE/review-$pr.err" 2>/dev/null; then
+    if grep -q "hit your usage limit" "$e" 2>/dev/null; then
       python3 "$(dirname "$0")/codex-reset.py" --hit > "$SG_SHARED/codex-limited"; rc=99; break; fi   # the real reset from the hub's quota cache
-    if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$SG_STATE/review-$pr.err" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
+    if grep -qE "RESOURCE_EXHAUSTED|Individual quota reached" "$e" 2>/dev/null; then   # agy quota: account-wide, the error names its own reset
       # the reset is the one /quota reports (what the hub card reads); the error's own "Resets in" is only the fallback, and 6 h the last
       qr=$(cd "$SG_CHECKOUT" && perl -e 'alarm 60; exec @ARGV' agy -p /quota </dev/null 2>/dev/null | python3 "$(dirname "$0")/agyquota.py" 2>/dev/null)
       if [ -n "$qr" ]; then echo "$qr" > "$SG_SHARED/agy-limited"
       else
-      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_SHARED/agy-limited"; fi
-      printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$")"
+      python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$e" > "$SG_SHARED/agy-limited"; fi
+      printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi
     # grok 402 "usage balance exhausted" (#622): account-wide, no reset in the answer, so the marker holds until the owner removes it
-    case $m in grok-*) if grep -qE "402 Payment Required|balance exhausted" "$SG_STATE/review-$pr.err" "$out" 2>/dev/null; then
+    case $m in grok-*) if grep -qE "402 Payment Required|balance exhausted" "$e" "$o" 2>/dev/null; then
       date +%s > "$SG_SHARED/grok-limited"
-      printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$")"
+      printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi;; esac
-    [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$")"; break; }
+    [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$-$ms-$i")"; break; }
     # the verdict goes on line 1 in the exact form the loop parses (review.sh, the loop's own passes and hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
-    if [ $rc = 0 ] && [ -s "$out" ] && [ -f "$(dirname "$0")/revformat.py" ]; then
-      python3 "$(dirname "$0")/revformat.py" --normalize "$out" > "$out.n" 2>/dev/null && mv "$out.n" "$out"
+    if [ $rc = 0 ] && [ -s "$o" ] && [ -f "$(dirname "$0")/revformat.py" ]; then
+      python3 "$(dirname "$0")/revformat.py" --normalize "$o" > "$o.n" 2>/dev/null && mv "$o.n" "$o"
       # ... and the answer itself must BE the checklist: a reviewer that narrates before it rules, restates the diff or
       # closes with a summary is a FORMAT failure of this try (#1777) -- the chain moves on and the issue says so,
       # instead of the prose passing silently as a review.
-      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out" 2>/dev/null); then
-        printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$(sg_cq_status "$iss" "mformat$$")"
+      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$o" 2>/dev/null); then
+        printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
         # one reachable model (#622): no next model, so the shape failure spends a retry, never the whole review
         fmt=1; rc=1; [ "$reachable" -gt 1 ] && break; continue
       fi
     fi
-    grep -q 'VERDICT' "$out" 2>/dev/null && [ $rc = 0 ] && { echo "$head" > "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
+    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
   done
-  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$SG_STATE/review-$pr.err"; [ "$rc" != 0 ] && tail -c 300 "$out"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$i")"   # claude -p prints its API error on stdout, the answer file; prev=$m
+  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file; prev=$m
 done
-echo "VERDICT: BLOCKED (every review model failed)" > "$out"; exit 1
+publish "VERDICT: BLOCKED (every review model failed)"; exit 1

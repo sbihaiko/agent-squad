@@ -68,7 +68,7 @@ LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]
 # message misstates it -- there is no path to cite. Its place is the diff itself, and a whole-change label names it:
 # a leading "whole" (whole diff / whole branch / the whole change), or the word "scope" (Scope: ... / Branch scope /
 # Issue #249 scope). A bullet that still names no place at all fails (#412), so the vague one is not let in.
-WHOLE = re.compile(r"^`?(?:(?:the\s+)?whole\b|.*\bscope\b)", re.IGNORECASE)
+WHOLE = re.compile(r"^`?(?:(?:the\s+)?whole\b|repo-wide\b|.*\bscope\b)", re.IGNORECASE)   # "Repo-wide" too (#624)
 SEP = re.compile(r"\s+[—–-]\s+")             # the " — " between the fields
 # the fix-round answer to a previous finding, the third field of a bullet (#1832): "fixed: <reason>", a bare "fixed",
 # or "fixed — <check>". "not fixed: <reason>" is not the answer, and neither is prose that merely opens with the word
