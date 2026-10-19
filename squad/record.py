@@ -29,6 +29,7 @@ REQUIRED = {
     "model_skipped": ["node", "entry", "model", "reason"],   # one chain entry left out before it was tried: outside its hours window
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
     "review_round": ["node", "round", "head", "verdict", "offered", "review"],   # #570: one review of a child's head; `fix` starts its next entry
+    "review_try": ["node", "round", "try", "review"],   # #635: one review try of a round that got no verdict; the round tries again in the gate's deadline
     "review_progress": ["node", "gate", "elapsed"],   # #599: a dispatch child's review gate is still running; the record moves so the heartbeat never kills it
     "paused": ["node", "scope", "held", "completed"],
     "resume": ["run_id", "graph_hash", "frontier", "invoker", "engine_options", "preflight"],

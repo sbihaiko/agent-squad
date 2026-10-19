@@ -16,6 +16,8 @@ from squad.engine_errors import Frontier
 REVIEW_TICK_S = 60.0                      # a review in flight writes one `review_progress` event at least this often (the heartbeat's quiet window is 5 min)
 REVIEW_NONE_EXIT = gates.REVIEW_NONE_EXIT  # the review command's "no review here": the child lands as today
 REVIEW_FIX_EXIT = gates.REVIEW_FIX_EXIT    # the review command's "fix": the run starts the child's next entry in its worktree (#570)
+REVIEW_RETRY_EXIT = gates.REVIEW_RETRY_EXIT  # the review command's "try again": no verdict; the run tries again within the gate's deadline (#635)
+REVIEW_RETRY_PAUSE_S = 60.0               # the pause between two tries of one round, inside the gate's deadline
 
 
 class Dispatch:
@@ -187,7 +189,7 @@ class Dispatch:
             fund, rec = None, next((x for x in e.record.events if x["event"] == "review_round" and x["node"] == name and x["round"] == n), None)
             if rec is None:
                 fund = e.budget.hold(self.children[name]["definition"]["spend"])
-                review = await self.review(node, name, d, path, base, n, fund is not None)
+                review = await self.tries(node, name, d, path, base, n, fund is not None)
                 if review["verdict"] == "fix" and fund is None:      # a fix the run did not offer is a hold
                     review["verdict"] = "hold"
                 rec = e.record.append("review_round", node=name, round=n, head=git.head(path), verdict=review["verdict"],
@@ -218,7 +220,29 @@ class Dispatch:
                 return review, n, ["review_fix_failed", *out["reasons"]]
             n += 1
 
-    async def review(self, node, name, d, path, base, n=1, offer=False):
+    async def tries(self, node, name, d, path, base, n, offer):
+        """Review round n until it gets a verdict (#635). A `retry` (no verdict: the chain wrote none, or the slot wait passed
+        its bound) is a `review_try` event, and the round tries again after a pause. All tries of the round share the gate's
+        one deadline; when it runs out, the verdict is `deadline` and the child is held, never merged unreviewed.
+        A resume counts the recorded tries against the deadline (ADR-0107)."""
+        e = self.e
+        cap = e.nodes[node["review"]]["params"]["deadline"] * e.scale
+        done = [x for x in e.record.events if x["event"] == "review_try" and x["node"] == name and x["round"] == n]
+        spent, k = sum(x["review"].get("elapsed") or 0 for x in done), len(done)
+        last = done[-1]["review"] if done else {"findings": "", "stderr": ""}
+        while spent < cap:
+            review = await self.review(node, name, d, path, base, n, offer, cap - spent)
+            if review["verdict"] != "retry":
+                return review
+            k, spent, last = k + 1, spent + review["elapsed"], review
+            e.record.append("review_try", node=name, round=n, review=review, **{"try": k})
+            pause = min(REVIEW_RETRY_PAUSE_S, cap - spent)
+            if pause > 0:
+                await anyio.sleep(pause)
+                spent += pause
+        return {**last, "verdict": "deadline"}
+
+    async def review(self, node, name, d, path, base, n=1, offer=False, deadline=None):
         """Run the dispatch's review gate on one passed child, in its worktree, before its merge. The command is graph data:
         its argv template gets the run id, the child, the child's issue, its worktree and the target HEAD it would land on.
         Its environment names the round (`SQUAD_REVIEW_ROUND`) and whether the run offers a fix round (`SQUAD_REVIEW_FIX`).
@@ -230,7 +254,8 @@ class Dispatch:
 
         def tick(elapsed):
             anyio.from_thread.run_sync(lambda: e.record.append("review_progress", node=name, gate=gate, elapsed=elapsed))
-        return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), params["deadline"] * e.scale, REVIEW_TICK_S, tick, env))
+        cap = params["deadline"] * e.scale if deadline is None else deadline
+        return await anyio.to_thread.run_sync(lambda: gates.review_command(argv, str(path), cap, REVIEW_TICK_S, tick, env))
 
     def issue(self, d):
         """The child's issue: the `Refs #<n>` line of its task or prompt (the line the loop counts as delivery), else the

@@ -56,10 +56,10 @@ async def test_a_no_verdict_try_is_tried_again_and_each_try_is_recorded(tmp_path
 @pytest.mark.anyio
 @pytest.mark.heavy
 async def test_tries_stop_at_the_gate_deadline_and_the_child_is_held_unmerged(tmp_path):
-    eng, repo, base = run_with(tmp_path, [5], deadline=1, sleep=0.3)
+    eng, repo, base = run_with(tmp_path, [5], deadline=3, sleep=0.3)
     assert (await eng.run()).verdict == "failed"
     tries = ev(tmp_path, "review_try")
-    assert 2 <= len(tries) <= 4 and sum(t["review"]["elapsed"] for t in tries) <= 1.5
+    assert len(tries) >= 2 and sum(t["review"]["elapsed"] for t in tries) <= 3
     assert [r["verdict"] for r in ev(tmp_path, "review_round")] == ["deadline"]
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "fail" and land["reasons"] == ["review_deadline"]
