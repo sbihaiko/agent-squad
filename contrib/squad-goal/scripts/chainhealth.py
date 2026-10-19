@@ -38,7 +38,9 @@ def _resolver():
     return _modelreg
 
 
-def _bare(m): return m[len("claude:"):] if m.startswith("claude:") else m
+def _bare(m):
+    """The spelling without its `claude:` route prefix: the name the status file shows (main's v1 rule, unchanged)."""
+    return m[len("claude:"):] if isinstance(m, str) and m.partition(":")[0] == "claude" else m
 
 def _display(e):
     """The name the hub and the status file show for a raw spelling: the route prefix is not part of it."""
@@ -60,8 +62,9 @@ def _v1_why(cfg, key, m, shared, now, hour):
     """The v1 rules, in the order main read them. Return (reason, until), or (None, None) when the model may run."""
     codex, agy = _marker(shared, "codex-limited", now), _marker(shared, "agy-limited", now)
     guard = (pathlib.Path(shared) / "quota-guard").exists()
-    if not m.startswith(("claude:", "grok-", "gemini-")) and codex: return "usage limit", codex
-    if m.startswith("gemini-") and agy: return "usage limit", agy
+    reg = _resolver()   # the two marker rules have one home, the resolver (ADR-0147 rule 10); their behavior is main's
+    if reg.v1_codex(m) and codex: return "usage limit", codex
+    if reg.v1_agy(m) and agy: return "usage limit", agy
     if provkey.closed(m): return provkey.reason(m), None
     if guard and m in (cfg.get("anthropic_models") or []): return "weekly quota guard", None
     if ((cfg.get("off") or {}).get(key) or {}).get(m): return "switched off", None

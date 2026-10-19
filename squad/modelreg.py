@@ -360,9 +360,15 @@ def _canonical(name):
     return key
 
 
-def _v1_codex(raw):
-    """A v1 file's marker rule: every spelling outside the `claude:`, `grok-` and `gemini-` prefixes ran through Codex."""
+def v1_codex(raw):
+    """A v1 file's marker rule: every spelling outside the `claude:`, `grok-` and `gemini-` prefixes ran through Codex.
+    A v1 caller reads this rule here, never by parsing the spelling itself (ADR-0147 rule 10)."""
     return not (isinstance(raw, str) and raw.startswith(("claude:", "grok-", "gemini-")))
+
+
+def v1_agy(raw):
+    """A v1 file's second marker rule: a `gemini-` spelling ran through agy. Its one home is here (ADR-0147 rule 10)."""
+    return isinstance(raw, str) and raw.startswith("gemini-")
 
 
 def _default_route(chain_name, entry):
@@ -418,7 +424,7 @@ def chain(models_json, name, reg=None):
                 on=not bool(off.get(raw)), hrs=hours.get(raw), timeout_s=timeouts.get(raw),
                 no_tools=raw in no_tools, provider=entry.provider if entry else None,
                 subscription=entry.subscription if entry else None, known=ref.known,
-                legacy_codex=_v1_codex(raw)))
+                legacy_codex=v1_codex(raw)))
     return Chain(name=canon, entries=entries, mixed=mixed, stray=stray)
 
 
