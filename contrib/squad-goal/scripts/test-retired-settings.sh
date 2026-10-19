@@ -9,7 +9,7 @@ here=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); fail=0; G=/usr/bin/grep; GI
 ok() { printf 'ok   %s\n' "$1"; }; ko() { printf 'FAIL %s\n' "$1"; fail=1; }
 S=$T/scene; mkdir -p "$S/s/profiles" "$S/bin" "$S/co"
 cp "$here/env.sh" "$here/address.sh" "$here/ghcall.sh" "$here/ghread.py" "$here/ghthrottle.py" "$here/workbranches.sh" \
-   "$here/branchreviewpass.sh" "$here/branchreview.sh" "$here/chainhealth.py" "$here/models.json" "$S/s/" 2>/dev/null
+   "$here/branchreviewpass.sh" "$here/caps.sh" "$here/branchreview.sh" "$here/chainhealth.py" "$here/models.json" "$S/s/" 2>/dev/null
 # the pass hands the repository to the review: the stub records that call, and keeps the verdict where branchland.sh reads it
 cat > "$S/s/review.sh" <<J
 #!/bin/bash
@@ -37,7 +37,8 @@ chmod +x "$S/bin/gh"
 common="SG_BASE=main SG_OWNER=x SG_PROJECT=4 SG_LAND_REMOTE=$T/origin.git SG_LAND_BRANCH=dev SG_GH_AGGREGATE_WINDOW=0 SG_GH_CACHE_WINDOW=0 SG_GH_COOLDOWN=0.001 SG_GH_COOLDOWN_JITTER=0.001"
 printf ': "${SG_REPO:=x/emu}"; SG_TOOLING_REPO=x/tool; SG_CHECKOUT=%s; %s\n' "$S/co" "$common" > "$S/s/profiles/retired.sh"
 printf ': "${SG_REPO:=x/emu}"; SG_REPOS="x/emu x/tool"; SG_CHECKOUT=%s; %s\n' "$S/co" "$common" > "$S/s/profiles/migrated.sh"
-export PATH="$S/bin:$PATH" SG_SQUAD=/dev/null SG_STATE_BASE="$S/state"
+# a review takes a review slot of the machine-wide budget (caps.sh, squad/caps.py, #567): this repository's module, a throwaway budget
+export PATH="$S/bin:$PATH" SG_SQUAD=$(cd "$here/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps" SQUAD_CAPS_POLL=0.2 SG_STATE_BASE="$S/state"
 # one pass of the loop as profile $1: its output is dropped, its stderr is kept (env.sh's warning goes there)
 cycle() { : > "$S/launched"; : > "$S/ghlog"; rm -rf "$S/state"
   ( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=$1 bash -c '. "$1/env.sh"; exec bash "$1/branchreviewpass.sh"' _ "$S/s" >/dev/null 2>"$S/err-$1" )
