@@ -114,3 +114,10 @@ def test_a_slow_suite_carries_a_slow_reason_so_the_cap_does_not_fail_it():
     out = collect("tests/test_shell_suites.py", "-m", "slow")
     slow = [name for name, seconds in shell_suites.measured().items() if seconds > shell_suites.SLOW_SECONDS]
     assert all(name in out for name in slow), out
+
+
+def test_every_suite_has_a_measured_line_so_none_lands_unmeasured():
+    listed = shell_suites.measured()
+    missing = [p.name for p in shell_suites.discover() if p.name not in listed]
+    assert not missing, ("each shell suite needs a line in tests/shell_suites_seconds.txt; measure it with "
+                         f"`python3 -m tests.measure_shell_suites --write {' '.join(missing)}`")
