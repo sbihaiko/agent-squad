@@ -227,7 +227,8 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$-$ms")"
   tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
-  for i in $(seq 1 $tries); do
+  [ -e "$p.orig" ] && cp "$p.orig" "$p"; rep=0; lim=$tries   # rep=1: this model had its one repair try (#625); the prompt goes back to the plain one
+  i=0; while [ "$i" -lt "$lim" ]; do i=$((i+1))
     rm -f "$o"; t1=$(date +%s); bad=""
     case $m in
       # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
@@ -310,7 +311,16 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       # closes with a summary is a FORMAT failure of this try (#1777) -- the chain moves on and the issue says so,
       # instead of the prose passing silently as a review.
       if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$o" 2>/dev/null); then
-        printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
+        # #625: with several reachable models, the same model gets one repair try first: the prompt, its answer and the
+        # check's complaint. The no-tools path already had its repair turn inside direct(). One extra try at most.
+        nx="the next model is tried"; [ "$reachable" -gt 1 ] && [ "$rep" = 0 ] && [ -n "$frem" ] && ! notools "$m" && nx="the same model answers once more with the complaint"
+        printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so %s.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" "$nx" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
+        if [ "$nx" != "the next model is tried" ]; then
+          rep=1; [ "$lim" -gt "$i" ] || lim=$((i+1)); [ -e "$p.orig" ] || cp "$p" "$p.orig"
+          { cat "$p.orig"; echo "=== YOUR PREVIOUS ANSWER (outside the shape)"; cat "$o"
+            echo "=== REPAIR"; echo "Your answer is outside the shape: $frem. Answer again: the same findings, every line in the shape, nothing else."; } > "$p.r" && mv -f "$p.r" "$p"
+          fmt=1; rc=1; continue
+        fi
         # one reachable model (#622): no next model, so the shape failure spends a retry, never the whole review
         fmt=1; rc=1; [ "$reachable" -gt 1 ] && break; continue
       fi

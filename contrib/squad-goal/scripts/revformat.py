@@ -8,7 +8,8 @@ section, one bullet per finding, at most two lines: `<file>:<line> — <defect> 
 commit message misstates it) has no path to cite: its place is the diff, named by a whole-change
 label in the location field -- a leading `whole` (`whole diff`, `whole branch`) or the word
 `scope` (`Branch scope`, `Issue #249 scope`) (#443), the same room #412 gave a whole-file
-concern. Findings that share a theme sit under a `### <theme>` heading, most severe first.
+concern. A location may name a symbol for its line (`path:symbol`), and an acceptance-criteria finding names
+its criterion (`AC1`, `Issue AC ...`) as a whole-change location (#625). Findings that share a theme sit under a `### <theme>` heading, most severe first.
 Nothing else: no preamble, no restating the diff, no closing summary.
 
 `review.sh` runs this on every model answer: a review that ignores the shape is a format failure
@@ -63,12 +64,16 @@ BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 EMPTY = re.compile(r"(?i)^(?:none|no findings|nothing|n/?a|nil)(?:[.!]?$|[.:;!]?\s+\S|\s*[—–-]\s+\S)|^[—–-]$")
 # ... and the marker may come wrapped, as Opus writes it: `(none)`, `*None*`, `_none_`, `[none]` (#618).
 WRAPPED_EMPTY = re.compile(r"(?i)^[(\[*_]+\s*(?:none|no findings|nothing|n/?a|nil)[.!]?\s*[)\]*_]+[.!]?$")
-LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`,]*)`?(?:[\s,;]|$)")  # path:line, or a path alone for a file-level finding; the first field of a bullet (or the second)
+LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`,]*"
+                 r"(?::`?[A-Za-z_][\w.]*(?:\(\))?`?)?)`?(?:[\s,;]|$)")  # path:line, path:symbol (#625), or a path alone for a file-level finding; the first field of a bullet (or the second)
 # a finding about the change as a whole, not a file (#443): the branch delivers nothing from its issue, the commit
 # message misstates it -- there is no path to cite. Its place is the diff itself, and a whole-change label names it:
 # a leading "whole" (whole diff / whole branch / the whole change), or the word "scope" (Scope: ... / Branch scope /
 # Issue #249 scope). A bullet that still names no place at all fails (#412), so the vague one is not let in.
-WHOLE = re.compile(r"^`?(?:(?:the\s+)?whole\b|repo-wide\b|.*\bscope\b)", re.IGNORECASE)   # "Repo-wide" too (#624)
+# An acceptance-criteria finding (#625) names its criterion -- AC1, AC 2, Acceptance criterion 3, Issue AC ... -- the
+# review prompt asks for a check against the issue's criteria, and a criterion is a place in the issue, not in a file.
+WHOLE = re.compile(r"^`?(?:(?:the\s+)?whole\b|repo-wide\b|.*\bscope\b|(?:issue\s+)?AC\s*\d*\b|acceptance\s+criteri(?:on|a)\b)",
+                   re.IGNORECASE)   # "Repo-wide" too (#624)
 SEP = re.compile(r"\s+[—–-]\s+")             # the " — " between the fields
 # the fix-round answer to a previous finding, the third field of a bullet (#1832): "fixed: <reason>", a bare "fixed",
 # or "fixed — <check>". "not fixed: <reason>" is not the answer, and neither is prose that merely opens with the word
