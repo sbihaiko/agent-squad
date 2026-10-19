@@ -42,9 +42,9 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$ps_" ] && up || break; sleep 0.2; done
 [ -n "$ps_" ] && ! up && ok "the fast lane's background childcc and its child stop with the supervisor" || { ko "the fast lane's pass still runs after the stop (pids ${ps_:-none})"; kill $ps_ 2>/dev/null; }
 rm -f "$SG_STATE/pass.pid"
 # a relight starts a fresh measurement (#515): the old marker made every start read the old burn again
-printf '1\n' > "$SG_STATE/token-guard.since"; echo "Token burn ..." > "$SG_STATE/token-pause"; echo "Token burn ..." > "$SG_STATE/token-over.alert"
+printf '1\n' > "$SG_STATE/token-guard.since"; echo "Token burn ..." > "$SG_STATE/token-pause"; echo "Token burn ..." > "$SG_STATE/token-over"
 bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
 [ "$(cat "$SG_STATE/token-guard.since" 2>/dev/null)" != 1 ] && ok "a start drops the old token-guard marker" || ko "the old token-guard marker survived the start"
-[ ! -e "$SG_STATE/token-pause" ] && [ ! -e "$SG_STATE/token-over.alert" ] && ok "a start clears the token-pause and token-over.alert markers" || ko "a token marker survived the start"
+[ ! -e "$SG_STATE/token-pause" ] && [ ! -e "$SG_STATE/token-over" ] && ok "a start clears the token-pause and token-over markers" || ko "a token marker survived the start"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do /bin/ps -p "$sup" >/dev/null 2>&1 || break; sleep 1; done
 rm -rf "$T"; exit $fail

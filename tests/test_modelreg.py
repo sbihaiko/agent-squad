@@ -214,8 +214,8 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
     "coding_models": ["claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-grok-4.7", "claude-sonnet-5-5"],
-    "review_models": ["grok-4.7", "claude:claude-deepseek-flash", "gemini-3.8-flash-high", "claude:claude-opus-5-5"],
-    "vision_models": ["grok-4.5", "gpt-5.6-terra", "gemini-3.8-flash-low"],
+    "review_models": ["gpt-5.6-luna", "claude:claude-deepseek-flash", "gemini-3.8-flash-high", "claude:claude-opus-5-5"],
+    "vision_models": ["gpt-5.6-luna", "gpt-5.6-terra", "gemini-3.8-flash-low"],
 }
 
 
