@@ -17,6 +17,21 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
 
+  // The review of one child, as its record has it: the last round's verdict, time and findings, and how many rounds ran. A review
+  // is live while the child's last event of the review kind is a `review_progress`: it is still running, so it has no verdict yet.
+  // A child with no review gate has none. A landing without a round event (an older record) still carries its review.
+  function childReview(events, child, land) {
+    const mine = events.filter((e) => e.node === child && ["outcome", "review_progress", "review_round", "land"].includes(e.event));
+    const rounds = mine.filter((e) => e.event === "review_round");
+    const tail = mine[mine.length - 1];
+    const live = !!tail && tail.event === "review_progress";
+    const done = rounds.length ? rounds[rounds.length - 1].review : land && land.effect && land.effect.review ? land.effect.review : null;
+    if (!done && !live) return null;
+    const count = rounds.length || (land && land.effect && num(land.effect.rounds) ? land.effect.rounds : 1);
+    return { verdict: live ? null : orNull(done.verdict), elapsed: live ? orNull(tail.elapsed) : orNull(done.elapsed), findings: !live && done && done.findings ? done.findings : "",
+      exit_code: !live && done ? orNull(done.exit_code) : null, rounds: count, live };
+  }
+
   // The children of every dispatch, in request order. Each carries what its call recorded and what landing did to it.
   // An outcome that is not pass after landing is fail, so a landing failure shows on the child, not only in its own event.
   // `now` (epoch seconds) makes a child that is running now read as running, with its time and its live figures; without
@@ -35,6 +50,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       const short = shortChildName(a.child, a.envelope);   // the display name: route.router.1 -> router.1
       const issue = issueNumber(d.prompt), skill = skillName(d.skill);
       return { name: a.child, dispatch: a.envelope, proposer: orNull(a.parent), depth: orNull(a.depth), rejected: false, outcome, reasons, evidence, checks, issue, task: orNull(d.task),
+        review: childReview(events, a.child, l),
         running_for: run ? run.running_for : null, live: run ? run.live : null,   // a child in flight: how long it has run, and what it last reported
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
@@ -47,7 +63,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     });
     const bad = events.filter((e) => e.event === "spawn_rejected").map((e) => ({ name: `${e.envelope} request ${e.request_key}`, dispatch: e.envelope, proposer: orNull(e.parent), depth: null,
       rejected: true, outcome: "fail", reasons: e.reasons || [e.reason], evidence: null, checks: null, skill: null, skillLabel: null, label: `${e.envelope} request ${e.request_key}`,
-      model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null,
+      model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null, review: null,
       elapsed: null, tokens_in: null, tokens_out: null, tps: null, land: null, issue: null }));
     // The position of each child among the children of its dispatch, and a title no two children share: "issue #11" can
     // repeat across waves, "3 · issue #11" cannot.

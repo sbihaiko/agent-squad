@@ -575,33 +575,32 @@ def test_undo_does_not_change_the_graph_text_the_page_saves():
 
 
 # --- a dispatch's review gate (#599): shown with its command and deadline, laid out, connected, and saved ---
-def with_review(d=None):
-    d = d or router()
-    d["nodes"].append({"name": "review_gate", "kind": "gate", "check": "review-command", "params": {"argv": ["bash", "review.sh", "{child}"], "deadline": 900}})
+def without_review():
+    d = router()
+    del node(d, "route")["review"]
     return d
 
 
 def test_a_review_gate_connects_as_the_review_and_never_as_a_check_and_disconnects():
-    d = with_review()
+    d = without_review()
     c = run_node([{"op": "connect", "doc": d, "from": "route", "to": "review_gate"}])[0]
     assert node(c["doc"], "route")["review"] == "review_gate" and "review_gate" not in node(c["doc"], "route")["checks"]
-    again = run_node([{"op": "connect", "doc": c["doc"], "from": "route", "to": "review_gate"}])[0]
-    assert "error" in again
+    assert "error" in run_node([{"op": "connect", "doc": c["doc"], "from": "route", "to": "review_gate"}])[0]
     gone = run_node([{"op": "disconnect", "doc": c["doc"], "from": "route", "to": "review_gate"}])[0]
-    assert "review" not in node(gone["doc"], "route") and gone["warnings"][0]["node"] == "review_gate"
+    assert node(gone["doc"], "route") == node(d, "route") and gone["warnings"][0]["node"] == "review_gate"
 
 
 def test_the_review_gate_sits_in_the_column_of_the_entry_and_the_checks():
-    d = with_review()
-    node(d, "route")["review"] = "review_gate"
+    d = router()
     lay = run_node([{"op": "layout", "doc": d}])[0]
     assert lay["review_gate"]["x"] == lay[node(d, "route")["entry"]]["x"] > lay["route"]["x"]
 
 
 def test_the_editor_shows_the_review_gate_command_and_deadline_of_a_dispatch():
-    d = with_review()
-    assert run_node([{"op": "reviewgate", "doc": d, "name": "route"}])[0] is None
-    node(d, "route")["review"] = "review_gate"
-    assert run_node([{"op": "reviewgate", "doc": d, "name": "route"}])[0] == {"gate": "review_gate", "command": "bash review.sh {child}", "deadline": 900}
+    d = router()
+    shown = run_node([{"op": "reviewgate", "doc": d, "name": "route"}])[0]
+    gate = node(d, "review_gate")["params"]
+    assert shown == {"gate": "review_gate", "command": " ".join(gate["argv"]), "deadline": gate["deadline"]}
+    assert run_node([{"op": "reviewgate", "doc": without_review(), "name": "route"}])[0] is None
     node(d, "route")["review"] = "missing"
     assert run_node([{"op": "reviewgate", "doc": d, "name": "route"}])[0] == {"gate": "missing", "command": None, "deadline": None}

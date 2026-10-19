@@ -167,6 +167,16 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The nodes a dispatch names: its entry, its checks, and its review when it has one.
   const dispatchLinks = (n) => [n.entry, ...(Array.isArray(n.checks) ? n.checks : []), ...("review" in n ? [n.review] : [])];
 
+  // The review gate a dispatch names, as the editor shows it: the gate, its command and its deadline. Null when the dispatch names none.
+  // A name with no gate behind it shows with no command, so the page says so and the rules name the error.
+  function reviewGate(doc, name) {
+    const d = doc.nodes.find((n) => isObj(n) && n.name === name);
+    if (!d || d.kind !== "dispatch" || !("review" in d)) return null;
+    const g = doc.nodes.find((n) => isObj(n) && n.name === d.review);
+    const p = g && g.kind === "gate" && isObj(g.params) ? g.params : null;
+    return { gate: d.review, command: p && Array.isArray(p.argv) ? p.argv.join(" ") : null, deadline: p && typeof p.deadline === "number" ? p.deadline : null };
+  }
+
   function removeNode(doc, name) {
     const gone = doc.nodes.find((n) => isObj(n) && n.name === name);
     if (!gone) return { error: `No node named ${name}.` };
@@ -277,7 +287,12 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
       if ((a.children || []).includes(to)) return { error: `${to} is already a child of ${from}.` };
       patch = { children: [...(a.children || []), to] };
     } else if (a.kind === "dispatch") {
-      if (b.kind === "gate") {
+      if (b.kind === "gate" && b.check === "review-command") {
+        // A review-command gate runs only as the dispatch's review, never as a check (ADR-0113).
+        if (a.review === to) return { error: `${to} is already the review of ${from}.` };
+        if ("review" in a) return { error: `${from} has the review ${a.review}: disconnect it first.` };
+        patch = { review: to };
+      } else if (b.kind === "gate") {
         if ((a.checks || []).includes(to)) return { error: `${to} is already a check of ${from}.` };
         patch = { checks: [...(a.checks || []), to] };
       } else {
@@ -299,7 +314,11 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     let patch;
     if ((a.children || []).includes(to)) patch = { children: a.children.filter((c) => c !== to) };
     else if (a.kind === "dispatch" && (a.checks || []).includes(to)) patch = { checks: a.checks.filter((c) => c !== to) };
-    else if (a.kind === "dispatch" && a.entry === to) return { error: `${to} is the entry of ${from}: connect another agent to replace it.` };
+    else if (a.kind === "dispatch" && a.review === to) {
+      const { review, ...rest } = a;
+      const nodes = doc.nodes.map((n) => (n === a ? rest : n));
+      return { doc: { ...doc, nodes }, warnings: hasParent(nodes, to) ? [] : [{ node: to, message: `${to} has no parent now: it is an orphan until you give it one` }] };
+    } else if (a.kind === "dispatch" && a.entry === to) return { error: `${to} is the entry of ${from}: connect another agent to replace it.` };
     else return { error: `${from} has no link to ${to}.` };
     const nodes = doc.nodes.map((n) => (n === a ? { ...a, ...patch } : n));
     const warnings = [];
@@ -311,5 +330,5 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The top-level fields a person may not change: the two registries.
   const READ_ONLY_TOP = ["facts", "gates"];
 
-  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
+  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
 }

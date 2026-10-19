@@ -64,3 +64,4 @@ def test_the_child_panel_and_the_run_dashboard_page_show_the_review():
     panel = (ROOT / "dashboard" / "page" / "panel.js").read_text()
     assert "c.review" in panel and re.search(r"findings", panel)
     assert "reviewGate" in panel   # the dispatch panel names the review gate, with its command and deadline
+    assert "childReviewHtml" in page and "Review gate" in page   # both reach the served page

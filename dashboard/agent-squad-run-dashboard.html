@@ -758,6 +758,21 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
   // A dispatch child's short name for display: route.router.1 -> router.1. The full name stays in the tooltip.
   const shortChildName = (name, dispatch) => (typeof name === "string" && typeof dispatch === "string" && name.startsWith(dispatch + ".") ? name.slice(dispatch.length + 1) : name);
 
+  // The review of one child, as its record has it: the last round's verdict, time and findings, and how many rounds ran. A review
+  // is live while the child's last event of the review kind is a `review_progress`: it is still running, so it has no verdict yet.
+  // A child with no review gate has none. A landing without a round event (an older record) still carries its review.
+  function childReview(events, child, land) {
+    const mine = events.filter((e) => e.node === child && ["outcome", "review_progress", "review_round", "land"].includes(e.event));
+    const rounds = mine.filter((e) => e.event === "review_round");
+    const tail = mine[mine.length - 1];
+    const live = !!tail && tail.event === "review_progress";
+    const done = rounds.length ? rounds[rounds.length - 1].review : land && land.effect && land.effect.review ? land.effect.review : null;
+    if (!done && !live) return null;
+    const count = rounds.length || (land && land.effect && num(land.effect.rounds) ? land.effect.rounds : 1);
+    return { verdict: live ? null : orNull(done.verdict), elapsed: live ? orNull(tail.elapsed) : orNull(done.elapsed), findings: !live && done && done.findings ? done.findings : "",
+      exit_code: !live && done ? orNull(done.exit_code) : null, rounds: count, live };
+  }
+
   // The children of every dispatch, in request order. Each carries what its call recorded and what landing did to it.
   // An outcome that is not pass after landing is fail, so a landing failure shows on the child, not only in its own event.
   // `now` (epoch seconds) makes a child that is running now read as running, with its time and its live figures; without
@@ -776,6 +791,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
       const short = shortChildName(a.child, a.envelope);   // the display name: route.router.1 -> router.1
       const issue = issueNumber(d.prompt), skill = skillName(d.skill);
       return { name: a.child, dispatch: a.envelope, proposer: orNull(a.parent), depth: orNull(a.depth), rejected: false, outcome, reasons, evidence, checks, issue, task: orNull(d.task),
+        review: childReview(events, a.child, l),
         running_for: run ? run.running_for : null, live: run ? run.live : null,   // a child in flight: how long it has run, and what it last reported
         skill: orNull(d.skill), skillLabel: skill,   // the bare skill name, for the detail line
         // The task first: every child of one dispatch usually runs the same skill, so the skill alone tells no two children
@@ -788,7 +804,7 @@ function childrenModule({ num, openCalls, orNull, skillName }) {
     });
     const bad = events.filter((e) => e.event === "spawn_rejected").map((e) => ({ name: `${e.envelope} request ${e.request_key}`, dispatch: e.envelope, proposer: orNull(e.parent), depth: null,
       rejected: true, outcome: "fail", reasons: e.reasons || [e.reason], evidence: null, checks: null, skill: null, skillLabel: null, label: `${e.envelope} request ${e.request_key}`,
-      model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null,
+      model: null, effort: null, after: [], workspace: null, spend: null, turns: null, running_for: null, live: null, review: null,
       elapsed: null, tokens_in: null, tokens_out: null, tps: null, land: null, issue: null }));
     // The position of each child among the children of its dispatch, and a title no two children share: "issue #11" can
     // repeat across waves, "3 · issue #11" cannot.
@@ -1832,6 +1848,16 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The nodes a dispatch names: its entry, its checks, and its review when it has one.
   const dispatchLinks = (n) => [n.entry, ...(Array.isArray(n.checks) ? n.checks : []), ...("review" in n ? [n.review] : [])];
 
+  // The review gate a dispatch names, as the editor shows it: the gate, its command and its deadline. Null when the dispatch names none.
+  // A name with no gate behind it shows with no command, so the page says so and the rules name the error.
+  function reviewGate(doc, name) {
+    const d = doc.nodes.find((n) => isObj(n) && n.name === name);
+    if (!d || d.kind !== "dispatch" || !("review" in d)) return null;
+    const g = doc.nodes.find((n) => isObj(n) && n.name === d.review);
+    const p = g && g.kind === "gate" && isObj(g.params) ? g.params : null;
+    return { gate: d.review, command: p && Array.isArray(p.argv) ? p.argv.join(" ") : null, deadline: p && typeof p.deadline === "number" ? p.deadline : null };
+  }
+
   function removeNode(doc, name) {
     const gone = doc.nodes.find((n) => isObj(n) && n.name === name);
     if (!gone) return { error: `No node named ${name}.` };
@@ -1942,7 +1968,12 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
       if ((a.children || []).includes(to)) return { error: `${to} is already a child of ${from}.` };
       patch = { children: [...(a.children || []), to] };
     } else if (a.kind === "dispatch") {
-      if (b.kind === "gate") {
+      if (b.kind === "gate" && b.check === "review-command") {
+        // A review-command gate runs only as the dispatch's review, never as a check (ADR-0113).
+        if (a.review === to) return { error: `${to} is already the review of ${from}.` };
+        if ("review" in a) return { error: `${from} has the review ${a.review}: disconnect it first.` };
+        patch = { review: to };
+      } else if (b.kind === "gate") {
         if ((a.checks || []).includes(to)) return { error: `${to} is already a check of ${from}.` };
         patch = { checks: [...(a.checks || []), to] };
       } else {
@@ -1964,7 +1995,11 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
     let patch;
     if ((a.children || []).includes(to)) patch = { children: a.children.filter((c) => c !== to) };
     else if (a.kind === "dispatch" && (a.checks || []).includes(to)) patch = { checks: a.checks.filter((c) => c !== to) };
-    else if (a.kind === "dispatch" && a.entry === to) return { error: `${to} is the entry of ${from}: connect another agent to replace it.` };
+    else if (a.kind === "dispatch" && a.review === to) {
+      const { review, ...rest } = a;
+      const nodes = doc.nodes.map((n) => (n === a ? rest : n));
+      return { doc: { ...doc, nodes }, warnings: hasParent(nodes, to) ? [] : [{ node: to, message: `${to} has no parent now: it is an orphan until you give it one` }] };
+    } else if (a.kind === "dispatch" && a.entry === to) return { error: `${to} is the entry of ${from}: connect another agent to replace it.` };
     else return { error: `${from} has no link to ${to}.` };
     const nodes = doc.nodes.map((n) => (n === a ? { ...a, ...patch } : n));
     const warnings = [];
@@ -1976,17 +2011,17 @@ function editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve }) {
   // The top-level fields a person may not change: the two registries.
   const READ_ONLY_TOP = ["facts", "gates"];
 
-  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
+  return { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP };
 }
 
 // Dashboard core module: layout and view: auto layout, layout for save, fit, zoom, pan. A factory: it takes what it uses from the modules below it, and returns its functions. No DOM here.
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function layoutModule() {
-  // A node's children, by graph edge: `children` plus, for a dispatch, its agent entry and its check gates.
+  // A node's children, by graph edge: `children` plus, for a dispatch, its agent entry, its check gates and its review gate.
   function graphKids(n) {
     if (!n) return [];
-    return [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(n.checks || [])] : [])];
+    return [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(n.checks || []), ...("review" in n ? [n.review] : [])] : [])];
   }
 
   // A layered, dependency-free DAG layout (a layout library would break
@@ -2436,7 +2471,7 @@ function scriptModule() {
 function make(ENGINE) {
   const { isObj, same, clone, pyFloat, canonText, canonFromText, graphHash, cmpCodePoints, parseImport } = canonModule(ENGINE);
   const { SCHEMA, KINDS, resolve, validate } = schemaModule({ ENGINE, isObj, canonText, same, pyFloat });
-  const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
+  const { applyNodeEdit, fieldGroups, setField, addNode, removeNode, reviewGate, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, READ_ONLY_TOP } = editsModule({ SCHEMA, KINDS, isObj, same, clone, resolve });
   const { autoLayout, graphKids, layoutForSave, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal } = layoutModule();
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
@@ -2454,7 +2489,7 @@ function make(ENGINE) {
   const { stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody } = groupsModule({ OUTCOME_STATE, STATES, inFlight, isDone, isRunning, childAnchor, childLayout, fmt, freeSpot, num, sumOf });
   const { nodeHarness, runStats } = statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, liveState, num, openCalls, orNull, runCap, runChildren, runTimeline, runTotals, skillLabel, sumOf, tokenFigures });
 
-  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
+  return { scriptDiagram, scriptSvg, guiRun, pauseView, controlBody, LEGEND, LEGEND_CHIPS, RUN_STATES, STATE_TEXT, HELP, httpSource, followPush, snapshot, histNew, histRecord, histUndo, histRedo, REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, layoutForSave, saveGate, saveMode, viewFit, viewFitFloor, viewZoomAt, viewPanBy, viewReveal, validate, canonText, canonFromText, graphHash, parseImport, parseRecord, parseLive, readDelay, liveState, replayAt, moveCursor, unresolvedChildren, overlayRows, overlayFor, runStats, runTotals, runCap, totalsCells, issueProgress, progressCells, nodeState, stateClass, childStateClass, inFlight, isRunning, graphKids, nodeLabel, issueNumber, reasonParts, causeSummary, failureCauses, runChildren, nodeHarness, childLayout, childAnchor, dispatchChecks, fmt, applyNodeEdit, reviewGate, fieldGroups, setField, addNode, removeNode, connect, disconnect, renameNode, layoutRename, changeKind, unseenValues, freeSpot, stateMark, childMark, splitChildren, groupKey, isGroupKey, toggleKey, DOUBLE_PRESS_MS, isDoublePress, childRoster, groupLayout, childPlan, childBus, CARD_NAMES, cardGroups, cardBody, autoLayout, CHILD_COLUMN_HEIGHT, READ_ONLY_TOP, KINDS };
 }
 
 </script>
@@ -2979,6 +3014,22 @@ function failuresHtml(causes) {
   const kind = { node: "", land: " landing", rejected: " request" };
   return `<h2>Failures</h2><div class="runbox">${causes.map((c) => `<div><b>${esc(c.node)}</b>${esc(kind[c.kind] || "")} \u00b7 ${esc(c.outcome)}${c.reasons.map(reasonHtml).join("")}</div>`).join("")}</div>`;
 }
+// The review of one child: its verdict and time, a live mark while it runs, and the findings of a child it held. Nothing when the dispatch names no review.
+function childReviewHtml(c) {
+  const r = c.review, f = core.fmt;
+  if (!r) return "";
+  const word = r.live ? `<b class="state-running" title="The review command is still running">running now</b>` : `<b${r.verdict === "approve" || r.verdict === "no_review" ? "" : ' class="bad"'}>${esc(r.verdict === "no_review" ? "no review here" : r.verdict || "none yet")}</b>`;
+  const line = `${word} \u00b7 time <b>${f.seconds(r.elapsed)}</b>${r.live ? " so far" : ""} \u00b7 round${r.rounds > 1 ? "s" : ""} <b>${r.rounds}</b>${r.exit_code === null || r.live ? "" : ` \u00b7 exit <b>${esc(r.exit_code)}</b>`}`;
+  const held = !r.live && r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : "";
+  return `<h2>Review</h2><div class="runbox">${line}${held}</div>`;
+}
+// The review gate of a dispatch, with the command and deadline it runs: read-only here, as a gate's thresholds are (ADR-0111).
+function reviewGateHtml(n) {
+  const g = n.kind === "dispatch" ? core.reviewGate(S.doc, n.name) : null;
+  if (!g) return "";
+  const f = core.fmt;
+  return `<h2>Review gate</h2><div class="ro">gate: <b>${esc(g.gate)}</b><br>command: ${g.command === null ? "none: the gate is missing or has no argv" : `<code>${esc(g.command)}</code>`}<br>deadline: <b>${g.deadline === null ? f.count(null) : f.seconds(g.deadline)}</b><br><span class="note">Code runs it in each passed child's worktree after the checks and before the merge. Exit 0 merges; exit 3 means no review here and merges; any other exit or the deadline holds the child.</span></div>`;
+}
 function childHtml(c) {
   const f = core.fmt;
   const rows = c.rejected ? [`request rejected by code, so no child started`] : [
@@ -2991,7 +3042,7 @@ function childHtml(c) {
   ].filter(Boolean);
   const evid = c.evidence || {};
   const why = c.outcome === "fail" ? `<h2>Why it failed</h2><div class="runbox">${c.reasons.map((r) => reasonHtml({ ...core.reasonParts(r), evidence: evid[r] !== undefined ? evid[r] : null })).join("")}</div>` : "";
-  return `<h2>Child ${esc(c.name)} <span class="note">(of ${esc(c.dispatch)}${c.proposer ? ", asked by " + esc(c.proposer) : ""})</span></h2><div class="runbox">${rows.join("<br>")}</div>${why}`;
+  return `<h2>Child ${esc(c.name)} <span class="note">(of ${esc(c.dispatch)}${c.proposer ? ", asked by " + esc(c.proposer) : ""})</span></h2><div class="runbox">${rows.join("<br>")}</div>${childReviewHtml(c)}${why}`;
 }
 // The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
@@ -3160,6 +3211,7 @@ function renderSide() {
       else if (!(ns && ns.cause !== null && ns.cause !== undefined)) parts.push(`<div class="msg-ok">no error on this node</div>`);
       const unseen = core.unseenValues(n, SERVED);
       if (unseen.length) parts.push(`<div class="note">Not in the served snapshot (allowed, never blocked): ${esc(unseen.join(", "))}.</div>`);
+      parts.push(reviewGateHtml(n));
       if (n.kind === "gate") parts.push(`<h2>Read-only: check and thresholds</h2><div class="ro">check: <b>${esc(n.check)}</b><br>params: ${esc(JSON.stringify(n.params))}</div>`);
       if (inEdit()) {
       const gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];

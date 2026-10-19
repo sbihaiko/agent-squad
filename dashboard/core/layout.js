@@ -2,10 +2,10 @@
 // scripts/build_dashboard.py bundles every file of dashboard/core/ in dependency order; nothing loads one file alone.
 
 function layoutModule() {
-  // A node's children, by graph edge: `children` plus, for a dispatch, its agent entry and its check gates.
+  // A node's children, by graph edge: `children` plus, for a dispatch, its agent entry, its check gates and its review gate.
   function graphKids(n) {
     if (!n) return [];
-    return [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(n.checks || [])] : [])];
+    return [...(Array.isArray(n.children) ? n.children : []), ...(n.kind === "dispatch" ? [n.entry, ...(n.checks || []), ...("review" in n ? [n.review] : [])] : [])];
   }
 
   // A layered, dependency-free DAG layout (a layout library would break

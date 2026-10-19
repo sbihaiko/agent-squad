@@ -21,6 +21,22 @@ function failuresHtml(causes) {
   const kind = { node: "", land: " landing", rejected: " request" };
   return `<h2>Failures</h2><div class="runbox">${causes.map((c) => `<div><b>${esc(c.node)}</b>${esc(kind[c.kind] || "")} \u00b7 ${esc(c.outcome)}${c.reasons.map(reasonHtml).join("")}</div>`).join("")}</div>`;
 }
+// The review of one child: its verdict and time, a live mark while it runs, and the findings of a child it held. Nothing when the dispatch names no review.
+function childReviewHtml(c) {
+  const r = c.review, f = core.fmt;
+  if (!r) return "";
+  const word = r.live ? `<b class="state-running" title="The review command is still running">running now</b>` : `<b${r.verdict === "approve" || r.verdict === "no_review" ? "" : ' class="bad"'}>${esc(r.verdict === "no_review" ? "no review here" : r.verdict || "none yet")}</b>`;
+  const line = `${word} \u00b7 time <b>${f.seconds(r.elapsed)}</b>${r.live ? " so far" : ""} \u00b7 round${r.rounds > 1 ? "s" : ""} <b>${r.rounds}</b>${r.exit_code === null || r.live ? "" : ` \u00b7 exit <b>${esc(r.exit_code)}</b>`}`;
+  const held = !r.live && r.findings ? `<pre class="ev">${esc(r.findings)}</pre>` : "";
+  return `<h2>Review</h2><div class="runbox">${line}${held}</div>`;
+}
+// The review gate of a dispatch, with the command and deadline it runs: read-only here, as a gate's thresholds are (ADR-0111).
+function reviewGateHtml(n) {
+  const g = n.kind === "dispatch" ? core.reviewGate(S.doc, n.name) : null;
+  if (!g) return "";
+  const f = core.fmt;
+  return `<h2>Review gate</h2><div class="ro">gate: <b>${esc(g.gate)}</b><br>command: ${g.command === null ? "none: the gate is missing or has no argv" : `<code>${esc(g.command)}</code>`}<br>deadline: <b>${g.deadline === null ? f.count(null) : f.seconds(g.deadline)}</b><br><span class="note">Code runs it in each passed child's worktree after the checks and before the merge. Exit 0 merges; exit 3 means no review here and merges; any other exit or the deadline holds the child.</span></div>`;
+}
 function childHtml(c) {
   const f = core.fmt;
   const rows = c.rejected ? [`request rejected by code, so no child started`] : [
@@ -33,7 +49,7 @@ function childHtml(c) {
   ].filter(Boolean);
   const evid = c.evidence || {};
   const why = c.outcome === "fail" ? `<h2>Why it failed</h2><div class="runbox">${c.reasons.map((r) => reasonHtml({ ...core.reasonParts(r), evidence: evid[r] !== undefined ? evid[r] : null })).join("")}</div>` : "";
-  return `<h2>Child ${esc(c.name)} <span class="note">(of ${esc(c.dispatch)}${c.proposer ? ", asked by " + esc(c.proposer) : ""})</span></h2><div class="runbox">${rows.join("<br>")}</div>${why}`;
+  return `<h2>Child ${esc(c.name)} <span class="note">(of ${esc(c.dispatch)}${c.proposer ? ", asked by " + esc(c.proposer) : ""})</span></h2><div class="runbox">${rows.join("<br>")}</div>${childReviewHtml(c)}${why}`;
 }
 // The roster of one dispatch's children: one row each. A click on a row selects that child.
 function rosterHtml(dispatch) {
@@ -202,6 +218,7 @@ function renderSide() {
       else if (!(ns && ns.cause !== null && ns.cause !== undefined)) parts.push(`<div class="msg-ok">no error on this node</div>`);
       const unseen = core.unseenValues(n, SERVED);
       if (unseen.length) parts.push(`<div class="note">Not in the served snapshot (allowed, never blocked): ${esc(unseen.join(", "))}.</div>`);
+      parts.push(reviewGateHtml(n));
       if (n.kind === "gate") parts.push(`<h2>Read-only: check and thresholds</h2><div class="ro">check: <b>${esc(n.check)}</b><br>params: ${esc(JSON.stringify(n.params))}</div>`);
       if (inEdit()) {
       const gates = Array.isArray(S.doc.gates) ? S.doc.gates : [];
