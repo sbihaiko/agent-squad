@@ -96,7 +96,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 sq="$T/sq"; wt="$T/wt"; mkdir -p "$sq/contrib/squad-goal/scripts"
 printf 'skill A\n' > "$sq/contrib/squad-goal/SKILL.md"; printf 'watch A\n' > "$sq/contrib/squad-goal/scripts/watch.sh"
 git -C "$sq" init -q -b main && git -C "$sq" add -A && git -C "$sq" commit -qm A
-git -C "$sq" worktree add -q -b ahead "$wt" main
+# The ahead tree is a clone, a main checkout of its own: a linked worktree is refused before this check (#658).
+git clone -q "$sq" "$wt" && git -C "$wt" checkout -q -b ahead
 printf 'skill B\n' > "$wt/contrib/squad-goal/SKILL.md"; git -C "$wt" commit -qam B
 a=$(git -C "$sq" rev-parse --short HEAD); b=$(git -C "$wt" rev-parse --short HEAD)
 snap() { (cd "$1" && find . -type f | LC_ALL=C sort | while read -r f; do printf '%s %s\n' "$(shasum -a 256 "$f" | cut -d' ' -f1)" "$f"; done); }
@@ -110,7 +111,7 @@ printf '%s' "$out" | /usr/bin/grep -q "$a" && printf '%s' "$out" | /usr/bin/grep
   && ok "the refusal names both commits and the fast-forward" || ko "the refusal line: $out"
 out=$(SG_SQUAD="$sq" bash "$src" "$sq/contrib/squad-goal" "$live2" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill A" ] && ok "SG_SQUAD as the source publishes" || ko "SG_SQUAD as the source (rc $rc): $out"
-git -C "$sq" merge -q --ff-only ahead; printf 'skill v0\n' > "$live2/SKILL.md"
+git -C "$sq" fetch -q "$wt" ahead && git -C "$sq" merge -q --ff-only FETCH_HEAD; printf 'skill v0\n' > "$live2/SKILL.md"
 git -C "$wt" checkout -q --detach HEAD~1
 out=$(SG_SQUAD="$sq" bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill A" ] && ok "a source behind SG_SQUAD publishes" || ko "a source behind SG_SQUAD (rc $rc): $out"
@@ -120,5 +121,22 @@ out=$(SG_SQUAD="$sq" bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
 printf 'skill v0\n' > "$live2/SKILL.md"
 out=$(env -u SG_SQUAD bash "$src" "$wt/contrib/squad-goal" "$live2" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$(cat "$live2/SKILL.md")" = "skill B" ] && ok "no SG_SQUAD publishes as before" || ko "no SG_SQUAD (rc $rc): $out"
+
+# --- a linked worktree is never the source (#658) -------------------------------------------------
+# A coding child published its unlanded branch from its own worktree. A publish from a linked worktree is refused: nonzero,
+# nothing written, one line naming the tree. --check writes nothing, so it still runs.
+lw="$T/linked"; git -C "$sq" worktree add -q -b child "$lw" main
+printf 'skill child\n' > "$lw/contrib/squad-goal/SKILL.md"
+printf 'skill v0\n' > "$live2/SKILL.md"; before=$(snap "$live2")
+for env in "env -u SG_SQUAD" "env SG_SQUAD=$sq"; do
+  out=$($env bash "$src" "$lw/contrib/squad-goal" "$live2" 2>&1); rc=$?
+  [ "$rc" != 0 ] && ok "a publish from a linked worktree is refused ($env)" || ko "a linked worktree published (rc $rc): $out"
+  [ "$before" = "$(snap "$live2")" ] && ok "a refused worktree publish writes nothing ($env)" || ko "a refused worktree publish wrote ($env)"
+  printf '%s' "$out" | /usr/bin/grep -q "$(cd "$lw" && pwd -P)" && printf '%s' "$out" | /usr/bin/grep -qi 'worktree' \
+    && ok "the refusal names the worktree ($env)" || ko "the worktree refusal line: $out"
+done
+out=$(env -u SG_SQUAD bash "$src" --check "$lw/contrib/squad-goal" "$live2" 2>&1); rc=$?
+[ "$rc" = 1 ] && printf '%s\n' "$out" | /usr/bin/grep -qx 'copy SKILL.md' && [ "$before" = "$(snap "$live2")" ] \
+  && ok "--check from a linked worktree still reports and writes nothing" || ko "--check from a linked worktree (rc $rc): $out"
 
 rm -rf "$T"; [ $fail = 0 ] && echo "test-publish-live: all checks green" || { echo "test-publish-live: failed"; exit 1; }
