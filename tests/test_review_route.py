@@ -113,7 +113,7 @@ def test_the_no_tools_call_runs_only_when_the_registry_says_no_tools():
 def test_an_empty_route_row_makes_a_model_ineligible_and_the_cause_is_kept():
     text = REVIEW.read_text()
     assert '[ -n "$rt" ] || return 1' in text
-    assert "review-route.err" in text
+    assert 'review-route.$$.err' in text
 
 
 def test_an_unknown_runner_is_refused_by_name():
@@ -123,4 +123,21 @@ def test_an_unknown_runner_is_refused_by_name():
 def test_the_review_timeouts_name_only_models_in_the_chain():
     doc = json.loads(MODELS.read_text())
     assert set(doc.get("review_timeout_seconds_by_model", {})) <= set(doc["review_models"])
+
+
+
+def test_a_gateway_only_tools_entry_keeps_its_legacy_runner_on_the_raw_spelling(reg):
+    got = modelreg.review_route("claude:claude-deepseek-v4-pro", reg)
+    assert (got.route, got.runner, got.wire, got.tools) == ("cli", "claude", "claude-deepseek-v4-pro", True)
+
+
+def test_the_route_error_file_is_one_per_process_and_removed_at_exit():
+    text = REVIEW.read_text()
+    assert 'review-route.err"' not in text
+    assert text.count('review-route.$$.err') >= 3
+
+
+def test_an_unsupported_runner_clears_stderr_and_ends_its_tries():
+    arm = next(line for line in REVIEW.read_text().splitlines() if "unsupported runner" in line)
+    assert ': > "$e"' in arm and "lim=$i" in arm and "fmt=1" in arm
 

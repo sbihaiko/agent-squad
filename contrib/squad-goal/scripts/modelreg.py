@@ -364,24 +364,30 @@ def invocation(ref_or_raw, use="gateway", effort=None, prompt_file=None, reg=Non
 _LEGACY_RUNNERS = (("claude:", "claude"), ("gemini-", "agy"), ("grok-", "grok"))
 
 
+def _legacy_route(raw):
+    for prefix, runner in _LEGACY_RUNNERS:
+        if raw.startswith(prefix):
+            return ReviewRoute("cli", runner, raw.removeprefix("claude:"), True)
+    return ReviewRoute("cli", "codex", raw, True)
+
+
 def review_route(raw, reg=None):
     """Where the review pass sends one reviewer: the route, its runner, its wire string and its tools.
 
     A registry entry decides: a `tools: false` capability picks the direct (or gateway) call, and any other entry
-    takes its CLI route, whose first argv word is the runner; an entry with tools and no CLI route keeps Codex. A spelling the registry does not know keeps the
+    takes its CLI route, whose first argv word is the runner; a gpt entry with tools and no CLI route keeps Codex, and any other keeps the legacy runner of its raw spelling. A spelling the registry does not know keeps the
     runner the old review script gave it: `claude:`, `gemini-` and `grok-` by prefix, Codex for the rest."""
     reg = reg or default_registry()
     ref = normalize(raw, reg)
     entry = reg.entries.get(ref.id) if ref.known else None
     if entry is None:
-        for prefix, runner in _LEGACY_RUNNERS:
-            if raw.startswith(prefix):
-                return ReviewRoute("cli", runner, raw.removeprefix("claude:"), True)
-        return ReviewRoute("cli", "codex", raw, True)
+        return _legacy_route(raw)
     tools = entry.capabilities.get("tools", True) is not False
     if tools and "cli" not in entry.routes:
-        # a reviewer with tools reads the repository, so it never takes the no-tools call: it keeps Codex
-        return ReviewRoute("cli", "codex", ref.id, True)
+        # a reviewer with tools reads the repository, so it never takes the no-tools call
+        if entry.subscription == "gpt":
+            return ReviewRoute("cli", "codex", ref.id, True)
+        return _legacy_route(raw)
     order = ("cli",) if tools else ("direct", "gateway")
     use = next((name for name in order if name in entry.routes), None)
     if use is None:

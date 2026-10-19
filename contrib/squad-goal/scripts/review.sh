@@ -73,7 +73,7 @@ if [ -s "$last" ] && [ "$(cat "$last")" = "$head" ] && head -1 "$out" 2>/dev/nul
   echo "model=$(cat "$SG_STATE/review-$pr.model" 2>/dev/null || echo unknown) (reused: this head was reviewed) $(head -1 "$out")"; exit 0; fi
 # Each try writes private files ($o and its siblings); only a verdict, or the BLOCKED line, is published to $out, by a rename.
 o="$out.$$"; e="$o.err"
-trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".*' EXIT
+trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".* "$SG_STATE/review-route.$$.err"' EXIT
 publish() { printf '%s\n' "$1" > "$o.pub" && mv -f "$o.pub" "$out"; }
 prevmd="$SG_STATE/review-$pr.prev.md"; delta=""
 if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/review-$pr.md" | grep -q '^VERDICT: CHANGES' && [ "$(cat "$last")" != "$head" ] \
@@ -145,7 +145,7 @@ answer_check() { local why
 bare='def bare: sub("\\[[^]]*\\]$"; "");'
 # route_of <model>: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
 # The resolver's stderr is kept in review-route.err, so a broken registry names its cause in the MODEL_FAIL line.
-route_of() { python3 "$(dirname "$0")/modelreg.py" review-route "$1" 2>"$SG_STATE/review-route.err"; }
+route_of() { python3 "$(dirname "$0")/modelreg.py" review-route "$1" 2>"$SG_STATE/review-route.$$.err"; }   # one file per process: reviews of different branches run at once
 direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
   cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
     -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
@@ -238,7 +238,7 @@ reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); do
 used=0
 for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
-  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$SG_STATE/review-route.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
+  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$SG_STATE/review-route.$$.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
   case $runner in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
@@ -285,7 +285,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
       cli:codex) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
-      *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; false > "$o";;
+      *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; : > "$e"; fmt=1; lim=$i; false > "$o";;   # no stale stderr, no second MODEL_FAIL, no more tries for a model that never ran
     esac
     rc=$?
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
