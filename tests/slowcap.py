@@ -13,6 +13,13 @@ Both lines guard the work a test does, not the runner's load. A call over a line
 scheduling slowdown measured right then (`contention_factor`): the measured wall time is divided by it, bounded, so a
 call that only waited for a CPU is not named while a call that sleeps past the line still is. The measure runs only for
 a call already over a line, so a passing suite pays nothing.
+
+The 1 s line is a timing-only finding, and xdist load still turns a 0.4 s suite into 2.2 s past what the factor excuses
+(#629). So the mode decides how it is read. Under xdist (pytest-xdist's own worker state: the call runs in a worker, whose
+config carries `workerinput`), an unmarked call at or over `heavy_cap_seconds` does not fail; it is named in the summary
+as `SLOW-UNMARKED (deferred to the serial run)`. In a serial run (`-p no:xdist`, or no `-n`) it fails, and the full suite
+runs that mode on the same tip after the xdist run, so the line is still enforced. The mode is read from the runner, never
+from a worker count. The 20 s cap and every functional failure are strict in both modes.
 """
 import signal
 import time
@@ -23,6 +30,8 @@ DEFAULT_CAP_SECONDS = 20.0
 DEFAULT_DEADLINE_SECONDS = 60.0
 DEFAULT_HEAVY_CAP_SECONDS = 2.0
 MAX_CONTENTION_FACTOR = 4.0
+DEFERRED_KEY = "slow_unmarked_deferred"
+DEFERRED_TITLE = "SLOW-UNMARKED (deferred to the serial run)"
 CALIBRATION_SECONDS = 0.05
 
 
@@ -30,7 +39,7 @@ def pytest_addoption(parser):
     parser.addini("slow_cap_seconds", "cap for one test call, in seconds", default=str(DEFAULT_CAP_SECONDS))
     parser.addini("test_deadline_seconds", "deadline for one test call, in seconds; 0 turns the deadline off",
                   default=str(DEFAULT_DEADLINE_SECONDS))
-    parser.addini("heavy_cap_seconds", "an unmarked test call at or over this fails; mark it heavy", default=str(DEFAULT_HEAVY_CAP_SECONDS))
+    parser.addini("heavy_cap_seconds", "an unmarked test call at or over this fails a serial run; under xdist it is reported; mark it heavy", default=str(DEFAULT_HEAVY_CAP_SECONDS))
 
 
 def pytest_configure(config):
@@ -114,8 +123,32 @@ def pytest_runtest_makereport(item, call):
         )
         return
     if duration >= heavy_cap and item.get_closest_marker("heavy") is None:
+        if _under_xdist(item.config):
+            report.user_properties.append((DEFERRED_KEY, f"{item.nodeid} took {report.duration:.1f} s"))
+            return
         report.outcome = "failed"
         report.longrepr = (
             f"{item.nodeid} took {report.duration:.1f} s, at or over the {heavy_cap:g} s line for an unmarked call. "
             "Mark it `@pytest.mark.heavy` so the fast battery leaves it out, or find why it is slow."
         )
+
+
+def _under_xdist(config):
+    """True when this call runs in a pytest-xdist worker: xdist gives each worker's config its `workerinput`."""
+    return hasattr(config, "workerinput")
+
+
+_DEFERRED: list[str] = []
+
+
+def pytest_runtest_logreport(report):
+    """Collect the deferred findings where the reports arrive: in the xdist controller, which writes the summary."""
+    for key, text in getattr(report, "user_properties", ()):
+        if key == DEFERRED_KEY:
+            _DEFERRED.append(text)
+
+
+def pytest_terminal_summary(terminalreporter):
+    """Name every unmarked call the xdist run deferred, so the finding is read even though the run stays green."""
+    for text in _DEFERRED:
+        terminalreporter.write_line(f"{DEFERRED_TITLE}: {text}, at or over the heavy line; the serial run enforces it")
