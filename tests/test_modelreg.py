@@ -297,6 +297,24 @@ def test_eligible_honours_a_marker_with_and_without_a_reset(tmp_path):
     assert mr.eligible(entry, shared=tmp_path, now=1000).ok is True
 
 
+def test_a_v1_chain_keeps_the_codex_marker_for_a_legacy_spelling(tmp_path):
+    """The registry maps `claude-deepseek-flash[1m]` to the spend-only DeepSeek subscription, but a v1 file ran it
+    through Codex: `codex-limited` still names it out, as the old chain reader did (SPEC 505 keeps v1 behavior)."""
+    entry = _chain_entry(tmp_path, {"coding_models": ["claude-deepseek-flash[1m]"]}, "coding", "deepseek-flash")
+    (tmp_path / "codex-limited").write_text("9999999999")
+    ev = mr.eligible(entry, shared=tmp_path, now=1000)
+    assert ev.ok is False and ev.reason == "usage limit"
+
+
+def test_a_v2_chain_lets_the_registry_subscription_decide_the_marker(tmp_path):
+    """A v2 file names registry ids, so the DeepSeek subscription is spend only and Codex's marker never touches it."""
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"chains": {"coding": [{"raw": "claude-deepseek-flash[1m]"}]}}))
+    entry = mr.chain(path, "coding").entries[0]
+    (tmp_path / "codex-limited").write_text("9999999999")
+    assert mr.eligible(entry, shared=tmp_path, now=1000).ok is True
+
+
 def test_eligible_honours_the_claude_reserve(tmp_path):
     entry = _chain_entry(tmp_path, {"coding_models": ["claude-opus-5-5"]}, "coding", "claude-opus-5-5")
     (tmp_path / "hub-quota.json").write_text(json.dumps(

@@ -100,6 +100,24 @@ def test_a_single_model_chain_has_no_banner(ch, tmp_path):
     assert s["banner"] is None
 
 
+def test_a_v1_chain_keeps_the_codex_marker_for_its_legacy_spellings(ch, tmp_path):
+    """A v1 file predates the registry's subscription field: every id outside the `claude:`, `grok-` and `gemini-`
+    prefixes ran through Codex, so `codex-limited` still names it out (SPEC 505 keeps v1 behavior)."""
+    (tmp_path / "codex-limited").write_text(str(int(_reset(22, 32))))
+    cfg = {"coding_models": ["claude-deepseek-flash[1m]", "claude-grok-4.7", "claude-sonnet-5-5", "gpt-5.6-terra"]}
+    s = ch.chain_state(cfg, "coding_models", tmp_path, now=NOON)
+    assert [o["model"] for o in s["out"]] == cfg["coding_models"]
+    assert {o["reason"] for o in s["out"]} == {"usage limit"}
+
+
+def test_a_v2_chain_lets_the_registry_subscription_decide_the_marker(ch, tmp_path):
+    """A v2 chain names registry ids: `claude-deepseek-flash[1m]` is spend-only now, not Codex (SPEC 505)."""
+    (tmp_path / "codex-limited").write_text(str(int(_reset(22, 32))))
+    cfg = {"chains": {"coding": [{"id": "deepseek-flash", "raw": "claude-deepseek-flash[1m]"}]}}
+    s = ch.chain_state(cfg, "coding_models", tmp_path, now=NOON)
+    assert s["out"] == [] and s["eligible"] == 1
+
+
 @pytest.mark.parametrize("key,models,marker", [
     ("coding_models", ["gpt-5.6-terra"], "codex-limited"),
     ("review_models", ["gemini-3.8-flash-high"], "agy-limited"),

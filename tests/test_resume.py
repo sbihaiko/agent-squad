@@ -9,8 +9,10 @@ from squad.adapter import ScriptedAdapter
 from squad.engine import Engine, ResumeRefused
 from squad.graph import from_doc
 from squad.record import read
+from squad.sdk_adapter import SdkAdapter
 from tests.flows import agent, doc
 from tests.gitrepo import make_repo, sh
+from tests.test_sdk_adapter import Options, ResultMessage, stub
 
 
 def wait_doc(default="pass", deadline=100):
@@ -119,6 +121,30 @@ async def test_run_start_turns_resolution_on_and_the_resume_reads_it(tmp_path):
     eng2, ad2 = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
     await eng2.resume(answer="pass")
     assert ad2.resolve is True
+
+
+def wire_registry(path):
+    """A registry whose `sonnet` alias answers on the wire string `wire-sonnet`, unlike the committed registry."""
+    path.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}},
+                                "models": [{"id": "claude-sonnet-5-5", "label": "Sonnet 5.5", "provider": "claude",
+                                            "subscription": "claude",
+                                            "routes": {"gateway": {"auth": "subscription", "model": "wire-sonnet",
+                                                                   "served": ["wire-sonnet"]}},
+                                            "aliases": ["sonnet"]}]}))
+    return path
+
+
+@pytest.mark.anyio
+async def test_an_sdk_run_resolves_through_the_engine_registry(tmp_path):
+    """One run never records a model id from the engine's registry while the SDK sends a wire model from the default."""
+    seen = []
+    reg = wire_registry(tmp_path / "registry.json")
+    ad = SdkAdapter(query=stub([ResultMessage(result=json.dumps({"status": "pass", "x": 1}))], seen), options_cls=Options)
+    eng = Engine(from_doc(doc([agent("a")], ["a"])), ad, tmp_path / "run", registry=str(reg))
+    await eng.run()
+    assert seen and seen[0][1].kw["model"] == "wire-sonnet"
+    out = events(tmp_path / "run", "outcome")[0]
+    assert out["route_model"] == "wire-sonnet"
 
 
 @pytest.mark.anyio
