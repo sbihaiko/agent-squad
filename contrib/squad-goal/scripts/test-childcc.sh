@@ -3,7 +3,7 @@
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB   # the old-vocabulary case needs it unset; a caller that exports it must not turn the suite red
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$T/"
+mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/revformat.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -271,5 +271,55 @@ assert all(c["issue"] in (6001, 6002) and c["child"] == "c" and c["since"] for c
 assert [c["rk"] for c in mid["children"] if c["step"] == "review"][0], mid   # the key of the child branch
 assert end["pid"] is None and [(c["run"], c["step"]) for c in end["children"]] == [("nwb", "deferred")], end
 PY
+
+# A childcc CHANGES on a child its run did not review starts one fix run in the child's kept worktree, with no requeue (#636).
+# The fix run is childfix.sh's, stubbed here: it names the run folder it started. While that run lives the child is held and
+# no second fix run starts; a fix run is no child of the issue's wave, so its own child moves no card. An APPROVE on the new
+# head enters the wave. Findings that do not change after the fix run requeue the issue once, with them in the reason (ADR-0134).
+cat > "$T/childreview.sh" <<'CR'
+#!/bin/bash
+k=$(git symbolic-ref --quiet --short HEAD | tr / _); cp "$FIX_DIR/verdict-$2" "$SG_STATE/review-$k.md"; git rev-parse HEAD > "$SG_STATE/review-$k.sha"
+CR
+cat > "$T/wave.sh" <<'W'
+#!/bin/bash
+echo "$*" >> "$WAVE_CALLS"
+[ "$1" = expired ] && exit 1
+[ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }
+k=$(git symbolic-ref --quiet --short HEAD | tr / _)
+head -1 "$SG_STATE/review-$k.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$3: the review of x did not approve it: $(head -1 "$SG_STATE/review-$k.md")"; exit 1; }
+echo "WAVE x entered (#$3)"
+W
+cat > "$T/childfix.sh" <<'CF'
+#!/bin/bash
+echo "$1 $2 $(pwd -P)" >> "$FIX_DIR/fix.calls"
+d=$FIX_DIR/co/runs/fix-$2; mkdir -p "$d"
+printf '%s\n' '{"event": "spawn_accepted", "child": "c", "definition": "GitHub issue #'$2'"}' '{"event": "outcome", "node": "c", "outcome": "pass", "reasons": ["ok"]}' > "$d/record.jsonl"
+echo "$d"
+CF
+export FIX_DIR=$T GH_NUMS="6100:Doing 6101:Doing"; rm -f "$T/moves"; : > "$T/fix.calls"
+fixpass() { printf '%s\n' "$T/co/runs/$1" "$T/co/runs/fix-$2" > "$T/st/active-runs.txt"; (cd "$T/co" && SG_CHILDCC_BUDGET=5 python3 "$T/childcc.py.run" 2>&1); }
+fixed() { /usr/bin/git -C "$T/co/runs/$1/ws/target-c" -c user.email=a@b -c user.name=t commit -q --allow-empty -m fix; echo '{"event": "verdict"}' >> "$T/co/runs/fix-$2/record.jsonl"; }
+printf '**VERDICT: CHANGES**\n- [Blocking] a.py:3 the guard is missing\n' > "$T/verdict-6100"
+rrun cfx 6100 pass '' none; : > "$WAVE_CALLS"
+out=$(fixpass cfx 6100); rc=$?
+[ "$(/usr/bin/grep -c '^cfx 6100 ' "$T/fix.calls")" = 1 ] && /usr/bin/grep -q "^cfx 6100 $(cd "$T/co/runs/cfx/ws/target-c" && pwd -P)\$" "$T/fix.calls" \
+  && ok "a childcc CHANGES starts one fix run in the child's worktree" || ko "fix runs: '$(cat "$T/fix.calls")', out $out"
+! /usr/bin/grep -q '^requeue 6100' "$WAVE_CALLS" && ok "a CHANGES with a fix run does not requeue the issue" || ko "requeued: $(cat "$WAVE_CALLS")"
+[ "$rc" = 3 ] && ok "a child in its fix run holds its wave" || ko "a pass with a child in its fix run exited $rc"
+out=$(fixpass cfx 6100); rc=$?
+[ "$(/usr/bin/grep -c '^cfx 6100 ' "$T/fix.calls")" = 1 ] && ! /usr/bin/grep -q '^requeue 6100' "$WAVE_CALLS" && [ "$rc" = 3 ] \
+  && ok "while the fix run lives no second fix run starts and nothing requeues" || ko "live fix run: calls '$(cat "$T/fix.calls")', waves $(cat "$WAVE_CALLS"), exit $rc"
+/usr/bin/grep -q ' 6100$' "$T/moves" 2>/dev/null && ko "the fix run's own child moved the card: $(cat "$T/moves")" || ok "the fix run's own child moves no card"
+printf '**VERDICT: APPROVE**\n' > "$T/verdict-6100"; fixed cfx 6100
+out=$(fixpass cfx 6100); rc=$?
+/usr/bin/grep -q 'WAVE x entered (#6100)' <<<"$out" && [ -e "$T/st/auto/cc-cfx-c" ] && ! /usr/bin/grep -q '^requeue 6100' "$WAVE_CALLS" \
+  && ok "an APPROVE on the fix run's head enters the wave" || ko "after the fix: out $out, waves $(cat "$WAVE_CALLS")"
+printf '**VERDICT: CHANGES**\n- [Blocking] b.py:7 the cap is never read\n' > "$T/verdict-6101"
+rrun cst 6101 pass '' none; : > "$WAVE_CALLS"
+fixpass cst 6101 >/dev/null; printf '**VERDICT: CHANGES**\n- [Blocking] b.py:9 the cap is never read\n' > "$T/verdict-6101"; fixed cst 6101
+out=$(fixpass cst 6101); fixpass cst 6101 >/dev/null
+[ "$(/usr/bin/grep -c '^cst 6101 ' "$T/fix.calls")" = 1 ] && ok "findings that do not change start no second fix run" || ko "fix runs: '$(cat "$T/fix.calls")'"
+[ "$(/usr/bin/grep -c '^requeue 6101 ' "$WAVE_CALLS")" = 1 ] && /usr/bin/grep -q '^requeue 6101 .*the cap is never read' "$WAVE_CALLS" \
+  && ok "findings that do not change requeue the issue once, with the findings in the reason" || ko "requeues: $(cat "$WAVE_CALLS"), out $out"
 
 rm -rf "$T"; exit $fail
