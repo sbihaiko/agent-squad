@@ -377,6 +377,17 @@ wave_check() {
 # refs_of <clone> <range>: every `Refs #N` in the whole message of each commit of the range, each named once.
 refs_of() { $G -C "$1" log --format=%B "$2" 2>/dev/null | /usr/bin/grep -oE 'Refs #[0-9]+' | /usr/bin/grep -oE '[0-9]+' | sort -un | tr '\n' ' '; }
 
+# netfail <what> <stderr>: a fetch or a push that failed on the network (DNS, connect, timeout, a 5xx answer, a TLS
+# handshake) is no cause a repeat does not change: the next cycle can land (#656). It prints one WAVE-NETWORK line with the
+# last line that names the network error and returns 0; the caller then exits 2 with no call to stuck, so no try is counted
+# and nothing is frozen. Any other failure returns 1, and the caller calls stuck as before.
+WAVE_NET_RE='Could not resolve host|Failed to connect|Connection (timed out|refused|reset)|Operation timed out|Network is unreachable|The requested URL returned error: 5[0-9][0-9]|SSL_|SSL connect|TLS handshake|gnutls_handshake'
+netfail() {
+  local l; l=$(printf '%s\n' "$2" | /usr/bin/grep -E "$WAVE_NET_RE" | tail -1)
+  [ -n "$l" ] || return 1
+  echo "WAVE-NETWORK $1: $l; it lands on a later cycle"
+}
+
 # stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are counted in
 # auto/wland-tries-<run>; at SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label
 # frozen:owner and one queued comment, and the run's wave marker goes, so the loop's cycle reads the run and stops. The wave
@@ -454,10 +465,12 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # that may be gone (a wave already landed).
   # A landing that cannot start -- the base or the wave branch is gone, or the checkout fails -- exits 2, and it is a landing
   # that failed: it counts toward the same cap as a conflict (#477), so its marker never holds the run's trees for good.
-  sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null || {
-    stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
-  sc fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>/dev/null || {
-    stuck "$run" "$w" "$S" "$w is not on $remote (the run cuts it from $base at its start)"; rm -rf "$S"; return 2; }
+  # A fetch that failed on the network is not counted (netfail, #656): it exits 2 and the wave lands on a later cycle.
+  local fo
+  fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || {
+    netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
+  fo=$(sc fetch -q origin "+refs/heads/$w:refs/remotes/origin/$w" 2>&1) || {
+    netfail "the fetch of $w from $remote" "$fo" || stuck "$run" "$w" "$S" "$w is not on $remote (the run cuts it from $base at its start)"; rm -rf "$S"; return 2; }
   sc checkout -q -B land "origin/$w" 2>/dev/null || { stuck "$run" "$w" "$S" "the checkout of $w failed"; rm -rf "$S"; return 2; }
   # The rebase on the base happens here and nowhere else (ADR-0145 rule 14): between entries the tip moves only by a child that
   # entered, so a base that moved under the wave is rebased onto now, before the one push. A push the remote refuses -- the
@@ -511,10 +524,11 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # ONE push of the wave's tip to the base: one ref update, one CI run, and a push git refuses unless it is a fast-forward,
     # so no merge commit can land. Nothing else is pushed -- no child branch, and the wave branch goes once its work is in.
     out=$(sc push -q origin "HEAD:refs/heads/$base" 2>&1) && break
+    netfail "the push of $w to $base" "$out" && { rm -rf "$S"; return 2; }
     [ "$try" = 1 ] || { stuck "$run" "$w" "$S" "the push of $w to $base was refused: $(printf '%s' "$out" | tail -1)"; rm -rf "$S"; return 1; }
     try=2
-    sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>/dev/null || {
-      stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
+    fo=$(sc fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2>&1) || {
+      netfail "the fetch of $base from $remote" "$fo" || stuck "$run" "$w" "$S" "$base is not on $remote"; rm -rf "$S"; return 2; }
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"

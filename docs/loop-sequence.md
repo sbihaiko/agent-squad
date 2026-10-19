@@ -153,6 +153,8 @@ A child the run approved enters with no second review. If its entry still holds 
 
 `gate.sh` takes the machine-wide `gate` lock through `serial.sh`. The wave entry and the wave tip check take it in try mode (`SERIAL_TRY=1`): a held lock exits 73 at once, never queued, and counts nothing toward `stuck`. The entry prints `WAVE HOLD` and the child enters on a later pass. The landing prints `WAVE WAIT` and the wave lands on a later cycle. `promote-pass.sh` takes the lock in try mode too. A hand-started gate waits.
 
+A fetch or push of `wave.sh land` that fails on the network (cannot resolve the host, cannot connect, a timeout, a 5xx answer, a TLS handshake) prints `WAVE-NETWORK` and exits 2. It counts nothing toward `stuck` and freezes nothing, so the wave lands on a later cycle. A fetch that answers and lacks the ref still counts.
+
 ### Spec cards
 
 A spec is never work (ADR-0142). `/to-spec` does not label it `ready-for-agent`, and the frontier skips the `spec` label. The janitor folds a spec's column over its sub-issues (rank 15, forward only, nothing below Doing). When the owner moves a spec card to Todo, the janitor moves each open sub-issue whose card is in Backlog or has no column to Todo (rank 12). A spec with at least one sub-issue, all closed, is closed with one comment.
@@ -203,7 +205,7 @@ sequenceDiagram
     CC-->>W: exit 3: the landing waits, the run stays unread
     W->>W: childcc lock held past SG_LAND_WAIT, or the pass failed: the run stays unread
     Note over WV,GH: landing fails
-    WV->>WV: rebase on dev conflicts, push refused twice, base or wave branch gone: stuck() counts wland-tries
+    WV->>WV: rebase on dev conflicts, push refused twice, base or wave branch gone: stuck() counts wland-tries (a network error counts nothing)
     WV->>GH: at SG_WAVE_LAND_TRIES (3): frozen:owner per issue, cq comment, rm wave-RUN#59; wave/RUN stays on the remote
     WV->>WV: gate lock held at the tip check: WAVE WAIT, exit 1, no count
     Note over WV: red tip
