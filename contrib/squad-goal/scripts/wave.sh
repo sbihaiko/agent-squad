@@ -390,7 +390,7 @@ netfail() {
 
 # stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are counted in
 # auto/wland-tries-<run>; at SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label
-# frozen:owner and one queued comment, and the run's wave marker goes, so the loop's cycle reads the run and stops. The wave
+# frozen:owner, its card goes to Todo (#657), one comment is queued, and the run's wave marker goes, so the cycle stops. The wave
 # branch stays on the remote with the work, when it is there. Returns 1 either way: the landing did not happen.
 stuck() {
   local run=$1 w=$2 S=$3 why=$4 f="$SG_STATE/auto/wland-tries-$1" t n
@@ -400,6 +400,7 @@ stuck() {
   export SG_GH_PASS=wave
   for n in $(refs_of "$S" "origin/$base..origin/$w"); do
     gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=frozen:owner" >/dev/null 2>&1
+    board_write "${SG_TODO:-Todo}" "$n"   # nothing landed, so the card leaves Code Complete (#657); frozen:owner holds it out of the frontier
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done

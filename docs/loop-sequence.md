@@ -206,7 +206,7 @@ sequenceDiagram
     W->>W: childcc lock held past SG_LAND_WAIT, or the pass failed: the run stays unread
     Note over WV,GH: landing fails
     WV->>WV: rebase on dev conflicts, push refused twice, base or wave branch gone: stuck() counts wland-tries (a network error counts nothing)
-    WV->>GH: at SG_WAVE_LAND_TRIES (3): frozen:owner per issue, cq comment, rm wave-RUN#59; wave/RUN stays on the remote
+    WV->>GH: at SG_WAVE_LAND_TRIES (3): frozen:owner and card Todo per issue, cq comment, rm wave-RUN#59; wave/RUN stays on the remote
     WV->>WV: gate lock held at the tip check: WAVE WAIT, exit 1, no count
     Note over WV: red tip
     WV->>WV: wave_check: child_gate per commit, newest first#59; drop the culprit by rebase --onto#59; requeue it
