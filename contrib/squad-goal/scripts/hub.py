@@ -3242,9 +3242,10 @@ class H(BaseHTTPRequestHandler):
         org = self.headers.get("Origin") or ""
         ok = self.path in ("/api/models", "/api/plans", "/api/promote") and own_host(self) and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
         try:
+            raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192))   # read before any answer: a refusal that leaves the body unread resets the connection
             if not ok: out = {"err": "forbidden"}
             else:
-                body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")
+                body = json.loads(raw or b"{}")
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
