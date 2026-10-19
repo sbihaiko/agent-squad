@@ -51,11 +51,12 @@ printf 'Refs #101\n' > "$T/co/runs/$R0b-r2/request.txt"
 printf 'GitHub issues 102, 103\n' > "$T/co/runs/$R1-r3/request.txt"
 printf 'Refs #104\n' > "$T/co/runs/$R5-r4/request.txt"   # outside the window, so issue 104 has no run in it
 
-# The child review lines the review pass writes, and the requeue line a CHANGES verdict appends.
+# The child review lines the review pass writes, the requeue line a CHANGES verdict appends, and the one a fix run with unchanged findings appends.
 cat > "$T/st/watch.log" <<'EOF'
 CHILD REVIEW run-20261018-121500-r1 child-1: squad/run-1/ws-child-1 123456789 VERDICT: APPROVE
 CHILD REVIEW run-20261018-121500-r1 child-2: squad/run-1/ws-child-2 abcdef123 VERDICT: CHANGES
 CHILD REVIEW REQUEUE #102: the review of its own diff asked for changes: a.sh:1 — wrong — fix
+CHILD FIX REQUEUE #103: a fix run left the same review findings: b.sh:2 — wrong — fix
 CHILD REVIEW run-20261018-121500-r1 child-3: squad/run-1/ws-child-3 111111111 VERDICT: APPROVE
 CHILD REVIEW run-20261018-121500-r1 child-4: squad/run-1/ws-child-4 222222222 VERDICT: BLOCKED (every review model failed)
 watch: a line that is not a child review
@@ -80,7 +81,7 @@ has "Mean runs per issue: 1.33 (4 run-issue pairs over 3 issues)" && ok "the mea
 has "  APPROVE: 2" && ok "two APPROVE lines are counted" || ko "APPROVE is not 2: $out"
 has "  CHANGES: 1" && ok "one CHANGES line is counted" || ko "CHANGES is not 1: $out"
 has "  BLOCKED: 1" && ok "one BLOCKED line is counted" || ko "BLOCKED is not 1: $out"
-has "  REQUEUE: 1" && ok "one CHILD REVIEW REQUEUE line is counted" || ko "REQUEUE is not 1: $out"
+has "  REQUEUE: 2" && ok "one CHILD REVIEW REQUEUE and one CHILD FIX REQUEUE line are counted (#638)" || ko "REQUEUE is not 2: $out"
 [ ! -e "$T/ghcalled" ] && ok "the report makes no GitHub call" || ko "the report called gh"
 after=$(find "$T/co" "$T/st" -type f | sort | while read -r f; do printf '%s %s\n' "$f" "$(cksum < "$f")"; done)
 [ "$before" = "$after" ] && ok "the report writes nothing into the checkout or the state folder" || ko "the report wrote into its sources"
