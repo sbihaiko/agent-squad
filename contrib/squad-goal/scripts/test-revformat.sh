@@ -333,4 +333,20 @@ python3 "$src" --answer "$T/bad.json" >/dev/null 2>&1 && ko "26 a finding with m
 printf '**VERDICT: approve**\n' > "$T/md.md"
 [ "$(python3 "$src" --answer "$T/md.md")" = "$(python3 "$src" --normalize "$T/md.md")" ] && ok "26 a markdown answer is normalized as before" || ko "26 markdown: $(python3 "$src" --answer "$T/md.md" 2>&1)"
 
+
+# #633: a fix round answers in JSON with the same schema. A fixed finding sits in resolved with the "fixed:" marker in its
+# failure field, and renders the '## Resolved' section the fix-round check reads; a not-fixed one stays in its section.
+# The fingerprint of the rendered fix round is the one of the equivalent markdown fix round (ADR-0134).
+cat > "$T/fx.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"src/a.py:12","defect":"null deref","failure":"not fixed: the guard is still missing","fix":"an empty list still raises TypeError"}],
+ "debt":[],"resolved":[{"location":"src/b.py:42","defect":"no backoff","failure":"fixed: backoff added","fix":"test_backoff passes"}]}
+J
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — not fixed: the guard is still missing — an empty list still raises TypeError\n## Resolved\n- src/b.py:42 — no backoff — fixed: backoff added — test_backoff passes\n' > "$T/fxeq.md"
+python3 "$src" --answer "$T/fx.json" > "$T/fx.md" 2>"$T/err"; rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q '^## Resolved$' "$T/fx.md" && python3 "$src" --max-lines 60 --fix-round "$T/fx.md" >/dev/null \
+  && ok "27 a fix-round JSON answer renders the Resolved section the fix-round check reads" || ko "27 fix render: rc=$rc $(cat "$T/err") $(cat "$T/fx.md")"
+python3 "$src" --max-lines 60 "$T/fx.md" >/dev/null 2>&1 && ko "27 a full-review check took the Resolved section" || ok "27 the full-review check still refuses Resolved"
+[ "$(python3 "$src" --summary "$T/fx.md")" = "blocking=1 debt=0" ] && ok "27 the rendered fix round reads blocking=1 debt=0" || ko "27 summary: $(python3 "$src" --summary "$T/fx.md")"
+[ "$(python3 "$src" --fingerprint "$T/fx.md")" = "$(python3 "$src" --fingerprint "$T/fxeq.md")" ] \
+  && ok "27 the fix-round fingerprint equals the equivalent markdown's (ADR-0134)" || ko "27 fix fingerprint: $(diff "$T/fx.md" "$T/fxeq.md")"
 rm -rf "$T"; exit $fail

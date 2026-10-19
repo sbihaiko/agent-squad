@@ -391,7 +391,8 @@ J='{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"diverges from
 cat > "$T/bin/claude" <<C
 #!/bin/bash
 cat > "$T/prompt21"; echo "\$*" > "$T/args21"
-jq -cn --argjson s '$J' '{type:"result",subtype:"success",is_error:false,result:"",structured_output:\$s,usage:{input_tokens:10,output_tokens:5}}'
+s='$J'; [ -s "$T/j21" ] && s=\$(cat "$T/j21")
+jq -cn --argjson s "\$s" '{type:"result",subtype:"success",is_error:false,result:"",structured_output:\$s,usage:{input_tokens:10,output_tokens:5}}'
 C
 cat > "$T/bin/codex" <<C
 #!/bin/bash
@@ -412,11 +413,29 @@ printf '{"review_models":["gpt-x"],"model_retry_budget":1,"review_timeout_second
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/null 2>&1 && ok "21 codex asks for JSON with --output-schema" || ko "21 codex args: $(cat "$T/args21c")"
 [ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
-# the fix round stays markdown here (#633): no schema flag
+# 22) #633: a fix round answers in JSON with the same schema. claude -p carries --json-schema, the prompt carries the
+# schema, and the previous findings it reads are the rendered markdown. A fixed finding in resolved renders the
+# '## Resolved' section the fix-round check reads, and the next fix round reads that rendered review unchanged.
 printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$T/st/review-fix_1-x.md"; echo ccc333 > "$T/st/review-fix_1-x.sha"
 printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
-bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
-/usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && ! /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "21 a fix round asks for no schema yet" || ko "21 fix round args: $(cat "$T/args21")"
+cat > "$T/j21" <<'R'
+{"verdict":"CHANGES","blocking":[],"debt":[{"location":"b.cs:2","defect":"naming","failure":"nobody can tell what it names","fix":"rename it"}],
+ "resolved":[{"location":"a.cs:1","defect":"x","failure":"fixed: the ADR is followed now","fix":"UI.Tests/a.cs"}]}
+R
+rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+/usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "22 a fix round asks for JSON with --json-schema" || ko "22 fix round args: $(cat "$T/args21")"
+sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q '"resolved"' && ok "22 the fix prompt carries the schema" || ko "22 the fix prompt has no schema"
+sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — y — z$' && ok "22 the fix prompt reads the previous findings as markdown" || ko "22 previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
+  && /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' "$T/st/review-fix_1-x.md" \
+  && ok "22 the fix-round JSON answer renders the '## Resolved' section" || ko "22 fix render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
+[ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")" = "blocking=0 debt=1" ] && python3 "$T/s/revformat.py" --fix-round "$T/st/review-fix_1-x.md" >/dev/null \
+  && ok "22 the rendered fix round passes the fix-round check, blocking=0 debt=1" || ko "22 fix check: $(python3 "$T/s/revformat.py" --fix-round "$T/st/review-fix_1-x.md")"
+jq -e '.resolved|length==1' "$T/st/review-fix_1-x.answer.json" >/dev/null 2>&1 && ok "22 the fix round keeps its raw JSON answer" || ko "22 no raw fix-round JSON"
+echo ccc333 > "$T/st/review-fix_1-x.sha"; bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' \
+  && ok "22 the next fix round reads the rendered review as its previous findings" || ko "22 next previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
+rm -f "$T/j21"
 rm -f "$T/bin/codex"
 
 rm -rf "$T"; exit $fail
