@@ -77,5 +77,43 @@ out=$(cd "$r" && SG_REPO= SG_TDD_RED="TDD RED: test-lib.sh -> expected v2, got v
 if [ "$rc" = 0 ]; then ok "a squash with the red in \$SG_TDD_RED passes"; else ko "a squash with the red in \$SG_TDD_RED passes (rc=$rc)"; fi
 clean "$r" && ok "the squash pass leaves the tree under check clean" || ko "the squash pass leaves the tree under check clean"
 
+# --- a companion edit (#640): a test present at the merge-base changes and still passes at its parent, and the range
+#     carries a test red at its parent: the edit has no red of its own, so it is reported as a companion, not refused
+other() { printf '#!/bin/bash\n# %s\n[ -f lib.sh ]\n' "$2" > "$1/test-other.sh"; }   # passes at every commit
+r=$(mk companion); other "$r" v1; add "$r" -m "Add a test that lib.sh exists"
+b=$($G -C "$r" rev-parse HEAD)
+red "$r"; other "$r" v2; add "$r" -m "Add the failing test, and touch the fixture of the other test"
+want "$r" 2; add "$r" -m "Fix: lib prints v2"
+guard "$r" "$b..HEAD"
+if [ "$rc" = 0 ]; then ok "a changed test that passes at its parent, beside a red, passes"; else ko "a changed test that passes at its parent, beside a red, passes (rc=$rc): $out"; fi
+case "$out" in *"TDD-RED OK (companion)"*test-other.sh*) ok "the pass names the companion";; *) ko "the pass names the companion: $out";; esac
+
+# --- the same changed test with no red in the range: refused
+r=$(mk companion-alone); other "$r" v1; add "$r" -m "Add a test that lib.sh exists"
+b=$($G -C "$r" rev-parse HEAD); other "$r" v2; add "$r" -m "Touch the other test"
+guard "$r" "$b..HEAD"
+if [ "$rc" = 1 ]; then ok "a changed test that passes at its parent, with no red, is refused"; else ko "a changed test that passes at its parent, with no red, is refused (rc=$rc)"; fi
+case "$out" in *"TDD-RED REFUSED"*test-other.sh*) ok "the refusal names the changed test";; *) ko "the refusal names the changed test: $out";; esac
+
+# --- an ADDED test that passes at its parent, beside a red: still refused, a new test must be red
+r=$(mk added-green); b=$($G -C "$r" rev-parse HEAD)
+red "$r"; other "$r" v1; add "$r" -m "Add the failing test and a test that passes"
+want "$r" 2; add "$r" -m "Fix: lib prints v2"
+guard "$r" "$b..HEAD"
+if [ "$rc" = 1 ]; then ok "an added test that passes at its parent, beside a red, is refused"; else ko "an added test that passes at its parent, beside a red, is refused (rc=$rc)"; fi
+case "$out" in *"TDD-RED REFUSED"*test-other.sh*) ok "the refusal names the added test";; *) ko "the refusal names the added test: $out";; esac
+
+# --- the base moved past the fork point (#640): its files are not the range's, so none of them is measured or refused
+r=$(mk moved-base); printf "#!/bin/bash\ntrue\n" > "$r/test-base-side.sh"; add "$r" -m "A test both sides hold"
+$G -C "$r" checkout -q -b work
+red "$r"; add "$r" -m "Add the failing test for the fix"
+want "$r" 2; add "$r" -m "Fix: lib prints v2"
+$G -C "$r" checkout -q main
+printf "#!/bin/bash\n# the base side\ntrue\n" > "$r/test-base-side.sh"; add "$r" -m "The base changes a test both sides hold"
+$G -C "$r" checkout -q work
+guard "$r" "main..work"
+if [ "$rc" = 0 ]; then ok "a range whose base moved passes on its own red"; else ko "a range whose base moved passes on its own red (rc=$rc): $out"; fi
+case "$out" in *test-base-side.sh*) ko "a base-side test is not the range's: $out";; *) ok "a base-side test is not the range's";; esac
+
 [ "$fail" = 0 ] && echo "test-check-tdd-red: all cases pass"
 exit "$fail"
