@@ -219,6 +219,19 @@ PINNED_CHAINS = {
 }
 
 
+def test_an_alias_that_is_another_entrys_id_is_not_registered(tmp_path):
+    """A spelling names one entry. An alias equal to another entry's id is ambiguous, so it is dropped and named."""
+    p = tmp_path / "registry.json"
+    p.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}}, "models": [
+        {"id": "a", "label": "A", "provider": "claude", "subscription": "claude",
+         "routes": {"gateway": {"auth": "subscription", "model": "a", "served": ["a"]}}, "aliases": ["b"]},
+        {"id": "b", "label": "B", "provider": "claude", "subscription": "claude",
+         "routes": {"gateway": {"auth": "subscription", "model": "b", "served": ["b"]}}, "aliases": []}]}))
+    reg = mr.load(p)
+    assert "b" not in reg.aliases and mr.normalize("b", reg).id == "b"
+    assert any(d["id"] == "a" and "another entry" in d["reason"] for d in reg.dropped)
+
+
 def test_every_repo_spelling_is_known_and_pinned(reg):
     """The chains and graphs in this repository are the table's source; none may fall out of the registry."""
     mdoc = json.loads(MODELS.read_text())

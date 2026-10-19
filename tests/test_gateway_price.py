@@ -81,6 +81,27 @@ def test_a_renamed_or_aliased_spelling_keeps_its_table_price():
     assert prices.rates(table, "claude-sonnet-5-5") is None
 
 
+def test_an_alias_is_never_priced_through_another_models_row(tmp_path, monkeypatch):
+    """Precedence: the raw key wins, then the canonical id, then an alias of that entry. An alias equal to another
+    entry's id is not registered, so an entry with no row of its own is never priced at a stranger's rate."""
+    import json
+    from squad import modelreg
+    p = tmp_path / "registry.json"
+    p.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}}, "models": [
+        {"id": "a", "label": "A", "provider": "claude", "subscription": "claude",
+         "routes": {"gateway": {"auth": "subscription", "model": "a", "served": ["a", "b"]}}, "aliases": ["b"]},
+        {"id": "b", "label": "B", "provider": "claude", "subscription": "claude",
+         "routes": {"gateway": {"auth": "subscription", "model": "b", "served": ["b"]}}, "aliases": []}]}))
+    monkeypatch.setenv("SG_MODELS_REGISTRY", str(p))
+    modelreg._CACHE.clear()
+    try:
+        table = {"client": CLIENT, "models": {"b": FLASH}}
+        assert prices.rates(table, "b") == FLASH          # the raw key wins
+        assert prices.rates(table, "a") is None           # never priced through b's row
+    finally:
+        modelreg._CACHE.clear()
+
+
 def test_the_no_tools_flash_spelling_resolves_to_its_own_row_never_the_v4_row():
     """`deepseek-flash` is its own id, not an alias of the v4 id, so a changed row is never read through the other."""
     models = defaults.load()["prices"]["models"]

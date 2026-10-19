@@ -27,7 +27,9 @@ def _spellings(model):
     if not ref.known or ref.id not in reg.entries:
         return
     yield ref.id
-    yield from reg.entries[ref.id].aliases
+    # Only the aliases the registry actually registered for this entry: an alias that is another entry's id was
+    # dropped at load, and reading it here would price this entry through that other model's row.
+    yield from (a for a in reg.entries[ref.id].aliases if reg.aliases.get(a) == ref.id)
 
 
 def rates(table, model):

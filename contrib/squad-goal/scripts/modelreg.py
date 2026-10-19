@@ -227,6 +227,10 @@ def load(path=None):
         for alias in entry.aliases:
             if alias != entry.id:
                 aliases[alias] = entry.id
+    for alias in list(aliases):                 # a spelling names one entry: an alias may never be another entry's id
+        if alias in entries:
+            dropped.append({"id": aliases[alias], "reason": f"alias {alias} is another entry's id"})
+            del aliases[alias]
     return Registry(path=str(p), entries=entries, aliases=aliases,
                     subscriptions=subscriptions, dropped=dropped)
 
