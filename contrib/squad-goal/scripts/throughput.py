@@ -4,7 +4,7 @@
 Three numbers, each read from a record on this machine:
   issues landed per day   the `Refs #N` lines of the commits on the base branch, grouped by commit date;
   mean runs per issue     the run folders whose request names the issue, each issue counted once per run;
-  child review verdicts   the `CHILD REVIEW ... VERDICT: <v>` and `CHILD REVIEW REQUEUE` lines of $SG_STATE/watch.log.
+  child review verdicts   the `CHILD REVIEW ... VERDICT: <v>`, `CHILD REVIEW REQUEUE` and `CHILD FIX REQUEUE` lines of $SG_STATE/watch.log.
 
 No GitHub call, no REST, no network: the commits come from the local clone and the runs from its runs/ folder.
 The report does not show the time from Todo to landed: no local record stamps the move of a card to Todo.
@@ -19,7 +19,7 @@ import child_issues   # the issues a request names: the reader the janitor's sib
 BASE = os.environ.get("SG_BASE") or "dev"
 REFS = re.compile(r"\bRefs #(\d+)\b")   # the landing line every commit carries, never a closing keyword
 REVIEW = re.compile(r"^CHILD REVIEW \S+ \S+: .*\bVERDICT:\s*(APPROVE|CHANGES|BLOCKED)\b")
-REQUEUE = "CHILD REVIEW REQUEUE "
+REQUEUE = ("CHILD REVIEW REQUEUE ", "CHILD FIX REQUEUE ")   # a CHANGES requeue, and the one after a fix run with unchanged findings (#636, #638)
 VERDICTS = ("APPROVE", "CHANGES", "BLOCKED")
 
 
