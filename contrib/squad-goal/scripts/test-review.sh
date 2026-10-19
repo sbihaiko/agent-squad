@@ -310,4 +310,24 @@ sleep 1; left=$(ps -ax -o pid,pgid,ppid,command | /usr/bin/grep -c '[s]leep 61')
   || ko "14 the spawned child outlives the timeout: rc=$rc ${el}s survivors=$left [$who] $(cat "$T/st/cq/"*mtimeout* 2>/dev/null)"
 /usr/bin/grep -q 'still running' "$T/hb" && ok "14 the wait says the review is still running" || ko "14 the wait is silent: $(cat "$T/hb")"
 
+# 15) #622: grok answers 402 "usage balance exhausted" on every call. A balance has no reset, so the first such answer
+# writes $SG_SHARED/grok-limited and every later review skips grok until the owner removes it -- no dead try per round.
+export SG_SHARED="$T/st"
+printf '#!/bin/bash\necho x >> "$T/grokcalls"\necho "Error: 402 Payment Required: Grok Build usage balance exhausted" >&2; exit 1\n' | sed "s|\$T|$T|" > "$T/bin/grok"
+printf '#!/bin/bash\ncat >/dev/null; echo "VERDICT: APPROVE"\n' > "$T/bin/claude"; chmod +x "$T/bin/grok" "$T/bin/claude"
+printf '{"review_models":["grok-4.6","claude:ok"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/grok-limited" "$T/grokcalls" "$T/st/cq/"*
+bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+[ -e "$T/st/grok-limited" ] && ok "15 a 402 balance answer writes grok-limited" || ko "15 no grok-limited marker after a 402"
+rm -f "$T/st/review-fix_1-x".* "$T/grokcalls" "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+[ ! -e "$T/grokcalls" ] && case "$out" in model=claude:ok*) true;; *) false;; esac && ok "15 grok-limited skips grok on the next review" || ko "15 grok tried again: calls=$(wc -l < "$T/grokcalls" 2>/dev/null) '$out'"
+/usr/bin/grep -q 'owner' "$T/st/cq/"*mquota* 2>/dev/null && ok "15 the skip line says the owner clears the marker" || ko "15 skip line: $(cat "$T/st/cq/"*mquota* 2>/dev/null)"
+rm -f "$T/st/grok-limited" "$T/bin/grok"
+# 16) #622: with one reachable model, an answer outside the checklist shape is retried up to model_retry_budget, not BLOCKED at once.
+printf '#!/bin/bash\ncat >/dev/null; echo x >> "$T/ccalls"; [ "$(wc -l < "$T/ccalls")" -ge 2 ] && { echo "VERDICT: APPROVE"; exit 0; }; printf "Checking.\\nVERDICT: CHANGES\\n1. a finding\\n"\n' | sed "s|\$T|$T|g" > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:only"],"model_retry_budget":2,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/ccalls" "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && case "$out" in model=claude:only*) true;; *) false;; esac && ok "16 one reachable model: a format failure is retried" || ko "16 one reachable model ended at the format failure: rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)"
+unset SG_SHARED
+
 rm -rf "$T"; exit $fail
