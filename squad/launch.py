@@ -134,9 +134,11 @@ def router_overlay(graph, models_path, now=None):
     """The models each dispatch `allow.models` keeps under `chains.router` (its on/hrs, v1 and v2 through `modelreg.chain`).
 
     Returns `{dispatch node name: [spelling, ...]}`, empty when every entry is open. A spelling outside the router chain
-    has no switch, so it stays. A dispatch left with no model refuses the run by name: the schema needs one, and the
-    router could ask for none. `now` stands in for the clock (tests). The overlay is recorded in `run_start` and applied
-    at dispatch, so the authored graph keeps its hash and its run-folder copy across a resume.
+    has no switch, so it stays. The overlay is a no-op when the router chain closes every model of a node: a graph that
+    already carries a valid envelope starts as it did before the overlay existed. A dispatch with no envelope at all
+    refuses the run by name, because there is nothing to start with. `now` stands in for the clock (tests). The overlay
+    is recorded in `run_start` and applied at dispatch, so the authored graph keeps its hash and its run-folder copy
+    across a resume.
     """
     try:
         entries = modelreg.chain(models_path, "router").entries
@@ -153,11 +155,13 @@ def router_overlay(graph, models_path, now=None):
         if node.get("kind") != "dispatch":
             continue
         allow = node.get("allow") or {}
-        kept = [m for m in allow.get("models") or [] if modelreg.normalize(m).id not in closed]
-        if not kept:
-            raise OptionError(f"the router chain in {models_path} leaves no model for dispatch node {node['name']!r}: "
-                              "every entry is switched off or outside its hours window")
-        overlay[node["name"]] = kept
+        authored = [m for m in allow.get("models") or [] if isinstance(m, str) and m]
+        if not authored:
+            raise OptionError(f"dispatch node {node['name']!r} has no model envelope: `allow.models` is empty or absent, "
+                              f"so the router chain in {models_path} has nothing to narrow")
+        kept = [m for m in authored if modelreg.normalize(m).id not in closed]
+        if kept and kept != authored:      # a closed set that empties a valid envelope leaves it as authored
+            overlay[node["name"]] = kept
     return overlay
 
 

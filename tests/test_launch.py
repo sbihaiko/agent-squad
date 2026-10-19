@@ -347,12 +347,37 @@ def test_a_v1_router_chain_filters_by_the_same_on_and_hours_rule(tmp_path):    #
     assert eng.router_overlay == {"route": ["opus"]}
 
 
-def test_an_empty_router_set_refuses_the_start_with_a_named_reason(tmp_path):    # SPEC 505
+def test_a_router_set_that_closes_every_model_leaves_the_authored_envelope(tmp_path):    # SPEC 505
+    """A graph that already carries a valid envelope starts as it did before the overlay existed (ADR-0147)."""
     models = _router_models(tmp_path, [{"id": "opus", "on": False}])
+    g = _dispatch_graph(["opus"])
+    eng = launch.launch(g, tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
+    assert eng.router_overlay == {}
+    assert json.loads((tmp_path / "r" / "graph.json").read_text()) == g.doc
+
+
+def test_a_dispatch_without_an_envelope_refuses_the_start_by_name(tmp_path):    # SPEC 505
+    models = _router_models(tmp_path, [{"id": "opus", "on": False}])
+    g = _dispatch_graph(["opus"])
+    next(n for n in g.doc["nodes"] if n["kind"] == "dispatch")["allow"]["models"] = []
     with pytest.raises(OptionError) as exc:
-        launch.launch(_dispatch_graph(["opus"]), tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=models)
-    assert "route" in str(exc.value) and "router" in str(exc.value)
-    assert not (tmp_path / "r").exists()
+        launch.router_overlay(g, models)
+    assert "route" in str(exc.value) and "allow.models" in str(exc.value)
+
+
+def test_the_shipped_models_file_carries_no_router_chain_and_narrows_nothing(tmp_path):    # SPEC 505
+    """The loop ships a models.json with no `router_models`: a start with it is a start as before the overlay."""
+    shipped = ROOT / "contrib" / "squad-goal" / "scripts" / "models.json"
+    assert "router_models" not in json.loads(shipped.read_text())
+    g = _dispatch_graph(["opus"])
+    assert launch.router_overlay(g, shipped) == {}
+    eng = launch.launch(g, tmp_path / "r", adapter=ScriptedAdapter({"a": OK}), models=shipped)
+    assert eng.router_overlay == {}
+
+
+def test_a_router_entry_outside_the_envelope_changes_nothing(tmp_path):    # SPEC 505
+    models = _router_models(tmp_path, [{"id": "sonnet", "on": False}])
+    assert launch.router_overlay(_dispatch_graph(["opus"]), models) == {}
 
 
 @pytest.mark.anyio
