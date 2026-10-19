@@ -327,6 +327,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
     fi
     grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
   done
-  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file; prev=$m
+  [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file
+  prev=$m   # this model's tries failed (MODEL_FAIL or MODEL_FORMAT), so the next model's turn queues a MODEL_SWITCH (#631)
 done
 publish "VERDICT: BLOCKED (every review model failed)"; exit 1

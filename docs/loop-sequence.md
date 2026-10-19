@@ -224,7 +224,3 @@ sequenceDiagram
     Note over LG: live publication
     LG->>LG: main tree not on stg, a shipped file dirty, fetch failed, or diverged: named, nothing published
 ```
-
-## 4. Edges the code leaves open
-
-- `review.sh` sets `prev` only inside a comment, so it never queues a MODEL_SWITCH line.
