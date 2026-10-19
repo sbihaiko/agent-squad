@@ -1818,24 +1818,31 @@ def read_carried(move_at, read_at):
     mark stays rather than lose a proved move (a later read drops it)."""
     return move_at is not None and read_at is not None and move_at < read_at
 PENDING_WINDOW_DEFAULT = 120.0   # seconds a proved move may stand with no list read agreeing (#651)
+PENDING_WARNED = set()           # bad window values already named on stderr, so a page reload never repeats the line
 def pending_window():
     """The window a proved move may stand without a list read agreeing (`SG_PENDING_WINDOW_SECONDS`, 120 s by default).
-    A value that is not a number, or is negative, is the default: the window is never unbounded and never a stop."""
-    try: w = float(os.environ.get("SG_PENDING_WINDOW_SECONDS") or PENDING_WINDOW_DEFAULT)
-    except ValueError: return PENDING_WINDOW_DEFAULT
-    return w if w >= 0 else PENDING_WINDOW_DEFAULT
+    A value that is not a number, or is negative, is the default, and one stderr line names the value and the default:
+    a setting the hub ignored never passes silently."""
+    raw = os.environ.get("SG_PENDING_WINDOW_SECONDS")
+    if not raw: return PENDING_WINDOW_DEFAULT
+    try: w = float(raw)
+    except ValueError: w = None
+    if w is None or w < 0:
+        if raw not in PENDING_WARNED:
+            PENDING_WARNED.add(raw)
+            print(f"hub: SG_PENDING_WINDOW_SECONDS={raw!r} is not a non-negative number: the pending window is "
+                  f"{PENDING_WINDOW_DEFAULT:g} s", file=sys.stderr)
+        return PENDING_WINDOW_DEFAULT
+    return w
 def overlay_on():
     """Whether the served board applies the door's record (`SG_PENDING_OVERLAY`, on by default). `off`, `0`, `false`
     or `no` serves the list read alone, so a suspected overlay defect is ruled out without a code change (#651)."""
     return (os.environ.get("SG_PENDING_OVERLAY") or "").strip().lower() not in ("0", "off", "false", "no")
-EXPIRED_LOGGED = set()   # expired entries this process already reported: a failed drop never reports the same expiry twice
-def report_expired(n, item, recorded, read, at, window):
+def report_expired(n, item, recorded, read, window):
     """One line in the loop's log (`$SG_STATE/cycle.log`) for an entry that outlived its window with no list read
-    agreeing (#651): the item, the column the door recorded and the column the read holds. The key is the entry's own
-    version, so a failed drop that the next serve retries never reports the same expiry twice."""
-    key = (str(item), at, recorded)
-    if key in EXPIRED_LOGGED: return
-    EXPIRED_LOGGED.add(key)
+    agreeing (#651): the item, the column the door recorded and the column the read holds. It is called only for an
+    entry the drop really removed, so the report is idempotent without process memory: the retry that succeeds reports
+    once, and every later serve finds no entry to report."""
     line = (f"{time.strftime('%T')} hub PENDING-EXPIRED #{n} (item {item}): the door recorded {recorded}, "
             f"the board read holds {read}; no read agreed within {window:g} s, so the entry was dropped")
     try:
@@ -1846,17 +1853,18 @@ DROP_FAILURES = 0   # record drops this process whose write failed: the entry st
 def drop_moves(ids):
     """Drop the entries the board read agreed with; every other entry stays (ADR-0030: formed whole beside the record,
     then one rename). The hub writes the record for nothing else (#650). An entry the door replaced while the board was
-    read is kept: this pass drops nothing, and the next one drops what its own read agrees with."""
-    if not ids: return
+    read is kept: this pass drops nothing, and the next one drops what its own read agrees with. Returns the ids the
+    record no longer holds: None when this pass wrote nothing, so an expiry is reported only for an entry really gone."""
+    if not ids: return set()
     with MOVES_LOCK:
         try: before = MOVES.read_text(); moves = json.loads(before)
-        except (OSError, ValueError): return
-        if not isinstance(moves, dict): return
+        except (OSError, ValueError): return None
+        if not isinstance(moves, dict): return None
         left = {k: v for k, v in moves.items() if k not in ids}
-        if len(left) == len(moves): return
+        if len(left) == len(moves): return set()
         try:
-            if MOVES.read_text() != before: return   # the door wrote meanwhile: never lose a move this pass did not read
-        except OSError: return
+            if MOVES.read_text() != before: return None   # the door wrote meanwhile: never lose a move this pass did not read
+        except OSError: return None
         _tmp = MOVES.with_name(f"{MOVES.name}.{os.getpid()}.{threading.get_ident()}.tmp")   # the temp name is the writer's own, as save_board's is (#512)
         try:
             _tmp.write_text(json.dumps(left, sort_keys=True) + "\n"); os.replace(_tmp, MOVES)
@@ -1865,12 +1873,14 @@ def drop_moves(ids):
             DROP_FAILURES += 1   # the entry stays; the failure is counted, and the next serve retries (dropping is bookkeeping, never the served board)
             try: _tmp.unlink()   # a rename removes the temp; a failed write leaves it behind, and it is never the record
             except OSError: pass
+            return None
+        return set(moves) - set(left)
 def board():
     overlay = overlay_on()   # one setting turns the overlay off: the served board is then the list read alone (#651)
     moves = read_moves() if overlay else {}   # the record is read on every serve, so a page reload sees the same overlay (#650)
     read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
-    window, now_at = pending_window(), time.time()   # an entry older than the window expires even with no read agreeing (#651)
-    agreed, expired = set(), set()
+    window = pending_window()   # an entry older than the window expires even with no read agreeing (#651)
+    agreed, expired = set(), {}   # expired: item id -> (card number, the recorded column, the column the read holds)
     by = {}
     for i in board_cache["items"]:
         closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
@@ -1880,15 +1890,15 @@ def board():
         if isinstance(entry, dict) and entry.get("column"):
             recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
             at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
-            if at is not None and now_at - at > window:
-                # The entry outlived its window with no read agreeing: the read's column stands, the entry is dropped,
-                # and the disagreement is reported once so a lost board write is visible (#651).
-                expired.add(str(i["i"]))
-                report_expired(i["n"], i["i"], recorded, st, at, window)
-            elif recorded not in ORDER:
+            if recorded not in ORDER:
                 pass   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
-            elif recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done
+            elif recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done, however old it is
                 agreed.add(str(i["i"]))
+            elif at is not None and read_at is not None and read_at - at >= window:
+                # The move is past its window at the read's own instant with no agreement: the read's column stands and
+                # the entry is dropped. The window is the read's clock, never the wall clock, so a cache that stopped
+                # updating never expires a move no read has had a window to agree with (#651).
+                expired[str(i["i"])] = (i["n"], recorded, st)
             else:
                 # The read began in or before the move's second, or contradicts it: draw the move at once and keep the
                 # entry until a read that began after the move agrees (#650). A column that matches by coincidence is no proof.
@@ -1932,7 +1942,10 @@ def board():
             "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"),
                        "rollup": p.get("rollup"), "ci": p.get("ci"), "o": p.get("o"), "by": p.get("by"), "cl": p.get("cl"),
                        "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO), "kind": p["kind"]} for p in open_prs]}
-    if agreed or expired: drop_moves(agreed | expired)   # agreement settles an entry; the window settles one no read ever agreed with (#651)
+    if agreed or expired:
+        dropped = drop_moves(agreed | set(expired))   # agreement settles an entry; the window settles one no read ever agreed with (#651)
+        for item, (n, recorded, read) in expired.items():
+            if dropped and item in dropped: report_expired(n, item, recorded, read, window)   # only a drop that really happened is reported, so a retry never repeats a line
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)

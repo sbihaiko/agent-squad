@@ -58,8 +58,9 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 : "${SG_GATE_WORKERS:=6}"
 # A proved board-door move is drawn at once, marked pending, until a list read agrees (#650). It may stand no longer than
 # SG_PENDING_WINDOW_SECONDS (120 s): an older entry is dropped, the card returns to the read's column, and the loop's log
-# names the disagreement once (#651). SG_PENDING_OVERLAY=off serves the list read alone, so a suspected overlay defect is
-# ruled out without a code change.
+# names the disagreement once (#651). hub.py validates the window and warns on stderr when the value is not a
+# non-negative number. SG_PENDING_OVERLAY=off serves the list read alone, so a suspected overlay defect is ruled out
+# without a code change.
 : "${SG_PENDING_WINDOW_SECONDS:=120}"
 : "${SG_PENDING_OVERLAY:=on}"
 # The retired SG_TOOLING_REPO is one more entry of SG_REPOS, and the key is not read again (the seam lists it once).
