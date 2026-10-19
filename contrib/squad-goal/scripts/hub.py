@@ -1299,6 +1299,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     repository. A read that fails keeps the last good rows it already had and says so (the pass's error, or the
     repository's own error on the lane), so a failed pass never writes a fresh empty board (#1772, #1820)."""
     items = lc = cases = None
+    read_started = time.time()   # when the list read begins: the only stamp the overlay may compare a proved move against
     try:
             out = board_seam().rows(
                 '.[]|select(.content_type=="Issue" or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}',
@@ -1319,7 +1320,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             lc = {x["n"]: x["c"].lower() for x in (json.loads(l) for l in lo.splitlines() if l.strip())}
     except Exception as e: board_cache["err"] = str(e)[:80]   # a failed pass keeps the last good rows on the board (#1810)
     if items: apply_holders(items)
-    if items: board_cache.update(t=time.time(), items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
+    if items: board_cache.update(t=time.time(), rt=int(read_started), items=items, cases=cases or [], lc=lc or board_cache.get("lc", {}), err=None)
     rs = REPOS if repos is None else repos
     try:
             prs, landed, errs = prs_pass(fetch_open, fetch_landed, rs)
@@ -1803,12 +1804,20 @@ def read_moves():
     except (OSError, ValueError): return {}
     return d if isinstance(d, dict) else {}
 def move_time(entry):
-    """The instant the door proved a move, as epoch seconds; None when the entry carries no readable instant. A record
-    without one is never taken as agreed: the board keeps its mark rather than lose a proved move."""
+    """The instant the door proved a move, as whole epoch seconds; None when the entry carries no readable instant.
+    `_utc` returns an aware UTC datetime, so its timestamp is the door's own instant, and both sides of the comparison
+    below are whole seconds. A record without one is never taken as agreed: the board keeps its mark rather than lose
+    a proved move."""
     stamp = entry.get("at") if isinstance(entry, dict) else None
     if not isinstance(stamp, str): return None
-    try: return _utc(stamp).timestamp()
-    except ValueError: return None
+    try: return int(_utc(stamp).timestamp())
+    except (ValueError, OverflowError, OSError): return None
+def read_carried(move_at, read_at):
+    """Whether a list read that began at `read_at` can have carried a move proved at `move_at`, both whole epoch
+    seconds. The read must have begun in a later second: in the same second nothing tells which came first, so the
+    mark stays rather than lose a proved move (a later read drops it)."""
+    return move_at is not None and read_at is not None and move_at < read_at
+DROP_FAILURES = 0   # record drops this process whose write failed: the entry stays, and the next serve retries it
 def drop_moves(ids):
     """Drop the entries the board read agreed with; every other entry stays (ADR-0030: formed whole beside the record,
     then one rename). The hub writes the record for nothing else (#650). An entry the door replaced while the board was
@@ -1827,31 +1836,32 @@ def drop_moves(ids):
         try:
             _tmp.write_text(json.dumps(left, sort_keys=True) + "\n"); os.replace(_tmp, MOVES)
         except OSError:
-            pass   # dropping a stale entry is bookkeeping: a state directory that refuses the write never breaks the served board
-        finally:
-            try: _tmp.unlink()   # a successful rename removes it; a failed write leaves it behind, and it is never the record
+            global DROP_FAILURES
+            DROP_FAILURES += 1   # the entry stays; the failure is counted, and the next serve retries (dropping is bookkeeping, never the served board)
+            try: _tmp.unlink()   # a rename removes the temp; a failed write leaves it behind, and it is never the record
             except OSError: pass
 def board():
     moves = read_moves()   # the record is read on every serve, so a page reload sees the same overlay (#650)
-    read_at = board_cache.get("t") or 0   # the list read's snapshot: a move recorded after it cannot be in it
+    read_at = board_cache.get("rt")   # the instant the list read began, never the completion stamp `t`: a read that began before a move cannot have carried it, however late it finished
     agreed = set()
     by = {}
     for i in board_cache["items"]:
-        st, fz = _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))   # the column the table names, and the freeze over it
+        closed = str(i["s"]).lower() == "closed"   # the row's own closedness: the freeze below is the card's, not the read's
+        st, fz = _columns_module.view_column(i["st"], closed, i.get("l"))   # the column the table names, and the freeze over it
         pending = False
         entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
         if isinstance(entry, dict) and entry.get("column"):
             recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
-            at = move_time(entry)   # the instant the door proved the move; the record carries whole UTC seconds
+            at = move_time(entry)   # the instant the door proved the move, in whole epoch seconds
             if recorded not in ORDER:
-                agreed.add(str(i["i"]))   # no column this board ships: the entry is never drawn, and it is dropped
-            elif recorded == st and at is not None and at <= read_at:   # the read postdates the move and carries its column: the entry's work is done
+                pass   # no column this board ships: the entry is never drawn, and the read says nothing about it, so the hub leaves it (never writes the record for it)
+            elif recorded == st and read_carried(at, read_at):   # the read began after the move and carries its column: the entry's work is done
                 agreed.add(str(i["i"]))
             else:
-                # The read is older than the move, or contradicts it: draw the move at once and keep the entry until
-                # a read that postdates the move agrees (#650). A matching column that predates the move is no proof.
+                # The read began in or before the move's second, or contradicts it: draw the move at once and keep the
+                # entry until a read that began after the move agrees (#650). A column that matches by coincidence is no proof.
                 st, pending = recorded, True
-                fz = _columns_module.view_column(recorded, False, i.get("l"))[1]   # the freeze of the column drawn, never the read's
+                fz = _columns_module.view_column(recorded, closed, i.get("l"))[1]   # the freeze of the column drawn, over the row's own closedness, never the read's
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
