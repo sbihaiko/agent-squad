@@ -9,6 +9,8 @@ The order these cases name is the seed's own (docs/design/router.graph.json): th
 reserve (the owner's call, to spend the Anthropic quota last), so the chain's next entry after a gateway pick is the second
 gateway model and never `opus`.
 """
+import time
+
 import pytest
 
 from squad.adapter import ScriptedAdapter
@@ -135,3 +137,23 @@ async def test_a_run_with_a_spent_gpt_marker_never_starts_a_call_on_a_gpt_model_
     assert not [c.model for c in eng.adapter.calls if c.model.startswith("claude-gpt-")]
     assert [c.model for c in eng.adapter.calls if c.node == "router"] == [m for m in ROUTER_CHAIN if m not in SPENT][:1]   # the router starts on the next entry, with no wait for a refusal
     assert v.verdict == "completed" and outcomes(tmp_path, "router")[0]["outcome"] == "pass"
+
+
+# A model outside its local `hours` window never starts a call, in the run as at the launch: the launcher passes the window
+# map as the engine option `model_hours` and the chain skips the entry, with a `model_skipped` event naming the window.
+NIGHT = time.mktime((2026, 10, 19, 22, 0, 0, 0, 0, -1))    # 22h local: outside "07-19"
+
+
+async def test_a_fallback_outside_its_hours_is_skipped_with_a_reason_and_the_next_model_answers(tmp_path):
+    shut = ROUTER_CHAIN[1]
+    eng = engine(tmp_path, {"router": [{"error": PROVIDER_ERROR}, SPAWNS], "route.router.1": CHILD}, wall=lambda: NIGHT,
+                 options={"model_hours": {shut: "07-19"}})
+    v = await eng.run()
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [ROUTER_CHAIN[0], ROUTER_CHAIN[2]]   # first refused, second shut, third taken
+    skipped = [e for e in read(tmp_path / "record.jsonl") if e["event"] == "model_skipped" and e["node"] == "router"]
+    assert [(e["model"], e["reason"]) for e in skipped] == [(shut, "outside_hours:07-19")]
+    assert v.verdict == "completed"
+
+
+def test_model_chain_keeps_a_model_inside_its_hours():
+    assert model_chain(CHAIN, PICK, hours={CHAIN[1]: "07-19"}, hour=10) == CHILD_CHAIN

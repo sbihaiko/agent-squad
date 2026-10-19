@@ -26,6 +26,7 @@ REQUIRED = {
     "spawn_accepted": ["request_key", "child", "parent", "depth", "envelope", "reservation", "parent_entry", "definition"],
     "spawn_rejected": ["request_key", "parent", "envelope", "reason"],
     "model_refused": ["node", "entry", "model", "error"],   # one chain entry the provider refused before it served (#494)
+    "model_skipped": ["node", "entry", "model", "reason"],   # one chain entry left out before it was tried: outside its hours window
     "land": ["node", "parent", "entry", "outcome", "reasons", "effect"],
     "review_round": ["node", "round", "head", "verdict", "offered", "review"],   # #570: one review of a child's head; `fix` starts its next entry
     "review_progress": ["node", "gate", "elapsed"],   # #599: a dispatch child's review gate is still running; the record moves so the heartbeat never kills it

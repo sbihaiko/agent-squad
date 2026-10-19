@@ -1,4 +1,6 @@
 """The context a runner sees: the run's record, budget, facts, artifacts, workspace paths, and two calls back into the engine."""
+import time
+
 from squad import node_commit
 
 
@@ -44,6 +46,13 @@ class RunCtx:
     @property
     def spent_models(self):
         return self._e.options.get("spent_models") or []
+
+    @property
+    def model_hours(self):
+        return self._e.options.get("model_hours") or {}
+
+    def local_hour(self):
+        return time.localtime(self._e.wall()).tm_hour
 
     def is_dispatch_entry(self, name):
         return name in self._e.entry_of

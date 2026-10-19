@@ -40,14 +40,14 @@ def _fn(path, name, **ns_extra):
     return ns[name]
 
 
-def _launch(tmp_path, coding, envelope, shared=None):
+def _launch(tmp_path, coding, envelope, shared=None, hours=None):
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy(SCRIPTS / "launch.py", s / "launch.py")
     shutil.copy(SCRIPTS / "router_envelope.py", s / "router_envelope.py")
     shutil.copy(SCRIPTS / "provkey.py", s / "provkey.py")
-    (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": []}))
+    (s / "models.json").write_text(json.dumps({"coding_models": coding, "review_models": [], "vision_models": [], "hours": {"coding_models": hours or {}}}))
     (s / "hub.py").write_text("print('hub')\n")
     doc = {"schema_version": 1, "name": "g", "root": "main", "nodes": [
         {"name": "main", "kind": "loop", "max": {"value": 1, "min": 1}, "children": ["route"]},
@@ -159,3 +159,10 @@ def test_the_loop_passes_no_spent_models_flag_without_a_closed_marker(tmp_path):
     r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, shared=_shared(tmp_path, codex_limited=1))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "--spent-models" not in (tmp_path / "argv").read_text()
+
+
+@pytest.mark.heavy   # launch.py waits for the run folder, over a second
+def test_the_loop_passes_the_coding_hours_to_the_run(tmp_path):
+    r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, hours={"claude-sonnet-5-5": "19-07"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--model-hours claude-sonnet-5-5=19-07 " in (tmp_path / "argv").read_text()

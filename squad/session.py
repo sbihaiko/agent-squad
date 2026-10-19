@@ -41,12 +41,37 @@ def provider_error(err):
     return bool(PROVIDER_STATUS.search(text)) and any(m in text for m in PROVIDER_MARKERS)
 
 
-def model_chain(models, first, spent=()):
+def in_window(window, hour):
+    """True when local `hour` is inside a "HH-HH" window: start inclusive, end exclusive, wrapping midnight. A window that does
+    not parse closes nothing, as the launcher reads it."""
+    try:
+        a, b = int(window[:2]), int(window[3:5])
+    except (TypeError, ValueError):
+        return True
+    return a <= hour < b if a <= b else (hour >= a or hour < b)
+
+
+def hours_closed(hours, hour):
+    """{model: window} of the models whose `hours` window excludes the local `hour`: the launcher's rule, read again at each call."""
+    return {m: w for m, w in (hours or {}).items() if hour is not None and not in_window(w, hour)}
+
+
+def model_chain(models, first, spent=(), hours=None, hour=None):
     """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`.
     A `spent` id (the engine option the launcher fills from the shared quota markers) is left out: its subscription refuses
-    at once, after a wait. When every entry is spent the whole chain stays, so a marker that is wrong never leaves no model."""
+    at once, after a wait. So is a model whose `hours` window excludes the local `hour`. When every entry is closed the whole
+    chain stays, so a marker that is wrong never leaves no model."""
     chain = [first] + [m for m in (models or []) if m and m != first]
-    return [m for m in chain if m not in spent] or chain
+    shut = hours_closed(hours, hour)
+    return [m for m in chain if m not in spent and m not in shut] or chain
+
+
+def hours_skipped(models, first, spent=(), hours=None, hour=None):
+    """[(model, reason)] the chain left out for its hours window; empty when `model_chain` kept every entry for want of another."""
+    chain = [first] + [m for m in (models or []) if m and m != first]
+    shut = hours_closed(hours, hour)
+    kept = model_chain(models, first, spent, hours, hour)
+    return [(m, f"outside_hours:{shut[m]}") for m in chain if m in shut and m not in kept]
 
 
 def adapter_reason(err):
