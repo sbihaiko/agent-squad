@@ -43,9 +43,11 @@ not.
 
 ## Guard
 
-None yet. The named guard is `scripts/check-tdd-red.sh` in the host project,
-wired into `$SG_PREPUSH_CHECKS`: it takes the test a fix adds or changes,
-checks that test out at the fix's parent commit, and fails the push when it
-passes there. A push with no such test and a test that already passed are the
-same refusal. Until that script and the squad test that proves the refusal
-exist, this rule is a draft (ADR-0018).
+`contrib/squad-goal/scripts/check-tdd-red.sh`, wired into `$SG_PREPUSH_CHECKS`
+by the machine profile. It takes each test the range adds or changes since the
+merge-base, runs it at the parent of the commit that carried it, and fails the
+push when it passes there. A push with no such test and a test that already
+passed are the same refusal. A changed test that passes at its parent is a
+companion, and passes only when the range carries a red (§2).
+`contrib/squad-goal/scripts/test-check-tdd-red.sh` and `test-tdd-red.sh` prove
+the refusal.

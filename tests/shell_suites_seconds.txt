@@ -19,7 +19,7 @@ test-branchland.sh 55.61
 test-branchreview-pass.sh 27.40
 test-branchreview.sh 14.14
 test-check-gh-interface.sh 0.22
-test-check-tdd-red.sh 2.45
+test-check-tdd-red.sh 5.05
 test-childcc.sh 9.14
 test-cluster.sh 7.87
 test-codex-reset.sh 0.15
@@ -107,7 +107,7 @@ test-single.sh 16.06
 test-stack.sh 1.17
 test-state-isolation.sh 1.45
 test-state-split.sh 1.75
-test-tdd-red.sh 2.34
+test-tdd-red.sh 2.54
 test-throughput.sh 1.04
 test-token-guard.sh 1.22
 test-token-ledger.sh 12.98

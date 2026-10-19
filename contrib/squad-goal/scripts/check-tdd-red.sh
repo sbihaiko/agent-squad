@@ -6,6 +6,11 @@
 # the commit BEFORE the one that carried it, and runs it there. The test must FAIL at that parent -- a test that
 # passes there is not this fix's red, and a range that carries no test at all is the same refusal (§2/§4).
 #
+# The range's files are the diff from the merge-base of <base> and <head>, so a base that moved on adds none (#640).
+# A test the merge-base already holds that the range changes and that still passes at its parent (a fixture list, say)
+# is a companion: "TDD-RED OK (companion)" when the range carries at least one test red at its parent, else refused.
+# An added test that passes at its parent is always refused.
+#
 # A commit that squashes its test and its code into one is the case where the range never held the red the
 # parent would measure (the test only ever ran green in this history), so it is accepted only with the red run
 # recorded in the deliverable (§3). The recorded red is read from $SG_TDD_RED, from the deliverable body
@@ -45,8 +50,11 @@ base=${range%%..*}; head=${range##*..}; [ -z "$head" ] && head=HEAD
 $G rev-parse -q --verify "$head^{commit}" >/dev/null 2>&1 || { echo "TDD-RED SKIP: $head is not a commit in this tree"; exit 0; }
 [ -n "$($G rev-list --reverse "$base..$head" 2>/dev/null)" ] || { echo "TDD-RED OK: no commit in $base..$head"; exit 0; }
 
+# The range's files come from its fork point: a two-dot diff against a base that moved on also lists the base's own
+# changes, and none of them is this range's (#640).
+mb=$($G merge-base "$base" "$head" 2>/dev/null); [ -z "$mb" ] && mb=$base
 tests=""
-for f in $($G diff --name-only "$base" "$head" 2>/dev/null); do
+for f in $($G diff --name-only "$mb" "$head" 2>/dev/null); do
   printf '%s' "$f" | grep -qE "$TEST_RE" || continue
   $G cat-file -e "$head:$f" 2>/dev/null || continue      # a deleted test is not this fix's test
   tests="$tests $f"
@@ -65,7 +73,7 @@ red_recorded() {
   return 1
 }
 
-fails=0
+fails=0; reds=0; companions=""
 if [ -z "$tests" ]; then
   if red_recorded; then
     echo "TDD-RED OK: $base..$head carries no test, and the red run is recorded in the deliverable (ADR-0136 §3)"
@@ -104,7 +112,13 @@ else
     fi
     out=$(cd "$wt" && eval "${cmd//\{\}/$t}" 2>&1); rc=$?
     $G worktree remove --force "$wt" >/dev/null 2>&1
-    if [ "$rc" = 0 ]; then
+    [ "$rc" != 0 ] && reds=$((reds + 1))
+    if [ "$rc" = 0 ] && $G cat-file -e "$mb:$t" 2>/dev/null; then
+      # a test the fork point holds, changed beside the fix (a fixture list, say): it has no red of its own, so it is a
+      # companion when the range carries a red, and refused when it does not (#640)
+      companions="$companions$t|$($G log -1 --format='%h %s' "$p")
+"
+    elif [ "$rc" = 0 ]; then
       echo "TDD-RED REFUSED: $t passes at $($G log -1 --format='%h %s' "$p"), the parent of the commit $($G log -1 --format=%h "$c") that carried the test: a test that already passed at the parent is not this fix's red (ADR-0136 §2/§4)"
       [ -n "$out" ] && printf '%s\n' "$out" | tail -3 | sed 's/^/    /'
       fails=$((fails + 1))
@@ -119,6 +133,15 @@ else
       echo "TDD-RED OK: $t fails at $($G log -1 --format='%h %s' "$p"), the parent of the commit that carried it"
     fi
   done
+  while IFS='|' read -r t at; do
+    [ -n "$t" ] || continue
+    if [ "$reds" -gt 0 ]; then
+      echo "TDD-RED OK (companion): $t is changed, not added, and passes at $at; the range carries $reds test(s) red at the parent (ADR-0136 §2)"
+    else
+      echo "TDD-RED REFUSED: $t passes at $at, and the range carries no test red at its parent: a changed test is a companion only beside a red (ADR-0136 §2/§4)"
+      fails=$((fails + 1))
+    fi
+  done <<< "$companions"
 fi
 [ "$fails" = 0 ] && exit 0
 exit 1
