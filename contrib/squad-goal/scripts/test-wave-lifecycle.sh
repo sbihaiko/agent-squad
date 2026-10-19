@@ -25,7 +25,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$d/revformat.py" "$T/s/" 2>/dev/null
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$d/revformat.py" "$d/wavepause.py" "$T/s/" 2>/dev/null
 export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
@@ -236,6 +236,8 @@ out=$(STUB_VERDICT=CHANGES childcc)
   || ko "L9: the wave tip moved to '$(wtip "$R6")'"
 [ "$(cat "$T/fix.log")" = "childfix $R6 72" ] && ! /usr/bin/grep -q 'Todo 72' "$T/board.log" && ok "L9: CHANGES starts one fix run, and the issue does not requeue" \
   || ko "L9: fix runs '$(cat "$T/fix.log")', board '$(cat "$T/board.log" 2>/dev/null)': $out"
+[ "$(cat "$T/st/auto/wave-pause-$R6" 2>/dev/null)" = "$T/co/runs/fix-72" ] && ok "L9: the fix run is named in the wave's pause marker, so its time does not spend the age cap (#637)" \
+  || ko "L9: the pause marker holds '$(cat "$T/st/auto/wave-pause-$R6" 2>/dev/null)'"
 out=$(STUB_VERDICT=CHANGES childcc)
 /usr/bin/grep -qx 'o 3 Todo 72' "$T/board.log" && ok "L9: findings the fix run left as they were send the issue back to the queue" \
   || ko "L9: the issue was not requeued: '$(cat "$T/board.log" 2>/dev/null)': $out"
