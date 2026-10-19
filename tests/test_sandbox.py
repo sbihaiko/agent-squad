@@ -106,11 +106,11 @@ async def test_a_scripted_session_meets_each_wall_and_writes_in_its_worktree(sit
     await a.call(request(ws))
     got = [d[1] for d in decisions]
     assert got == [None, "deny", "deny", "deny", "deny", "deny", "deny", "deny", "deny", "deny", "deny", "deny", "deny",
-                   "deny", "deny", None, None]
+                   "deny", "deny", "deny", None]
     assert (ws / "ok.txt").read_text() == "fine" and not (tmp / "outside.txt").exists()
     assert all(r for _, d, r in decisions if d == "deny")          # the agent gets a reason, so it can continue
     deny = [f for k, f in events if k == "sandbox_deny"]
-    assert len(deny) == 14
+    assert len(deny) == 15
     assert deny[0]["node"] == "actor" and deny[0]["session"] == "run-s1" and deny[0]["tool"] == "Write" and deny[0]["reason"]
     for f in deny:
         record.validate_event({"event": "sandbox_deny", **f})
@@ -133,3 +133,59 @@ def test_a_path_is_resolved_before_it_is_judged(tmp_path):
     assert sandbox.deny_reason("Write", {"file_path": str(ws / "sub" / ".." / "f")}, str(ws), env={}, home=str(tmp_path / "h")) is None
     assert sandbox.deny_reason("Write", {"file_path": str(ws / "sub" / ".." / ".." / "f")}, str(ws), env={}, home=str(tmp_path / "h"))
     assert sandbox.deny_reason("Write", {"file_path": str(tmp_path / "wt2" / "f")}, str(ws), env={}, home=str(tmp_path / "h"))
+
+
+def _migrate_reason(ws, cmd, env, home):
+    return sandbox.deny_reason("Bash", {"command": cmd}, str(ws), env=env, home=str(home))
+
+
+def test_a_repo_modelreg_migrate_is_allowed(tmp_path):
+    """#662: a child migrates the repo file in its own worktree; only the live file is the operator's."""
+    home, ws = tmp_path / "h", tmp_path / "wt"
+    (ws / "contrib" / "squad-goal" / "scripts").mkdir(parents=True)
+    env = {"HOME": str(home)}
+    commands = [
+        "python3 -m squad.modelreg migrate contrib/squad-goal/scripts/models.json",
+        f"python3 {ws}/contrib/squad-goal/scripts/modelreg.py migrate {ws}/contrib/squad-goal/scripts/models.json --dry-run",
+        "uv run python -m squad.modelreg migrate --dry-run contrib/squad-goal/scripts/models.json",
+        "cd contrib/squad-goal/scripts && python3 modelreg.py migrate models.json",
+    ]
+    for cmd in commands:
+        assert _migrate_reason(ws, cmd, env, home) is None, cmd
+
+
+def test_a_live_modelreg_migrate_is_denied_with_and_without_a_dry_run(tmp_path):
+    home, ws = tmp_path / "h", tmp_path / "wt"
+    live = home / ".claude" / "skills" / "squad-goal"
+    (live / "scripts").mkdir(parents=True)
+    ws.mkdir()
+    env = {"HOME": str(home)}
+    for dry in ("", " --dry-run"):
+        reason = _migrate_reason(ws, f"python3 -m squad.modelreg migrate {live}/scripts/models.json{dry}", env, home)
+        assert reason and str((home / ".claude" / "skills").resolve()) in reason, (dry, reason)
+
+
+def test_a_symlink_into_the_live_skill_directory_is_denied(tmp_path):
+    home, ws = tmp_path / "h", tmp_path / "wt"
+    live = home / ".claude" / "skills" / "squad-goal"
+    (live / "scripts").mkdir(parents=True)
+    ws.mkdir()
+    (ws / "copy").symlink_to(live)
+    reason = _migrate_reason(ws, "python3 -m squad.modelreg migrate copy/scripts/models.json", {"HOME": str(home)}, home)
+    assert reason and str((home / ".claude" / "skills").resolve()) in reason, reason
+
+
+def test_sg_live_dir_is_a_live_root(tmp_path):
+    live, ws = tmp_path / "live", tmp_path / "wt"
+    live.mkdir()
+    ws.mkdir()
+    env = {"HOME": str(tmp_path / "h"), "SG_LIVE_DIR": str(live)}
+    reason = _migrate_reason(ws, f"python3 -m squad.modelreg migrate {live}/models.json", env, tmp_path / "h")
+    assert reason and str(live.resolve()) in reason, reason
+
+
+def test_a_migrate_with_no_path_names_the_live_file_as_its_reason(tmp_path):
+    home, ws = tmp_path / "h", tmp_path / "wt"
+    ws.mkdir()
+    reason = _migrate_reason(ws, "python3 -m squad.modelreg migrate --dry-run", {"HOME": str(home)}, home)
+    assert reason and str((home / ".claude" / "skills").resolve()) in reason, reason

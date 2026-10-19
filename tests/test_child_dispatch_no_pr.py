@@ -51,3 +51,22 @@ def test_profile_and_prepush_range_use_dev():
     assert ': "${SG_BASE:=dev}"' in read("profiles/example.sh")
     assert 'origin/${SG_BASE:-dev}' in read("prepush.sh")
     assert 'origin/${SG_BASE:-main}' not in read("prepush.sh")
+
+
+def test_the_request_and_the_fix_run_name_the_worktrees_own_prepush():
+    """#662: the sandbox denies any command naming the live skill copy, so a request that prescribes the loop's own
+    prepush path cannot be followed. The child works where it stands, so the relative path is its worktree's copy."""
+    for f in ("autofrontier.sh", "autobug.sh"):
+        text = read(f)
+        assert "bash contrib/squad-goal/scripts/prepush.sh --local" in text, f
+        assert "$here/prepush.sh" not in text, f
+    fix = read("childfix.sh")
+    assert "bash $wt/contrib/squad-goal/scripts/prepush.sh --local" in fix
+    assert "$here/prepush.sh" not in fix
+
+
+def test_the_checklist_names_no_live_script_a_child_cannot_run():
+    for line in read("req-checklist.txt").splitlines():
+        if "serial.sh gui-suite" in line:
+            assert "~/.claude" not in line and "$SG_LIVE_DIR" not in line, line
+            assert "bash contrib/squad-goal/scripts/serial.sh gui-suite" in line, line
