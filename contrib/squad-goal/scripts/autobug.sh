@@ -174,6 +174,7 @@ gh_aggregate "repos/$SG_REPO/issues?state=open" > "$F/issues.json" || { echo "AU
 gh_loop_stop "$F/issues.json" && exit 0
 # Too many finished children wait for review (#562): a new run only adds more, so the pass holds until childcc catches up.
 gh_dispatch_hold && exit 0
+gh_disk_stop && exit 0
 # The column Todo is the owner's go signal, and the go label says an agent may take the issue (#550): a candidate needs both.
 go=${SG_FRONTIER_LABEL:-ready-for-agent}
 todo=$(sg_todo_cards) || { echo "AUTOBUG: the board did not answer; nothing dispatched this pass" >&2; exit 0; }

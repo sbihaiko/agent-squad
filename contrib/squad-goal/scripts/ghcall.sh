@@ -129,6 +129,24 @@ gh_dispatch_hold() {
   return 0
 }
 
+# gh_disk_stop   A full disk fails every run a pass starts, and the owner's machine with it (#615). Under SG_MIN_FREE_GB
+# GiB free (default 20) on the volume of $SG_STATE or of $TMPDIR, a dispatch pass dispatches nothing. Returns 0 and prints
+# the one line on a stop, 1 when the pass may go on. A floor that is not a non-negative integer is the default.
+gh_disk_stop() {
+  local m=${SG_MIN_FREE_GB:-20} p k line
+  case "$m" in ''|*[!0-9]*) m=20;; esac
+  for p in "${SG_STATE:?gh_disk_stop: no state directory}" "${TMPDIR:-/tmp}"; do
+    k=$(df -Pk "$p" 2>/dev/null | awk 'NR==2{print $4}')
+    case "$k" in ''|*[!0-9]*) continue;; esac
+    [ $((k / 1048576)) -lt $((10#$m)) ] || continue
+    line="DISK STOP: $(df -Pk "$p" | awk 'NR==2{print $6}') has $((k / 1048576)) GiB free, under the floor of $((10#$m)) GiB; nothing dispatched"
+    printf '%s\n' "$line"
+    printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+    return 0
+  done
+  return 1
+}
+
 # gh_api <route> [-q <jq filter>]   A read. Answers on stdout with exit 0; a refusal is exit 2 and its line is not an
 # answer; a failure is exit 1. A caller that only ever learns from an answer keeps what it already knew.
 gh_api() {
