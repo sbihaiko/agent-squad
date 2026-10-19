@@ -524,26 +524,24 @@ function figuresModule() {
 }
 
 // Dashboard core module: The run record: parse, the live reread, and the adaptation overlay.. Moved from rest.js with no change.
-// modelreg: seam-clean
 // A factory: it takes what lower modules export and returns its own functions. No DOM here.
 
-function recordModule({ graphHash, models }) {
-  const REG = models || {}, ALIASES = REG.aliases || {}, PRICES = REG.prices || {}, PROVIDERS = REG.providers || {};
-  // The registry id a spelling names. An alias resolves; an unknown spelling keeps its raw form.
-  const canonical = (m) => ALIASES[m] || m;
-
+function recordModule({ graphHash }) {
   // ---- Run record (read-only) and the overlay ----
   // A line that is not JSON ends the record there: the lines before it are shown, the line and the lines after it are not, and
   // `bad` names the line and what was wrong. The page never skips the bad line to read on: events after a gap would be a wrong run.
   // With no valid prefix (line 1 is bad, or the first event is not run_start) there is nothing to show, and `error` says why.
-  // The SDK prices a model it does not know at Claude rates, so a gateway call is re-priced from its tokens at the
-  // registry's display price. The registry holds one input rate, so a cache read is priced at that rate too. A Claude
-  // call keeps the SDK figure, and an id the registry does not know is never re-priced.
+  // Local patch: the SDK's spend is an estimate at the wrong list prices for non-Claude models; re-price from tokens (same table as the hub).
+  const PRICES = [[/deepseek-.*pro/, 0.044, 1.32, 3.96], [/deepseek/, 0.006, 0.3, 1.2], [/grok-4\.5/, 0.30, 2, 6], [/grok-4\.[67]/, 0.50, 2, 6],
+    [/gpt-5\.6-sol-fast/, 0.8, 8, 40], [/gpt-5\.6-sol/, 0.4, 4, 20], [/gpt-5\.6-terra-fast/, 0.4, 4, 24], [/gpt-5\.6-terra/, 0.2, 2, 12],
+    [/gpt-5\.5-fast/, 1.25, 12.5, 75], [/gpt-5\.5/, 0.5, 5, 30], [/gpt-6\.1-sol-fast/, 0.2, 4, 20], [/gpt-6\.1-sol/, 0.1, 2, 10]];
   function repriced(ev) {
     if (ev.event !== "outcome" || typeof ev.model !== "string" || typeof ev.tokens_in !== "number") return ev;
-    const id = canonical(ev.model), price = PRICES[id];
-    if (!price || typeof price.input !== "number" || typeof price.output !== "number" || PROVIDERS[id] === "claude") return ev;
-    return { ...ev, spend_sdk: ev.spend, spend: (ev.tokens_in * price.input + (ev.tokens_out || 0) * price.output) / 1e6 };
+    for (const [rx, hit, miss, out] of PRICES) if (rx.test(ev.model)) {
+      const cr = ev.cache_read || 0;
+      return { ...ev, spend_sdk: ev.spend, spend: (cr * hit + Math.max(ev.tokens_in - cr, 0) * miss + (ev.tokens_out || 0) * out) / 1e6 };
+    }
+    return ev;
   }
   function parseRecord(text) {
     const events = [];
@@ -2486,7 +2484,7 @@ function make(ENGINE) {
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
   const { num, sumOf, orNull, lastOf, tokenFigures, runTimeline } = figuresModule();
-  const { parseRecord, parseLive, overlayRows, overlayFor } = recordModule({ graphHash, models: ENGINE.models });
+  const { parseRecord, parseLive, overlayRows, overlayFor } = recordModule({ graphHash });
   const { readDelay, liveState, openCalls } = liveModule({ lastOf, num, orNull });
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });

@@ -1,17 +1,16 @@
 """The page presents a model by its registry label, and an unknown id raw (SPEC 505 ticket 9).
 
-Every label, alias and display price is inlined from `config/models.registry.json` by the build, so the page and the
-hub cannot drift. An old record names a spelling the registry keeps as an alias, and the alias map finds its label and
-its price. An id the registry does not know renders exactly as the record wrote it: display never guesses, and never
-crashes.
+Every label and alias is inlined from `config/models.registry.json` by the build, so the page and the hub cannot
+drift. An old record names a spelling the registry keeps as an alias, and the alias map finds its label. An id the
+registry does not know renders exactly as the record wrote it: display never guesses, and never crashes.
 
 Display only: the record, the graph, an editable field and the editor's own suggestion list keep the id whole. A page
-that showed a label there would invite a run to be configured with a word no CLI resolves.
+that showed a label there would invite a run to be configured with a word no CLI resolves. The spend re-pricing stays
+the page's own table, unchanged: the registry landing moved no caller (ADR-0147).
 """
 import json
 import re
 
-from squad import modelreg
 from tests.dashboard_helpers import CORE_DIR, ROOT, run_node
 
 PAGE = ROOT / "dashboard" / "page"
@@ -52,17 +51,16 @@ def test_a_missing_model_is_a_dash_like_every_other_missing_figure():
     assert _model(None) == DASH and _model("") == DASH
 
 
-def test_an_old_record_re_prices_through_the_alias_map():
-    """The SDK prices a model it does not know at Claude rates, so a gateway call is priced from its tokens.
-    The alias finds the canonical entry, and the canonical entry's display price is the rate."""
-    price = modelreg.display_price("gpt-5.6-terra")
+def test_a_gateway_call_is_re_priced_from_its_tokens_and_keeps_its_cache_read_rate():
+    """The SDK prices a model it does not know at Claude rates, so the page prices a gateway call from its tokens.
+    The table is the page's own (unchanged by the registry landing): a cache read keeps the table's cache-read rate."""
     parsed = _record([
         {"event": "run_start", "pos": 1, "run_id": "r", "graph_name": "g", "graph_hash": "h", "engine_options": {}, "root": "main", "plan": []},
         {"event": "outcome", "pos": 2, "node": "actor", "entry": 1, "outcome": "pass", "reasons": [], "model": "claude-gpt-5.6-terra",
-         "spend": 99.0, "tokens_in": 1000, "tokens_out": 100},
+         "spend": 99.0, "tokens_in": 1000, "tokens_out": 100, "cache_read": 400},
     ])
     ev = parsed["events"][1]
-    assert ev["spend"] == (1000 * price["input"] + 100 * price["output"]) / 1e6
+    assert ev["spend"] == (400 * 0.2 + 600 * 2 + 100 * 12) / 1e6
     assert ev["spend_sdk"] == 99.0
 
 
@@ -83,11 +81,11 @@ def test_the_formatter_lives_in_the_core_and_not_in_the_view():
     assert re.search(r"model: \(m\) =>", (CORE_DIR / "totals.js").read_text()), "core.fmt has no model formatter"
 
 
-def test_the_snapshot_reading_modules_carry_the_seam_header():
-    """A file that reads the registry instead of parsing an id carries the seam header (ADR 505)."""
-    for name in ("record.js", "totals.js"):
-        head = (CORE_DIR / name).read_text().splitlines()[:5]
-        assert any("modelreg: seam-clean" in line for line in head), f"{name} carries no modelreg seam header"
+def test_the_snapshot_reading_module_carries_the_seam_header():
+    """A file that reads the registry instead of parsing an id carries the seam header (ADR 505). The record's
+    re-pricing reads no registry: it keeps the page's own table."""
+    head = (CORE_DIR / "totals.js").read_text().splitlines()[:5]
+    assert any("modelreg: seam-clean" in line for line in head), "totals.js carries no modelreg seam header"
 
 
 def test_every_place_the_page_presents_a_model_goes_through_the_formatter():

@@ -10,7 +10,7 @@ function make(ENGINE) {
   const { REVIEW_NOTE, diffGraphs, declaredCaps, commandTemplate, reviewSheet, saveText, hashChip, hashRelation, draftRecord, draftOffer, saveGate, saveMode } = reviewModule({ canonText, graphHash, cmpCodePoints });
   const { snapshot, histNew, histRecord, histUndo, histRedo } = historyModule({ clone });
   const { num, sumOf, orNull, lastOf, tokenFigures, runTimeline } = figuresModule();
-  const { parseRecord, parseLive, overlayRows, overlayFor } = recordModule({ graphHash, models: ENGINE.models });
+  const { parseRecord, parseLive, overlayRows, overlayFor } = recordModule({ graphHash });
   const { readDelay, liveState, openCalls } = liveModule({ lastOf, num, orNull });
   const { reasonParts, causeSummary, failureCauses, skillName, nodeLabel } = failuresModule({ orNull });
   const { issueNumber, runChildren, skillLabel, CHILD_COLUMN_HEIGHT, childLayout, dispatchChecks, freeSpot, childAnchor } = childrenModule({ num, openCalls, orNull, skillName });
