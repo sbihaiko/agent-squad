@@ -11,16 +11,16 @@
 # usage: bash test-board-move-unchanged.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 mkdir -p "$T/bin" "$T/st"; cp "$src" "$T/s-board.py"; cp "$(dirname "$src")/issue_state.py" "$T/issue_state.py"
-printf '2001\tTodo\n2002\tDoing\n' > "$T/cards.tsv"
+printf '2001\tTodo\n2002\tDoing\n2003\tTodo\n' > "$T/cards.tsv"
 cat > "$T/bin/gh" <<'J'
 #!/bin/bash
 a="$*"; echo "$a" >> "TMPDIR/gh.calls"
 case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
-  *"-X PATCH"*items/ITEM*)
+  *"-X PATCH"*items/*)
     echo PATCH >> "TMPDIR/patches"
     [ -e "TMPDIR/drop" ] && { echo '{"id":"ITEM"}'; exit 0; }   # a write answered ok and never landed
-    n=${a#*items/ITEM}; n=${n%% *}
+    n=${a#*items/}; n=${n%% *}; n=${n#ITEM}; [ "$n" = 3003 ] && n=2003   # 2003's item id is a bare number, as the REST route answers
     opt=$(python3 -c 'import json;print(json.load(open("TMPDIR/patch.in"))["fields"][0]["value"])')
     name=Todo; [ "$opt" = O_DOING ] && name=Doing
     /usr/bin/grep -v "^$n	" "TMPDIR/cards.tsv" > "TMPDIR/cards.new"; printf '%s\t%s\n' "$n" "$name" >> "TMPDIR/cards.new"; mv "TMPDIR/cards.new" "TMPDIR/cards.tsv"
@@ -29,7 +29,7 @@ case "$a" in
   *fields?per_page=100*) echo '[{"id":"F_STATUS","name":"Status","options":[{"id":"O_TODO","name":{"raw":"Todo"}},{"id":"O_DOING","name":{"raw":"Doing"}}]}]';;
   *'fields[]=F_STATUS'*) [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     echo read >> "TMPDIR/reads"; while IFS=$'\t' read -r n s; do printf '%s\t%s\thttps://api.github.com/repos/x/y\n' "$n" "$s"; done < "TMPDIR/cards.tsv";;
-  *items?per_page=100*) printf '[2001,"ITEM2001","https://api.github.com/repos/x/y"]\n[2002,"ITEM2002","https://api.github.com/repos/x/y"]\n';;
+  *items?per_page=100*) printf '[2001,"ITEM2001","https://api.github.com/repos/x/y"]\n[2002,"ITEM2002","https://api.github.com/repos/x/y"]\n[2003,3003,"https://api.github.com/repos/x/y"]\n';;
   *) echo '{"message":"not found"}' >&2; exit 1;;
 esac
 J
@@ -76,6 +76,8 @@ rm -f "$T/st/board-moves.json"
 run o 4 Todo 2001 >/dev/null 2>&1; run o 4 Doing 2001 >/dev/null 2>&1
 r=$(rec)
 [ "$(entries)" = 1 ] && case "$r" in "ITEM2001 Doing "*) ok "two proved moves of one item leave one entry, the later one";; *) ko "later entry: $r";; esac || ko "entries after two moves: $(entries), $r"
+o=$(run o 4 Doing 2003 2>&1); rc=$?   # a numeric item id joins a record whose keys were read back as text (#652)
+[ "$rc" -eq 0 ] && [ "$(entries)" = 2 ] && case "$(rec)" in *"3003 Doing "*) ok "a move with a numeric item id after an earlier entry writes the record and exits 0";; *) ko "numeric id record: $(rec)";; esac || ko "numeric id move: exit $rc, $(entries) entries: $o"
 run o 4 Todo 2001 >/dev/null 2>&1   # the kill interrupts a proved move away from Todo
 python3 -c 'import json,sys; json.dump({"ITEM2001":{"column":"Todo","at":"2026-10-14T00:00:00Z"}}, open(sys.argv[1],"w"))' "$T/st/board-moves.json"
 mkdir -p "$T/hooks"
