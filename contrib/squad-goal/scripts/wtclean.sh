@@ -125,6 +125,33 @@ for rel in worktrees/child .worktrees; do
     elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule child ${w##*/} ${sha:-} ${w}: a checked out submodule git refuses to remove, even with --force; kept"; echo "sub $w" >> "$seen"; }; fi
   done
 done
+# R (#581): the run's own tree, worktrees/run/<key> on squad/run/<key> (launch.py, #580). One launch makes one, and nothing else
+# removed it. It goes when every run folder inside it has ended for good, read from the record as the dashboard reads it (the last
+# verdict after the last run_start or resume): `completed`, or `failed` with nothing in `remains`. A run with no verdict, a paused
+# one (`stopped`), `needs-human`, `conflict` or a failure that still has remains can be resumed, so it keeps the tree. The same
+# rules as every tree above hold: no live process inside, a held wave keeps it, a clean tree, and HEAD in the base. The branch
+# goes with the tree, and only once the tree is gone.
+for w in "$SG_CHECKOUT"/worktrees/run/*; do
+  [ -e "$w/.git" ] || continue
+  in_use "$w" && continue
+  n=0; ended=1
+  for r in "$w"/runs/*/; do [ -f "$r/record.jsonl" ] || continue; n=$((n + 1))
+    wave_hold "$(basename "$r")" && { ended=0; break; }
+    last=$(awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$r/record.jsonl")
+    case $last in
+      *'"verdict": "completed"'*) ;;
+      *'"verdict": "failed"'*) printf '%s' "$last" | grep -qE '"remains": *\[ *\]' || { ended=0; break; };;
+      *) ended=0; break;; esac
+  done
+  [ $n -gt 0 ] && [ $ended = 1 ] || continue
+  [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
+  in_base "$w" || continue
+  b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
+  wt_remove "$SG_CHECKOUT" "$w"; rc=$?
+  if [ $rc = 0 ]; then echo "WT CLEAN run ${w##*/} ${b:-detached} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
+    case $b in squad/run/*) $G branch -D "$b" >/dev/null 2>&1;; esac
+  elif [ $rc = 2 ]; then grep -qx "sub $w" "$seen" || { echo "WT KEPT submodule run ${w##*/} ${sha:-} ${w}: a checked out submodule git refuses to remove, even with --force; kept"; echo "sub $w" >> "$seen"; }; fi
+done
 # acceptance-command trees (acpr.sh) left by a killed gate: drop any older than 2 h
 $G worktree list --porcelain | sed -n 's#^worktree \(.*/acpr\.[^/]*\)$#\1#p' | while read -r w; do
   [ -n "$(find "$w" -maxdepth 0 -mmin +120 2>/dev/null)" ] && $G worktree remove --force "$w" && echo "WT CLEAN acpr ${w##*/}"; done
