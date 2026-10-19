@@ -144,7 +144,8 @@ answer_check() { local why
 # A per-model setting matches its chain id with a context suffix stripped from both sides (#643). An exact key still wins.
 bare='def bare: sub("\\[[^]]*\\]$"; "");'
 # route_of <model>: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
-route_of() { python3 "$(dirname "$0")/modelreg.py" review-route "$1" 2>/dev/null; }
+# The resolver's stderr is kept in review-route.err, so a broken registry names its cause in the MODEL_FAIL line.
+route_of() { python3 "$(dirname "$0")/modelreg.py" review-route "$1" 2>"$SG_STATE/review-route.err"; }
 direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
   cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
     -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
@@ -226,6 +227,7 @@ PY
 # when that count is 1. Several reachable models still get the leash.
 eligible() { local m=$1 rt rn
   IFS=$'\t' read -r rt rn _ <<< "$(route_of "$m")"
+  [ -n "$rt" ] || return 1   # no row: the model is not reachable, so the leash never counts it
   case $rn in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
   case $rn in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
   case $rn in grok) [ -e "$SG_SHARED/grok-limited" ] && return 1;; esac
@@ -236,7 +238,7 @@ reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); do
 used=0
 for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
   IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
-  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
+  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it (%s).\n" "$m" "$bm" "$(head -c 300 "$SG_STATE/review-route.err" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
   case $runner in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
@@ -264,7 +266,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       # A reviewer with no tools (#504): one direct call to the gateway, thinking off. `claude -p` sends nothing that turns a gateway
       # model's thinking off, and DeepSeek V4.1 Flash then thinks 32k tokens a turn and never answers; off, it answers in
       # seconds. The answer is reshaped into the CLI's JSON, so the checks and the token ledger below read one shape.
-      direct:*|gateway:*|cli:claude) if [ "$tools" = 0 ] || [ "$rroute" != cli ]; then
+      direct:*|gateway:*|cli:claude) if [ "$tools" = 0 ]; then
           jq -Rs --arg m "$wire" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
           direct "$p.body"; r=$?
           # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
@@ -281,8 +283,9 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
         fi;;
       cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
       cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
-      *) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
+      cli:codex) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
+      *) printf "MODEL_FAIL review %s on branch %s: unsupported runner %s on route %s.\n" "$m" "$bm" "$runner" "$rroute" > "$(sg_cq_status "$iss" "mfail$$-$ms-1")"; false > "$o";;
     esac
     rc=$?
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,

@@ -96,3 +96,31 @@ def test_the_repo_review_chain_is_the_live_chain(reg):
     ids = [e.id for e in modelreg.chain(MODELS, "review", reg).entries]
     assert ids == ["claude-opus-5-5", "gemini-3.8-flash", "grok-4.6"]
     assert [e.effort for e in modelreg.chain(MODELS, "review", reg).entries] == [None, "medium", None]
+
+
+@pytest.mark.parametrize("raw", ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol-fast", "gpt-5.6-terra-fast", "gpt-5.6-luna-fast"])
+def test_a_tools_entry_with_no_cli_route_keeps_codex_with_tools(reg, raw):
+    got = modelreg.review_route(raw, reg)
+    assert (got.route, got.runner, got.wire, got.tools) == ("cli", "codex", raw, True)
+
+
+def test_the_no_tools_call_runs_only_when_the_registry_says_no_tools():
+    text = REVIEW.read_text()
+    assert '[ "$rroute" != cli ]' not in text
+    assert "cli:codex)" in text
+
+
+def test_an_empty_route_row_makes_a_model_ineligible_and_the_cause_is_kept():
+    text = REVIEW.read_text()
+    assert '[ -n "$rt" ] || return 1' in text
+    assert "review-route.err" in text
+
+
+def test_an_unknown_runner_is_refused_by_name():
+    assert "unsupported runner" in REVIEW.read_text()
+
+
+def test_the_review_timeouts_name_only_models_in_the_chain():
+    doc = json.loads(MODELS.read_text())
+    assert set(doc.get("review_timeout_seconds_by_model", {})) <= set(doc["review_models"])
+
