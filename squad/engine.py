@@ -117,10 +117,18 @@ class Engine:
         return out
 
     def _set_resolve(self, on):
-        """Record the resolution setting and hand it to an adapter that can resolve a spelling (the SDK adapter)."""
+        """Record the resolution setting and hand it to an adapter that can resolve a spelling (the SDK adapter).
+
+        The engine registry is the one the adapter resolves through: a run never records a model id from one registry
+        and sends the wire model of another.
+        """
         self.models_resolve = bool(on)
         if hasattr(self.adapter, "resolve"):
             self.adapter.resolve = self.models_resolve
+            if hasattr(self.adapter, "registry"):
+                self.adapter.registry = self.registry
+                if hasattr(self.adapter, "_reg"):
+                    self.adapter._reg = None
 
     def _src(self):
         return {"kind": "run_record", "run": self.run_id, "pos": len(self.record.events)}

@@ -88,6 +88,7 @@ class ChainEntry:
     provider: str | None
     subscription: str | None
     known: bool
+    legacy_codex: bool = False   # a v1 spelling the old chain reader ran through Codex: its marker still applies
 
 
 @dataclass(frozen=True)
@@ -348,6 +349,11 @@ def _canonical(name):
     return key
 
 
+def _v1_codex(raw):
+    """A v1 file's marker rule: every spelling outside the `claude:`, `grok-` and `gemini-` prefixes ran through Codex."""
+    return not (isinstance(raw, str) and raw.startswith(("claude:", "grok-", "gemini-")))
+
+
 def _default_route(chain_name, entry):
     if entry is None:
         return None
@@ -400,7 +406,8 @@ def chain(models_json, name, reg=None):
                 id=ref.id, raw=raw, route=ref.route, effort=efforts.get(raw) or ref.effort, ctx=ref.ctx,
                 on=not bool(off.get(raw)), hrs=hours.get(raw), timeout_s=timeouts.get(raw),
                 no_tools=raw in no_tools, provider=entry.provider if entry else None,
-                subscription=entry.subscription if entry else None, known=ref.known))
+                subscription=entry.subscription if entry else None, known=ref.known,
+                legacy_codex=_v1_codex(raw)))
     return Chain(name=canon, entries=entries, mixed=mixed, stray=stray)
 
 
@@ -461,7 +468,11 @@ def _plans():
 
 
 def eligible(entry, shared=None, now=None, hour=None, reg=None):
-    """Why one chain entry may not run now: the switch, its window, its subscription marker, or the Claude reserve."""
+    """Why one chain entry may not run now: the switch, its window, its subscription marker, or the Claude reserve.
+
+    A v1 entry keeps the marker rule it had before the registry: its `legacy_codex` flag applies Codex's marker even
+    when the registry maps the spelling to another subscription, so a v1 file never changes behavior.
+    """
     if not entry.on:
         return Eligibility(False, "off", None)
     now = time.time() if now is None else now
@@ -469,6 +480,10 @@ def eligible(entry, shared=None, now=None, hour=None, reg=None):
     if entry.hrs and not _in_window(entry.hrs, hour):
         return Eligibility(False, f"outside its window {entry.hrs}", None)
     reg = reg or default_registry()
+    if entry.legacy_codex:
+        marker = _marker_state("gpt", shared, now, reg)
+        if marker:
+            return Eligibility(False, marker[0], marker[1])
     sub = entry.subscription
     if not sub:
         return Eligibility(True, None, None)
