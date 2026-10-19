@@ -1843,14 +1843,15 @@ def board():
         if isinstance(entry, dict) and entry.get("column"):
             recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
             at = move_time(entry)   # the instant the door proved the move; the record carries whole UTC seconds
-            if recorded in ORDER:   # a column no board ships is never drawn, and the hub never rewrites the door's record
-                if recorded == st and at is not None and at <= read_at:   # the read postdates the move and carries its column: the entry's work is done
-                    agreed.add(str(i["i"]))
-                else:
-                    # The read is older than the move, or contradicts it: draw the move at once and keep the entry until
-                    # a read that postdates the move agrees (#650). A matching column that predates the move is no proof.
-                    st, pending = recorded, True
-                    fz = _columns_module.view_column(recorded, False, i.get("l"))[1]   # the freeze of the column drawn, never the read's
+            if recorded not in ORDER:
+                agreed.add(str(i["i"]))   # no column this board ships: the entry is never drawn, and it is dropped
+            elif recorded == st and at is not None and at <= read_at:   # the read postdates the move and carries its column: the entry's work is done
+                agreed.add(str(i["i"]))
+            else:
+                # The read is older than the move, or contradicts it: draw the move at once and keep the entry until
+                # a read that postdates the move agrees (#650). A matching column that predates the move is no proof.
+                st, pending = recorded, True
+                fz = _columns_module.view_column(recorded, False, i.get("l"))[1]   # the freeze of the column drawn, never the read's
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
