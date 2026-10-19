@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -163,6 +164,10 @@ def test_the_loop_passes_no_spent_models_flag_without_a_closed_marker(tmp_path):
 
 @pytest.mark.heavy   # launch.py waits for the run folder, over a second
 def test_the_loop_passes_the_coding_hours_to_the_run(tmp_path):
-    r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, hours={"claude-sonnet-5-5": "19-07"})
+    # launch.py reads the local hour, so the window opens at this hour and spans two: an hour that turns during the run
+    # stays inside it, and the test never depends on the wall clock (the test-review.sh pattern).
+    h = time.localtime().tm_hour
+    w = f"{h:02d}-{(h + 2) % 24:02d}"
+    r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, hours={"claude-sonnet-5-5": w})
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "--model-hours claude-sonnet-5-5=19-07 " in (tmp_path / "argv").read_text()
+    assert f"--model-hours claude-sonnet-5-5={w} " in (tmp_path / "argv").read_text()
