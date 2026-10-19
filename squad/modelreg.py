@@ -296,16 +296,17 @@ def model(raw, reg=None):
 
 
 def entries_sha256(raws, reg=None):
-    """Hash of every raw spelling a list names and the state the registry gives it.
+    """Hash of the entries a list of raw spellings names, and of each spelling the registry cannot resolve.
 
-    An unknown spelling is recorded as unknown, so adding it to the registry later changes the hash and a resume
-    refuses instead of resolving the frozen run to a different wire model.
+    The resolved part keeps the shape a record written before this key named unknown spellings used: one entry per
+    registry id. An unknown spelling adds one `{raw: {"known": False}}` row, so adding that spelling to the registry
+    later changes the hash and a resume refuses instead of resolving the frozen run to a different wire model. A
+    record whose graph names only known spellings therefore keeps the hash it wrote.
     """
     reg = reg or default_registry()
-    doc = {}
-    for raw in raws:
-        ref = normalize(raw, reg)
-        doc[ref.raw] = {"known": True, "entry": asdict(reg.entries[ref.id])} if ref.known else {"known": False}
+    refs = [normalize(raw, reg) for raw in raws]
+    doc = {ref.id: asdict(reg.entries[ref.id]) for ref in refs if ref.known}
+    doc.update({ref.raw: {"known": False} for ref in refs if not ref.known})
     return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
