@@ -176,7 +176,7 @@ rm -f "$ST/watch-seen.txt" "$ST/cycle.log"; run_cycles 2 REAL_SLEEP=1 SG_WATCH_W
 printf '#!/bin/bash\necho janitor >> "%s"\n' "$STEPS" > "$S/janitor.sh"; : > "$ST/active-runs.txt"
 # the inline childcc points are a third and two thirds of the wait, whatever the poll: a wait of 8 polls is no multiple of 3
 lane_down; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=8 SG_WATCH_POLL=1
-[ "$(count childcc)" = 6 ] && ok "11 a wait that is no multiple of 3 polls still runs childcc twice inline" || ko "11 childcc ran $(count childcc)× in 2 cycles (6 expected)"
+[ "$(count childcc)" = 4 ] && ok "11 a wait that is no multiple of 3 polls still runs childcc twice inline" || ko "11 childcc ran $(count childcc)× in 2 cycles (4 expected)"
 # a fractional poll does not break the wait
 t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=2 SG_WATCH_POLL=0.5; el=$(( $(date +%s) - t0 ))
 [ "$el" -ge 2 ] && [ "$el" -lt 10 ] && ok "11 a fractional SG_WATCH_POLL still waits its bound (${el}s)" || ko "11 fractional poll: ${el}s of a 2 s wait"

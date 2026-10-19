@@ -25,7 +25,7 @@ test-dispatch-hold-wave.sh 9.4
 test-dispatch-mutex.sh 26.8
 test-dispatch-worktree-reuse.sh 5.8
 test-fast-gate.sh 1.7
-test-fastloop-interval.sh 0.2
+test-fastloop-interval.sh 8.0
 test-fastloop-orphan.sh 0.5
 test-gate-lock.sh 5.8
 test-gh-pass-bounded.sh 12.3
@@ -86,7 +86,7 @@ test-state-split.sh 2.9
 test-token-guard.sh 2.8
 test-token-ledger.sh 14.4
 test-vendor-guard.sh 1.4
-test-watch-cycle.sh 60.2
+test-watch-cycle.sh 95.0
 test-watch-land.sh 8.5
 test-watchd-token-stop.sh 8.4
 test-wave-lifecycle.sh 27.5

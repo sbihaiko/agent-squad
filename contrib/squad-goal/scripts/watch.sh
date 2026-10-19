@@ -114,6 +114,7 @@ if v:
         for n in $(head -c 200000 "$rd/record.jsonl" 2>/dev/null | grep -oE '(issue|Refs) #[0-9]{3,5}' | grep -oE '[0-9]+' | sort -u); do
           printf "Squad run %s finished: verdict %s. Refs #%s\n" "${r##*/}" "$v" $n > "$(sg_cq_file "$n-run$$-${r##*-}.md")"; done; }
       seen="$seen$r "; echo "seen $r" >> "$W"; }; done
+  boot=0; v0=$(verdicts)   # the closing wait's baseline: the runs with a verdict now. One that lands in a later step is an event; one already here whose landing failed is not (#569)
   # stall watchdog: live run whose record.jsonl has not moved for stall_timeout_minutes. A run whose record already carries
   # its verdict is not a stalled run: it is over, and it waits for its wave to land (childcc keeps it in active-runs until
   # then, so its children can still enter). Reading its quiet record as a stall named three finished runs at 10:41 today and
@@ -154,12 +155,15 @@ if v:
   tm bash "$(dirname "$0")/single.sh" liveguard bash "$(dirname "$0")/live-guard.sh" 2>&1   # the live skill follows the repository copy: the difference is read, published, and named
   tm bash "$(dirname "$0")/single.sh" vendorguard bash "$(dirname "$0")/vendor-guard.sh" 2>&1   # re-vendor drifted personal skills (a drifted vendor makes every squad start refuse)
   # The closing wait is one wait of SG_WATCH_WAIT seconds at most (90 by default), polled every SG_WATCH_POLL (3), and a run verdict that the
-  # wait's start did not see ends it (#569). A verdict already there is no event: a run whose landing failed stays unread and must not spin the cycle.
+  # wait's start did not see ends it (#569). A verdict already there when the read loop ended is no event: a run whose landing failed stays unread and must not spin the cycle.
   # childcc runs inline at the wait's first and second third (the 30 s and 60 s points) only while the fast lane is down.
-  boot=0; v0=$(verdicts); wn=$(( ${SG_WATCH_WAIT:-90} / ${SG_WATCH_POLL:-3} )); [ "$wn" -ge 1 ] || wn=1
-  for ((i = 1; i <= wn; i++)); do sleep "${SG_WATCH_POLL:-3}"
+  # wn polls in all; the inline childcc points are the first and second third of them. A fractional poll is fine; a bad value falls back to the default.
+  num='^[0-9]+([.][0-9]+)?$'; ww=${SG_WATCH_WAIT:-90}; wp=${SG_WATCH_POLL:-3}
+  [[ $ww =~ $num ]] || ww=90; { [[ $wp =~ $num ]] && [ "$wp" != 0 ]; } || wp=3
+  read -r wn c1 c2 < <(awk -v w="$ww" -v p="$wp" 'BEGIN{n=int(w/p); if(n<1)n=1; a=int(n/3); if(a<1)a=1; b=int(2*n/3); if(b<1)b=1; print n, a, b}')
+  for ((i = 1; i <= wn; i++)); do sleep "$wp"
     [ -z "$(comm -13 <(echo "$v0") <(verdicts))" ] || { echo "$(date +%T) WAIT ended early: a run verdict"  >> "$SG_STATE/cycle.log"; break; }
-    { [ $((i * 3)) -eq $wn ] || [ $((i * 3)) -eq $((wn * 2)) ]; } && { [ -n "$fast" ] || tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1; }; done
+    { [ "$i" -eq "$c1" ] || [ "$i" -eq "$c2" ]; } && { [ -n "$fast" ] || tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1; }; done
   # adaptive cycle (#45): once under 20 percent of a pool's limit is left the cycle is longer, so the loop spends less of what remains
   x=$(gh_stretch 90); [ "$x" -gt 0 ] 2>/dev/null && { echo "$(date +%T) QUOTA low: this cycle waits ${x}s more" >> "$SG_STATE/cycle.log"; sleep "$x"; }
   echo "$(date +%T) CYCLE $((SECONDS - c0))s" >> "$SG_STATE/cycle.log"; done   # childcc and both dispatches every SG_FAST_INTERVAL s (fastloop.sh when watchd runs it), the rest every 90 s

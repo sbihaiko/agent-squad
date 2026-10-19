@@ -8,6 +8,7 @@
 # every dispatch and the pid refresh of the beat behind it. It stays in the supervisor's process group, so a watchd stop ends it.
 # The wait between beats ends early on a new Todo card in the local board cache (#569): the owner's go signal reaches a dispatch
 # within SG_FAST_POLL seconds (2 by default), not at the end of the beat. It reads that file only, never GitHub.
+# The cache is the hub's one board (SG_PROJECT): the bug project's own Todo column (SG_BUG_*) is not in it, so a bug filed there waits for the beat.
 # --interval prints the resolved beat and exits (tests). SG_FASTLOOP_ONCE=1 runs one iteration and exits (tests).
 . "$(dirname "$0")/env.sh"; [ "${1:-}" = --interval ] && { echo "$SG_FAST_INTERVAL"; exit 0; }; here="$(dirname "$0")"; P="$SG_STATE/fastloop.pid"
 # todos: the numbers of the cards that sit in Todo in the hub's board cache (items n, st, s), one a line; nothing when the cache is missing or unreadable.
@@ -27,5 +28,9 @@ while :; do
   # The bug pass goes first (#616): it writes the bugs it left waiting, and the frontier pass after it reads that count.
   ( { "$here/autobug.sh" 2>&1; "$here/autofrontier.sh" 2>&1; } & ) 2>/dev/null
   [ -n "${SG_FASTLOOP_ONCE:-}" ] && { wait "$cc"; exit 0; }   # a test's one iteration ends with its pass
-  # The wait is SG_FAST_INTERVAL seconds at most, polled; a card in Todo that the beat's start did not see ends it.
-  w=$SECONDS; while [ $((SECONDS - w)) -lt "$SG_FAST_INTERVAL" ]; do sleep "${SG_FAST_POLL:-2}"; [ -z "$(comm -13 <(echo "$t0") <(todos))" ] || break; done; done
+  # The wait is SG_FAST_INTERVAL seconds at most (a fraction is fine), polled; a card in Todo that the beat's start did not see ends it.
+  # It counts polls, never SECONDS: an integer test on a fractional beat errored and the lane spun with no pause. The remainder is one last short sleep.
+  p=${SG_FAST_POLL:-2}; num='^[0-9]+([.][0-9]+)?$'; [[ $p =~ $num ]] && [ "$p" != 0 ] || p=2; iv=$SG_FAST_INTERVAL; [[ $iv =~ $num ]] || iv=120
+  n=$(awk -v i="$iv" -v p="$p" 'BEGIN{print int(i/p)}'); r=$(awk -v i="$iv" -v p="$p" -v n="$n" 'BEGIN{print i-n*p}')
+  for ((k = 0; k < n; k++)); do sleep "$p"; [ -z "$(comm -13 <(echo "$t0") <(todos))" ] || continue 2; done
+  [ "$r" = 0 ] || sleep "$r"; done

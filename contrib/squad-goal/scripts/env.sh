@@ -41,6 +41,8 @@ eval "$(printf '%s\n' "$_sg_ctx" | /usr/bin/grep -E '^(SG_STATE|SG_SHARED|SG_BOA
 : "${SG_REVIEW_MODEL:=gpt-5.6-terra}"
 # Seconds between two beats of the fast lane (fastloop.sh), 120 unless the profile sets SG_FAST_INTERVAL. The slow cycle keeps its own beat.
 : "${SG_FAST_INTERVAL:=120}"
+# The watch cycle closes with one wait of SG_WATCH_WAIT seconds at most, polled every SG_WATCH_POLL seconds; a run verdict ends it early (watch.sh). A fraction is fine.
+: "${SG_WATCH_WAIT:=90}" "${SG_WATCH_POLL:=3}"
 # A wave has an age cap (#378, ADR-0145 rule 13): a wave past it lands the children it holds, and the children of the run
 # that never entered go back to the queue. Two hours by default. It is read here, after the profile, so a profile that sets
 # SG_WAVE_MAX_AGE_SECONDS wins. The wave tip's own check (#377) is SG_WAVE_TIP_GATES, built in wave.sh (a profile may set
