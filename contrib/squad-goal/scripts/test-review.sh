@@ -448,4 +448,30 @@ sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '
 rm -f "$T/j21"
 rm -f "$T/bin/codex"
 
+# 23) #634: a JSON answer off the schema gets one repair turn by the same model, with the parser's error, also when one
+# model is all that is reachable. A second answer off the schema ends that model's turn: no plain retry follows.
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat > "$T/prompt.\$(wc -l < "$T/ccalls" 2>/dev/null | tr -d ' ')"; echo "\$*" >> "$T/ccalls"
+a='{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"d"}],"debt":[],"resolved":[]}'
+[ -e "$T/fix23" ] && [ "\$(wc -l < "$T/ccalls")" -ge 2 ] && a='{"verdict":"APPROVE","blocking":[],"debt":[],"resolved":[]}'
+jq -cn --arg a "\$a" '{type:"result",subtype:"success",is_error:false,result:\$a,usage:{input_tokens:10,output_tokens:5}}'
+J
+chmod +x "$T/bin/claude"; touch "$T/fix23"
+printf '{"review_models":["claude:only"],"model_retry_budget":3,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/ccalls"; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] && [ "$(wc -l < "$T/ccalls" | tr -d ' ')" = 2 ] \
+  && ok "23 one reachable model: a JSON answer off the schema is repaired once" || ko "23 one-model repair: rc=$rc '$out' calls=$(wc -l < "$T/ccalls")"
+/usr/bin/grep -q 'outside the shape' "$T/prompt.1" 2>/dev/null && /usr/bin/grep -q 'blocking\[0\].failure is missing or empty' "$T/prompt.1" \
+  && ok "23 the repair prompt carries the parser's error" || ko "23 repair prompt: $(tail -3 "$T/prompt.1" 2>/dev/null)"
+/usr/bin/grep -qs 'the same model answers once more' "$T/st/cq/"*mformat* && ok "23 the MODEL_FORMAT line names the repair turn" || ko "23 mformat: $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
+rm -f "$T/fix23" "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/ccalls"; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc != 0 ] && head -1 "$T/st/review-fix_1-x.md" | /usr/bin/grep -q BLOCKED && [ "$(wc -l < "$T/ccalls" | tr -d ' ')" = 2 ] \
+  && ok "23 one reachable model: a failed repair ends the turn after two calls" || ko "23 failed repair: rc=$rc calls=$(wc -l < "$T/ccalls") md='$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)'"
+printf '{"review_models":["claude:one","claude:two"],"review_order":"config","model_retry_budget":3,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/ccalls"; bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+[ "$(/usr/bin/grep -c -- '--model one' "$T/ccalls")" = 2 ] && [ "$(/usr/bin/grep -c -- '--model two' "$T/ccalls")" = 2 ] \
+  && ok "23 several reachable models: one repair turn each, then the next model" || ko "23 several models: $(cat "$T/ccalls")"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".* "$T/ccalls"
+
 rm -rf "$T"; exit $fail
