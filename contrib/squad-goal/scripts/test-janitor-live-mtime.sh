@@ -17,8 +17,17 @@ pass env; [ "$(alerts)" = 1 ] && ok "a changed file with no publish raises LIVE-
 pass env; [ "$(alerts)" = 1 ] && ok "an unchanged live copy raises nothing again" || ko "a pass with no change alerted ($(alerts))"
 printf 'skill v2\n' > "$T/live/SKILL.md"; touch "$T/st/live-publish.stamp"
 pass env; [ "$(alerts)" = 1 ] && ok "a change a publish made raises nothing" || ko "a publish was read as a stray write ($(alerts))"
+# An import writes __pycache__/<module>.cpython-312.pyc under the live copy, and an editor writes .DS_Store. Neither is a
+# change to the loop's code (#661): they raise nothing, whether they come or go.
+mkdir -p "$T/live/scripts/__pycache__"
+printf 'cache\n' > "$T/live/scripts/__pycache__/models.cpython-312.pyc"; printf 'cache\n' > "$T/live/scripts/models.pyo"; printf 'meta\n' > "$T/live/scripts/.DS_Store"
+pass env; [ "$(alerts)" = 1 ] && ok "a bytecode cache, a .pyo and .DS_Store raise nothing" || ko "a bytecode cache raised LIVE-MTIME ($(alerts))"
+rm "$T/live/scripts/__pycache__/models.cpython-312.pyc"
+pass env; [ "$(alerts)" = 1 ] && ok "a bytecode cache that goes raises nothing" || ko "a removed bytecode cache raised LIVE-MTIME ($(alerts))"
+printf 'print(1)\n' > "$T/live/scripts/real.py"
+pass env; [ "$(alerts)" = 2 ] && ok "a real script changing still raises LIVE-MTIME" || ko "a real script change was ignored ($(alerts))"
 rm "$T/live/SKILL.md"
-pass env; [ "$(alerts)" = 2 ] && ok "a removed file with no publish raises LIVE-MTIME" || ko "no alert for the removed file ($(alerts))"
+pass env; [ "$(alerts)" = 3 ] && ok "a removed file with no publish raises LIVE-MTIME" || ko "no alert for the removed file ($(alerts))"
 pass env JANITOR_DRY=1; printf 'x\n' > "$T/live/new.md"
-pass env JANITOR_DRY=1; pass env JANITOR_DRY=1; [ "$(alerts)" = 4 ] && ok "a dry pass keeps no snapshot, so it reads the same change again" || ko "dry passes: $(alerts)"
+pass env JANITOR_DRY=1; pass env JANITOR_DRY=1; [ "$(alerts)" = 5 ] && ok "a dry pass keeps no snapshot, so it reads the same change again" || ko "dry passes: $(alerts)"
 exit $fail
