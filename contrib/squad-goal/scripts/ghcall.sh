@@ -147,6 +147,23 @@ gh_disk_stop() {
   return 1
 }
 
+# gh_bug_first   A bug goes first (#616): autobug writes the startable bugs it left without a run to $SG_STATE/bugs-waiting.
+# While that count is over 0 and fresh (30 min), the frontier pass dispatches nothing. Returns 0 and prints the one line on a
+# hold, 1 when the pass may go on. A missing, unreadable or stale count never holds.
+gh_bug_first() {
+  local f="${SG_STATE:?gh_bug_first: no state directory}/bugs-waiting" n t line
+  [ -r "$f" ] || return 1
+  n=$(head -n 1 "$f" 2>/dev/null | tr -d '[:space:]')
+  case "$n" in ''|*[!0-9]*) return 1;; esac
+  [ $((10#$n)) -gt 0 ] || return 1
+  t=$(date -r "$f" +%s 2>/dev/null) || return 1
+  [ $(( $(date +%s) - t )) -le 1800 ] || return 1
+  line="BUG FIRST: $((10#$n)) startable bug(s) wait for a run; no feature run this pass"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+  return 0
+}
+
 # gh_api <route> [-q <jq filter>]   A read. Answers on stdout with exit 0; a refusal is exit 2 and its line is not an
 # answer; a failure is exit 1. A caller that only ever learns from an answer keeps what it already knew.
 gh_api() {

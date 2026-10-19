@@ -138,8 +138,8 @@ if v:
   # already running in the other lane is skipped rather than started a second time.
   # The cycle's own childcc takes the childcc lock as every other pass does (#590): a bare one ran beside the fast lane's pass.
   [ -n "$fast" ] || { tm bash "$(dirname "$0")/single.sh" childcc python3 "$(dirname "$0")/childcc.py" 2>&1
-    tm "$(dirname "$0")/autofrontier.sh" 2>&1   # dispatch the frontier as soon as a blocker falls
-    tm "$(dirname "$0")/autobug.sh" 2>&1; }   # open bug issues dispatched automatically
+    tm "$(dirname "$0")/autobug.sh" 2>&1   # open bug issues dispatched automatically, before the frontier (#616)
+    tm "$(dirname "$0")/autofrontier.sh" 2>&1; }   # dispatch the frontier as soon as a blocker falls
   tm "$(dirname "$0")/autohunt.sh" 2>&1   # idle loop: one read-only bug hunt that files reproducible defects
   tm "$(dirname "$0")/heartbeat.sh"   # hung test hosts (0% CPU) and dead runs
   # worktree cleanup every third cycle (~4.5 min): the trees are almost always clean and ~17 s of every cycle is 10% of the loop (#1845).

@@ -189,7 +189,7 @@ ready_now() {   # <issue>: 0 when stack.sh answers READY
   return 1
 }
 # candidates first, then clusters (cluster.py: same area + time window, or a shared file path) -> one child per cluster
-cand=(); cj="["
+cand=(); cj="["; nb=0
 for sel in "$lab" debt; do
   [ "$sel" = "$lab" ] || { [ ${#cand[@]} -eq 0 ] && [ -z "${AB_SKIP_DEBT:-}" ] || continue; }
   if [ "$sel" = "$lab" ]; then list=$(gather_bugs) || exit 0; else list=$(gather "$sel") || exit 0; fi            # refused selection: no candidate, no marker, no request (#1855)
@@ -205,7 +205,10 @@ for sel in "$lab" debt; do
     ready_now "$n" || continue
     cand+=("$n")
   done <<<"$list"
+  [ "$sel" = "$lab" ] && nb=${#cand[@]}   # the bugs among the candidates; debt is read only when there is none (#616)
 done
+# The startable bugs this pass leaves without a run (#616), read by the frontier pass: every candidate until the pick is known.
+echo "${nb:-0}" > "$SG_STATE/bugs-waiting"
 [ ${#cand[@]} -gt 0 ] || exit 0
 # every candidate is a decimal issue number that resolves to a non-PR issue; anything else is dropped and logged. On
 # 2026-10-12 the exit-code fix alone was not enough: one line of rate-limit text reached here and its words became
@@ -236,6 +239,8 @@ for c in "${clusters[@]}"; do
   pick+=("${parts[@]}")
 done
 [ ${#pick[@]} -gt 0 ] || exit 0
+w=${nb:-0}; [ "$w" -gt 0 ] && for p in "${pick[@]}"; do case " ${cand[*]} " in *" $p "*) w=$((w - 1));; esac; done
+echo "$(( w < 0 ? 0 : w ))" > "$SG_STATE/bugs-waiting"
 [ -n "${AB_DRY:-}" ] && { echo "AUTOBUG would dispatch ${#clusters[@]} cluster(s): $(printf '[%s] ' "${clusters[@]}")($free free slots)"; exit 0; }
 name="autobug-$(date +%Y%m%d-%H%M%S)"; body="$SG_STATE/req/$name.body"
 # Claim the issues before the request is built (#1514), not after the launch: the launch takes 11-14 s, and a pass

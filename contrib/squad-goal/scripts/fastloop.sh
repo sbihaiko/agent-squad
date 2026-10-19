@@ -19,7 +19,7 @@ while :; do
   { [ -n "$cc" ] && kill -0 "$cc" 2>/dev/null; } || { bash "$here/single.sh" childcc python3 "$here/childcc.py" 2>&1 & cc=$!; }
   # Both go out detached: a pass ends in a squad start that runs for minutes, and it must not hold the beat. They are called bare, as watch.sh calls them,
   # because each takes its own single.sh <stage> lock inside — so a pass already running is skipped here, and never doubled against the cycle's standalone path.
-  ( "$here/autofrontier.sh" 2>&1 & ) 2>/dev/null
-  ( "$here/autobug.sh" 2>&1 & ) 2>/dev/null
+  # The bug pass goes first (#616): it writes the bugs it left waiting, and the frontier pass after it reads that count.
+  ( { "$here/autobug.sh" 2>&1; "$here/autofrontier.sh" 2>&1; } & ) 2>/dev/null
   [ -n "${SG_FASTLOOP_ONCE:-}" ] && { wait "$cc"; exit 0; }   # a test's one iteration ends with its pass
   sleep "$SG_FAST_INTERVAL"; done
