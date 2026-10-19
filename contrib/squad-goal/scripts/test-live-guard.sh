@@ -154,6 +154,16 @@ case "$out" in *LIVE-GUARD*"copy scripts/hub.py"*) ok "a hand edit of the live c
 : > "$calls"; out=$(kpass)
 [ -z "$out" ] && [ ! -s "$calls" ] && ok "after a publish the key is stored: the next pass skips" || ko "the pass did not skip after a publish (check calls: $(cat "$calls")): $out"
 
+# --- the live review chain is the repository review chain: a hand edit from the hub panel is named (#542) -----
+printf '{"review_models":["claude:claude-opus-5-5","grok-4.6"]}\n' > "$repo/scripts/models.json"
+printf '{"review_models":["claude:claude-opus-5-5","grok-4.6"]}\n' > "$live/scripts/models.json"
+out=$(pass 2>&1 | /usr/bin/grep "review chain"); [ -z "$out" ] && ok "the same review chains: the pass says nothing about them" || ko "same chains were named: $out"
+printf '{"review_models":["claude:claude-opus-5-5"]}\n' > "$live/scripts/models.json"
+out=$(pass 2>&1 | /usr/bin/grep "review chain")
+case "$out" in *LIVE-GUARD*"live review chain differs"*"grok-4.6"*) ok "a live review chain that differs is named with both lists";; *) ko "the review chain drift is silent: $out";; esac
+[ "$(jq -c .review_models "$live/scripts/models.json")" = '["claude:claude-opus-5-5"]' ] && ok "the pass only reads the live chain, never writes it" || ko "the live models.json was rewritten"
+rm -f "$repo/scripts/models.json"; printf '{"models": "mine"}\n' > "$live/scripts/models.json"
+
 # --- a checkout that ships no copy of the skill: nothing to read, nothing to publish --------------
 out=$(SG_CHECKOUT=$T/elsewhere bash "$S/live-guard.sh" 2>&1); rc=$?
 [ "$rc" = 0 ] && [ -z "$out" ] && ok "a checkout with no contrib/squad-goal: the pass says nothing" || ko "a foreign checkout spoke (exit $rc): $out"

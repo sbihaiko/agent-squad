@@ -30,6 +30,10 @@ live=${SG_LIVE_DIR:-$HOME/.claude/skills/squad-goal}
 repo=${SG_CHECKOUT:-}/contrib/squad-goal
 [ -n "${SG_CHECKOUT:-}" ] && [ -f "$repo/SKILL.md" ] || exit 0                  # this checkout does not ship the skill
 [ -d "$live" ] || exit 0                                                       # no live copy on this machine: nothing to keep in step
+# The review chain is machine config the publish never writes, and the hub panel edits the live one. Read both lists and
+# name a difference every cycle; a missing file or a missing jq says nothing (#542).
+rc_live=$(jq -c '.review_models' "$live/scripts/models.json" 2>/dev/null); rc_repo=$(jq -c '.review_models' "$repo/scripts/models.json" 2>/dev/null)
+[ -n "$rc_live" ] && [ -n "$rc_repo" ] && [ "$rc_live" != "$rc_repo" ] && echo "LIVE-GUARD the live review chain differs from the repository: live $rc_live, repository $rc_repo"
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 mode_of() { if stat -f '%Lp' / >/dev/null 2>&1; then xargs -0 stat -f '%Lp %N'; else xargs -0 stat -c '%a %n'; fi; }
 live_state() { # every file the live copy holds, by name, mode and content: a hand edit there is an input too (ADR-0140)
