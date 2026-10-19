@@ -17,8 +17,9 @@
 # an answer outside it (prose, a verdict off line 1, a bullet over two lines) is a MODEL_FORMAT failure of that
 # try and the chain moves on, never a silent pass. That shape is not described here (#1835): revformat.py prints
 # it and the prompt embeds the printed text, so the prompt cannot ask for a shape the check rejects.
-# A full review answers in JSON with the schema of revformat.py --schema (#632); revformat.py --answer renders it into that
-# shape, so every reader of review-<key>.md works unchanged, and the raw JSON is kept as review-<key>.answer.json.
+# A review answers in JSON with the schema of revformat.py --schema (#632, a fix round too: #633); revformat.py --answer
+# renders it into that shape, so every reader of review-<key>.md works unchanged, and the raw JSON is kept as
+# review-<key>.answer.json.
 # Fix rounds are reviewed incrementally: when the last review of this branch asked for CHANGES and the new head
 # descends from the reviewed sha (compare status "ahead") with a delta under review_delta_max_lines, the reviewer
 # gets the previous findings plus that delta only; otherwise (first review, rebase, big delta) a full review.
@@ -91,17 +92,20 @@ SEV="Severity: the section a finding sits in is its severity, nothing else. BLOC
 cap=$(jq -r '.review_max_lines // 60' "$cfg")
 SHAPE_FULL="$(python3 "$(dirname "$0")/revformat.py" --shape)"
 SHAPE_FIX="$(python3 "$(dirname "$0")/revformat.py" --shape --fix-round)"
-# #632: a full review answers in JSON with the schema revformat.py prints (--schema). claude -p gets it as --json-schema,
+# #632: a review answers in JSON with the schema revformat.py prints (--schema). claude -p gets it as --json-schema,
 # codex as --output-schema <file>, and every model gets it in the prompt (agy, grok and the direct path have no other way).
 # revformat.py --answer renders the JSON into the checklist below, so every reader of review-<key>.md works unchanged.
-# A fix round stays markdown (#633).
+# #633: a fix round answers with the same schema. Its fixed findings go to resolved and render as '## Resolved', and the
+# previous findings it reads ($prevmd) are the rendered markdown, so the fix-round check and the fingerprint are unchanged.
 SCHEMA="$(python3 "$(dirname "$0")/revformat.py" --schema)"; printf '%s\n' "$SCHEMA" > "$p.schema"
 FMT="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
 $SCHEMA
 verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect (the defect the code has), failure (the concrete failure it causes) and fix. A list with no finding is []; resolved is [] in a full review. The loop renders the JSON into this short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FULL"
-schemaargs=(); outschema=(); [ -z "$fr" ] && schemaargs=(--json-schema "$SCHEMA") && outschema=(--output-schema "$p.schema")
-FMTFIX="Output — the same short checklist, at most $cap lines in all (the cap is review_max_lines in models.json). Answer with exactly that and nothing else; the fields in angle brackets are the ones you fill in with the real path and line, the defect the code has, the failure it causes and the fix:
+schemaargs=(--json-schema "$SCHEMA"); outschema=(--output-schema "$p.schema")
+FMTFIX="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
+$SCHEMA
+verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect, failure and fix. A previous finding that is fixed goes to resolved, its failure \"fixed: <one-line reason>\" and its fix the check that proves it. A previous finding that is not fixed stays in the list it was raised in (blocking or debt), its failure \"not fixed: <one-line reason>\" and its fix the failure it still causes. A new defect in the delta is a new finding in blocking or debt. A list with no finding is []. The loop renders the JSON into this short checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FIX"
 prdata() { echo "$lbl: its diff is taken against $pbase"; }
 if [ -n "$delta" ]; then
