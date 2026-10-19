@@ -174,7 +174,7 @@ class Children:
         # A child answers on the envelope's `allow.models`, led by the model its request names. A provider that refuses
         # to serve is an outage, not a defect of the work, so the chain moves on; the worktree is cut once and kept.
         spent, hours, hour = e.options.get("spent_models") or [], e.options.get("model_hours") or {}, time.localtime(e.wall()).tm_hour
-        chain = session.model_chain(ctx.node["allow"]["models"], d["model"], spent, hours, hour)
+        chain = session.model_chain(ctx.node["allow"]["models"], d["model"], spent, hours, hour, e.options.get("model_order") or [])
         for m, why in session.hours_skipped(ctx.node["allow"]["models"], d["model"], spent, hours, hour):    # an entry left out of its window is on the record
             e.record.append("model_skipped", node=name, entry=entry, model=m, reason=why)
         out, tried, model = await session.run_chain(chain, lambda m, first: self.attempt(name, d, ws, dl, m, slot, first and entry == 1, entry, review))

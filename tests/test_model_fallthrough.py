@@ -157,3 +157,24 @@ async def test_a_fallback_outside_its_hours_is_skipped_with_a_reason_and_the_nex
 
 def test_model_chain_keeps_a_model_inside_its_hours():
     assert model_chain(CHAIN, PICK, hours={CHAIN[1]: "07-19"}, hour=10) == CHILD_CHAIN
+
+
+# The launcher picks the coding model by the models.json coding_models order; the in-run fallback follows the graph
+# allow-list order, so a request line could promise claude-sonnet-5-5 while the engine took grok (#617). The launcher
+# passes the order it read as the engine option `model_order`, recorded at run start like `model_hours`.
+CODING_ORDER = [CHAIN[2], CHAIN[0], CHAIN[1], CHAIN[3]]   # the allow-list order is CHAIN: the two differ
+
+
+async def test_a_fallback_follows_the_coding_order_the_launcher_read(tmp_path):
+    pick = node(_DOC, "router")["model"]
+    eng = engine(tmp_path, {"router": [{"error": PROVIDER_ERROR}, SPAWNS], "route.router.1": CHILD},
+                 options={"model_order": CODING_ORDER})
+    v = await eng.run()
+    assert [c.model for c in eng.adapter.calls if c.node == "router"] == [pick, CHAIN[2]]   # refused, then the coding chain's next entry, not the allow list's
+    start = [e for e in read(tmp_path / "record.jsonl") if e["event"] == "run_start"][0]
+    assert start["engine_options"]["model_order"] == CODING_ORDER
+    assert v.verdict == "completed"
+
+
+def test_model_chain_keeps_an_entry_the_coding_order_does_not_name_behind_the_named_ones():
+    assert model_chain(CHAIN, PICK, order=[CHAIN[3], CHAIN[1]]) == [PICK, CHAIN[3], CHAIN[1], CHAIN[2]]   # terra follows the named entries

@@ -51,6 +51,10 @@ class RunCtx:
     def model_hours(self):
         return self._e.options.get("model_hours") or {}
 
+    @property
+    def model_order(self):
+        return self._e.options.get("model_order") or []
+
     def local_hour(self):
         return time.localtime(self._e.wall()).tm_hour
 

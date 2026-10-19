@@ -67,7 +67,7 @@ class AgentRunner:
         # refuses to serve one entry must not end the node while the chain still holds an entry nobody tried.
         models = ctx.limits(node["name"])["models"] if ctx.is_dispatch_entry(node["name"]) else []
         hour = ctx.local_hour()
-        chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, hour)
+        chain = session.model_chain(models, eff["model"], ctx.spent_models, ctx.model_hours, hour, ctx.model_order)
         for m, why in session.hours_skipped(models, eff["model"], ctx.spent_models, ctx.model_hours, hour):    # an entry left out of its window is on the record
             ctx.record.append("model_skipped", node=node["name"], entry=entry, model=m, reason=why)
         out, tried, who = await session.run_chain(chain, lambda m, first: self.attempt(ctx, node, entry, sc, eff, deadline, m, slot, fin))

@@ -4,7 +4,7 @@ An option may name nodes and may lower a run-block value. It never sets a node's
 """
 LOWER = {"spend_cap": "spend_cap", "deadline": "deadline", "max_parallel": "max_parallel"}
 NODE_OPTIONS = ("stop_after",)
-OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "keep_children")
+OTHER = ("tier_pin", "expect_graph_hash", "spent_models", "model_hours", "model_order", "keep_children")
 TIERS = ("trivial", "medium", "large")
 
 
@@ -41,6 +41,8 @@ def resolve(graph, options):
         raise OptionError("spent_models must be a list of model ids")
     if "model_hours" in opts and not (isinstance(opts["model_hours"], dict) and all(isinstance(m, str) and m and isinstance(w, str) for m, w in opts["model_hours"].items())):
         raise OptionError("model_hours must map a model id to an HH-HH window")
+    if "model_order" in opts and not (isinstance(opts["model_order"], list) and all(isinstance(m, str) and m for m in opts["model_order"])):
+        raise OptionError("model_order must be a list of model ids")
     if "keep_children" in opts and not isinstance(opts["keep_children"], bool):
         raise OptionError("keep_children must be true or false")
     if "expect_graph_hash" in opts and opts["expect_graph_hash"] != graph.hash:

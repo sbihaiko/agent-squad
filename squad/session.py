@@ -56,12 +56,18 @@ def hours_closed(hours, hour):
     return {m: w for m, w in (hours or {}).items() if hour is not None and not in_window(w, hour)}
 
 
-def model_chain(models, first, spent=(), hours=None, hour=None):
+def model_chain(models, first, spent=(), hours=None, hour=None, order=()):
     """The models one entry may answer on, in order: the pick this call starts with leads the envelope's `allow.models`.
-    A `spent` id (the engine option the launcher fills from the shared quota markers) is left out: its subscription refuses
-    at once, after a wait. So is a model whose `hours` window excludes the local `hour`. When every entry is closed the whole
-    chain stays, so a marker that is wrong never leaves no model."""
-    chain = [first] + [m for m in (models or []) if m and m != first]
+    The rest follow `order`, the models.json coding chain the launcher read: the launch picks by that order, so a fallback
+    reads the same one (#617). An entry the order does not name keeps its allow-list place behind the named ones and no
+    entry is dropped. A `spent` id (the engine option the launcher fills from the shared quota markers) is left out: its
+    subscription refuses at once, after a wait. So is a model whose `hours` window excludes the local `hour`. When every
+    entry is closed the whole chain stays, so a marker that is wrong never leaves no model."""
+    rest = [m for m in (models or []) if m and m != first]
+    rank = {m: i for i, m in enumerate(order or [])}
+    if rank:
+        rest.sort(key=lambda m: rank.get(m, len(rank)))     # stable: an unnamed entry keeps its place, behind the named ones
+    chain = [first] + rest
     shut = hours_closed(hours, hour)
     return [m for m in chain if m not in spent and m not in shut] or chain
 

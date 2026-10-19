@@ -274,6 +274,9 @@ try: spent = _spent_models(json.loads(_graph_path(os.environ.get("SG_WORKFLOW"))
 except (OSError, ValueError): spent = []   # an absent or malformed graph is the squad's own refusal to make, not this launcher's
 # The coding chain's hours windows go to the run too, so its own fallback skips a model that the window closes while the run lives (#571).
 hours = {m: w for m, w in ((mdoc.get("hours") or {}).get("coding_models") or {}).items() if isinstance(w, str) and w}
+# The coding chain's order goes to the run as well: the launch picks by it, so an in-run fallback follows the same order
+# rather than the graph allow-list order, and the request line and the engine agree on the next model (#617).
+order = [m for m in cm if isinstance(m, str) and m]
 # A run that cuts a wave keeps its landed children after its verdict (#477, ADR-0106): the wave entry reads each child's
 # worktree then, so the run starts with the engine option --keep-children, which it records at its start. The hold is the
 # run's wave, never the target's shape. A squad that has no such option refuses the flag, so it goes only to one that names it.
@@ -282,7 +285,7 @@ def _keeps_children():
     except OSError: return False
 keep = ["--keep-children"] if _issue_child_request(req_text) and _keeps_children() else []
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + [
-                        "--target", str(target)] + (["--spent-models", ",".join(spent)] if spent else []) + (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + [req_text],
+                        "--target", str(target)] + (["--spent-models", ",".join(spent)] if spent else []) + (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target),
                         env={**os.environ, "SQUAD_HEADLESS": "1"})

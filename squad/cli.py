@@ -26,7 +26,8 @@ def _opts(a):
     m = {"stop_after": a.stop_after, "spend_cap": a.spend_cap, "deadline": a.deadline, "max_parallel": a.max_parallel, "tier_pin": a.tier_pin,
          "expect_graph_hash": a.expect_graph_hash, "keep_children": a.keep_children or None,
          "spent_models": a.spent_models.split(",") if a.spent_models is not None else None,
-         "model_hours": dict(p.split("=", 1) for p in a.model_hours.split(",") if "=" in p) if a.model_hours is not None else None}
+         "model_hours": dict(p.split("=", 1) for p in a.model_hours.split(",") if "=" in p) if a.model_hours is not None else None,
+         "model_order": a.model_order.split(",") if a.model_order is not None else None}
     return {k: v for k, v in m.items() if v is not None}
 
 
@@ -123,6 +124,7 @@ def parser():
         s.add_argument("--tier-pin")
         s.add_argument("--spent-models", help="comma-separated model ids whose subscription is spent: a call chain leaves them out unless no model remains (an empty value lists none)")
         s.add_argument("--model-hours", help="comma-separated MODEL=HH-HH local windows: a call chain leaves a model out of its window, unless no model remains")
+        s.add_argument("--model-order", help="comma-separated model ids in the order the launcher read them (models.json coding_models): an in-run fallback follows it after its pick")
         s.add_argument("--keep-children", action="store_true",
                        help="keep every landed child's worktree and branch after the verdict: a later pass reads them (the loop's wave entry)")
         s.add_argument("--expect-graph-hash", help="refuse the run unless the loaded graph has this sha256 (exit 2, no record written)")

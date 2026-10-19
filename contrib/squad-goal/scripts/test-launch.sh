@@ -4,6 +4,8 @@
 # caffeinate/uv so squad "starts" a folder, refuses after the folder exists, and exits.
 # usage: bash test-launch.sh [launch.py]
 src=${1:-$(dirname "$0")/launch.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+# The fixture owns its origin (main) and its markers: an inherited loop profile must not redirect the base branch or close a model.
+unset SG_BASE SG_WORKFLOW SG_SHARED
 mkdir -p "$T/bin" "$T/s" "$T/st" "$T/co/runs" "$T/squad"
 cp "$src" "$T/s/launch.py"; cp "$(dirname "$src")/router_envelope.py" "$(dirname "$src")/provkey.py" "$T/s/"
 # models.json: one coding model, no hours window. SG_ALLOW_MODEL skips the gate anyway.
@@ -14,6 +16,7 @@ printf 'print("hub")\n' > "$T/s/hub.py"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
 while [ "${1#-}" != "$1" ]; do shift; done
+printf '%s ' "$@" > "${SG_ARGV:?}"
 mkdir -p runs/run-20261011-000000-dead
 sleep 5
 echo "squad refused: vendor/skills is not clean"
@@ -21,7 +24,7 @@ exit 0
 C
 chmod +x "$T/bin/caffeinate"
 printf '#!/bin/bash\necho uv-not-used\n' > "$T/bin/uv"; chmod +x "$T/bin/uv"
-export PATH="$T/bin:$PATH"
+export PATH="$T/bin:$PATH" SG_ARGV="$T/argv"
 printf 'IMPORTANT: your first and only action is X\nCoding model: test-model\n--- issue #9\n' > "$T/req.txt"
 # #580: a run targets its own worktree, cut from origin/$SG_BASE as fetched now, so the checkout is a repository with an origin,
 # and the run folder sits in that worktree: active-runs.txt names it.
@@ -33,6 +36,8 @@ log="$(tail -1 "$T/st/active-runs.txt" 2>/dev/null)/launch.log"
 [ -f "$log" ] && ok "launch writes launch.log in the run folder" || ko "no run launch.log; out=$o log=$log"
 for _ in $(seq 1 20); do /usr/bin/grep -q 'vendor/skills is not clean' "$log" 2>/dev/null && break; sleep 1; done
 /usr/bin/grep -q 'vendor/skills is not clean' "$log" 2>/dev/null && ok "launch.log captures what the squad wrote after the folder appeared" || ko "launch.log contents: $(cat "$log" 2>/dev/null) out=$o"
+# The launch picks by the models.json coding chain, so the run reads the same order for its own fallback (#617).
+/usr/bin/grep -q -- '--model-order test-model ' "$SG_ARGV" 2>/dev/null && ok "the coding chain's order goes to the run" || ko "no --model-order in the argv: $(cat "$SG_ARGV" 2>/dev/null) out=$o"
 # A node of the graph whose model (an alias resolved to its provider id) the panel switched off refuses the start, and no run folder
 # appears (#60). The request's own "Coding model:" line is fine here: the gate that read only that line is what let this through.
 rm -rf "$T/co/runs"; mkdir -p "$T/co/runs" "$T/co/docs/squad/workflows"

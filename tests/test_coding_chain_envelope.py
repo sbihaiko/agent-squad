@@ -171,3 +171,11 @@ def test_the_loop_passes_the_coding_hours_to_the_run(tmp_path):
     r = _launch(tmp_path, ["claude-sonnet-5-5"], ENVELOPE, hours={"claude-sonnet-5-5": w})
     assert r.returncode == 0, r.stdout + r.stderr
     assert f"--model-hours claude-sonnet-5-5={w} " in (tmp_path / "argv").read_text()
+
+
+@pytest.mark.heavy   # launch.py waits for the run folder, over a second
+def test_the_loop_passes_the_coding_order_to_the_run(tmp_path):
+    coding = ["claude-sonnet-5-5", "claude-gpt-5.6-terra"]   # a coding order that differs from the envelope's
+    r = _launch(tmp_path, coding, ENVELOPE)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"--model-order {','.join(coding)} " in (tmp_path / "argv").read_text()   # the in-run fallback follows it (#617)
