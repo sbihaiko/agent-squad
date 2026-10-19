@@ -73,10 +73,10 @@
       "join": "all",
       "allow": {
         "models": [
-          "deepseek-flash[1m]",
+          "claude-deepseek-flash[1m]",
           "claude-sonnet-5-5",
-          "gpt-5.6-terra",
-          "grok-4.7"
+          "claude-gpt-5.6-terra",
+          "claude-grok-4.7"
         ],
         "efforts": [
           "low",

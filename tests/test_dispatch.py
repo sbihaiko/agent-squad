@@ -394,12 +394,11 @@ def _model_names(doc):
     return names
 
 
-def test_repo_graphs_name_registry_ids_the_gateway_serves():
-    """SPEC 505 ticket 17 (#586): a repo graph names the registry id, and the SDK wire is a name its gateway route serves.
+def test_repo_graphs_name_a_spelling_their_gateway_route_serves():
+    """SPEC 505 ticket 17 (#586): a registry landing changes no graph.
 
-    The registry id is the canonical spelling the graph carries; the gateway route may serve it under another name
-    (`claude-gpt-5.6-terra` for `gpt-5.6-terra`), so the SDK call maps the id to that route's wire string.
-    `allow.models` stays a list of strings.
+    A repo graph keeps the spelling it carried, and that exact string is in the gateway route's served list, so a run
+    that does not opt into resolution sends what it sent before. `allow.models` stays a list of strings.
     """
     from squad import modelreg
     reg = modelreg.default_registry()
@@ -408,26 +407,23 @@ def test_repo_graphs_name_registry_ids_the_gateway_serves():
         for raw in _model_names(doc):
             ref = modelreg.normalize(raw, reg)
             assert ref.known, f"{path.name}: {raw!r} is not in the registry"
-            base = raw[:-len(f"[{ref.ctx}]")] if ref.ctx else raw
-            assert base == ref.id and base in reg.entries, f"{path.name}: {raw!r} is not the registry id {ref.id!r}"
-            wire = modelreg.invocation(ref, "sdk", reg=reg).wire
             gateway = reg.entries[ref.id].routes.get("gateway") or {}
             served = gateway.get("served") or []
-            assert wire in served, f"{path.name}: the SDK wire would send {wire!r}, but the gateway route serves {served!r}"
+            assert raw in served, f"{path.name}: the gateway route for {ref.id!r} does not serve {raw!r}: {served!r}"
 
 
-def test_the_shipped_router_record_names_the_registry_ids_its_graph_allows():
-    """SPEC 505 ticket 16: the record's spawn requests name the registry ids the restamped graph allows."""
+def test_the_shipped_router_record_names_spellings_the_registry_knows():
+    """SPEC 505 ticket 16: the record's spawn requests name spellings the registry resolves.
+
+    The record is a fixture of a run that happened; its spellings are the ones that run sent, not a restamped id.
+    """
     from squad import modelreg
     reg = modelreg.default_registry()
     events = [json.loads(line) for line in (DESIGN / "router.record.jsonl").read_text().splitlines() if line.strip()]
-    graph = json.loads((DESIGN / "router.graph.json").read_text())
-    allow = {modelreg.normalize(raw, reg).id for raw in _model_names(graph)}
     models = [e["requested"]["model"] for e in events if e["event"] == "spawn_requested"]
     assert models
     for m in models:
-        ref = modelreg.normalize(m, reg)
-        assert ref.known and m == ref.id and ref.id in allow, f"the record names {m!r}, not the registry id its graph allows"
+        assert modelreg.normalize(m, reg).known, f"the record names {m!r}, a spelling the registry does not know"
 
 
 def test_the_shipped_router_record_is_stamped_to_the_graph_it_ships_beside():

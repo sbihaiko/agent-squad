@@ -210,12 +210,22 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
     assert mr.invocation(ref, use, reg=reg).wire == wire
 
 
+# The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
+# own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
+PINNED_CHAINS = {
+    "coding_models": ["claude-gpt-5.6-terra", "claude-deepseek-flash[1m]", "claude-grok-4.7", "claude-sonnet-5-5"],
+    "review_models": ["grok-4.7", "claude:claude-deepseek-flash", "gemini-3.8-flash-high", "claude:claude-opus-5-5"],
+    "vision_models": ["grok-4.5", "gpt-5.6-terra", "gemini-3.8-flash-low"],
+}
+
+
 def test_every_repo_spelling_is_known_and_pinned(reg):
     """The chains and graphs in this repository are the table's source; none may fall out of the registry."""
     mdoc = json.loads(MODELS.read_text())
     raws = []
-    for key in ("coding_models", "review_models", "vision_models"):
-        raws += mdoc.get(key, [])
+    for key, pinned in PINNED_CHAINS.items():
+        assert mdoc.get(key) == pinned, f"{key} moved: {mdoc.get(key)}"
+        raws += pinned
     for raw in raws:
         assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
     for models in (mdoc.get("hours") or {}).values():

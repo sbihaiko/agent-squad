@@ -140,7 +140,7 @@
     {
       "name": "scout",
       "kind": "agent",
-      "model": "claude-sonnet-5-5",
+      "model": "sonnet",
       "tools": [
         "Read",
         "Grep",
@@ -183,7 +183,7 @@
     {
       "name": "spec_draft",
       "kind": "agent",
-      "model": "claude-opus-5-5",
+      "model": "opus",
       "tools": [
         "Read",
         "Grep"
@@ -211,8 +211,8 @@
           "shrink_spend"
         ],
         "models": [
-          "claude-opus-5-5",
-          "claude-sonnet-5-5"
+          "opus",
+          "sonnet"
         ],
         "efforts": [
           "low",
@@ -239,7 +239,7 @@
     {
       "name": "spec_proxy",
       "kind": "agent",
-      "model": "claude-opus-5-5",
+      "model": "opus",
       "tools": [
         "Read"
       ],
@@ -279,7 +279,7 @@
     {
       "name": "decompose",
       "kind": "agent",
-      "model": "claude-opus-5-5",
+      "model": "opus",
       "tools": [
         "Read",
         "Grep"
@@ -314,7 +314,7 @@
     {
       "name": "plan_proxy",
       "kind": "agent",
-      "model": "claude-opus-5-5",
+      "model": "opus",
       "tools": [
         "Read"
       ],
@@ -387,7 +387,7 @@
     {
       "name": "actor",
       "kind": "agent",
-      "model": "claude-sonnet-5-5",
+      "model": "sonnet",
       "tools": [
         "Read",
         "Edit",
@@ -419,8 +419,8 @@
           "shrink_spend"
         ],
         "models": [
-          "claude-sonnet-5-5",
-          "claude-haiku-4-5-20251001"
+          "sonnet",
+          "haiku"
         ],
         "efforts": [
           "low",
@@ -469,7 +469,7 @@
     {
       "name": "critic",
       "kind": "agent",
-      "model": "claude-opus-5-5",
+      "model": "opus",
       "tools": [
         "Read",
         "Grep"
@@ -499,8 +499,8 @@
           "shrink_stalls"
         ],
         "models": [
-          "claude-opus-5-5",
-          "claude-sonnet-5-5"
+          "opus",
+          "sonnet"
         ],
         "sees": [
           "run_spend"
@@ -583,7 +583,7 @@
     {
       "name": "visual_actor",
       "kind": "agent",
-      "model": "claude-sonnet-5-5",
+      "model": "sonnet",
       "tools": [
         "Bash",
         "Read"
@@ -615,7 +615,7 @@
     {
       "name": "visual_critic",
       "kind": "agent",
-      "model": "claude-opus-5-5",
+      "model": "opus",
       "tools": [
         "Read"
       ],
@@ -646,7 +646,7 @@
     {
       "name": "audit_a",
       "kind": "agent",
-      "model": "claude-haiku-4-5-20251001",
+      "model": "haiku",
       "tools": [
         "Read"
       ],
@@ -674,7 +674,7 @@
     {
       "name": "audit_b",
       "kind": "agent",
-      "model": "claude-haiku-4-5-20251001",
+      "model": "haiku",
       "tools": [
         "Read"
       ],
@@ -702,7 +702,7 @@
     {
       "name": "audit_c",
       "kind": "agent",
-      "model": "claude-haiku-4-5-20251001",
+      "model": "haiku",
       "tools": [
         "Read"
       ],
