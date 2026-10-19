@@ -473,5 +473,33 @@ rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/ccalls"; bash
 [ "$(/usr/bin/grep -c -- '--model one' "$T/ccalls")" = 2 ] && [ "$(/usr/bin/grep -c -- '--model two' "$T/ccalls")" = 2 ] \
   && ok "23 several reachable models: one repair turn each, then the next model" || ko "23 several models: $(cat "$T/ccalls")"
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".* "$T/ccalls"
+# 24) #653: a CHANGES with only Debt findings is saved as an APPROVE (the model's verdict named after it), so wave.sh, childcc
+# and the fix round read it as an approval; a CHANGES with a Blocking finding is saved as the model wrote it.
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > /dev/null; printf 'VERDICT: CHANGES\n'; [ -n "$CLAUDE_BLOCKING" ] && printf '## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n'
+printf '## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+l1=$(head -1 "$T/st/review-fix_1-x.md")
+[ $rc = 0 ] && [ "$l1" = "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)" ] && /usr/bin/grep -q '^- b.cs:2 — ' "$T/st/review-fix_1-x.md" \
+  && ok "24 a debt-only CHANGES is saved as APPROVE, its Debt kept" || ko "24 debt-only: rc=$rc '$l1'"
+printf '%s\n' "$l1" | /usr/bin/grep -q 'VERDICT: APPROVE' && ok "24 wave.sh reads it as an approval" || ko "24 wave.sh reads '$l1'"
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > "${CLAUDE_PROMPT:-/dev/null}"; printf 'VERDICT: APPROVE\n'
+J
+echo ccc333 > "$T/st/review-fix_1-x.sha"; printf 'VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)\n## Debt\n- b.cs:2 — x — y — z\n' > "$T/st/review-fix_1-x.md"
+: > "$T/prompt"; CLAUDE_PROMPT="$T/prompt" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -q 'FIX ROUND' "$T/prompt" && ko "24 the saved approval started a fix round" || ok "24 the saved approval starts no fix round"
+cat > "$T/bin/claude" <<'J'
+#!/bin/bash
+cat > /dev/null; printf 'VERDICT: CHANGES\n'; [ -n "$CLAUDE_BLOCKING" ] && printf '## Blocking\n- a.cs:1 — diverges from ADR-0001 — wrong — fix\n'
+printf '## Debt\n- b.cs:2 — naming — nobody can tell what it names — rename it\n'
+J
+rm -f "$T/st/review-fix_1-x".*; CLAUDE_BLOCKING=1 bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+[ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && ok "24 a CHANGES with a Blocking finding is saved unchanged" || ko "24 blocking: '$(head -1 "$T/st/review-fix_1-x.md")'"
 
 rm -rf "$T"; exit $fail
