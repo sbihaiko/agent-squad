@@ -248,6 +248,14 @@ python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
 printf 'VERDICT: APPROVE\n## Debt\n—\n' > "$T/r.md"
 python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
 [ $? = 0 ] && ok "an em dash is an empty section too" || ko "an em dash is rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+# #618: the empty marker may be wrapped: Opus writes "(none)" under a section, and "*None*" or "[none]" are the same word.
+for e in '(none)' '*None*' '_none_' '[none]' '(None.)'; do
+  printf 'VERDICT: APPROVE\n## Blocking\n%s\n## Debt\n- src/a.py:1 — x — y — z\n' "$e" > "$T/r.md"
+  python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ok "an empty section says $e" || ko "an empty section's $e is rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+done
+printf 'VERDICT: APPROVE\n## Blocking\n(see the diff)\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ko "a wrapped word that is not an empty marker passed" || ok "a wrapped word that is not an empty marker stays prose"
+
 # #504: the empty section says None and why, on one line ("None. The four acceptance criteria are met."): Opus and DeepSeek
 # both write it, and it was MODEL_FORMAT. A second prose line is still prose.
 printf 'VERDICT: APPROVE\n## Blocking\nNone. The four acceptance criteria are met and no ADR is crossed.\n## Debt\n- src/a.py:1 — x — y — z\n' > "$T/r.md"
