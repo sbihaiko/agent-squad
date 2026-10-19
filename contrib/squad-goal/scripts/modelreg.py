@@ -683,15 +683,33 @@ def _diff(old, new, path):
         fromfile=f"{path} (v1)", tofile=f"{path} (v2)"))
 
 
-def migrate(path, dry_run=False, reg=None):
+def _live_roots():
+    """The live skill directories: ~/.claude/skills, and SG_LIVE_DIR when set. Symlinks resolved."""
+    roots = [Path.home() / ".claude" / "skills"]
+    if os.environ.get("SG_LIVE_DIR"):
+        roots.append(Path(os.environ["SG_LIVE_DIR"]))
+    return [r.resolve() for r in roots]
+
+
+def live_path(path):
+    """True when path, symlinks resolved, is under a live skill directory."""
+    real = Path(path).resolve()
+    return any(real == r or r in real.parents for r in _live_roots())
+
+
+def migrate(path, dry_run=False, reg=None, live=False):
     """Convert one v1 models.json to the v2 chain shape.
 
     The write is atomic, keeps a `.v1.bak`, and prints a diff. A second run on a v2 file is a no-op. A mixed
     file is refused. An entry whose chain cannot run it is dropped and named; an orphaned setting is kept under
-    `_orphans` and reported, never applied.
+    `_orphans` and reported, never applied. A write under the live skill copy is the operator's, after landing,
+    so it is refused unless `live` is set (#658); a dry run is allowed.
     """
     reg = reg or default_registry()
     p = Path(path)
+    if not dry_run and not live and live_path(p):
+        raise RegistryError(f"models {p.resolve()}: refused: the file is in the live skill copy; "
+                            f"only the operator migrates it, after landing, with --live")
     text = p.read_text()
     try:
         doc = json.loads(text)
@@ -811,6 +829,7 @@ def main(argv=None):
     g = sub.add_parser("migrate", help="convert a v1 models.json to the v2 chain shape")
     g.add_argument("models")
     g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--live", action="store_true", help="allow a write under the live skill copy (operator only)")
     ns = ap.parse_args(argv)
     try:
         reg = load(ns.registry)
@@ -843,7 +862,7 @@ def main(argv=None):
         return 0
     if ns.cmd == "migrate":
         try:
-            result = migrate(ns.models, dry_run=ns.dry_run, reg=reg)
+            result = migrate(ns.models, dry_run=ns.dry_run, reg=reg, live=ns.live)
         except (OSError, RegistryError) as exc:
             print(f"modelreg: {exc}", file=sys.stderr)
             return 1
