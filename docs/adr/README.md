@@ -46,6 +46,7 @@ An ADR holds a decision and its reason. It is not a ledger: no dates, counts, st
 | [0144](0144-the-carrier-is-the-project-field.md) | The state of a card stays on the Project Status field; a write is sent only when the value changes |
 | [0145](0145-a-work-branch-lands-in-dev-by-fast-forward.md) | A work branch lands in `dev` by a fast-forward push, with no pull request; the owner promotes `dev` to `stg` and `stg` to `main`, and the live copy publishes from `stg`; a wave is one branch, a child enters it by a rebase and `--ff-only`, and CI runs once when the wave lands in `dev` |
 | [0146](0146-a-loop-defect-is-fixed-outside-the-loop.md) | A defect in the loop's own machinery is fixed outside the loop: while an open `loop-bug` issue exists, every dispatch pass halts and names the issue, and closing it resumes dispatch with no other action |
+| [0148](0148-bug-first.md) | Zero bugs: a bug is filed at once with its card in Todo, and the loop dispatches bugs before features; `autobug.sh` runs before `autofrontier.sh`, and a fresh count of startable bugs with no run holds the frontier pass |
 
 ## Adding an ADR
 
