@@ -92,6 +92,14 @@ class ChainEntry:
 
 
 @dataclass(frozen=True)
+class ReviewRoute:
+    route: str       # cli, gateway or direct: how the review pass calls the reviewer
+    runner: str      # the CLI program for a cli route (claude, agy, grok, codex); empty for gateway and direct
+    wire: str        # the model string that route sends
+    tools: bool      # the registry capability: a reviewer with no tools reads the prompt alone
+
+
+@dataclass(frozen=True)
 class Chain:
     name: str
     entries: list
@@ -349,6 +357,35 @@ def invocation(ref_or_raw, use="gateway", effort=None, prompt_file=None, reg=Non
         return Inv(route=use, wire=ref.raw, argv=())
     wire = _wire(route, ref.raw)
     return Inv(route=use, wire=wire, argv=_argv(route, wire, effort or ref.effort, prompt_file))
+
+
+# --- review route: the runner and the tools of one reviewer -----------------------------------------------
+
+_LEGACY_RUNNERS = (("claude:", "claude"), ("gemini-", "agy"), ("grok-", "grok"))
+
+
+def review_route(raw, reg=None):
+    """Where the review pass sends one reviewer: the route, its runner, its wire string and its tools.
+
+    A registry entry decides: a `tools: false` capability picks the direct (or gateway) call, and any other entry
+    takes its CLI route, whose first argv word is the runner. A spelling the registry does not know keeps the
+    runner the old review script gave it: `claude:`, `gemini-` and `grok-` by prefix, Codex for the rest."""
+    reg = reg or default_registry()
+    ref = normalize(raw, reg)
+    entry = reg.entries.get(ref.id) if ref.known else None
+    if entry is None:
+        for prefix, runner in _LEGACY_RUNNERS:
+            if raw.startswith(prefix):
+                return ReviewRoute("cli", runner, raw.removeprefix("claude:"), True)
+        return ReviewRoute("cli", "codex", raw, True)
+    tools = entry.capabilities.get("tools", True) is not False
+    order = ("cli", "gateway", "direct") if tools else ("direct", "gateway")
+    use = next((name for name in order if name in entry.routes), None)
+    if use is None:
+        return ReviewRoute("direct", "", ref.raw, tools)
+    inv = invocation(ref, use, reg=reg)
+    runner = entry.routes["cli"]["argv"][0] if use == "cli" else ""
+    return ReviewRoute(use, runner, inv.wire, tools)
 
 
 # --- chain: v1, v2, and a mixed file ----------------------------------------------------------------------
@@ -815,6 +852,8 @@ def main(argv=None):
     c.add_argument("--tsv", action="store_true")
     c.add_argument("--shared", default=None)
     c.add_argument("--now", type=float, default=None)
+    r = sub.add_parser("review-route", help="print one reviewer's route, runner, wire string and tools as a tab row")
+    r.add_argument("id")
     a = sub.add_parser("argv", help="print argv, NUL-separated")
     a.add_argument("id")
     a.add_argument("--use", default="gateway", choices=ROUTES)
@@ -852,6 +891,10 @@ def main(argv=None):
         else:
             for e in rows:
                 print(e.id)
+        return 0
+    if ns.cmd == "review-route":
+        rr = review_route(ns.id, reg)
+        print("\t".join([rr.route, rr.runner or "-", rr.wire, "1" if rr.tools else "0"]))
         return 0
     if ns.cmd == "argv":
         inv = invocation(ns.id, ns.use, effort=ns.effort, prompt_file=ns.prompt_file, reg=reg)

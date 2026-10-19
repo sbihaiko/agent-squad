@@ -1,4 +1,5 @@
 #!/bin/bash
+# modelreg: seam-clean (a reviewer's runner and tools come from the registry through modelreg.py, never from the spelling)
 # usage: review.sh [repo] --branch <branch> <issue>  -> $SG_STATE/review-<branch with / as _>.md, first line "VERDICT: APPROVE|CHANGES"  (#357)
 #        review.sh [repo] --worktree <base-ref> <issue>  the same review of the work in this worktree (#448)
 # A work branch is the unit of work: the review reads the diff of the branch against $SG_LAND_BRANCH (default dev), the head is
@@ -9,7 +10,7 @@
 # compare gives the merge-base of the child and the wave branch -- the child's own commits, never the whole wave.
 # `repo` is the repository the branch belongs to (owner/name): the squad works in two, and a tooling branch is reviewed by the
 # same chain, against its own repository's issue and diff. With no argument it is the profile's $SG_REPO (#1820).
-# Walks review_models in models.json (claude:* -> claude CLI, grok-* -> grok CLI, gemini-* -> agy (Antigravity) CLI, else codex): a model that fails for infrastructure reasons (non-zero exit,
+# Walks review_models in models.json (each one runs the runner its registry route names): a model that fails for infrastructure reasons (non-zero exit,
 # empty output, no VERDICT line) after model_retry_budget tries is skipped, and MODEL_FAIL/MODEL_SWITCH
 # are queued on the issue. Anthropic entries are skipped while $SG_SHARED/quota-guard exists.
 # A model try is killed after review_timeout_seconds and the chain moves on (no retry of a timed-out model).
@@ -130,7 +131,7 @@ Only real defects; no style nits."
   echo "=== DIFF"; tipdiff   # the child's own commits against the landing branch, or a local worktree's against its wave branch
   } > $p
 fi
-# review_no_tools (#504): a model listed there reviews from this prompt alone. With tools, DeepSeek explored the repo turn
+# A reviewer whose registry capabilities say tools:false (#504) reviews from this prompt alone. With tools, DeepSeek explored the repo turn
 # after turn (833 s, 4.3M cache-read tokens) and never answered inside its timeout; the diff is already above.
 sed -E 's/ Read (surrounding )?code (at the head )?with git show .*$/ You have no tools: judge from the text below alone./' "$p" > "$p.nt"
 # answer_check <answer> <review> [<keep>]: writes the review of a model answer to <review> -- a JSON answer rendered (its
@@ -140,10 +141,10 @@ answer_check() { local why
   if ! why=$(python3 "$(dirname "$0")/revformat.py" --answer ${3:+--keep "$3"} "$1" 2>&1 >"$2"); then
     rm -f "$2"; echo "the JSON answer is not the schema: ${why:-revformat.py failed to read it}"; return 1; fi
   python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$2" 2>/dev/null; }
-# A per-model setting matches its chain id with a context suffix stripped from both sides (#643): an entry written as
-# claude:claude-deepseek-flash applies to the chain id claude:claude-deepseek-flash[1m]. An exact key still wins.
+# A per-model setting matches its chain id with a context suffix stripped from both sides (#643). An exact key still wins.
 bare='def bare: sub("\\[[^]]*\\]$"; "");'
-notools() { jq -e --arg m "$1" "$bare"' ($m|bare) as $b | (.review_no_tools // []) | map(bare) | index($b)' "$cfg" >/dev/null 2>&1; }
+# route_of <model>: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
+route_of() { python3 "$(dirname "$0")/modelreg.py" review-route "$1" 2>/dev/null; }
 direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
   cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
     -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
@@ -223,23 +224,26 @@ PY
 # #1501: the aging leash (SG_REVIEW_TIMEOUT) exists so a slow review does not burn the whole chain. It must not
 # make the only reachable model fail by construction: count who would actually be tried, and skip the clamp
 # when that count is 1. Several reachable models still get the leash.
-eligible() { local m=$1
-  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
-  case $m in gemini-*) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
-  case $m in grok-*) [ -e "$SG_SHARED/grok-limited" ] && return 1;; esac
+eligible() { local m=$1 rt rn
+  IFS=$'\t' read -r rt rn _ <<< "$(route_of "$m")"
+  case $rn in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
+  case $rn in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
+  case $rn in grok) [ -e "$SG_SHARED/grok-limited" ] && return 1;; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
   may_run review_models "$m" || return 1
   return 0; }
 reachable=0; for m in $chain; do eligible "$m" && reachable=$((reachable+1)); done
 used=0
 for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms: the model in a status file name, so one model's status never overwrites another's (#624)   # fmt=1: this model's answer was outside the checklist shape, so no MODEL_FAIL on top of the MODEL_FORMAT
+  IFS=$'\t' read -r rroute runner wire tools <<< "$(route_of "$m")"
+  [ -n "$rroute" ] || { printf "MODEL_FAIL review %s on branch %s: the registry gave no route for it.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mfail$$-$ms-0")"; prev=$m; continue; }
   # codex usage limit is account-wide: skip every codex entry until the file's time passes
-  case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
+  case $runner in codex) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && continue;; esac
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
   # until the reset the error itself names, instead of spending one dead try per review round
-  case $m in gemini-*) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
+  case $runner in agy) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
   # a spent grok balance (402) has no reset: grok is skipped until the owner tops it up and removes the marker (#622)
-  case $m in grok-*) [ -e "$SG_SHARED/grok-limited" ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; };; esac
+  case $runner in grok) [ -e "$SG_SHARED/grok-limited" ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"; continue; };; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
@@ -254,14 +258,14 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
   [ -e "$p.orig" ] && cp "$p.orig" "$p"; rep=0; lim=$tries   # rep=1: this model had its one repair try (#625); the prompt goes back to the plain one
   i=0; while [ "$i" -lt "$lim" ]; do i=$((i+1))
     rm -f "$o"; t1=$(date +%s); bad=""
-    case $m in
+    case $rroute:$runner in
       # --strict-mcp-config: the review needs no MCP server, and the machine's server set (Notion, Slack, ...) would
       # otherwise load into this call and pay tens of thousands of input tokens of tool schemas before a line of the review.
-      # review_no_tools (#504): one direct call to the gateway, thinking off. `claude -p` sends nothing that turns a gateway
+      # A reviewer with no tools (#504): one direct call to the gateway, thinking off. `claude -p` sends nothing that turns a gateway
       # model's thinking off, and DeepSeek V4.1 Flash then thinks 32k tokens a turn and never answers; off, it answers in
       # seconds. The answer is reshaped into the CLI's JSON, so the checks and the token ledger below read one shape.
-      claude:*) if notools "$m"; then
-          jq -Rs --arg m "${m#claude:}" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
+      direct:*|gateway:*|cli:claude) if [ "$tools" = 0 ] || [ "$rroute" != cli ]; then
+          jq -Rs --arg m "$wire" '{model:$m, max_tokens:8000, thinking:{type:"disabled"}, messages:[{role:"user", content:.}]}' < "$p.nt" > "$p.body"
           direct "$p.body"; r=$?
           # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
           # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
@@ -273,17 +277,17 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
             jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
           fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
         else
-          cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
+          cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
         fi;;
-      grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
-      gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
-      *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
+      cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
+      cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
+      *) cap codex exec -m "$wire" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
            --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
     esac
     rc=$?
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
     # review:<branch>#2 for the second call. claude -p runs in its JSON mode: .result is the answer text, .usage the tokens. A
-    # call whose answer carries no usage is not a zero, it is a FLOOR: a claude:* call -- a model that reports tokens -- whose
+    # call whose answer carries no usage is not a zero, it is a FLOOR: a claude call -- a model that reports tokens -- whose
     # answer carried none (a refusal, an error, a zeroed .usage, an old CLI's plain text) gets a 7th field `no-usage`, so a reader
     # can tell a call that never answered from a model that never reports (both make the total a floor). grok, agy and codex print no token count on the plain
     # path this script reads, so they log 0 with NO mark: the call is still counted and named, and tokens.py reads it as `unreported`, so the total is a floor.
@@ -292,7 +296,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
     tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
     tu=""; mark=""
-    case $m in claude:*) tu=$(jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
+    case $rroute:$runner in direct:*|gateway:*|cli:claude) tu=$(jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
       # A claude answer is a review only when the run itself succeeded (#501): the JSON says `is_error` and the `subtype`
       # (success, error_max_turns, error_during_execution, ...), and `.result` holds whatever the model had said when the run
       # ended -- a lone preamble included, which the check below would take for an answer of rc 0. The raw JSON is kept
@@ -322,7 +326,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi
     # grok 402 "usage balance exhausted" (#622): account-wide, no reset in the answer, so the marker holds until the owner removes it
-    case $m in grok-*) if grep -qE "402 Payment Required|balance exhausted" "$e" "$o" 2>/dev/null; then
+    case $runner in grok) if grep -qE "402 Payment Required|balance exhausted" "$e" "$o" 2>/dev/null; then
       date +%s > "$SG_SHARED/grok-limited"
       printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$-$ms")"
       rc=99; break; fi;; esac
@@ -341,7 +345,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
         # #625, #634: the same model gets one repair try first, for any number of reachable models: the prompt, its
         # answer and the check's complaint (for a JSON answer, the parser's error). The no-tools path already had its
         # repair turn inside direct(). One extra try at most; a failed repair ends this model's turn.
-        nx="the next model is tried"; [ "$rep" = 0 ] && [ -n "$frem" ] && ! notools "$m" && nx="the same model answers once more with the complaint"
+        nx="the next model is tried"; [ "$rep" = 0 ] && [ -n "$frem" ] && [ "$tools" = 1 ] && nx="the same model answers once more with the complaint"
         printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so %s.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" "$nx" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
         if [ "$nx" != "the next model is tried" ]; then
           rep=1; [ "$lim" -gt "$i" ] || lim=$((i+1)); [ -e "$p.orig" ] || cp "$p" "$p.orig"

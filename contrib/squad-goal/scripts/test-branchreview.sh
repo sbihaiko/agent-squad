@@ -10,7 +10,7 @@
 # usage: bash test-branchreview.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset SG_REVIEW_BASE   # each case decides the base the review is read against; an ambient one from a live loop must not
-mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$d/review.sh" "$d/revformat.py" "$d/address.sh" "$T/s/"; : > "$T/s/codex-reset.py"
+mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$d/review.sh" "$d/revformat.py" "$d/address.sh" "$d/modelreg.py" "$d/registry.json" "$T/s/"; : > "$T/s/codex-reset.py"
 cp "$d/ghcall.sh" "$d/ghread.py" "$d/branchreview.sh" "$d/branchfix.sh" "$d/childreview.sh" "$T/s/" 2>/dev/null
 printf '{"review_models":["claude:claude-opus-5-5"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}\n' > "$T/s/models.json"
 cat > "$T/s/env.sh" <<J
