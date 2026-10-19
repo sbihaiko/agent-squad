@@ -21,6 +21,7 @@ The suite serves the board over HTTP from a temporary state directory, against a
 import http.client
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -536,6 +537,51 @@ def test_a_card_another_writer_moved_follows_the_read_once_its_entry_expires(ser
     assert [p[0] for p in placed] == ["Doing"], f"the hub argued with the carrier after the expiry: {placed}"
     assert "pd" not in placed[0][1], "the card another writer moved still wears the pending mark"
     assert "ITEM9" not in recorded(state), "the expired entry of the card another writer moved stayed"
+
+
+def test_a_read_that_agrees_settles_an_entry_past_the_window(served):
+    """A lag between the move and the first read can put a move past its window. A read that began after the move and
+    carries its column is agreement, not a disagreement: the entry drops with no expiry report."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Doing")], now() - 10)   # the read began after the move
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 600)}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Doing"] and "pd" not in placed[0][1], \
+        f"an agreeing read was drawn as a disagreement: {placed}"
+    assert "ITEM7" not in recorded(state), "the agreeing read did not drop the entry"
+    log = state / "cycle.log"
+    assert not log.exists() or not log.read_text().strip(), \
+        f"an agreeing read was reported as an expiry: {log.read_text() if log.exists() else ''}"
+
+
+def test_a_failed_drop_never_reports_the_expiry_twice_from_a_fresh_process(served, monkeypatch):
+    """The drop of an expired entry is bookkeeping that may fail: the entry stays and the next serve retries it, in a
+    fresh hub process too. The loop was told once, so the retry writes no second line."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Todo")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 600)}})
+    real_replace = os.replace
+
+    def refuse_record(src, dst):
+        if str(dst).endswith("board-moves.json"):
+            raise OSError("the state directory refused the record write")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(mod.os, "replace", refuse_record)
+    first = where(get_board(port), 7)
+    assert [p[0] for p in first] == ["Todo"] and "pd" not in first[0][1], \
+        f"the expired entry did not return the card to the read: {first}"
+    assert "ITEM7" in recorded(state), "the failed drop changed the record"
+    lines = (state / "cycle.log").read_text().splitlines() if (state / "cycle.log").exists() else []
+    assert len(lines) == 1, f"the expiry was not reported once: {lines}"
+    fresh = _module("hub_board_pending_retry", HUB_PY)   # each cycle spawns a new hub: only the state directory survives
+    fresh.board_cache = mod.board_cache
+    again = where(fresh.board(), 7)
+    assert [p[0] for p in again] == ["Todo"] and "pd" not in again[0][1], \
+        f"the retry did not serve the read's column: {again}"
+    assert "ITEM7" in recorded(state), "the retry dropped the entry though its write was still refused"
+    lines = (state / "cycle.log").read_text().splitlines()
+    assert len(lines) == 1, f"the retry reported the same expiry again: {lines}"
 
 
 def test_the_window_defaults_to_120_seconds(served):
