@@ -1083,6 +1083,42 @@ LOST_NOTE = "lost: no state written for over 4 h"
 # converges on what is current instead of growing by one row per killed pass.
 TEST_LOST_DROP_SECS = 24 * 3600
 
+# ---------------------------------------------------------------- the childcc pass (#598)
+# The pass writes auto/childcc-now.json (childcc.py): its pid and start, and one entry per child it holds, with the step it is
+# at (review, enter, deferred) and since when it waits. The hub reads that file and nothing else of the pass, and shows it as
+# one row of the WORKERS group: the pid and age, one line per child, and the deferred count with the oldest wait.
+def _pid_alive(pid):
+    try: os.kill(int(pid), 0)
+    except (TypeError, ValueError, ProcessLookupError, OverflowError): return False
+    except PermissionError: return True
+    return True
+
+def _childcc_line(c):
+    who = f"{c.get('run')} {c.get('child')} #{c.get('issue')}"
+    if c.get("step") == "review":
+        model = _read(STATE / f"review-{c['rk']}.model").strip() if c.get("rk") else ""
+        return f"{who} · in review" + (f" with {model}" if model else "")
+    return f"{who} · " + ("entering wave" if c.get("step") == "enter" else "deferred")
+
+def childcc_row(now=None):
+    """The one WORKERS row of the childcc pass, or None when no pass is live and no child waits. With no live pass every
+    child the last pass left still waits, whatever step it was at."""
+    now = time.time() if now is None else now
+    d = _json(STATE / "auto" / "childcc-now.json")
+    if not isinstance(d, dict): return None
+    kids = [c for c in d.get("children") or [] if isinstance(c, dict)]
+    live = bool(d.get("pid")) and _pid_alive(d["pid"])
+    waits = [c for c in kids if c.get("step") == "deferred" or not live]
+    if not live and not waits: return None
+    oldest = int(max(now - float(c.get("since") or now) for c in waits)) if waits else 0
+    sub = f"CHILDCC DEFERRED {len(waits)} · oldest wait {_age(oldest)}" if waits else ""
+    age = int(now - float(d.get("t0") or now)) if live else oldest
+    return {"id": "childcc", "port": "", "kind": "childcc", "live": live, "rank": 0, "state": "running" if live else "waiting",
+            "badge": "childcc" if live else "waiting", "tip": "the childcc pass: one review and one wave entry at a time",
+            "label": f"childcc pass · pid {d['pid']}" if live else f"CHILDCC DEFERRED {len(waits)}", "issues": [], "pid": d["pid"] if live else None,
+            "age": age, "dur": round(age / 60, 1), "spend": 0, "agents": 0, "project": "childcc", "sub": sub,
+            "lines": [_childcc_line(c) for c in kids] if live else [], "deferred": len(waits), "oldest_wait": oldest}
+
 def runs():
     _titles()
     out = []; load_rows = []
@@ -1126,6 +1162,8 @@ def runs():
         tip = LOST_NOTE if lost else b["title"]
         if lost: b = {**b, "text": b["text"] + " · lost"}   # the badge carries the note too: the state alone reads as a live stall
         out.append({"id": f.stem, "port": "", "url": "/test/" + f.stem, "state": st, "badge": b["text"], "tip": tip, "label": "test #" + str(d.get("issue")), "issues": [str(d.get("issue"))], "age": int(age), "project": "test", "rank": run_rank(st, live=not lost), "spend": 0, "dur": round((t1 - d.get("t0", t1)) / 60, 1), "kind": "test", "titles": {str(d.get("issue")): TITLE.get(int(d.get("issue") or 0), "")}, "live": not lost and st in LIVE_STATES, "agents": 0})
+    cc = childcc_row()
+    if cc: out.append(cc)   # the pass is a worker beside the runs, never one of them: working() and the header count skip its kind
     LOAD_RUNS[:] = load_rows   # the attribution works off the runs the hub just showed, so it never needs a query of its own
     attach_load(out, LOAD_STATE.get("runs") or {}, sustained(LOAD_STATE.get("cpu") or []))
     out.sort(key=lambda r: (r["rank"], r["age"]))   # live runs first, finished next; then most recently updated first
@@ -1180,7 +1218,7 @@ def watch_runs(stop=None):
 
 def working(rows):
     """The ids of the runs that work: a run folder with no verdict and a dashboard that answers, as the list above groups them. Test passes are not runs."""
-    return [r["id"] for r in rows if r.get("kind") != "test" and group_of(r) == "running"]
+    return [r["id"] for r in rows if r.get("kind") not in ("test", "childcc") and group_of(r) == "running"]
 
 def stats(period, src="both"):
     fmt = {"hour": "%Y-%m-%d %H:00", "day": "%Y-%m-%d", "month": "%Y-%m"}[period]
@@ -1899,6 +1937,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .r.show{background:#1f2a3a;box-shadow:inset 3px 0 0 var(--pin)}.r.pinned .pn{color:var(--pin)}
 .pn{color:var(--mute);flex:none}.gh.op{color:var(--fg)}.gh+.r{border-top:0}
 .b{display:inline-block;padding:0 6px;border-radius:9px;font-size:11px;border:1px solid}
+.b.waiting{color:var(--wait);border-style:dashed}   /* the childcc pass after it ended: no state of RUN_STATES says a pass that waits (#598) */
 .landed,.pass,.ok{color:var(--ok)}
 /*RUN_STATE_CSS*/
 .m{color:var(--mute);font-size:11px;margin-top:2px}
@@ -2147,7 +2186,7 @@ function footDraw(d){const l=$("#ldline"),f=$("#ldfacts");if(l)ldPaint(l,d);
  if(f)f.innerHTML=footFit(d.facts,footCols()).map(footItem).join(FOOT_SEP_HTML)}
 async function loadPoll(){try{const d=await (await fetch("/api/load")).json(),fo=$("#foot");
  footDraw(d);if(fo)fo.classList.toggle("warn",!!d.warn)}catch(e){}}
-function groupHeader(k,rows){const n=rows.length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
+function groupHeader(k,rows){const n=rows.filter(r=>r.kind!=="childcc").length,spend=rows.reduce((a,r)=>a+r.spend,0),agents=rows.reduce((a,r)=>a+(r.agents||0),0);let title=usd(spend);let text=n+" · "+title;if(k==="running"&&CAPS&&CAPS.per_run&&CAPS.per_run.label)title+=" · "+CAPS.per_run.label;if(k==="running")text=(CAPS&&CAPS.runs&&CAPS.children)?`RUNS ${n}/${CAPS.runs} · AGENTS ${agents}/${CAPS.children}`+((CAPS.waiting||[]).length?" · waiting: "+CAPS.waiting.map(w=>`${w.holder} (${w.ceiling})`).join(", "):""):`${n} · ${agents}`;return {text,title}}
 // The open groups belong to the user: a click on a header toggles that one group, any number stay open, and the set is stored
 // beside the pins. `null` means nothing is stored yet — the first draw opens the first filled group once, and only then, so a
 // run appearing, ending or moving to another age bucket can never move what the user opened.
@@ -2159,14 +2198,15 @@ const short=r=>{const m=/(\d{8})-(\d{2})(\d{2})\d{2}/.exec(r.id||"");return m?m[
 const name=r=>{const l=label(r);return runs.filter(x=>label(x)===l).length>1&&short(r)?`${l} · ${short(r)}`:l};
 const groupOf=r=>{if(r.rank===0)return"running";const h=r.age/3600;return h<=1?"1h":h<=2?"2h":h<=4?"4h":h<=8?"8h":h<=24?"24h":"d"};
 function drawList(){
-  const shown=new Set(slots),by={};runs.forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
+  const shown=new Set(slots),by={};allRuns.filter(r=>r.kind==="childcc").concat(runs).forEach(r=>(by[groupOf(r)]=by[groupOf(r)]||[]).push(r));
   if(openGroups===null){const first=GROUPS.find(g=>by[g[0]]);openGroups=new Set(first?[first[0]]:[]);saveGroups()}   // nothing stored yet: the first filled group opens once
   const filled=GROUPS;   // the whole age ladder stays visible, so a band that holds no run still draws its header, and an open group that emptied keeps its header and shows no rows
-  const row=r=>`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
+  const ccRow=r=>`<div class="r cc" data-id="${r.id}"><div><span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge)}</span> <b>${esc(r.label)}</b>${r.sub?`<div class=st title="${esc(r.sub)}">${esc(r.sub)}</div>`:""}${(r.lines||[]).map(l=>`<div class=st>${esc(l)}</div>`).join("")}${r.live?`<div class=m>age ${age(r.age)}</div>`:""}</div></div>`;
+  const row=r=>r.kind==="childcc"?ccRow(r):`<div class="r ${shown.has(r.id)?"show":""} ${pins.has(r.id)?"pinned":""}" data-id="${r.id}"><div>${r.kind==="test"?`<span class=kd title="GUI test run">🧪</span>`:""}<span class="b ${r.state}"${r.tip?` title="${esc(r.tip)}"`:""}>${esc(r.badge||r.state)}</span> <b title="${esc(labelTip(r))}">${esc(name(r))}</b>${loadMark(r)}${!(r.issues||[]).length&&r.issue_why&&!r.fix&&!r.url?`<div class=st>${esc(labelTip(r))}</div>`:""}${sub(r)?`<div class=st title="${esc(sub(r))}">${esc(sub(r))}</div>`:""}<div class=m>${r.share?`<span class="sh${r.share.pct===100?" done":""}" title="the newest gate that counted ran ${r.share.total} tests, ${r.share.passed} passed">${r.share.passed}/${r.share.total} · ${r.share.pct}%</span> · `:""}${usd(r.spend)} · ${Math.round(r.dur)}m · ${age(r.age)} ago · ${r.id.slice(-6)} · :${r.port}</div></div><span class=pn title="shown in the panel">${pins.has(r.id)?"●":"○"}</span></div>`;
   $("#list").innerHTML=filled.map(([k,t])=>{const rows=by[k]||[],h=groupHeader(k,rows);return `<div class="gh ${openGroups.has(k)?"op":""}" data-g="${k}" tabindex=0>${t}<span class=sr title="${esc(h.title)}">${h.text}</span></div>${openGroups.has(k)?rows.map(row).join(""):""}`}).join("")||"<div class=m style=padding:10px>no live dashboards</div>";
   document.querySelectorAll(".gh").forEach(e=>e.onclick=()=>{const k=e.dataset.g;   // the header is the only writer: a click toggles this group and nothing else
     if(openGroups.has(k))openGroups.delete(k);else openGroups.add(k);saveGroups();drawList()});
-  document.querySelectorAll(".r").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
+  document.querySelectorAll(".r:not(.cc)").forEach(e=>e.onclick=()=>{const id=e.dataset.id;
     if(pins.has(id))pins.delete(id);else{if(N===1)pins.clear();pins.add(id);focus=id}
     save();refresh(true)});
 }
@@ -2196,10 +2236,10 @@ function drawMain(force){
 }
 function liveSync(){drawMain();pipDraw()}   // the run pane went out of sight or came back: the frame follows the plan
 function refresh(){plan();drawList();liveSync()}
-function applyFilter(){runs=allRuns}
+function applyFilter(){runs=allRuns.filter(r=>r.kind!=="childcc")}   // the childcc pass is drawn in the WORKERS group, never a pane (#598)
 let known=null;   // run ids already seen: a run that appears running after the first poll is selected on its own (pinned, its group opened)
-function selectNew(){const ids=allRuns.map(r=>r.id);if(known===null){known=new Set(ids);return}
-  const fresh=allRuns.filter(r=>!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
+function selectNew(){const ids=allRuns.filter(r=>r.kind!=="childcc").map(r=>r.id);if(known===null){known=new Set(ids);return}
+  const fresh=allRuns.filter(r=>r.kind!=="childcc"&&!known.has(r.id)&&r.rank===0);ids.forEach(i=>known.add(i));
   if(!fresh.length)return;const id=fresh.sort((x,y)=>x.age-y.age)[0].id;
   if(N===1)pins.clear();else if(pins.size>=N)pins.delete([...pins][0]);pins.add(id);save()}   // a run starting moves the pins, never the accordions
 async function poll(){try{allRuns=await (await fetch("/api/runs")).json();selectNew();applyFilter();refresh()}catch(e){}}

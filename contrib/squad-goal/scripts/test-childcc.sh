@@ -240,4 +240,22 @@ SG_CHILDCC_BUDGET=5 pass fx >/dev/null
 [ "$(/usr/bin/grep '^fx ' "$T/cr.calls")" = "fx 5900 $h2" ] && ok "a child with a fix entry is reviewed once, at its last entry's head" || ko "fix entries: reviews '$(cat "$T/cr.calls")', want 'fx 5900 $h2'"
 [ "$(/usr/bin/grep '^enter fx ' "$WAVE_CALLS")" = "enter fx 5900" ] && ok "a child with a fix entry enters once" || ko "fix entries: entries '$(cat "$WAVE_CALLS")'"
 
+# The hub shows the pass (#598): auto/childcc-now.json names the pass and each child it holds. Mid-review the child reads
+# `review` with the key of its model file, the other child reads `deferred`; when the pass ends no pid stays and the deferred
+# child keeps its wait.
+printf '#!/bin/bash\ncp "%s/st/auto/childcc-now.json" "%s/mid.json"\n' "$T" "$T" > "$T/childreview.sh"
+rrun nwa 6001 pass '' none; rrun nwb 6002 pass '' none; export GH_NUMS="6001:Doing 6002:Doing"
+printf '%s\n%s\n' "$T/co/runs/nwa" "$T/co/runs/nwb" > "$T/st/active-runs.txt"; rm -f "$T/st/auto/childcc-now.json"
+(cd "$T/co" && python3 "$T/childcc.py.run" >/dev/null 2>&1)
+python3 - "$T/mid.json" "$T/st/auto/childcc-now.json" <<'PY' && ok "the pass publishes its children: one in review mid-pass, the other deferred, and no pid once it ends" || ko "childcc-now.json: $(cat "$T/mid.json" "$T/st/auto/childcc-now.json" 2>&1)"
+import json, sys
+mid, end = (json.load(open(f)) for f in sys.argv[1:])
+assert mid["pid"] and mid["t0"], mid
+steps = {c["run"]: c["step"] for c in mid["children"]}
+assert steps == {"nwa": "review", "nwb": "deferred"}, steps
+assert all(c["issue"] in (6001, 6002) and c["child"] == "c" and c["since"] for c in mid["children"]), mid
+assert [c["rk"] for c in mid["children"] if c["step"] == "review"][0], mid   # the key of the child branch
+assert end["pid"] is None and [(c["run"], c["step"]) for c in end["children"]] == [("nwb", "deferred")], end
+PY
+
 rm -rf "$T"; exit $fail

@@ -60,7 +60,7 @@ def test_a_live_pass_is_one_row_with_pid_age_and_a_line_per_child(hub, state):
                             "run-b c2 #601 · deferred"]
     assert row["deferred"] == 2 and row["oldest_wait"] == 600
     assert row["label"] == f"childcc pass · pid {os.getpid()}"
-    assert row["sub"] == "CHILDCC DEFERRED 2 · oldest wait 10 min"
+    assert row["sub"] == "CHILDCC DEFERRED 2 · oldest wait 10m"
 
 
 def test_a_review_with_no_model_yet_reads_in_review(hub, state):
@@ -74,7 +74,7 @@ def test_no_live_pass_shows_the_deferred_count_and_the_oldest_wait(hub, state):
     row = hub.childcc_row(NOW)
     assert row["live"] is False and row["pid"] is None and row["state"] == "waiting"
     assert row["label"] == "CHILDCC DEFERRED 2"
-    assert row["sub"] == "CHILDCC DEFERRED 2 · oldest wait 15 min"
+    assert row["sub"] == "CHILDCC DEFERRED 2 · oldest wait 15m"
     assert row["deferred"] == 2 and row["oldest_wait"] == 900
 
 

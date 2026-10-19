@@ -199,6 +199,7 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   hours_ok review_models "$m" || { printf "MODEL_HOURS review %s skipped on branch %s: outside its window in models.json.\n" "$m" "$bm" > "$(sg_cq_status "$iss" "mhours$$")"; continue; }
   [ -n "${SG_REVIEW_CHAIN_DEPTH:-}" ] && [ "$used" -ge "$SG_REVIEW_CHAIN_DEPTH" ] && break
   used=$((used+1))
+  echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$")"
   tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it

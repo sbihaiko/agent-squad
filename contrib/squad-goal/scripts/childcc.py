@@ -32,7 +32,7 @@ again; a child of a run with no review in its record is reviewed here as before.
 holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
 never held for good (#600).
 A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611)."""
-import json, os, pathlib, re, subprocess, sys
+import json, os, pathlib, re, subprocess, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
 from issue_state import board_state, RunParentChild
@@ -47,6 +47,22 @@ BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass
 SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
 INCOMPLETE = 3   # the exit of a pass that left a child for a later pass: not a failure (1, a traceback), and not done (0)
 CURSOR, ROUND = A / "childcc-cursor", A / "childcc-round"
+NOW = A / "childcc-now.json"   # what the hub shows of this pass (#598): its pid and start, and each child it holds with its step and since when it waits
+T0 = time.time()
+PENDING, HELD = [], {"key": None, "step": None, "rk": None}   # HELD: the child this pass works now, and the step it is at (review, enter)
+try: SINCE = {f"{c['run']} {c['child']}": c["since"] for c in json.loads(NOW.read_text()).get("children", [])}   # a child keeps its wait from the pass before
+except Exception: SINCE = {}
+def publish(live=True):
+    """Write the hub's reading of the pass, atomically. Every pending child with no marker is held: the one worked now at its
+    step, the rest deferred. `pid` is None once the pass ends, so the hub reads a child that waits and no pass that runs."""
+    rows = []
+    for key, r, child, _, n, *_ in PENDING:
+        name = pathlib.Path(r).name
+        if (A / f"cc-{name}-{child}").exists(): continue
+        now = key == HELD["key"]
+        rows.append({"run": name, "child": child, "issue": n, "step": HELD["step"] if now else "deferred", "rk": HELD["rk"] if now else None,
+                     "since": SINCE.setdefault(f"{name} {child}", time.time())})
+    tmp = NOW.with_name(f"{NOW.name}.{os.getpid()}.tmp"); tmp.write_text(json.dumps({"pid": os.getpid() if live else None, "t0": T0, "children": rows})); os.replace(tmp, NOW)
 def loop_defect():
     """The open issue that marks a defect in the loop's own machinery (#596, ADR-0146), or None. One bounded read of the
     open issues through the seam for the whole pass; a refusal or a failure answers None, so a read the pass could not
@@ -119,8 +135,9 @@ def reviewed(rd, child, n, wt, rv):
     if not took: print(f"CHILD REVIEW SKIPPED {rd.name} {child}: {why}", flush=True); return False
     rv.write_text(f"{head} {os.getpid()}\n")
     code_review(rd.name, child, n, "its review starts")
+    HELD.update(step="review", rk=review_paths(wt)[0].name[len("review-"):-len(".md")]); publish()   # the key names the file review.sh writes the model it tries to
     try: e = subprocess.run(["bash", childreview, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
-    finally: caps_cmd("release", "reviews", holder)
+    finally: caps_cmd("release", "reviews", holder); HELD.update(step="enter", rk=None); publish()
     out = (e.stdout + e.stderr).strip()
     if out: print(f"CHILD REVIEW {rd.name} {child}: {out}", flush=True)
     if e.returncode != 0: rv.unlink(missing_ok=True)
@@ -202,12 +219,14 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
         mk.touch(); print(f"CHILDCC UNMAPPED {name} {child}")
 # The pass starts after the child the cursor names, in key order, so the work rotates over every pending child (#590).
 pending.sort(key=lambda p: p[0])
+PENDING[:] = pending; publish()
 cur = CURSOR.read_text().strip() if CURSOR.exists() else ""
 k0 = next((i for i, p in enumerate(pending) if p[0] > cur), 0)
 spent, visited = 0, set()
 for key, r, child, why, n, finished, d, lwhy, ok in pending[k0:] + pending[:k0]:
     if spent >= BUDGET: break   # the budget is spent: the children left wait for the next pass
     visited.add(key)
+    HELD.update(key=key, step="enter", rk=None); publish()
     name = pathlib.Path(r).name; mk = A / f"cc-{name}-{child}"
     s = subprocess.run(["gh", "api", f"repos/{repo}/issues/{n}", "-q", ".state"], capture_output=True, text=True).stdout.strip()
     if s != "open": mk.touch(); continue
@@ -238,6 +257,7 @@ left = [k for k in keys - visited if k not in rnd]
 # pass, 0 when none wait, and atomically, so a reader never sees a half-written count.
 WAITING = st / "childcc-waiting"
 _tmp = WAITING.with_name(f"{WAITING.name}.{os.getpid()}.tmp"); _tmp.write_text(f"{len(keys - visited)}\n"); os.replace(_tmp, WAITING)
+HELD.update(key=None, step=None, rk=None); publish(live=False)
 for key, r, child, why, n, finished, d, lwhy, _ in pending:   # a child that waits for review: its card reads Code Review (#603)
     name = pathlib.Path(r).name
     if key not in visited and (A / f"wave-{name}").exists(): code_review(name, child, n, "it waits for review")
