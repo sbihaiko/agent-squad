@@ -5,6 +5,7 @@
 # requeue below the cap is unchanged, except that a refused card write is named.
 # usage: bash test-wave-requeue-cap.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+exec 3>&2 2>>"$T.err"   # the suite's own stderr, read at the end: a "command not found" there is a fixture that lacks a file (#610)
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/address.sh" "$d/ghcall.sh" "$T/s/"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -70,4 +71,6 @@ gc "Part of the fix
 Refs #13"
 o=$(SG_CHECKOUT="$R" w fail 13 rc "ended failed: c")
 [ "$(cat "$T/st/auto/requeues-13")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new commit in the base restarts the count" || ko "evolution: count '$(cat "$T/st/auto/requeues-13")', '$o'"
-rm -rf "$T"; exit $fail
+cat "$T.err" >&3
+/usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
+rm -rf "$T" "$T.err"; exit $fail
