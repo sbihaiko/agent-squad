@@ -111,7 +111,7 @@ if proved:   # the record and the refresh flag are one step: one move, one write
     except (OSError, ValueError): moves = {}
     if not isinstance(moves, dict): moves = {}
     at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    for iid, col in proved: moves[iid] = {"column": col, "at": at}   # a later move of the same item replaces its entry
+    for iid, col in proved: moves[str(iid)] = {"column": col, "at": at}   # a later move of the same item replaces its entry; the key is text, as the record reads back (#652)
     tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")   # formed whole beside the record, then one atomic rename (ADR-0030)
     tmp.write_text(json.dumps(moves, sort_keys=True) + "\n"); os.replace(tmp, p)
 (st / "board-dirty").touch(); sys.exit(rc)
