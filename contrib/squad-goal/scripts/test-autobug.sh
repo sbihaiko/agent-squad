@@ -735,4 +735,14 @@ $G -qE "^DISK STOP: .* has [0-9]+ GiB free, under the floor of 999999 GiB; nothi
 $G -qE "^DISK STOP: " "$T/st/cycle.log" && ok "20 the stop is published to the loop log" || ko "20 cycle.log: $(cat "$T/st/cycle.log")"
 r=$(disk 0); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "20 over the floor the pass dispatches";; *) ko "20 over the floor: '$r'";; esac
 
+# 21) (#616) a bug goes first: the pass writes the startable bugs it leaves without a run to $SG_STATE/bugs-waiting, which
+# the frontier pass reads. A pass that funds no child leaves every candidate waiting; a pass that takes them all leaves 0.
+rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; rm -f "$T/st/childcc-waiting" "$T/st/bugs-waiting"
+printf 'print("0")\n' > "$T/s/fundroom.py"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+[ "$(cat "$T/st/bugs-waiting" 2>/dev/null)" = 1 ] && ok "21 a pass that funds no child leaves its candidate waiting" || ko "21 bugs-waiting '$(cat "$T/st/bugs-waiting" 2>/dev/null)': '$r'"
+printf 'print("-")\n' > "$T/s/fundroom.py"
+r=$(AB_DRY=1 bash "$T/s/autobug.sh" 2>&1)
+[ "$(cat "$T/st/bugs-waiting" 2>/dev/null)" = 0 ] && ok "21 a pass that takes every candidate leaves 0 waiting" || ko "21 bugs-waiting '$(cat "$T/st/bugs-waiting" 2>/dev/null)': '$r'"
+
 rm -rf "$T"; exit $fail

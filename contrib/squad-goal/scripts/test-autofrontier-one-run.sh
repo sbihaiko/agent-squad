@@ -279,6 +279,25 @@ $G -qE "^DISK STOP: " "$d/st/cycle.log" 2>/dev/null && ok "Y2: the stop is publi
 r=$(SG_MIN_FREE_GB=0 run)
 [ "$(marked 92)" = 1 ] && ok "Y2: over the floor the pass dispatches" || ko "Y2: over the floor: '$r'"
 
+# Y3 (#616): a bug goes first. autobug writes the startable bugs it left without a run to $SG_STATE/bugs-waiting; while
+# that count is over 0 and fresh (30 min), the frontier pass dispatches nothing and says why. A count of 0, a missing file
+# or a stale one holds nothing.
+scene bugfirst
+issues '[{"number":93,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+echo 2 > "$d/st/bugs-waiting"
+r=$(run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 93)" = 0 ] && ok "Y3: a waiting bug halts the frontier pass" || ko "Y3: the pass dispatched a feature while a bug waits: '$r'"
+case "$r" in *"BUG FIRST: 2 startable bug(s) wait for a run; no feature run this pass"*) ok "Y3: the hold names the count";; *) ko "Y3: no hold line: '$r'";; esac
+$G -qxF "BUG FIRST: 2 startable bug(s) wait for a run; no feature run this pass" "$d/st/cycle.log" 2>/dev/null && ok "Y3: the hold is published to the loop log" || ko "Y3: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
+touch -t "$(date -r $(( $(date +%s) - 1860 )) +%Y%m%d%H%M.%S)" "$d/st/bugs-waiting"
+r=$(run)
+[ "$(marked 93)" = 1 ] && ok "Y3: a stale count holds nothing" || ko "Y3: a stale count held: '$r'"
+scene bugfirst0
+issues '[{"number":94,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+echo 0 > "$d/st/bugs-waiting"
+r=$(run)
+[ "$(marked 94)" = 1 ] && ok "Y3: no waiting bug holds nothing" || ko "Y3: a zero count held: '$r'"
+
 # Z (#562): an interim limit until the review moves into the run. childcc writes the count of finished children that wait
 # for review to $SG_STATE/childcc-waiting; over SG_DISPATCH_MAX_WAITING the frontier pass dispatches nothing and says why,
 # and at the cap it dispatches as before. The other edges (no cap, no file, a stale file) are the shared helper's, in
