@@ -48,11 +48,13 @@ def entry(mid, label, alias):
             "aliases": [alias]}
 
 
-def write_registry(path, sonnet_label="Sonnet 5.5", opus_label="Opus 5.5"):
+def write_registry(path, sonnet_label="Sonnet 5.5", opus_label="Opus 5.5", mystery=False):
     """A small registry whose only named entry is the `sonnet` the test graph carries."""
-    path.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}},
-                                "models": [entry("claude-sonnet-5-5", sonnet_label, "sonnet"),
-                                           entry("claude-opus-5-5", opus_label, "opus")]}))
+    models = [entry("claude-sonnet-5-5", sonnet_label, "sonnet"),
+              entry("claude-opus-5-5", opus_label, "opus")]
+    if mystery:
+        models.append(entry("claude-mystery", "Mystery", "mystery"))
+    path.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}}, "models": models}))
     return path
 
 
@@ -94,6 +96,21 @@ async def test_a_resume_refuses_a_changed_registry_entry_the_graph_names(tmp_pat
     await eng.run()
     write_registry(reg, sonnet_label="Sonnet 5.5 renamed")
     eng2, _ = make(wait_doc(), run, registry=str(reg))
+    with pytest.raises(ResumeRefused, match="model registry"):
+        await eng2.resume(answer="pass")
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_when_a_model_the_graph_could_not_resolve_is_now_known(tmp_path):
+    """A run started with an unknown spelling is frozen to it; adding that spelling later must not rewire the resume."""
+    reg = write_registry(tmp_path / "registry.json")
+    d = wait_doc()
+    d["nodes"][1]["model"] = "mystery"          # agent `a` names a spelling the registry does not know
+    run = tmp_path / "run"
+    eng, _ = make(d, run, registry=str(reg))
+    await eng.run()
+    write_registry(reg, mystery=True)
+    eng2, _ = make(d, run, registry=str(reg))
     with pytest.raises(ResumeRefused, match="model registry"):
         await eng2.resume(answer="pass")
 

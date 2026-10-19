@@ -155,6 +155,22 @@ def test_normalize_splits_prefix_context_alias_and_effort(raw, mid, route, effor
     assert (ref.id, ref.route, ref.effort, ref.ctx) == (mid, route, effort, ctx)
 
 
+# --- entries_sha256: every spelling the graph names, resolved or not --------------------------------------
+
+def test_entries_sha256_distinguishes_an_unknown_spelling_from_no_spelling():
+    reg = mr.load(REGISTRY)
+    assert mr.entries_sha256(["no-such-model"], reg) != mr.entries_sha256([], reg)
+
+
+def test_entries_sha256_changes_when_an_unknown_spelling_becomes_known(tmp_path):
+    known = _good("known", "gpt", "gpt", {"gateway": {"model": "known", "served": ["known"], "auth": "subscription"}})
+    before = mr.entries_sha256(["mystery"], mr.load(_write_registry(tmp_path / "before.json", [known])))
+    later = _good("later", "gpt", "gpt", {"gateway": {"model": "later", "served": ["mystery"], "auth": "subscription"}})
+    later["aliases"] = ["mystery"]
+    after = mr.entries_sha256(["mystery"], mr.load(_write_registry(tmp_path / "after.json", [known, later])))
+    assert after != before
+
+
 # --- invocation: today's wire string, spelled once -------------------------------------------------------
 
 WIRE = [
