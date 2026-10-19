@@ -45,8 +45,8 @@ def test_a_child_that_did_not_enter_the_wave_has_no_wave_fact():
     assert not (produced["wave_branch"] or produced["landing"] or produced["dev_ci"])
 
 
-def test_a_waiting_review_marks_code_review():
-    assert _column(entered=False, review_waits=True) == "Code Review"
+def test_a_waiting_review_marks_doing():
+    assert _column(entered=False, review_waits=True) == "Doing"
 
 
 def test_review_state_reads_the_verdict_for_the_tip_only():
@@ -62,7 +62,7 @@ def _spec(*children):
 
 
 def test_a_spec_with_a_live_child_reads_doing():
-    for child in ("Doing", "Code Review", "Code Complete", "Pushing", "Testing"):
+    for child in ("Doing", "Code Complete", "Pushing", "Testing"):
         assert columns.column_for(_spec(child))[0] == "Doing"
 
 
@@ -80,13 +80,12 @@ def test_an_open_work_issue_with_no_spec_label_still_reads_todo():
 def test_the_child_live_fact_marks_live_work_only():
     assert facts.spec_facts(["Todo", "Closed", "Abandoned"]) == {"child_live": False}
     assert facts.spec_facts(["Code Complete"]) == {"child_live": True}
-    assert facts.spec_facts(["Code Review", "Todo"]) == {"child_live": True}
 
 
 def test_the_hub_legacy_table_names_no_pull_request_fact():
     names = {c["fact"] for c in columns.COLUMNS}
 
     assert "merged" not in names and "open_pr" not in names
-    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "dev_ci"}
+    assert set(columns.ROLE) == {"issue_closed", "abandoned", "unscheduled", "issue_todo", "dev_ci"}
     assert columns.ROLE["dev_ci"] == "Testing"
     assert columns.view_column("Testing", False)[0] == "Testing"
