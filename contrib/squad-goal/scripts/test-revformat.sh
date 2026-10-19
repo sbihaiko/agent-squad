@@ -265,4 +265,13 @@ printf 'VERDICT: APPROVE\n## Blocking\nNone. All met.\nThe code is fine.\n' > "$
 python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1
 [ $? = 1 ] && ok "a second prose line after None is still prose" || ko "a second prose line was let in"
 
+# #624: a repo-wide finding names its place as "Repo-wide" (or "repo-wide"), a whole-change label like "whole"; a bullet
+# that still names no place fails as before.
+for w in 'Repo-wide' 'repo-wide'; do
+  printf 'VERDICT: CHANGES\n## Blocking\n- %s — the scripts read no lock — two reviews race — serialize them\n' "$w" > "$T/r.md"
+  python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ok "24 a $w bullet is a whole-change location (#624)" || ko "24 a $w bullet was rejected: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+done
+printf 'VERDICT: CHANGES\n## Blocking\n- The code is wide — two reviews race — serialize them\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ko "24 an unlocated bullet passed" || ok "24 an unlocated bullet still fails"
+
 rm -rf "$T"; exit $fail

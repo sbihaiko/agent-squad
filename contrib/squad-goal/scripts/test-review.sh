@@ -330,4 +330,36 @@ rm -f "$T/st/review-fix_1-x".* "$T/ccalls" "$T/st/cq/"*; out=$(bash "$T/s/review
 [ $rc = 0 ] && case "$out" in model=claude:only*) true;; *) false;; esac && ok "16 one reachable model: a format failure is retried" || ko "16 one reachable model ended at the format failure: rc=$rc '$out' $(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)"
 unset SG_SHARED
 
+# 17) #624: two callers review one branch at once (runreview.sh and childcc.py, both through childreview.sh). The first
+# chain fails, the second approves. Neither reads the other's files: the failed chain's BLOCKED line is never the
+# approving model's answer, and the approving review exits 0 with APPROVE on line 1.
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat >/dev/null; echo "\$CLAUDE_MODE" >> "$T/ccalls"
+case "\$CLAUDE_MODE" in fail) sleep 3; echo "API Error: 529 overloaded_error"; exit 1;; *) sleep 6; echo "VERDICT: APPROVE";; esac
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:only"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/ccalls" "$T/st/cq/"*
+(CLAUDE_MODE=fail bash "$T/s/review.sh" --branch fix/1-x 8 > "$T/c1.out" 2>&1; echo $? > "$T/c1.rc") & c1=$!
+sleep 1
+(CLAUDE_MODE=ok bash "$T/s/review.sh" --branch fix/1-x 8 > "$T/c2.out" 2>&1; echo $? > "$T/c2.rc") & c2=$!
+wait $c1 $c2
+[ "$(cat "$T/c2.rc")" = 0 ] && /usr/bin/grep -q '^model=claude:only.*VERDICT: APPROVE' "$T/c2.out" && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] \
+  && ok "17 two reviews of one branch at once: the approving one exits 0 with APPROVE" \
+  || ko "17 concurrent reviews: rc=$(cat "$T/c2.rc") '$(head -2 "$T/c2.out" | tr '\n' ' ')' md='$(head -1 "$T/st/review-fix_1-x.md")'"
+/usr/bin/grep -qs 'BLOCKED' "$T/st/cq/"*mformat* && ko "17 one review read the other's BLOCKED line as its answer: $(cat "$T/st/cq/"*mformat*)" || ok "17 no review reads the other's BLOCKED line"
+[ "$(cat "$T/c1.rc")" = 1 ] && ok "17 the failed chain exits 1" || ko "17 the failed chain: rc=$(cat "$T/c1.rc")"
+# 18) #624: a review that waited for another one of the same head reuses its verdict and calls no model.
+: > "$T/ccalls"; out=$(CLAUDE_MODE=ok bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && [ ! -s "$T/ccalls" ] && case "$out" in model=claude:only*"VERDICT: APPROVE"*) true;; *) false;; esac \
+  && ok "18 a head already reviewed is reused, with no model call" || ko "18 reuse: rc=$rc calls=$(wc -l < "$T/ccalls") '$out'"
+# 19) #624: two models that both fail the shape in one pass keep two MODEL_FORMAT lines; the second never overwrites the first.
+printf '#!/bin/bash\ncat >/dev/null; printf "Checking.\\nVERDICT: CHANGES\\n1. a finding\\n"\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:one","claude:two"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -qs 'claude:one' "$T/st/cq/"*mformat* && /usr/bin/grep -qs 'claude:two' "$T/st/cq/"*mformat* \
+  && ok "19 each model's MODEL_FORMAT keeps its own status file" || ko "19 status files: $(/bin/ls "$T/st/cq")"
+/bin/ls "$T/st/" | /usr/bin/grep -q 'review-fix_1-x\.md\.[0-9]' && ko "19 a private attempt file was left: $(/bin/ls "$T/st")" || ok "19 no private attempt file is left"
+
 rm -rf "$T"; exit $fail
