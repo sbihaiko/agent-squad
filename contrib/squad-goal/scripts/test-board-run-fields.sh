@@ -42,9 +42,11 @@ $o"
 /usr/bin/grep -q '"id": "F_START", "value": "2026-10-13T08:00:00Z"' "$T/patch.in" 2>/dev/null && ok "Run started carries the run's start time" || ko "Run started field: $(cat "$T/patch.in" 2>/dev/null)"
 [ "$(wc -l < "$T/gh.calls" | tr -d ' ')" = "5" ] && ok "one card is one PATCH and the read that proves it (owner kind, fields, items, patch, read)" || ko "gh calls: $(cat "$T/gh.calls")"
 [ -e "$T/st/board-dirty" ] && ok "the hub is flagged to refresh" || ko "board-dirty not touched"
+[ ! -e "$T/st/board-moves.json" ] && ok "a holder write records no move" || ko "a holder write wrote a record: $(cat "$T/st/board-moves.json")"
 rm -f "$T/patch.in"; o=$(run --clear-run o 4 2001 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "clearing Run fields exits 0" || ko "clear exit $rc: $o"
 [ "$(grep -o '"value": null' "$T/patch.in" 2>/dev/null | wc -l | tr -d ' ')" = "2" ] && ok "both text fields are cleared with null, the value the endpoint documents" || ko "clear payload: $(cat "$T/patch.in" 2>/dev/null)"
+[ ! -e "$T/st/board-moves.json" ] && ok "a holder clear records no move" || ko "a holder clear wrote a record: $(cat "$T/st/board-moves.json")"
 o=$(run --run-fields o 4 2009 run-abc "" 2>&1); rc=$?
 [ "$rc" -eq 1 ] && case $o in *"2009 not on the board"*) ok "an issue not on the board is named and exits 1";; *) ko "not-on-board message: $o";; esac || ko "not-on-board exit $rc: $o"
 o=$(run --run-fields o 4 2002 run-abc "" 2>&1); rc=$?

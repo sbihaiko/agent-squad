@@ -3,6 +3,10 @@
 # once, and a card that already carries the Status is not written -- no PATCH, no proving read, exit 0 (#327). A card in another
 # column, or a card the board does not carry yet, is still written and proven by the read that follows. A board that does not
 # answer the read writes on, so a read that fails never blocks a move. Every write is counted against a stubbed gh.
+# A move the door proves is recorded beside the refresh flag, in `board-moves.json`: one entry per item, the column
+# it set and the instant, replaced by a later move of the same item. A move the door cannot prove and a skipped move
+# write no entry. The record is written to a temp file in the state directory and renamed, so a reader sees the old
+# file or the new one, never a part-written one.
 # Stubbed gh; a temp state dir, so the live board and the loop's cache are never read or written.
 # usage: bash test-board-move-unchanged.sh [board.py]
 src=${1:-$(dirname "$0")/board.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
@@ -15,6 +19,7 @@ case "$a" in *"--input -"*) cat > "TMPDIR/patch.in";; esac
 case "$a" in
   *"-X PATCH"*items/ITEM*)
     echo PATCH >> "TMPDIR/patches"
+    [ -e "TMPDIR/drop" ] && { echo '{"id":"ITEM"}'; exit 0; }   # a write answered ok and never landed
     n=${a#*items/ITEM}; n=${n%% *}
     opt=$(python3 -c 'import json;print(json.load(open("TMPDIR/patch.in"))["fields"][0]["value"])')
     name=Todo; [ "$opt" = O_DOING ] && name=Doing
@@ -44,4 +49,51 @@ rm -f "$T/reads"; o=$(run o 4 Doing 2001 2>&1); rc=$?
 [ "$(reads)" = 2 ] && ok "a written move is read before (compare) and once after (proof)" || ko "reads for a written move: $(reads)"
 touch "$T/board-down"; o=$(run o 4 Doing 2002 2>&1); rc=$?
 [ "$(patches)" -ge 3 ] && ok "a board read that fails writes on, so a move is never blocked by the compare" || ko "board down: exit $rc, $(patches) PATCH: $o"
+rm -f "$T/board-down"
+cat > "$T/bin/rec.py" <<'P'
+import json, sys
+try: d = json.load(open(sys.argv[1]))
+except (OSError, ValueError): print(); sys.exit()
+for k, v in sorted(d.items()): print(k, v.get("column", ""), v.get("at", ""))
+P
+rec() { python3 "$T/bin/rec.py" "$T/st/board-moves.json"; }
+entries() { rec | wc -l | tr -d ' '; }
+run o 4 Todo 2001 >/dev/null 2>&1   # 2001 is Doing after the batch: set it to Todo
+rm -f "$T/st/board-moves.json" "$T/st/board-dirty"
+o=$(run o 4 Doing 2001 2>&1); rc=$?   # a proved move to Doing
+r=$(rec)
+[ "$rc" -eq 0 ] && [ "$(entries)" = 1 ] && case "$r" in "ITEM2001 Doing "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ok "a proved move writes one entry with the item, the column and the instant";; *) ko "entry: $r";; esac || ko "proved move: exit $rc, entries $(entries): $o"
+[ -e "$T/st/board-dirty" ] && ok "the proved move touches the refresh flag in the same step" || ko "board-dirty not touched by a proved move"
+rm -f "$T/st/board-moves.json" "$T/st/board-dirty"; touch "$T/drop"
+o=$(run o 4 Todo 2001 2>&1); rc=$?   # the PATCH is answered ok and the card never carries it
+[ "$rc" -ne 0 ] && [ ! -e "$T/st/board-moves.json" ] && ok "a move the door cannot prove writes no entry" || ko "unproved move: exit $rc, record $(rec): $o"
+rm -f "$T/drop"
+o=$(run o 4 Doing 2001 2>&1); rc=$?   # the unproved move left 2001 in Todo: move it to Doing for the skipped move
+[ "$rc" -eq 0 ] && ok "setup: the card is in Doing for the skipped move" || ko "setup exit $rc: $o"
+rm -f "$T/st/board-moves.json"; o=$(run o 4 Doing 2001 2>&1); rc=$?
+[ "$rc" -eq 0 ] && [ ! -e "$T/st/board-moves.json" ] && ok "a move to the column the card already carries writes no entry" || ko "skipped move: exit $rc, record $(rec): $o"
+rm -f "$T/st/board-moves.json"
+run o 4 Todo 2001 >/dev/null 2>&1; run o 4 Doing 2001 >/dev/null 2>&1
+r=$(rec)
+[ "$(entries)" = 1 ] && case "$r" in "ITEM2001 Doing "*) ok "two proved moves of one item leave one entry, the later one";; *) ko "later entry: $r";; esac || ko "entries after two moves: $(entries), $r"
+run o 4 Todo 2001 >/dev/null 2>&1   # the kill interrupts a proved move away from Todo
+python3 -c 'import json,sys; json.dump({"ITEM2001":{"column":"Todo","at":"2026-10-14T00:00:00Z"}}, open(sys.argv[1],"w"))' "$T/st/board-moves.json"
+mkdir -p "$T/hooks"
+cat > "$T/hooks/sitecustomize.py" <<'P'
+import os
+_real = os.replace
+def replace(src, dst):
+    if str(dst).endswith("board-moves.json"):   # the rename is where a reader would first see the new file: die just before it
+        open("TMPDIR/replace.src", "w").write(str(src))
+        raise RuntimeError("killed before the rename")
+    return _real(src, dst)
+os.replace = replace
+P
+sed -i.bak "s|TMPDIR|$T|g" "$T/hooks/sitecustomize.py"
+o=$(PYTHONPATH="$T/hooks" run o 4 Doing 2001 2>&1); rc=$?   # 2001 is Todo after the two moves: the write the kill interrupts
+before=$(rec)
+[ "$rc" -ne 0 ] && case "$before" in "ITEM2001 Todo "*) ok "a write killed before the rename leaves the old record whole, never a part-written file";; *) ko "record after the kill: $before";; esac || ko "killed write exit $rc: $o"
+s=$(cat "$T/replace.src" 2>/dev/null)
+[ -n "$s" ] && [ "$(dirname "$s")" = "$T/st" ] && case "$(basename "$s")" in board-moves.json.*.tmp) ok "the record is formed in a temp file in the state directory";; *) ko "temp name: $(basename "$s")";; esac || ko "no temp beside the record: $s"
+case "$(python3 "$T/bin/rec.py" "$s" 2>/dev/null)" in "ITEM2001 Doing "*) ok "the temp file holds the finished record before the rename";; *) ko "temp content: $(python3 "$T/bin/rec.py" "$s" 2>/dev/null)";; esac
 rm -rf "$T"; exit $fail

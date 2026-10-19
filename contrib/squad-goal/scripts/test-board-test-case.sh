@@ -30,6 +30,7 @@ o=$(run --test-case o 4 300 pass $SHA 2026-10-14T03:00:00Z 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "a finished pass is recorded and exits 0" || ko "exit $rc: $o"
 [ "$(wc -l < "$T/titles" | tr -d ' ')" = "1" ] && /usr/bin/grep -q "300 | pass | $SHA |" "$T/titles" && ok "one item names the issue, the result and the merge commit" || ko "titles: $(cat "$T/titles" 2>/dev/null)"
 [ -e "$T/st/board-dirty" ] && ok "the hub is flagged to refresh" || ko "board-dirty not touched"
+[ ! -e "$T/st/board-moves.json" ] && ok "a test-case write records no move" || ko "a test-case write wrote a record: $(cat "$T/st/board-moves.json")"
 run --test-case o 4 300 fail $SHA 2026-10-14T03:30:00Z >/dev/null 2>&1
 o=$(run --test-case o 4 300 pass $SHA 2026-10-14T04:00:00Z 2>&1); rc=$?
 [ "$rc" -eq 0 ] && case $o in *"test case fail"*) ok "a later green pass on a failed commit is answered with the failure, which stays failed";; *) ko "repeat: $o";; esac || ko "repeat exit $rc: $o"
