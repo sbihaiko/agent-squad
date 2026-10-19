@@ -72,15 +72,16 @@ grep -q "remove\|drop" <<<"$o" && ko "expand plans a removal: $o" || ok "expand 
 # --apply: the missing options join today's options, every id is kept, nothing is removed, no card moves
 : > "$T/gh.calls"; o=$(run --apply o 4 2>&1); rc=$?
 [ "$rc" -eq 0 ] && ok "--apply exits 0" || ko "--apply exit $rc: $o"
-python3 - "$T/graphql.in" <<'P' && ok "Status keeps Blocked, Todo and Done with their ids, then adds Backlog, Doing and Closed" || { ko "Status payload: $(cat "$T/graphql.in")"; }
+python3 - "$T/graphql.in" <<'P' && ok "Status is sent in the definition's order, each existing option with its id, then the options the definition does not name" || { ko "Status payload: $(cat "$T/graphql.in")"; }
 import json, sys
 calls = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 upd = [c["variables"]["input"] for c in calls if "updateProjectV2Field" in c["query"]]
 assert len(upd) == 1 and upd[0]["fieldId"] == "F_STATUS", upd
 opts = upd[0]["singleSelectOptions"]
-assert [(o.get("id"), o["name"]) for o in opts] == [("o_block", "Blocked"), ("o_todo", "Todo"), ("o_done", "Done"), (None, "Backlog"), (None, "Doing"), (None, "Closed")], opts
+assert [(o.get("id"), o["name"]) for o in opts] == [(None, "Backlog"), ("o_todo", "Todo"), (None, "Doing"), (None, "Closed"), ("o_block", "Blocked"), ("o_done", "Done")], opts
 assert opts[1] == {"id": "o_todo", "name": "Todo", "color": "GRAY", "description": "today"}, opts[1]
-assert opts[3] == {"name": "Backlog", "color": "GRAY", "description": "Open, not in the schedule"}, opts[3]
+assert opts[0] == {"name": "Backlog", "color": "GRAY", "description": "Open, not in the schedule"}, opts[0]
+assert opts[4] == {"id": "o_block", "name": "Blocked", "color": "RED", "description": ""}, opts[4]
 P
 python3 - "$T/graphql.in" <<'P' && ok "--apply creates Kind and Outcome with the definition's options and Run started as text, and touches Freeze and Run not at all" || ko "create payload: $(cat "$T/graphql.in")"
 import json, sys

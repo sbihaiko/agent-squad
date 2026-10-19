@@ -4,7 +4,7 @@ The run reads the project's fields once, over REST through the board binding (is
 between the board and the definition by name: an option the definition names and the board lacks, an option the board
 carries and the definition does not name, a field the board lacks, and a holder text field the binding writes (issue_state.HOLDER_FIELDS) the board lacks.
 Then it prints the expand plan.
-Expand never removes: a missing option is added beside today's options, every option already there keeps its id, name,
+Expand never removes: the options go in the definition's order, a missing one where the definition puts it, every option already there keeps its id, name,
 colour and description, so no card loses the value it carries, and no item is written, so no card moves. A missing field
 is created with the definition's options; a missing text field is created empty (#487). An option the definition does not name stays, reported as drift; dropping it
 is the definition's applier's, which refuses a column cards still carry.
@@ -83,10 +83,12 @@ def expand(binding, project_id, rows):
             graphql("mutation($input: CreateProjectV2FieldInput!) { createProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }",
                     {"input": {"projectId": project_id, "dataType": "SINGLE_SELECT", "name": name, "singleSelectOptions": [option(e) for e in entries]}})
         elif missing:
-            kept = [dict(o) for o in field["options"]]   # today's options first, each with its id: a card keeps the value it carries
-            added = [option(e) for e in entries if e["name"] in missing]
+            today = {o["name"]: dict(o) for o in field["options"]}   # each with its id: a card keeps the value it carries
+            ordered = [today.get(e["name"]) or option(e) for e in entries]   # the definition's order sets the column order
+            named = {e["name"] for e in entries}
+            extra = [dict(o) for o in field["options"] if o["name"] not in named]   # an option the definition does not name goes after
             graphql("mutation($input: UpdateProjectV2FieldInput!) { updateProjectV2Field(input: $input) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }",
-                    {"input": {"fieldId": field["id"], "singleSelectOptions": kept + added}})
+                    {"input": {"fieldId": field["id"], "singleSelectOptions": ordered + extra}})
 
 
 def cards(binding, status):
