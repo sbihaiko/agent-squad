@@ -181,4 +181,36 @@ lane_down; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=8 SG_WATCH_POLL=1
 t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=2 SG_WATCH_POLL=0.5; el=$(( $(date +%s) - t0 ))
 [ "$el" -ge 2 ] && [ "$el" -lt 10 ] && ok "11 a fractional SG_WATCH_POLL still waits its bound (${el}s)" || ko "11 fractional poll: ${el}s of a 2 s wait"
 
+# 12) a token guard that exits 1 is a pause of dispatch, never a stop of the loop: the real cycle runs the guard, goes on to
+# its steps and calls no `watchd.sh stop`. And the real dispatch passes start nothing while token-pause is there: this case
+# runs them, it does not read their text.
+cat > "$S/token-guard.sh" <<EOF
+#!/bin/bash
+printf 'Token burn paused.\n' > "$ST/token-pause"
+echo tokenguard >> "$STEPS"
+exit 1
+EOF
+cat > "$S/watchd.sh" <<EOF
+#!/bin/bash
+echo "watchd \$1" >> "$STEPS"
+EOF
+chmod +x "$S/token-guard.sh" "$S/watchd.sh"
+lane_down; run_cycles 1
+[ "$(count tokenguard)" = 1 ] && ok "12 the cycle runs the token guard" || ko "12 the guard did not run ($(tr '\n' ' ' < "$STEPS"))"
+[ "$(count 'watchd stop')" = 0 ] && ok "12 a guard exit 1 never calls watchd.sh stop" || ko "12 the cycle called watchd.sh stop"
+[ "$(count autofrontier)" = 1 ] && ok "12 the cycle goes on after a paused guard" || ko "12 the cycle stopped after the guard ($(count autofrontier) frontier passes)"
+rm -f "$S/token-guard.sh" "$S/watchd.sh"
+D=$T/dispatch; mkdir -p "$D"
+for f in autofrontier.sh autobug.sh startability.sh refusal-names.sh workbranches.sh ghcall.sh ghread.py ghthrottle.py single.sh; do cp "$d/$f" "$D/"; done
+cp "$S/env.sh" "$D/env.sh"
+printf '#!/bin/bash\necho "gh $*" >> "%s"\nexit 0\n' "$T/ghlog" > "$B/gh"; chmod +x "$B/gh"
+printf 'paused\n' > "$ST/token-pause"; : > "$T/ghlog"; rm -f "$ST"/auto/disp-* "$ST"/auto/bug-*
+env SG_STATE="$ST" SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug bash "$D/autofrontier.sh" > "$T/af.out" 2>&1; af=$?
+[ "$af" = 0 ] && ok "12 autofrontier exits 0 while token-pause is there" || ko "12 autofrontier: rc=$af $(tail -2 "$T/af.out")"
+env SG_STATE="$ST" SG_FRONTIER_LABEL=ready SG_BUG_LABEL=bug bash "$D/autobug.sh" > "$T/ab.out" 2>&1; ab=$?
+[ "$ab" = 0 ] && ok "12 autobug exits 0 while token-pause is there" || ko "12 autobug: rc=$ab $(tail -2 "$T/ab.out")"
+[ ! -s "$T/ghlog" ] && ok "12 neither pass reads GitHub while paused" || ko "12 a paused pass read GitHub: $(head -2 "$T/ghlog")"
+[ -z "$(ls "$ST"/auto/disp-* "$ST"/auto/bug-* 2>/dev/null)" ] && ok "12 neither pass marks a dispatch while paused" || ko "12 a paused pass wrote a dispatch marker"
+rm -f "$ST/token-pause"; : > "$STEPS"
+
 rm -rf "$T"; exit $fail
