@@ -109,14 +109,14 @@ test-state-isolation.sh 1.45
 test-state-split.sh 1.75
 test-tdd-red.sh 2.54
 test-throughput.sh 1.04
-test-token-guard.sh 1.22
+test-token-guard.sh 2.43
 test-token-ledger.sh 12.98
 test-vendor-guard.sh 1.38
 test-view-domain-firewall.sh 0.37
 test-watch-cycle.sh 94.70
 test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
-test-watchd-token-stop.sh 6.33
+test-watchd-token-stop.sh 6.28
 test-wave-lifecycle.sh 18.50
 test-wave-requeue-cap.sh 3.35
 test-wave.sh 46.99

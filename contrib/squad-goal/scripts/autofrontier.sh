@@ -12,6 +12,7 @@
 . "$(dirname "$0")/env.sh"; . "$(dirname "$0")/startability.sh"; here="$(cd "$(dirname "$0")" && pwd)"; A="$SG_STATE/auto"; mkdir -p "$A"
 export SG_GH_PASS=frontier   # the pass that spends the GitHub calls below, named in the call log (ADR-0277)
 [ -n "${SG_FRONTIER_LABEL:-}" ] || exit 0; [ -e "$A/off" ] && exit 0
+[ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same issues again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.

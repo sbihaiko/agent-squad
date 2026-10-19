@@ -100,7 +100,7 @@ One line per rule ADR, with its guard. The ADR holds the reasoning; [docs/adr/RE
 - **A card only moves forward, and an old option is removed only after its cards moved** ([ADR-0143](docs/adr/0143-a-card-only-moves-forward.md)). Guard: `contrib/squad-goal/scripts/test-board-migrate.sh`, `tests/test_board_migrate.py`.
 - **This repository's card state stays on the Project Status field; a writer sends a board write only when the value changes** ([ADR-0144](docs/adr/0144-the-carrier-is-the-project-field.md)). Guard: none yet; a draft.
 - **Bug first: a bug is filed at once in Todo, and the loop dispatches bugs before features** ([ADR-0148](docs/adr/0148-bug-first.md)). Guard: `contrib/squad-goal/scripts/test-autobug.sh`, `contrib/squad-goal/scripts/test-autofrontier-one-run.sh`.
-- **The loop stops itself on the first pass whose burn crosses the token cap** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `contrib/squad-goal/scripts/test-token-guard.sh`.
+- **A burn over the token cap is a report and an alert, never a stop; dispatch pauses only while the last hour burns over 3x the cap, and resumes by itself under it** ([ADR-0145](docs/adr/0145-a-work-branch-lands-in-dev-by-fast-forward.md)). Guard: `contrib/squad-goal/scripts/test-token-guard.sh`.
 
 ## Where decisions go
 

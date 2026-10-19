@@ -1,7 +1,7 @@
 #!/bin/bash
-# The token tripwire stops the loop for good (#489). watch.sh runs `watchd.sh stop` when the guard fires, and that stop
-# must take the supervisor down with it: the supervisor, the cycle and the fast lane all exit, and nothing restarts.
-# Offline: a temp state dir, a stub env.sh and a stub watch.sh that stops the daemon the way the guard path does.
+# `watchd.sh stop` stops the loop for good (#489): the stop takes the supervisor down with it, so the supervisor, the cycle
+# and the fast lane all exit, and nothing restarts. A start is a relight: it clears the token guard's markers.
+# Offline: a temp state dir, a stub env.sh and a stub watch.sh that stops the daemon from inside a cycle.
 d=$(cd "$(dirname "$0")" && pwd); T=$(mktemp -d); trap 'kill -9 "$sup" 2>/dev/null; rm -rf "$T"' EXIT; fail=0
 ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 unset "${!SG_@}"; export SG_STATE="$T/st" SG_PROFILE= HOME="$T/home"; mkdir -p "$SG_STATE" "$HOME"
@@ -14,7 +14,7 @@ t=t.replace('. "$(dirname "$0")/env.sh"','SG_STATE="%s"; SG_PROFILE='%st,1)
 t=t.replace('"$(dirname "$me")/watch.sh"','"%s/watch.sh"'%f.rsplit("/",1)[0])
 p.write_text(t)
 PY
-# the stub watch.sh: one line to the log, then the stop the guard path runs, then exit
+# the stub watch.sh: one line to the log, then a stop from inside the cycle, then exit
 # the pause lets `start` see the supervisor alive before the stop lands, the way a real cycle does
 printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 2\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
 # the real fast lane, beside stub passes: its childcc runs in the background (#590), and a stub childcc.py starts a child of
@@ -41,10 +41,10 @@ up() { for p in $ps_; do /bin/ps -p "$p" >/dev/null 2>&1 && return 0; done; retu
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$ps_" ] && up || break; sleep 0.2; done
 [ -n "$ps_" ] && ! up && ok "the fast lane's background childcc and its child stop with the supervisor" || { ko "the fast lane's pass still runs after the stop (pids ${ps_:-none})"; kill $ps_ 2>/dev/null; }
 rm -f "$SG_STATE/pass.pid"
-# a relight after a token stop starts a fresh measurement (#515): the old marker made every start stop again at once
-printf '1\n' > "$SG_STATE/token-guard.since"; echo "Token burn ..." > "$SG_STATE/token-stop"
+# a relight starts a fresh measurement (#515): the old marker made every start read the old burn again
+printf '1\n' > "$SG_STATE/token-guard.since"; echo "Token burn ..." > "$SG_STATE/token-pause"; echo "Token burn ..." > "$SG_STATE/token-over"
 bash "$T/watchd.sh" start >/dev/null; sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
 [ "$(cat "$SG_STATE/token-guard.since" 2>/dev/null)" != 1 ] && ok "a start drops the old token-guard marker" || ko "the old token-guard marker survived the start"
-[ ! -e "$SG_STATE/token-stop" ] && ok "a start clears the token-stop note" || ko "token-stop survived the start"
+[ ! -e "$SG_STATE/token-pause" ] && [ ! -e "$SG_STATE/token-over" ] && ok "a start clears the token-pause and token-over markers" || ko "a token marker survived the start"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do /bin/ps -p "$sup" >/dev/null 2>&1 || break; sleep 1; done
 rm -rf "$T"; exit $fail

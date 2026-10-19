@@ -103,6 +103,7 @@ sg_issue_body() {
   printf '%s' "$j"
 }
 [ "${SG_AUTO_BUGFIX:-yes}" = yes ] || exit 0; [ -e "$A/off" ] && exit 0
+[ -e "$SG_STATE/token-pause" ] && exit 0   # the token guard paused dispatch: the hourly burn stays over 3x the cap (token-guard.sh)
 # One pass at a time (#1514): a pass starting inside another one's pick sees every issue unmarked and dispatches the
 # same bugs again, overwriting the first pass's markers. single.sh <stage> around the whole pass, as fastloop.sh does
 # for its steps: the second pass exits 0 at once. Not re-entrant, so the re-entry carries its own marker.
