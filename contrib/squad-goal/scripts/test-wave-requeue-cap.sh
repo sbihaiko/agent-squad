@@ -44,15 +44,15 @@ SG_REQUEUE_RUN=r1 w requeue 11 "the review asked for changes: a" >/dev/null
 SG_REQUEUE_RUN=r1 w requeue 11 "the local gates failed: b" >/dev/null
 o=$(w fail 11 r1 "ended failed: run_spend_cap")
 [ "$(cat "$T/st/auto/requeues-11" 2>/dev/null)" = 1 ] && ok "one run counts once, however many times it fails the issue" || ko "run key: count '$(cat "$T/st/auto/requeues-11" 2>/dev/null)', '$o'"
-o=$(w fail 11 r2 "ended failed: merge_conflict")
+o=$(w fail 11 r2 "ended failed: node_spend_cap")
 case "$o" in *"WAVE STOP"*) ko "the second run stopped the issue: '$o'";; *) ok "a second failed run is below the cap";; esac
-o=$(w fail 11 r3 "the wave of run r3 landed without its child")
+o=$(w fail 11 r3 "ended failed: the gates failed")
 case "$o" in *"WAVE STOP #11"*) ok "the third failed run stops the issue, whatever its reason";; *) ko "no stop at the third run: '$o'";; esac
 [ "$(gl 11)" = 1 ] && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/11/labels -f labels[]=frozen:owner' "$T/gh.log" && ok "the stop freezes the issue for the owner once" || ko "freeze #11: '$(tr '\n' ' ' < "$T/gh.log")'"
 c11=$(cat "$T"/st/cq/*11-wavestop* 2>/dev/null)
-case "$c11" in SQUAD-NOT-STARTABLE:*r1*"the review asked for changes: a"*r2*merge_conflict*r3*"landed without its child"*) ok "the stop comment lists every run and its reason";;
+case "$c11" in SQUAD-NOT-STARTABLE:*r1*"the review asked for changes: a"*r2*node_spend_cap*r3*"the gates failed"*) ok "the stop comment lists every run and its reason";;
   *) ko "stop comment: '$c11'";; esac
-o=$(w fail 11 r3 "the wave of run r3 landed without its child")
+o=$(w fail 11 r3 "ended failed: the gates failed")
 [ "$(gl 11)" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a run already counted freezes nothing again" || ko "repeat of r3: '$o', labels $(gl 11)"
 o=$(w fail 11 r4 "ended failed: x")
 [ "$(cat "$T/st/auto/requeues-11")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new run after the freeze (the owner let it start) counts from one" || ko "after the freeze: count '$(cat "$T/st/auto/requeues-11")', '$o'"
@@ -71,6 +71,32 @@ gc "Part of the fix
 Refs #13"
 o=$(SG_CHECKOUT="$R" w fail 13 rc "ended failed: c")
 [ "$(cat "$T/st/auto/requeues-13")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new commit in the base restarts the count" || ko "evolution: count '$(cat "$T/st/auto/requeues-13")', '$o'"
+# #621: a requeue the loop caused -- a wave that landed without its child, an adapter error, a merge conflict with a sibling,
+# a disk stop -- is no failure of the issue's work: it requeues the issue and never counts toward SG_REQUEUE_CAP. Its own
+# bound, SG_LOOP_REQUEUE_CAP (6), ends the issue needs-human (card Blocked, ADR-0029) with a comment naming the loop cause,
+# never frozen:owner. `own` makes the janitor's verdict read (the review held the diff) count, whatever the text.
+for r in l1 l2 l3 l4; do o=$(w fail 21 $r "the wave of run $r landed without its child"); done
+[ ! -e "$T/st/auto/requeues-21" ] && [ "$(gl 21)" = 0 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac \
+  && ok "a wave that landed without its child never counts toward the cap" || ko "loop fail: count '$(cat "$T/st/auto/requeues-21" 2>/dev/null)', '$o'"
+echo req > "$T/st/auto/disp-22"
+for r in a b c; do SG_REQUEUE_RUN=$r w requeue 22 "ended failed: adapter_error" >/dev/null; done
+SG_REQUEUE_RUN=d w requeue 22 "the rebase on wave/x conflicts: f.py" >/dev/null; echo req > "$T/st/auto/disp-22"
+o=$(SG_REQUEUE_RUN=e w requeue 22 "DISK STOP: / has 1 GiB free")
+[ ! -e "$T/st/auto/disp-22" ] && [ ! -e "$T/st/auto/requeues-22" ] && case "$o" in *"WAVE REQUEUE #22"*) true;; *) false;; esac \
+  && ok "a loop-caused requeue still requeues the issue, with no count" || ko "loop requeue: count '$(cat "$T/st/auto/requeues-22" 2>/dev/null)', '$o'"
+o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m1 "ended failed: merge_conflict"); o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m2 "ended failed: adapter_error")
+o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m3 "the wave of run m3 landed without its child")
+c23=$(cat "$T"/st/cq/*23-* 2>/dev/null)
+case "$o" in *"WAVE NEEDS-HUMAN #23"*) ok "the loop bound ends the issue needs-human";; *) ko "no loop stop at SG_LOOP_REQUEUE_CAP: '$o'";; esac
+/usr/bin/grep -q '^o 3 Blocked 23$' "$T/board.log" && [ "$(gl 23)" = 0 ] && ok "the loop stop moves the card to Blocked, never frozen:owner" || ko "loop stop: board '$(tr '\n' ' ' < "$T/board.log")', labels $(gl 23)"
+case "$c23" in *"landed without its child"*) ok "the loop stop comment names the loop cause";; *) ko "loop stop comment: '$c23'";; esac
+case "$c23" in *SQUAD-NOT-STARTABLE*) ko "the loop stop is no owner freeze: '$c23'";; *) ok "the loop stop queues no SQUAD-NOT-STARTABLE";; esac
+w fail 24 o1 "ended failed: review_held" own >/dev/null; w fail 24 o2 "ended failed: adapter_error" own >/dev/null
+[ "$(cat "$T/st/auto/requeues-24" 2>/dev/null)" = 2 ] && ok "own counts toward the cap whatever the reason text" || ko "own: count '$(cat "$T/st/auto/requeues-24" 2>/dev/null)'"
+SG_REQUEUE_RUN=v1 w requeue 25 "the review of its own diff in run v1 asked for changes (VERDICT: BLOCKED (every review model failed)) at abc:" >/dev/null
+SG_REQUEUE_RUN=v2 w requeue 25 "the review of its own diff in run v2 asked for changes (VERDICT: BLOCKED) at abc:
+- a real finding" >/dev/null
+[ "$(cat "$T/st/auto/requeues-25" 2>/dev/null)" = 1 ] && ok "a BLOCKED the chain wrote (every model failed) never counts; one a model wrote does" || ko "chain BLOCKED: count '$(cat "$T/st/auto/requeues-25" 2>/dev/null)'"
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail
