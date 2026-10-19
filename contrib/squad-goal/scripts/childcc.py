@@ -33,7 +33,13 @@ enters with no second review here; a child its run held, with its requeued marke
 again; a child of a run with no review in its record is reviewed here as before. An approved child that its entry still
 holds (its review file is stale or gone) is reviewed here from the next pass (marker auto/apphold-<run>-<child>), so it is
 never held for good (#600).
-A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611)."""
+A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611).
+A review here that asks for CHANGES starts one fix run in the child's kept worktree (childfix.sh, #636), and the issue does not
+go back to the queue: the child's branch is pushed nowhere, so the pushed-branch fix lane never reaches it. The marker
+auto/ccfix-<run>-<child> names the fix run's folder; while that run has no verdict the child is held and its wave waits. A fix
+run is no delivery of its own (marker auto/ccfixrun-<fix run>): the pass never works its children. The new head is reviewed
+again, and an APPROVE enters the wave. Findings that do not change after a fix run requeue the issue once, with them in the
+reason (ADR-0134, revformat.py's fingerprint); changed findings start the next fix run."""
 import json, os, pathlib, re, subprocess, sys, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import child_issues   # the issues a child's spawn text names (#555)
@@ -44,6 +50,7 @@ CQ = os.environ["SG_REPO"].replace("/", "__")   # a queued comment is named <own
 board = str(pathlib.Path(__file__).resolve().parent / "board.sh")
 wave = str(pathlib.Path(__file__).resolve().parent / "wave.sh")   # the wave's verbs, beside this pass (#375)
 childreview = str(pathlib.Path(__file__).resolve().parent / "childreview.sh")   # the review of the child's own diff, beside this pass (#448)
+childfix = str(pathlib.Path(__file__).resolve().parent / "childfix.sh")   # the fix run in the child's kept worktree, beside this pass (#636)
 state = board_state()   # the dispatch pass asks the seam what state an issue carries, never the carrier (#236)
 BUDGET = int(os.environ.get("SG_CHILDCC_BUDGET") or 1)   # the children one pass works (#590)
 SHIPPED = os.environ.get("SG_BOARD_VOCAB") == "shipped"   # the old vocabulary has no Code Review column (#603)
@@ -155,6 +162,32 @@ def first_finding(wt):   # the first finding of the review the entry read, for t
     try: lines = [l.strip() for l in md.read_text().splitlines()[1:] if l.strip()]
     except OSError: return "no finding was written"
     return (lines[0] if lines else "no finding was written")[:300]
+def fix_live(fx):   # the fix run the marker names has no verdict yet; a folder with no record is no run that lives
+    try: return '"event": "verdict"' not in (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text()
+    except OSError: return False
+def fix_round(rd, child, n, wt, fx, out):
+    """A review here asked for CHANGES (#636). The first time, or when the findings changed after a fix run, one fix run
+    starts in the child's worktree and the child is held: (False, line, True). Findings that a fix run left as they were
+    requeue the issue once, with them in the reason (ADR-0134). A fix run that did not start holds the child, and the next
+    pass tries again on its review."""
+    import revformat   # the fingerprint of a review's findings and the stall count of its fix rounds (ADR-0134), read only here
+    md, _ = review_paths(wt); key = f"{rd.name}-{child}"
+    try: fp = revformat.findings_fingerprint(md.read_bytes())
+    except OSError: fp = ""
+    same = revformat.stall_rounds(str(A), "ccfix", key, fp)
+    if fx.exists() and same:
+        why = f"a fix run left the same review findings: {first_finding(wt)}"
+        subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
+        (A / f"requeued-{rd.name}-{child}").write_text(head_of(wt) + "\n")
+        return False, out + f"\nCHILD FIX REQUEUE #{n}: {why}", True
+    f = subprocess.run(["bash", childfix, rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
+    lines = f.stdout.strip().splitlines()
+    HOLDS.add(f"{rd.name} {child}")
+    if f.returncode or not lines:
+        return False, out + f"\nCHILD FIX REFUSED #{n} ({rd.name} {child}): {(f.stdout + f.stderr).strip()[-300:] or f'exit {f.returncode}'}", True
+    fx.write_text(lines[-1] + "\n"); (A / f"ccfixrun-{pathlib.Path(lines[-1]).name}").touch()
+    revformat.record_stall(str(A), "ccfix", key, fp, same)
+    return False, out + f"\nCHILD FIX RUN #{n} ({rd.name} {child}): {first_finding(wt)} -> {pathlib.Path(lines[-1]).name}", True
 def enter(rd, child, n, d, approved=False):
     """The wave's entry of a finished child, in the tree the engine made for it. Return (entered, why, worked): (None, "") when the
     run cut no wave and the direct move stands, (True, the entry line) when the child is now in the wave branch, and
@@ -172,15 +205,17 @@ def enter(rd, child, n, d, approved=False):
     if rq.exists() and rq.read_text().strip() == head_of(wt): return False, "", False
     hold = A / f"apphold-{rd.name}-{child}"   # its run approved it, but the entry held it once: the review here takes over (#600)
     approved = approved and not hold.exists()
+    fx = A / f"ccfix-{rd.name}-{child}"   # the fix run this pass started for the child (#636)
+    if fx.exists() and fix_live(fx):   # its fix run still works the child's worktree: held, at no cost, and its wave waits
+        HOLDS.add(f"{rd.name} {child}")
+        return False, f"CHILD FIX WAIT #{n} ({rd.name} {child}): its fix run {pathlib.Path(fx.read_text().strip()).name} has no verdict yet", False
     if not approved and not reviewed(rd, child, n, wt, A / f"rvd-{rd.name}-{child}"): return False, "", None   # no review slot: the child waits, and the landing waits for it
     e = subprocess.run(["bash", wave, "enter", rd.name, str(n)], cwd=str(wt), capture_output=True, text=True)
     out = (e.stdout + e.stderr).strip()
     if approved and "WAVE HOLD" in out: hold.touch()
     if "WAVE REQUEUE" in out or "WAVE STOP" in out: rq.write_text(head_of(wt) + "\n")   # a hold (no review yet) is no requeue: it is tried again on the same sha; a stop (#594) is one that froze the issue
     if e.returncode != 0 and re.search(r"did not approve it: .*CHANGES", out):
-        why = f"the review of its own diff asked for changes: {first_finding(wt)}"
-        subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})   # the run is the key of the count (#609)
-        rq.write_text(head_of(wt) + "\n"); out += f"\nCHILD REVIEW REQUEUE #{n}: {why}"
+        return fix_round(rd, child, n, wt, fx, out)   # a fix run in its worktree, never a requeue at once (#636)
     elif e.returncode != 0 and "WAVE HOLD" in out:   # held, not requeued: the wave waits for it (#620)
         HOLDS.add(f"{rd.name} {child}")
         if re.search(r"WAVE HOLD #\d+: (no review|the review of)", out):   # a review hold, never a gate one: bounded per head, so a dead review chain never holds the wave for its whole age cap
@@ -223,6 +258,7 @@ for r in (sys.argv[1:] or (st / "active-runs.txt").read_text().split()):
             if isinstance(rv, dict): verdict[d["node"]] = rv.get("verdict")   # the run's own review of the child (#599, #601)
             if d.get("outcome") != "pass": failed[d["node"]] = (d.get("reasons") or ["the landing failed"])[0]   # the child's own engine landing: its work is not in the run's target (#592)
     name = pathlib.Path(r).name; runs.add(name)
+    if (A / f"ccfixrun-{name}").exists(): continue   # a fix run this pass started: its child commits in another child's worktree, and delivers nothing itself (#636)
     for child, why in done.items():
         if not (A / f"cc-{name}-{child}").exists(): pending.append((f"{name} {child}", r, child, why, issue[child], finished, defn.get(child), failed.get(child), verdict.get(child) == "approve"))
     for child in unmapped:

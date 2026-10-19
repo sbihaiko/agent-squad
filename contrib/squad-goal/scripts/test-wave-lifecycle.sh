@@ -25,7 +25,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin" "$T/squad"
-cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$T/s/" 2>/dev/null
+cp "$d/launch.py" "$d/router_envelope.py" "$d/provkey.py" "$d/childcc.py" "$d/runreview.sh" "$d/child_issues.py" "$d/wave.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/address.sh" "$d/ghcall.sh" "$d/issue_state.py" "$d/models.json" "$d/revformat.py" "$T/s/" 2>/dev/null
 export SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots, a review a review slot (#567): a throwaway budget, and this repository's squad.caps under $T/squad
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 # The loop's own cycle travels with the fixture too: watch.sh is the completion a finished run's wave is landed by.
@@ -221,17 +221,24 @@ out=$(childcc)
 [ "$(wtip "$R5")" = "$(child_head "$R5" 71)" ] && [ "$(wtip "$R5")" != "$before" ] && ok "L8: the reviewed child enters its wave" \
   || ko "L8: the wave tip is '$(wtip "$R5")' and the child's head '$(child_head "$R5" 71)': '$(printf '%s' "$out" | tail -3)'"
 
-# 3e) A review that asked for CHANGES on a run that already ended puts its issue back in the queue instead of holding it for
-# good, and the head it read is never read again: a hold no pass can clear is a child that never enters (#448).
+# 3e) A review that asked for CHANGES starts one fix run in the child's worktree (#636), stubbed here as one that ends at
+# once with no commit. The findings are then the same on the same head, so the issue goes back to the queue instead of
+# holding for good, and the head it read is never read again: a hold no pass can clear is a child that never enters (#448).
+cat > "$T/s/childfix.sh" <<EOF
+#!/bin/bash
+echo "childfix \$1 \$2" >> "$T/fix.log"; d=$T/co/runs/fix-\$2; mkdir -p "\$d"; echo '{"event": "verdict"}' > "\$d/record.jsonl"; echo "\$d"
+EOF
 R6=run-20261014-000000-bbb666
-: > "$T/rev.log"; : > "$T/board.log"
+: > "$T/rev.log"; : > "$T/board.log"; : > "$T/fix.log"
 launch "$R6" 72 >/dev/null 2>&1; CHILD_NO_REVIEW=1 child "$R6" 72 g72; before=$(wtip "$R6")
 out=$(STUB_VERDICT=CHANGES childcc)
 [ -n "$(wtip "$R6")" ] && [ "$(wtip "$R6")" = "$before" ] && ok "L9: a child the review asked changes of never enters the wave" \
   || ko "L9: the wave tip moved to '$(wtip "$R6")'"
-/usr/bin/grep -qx 'o 3 Todo 72' "$T/board.log" && ok "L9: its issue goes back to the queue instead of holding for good" \
-  || ko "L9: the issue was not requeued: '$(cat "$T/board.log" 2>/dev/null)'"
+[ "$(cat "$T/fix.log")" = "childfix $R6 72" ] && ! /usr/bin/grep -q 'Todo 72' "$T/board.log" && ok "L9: CHANGES starts one fix run, and the issue does not requeue" \
+  || ko "L9: fix runs '$(cat "$T/fix.log")', board '$(cat "$T/board.log" 2>/dev/null)': $out"
 out=$(STUB_VERDICT=CHANGES childcc)
+/usr/bin/grep -qx 'o 3 Todo 72' "$T/board.log" && ok "L9: findings the fix run left as they were send the issue back to the queue" \
+  || ko "L9: the issue was not requeued: '$(cat "$T/board.log" 2>/dev/null)': $out"
 [ "$(wc -l < "$T/rev.log" | tr -d ' ')" = 1 ] && ok "L9: the review is read once per head, never on every pass" \
   || ko "L9: the review ran again: '$(cat "$T/rev.log" 2>/dev/null)'"
 
