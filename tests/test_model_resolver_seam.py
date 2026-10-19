@@ -91,10 +91,29 @@ def test_a_header_file_that_parses_a_prefix_is_a_violation(tmp_path, line, why):
     assert any(why == h[2] for h in hits), hits
 
 
-def test_a_file_without_the_header_is_not_enforced(tmp_path):
+def test_a_file_without_the_header_is_still_enforced(tmp_path):
     p = tmp_path / "legacy.py"
     p.write_text('return m.startswith("claude-")\n')
-    assert scan_file(p) == []
+    assert scan_file(p), "an unmarked parser passed the guard"
+
+
+def unpermitted(paths):
+    """The violations outside the resolver seam and the recorded legacy debt."""
+    out = []
+    for p in paths:
+        for n, line, why in scan_file(p):
+            out.append(f"{p.name}:{n}: {why}: {line}")
+    return out
+
+
+def test_an_unmarked_new_parser_fails_the_guard(tmp_path):
+    p = tmp_path / "newparser.py"
+    p.write_text('def f(m):\n    return m.startswith("claude-")\n')
+    assert unpermitted([p]), "a new parser with no header or legacy mark passed the guard"
+
+
+def test_no_eligible_file_parses_a_model_prefix_outside_the_seam():
+    assert unpermitted(scanned_files()) == []
 
 
 def test_a_bare_claude_key_is_not_a_match(tmp_path):
