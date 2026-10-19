@@ -97,7 +97,7 @@ test-retire-fork-only.sh 1.82
 test-retired-settings.sh 1.85
 test-revformat-stall.sh 0.74
 test-revformat.sh 10.21
-test-review.sh 225.10
+test-review.sh 266.80
 test-runreview.sh 4.06
 test-serial.sh 35.76
 test-shell-suites-gate.sh 4.22
