@@ -19,7 +19,7 @@
  O  a run that recorded a verdict and landed nothing (no `land` pass in its record, that event being the landing stage's own -- a router that passed by asking for children is not a landing): the issue's marker is dropped, so autofrontier/autobug dispatch it again. `failed` is not the only way a run ends without landing (#1847): a run that ended any other way (`needs-human`, `pass`) left its auto/disp-<n> behind, autofrontier.sh skips every issue holding that marker, and the frontier starved on a run that is over -- the cause health.sh reports as frontier-idle.
     A run that landed a change, an issue a live run works or a pending wave carries, and an issue with an open work branch keeps its marker; a run drops only a marker its own request wrote (#539). The loop-board card is rule R's: O writes none, and its comment names the column R wrote
     (a failed run -> Todo, a needs-human run -> Blocked). On the bug board, auto/bug-<n> -> To triage, but only from the column the dispatch set ($SG_BUG_DOING), so a card another step moved past it is never downgraded. Once per run; the comment carries the run id and the verdict's reasons.
-    Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner.
+    Each such run, marker or not (needs-human aside), is one failed dispatch of the issue, counted once by `wave.sh fail` (#609): at SG_REQUEUE_CAP with no new commit in the base the issue is frozen for the owner. A loop-caused one (the run's own review verdict decides, #621) counts only toward SG_LOOP_REQUEUE_CAP.
  Q  a card still In Progress behind its auto/disp-<n> (or auto/bug-<n>) marker, 10 min old, that no run works: not a live run, not a run in its launch window, not a run that landed, no open work branch naming the issue, no fork-<n>-<sha9> marker.
     Rules E and O read a run's verdict, so a run that ended without one (rule C drops a zombie from active-runs) or that left active-runs by any other road freed nothing: the card sat In Progress, autofrontier.sh skipped the issue,
     and health.sh reported runs-board-drift for hours. Rule Q reads the state, never the run's history: the card goes back to Todo (the bug card to To triage), the marker is dropped, one comment is queued. A refused read touches nothing.
@@ -169,7 +169,7 @@ def read(f):
     # The per-child evidence (#271): the children the run accepted, the issues each child's own accept line named, the
     # landing nodes that stand, and every node's own outcome. A run that asked for children landed through the child
     # that made the landing, so rule R reads each child's own fact instead of crediting the run's landing to every issue.
-    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}
+    kids = set(); kid_issue = {}; land_nodes = set(); outs = {}; kid_review = {}
     # The spawn batch (#480): the engine answers a dispatch's requests in one batch, then starts the children. Any event after
     # the last spawn event is past that batch, so the run's choice of children is decided; spawn_ts is when it was made.
     spawned = decided = False; spawn_ts = 0.0
@@ -189,6 +189,8 @@ def read(f):
             v = True; ver = d.get("verdict"); rs = [str(x) for x in (d.get("reasons") or [])]
         if ev == "land":   # only the landing stage's own event counts; a router's `routed: continue` is not a landing
             eff = d.get("effect") or {}
+            if isinstance(eff, dict) and isinstance(eff.get("review"), dict) and d.get("node") is not None:
+                kid_review[str(d["node"])] = eff["review"]   # the run's own review of the child (#599): rule O reads its verdict (#621)
             # A landing that moved the target's tip by nothing carries no work: it is no delivery, so no card is claimed and
             # no marker stands on it (ADR-0145 rule 12, #464). A record written before the effect carried `before` keeps the
             # old reading, so an old run is judged as it was.
@@ -219,7 +221,7 @@ def read(f):
     kid_landed = {n for n in land_nodes if n in kids}   # the children whose own landing stands: the run's landing is theirs
     return {"verdict": v, "name": ver or "no verdict", "pid": pidc, "started_at": started_at, "acc": acc, "idle": now - t.stat().st_mtime,
             "failed": ver == "failed", "reasons": rs, "landed": landed, "run_id": rid, "run_ts": rts,
-            "kid_issue": kid_issue, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts}
+            "kid_issue": kid_issue, "kid_review": kid_review, "kid_landed": kid_landed, "kid_out": outs, "decided": decided, "spawn_ts": spawn_ts}
 def same_process(pidc, started_at):
     if pidc not in procs or not isinstance(started_at, (int, float)):
         return pidc in procs
@@ -797,12 +799,22 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
     # by wave.sh fail (one count per issue, keyed by the run, frozen at SG_REQUEUE_CAP), whether or not it still holds a marker.
     # A run the ledger lists is not sent again, so a pass costs no call for a run already counted.
     try:
-        if any(l.split("\t")[0] == f.name for l in (st / "auto" / f"requeues-{n}.runs").read_text().splitlines()): return
+        if any(l.split("\t")[0] == f.name for k in ("requeues", "loopqueues") if (st / "auto" / f"{k}-{n}.runs").exists()
+               for l in (st / "auto" / f"{k}-{n}.runs").read_text().splitlines()): return
     except OSError: pass
     if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": return
     why = f"the wave of run {i['run_id']} landed without its child" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
-    if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why})"); return
-    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why])[1].strip()
+    # The run's own review of the child decides over the reason text (#621): CHANGES or BLOCKED a model wrote on the diff is
+    # the issue's own failure (`own`); a BLOCKED the chain wrote because every model failed, a review past its deadline or one that
+    # never started, is the loop's (`loop`). No review leaves the text to wave.sh.
+    kind = ""
+    for k, iss in i["kid_issue"].items():
+        rv = i["kid_review"].get(k)
+        if n not in iss or not rv or str(rv.get("verdict") or "").lower() in ("approve", "no_review", ""): continue
+        lost = str(rv.get("verdict")) == "deadline" or "every review model failed" in str(rv.get("findings") or "") or str(rv.get("stderr") or "").startswith("review_not_started")
+        kind = "own" if not lost or kind == "own" else "loop"
+    if dry: say(f"FAILED-DISPATCH #{n}: run {f.name} would count ({why}{', ' + kind if kind else ''})"); return
+    out = _run(["bash", str(pathlib.Path(__file__).parent / "wave.sh"), "fail", n, f.name, why, *([kind] if kind else [])])[1].strip()
     if out: say(f"FAILED-DISPATCH #{n}: {out}")
 if owner and proj and repo0:
     for r in names:   # O:a run that ended without landing releases its issues: marker dropped (whatever the verdict was: #1847), card back where the dispatch found it

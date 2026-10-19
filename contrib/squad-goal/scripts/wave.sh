@@ -153,8 +153,9 @@ landed_key() {
 # whether a requeue or the janitor's `fail` reports it. Evolution starts the count again at one: a new key (a non-RED commit
 # in the base names the issue), or a new run after the freeze, which only the owner lets start. A different reason is no
 # evolution: the reasons change while nothing reaches the base. Sets c (the count) and fresh (1: this call added a line).
+# A 4th argument names the ledger: `loopqueues` keeps the loop-caused requeues apart (#621).
 count() {
-  local n=$1 run=$2 why=$3 cf lf key last; cf="$SG_STATE/auto/requeues-$n"; lf="$cf.runs"; fresh=0
+  local n=$1 run=$2 why=$3 cf lf key last; cf="$SG_STATE/auto/${4:-requeues}-$n"; lf="$cf.runs"; fresh=0
   mkdir -p "$SG_STATE/auto"
   c=$(cat "$cf" 2>/dev/null); case "$c" in ''|*[!0-9]*) c=0;; esac
   if [ -n "$run" ] && cut -f1 "$lf" 2>/dev/null | /usr/bin/grep -qxF -- "$run"; then return 0; fi
@@ -179,12 +180,44 @@ stop() {
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
+# loop_caused <why> [own|loop]: the loop caused this requeue, not the issue's work (#621): a wave that landed without its
+# child, an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
+# wrote no ruling (every model failed, or a hold with no verdict). The caller's kind wins over the text: the janitor reads
+# the run's own review verdict (`own`: CHANGES or BLOCKED on the diff), which a reason like "review_held" hides.
+loop_caused() {
+  case "${2:-}" in own) return 1;; loop) return 0;; esac
+  case "$1" in *"landed without its child"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
+    *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*) return 0;; esac
+  return 1
+}
+
+# loop_stop <issue> <why>: SG_LOOP_REQUEUE_CAP (6) loop-caused requeues of one issue (#621). A child held for good is not
+# redispatched forever: the issue ends needs-human (ADR-0029). Its card goes to Blocked and it takes needs-owner, which no
+# dispatch pass takes (SG_FRONTIER_SKIP_LABELS) and which holds the card in Blocked (janitor rule R), with one comment that
+# names the loop cause. No frozen:owner: the loop failed the issue, not its work. The owner frees it by removing the label.
+loop_stop() {
+  local n=$1 why=$2 lf="$SG_STATE/auto/loopqueues-$1.runs" f out
+  out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=needs-owner" 2>&1) || printf 'WAVE-LABEL #%s needs-owner refused: %s\n' "$n" "$out"
+  board_write Blocked "$n"
+  f=$(sg_cq_file "$n-loopstop$$.md" 2>/dev/null) && {
+    printf 'SQUAD-NEEDS-HUMAN: %s requeues the loop itself caused, none a failure of this issue'"'"'s work; the loop stops building it (#621). Last cause: %s\n\nRuns:\n' "$c" "$(printf '%s' "$why" | head -1)"
+    awk -F'\t' '$1 != "frozen" { printf "- %s: %s\n", ($1 == "" ? "(no run named)" : $1), $3 }' "$lf" 2>/dev/null; } > "$f"
+  echo frozen >> "$lf"
+  echo "WAVE NEEDS-HUMAN #$n: $c loop-caused requeues, so it is not dispatched again: $why"
+}
+
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
   local n=$1 why=$2 f
   # The run is SG_REQUEUE_RUN (enter and land set it; childcc and runreview pass it). A requeue the wave's age cap made
   # (`cap`, #594) is the loop's delay, not a failure of the child: it neither counts nor stops the issue. The run behind it
-  # is counted once at its end, by the janitor's `fail`, when it delivered nothing.
-  if [ "${3:-}" != cap ]; then
+  # is counted once at its end, by the janitor's `fail`, when it delivered nothing. A loop-caused one (#621) counts only
+  # toward its own, larger bound.
+  if [ "${3:-}" != cap ] && loop_caused "$why"; then
+    count "$n" "${SG_REQUEUE_RUN:-}" "$why" loopqueues
+    if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_LOOP_REQUEUE_CAP:-6}" ]; then loop_stop "$n" "$why"; return 0; fi
+    if [ "$fresh" = 0 ] && [ "$(tail -1 "$SG_STATE/auto/loopqueues-$n.runs" 2>/dev/null)" = frozen ]; then
+      echo "WAVE NEEDS-HUMAN #$n: already stopped, so it is not dispatched again: $why"; return 0; fi
+  elif [ "${3:-}" != cap ]; then
     count "$n" "${SG_REQUEUE_RUN:-}" "$why"
     if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then stop "$n" "$why"; return 0; fi
     if [ "$fresh" = 0 ] && [ "$(tail -1 "$SG_STATE/auto/requeues-$n.runs" 2>/dev/null)" = frozen ]; then
@@ -196,9 +229,15 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
   echo "WAVE REQUEUE #$n: $why"
 }
 
-fail() {   # <issue> <run> <why>: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
+fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivered for the issue (janitor rule O, #609): one failed dispatch.
   local n=$1 run=$2 why=$3
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
+  if loop_caused "$why" "${4:-}"; then   # the loop's failure, not the issue's (#621): its own ledger and bound
+    count "$n" "$run" "$why" loopqueues
+    [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
+    [ "$c" -ge "${SG_LOOP_REQUEUE_CAP:-6}" ] && { loop_stop "$n" "$why"; return 0; }
+    echo "WAVE FAILED #$n: loop-caused, $c of ${SG_LOOP_REQUEUE_CAP:-6} (run $run), not counted toward the cap: $why"; return 0
+  fi
   count "$n" "$run" "$why"
   [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
   [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ] && { stop "$n" "$why"; return 0; }

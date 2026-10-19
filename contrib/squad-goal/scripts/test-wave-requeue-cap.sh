@@ -88,7 +88,7 @@ o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m1 "ended failed: merge_conflict"); o=$(SG_L
 o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m3 "the wave of run m3 landed without its child")
 c23=$(cat "$T"/st/cq/*23-* 2>/dev/null)
 case "$o" in *"WAVE NEEDS-HUMAN #23"*) ok "the loop bound ends the issue needs-human";; *) ko "no loop stop at SG_LOOP_REQUEUE_CAP: '$o'";; esac
-/usr/bin/grep -q '^o 3 Blocked 23$' "$T/board.log" && [ "$(gl 23)" = 0 ] && ok "the loop stop moves the card to Blocked, never frozen:owner" || ko "loop stop: board '$(tr '\n' ' ' < "$T/board.log")', labels $(gl 23)"
+/usr/bin/grep -q '^o 3 Blocked 23$' "$T/board.log" && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/23/labels -f labels[]=needs-owner' "$T/gh.log" && ! /usr/bin/grep -q 'issues/23/labels -f labels\[\]=frozen:owner' "$T/gh.log" && ok "the loop stop moves the card to Blocked with needs-owner, never frozen:owner" || ko "loop stop: board '$(tr '\n' ' ' < "$T/board.log")', gh '$(/usr/bin/grep 'issues/23' "$T/gh.log")'"
 case "$c23" in *"landed without its child"*) ok "the loop stop comment names the loop cause";; *) ko "loop stop comment: '$c23'";; esac
 case "$c23" in *SQUAD-NOT-STARTABLE*) ko "the loop stop is no owner freeze: '$c23'";; *) ok "the loop stop queues no SQUAD-NOT-STARTABLE";; esac
 w fail 24 o1 "ended failed: review_held" own >/dev/null; w fail 24 o2 "ended failed: adapter_error" own >/dev/null

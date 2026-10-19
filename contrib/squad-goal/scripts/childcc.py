@@ -190,7 +190,8 @@ def enter(rd, child, n, d, approved=False):
             k = int(k) + 1 if was == h else 1
             hk.write_text(f"{h} {k}\n")
             if k >= HOLD_TRIES:
-                why = f"its review held it {k} times on head {h[:9]} with no verdict"
+                m = re.search(r"did not approve it: (.*)", out)   # a BLOCKED a model wrote is the issue's own; the chain's "every review model failed" is the loop's (#621)
+                why = f"its review held it {k} times on head {h[:9]}: {m.group(1)}" if m else f"its review held it {k} times on head {h[:9]} with no verdict"
                 subprocess.run(["bash", wave, "requeue", str(n), why], capture_output=True, env={**os.environ, "SG_REQUEUE_RUN": rd.name})
                 rq.write_text(h + "\n"); hk.unlink(); HOLDS.discard(f"{rd.name} {child}"); out += f"\nCHILD HOLD REQUEUE #{n}: {why}"
     return e.returncode == 0, out or f"WAVE no entry for #{n} (exit {e.returncode})", True
