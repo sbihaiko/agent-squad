@@ -6,7 +6,7 @@ it costs a checkout, it confuses the next reader, and it can hide a stale build.
 `.claude/worktrees/` on 2026-10-02, every one of them fully merged.
 
 The main checkout and the worktree this test runs in are exempt. The current worktree is the one being worked in,
-and a fresh one holding no commit yet is not stale — it is in use.
+and a fresh one holding no commit yet is not stale — it is in use. A locked worktree is a live agent's, and is exempt too.
 
 Guard for the clean-repository rule.
 """
@@ -20,30 +20,38 @@ def git(*args, cwd=ROOT):
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True).stdout.strip()
 
 
-def worktrees():
-    """Every registered worktree as (path, head), the main checkout first."""
-    rows, path = [], None
-    for line in git("worktree", "list", "--porcelain").splitlines():
+def parse_worktrees(text):
+    """Every worktree of `git worktree list --porcelain` as [path, head, locked], the main checkout first."""
+    rows = []
+    for line in text.splitlines():
         if line.startswith("worktree "):
-            path = line.split(" ", 1)[1].strip()
-        elif line.startswith("HEAD ") and path:
-            rows.append((Path(path), line.split(" ", 1)[1].strip()))
-    return rows
+            rows.append([Path(line.split(" ", 1)[1].strip()), None, False])
+        elif line.startswith("HEAD ") and rows:
+            rows[-1][1] = line.split(" ", 1)[1].strip()
+        elif (line == "locked" or line.startswith("locked ")) and rows:
+            rows[-1][2] = True
+    return [r for r in rows if r[1]]
 
 
-def test_no_finished_worktree_is_left_behind():
-    rows = worktrees()
-    assert rows, "git worktree list returned nothing"
-    main_head, here = rows[0][1], Path.cwd().resolve()
+def stale_worktrees(rows, here, ahead):
+    """The worktrees under .claude/worktrees that hold no commit main lacks. The main checkout, the current worktree and a
+    locked worktree are exempt: a locked one is a live agent's, which may hold no commit yet."""
+    main, main_head = rows[0][0], rows[0][1]
     stale = []
-    for path, head in rows:
-        if path.resolve() == here or path.resolve() == rows[0][0].resolve():
+    for path, head, locked in rows:
+        if locked or path.resolve() == here or path.resolve() == main.resolve():
             continue
         if ".claude/worktrees" not in path.as_posix():
             continue  # live sibling checkouts (for example ~/wt-as-*) are other sessions, not leftover work
-        ahead = git("rev-list", "--count", f"{main_head}..{head}") if path.exists() else "?"
-        if ahead == "0":
+        if ahead(main_head, head) == "0":
             stale.append(str(path))
+    return stale
+
+
+def test_no_finished_worktree_is_left_behind():
+    rows = parse_worktrees(git("worktree", "list", "--porcelain"))
+    assert rows, "git worktree list returned nothing"
+    stale = stale_worktrees(rows, Path.cwd().resolve(), lambda main, head: git("rev-list", "--count", f"{main}..{head}"))
     assert stale == [], f"worktrees holding nothing main does not already have: {stale}"
 
 
