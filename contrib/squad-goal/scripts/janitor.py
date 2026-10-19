@@ -34,6 +34,8 @@
     committed nothing keeps the loop's queue however many of its siblings landed, and only an issue no child of the run names takes the run's landing as its own;
     a completed run, whether or not it landed work, whose branch has not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
+    An issue labelled frozen:owner keeps the column it carries, and cycle.log names the write R held back (BOARD-FROZEN). A run that stopped needs-human or failed never moves its issue's
+    card forward: its Todo or Blocked stands, and a work branch or local landing it left is stale evidence.
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
@@ -592,10 +594,24 @@ def reconcile_board():
     doing = "Doing" if shipped else "In Progress"
     testing = set()   # issues whose wave is in dev while the CI of the dev tip runs: Done waits for the CI to end
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
+    stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
+    held_owner = {}   # issue -> (rank, status, why): the write frozen:owner held back this pass, named in cycle.log when it differs
+    _owner_frozen = {}
+    def owner_frozen(n):   # the issue carries frozen:owner: the owner holds its card, so R never moves it (the open-issue read answers for the whole pass)
+        n = str(n)
+        if n not in _owner_frozen:
+            _, ol = open_issues()
+            labs = ol.get(n)
+            _owner_frozen[n] = "frozen:owner" in (labs if labs is not None else issue_labels(n))
+        return _owner_frozen[n]
     def set_expected(n, status, why, run_id="", run_ts="", rank=0):
         if shipped:   # the shipped vocabulary (ADR-0141): Blocked is no column, it is the owner freeze over the column the work reached
             status = SHIPPED_NAME.get(status, status)
             if status is None: frozen.add(n); return
+        if owner_frozen(n) and issue_info(n)[0] != "closed":   # the owner's freeze keeps the column stuck() wrote: record the write R held back
+            old = held_owner.get(n)
+            if not old or old[0] < rank: held_owner[n] = (rank, status, why)
+            return
         old = expected.get(n)
         if old and old[0] >= rank: return
         expected[n] = (rank, status, why, run_id, run_ts)
@@ -619,6 +635,13 @@ def reconcile_board():
         else:
             set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
             wave_column(n, f, i)
+    def stopped_run(n, i, evidence):   # a run that stopped needs-human or failed never moves its issue's card forward: its Todo or Blocked stands, whatever branch or local landing it left
+        stopped.add(n)
+        why = "; ".join(i["reasons"]) or "no reason recorded"
+        human = i["name"] == "needs-human"
+        set_expected(n, "Blocked" if human else os.environ.get("SG_TODO", "Todo"),
+                     f"run {i['run_id']} {evidence}, but the run {'needs a human' if human else 'failed'} ({why})",
+                     i["run_id"], i["run_ts"], 40 if human else 20)
     # Rank 20, a run that ended with nothing delivered: Doing back to Todo. It is the one backward move the loop makes, and it
     # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
     # back into Todo or Backlog: only the owner does.
@@ -645,21 +668,27 @@ def reconcile_board():
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
             elif landed_kid:
-                code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
+                if i["failed"] or i["name"] == "needs-human": stopped_run(n, i, f"child {landed_kid} landed work locally")
+                else: code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
             elif holding(n) and (bool(mine and i["kid_landed"]) or not i["landed"]): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
             elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
                 why = "; ".join(ors) or "no reason recorded"
                 if oc == "needs-human" or i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor
+                    stopped.add(n)
                     set_expected(n, "Blocked", f"run {i['run_id']} child {c} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
                 else:
+                    if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["landed"]:
-                code_complete(n, f, i, f"run {i['run_id']} landed work locally")
+                if i["failed"] or i["name"] == "needs-human": stopped_run(n, i, "landed work locally")
+                else: code_complete(n, f, i, f"run {i['run_id']} landed work locally")
             elif i["failed"]:
+                stopped.add(n)
                 why = "; ".join(i["reasons"]) or "nothing landed"
                 set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} failed with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["name"] == "needs-human":   # not success (ADR-0029): the owner is the next actor, and the board says so
+                stopped.add(n)
                 why = "; ".join(i["reasons"]) or "no reason recorded"
                 set_expected(n, "Blocked", f"run {i['run_id']} needs a human with nothing landed ({why})", i["run_id"], i["run_ts"], 40)
             else:   # a run that ended with nothing delivered delivered nothing: the card goes back to the queue, never to Code Complete (ADR-0145 rule 12, #464)
@@ -717,13 +746,17 @@ def reconcile_board():
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
         if str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519)
-        if branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read
+        if n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
         if n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Pushing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
+    for n, (_, want, why) in sorted(held_owner.items(), key=lambda kv: int(kv[0])):   # frozen:owner holds the card: R names the write it held back, and writes nothing
+        have = have_all.get(str(n))
+        if have is not None and have != want:
+            say(f"BOARD-FROZEN #{n}: frozen:owner holds the card in {have}; R left it alone (would have written {want}: {why})")
     for n in sorted((k for k in set(expected) | set(olabels) if RUN_PARENT in (olabels.get(k) or issue_labels(k))), key=int):   # a run parent is a roll-up in GitHub, never work: it gets no card, and a card it has is removed, only when the board carries one (#500)
         expected.pop(n, None)
         if str(n) in have_all and board_write(["--remove", owner, str(proj), str(n)], n, "the issue is a run parent"):

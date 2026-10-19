@@ -64,6 +64,7 @@ test-janitor-env-hermetic.sh 28.13
 test-janitor-f.sh 1.39
 test-janitor-failed-dispatch.sh 0.88
 test-janitor-floor-startable.sh 1.80
+test-janitor-frozen-owner.sh 0.95
 test-janitor-gone-issue.sh 1.31
 test-janitor-h.sh 0.59
 test-janitor-i.sh 1.13
