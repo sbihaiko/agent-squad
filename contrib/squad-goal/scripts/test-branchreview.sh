@@ -109,4 +109,14 @@ out=$(cd "$T/child" && SQUAD_CAPS_DIR="$T/caps" SG_SQUAD="$(cd "$d/../../.." && 
   && ok "run: the issue is requeued with the review's blocking finding" || ko "run: wave.log '$(cat "$T/wave.log" 2>/dev/null)'"
 [ "$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)" = "$(cd "$T/child" && $G rev-parse HEAD)" ] && ok "run: the requeued marker holds the reviewed head" \
   || ko "run: marker '$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)'"
+# 9) #655: a child that sits on a dev tip newer than its wave branch (a fix run rebased it there) is reviewed on its own
+#    commits only. dev's later commits are in dev already: they are never the child's, so the review never asks to change them.
+#    The base file still names the wave branch, so the entry's gate passes for this correctly reviewed child.
+rm -f "$T/st/review-squad_run-1_ws-late".* "$T/st/cq/"*
+(cd "$T/repo" && echo devlater > dl && $G add dl && $G -c user.email=a@b -c user.name=t commit -q -m "dev's later landing" && $G push -q "$T/remote.git" HEAD:dev)
+(cd "$T/child" && $G fetch -q origin && $G checkout -q -b squad/run-1/ws-late origin/dev && echo late > l && $G add l && $G -c user.email=a@b -c user.name=t commit -q -m "late work 7 (Refs #7)")
+out=$(cd "$T/child" && CLAUDE_CHANGES=1 bash "$T/s/childreview.sh" run-1 7 2>&1); rc=$?
+[ $rc = 0 ] && /usr/bin/grep -q '^+late' "$T/prompt" && ! /usr/bin/grep -q '^+devlater' "$T/prompt" && ! /usr/bin/grep -q '^+wave' "$T/prompt" \
+  && ok "late: a child on a dev tip newer than its wave is reviewed on its own commits only" || ko "late: rc=$rc, the prompt diff: $(/usr/bin/grep '^+[a-z]' "$T/prompt" | tr '\n' ' ') $out"
+[ "$(cat "$T/st/review-squad_run-1_ws-late.base" 2>/dev/null)" = wave/run-1 ] && ok "late: the base file still names the wave branch, as the entry requires" || ko "late: base '$(cat "$T/st/review-squad_run-1_ws-late.base" 2>/dev/null)'"
 rm -rf "$T"; exit $fail
