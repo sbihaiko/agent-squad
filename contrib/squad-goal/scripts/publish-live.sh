@@ -10,6 +10,7 @@
 # difference it prints nothing and exits 0. A publish prints each retired name it drops and a one-line count.
 # A publish refuses (exit 3, nothing written, one line naming both commits) when the source HEAD is not in the history of
 # $SG_SQUAD's HEAD, the repository the live scripts import squad from (#605). SG_SQUAD unset or the source repo: no check.
+# A publish refuses (exit 3, nothing written, one line naming the tree) when the source is a linked worktree (#658).
 #
 # The retired names (#122, #134, #361) are the routes the repository no longer ships: the fork-only route and, from the #361
 # landing, the pull-request route. The fork names are split in the source so this list is not itself a call site:
@@ -49,6 +50,18 @@ src=${args[0]:-$(cd "$here/.." && pwd)}
 dest=${args[1]:-${SG_LIVE_DIR:-$HOME/.claude/skills/squad-goal}}
 [ -d "$src" ] || { echo "publish-live: no source tree at $src" >&2; exit 2; }
 [ -d "$dest" ] || { echo "publish-live: no live skill at $dest" >&2; exit 2; }
+
+# Only the main checkout publishes. A coding child published its unlanded branch from its own worktree (#658), so a
+# publish from a linked worktree (git-dir differs from the common dir) is refused: exit 3, nothing written, one line
+# naming the tree. --check writes nothing, so it still runs. A source with no git is not checked.
+if [ -z "$check" ]; then
+  gd=$(git -C "$src" rev-parse --path-format=absolute --git-dir 2>/dev/null)
+  cd_=$(git -C "$src" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [ -n "$gd" ] && [ -n "$cd_" ] && [ "$(cd "$gd" && pwd -P)" != "$(cd "$cd_" && pwd -P)" ]; then
+    wtop=$(cd "$(git -C "$src" rev-parse --show-toplevel)" && pwd -P)
+    echo "publish-live: refused: source $wtop is a linked worktree, not the main checkout; publish from the main checkout after landing" >&2; exit 3
+  fi
+fi
 
 # The live scripts import squad from SG_SQUAD (caps.sh, childcc.py). A source tree ahead of SG_SQUAD ships scripts that call
 # a squad command SG_SQUAD lacks (#605), so a publish refuses unless the source HEAD is in SG_SQUAD's history. No check
