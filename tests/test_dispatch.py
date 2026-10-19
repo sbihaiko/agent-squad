@@ -51,6 +51,22 @@ def child_outs(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_a_child_falls_back_only_within_the_router_overlay(tmp_path):
+    """SPEC 505: a child's chain reads the narrowed envelope, never a model the router overlay closed."""
+    keep = "claude-sonnet-5-5"
+    closed = [m for m in node(router(), "route")["allow"]["models"] if m != keep]
+    assert closed
+    err = {"error": "API Error: 400 the model is not supported", "served": False}
+    eng = make(tmp_path, {"router": routed(req(model=keep)), "route.router.1": [err] * 8},
+               router_overlay={"route": [keep]})
+    await eng.run()
+    calls = [c.model for c in eng.adapter.calls if c.node == "route.router.1"]
+    assert calls and set(calls) == {keep}
+    refused = [e["model"] for e in ev(tmp_path, "model_refused") if e["node"] == "route.router.1"]
+    assert refused == [keep] and not set(refused) & set(closed)
+
+
+@pytest.mark.anyio
 async def test_a_refused_chain_entry_is_recorded_and_its_grant_returned(tmp_path):
     """#494: the router's first model is refused before it serves a message; the next entry answers, the record names
     the refusal, and the run still funds the child (a kept grant of the router's max starved it before)."""
