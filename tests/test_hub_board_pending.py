@@ -3,12 +3,13 @@
 The board door records each move it proved in `$SG_STATE/board-moves.json`, keyed by the item, with the column it
 set and the instant (#649). The board the hub serves applies that record on top of the list read: a card the list
 read contradicts is drawn in the recorded column and wears a pending mark, and the column counts are taken after the
-overlay. When a pass whose read postdates the move carries the recorded column for that item, the hub drops the entry
-and the mark goes with no flicker. A read taken before the move says nothing about it, so the mark stays until a read
-that postdates the move agrees. The hub writes the record only to drop an entry the read agrees with: a disagreeing
-entry and every other entry stay, and a failed drop never breaks the served board. A record naming no column of the
-shipped vocabulary is dropped, never drawn. The page draws the mark from the row, so a reload keeps it. Every column
-of the shipped vocabulary takes the same path.
+overlay. A move is agreed only by a list read that began in a later whole second than the move and carries the
+recorded column for that item; then the hub drops the entry and the mark goes with no flicker. A read that began
+before or in the move's own second says nothing about it, so the mark stays until a later read agrees. The hub
+writes the record only to drop an entry the read agrees with: a disagreeing entry and every other entry stay, a
+record naming no column of the shipped vocabulary is never drawn and stays, and a failed drop is counted and retried
+by the next serve. The page draws the mark from the row, so a reload keeps it. Every column of the shipped
+vocabulary takes the same path.
 
 The suite serves the board over HTTP from a temporary state directory, against a lagging board read.
 """
@@ -16,6 +17,7 @@ import http.client
 import importlib.util
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import threading
@@ -79,9 +81,27 @@ def card(n, status="Todo", **extra):
     return {"n": n, "t": f"card {n}", "s": "OPEN", "st": status, "l": [], "i": f"ITEM{n}", **extra}
 
 
-def lagging(mod, items, read_at):
-    """The rows the last pass read: a list read that has not carried the door's proved move yet."""
-    mod.board_cache = {"t": read_at, "err": None, "errs": [], "items": items, "prs": [], "lc": {}, "cases": []}
+def lagging(mod, items, read_at, completed=None):
+    """The rows the last pass read: a list read that has not carried the door's proved move yet. `rt` is the instant
+    the fetch began, the only stamp the overlay may compare a move against; `t` is when the pass finished."""
+    mod.board_cache = {"t": completed if completed is not None else read_at, "rt": int(read_at),
+                       "err": None, "errs": [], "items": items, "prs": [], "lc": {}, "cases": []}
+
+
+def lagging_fetch(mod, monkeypatch, items, on_read=None):
+    """Point a real board pass at a fetch that returns `items`: the list read its rows come from, with the door's other
+    reads answered empty. `on_read` runs while that fetch is in flight, as a writer on the hub would."""
+    class Seam:
+        def rows(self, *a, **kw):
+            if on_read:
+                on_read()
+            return "".join(json.dumps(i) + "\n" for i in items)
+
+        def holders(self):
+            return {}
+
+    monkeypatch.setattr(mod, "board_seam", lambda: Seam())
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
 
 
 def record(state, moves):
@@ -96,14 +116,30 @@ def get_board(port):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     conn.request("GET", "/api/board", headers={"Host": f"127.0.0.1:{port}"})
     answer = conn.getresponse()
-    body = json.loads(answer.read())
+    status, ctype, raw = answer.status, answer.getheader("Content-Type") or "", answer.read()
     conn.close()
-    return body
+    assert status == 200, f"served board missing: /api/board answered {status}: {raw[:200]!r}"
+    assert "application/json" in ctype.lower(), \
+        f"served board missing: /api/board answered {ctype!r}, not a JSON board: {raw[:200]!r}"
+    return json.loads(raw)
 
 
 def where(board, n):
     """Every (column, row) the served board draws card `n` in."""
     return [(g["name"], x) for g in board["groups"] for x in g["items"] if x["n"] == n]
+
+
+def _lum(hexcolor):
+    """WCAG relative luminance of a `#rrggbb` colour."""
+    v = [int(hexcolor.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in v]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a, b):
+    """The WCAG contrast ratio of two `#rrggbb` colours, from 1:1 to 21:1."""
+    hi, lo = sorted((_lum(a), _lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
 
 
 def _decl(page, name):
@@ -176,6 +212,46 @@ def test_a_move_recorded_after_the_read_keeps_its_mark_though_the_column_agrees(
     assert "ITEM7" in recorded(state), "a move newer than the read was dropped"
 
 
+def test_a_move_proved_during_the_list_read_is_not_agreed_by_that_read(served, monkeypatch):
+    """The overlay compares a move with the instant the list read began. A door that proves the move while the fetch is
+    in flight cannot have had it carried, even when the page it returns ends up naming the recorded column."""
+    mod, state, port = served
+
+    def proved_mid_read():
+        record(state, {"ITEM7": {"column": "Doing", "at": at(now())}})
+
+    lagging_fetch(mod, monkeypatch, [card(7, "Doing")], on_read=proved_mid_read)
+    mod.board_pass(repos=[])
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Doing"], f"the recorded column is not the one drawn: {placed}"
+    assert placed[0][1].get("pd") is True, "a move proved after the list read began was taken as carried by that read"
+    assert "ITEM7" in recorded(state), "a move the read cannot have carried was dropped"
+
+
+def test_a_move_in_the_reads_own_whole_second_is_not_agreed(served):
+    """The record's stamps and the read's start are whole epoch seconds. In the same second nothing tells which came
+    first, so the mark stays rather than lose a proved move; the read must begin in a later second."""
+    mod, state, port = served
+    second = int(now()) - 10
+    lagging(mod, [card(7, "Doing")], second)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(second)}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Doing"], f"the card left its column: {placed}"
+    assert placed[0][1].get("pd") is True, "a move in the read's own second was taken as carried by that read"
+    assert "ITEM7" in recorded(state), "a move in the read's own second was dropped"
+
+
+def test_a_read_that_began_a_later_whole_second_does_agree(served):
+    """One whole second is the step: the same columns one second apart are the read's proof of the move."""
+    mod, state, port = served
+    second = int(now()) - 10
+    lagging(mod, [card(7, "Doing")], second + 1)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(second)}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Doing"] and "pd" not in placed[0][1], f"the agreeing read left a mark: {placed}"
+    assert "ITEM7" not in recorded(state), "a read that began a later second than the move did not drop it"
+
+
 def test_a_move_the_door_writes_during_the_pass_is_never_lost(served, monkeypatch):
     """The door may write the record while the board pass runs: that write is the door's, and this pass drops nothing."""
     mod, state, port = served
@@ -227,8 +303,35 @@ def test_a_failing_record_write_never_breaks_the_served_board(served, monkeypatc
     assert not list(state.glob("board-moves.json.*.tmp")), "the temp file of the failed write stayed behind"
 
 
-def test_a_record_outside_the_shipped_vocabulary_is_never_drawn_and_is_dropped(served):
-    """A renamed or corrupt record value draws no column the board does not ship, and the entry is dropped."""
+def test_a_failed_drop_is_counted_and_retried_by_the_next_serve(served, monkeypatch):
+    """A drop the state directory refuses is bookkeeping that reports itself: the entry stays, the failure is counted,
+    the temp is removed, and the next serve tries again."""
+    mod, state, port = served
+    read_at = now() - 10
+    lagging(mod, [card(7, "Doing")], read_at)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(read_at - 5)}})
+    real_replace, tries = mod.os.replace, []
+
+    def fail_once(src, dst):
+        tries.append(dst)
+        if len(tries) == 1:
+            raise OSError("the state directory refused the replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(mod.os, "replace", fail_once)
+    first = get_board(port)
+    assert [p[0] for p in where(first, 7)] == ["Doing"], "the agreeing read drew the wrong column"
+    assert "ITEM7" in recorded(state), "the failed drop changed the record"
+    assert mod.DROP_FAILURES == 1, "the failed drop was not counted"
+    assert not list(state.glob("board-moves.json.*.tmp")), "the failed drop left its temp behind"
+    get_board(port)
+    assert "ITEM7" not in recorded(state), "the next serve did not retry the failed drop"
+    assert mod.DROP_FAILURES == 1, "the successful retry was counted as another failure"
+
+
+def test_a_record_outside_the_shipped_vocabulary_is_never_drawn_and_is_kept(served):
+    """A renamed or corrupt record value draws no column the board does not ship. The read says nothing about it, so it
+    is no agreement: the hub never writes the record except to drop an entry the read agrees with."""
     mod, state, port = served
     read_at = now() - 10
     lagging(mod, [card(7, "Todo")], read_at)
@@ -238,7 +341,7 @@ def test_a_record_outside_the_shipped_vocabulary_is_never_drawn_and_is_dropped(s
     assert [p[0] for p in placed] == ["Todo"], f"the card left its read column: {placed}"
     assert "pd" not in placed[0][1], "the card wears a mark for a column no board ships"
     assert "Nowhere" not in {g["name"] for g in board["groups"]}, "the board served a column it does not ship"
-    assert "ITEM7" not in recorded(state), "the record entry naming no shipped column stayed"
+    assert "ITEM7" in recorded(state), "the hub dropped a record entry its read never agreed with"
 
 
 def test_a_pending_card_takes_the_freeze_of_the_column_it_is_drawn_in(served):
@@ -251,6 +354,19 @@ def test_a_pending_card_takes_the_freeze_of_the_column_it_is_drawn_in(served):
     assert [p[0] for p in placed] == ["Doing"], f"the recorded column is not the one drawn: {placed}"
     assert placed[0][1].get("pd") is True
     assert "fz" not in placed[0][1], f"the read's freeze travelled with the moved card: {placed}"
+
+
+def test_a_pending_closed_card_carries_no_open_freeze(served):
+    """The drawn column's freeze is computed with the row's own closedness: a closed card never wears the open card's
+    owner freeze from its labels."""
+    mod, state, port = served
+    read_at = now() - 10
+    lagging(mod, [card(7, "Closed", s="CLOSED", l=["frozen:owner"])], read_at)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(read_at + 5)}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Doing"], f"the recorded column is not the one drawn: {placed}"
+    assert placed[0][1].get("pd") is True
+    assert "fz" not in placed[0][1], f"a closed card wore an open card's freeze: {placed}"
 
 
 def test_the_served_card_shape_is_the_old_one_plus_the_mark(served):
@@ -291,16 +407,17 @@ def test_every_column_of_the_shipped_vocabulary_takes_the_same_path(served, colu
     assert placed[0][1].get("pd") is True, f"the card moved to {column!r} wears no pending mark"
 
 
-def test_a_page_reload_keeps_the_pending_mark(served):
-    """The page renders the row it is served: a fresh pass over the same lagging read keeps the mark."""
+def test_a_page_reload_keeps_the_pending_mark(served, monkeypatch):
+    """The page renders the row it is served: two real passes over a lagging fetch both keep the mark, and the second
+    pass's snapshot is its own -- the reload never reuses the first pass's list read."""
     mod, state, port = served
-    read_at = now() - 10
-    lagging(mod, [card(7, "Todo")], read_at)
-    record(state, {"ITEM7": {"column": "Doing", "at": at(read_at + 5)}})
+    lagging_fetch(mod, monkeypatch, [card(7, "Todo")])
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now())}})
+    mod.board_pass(repos=[])
     first_board = get_board(port)
     first = where(first_board, 7)
-    assert first and first[0][1].get("pd") is True, f"the first serve lost the mark: {first}"
-    lagging(mod, [card(7, "Todo")], now())   # a new pass over the same lagging list read: the page reloads
+    assert first and first[0][1].get("pd") is True, f"the first pass lost the mark: {first}"
+    mod.board_pass(repos=[])   # the page reloads: the hub runs another pass over the same lagging fetch
     again_board = get_board(port)
     again = where(again_board, 7)
     assert again and again[0][1].get("pd") is True, f"a reload lost the pending mark: {again}"
@@ -330,13 +447,21 @@ def test_the_page_draws_the_pending_mark_only_on_a_pending_row(hub):
     else:
         assert "class=pnd" not in plain_drawn, f"a plain card wears the pending mark: {plain_drawn}"
         assert "class=pnd" in drawn and ">pending</span>" in drawn, f"the page does not draw the pending mark: {drawn}"
+    root = next(line for line in mod.PAGE.splitlines() if line.startswith(":root{"))
+    warn = re.search(r"--warn:(#[0-9a-fA-F]{6})", root)
+    assert warn, f"the page defines no --warn, so the pending mark has no colour: {root}"
     mark = next(line for line in mod.PAGE.splitlines() if line.startswith("#bbody .it .pnd"))
+    ink = re.search(r"color:(#[0-9a-fA-F]{6})", mark)
+    assert ink, f"the mark names no ink colour: {mark}"
     assert "background:var(--warn)" in mark and "font-weight:700" in mark, f"the mark does not read at a glance: {mark}"
+    ratio = _contrast(ink[1], warn[1])
+    assert ratio >= 4.5, f"the pending mark's {ink[1]} on {warn[1]} reads {ratio:.1f}:1, under the AA floor for its small text"
 
 
 def test_the_board_pass_reads_the_item_id_the_record_is_keyed_by(hub, monkeypatch):
-    """The door keys each entry by the Project item id, so the pass must carry it on the row it stores."""
-    mod, _ = hub
+    """The door keys each entry by the Project item id, so the pass must carry it on the row it stores, and the overlay
+    must find the entry by it: a record for that id draws the pending mark."""
+    mod, state = hub
     calls = []
 
     def fake(cmd, **kw):
@@ -360,4 +485,9 @@ def test_the_board_pass_reads_the_item_id_the_record_is_keyed_by(hub, monkeypatc
     mod.board_pass()
     row = next(c for c in calls if "projectsV2" in " ".join(c) and "/items" in " ".join(c))
     assert ".id" in row[-1], f"the items read does not ask for the item id: {row[-1]}"
-    assert [i.get("i") for i in mod.board_cache["items"]] == ["ITEM11"], mod.board_cache["items"]
+    assert [i.get("i") for i in mod.board_cache["items"]] == ["ITEM11"], \
+        f"the pass stored no item id, so no record can be keyed to the row: {mod.board_cache['items']}"
+    record(state, {"ITEM11": {"column": "Doing", "at": at(now())}})
+    placed = where(mod.board(), 11)
+    assert placed and placed[0][1].get("pd") is True, \
+        f"a record keyed by the stored item id draws no pending mark: {placed}"
