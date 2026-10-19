@@ -267,9 +267,13 @@ head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q "I'll review" &
 /usr/bin/grep -q 'error_max_turns' "$T/st/cq/x__y#"*mfail* 2>/dev/null && ok "the MODEL_FAIL names the subtype" || ko "the subtype is lost: $(cat "$T/st/cq/"*mfail* 2>/dev/null)"
 [ -s "$T/st/review-fix_1-x.json" ] && ok "the raw JSON is kept beside the answer" || ko "no raw JSON was kept"
 printf '{"review_models":["claude:bad","claude:good"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
-rm -f "$T/st/review-fix_1-x.sha" "$T/st/cq/"*mfail*
+rm -f "$T/st/review-fix_1-x.sha" "$T/st/cq/"*mfail* "$T/st/cq/"*mswitch*
 out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
 [ $rc = 0 ] && case "$out" in model=claude:good*) ok "the chain moves on to the next model after an error answer";; *) ko "chain after error: '$out'";; esac || ko "chain after error: rc=$rc '$out'"
+# #631: the move to the next model is queued once, as one MODEL_SWITCH status that names both models.
+sw=$(cat "$T/st/cq/"*mswitch* 2>/dev/null)
+[ "$(/bin/ls "$T/st/cq/" | /usr/bin/grep -c mswitch)" = 1 ] && case "$sw" in "MODEL_SWITCH review claude:bad -> claude:good "*) true;; *) false;; esac \
+  && ok "a failed model then an approving one queues one MODEL_SWITCH naming both" || ko "MODEL_SWITCH: '$sw'"
 unset CLAUDE_ERRJSON
 # 13b) #511: the agy-limited marker takes its reset from `agy -p /quota` (the reading the hub's q_agy uses), never from the
 # error text: the error said "Resets in 1h" while /quota said the Gemini weekly limit was spent for six more days, so the
