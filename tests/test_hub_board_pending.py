@@ -194,7 +194,10 @@ def test_a_move_the_door_writes_during_the_pass_is_never_lost(served, monkeypatc
 
         def read_text(self):
             self.calls += 1
-            return old_body if self.calls <= 2 else new_body
+            if self.calls >= 3:   # between the pass's own read and its guard read, the door replaces the record
+                (state / "board-moves.json").write_text(new_body)
+                return new_body
+            return old_body
 
         def with_name(self, name):
             return (state / "board-moves.json").with_name(name)

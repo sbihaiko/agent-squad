@@ -1802,6 +1802,13 @@ def read_moves():
     try: d = json.loads(MOVES.read_text())
     except (OSError, ValueError): return {}
     return d if isinstance(d, dict) else {}
+def move_time(entry):
+    """The instant the door proved a move, as epoch seconds; None when the entry carries no readable instant. A record
+    without one is never taken as agreed: the board keeps its mark rather than lose a proved move."""
+    stamp = entry.get("at") if isinstance(entry, dict) else None
+    if not isinstance(stamp, str): return None
+    try: return _utc(stamp).timestamp()
+    except ValueError: return None
 def drop_moves(ids):
     """Drop the entries the board read agreed with; every other entry stays (ADR-0030: formed whole beside the record,
     then one rename). The hub writes the record for nothing else (#650). An entry the door replaced while the board was
@@ -1817,9 +1824,16 @@ def drop_moves(ids):
             if MOVES.read_text() != before: return   # the door wrote meanwhile: never lose a move this pass did not read
         except OSError: return
         _tmp = MOVES.with_name(f"{MOVES.name}.{os.getpid()}.{threading.get_ident()}.tmp")   # the temp name is the writer's own, as save_board's is (#512)
-        _tmp.write_text(json.dumps(left, sort_keys=True) + "\n"); os.replace(_tmp, MOVES)
+        try:
+            _tmp.write_text(json.dumps(left, sort_keys=True) + "\n"); os.replace(_tmp, MOVES)
+        except OSError:
+            pass   # dropping a stale entry is bookkeeping: a state directory that refuses the write never breaks the served board
+        finally:
+            try: _tmp.unlink()   # a successful rename removes it; a failed write leaves it behind, and it is never the record
+            except OSError: pass
 def board():
     moves = read_moves()   # the record is read on every serve, so a page reload sees the same overlay (#650)
+    read_at = board_cache.get("t") or 0   # the list read's snapshot: a move recorded after it cannot be in it
     agreed = set()
     by = {}
     for i in board_cache["items"]:
@@ -1828,8 +1842,15 @@ def board():
         entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
         if isinstance(entry, dict) and entry.get("column"):
             recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
-            if recorded == st: agreed.add(str(i["i"]))   # the read carries the column the move set: the entry's work is done
-            elif recorded: st, pending = recorded, True   # the read contradicts a proved move: it lags the door's single-item read, so draw the move at once
+            at = move_time(entry)   # the instant the door proved the move; the record carries whole UTC seconds
+            if recorded in ORDER:   # a column no board ships is never drawn, and the hub never rewrites the door's record
+                if recorded == st and at is not None and at <= read_at:   # the read postdates the move and carries its column: the entry's work is done
+                    agreed.add(str(i["i"]))
+                else:
+                    # The read is older than the move, or contradicts it: draw the move at once and keep the entry until
+                    # a read that postdates the move agrees (#650). A matching column that predates the move is no proof.
+                    st, pending = recorded, True
+                    fz = _columns_module.view_column(recorded, False, i.get("l"))[1]   # the freeze of the column drawn, never the read's
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
