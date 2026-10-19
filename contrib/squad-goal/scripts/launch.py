@@ -237,14 +237,32 @@ def _issue_worktree(issue, land):
         return None
     return wt
 
+def _named_target(co, path):
+    """The tree a fix run names in SG_RUN_TARGET (#654): the child's kept worktree, used as it is (no reset, no new tree), so every
+    gate that reads the target reads the child's files and the fix commits stay on its branch. It must be a linked worktree of the
+    checkout, on a branch, never the checkout itself; any other path refuses the start, so a fix run never measures a fresh tree."""
+    p = pathlib.Path(path)
+    if not p.is_dir(): sys.exit(f"refusing to start: SG_RUN_TARGET {path} is no folder (#654)")
+    p = p.resolve()
+    g = lambda *a: subprocess.run(["git", "-C", str(p), *a], capture_output=True, text=True)
+    top, common = g("rev-parse", "--show-toplevel").stdout.strip(), g("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    own = (pathlib.Path(co).resolve() / ".git").resolve()
+    if not top or pathlib.Path(top).resolve() != p or not common or pathlib.Path(common).resolve() != own or p == pathlib.Path(co).resolve():
+        sys.exit(f"refusing to start: SG_RUN_TARGET {p} is no linked worktree of {co} (#654)")
+    if g("symbolic-ref", "--quiet", "HEAD").returncode: sys.exit(f"refusing to start: SG_RUN_TARGET {p} is on no branch (#654)")
+    return p
+
 req_text = req_file.read_text()
 if _issue_child_request(req_text): req_text = _wave_request(req_text)   # the run cuts a wave below: its children keep their branches local
 issues = _issue_named(req_text) if _issue_child_request(req_text) else []   # a run that commits on the branch the land reads
 checkout = os.environ.get("SG_CHECKOUT") or str(cwd)
 land = _landing_base(checkout)   # before any tree is made: a fetch that fails refuses the start (#580)
-target = _issue_worktree(issues[0], land) if len(issues) == 1 else None
-if len(issues) > 1: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
-if target:
+named = os.environ.get("SG_RUN_TARGET")
+target = _named_target(checkout, named) if named else _issue_worktree(issues[0], land) if len(issues) == 1 else None
+if len(issues) > 1 and not named: print(f"note: the request names {issues}: one run has one target, so this run gets {FALLBACK}", file=sys.stderr)
+if named:
+    print(f"note: the run's target is the kept worktree {target} it fixes: the engine commits it (#654, ADR-0106 rule 4)", file=sys.stderr)
+elif target:
     print(f"note: the run's target is the issue worktree {target}: the engine commits it (#93, ADR-0106 rule 4)", file=sys.stderr)
 else:
     target = _run_worktree(checkout, land)

@@ -4,7 +4,7 @@
 # pushed-branch fix lane (branchfixpass.sh) never reaches it, and a requeue at once threw the child's work away. The fix run's
 # child commits on top of the child's HEAD in this worktree and pushes nothing; childcc reviews the new head again, and an
 # APPROVE enters the wave. The request is sent through mkreq.sh and launch.py, as every pass sends a run. It carries no
-# `CHILD ... GitHub issue` line, so launch.py cuts no wave for it: the fix run gets its own run worktree and delivers nothing.
+# `CHILD ... GitHub issue` line, so launch.py cuts no wave for it; SG_RUN_TARGET makes the kept worktree its target, and it delivers nothing.
 . "$(dirname "$0")/env.sh"; here="$(cd "$(dirname "$0")" && pwd)"
 run=$1 iss=$2
 { [ -n "$run" ] && [ -n "$iss" ]; } || { echo "usage: childfix.sh <run> <issue>" >&2; exit 2; }
@@ -19,8 +19,10 @@ b=$(mktemp)
   echo "Before every commit, run in $wt: bash $here/prepush.sh --local   (it must print nothing)."; } > "$b"
 req=$(bash "$here/mkreq.sh" "auto-childfix-$run-$iss-${sha:0:9}" "$b") || { rm -f "$b"; echo "CHILDFIX $br @ ${sha:0:9}: refused by mkreq.sh (#$iss)" >&2; exit 1; }
 rm -f "$b"
-id=$(cd "$SG_CHECKOUT" && python3 "$here/launch.py" "$req" 2>/dev/null | tail -1)
-/usr/bin/git -C "$SG_CHECKOUT" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in place
+# The kept worktree is the run's target (#654): ac-verify and every gate that reads a tree read the child's files there, and the
+# engine commits the fix on the child's branch. A fresh run tree at the base tip lacks them, so every fix run failed its final gate.
+id=$(cd "$SG_CHECKOUT" && SG_RUN_TARGET="$wt" python3 "$here/launch.py" "$req" 2>/dev/null | tail -1)
+/usr/bin/git -C "$wt" checkout -q -- docs/squad/workflows/dynamic.graph.json 2>/dev/null   # launch.py renames the graph root in the target in place
 [ -n "$id" ] || { echo "CHILDFIX $br @ ${sha:0:9}: launch.py printed no run id, so no fix run started (#$iss)" >&2; exit 1; }
 d=$(/usr/bin/grep "/$id\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1)
 [ -n "$d" ] || { echo "CHILDFIX $br @ ${sha:0:9}: run $id is not in active-runs.txt (#$iss)" >&2; exit 1; }
