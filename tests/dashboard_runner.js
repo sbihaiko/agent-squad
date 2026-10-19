@@ -67,6 +67,7 @@ process.stdin.on("end", async () => {
     else if (o.op === "unseen") out.push(core.unseenValues(o.node, o.served));
     else if (o.op === "groups") out.push(core.fieldGroups(o.node));
     else if (o.op === "setfield") out.push(core.setField(o.doc, o.name, o.key, o.text));
+    else if (o.op === "reviewgate") out.push(core.reviewGate(o.doc, o.name));
     else if (o.op === "connect") out.push(core.connect(o.doc, o.from, o.to));
     else if (o.op === "disconnect") out.push(core.disconnect(o.doc, o.from, o.to));
     else if (o.op === "spot") out.push(core.freeSpot(o.layout, o.box, o.want, o.gap));
