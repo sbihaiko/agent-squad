@@ -11,6 +11,11 @@ record naming no column of the shipped vocabulary is never drawn and stays, and 
 by the next serve. The page draws the mark from the row, so a reload keeps it. Every column of the shipped
 vocabulary takes the same path.
 
+An entry no list read agrees with expires after its window (#651): the served board returns the card to the column
+the list read holds, the entry is dropped, and the loop's log names the item, the recorded column and the read
+column once. The window is a setting (`SG_PENDING_WINDOW_SECONDS`, 120 s by default). One setting
+(`SG_PENDING_OVERLAY`) turns the overlay off, and the served board is then the list read alone.
+
 The suite serves the board over HTTP from a temporary state directory, against a lagging board read.
 """
 import http.client
@@ -491,3 +496,83 @@ def test_the_board_pass_reads_the_item_id_the_record_is_keyed_by(hub, monkeypatc
     placed = where(mod.board(), 11)
     assert placed and placed[0][1].get("pd") is True, \
         f"a record keyed by the stored item id draws no pending mark: {placed}"
+
+
+def test_an_entry_past_the_window_returns_the_card_to_the_reads_column(served):
+    """No read will ever agree with a lost board write, so the entry expires: the served board returns the card to
+    the column the list read holds, with no pending mark, and the entry is dropped."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Todo")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 600)}})
+    board = get_board(port)
+    placed = where(board, 7)
+    assert [p[0] for p in placed] == ["Todo"], f"an expired entry still drew its column: {placed}"
+    assert "pd" not in placed[0][1], "the card whose entry expired still wears the pending mark"
+    assert "ITEM7" not in recorded(state), "the expired entry stayed in the record"
+
+
+def test_the_expiry_is_reported_once_in_the_loop_log_naming_the_item_and_both_columns(served):
+    """The disagreement is visible in the loop's log: one line names the item, the recorded column and the column
+    the list read holds. A second serve of the same record writes no second line."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Todo")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 600)}})
+    get_board(port)
+    get_board(port)
+    lines = (state / "cycle.log").read_text().splitlines() if (state / "cycle.log").exists() else []
+    assert len(lines) == 1, f"the expiry was not reported once: {lines}"
+    line = lines[0]
+    assert "#7" in line, f"the expiry report does not name the item: {line}"
+    assert "Doing" in line and "Todo" in line, f"the expiry report does not name both columns: {line}"
+
+
+def test_a_card_another_writer_moved_follows_the_read_once_its_entry_expires(served):
+    """Another writer moved the card while the door's entry slept: once the entry expires the hub follows the carrier,
+    never the stale record."""
+    mod, state, port = served
+    lagging(mod, [card(9, "Doing")], now() - 10)
+    record(state, {"ITEM9": {"column": "Backlog", "at": at(now() - 600)}})
+    placed = where(get_board(port), 9)
+    assert [p[0] for p in placed] == ["Doing"], f"the hub argued with the carrier after the expiry: {placed}"
+    assert "pd" not in placed[0][1], "the card another writer moved still wears the pending mark"
+    assert "ITEM9" not in recorded(state), "the expired entry of the card another writer moved stayed"
+
+
+def test_the_window_defaults_to_120_seconds(served):
+    """An entry 100 s old is still pending; one 130 s old has expired, with no setting in the environment."""
+    mod, state, port = served
+    lagging(mod, [card(7, "Todo"), card(8, "Todo")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 100)},
+                   "ITEM8": {"column": "Doing", "at": at(now() - 130)}})
+    board = get_board(port)
+    inside, past = where(board, 7), where(board, 8)
+    assert [p[0] for p in inside] == ["Doing"] and inside[0][1].get("pd") is True, \
+        f"an entry inside the 120 s default window was not drawn as pending: {inside}"
+    assert [p[0] for p in past] == ["Todo"] and "pd" not in past[0][1], \
+        f"an entry past the 120 s default window did not expire: {past}"
+
+
+def test_the_window_is_a_setting(served, monkeypatch):
+    """A window named in the environment replaces the default: the same 100 s old entry expires under 60 s."""
+    mod, state, port = served
+    monkeypatch.setenv("SG_PENDING_WINDOW_SECONDS", "60")
+    lagging(mod, [card(7, "Todo")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 100)}})
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Todo"], f"the 60 s window did not expire a 100 s old entry: {placed}"
+    assert "pd" not in placed[0][1], "the card whose entry expired under the setting still wears the mark"
+
+
+@pytest.mark.parametrize("off", ["off", "0"])
+def test_the_off_setting_serves_the_list_read_only(served, monkeypatch, off):
+    """One setting turns the overlay off: no pending card, no mark, and the record is left as the door wrote it."""
+    mod, state, port = served
+    monkeypatch.setenv("SG_PENDING_OVERLAY", off)
+    lagging(mod, [card(7, "Todo")], now() - 10)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 600)}})
+    board = get_board(port)
+    placed = where(board, 7)
+    assert [p[0] for p in placed] == ["Todo"], f"the overlay drew a card though it is off: {placed}"
+    assert "pd" not in placed[0][1], "the overlay marked a card though it is off"
+    assert "ITEM7" in recorded(state), "the hub wrote the record while the overlay was off"
+    assert not (state / "cycle.log").exists(), "the hub reported an expiry while the overlay was off"
