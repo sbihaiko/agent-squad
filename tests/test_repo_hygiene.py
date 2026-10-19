@@ -45,3 +45,15 @@ def test_no_finished_worktree_is_left_behind():
         if ahead == "0":
             stale.append(str(path))
     assert stale == [], f"worktrees holding nothing main does not already have: {stale}"
+
+
+def test_a_locked_worktree_is_a_live_agents_and_is_exempt():
+    """A locked worktree (the porcelain `locked` line) is a live agent's, so it is never stale; an unlocked one at main is."""
+    text = "\n".join([
+        "worktree /r", "HEAD aaa", "branch refs/heads/dev", "",
+        "worktree /r/.claude/worktrees/live", "HEAD aaa", "branch refs/heads/x", "locked", "",
+        "worktree /r/.claude/worktrees/done", "HEAD aaa", "branch refs/heads/y", "",
+    ])
+    rows = parse_worktrees(text)
+    assert [r[2] for r in rows] == [False, True, False]
+    assert stale_worktrees(rows, Path("/elsewhere"), lambda main, head: "0") == ["/r/.claude/worktrees/done"]
