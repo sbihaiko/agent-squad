@@ -28,6 +28,7 @@ pout=$(pass); rc=$?
 case "$pout" in *LIVE-GUARD*"copy SKILL.md"*) ok "the pass reports the difference it read";; *) ko "no drift line: $pout";; esac
 [ "$(cat "$live/SKILL.md")" = "skill v2" ] && ok "the pass publishes the shipped file" || ko "SKILL.md was not published"
 [ "$(cat "$live/scripts/hub.py")" = "hub v2" ] && ok "the pass publishes the shipped script" || ko "hub.py was not published"
+[ -e "$T/st/live-publish.stamp" ] && ok "a publish leaves its stamp, so the janitor reads the change as the publish's own (#659)" || ko "no publish stamp in the state dir"
 
 # --- after the publish the check reports no difference (the done condition, #152) -----------------
 out=$(check); rc=$?

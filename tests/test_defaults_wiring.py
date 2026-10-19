@@ -47,9 +47,10 @@ async def test_a_precompact_hook_logs_each_compaction_to_the_run_record_with_its
     assert events == [("compaction", {"node": "actor", "entry": 1, "item": None, "session": "run-s1", "trigger": "auto"})]
 
 
-async def test_no_hook_is_set_when_compaction_logging_is_off():
+async def test_no_compaction_hook_is_set_when_compaction_logging_is_off():
+    """The sandbox wall (PreToolUse) is on every session; only the compaction log follows the setting (#659)."""
     a = SdkAdapter(query=stub([ResultMessage(result="{}")]), options_cls=Options)
-    assert a._hooks(request()) is None
+    assert "PreCompact" not in a._hooks(request())
 
 
 def test_a_compaction_event_needs_its_fields():
