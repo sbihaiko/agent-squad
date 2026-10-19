@@ -4,9 +4,10 @@
 `SG_*` variable cleared and `HOME` at its own temp dir, so the live loop's state never reaches an assertion.
 
 The measured run time of each suite sits beside the runner, in `tests/shell_suites_seconds.txt` (`name seconds`, `#` starts
-a comment). A suite of 1 s or more is heavy, so the fast battery (`-m "not heavy"`) leaves it out before it runs. One over
-the slow line carries a `slow` reason, so the 20 s cap does not fail a real script suite. A new suite needs no edit here: it
-is found, and it counts as fast until the list says otherwise. The heavy line in `tests/slowcap.py` names one that is not.
+a comment); `python3 -m tests.measure_shell_suites` writes it. A suite of 0.5 s or more is heavy, so the fast battery
+(`-m "not heavy"`) leaves it out before it runs: the line is half the 1 s rule, since a full run's load makes a 1 s suite take
+2.5 s (#629). One over the slow line, 8 s, carries a `slow` reason, so the 20 s cap does not fail a real script suite under
+that load. A new suite is found with no edit here, and a test fails until the list measures it.
 """
 import os
 import subprocess
@@ -16,8 +17,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "contrib" / "squad-goal" / "scripts"
 SECONDS_LIST = Path(__file__).resolve().parent / "shell_suites_seconds.txt"
-HEAVY_SECONDS = 1.0
-SLOW_SECONDS = 15.0
+HEAVY_SECONDS = 0.5
+SLOW_SECONDS = 8.0
 SUITE_TIMEOUT_SECONDS = 300.0
 TAIL_LINES = 20
 
