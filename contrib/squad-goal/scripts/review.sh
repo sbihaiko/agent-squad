@@ -17,6 +17,8 @@
 # an answer outside it (prose, a verdict off line 1, a bullet over two lines) is a MODEL_FORMAT failure of that
 # try and the chain moves on, never a silent pass. That shape is not described here (#1835): revformat.py prints
 # it and the prompt embeds the printed text, so the prompt cannot ask for a shape the check rejects.
+# A full review answers in JSON with the schema of revformat.py --schema (#632); revformat.py --answer renders it into that
+# shape, so every reader of review-<key>.md works unchanged, and the raw JSON is kept as review-<key>.answer.json.
 # Fix rounds are reviewed incrementally: when the last review of this branch asked for CHANGES and the new head
 # descends from the reviewed sha (compare status "ahead") with a delta under review_delta_max_lines, the reviewer
 # gets the previous findings plus that delta only; otherwise (first review, rebase, big delta) a full review.
@@ -89,8 +91,16 @@ SEV="Severity: the section a finding sits in is its severity, nothing else. BLOC
 cap=$(jq -r '.review_max_lines // 60' "$cfg")
 SHAPE_FULL="$(python3 "$(dirname "$0")/revformat.py" --shape)"
 SHAPE_FIX="$(python3 "$(dirname "$0")/revformat.py" --shape --fix-round)"
-FMT="Output — a short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json). Answer with exactly that and nothing else; the fields in angle brackets are the ones you fill in with the real path and line, the defect the code has, the failure it causes and the fix:
+# #632: a full review answers in JSON with the schema revformat.py prints (--schema). claude -p gets it as --json-schema,
+# codex as --output-schema <file>, and every model gets it in the prompt (agy, grok and the direct path have no other way).
+# revformat.py --answer renders the JSON into the checklist below, so every reader of review-<key>.md works unchanged.
+# A fix round stays markdown (#633).
+SCHEMA="$(python3 "$(dirname "$0")/revformat.py" --schema)"; printf '%s\n' "$SCHEMA" > "$p.schema"
+FMT="Output — one JSON object and nothing else (no prose, no code fence), that matches this JSON Schema:
+$SCHEMA
+verdict is APPROVE or CHANGES. Each finding fills location (file:line, path:symbol, AC<n> or whole diff), defect (the defect the code has), failure (the concrete failure it causes) and fix. A list with no finding is []; resolved is [] in a full review. The loop renders the JSON into this short, topic-grouped checklist, at most $cap lines in all (the cap is review_max_lines in models.json):
 $SHAPE_FULL"
+schemaargs=(); outschema=(); [ -z "$fr" ] && schemaargs=(--json-schema "$SCHEMA") && outschema=(--output-schema "$p.schema")
 FMTFIX="Output — the same short checklist, at most $cap lines in all (the cap is review_max_lines in models.json). Answer with exactly that and nothing else; the fields in angle brackets are the ones you fill in with the real path and line, the defect the code has, the failure it causes and the fix:
 $SHAPE_FIX"
 prdata() { echo "$lbl: its diff is taken against $pbase"; }
@@ -119,6 +129,13 @@ fi
 # review_no_tools (#504): a model listed there reviews from this prompt alone. With tools, DeepSeek explored the repo turn
 # after turn (833 s, 4.3M cache-read tokens) and never answered inside its timeout; the diff is already above.
 sed -E 's/ Read (surrounding )?code (at the head )?with git show .*$/ You have no tools: judge from the text below alone./' "$p" > "$p.nt"
+# answer_check <answer> <review> [<keep>]: writes the review of a model answer to <review> -- a JSON answer rendered (its
+# raw JSON to <keep>), a markdown one normalized (#632) -- and prints the first failure: the parser's reason for a JSON
+# answer off the schema (no <review> then), or the shape check's. Exit 1 on a failure.
+answer_check() { local why
+  if ! why=$(python3 "$(dirname "$0")/revformat.py" --answer ${3:+--keep "$3"} "$1" 2>&1 >"$2"); then
+    rm -f "$2"; echo "the JSON answer is not the schema: ${why:-revformat.py failed to read it}"; return 1; fi
+  python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$2" 2>/dev/null; }
 notools() { jq -e --arg m "$1" '(.review_no_tools // []) | index($m)' "$cfg" >/dev/null 2>&1; }
 direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
   cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
@@ -242,20 +259,19 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
           # One repair turn: a sound review with one line outside the shape goes back once, with the check's own
           # complaint, instead of losing the whole review to MODEL_FORMAT. Both calls' tokens are counted.
           if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$o" > "$o.t" 2>/dev/null \
-             && python3 "$(dirname "$0")/revformat.py" --normalize "$o.t" > "$o.n" 2>/dev/null \
-             && ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$o.n" 2>/dev/null) && [ -n "$frem" ]; then
+             && ! frem=$(answer_check "$o.t" "$o.n") && [ -n "$frem" ]; then
             mv "$o" "$o.1"
             jq --rawfile a "$o.t" --arg f "$frem" '.messages += [{role:"assistant", content:$a}, {role:"user", content:("Your answer is outside the shape: " + $f + ". Answer again: the same findings, every line in the shape, nothing else.")}]' "$p.body" > "$p.body2"
             direct "$p.body2"; r=$?
             jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
           fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
         else
-          cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch < $p > "$o" 2>"$e"
+          cap claude -p --output-format json --strict-mcp-config --model "${m#claude:}" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
         fi;;
       grok-*) (cd "$SG_CHECKOUT" && cap grok -m "$m" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
       gemini-*) (cd "$SG_CHECKOUT" && cap agy --model "$m" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools
       *) cap codex exec -m "$m" -c service_tier=fast -c model_reasoning_effort=medium -s read-only \
-           --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" -o "$o" - < $p > "$e" 2>&1;;
+           --ephemeral --skip-git-repo-check -C "$SG_CHECKOUT" "${outschema[@]}" -o "$o" - < $p > "$e" 2>&1;;
     esac
     rc=$?
     # token ledger: one line per call in $SG_STATE/token-usage.tsv (ts, consumer, model, in, out, cache_read); consumer review:<branch>,
@@ -269,14 +285,15 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
     # the whole line and lose the call. Why a word and not a bare flag: the mark names its reason, and the reason travels with it.
     tl="$SG_STATE/token-usage.tsv"; tn=$(grep -c "^[^	]*	review:$pr\(#[0-9]*\)\{0,1\}	" "$tl" 2>/dev/null); tc="review:$pr"; [ "${tn:-0}" -gt 0 ] && tc="$tc#$((tn+1))"
     tu=""; mark=""
-    case $m in claude:*) tu=$(jq -r 'select(type=="object" and (.result|type)=="string" and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
+    case $m in claude:*) tu=$(jq -r 'select(type=="object" and ((.result|type)=="string" or (.structured_output|type)=="object") and (.usage|type)=="object") | [(.usage.input_tokens//0)+(.usage.cache_creation_input_tokens//0), (.usage.output_tokens//0), (.usage.cache_read_input_tokens//0)] | @tsv' "$o" 2>/dev/null)
       # A claude answer is a review only when the run itself succeeded (#501): the JSON says `is_error` and the `subtype`
       # (success, error_max_turns, error_during_execution, ...), and `.result` holds whatever the model had said when the run
       # ended -- a lone preamble included, which the check below would take for an answer of rc 0. The raw JSON is kept
       # beside the answer, so a run that ended on its own is diagnosed without spending another call.
       bad=$(jq -r 'select(type=="object" and ((.is_error // false) or ((.subtype // "success") != "success"))) | (.subtype // "error")' "$o" 2>/dev/null)
       [ -n "$bad" ] && cp "$o" "$SG_STATE/review-$pr.json"
-      jq -r .result "$o" > "$o.r" 2>/dev/null && mv "$o.r" "$o"; rm -f "$o.r"
+      # with --json-schema the answer is the envelope's structured_output (#632); without it, .result
+      jq -r 'if (.structured_output|type)=="object" then (.structured_output|tojson) else .result end' "$o" > "$o.r" 2>/dev/null && mv "$o.r" "$o"; rm -f "$o.r"
       case "$tu" in ""|"0	0	0") tu="0	0	0"; mark="no-usage";; esac;;
       *) tu="0	0	0";;
     esac
@@ -306,11 +323,14 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
     # the verdict goes on line 1 in the exact form the loop parses (review.sh, the loop's own passes and hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
     if [ $rc = 0 ] && [ -s "$o" ] && [ -f "$(dirname "$0")/revformat.py" ]; then
-      python3 "$(dirname "$0")/revformat.py" --normalize "$o" > "$o.n" 2>/dev/null && mv "$o.n" "$o"
+      # #632: a JSON answer is rendered into the checklist here (its raw JSON kept in $o.answer); a JSON answer off the
+      # schema keeps the raw text in $o, and the parser's reason is the format failure below.
       # ... and the answer itself must BE the checklist: a reviewer that narrates before it rules, restates the diff or
       # closes with a summary is a FORMAT failure of this try (#1777) -- the chain moves on and the issue says so,
       # instead of the prose passing silently as a review.
-      if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$o" 2>/dev/null); then
+      rm -f "$o.answer"; frem=$(answer_check "$o" "$o.n" "$o.answer"); fok=$?
+      [ -s "$o.n" ] && mv -f "$o.n" "$o"; rm -f "$o.n"
+      if [ "$fok" != 0 ]; then
         # #625: with several reachable models, the same model gets one repair try first: the prompt, its answer and the
         # check's complaint. The no-tools path already had its repair turn inside direct(). One extra try at most.
         nx="the next model is tried"; [ "$reachable" -gt 1 ] && [ "$rep" = 0 ] && [ -n "$frem" ] && ! notools "$m" && nx="the same model answers once more with the complaint"
@@ -325,7 +345,8 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
         fmt=1; rc=1; [ "$reachable" -gt 1 ] && break; continue
       fi
     fi
-    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
+    # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
+    grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
   done
   [ "$fmt" = 1 ] || printf "MODEL_FAIL review %s on branch %s: exit %s, %s\n" "$m" "$bm" "$rc" "$({ tail -c 300 "$e"; [ "$rc" != 0 ] && tail -c 300 "$o"; } 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"   # claude -p prints its API error on stdout, the answer file
   prev=$m   # this model's tries failed (MODEL_FAIL or MODEL_FORMAT), so the next model's turn queues a MODEL_SWITCH (#631)

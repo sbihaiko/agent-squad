@@ -43,6 +43,10 @@ usage: revformat.py [--max-lines N] [--fix-round] <review>
        revformat.py --summary <review>     prints "blocking=N debt=N" (0 when the shape is broken)
        revformat.py --shape [--fix-round]  prints the answer shape of that mode, and checks nothing (#1835)
        revformat.py --fingerprint <review> prints the fingerprint of the review's findings
+       revformat.py --schema               prints the JSON schema of an answer (#632)
+       revformat.py --answer [--keep F] <answer>
+                                           prints the review: a JSON answer rendered, a markdown one normalized;
+                                           exit 1 = a JSON answer off the schema, its reason on stderr
        revformat.py --stall <dir> <prefix> <key> <fingerprint>
                                            prints the failed rounds in a row for that marker set (ADR-0134)
        revformat.py --record-stall <dir> <prefix> <key> <fingerprint> <rounds>
@@ -50,6 +54,7 @@ usage: revformat.py [--max-lines N] [--fix-round] <review>
 """
 import argparse
 import hashlib
+import json
 import os
 import re
 import sys
@@ -339,6 +344,93 @@ def normalize(review):
     return "\n".join([f"VERDICT: {verdict}"] + rest)
 
 
+# #632: a full review answers in JSON with this schema (#627), and `render` writes the markdown above from it, so every
+# reader of review-<key>.md works unchanged. The schema is strict (codex --output-schema asks for every key required and
+# no other key); `parse_answer` reads it the same way, with no library.
+FIELDS = ("location", "defect", "failure", "fix")
+_FINDING = {"type": "object", "additionalProperties": False, "required": list(FIELDS),
+            "properties": {f: {"type": "string"} for f in FIELDS}}
+SCHEMA = {"type": "object", "additionalProperties": False, "required": ["verdict", "blocking", "debt", "resolved"],
+          "properties": {"verdict": {"type": "string", "enum": ["APPROVE", "CHANGES"]},
+                         "blocking": {"type": "array", "items": _FINDING},
+                         "debt": {"type": "array", "items": _FINDING},
+                         "resolved": {"type": "array", "items": _FINDING}}}
+FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n?```", re.DOTALL)
+
+
+def json_candidate(text):
+    """The JSON object an answer holds, as text, or None when the answer is not a JSON one (a markdown answer).
+
+    The answer may be bare, in a code fence, or after a line of prose; it is a JSON answer when it names "verdict"
+    inside braces. The text read is the first fenced block, else the span from the first `{` to the last `}`.
+    """
+    if '"verdict"' not in text or "{" not in text:
+        return None
+    fenced = FENCE.search(text)
+    if fenced and "{" in fenced.group(1):
+        return fenced.group(1).strip()
+    start = text.index("{")
+    return text[start:text.rindex("}") + 1] if "}" in text[start:] else text[start:]
+
+
+def parse_answer(text):
+    """The answer as a dict that matches SCHEMA. Raises ValueError with the parser's reason when it does not.
+
+    A missing list is an empty list, and a verdict in another case is read in upper case. Every finding has the four
+    fields as non-empty strings. Nothing else is checked here: the semantic rules stay with `survey`.
+    """
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"the answer is not JSON: {exc}") from None
+    if not isinstance(obj, dict):
+        raise ValueError("the answer is not a JSON object")
+    verdict = obj.get("verdict")
+    if not isinstance(verdict, str) or verdict.strip().upper() not in ("APPROVE", "CHANGES"):
+        raise ValueError(f'verdict is {verdict!r}, not "APPROVE" or "CHANGES"')
+    out = {"verdict": verdict.strip().upper()}
+    for key in ("blocking", "debt", "resolved"):
+        items = obj.get(key) or []
+        if not isinstance(items, list):
+            raise ValueError(f"{key} is not a list")
+        for n, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f"{key}[{n}] is not an object")
+            for f in FIELDS:
+                if not isinstance(item.get(f), str) or not item[f].strip():
+                    raise ValueError(f"{key}[{n}].{f} is missing or empty")
+        out[key] = items
+    return out
+
+
+def render(answer):
+    """The markdown review of a parsed answer: line 1 `VERDICT: ...`, then each non-empty section, most severe first,
+    one bullet per finding, `<location> — <defect> — <failure> — <fix>` on one line. The line breaks in a field become
+    one space. The text ends with a newline, as a model's answer does, so the fingerprint is the one of the equivalent
+    markdown answer (ADR-0134).
+    """
+    lines = [f"VERDICT: {answer['verdict']}"]
+    for key, name in (("blocking", SECTIONS[0]), ("debt", SECTIONS[1]), ("resolved", ANSWER)):
+        if answer.get(key):
+            lines.append(f"## {name}")
+            lines += ["- " + " — ".join(" ".join(item[f].split()) for f in FIELDS) for item in answer[key]]
+    return "\n".join(lines) + "\n"
+
+
+def answer_review(text, keep=None):
+    """The review of a model answer. A JSON answer is parsed and rendered, and its raw JSON is written to `keep`; a
+    markdown answer is normalized as before. Raises ValueError for a JSON answer off the schema."""
+    raw = json_candidate(text)
+    if raw is None:
+        return normalize(text)
+    answer = parse_answer(raw)
+    if keep:
+        with open(keep, "w", encoding="utf-8") as f:
+            json.dump(json.loads(raw), f, ensure_ascii=False, indent=1)
+            f.write("\n")
+    return render(answer)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="Check the shape of a squad review (a short checklist).")
     p.add_argument("review", nargs="?", help="the review to check, or - for stdin (not needed with --shape)")
@@ -353,6 +445,10 @@ def main(argv=None):
     p.add_argument("--shape", action="store_true",
                    help="print the answer shape of this mode (with --fix-round, the fix round's), and check nothing:"
                    " what review.sh embeds in the prompt, verbatim (#1835)")
+    p.add_argument("--schema", action="store_true", help="print the JSON schema of an answer, and check nothing (#632)")
+    p.add_argument("--answer", action="store_true", help="print the review of a model answer: JSON rendered, markdown"
+                   " normalized; exit 1 with the parser's reason on stderr for JSON off the schema (#632)")
+    p.add_argument("--keep", metavar="FILE", help="with --answer, write the raw JSON answer there")
     p.add_argument("--fingerprint", action="store_true",
                    help="print the fingerprint of the review's findings, the reading the fix pass keeps (ADR-0134)")
     p.add_argument("--stall", nargs=4, metavar=("DIR", "PREFIX", "KEY", "FINGERPRINT"),
@@ -369,12 +465,23 @@ def main(argv=None):
     if a.shape:
         print(shape(a.fix_round))
         return 0
+    if a.schema:
+        print(json.dumps(SCHEMA, separators=(",", ":")))
+        return 0
     if not a.review:
-        p.error("a review is required (or - for stdin), unless --shape, --stall or --record-stall is asked for")
+        p.error("a review is required (or - for stdin), unless --shape, --schema, --stall or --record-stall is asked for")
     if a.fingerprint:
         print(findings_fingerprint(sys.stdin.buffer.read() if a.review == "-" else open(a.review, "rb").read()))
         return 0
     text = sys.stdin.read() if a.review == "-" else open(a.review, encoding="utf-8", errors="replace").read()
+    if a.answer:
+        try:
+            review = answer_review(text, a.keep)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(review, end="" if review.endswith("\n") else "\n")
+        return 0
     if a.normalize:
         print(normalize(text), end="" if text.endswith("\n") else "\n")
         return 0
