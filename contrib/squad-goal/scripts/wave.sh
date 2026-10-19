@@ -40,8 +40,8 @@
 # approve it, was read against another base, or read a different head. The review of a run child is read in the child's own
 # worktree against the wave branch (childreview.sh, #448): a child's branch reaches no remote, so the review lane that lists
 # pushed `fix/` and `gui/` branches never sees it, and the entry held every child for good.
-# A review that asked for CHANGES on a run that already ended puts its issue back in the queue (`requeue`) instead of holding
-# it: the child of a live run stays where it stands, because that run may still fix it.
+# A review that asked for CHANGES puts its issue back in the queue (`requeue`) instead of holding it, live run or not
+# (childcc.py): a child's branch is pushed nowhere, so nothing behind a hold could fix it.
 # A wave with nothing ahead of the base landed empty: its ref and marker go and `land` exits 0. A landing that fails on a rebase
 # conflict, a push refused twice, or a start it cannot make (the base or the wave branch is gone, the checkout fails: exit 2)
 # is counted per run (SG_WAVE_LAND_TRIES, default 3); at the cap each issue the wave carries
@@ -192,13 +192,14 @@ loop_caused() {
 }
 
 # loop_stop <issue> <why>: SG_LOOP_REQUEUE_CAP (6) loop-caused requeues of one issue (#621). A child held for good is not
-# redispatched forever: the issue ends needs-human (ADR-0029). Its card goes to Blocked and it takes needs-owner, which no
-# dispatch pass takes (SG_FRONTIER_SKIP_LABELS) and which holds the card in Blocked (janitor rule R), with one comment that
-# names the loop cause. No frozen:owner: the loop failed the issue, not its work. The owner frees it by removing the label.
+# redispatched forever: the issue ends needs-human (ADR-0029). It takes needs-owner, which no dispatch pass takes
+# (SG_FRONTIER_SKIP_LABELS), with one comment that names the loop cause. No card write here (#630): Blocked is no column of
+# the shipped board, it is the owner freeze over the column the work reached (board_columns.py), so the card keeps its
+# column and janitor rule R turns needs-owner into frozen:owner (Blocked on the old vocabulary). The owner frees it by
+# removing the labels.
 loop_stop() {
   local n=$1 why=$2 lf="$SG_STATE/auto/loopqueues-$1.runs" f out
   out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=needs-owner" 2>&1) || printf 'WAVE-LABEL #%s needs-owner refused: %s\n' "$n" "$out"
-  board_write Blocked "$n"
   f=$(sg_cq_file "$n-loopstop$$.md" 2>/dev/null) && {
     printf 'SQUAD-NEEDS-HUMAN: %s requeues the loop itself caused, none a failure of this issue'"'"'s work; the loop stops building it (#621). Last cause: %s\n\nRuns:\n' "$c" "$(printf '%s' "$why" | head -1)"
     awk -F'\t' '$1 != "frozen" { printf "- %s: %s\n", ($1 == "" ? "(no run named)" : $1), $3 }' "$lf" 2>/dev/null; } > "$f"

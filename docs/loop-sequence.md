@@ -147,7 +147,7 @@ A child the run approved enters with no second review. If its entry still holds 
 
 ### Requeue counts
 
-`wave.sh requeue` keeps two ledgers per issue. A loop-caused reason (`loop_caused`: a wave that landed without the child, an adapter error, a merge or rebase conflict, a disk stop, a review with no ruling or a moved head) counts in `loopqueues-N`. At `SG_LOOP_REQUEUE_CAP` (6) `loop_stop` adds `needs-owner`, asks for Blocked, and queues SQUAD-NEEDS-HUMAN. Any other reason counts in `requeues-N`. At `SG_REQUEUE_CAP` (3) `stop` adds `frozen:owner` and queues SQUAD-NOT-STARTABLE. One run counts once. A new non-RED `Refs #N` commit in the base starts the count again. A requeue the age cap makes (`cap`) counts in neither. `janitor.py` rule O counts a run that delivered nothing through `wave.sh fail`, with the run's own review verdict as the kind.
+`wave.sh requeue` keeps two ledgers per issue. A loop-caused reason (`loop_caused`: a wave that landed without the child, an adapter error, a merge or rebase conflict, a disk stop, a review with no ruling or a moved head) counts in `loopqueues-N`. At `SG_LOOP_REQUEUE_CAP` (6) `loop_stop` adds `needs-owner` and queues SQUAD-NEEDS-HUMAN. It writes no card; janitor rule R adds `frozen:owner` over the column the card reached. Any other reason counts in `requeues-N`. At `SG_REQUEUE_CAP` (3) `stop` adds `frozen:owner` and queues SQUAD-NOT-STARTABLE. One run counts once. A new non-RED `Refs #N` commit in the base starts the count again. A requeue the age cap makes (`cap`) counts in neither. `janitor.py` rule O counts a run that delivered nothing through `wave.sh fail`, with the run's own review verdict as the kind.
 
 ### Gate lock
 
@@ -227,5 +227,4 @@ sequenceDiagram
 
 ## 4. Edges the code leaves open
 
-- `loop_stop` (`wave.sh`) asks for Blocked. The shipped board has no Blocked option, so `board.py` refuses the write and `wave.sh` names the refusal. The card keeps its column. Janitor rule R then reads `needs-owner` and adds `frozen:owner`.
 - `review.sh` sets `prev` only inside a comment, so it never queues a MODEL_SWITCH line.
