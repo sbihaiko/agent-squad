@@ -154,13 +154,12 @@ class Engine:
 
     def _finish(self, node, entry, sc, outcome, reasons, artifact=None, *, spend=None, turns=None, cap=None, elapsed=None, routed=None, **extra):
         name = node["name"]
-        if isinstance(extra.get("model"), str):     # an outcome keeps the graph spelling and names the registry id it resolved to
+        if isinstance(extra.get("model"), str) and self.models_resolve:     # an outcome keeps the graph spelling and names the registry id it resolved to
             raw, reg = extra["model"], self._registry()
-            extra["route_model"] = modelreg.invocation(raw, "sdk", reg=reg).wire if self.models_resolve else raw
-            if self.models_resolve:
-                ref = modelreg.normalize(raw, reg)
-                if ref.known:
-                    extra["model_id"] = ref.id
+            extra["route_model"] = modelreg.invocation(raw, "sdk", reg=reg).wire
+            ref = modelreg.normalize(raw, reg)
+            if ref.known:
+                extra["model_id"] = ref.id
         routed = routed or self._route(node, outcome)
         fields = dict(reasons=list(reasons), artifact=artifact, spend=spend, turns=turns, cap=cap, elapsed=elapsed, routed=routed, **extra)
         self.outcomes.node(name, entry, sc.item, outcome, **fields)

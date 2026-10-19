@@ -130,8 +130,23 @@ async def test_a_run_keeps_the_raw_graph_spelling_in_model_and_the_registry_id_a
     assert out["model_id"] == "claude-sonnet-5-5"
 
 
+@pytest.mark.anyio
+async def test_a_run_that_does_not_resolve_records_only_the_graph_spelling(tmp_path):
+    """#587: with no opt-in, an outcome carries the graph spelling and no registry field at all."""
+    from squad.adapter import ScriptedAdapter
+    from squad.engine import Engine
+    from squad.graph import from_doc
+    from tests.flows import agent, doc
+    d = doc([agent("a", output_key="x", next={"fail": "exit:fail"})], ["a"])
+    eng = Engine(from_doc(d), ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1}}), tmp_path / "run")
+    await eng.run()
+    out = [e for e in record.read(tmp_path / "run" / "record.jsonl") if e["event"] == "outcome"][0]
+    assert out["model"] == "sonnet"
+    assert "model_id" not in out and "route_model" not in out
+
+
 def test_an_outcome_keeps_the_model_id_and_the_wire_string(tmp_path):
-    """A run that resolves names the registry id in `model` and the string it sent in `route_model`."""
+    """A resolving run keeps the string it sent in `route_model`, apart from the graph spelling in `model`."""
     r = record.Record(tmp_path / "r.jsonl")
     r.append("run_start", **START)
     ev = r.append("outcome", **{**OUTCOME, "model": "claude-sonnet-5-5", "route_model": "sonnet"})

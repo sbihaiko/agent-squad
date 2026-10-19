@@ -182,7 +182,7 @@ async def test_a_graph_that_does_not_ask_keeps_resolution_off(tmp_path):
     assert ad.resolve is False
     assert events(run, "run_start")[0]["models"] == {"resolve": False}
     out = [e for e in events(run, "outcome") if e["node"] == "a"][0]
-    assert (out["model"], out["route_model"]) == ("sonnet", "sonnet") and "model_id" not in out
+    assert out["model"] == "sonnet" and "model_id" not in out and "route_model" not in out
 
 
 @pytest.mark.anyio
