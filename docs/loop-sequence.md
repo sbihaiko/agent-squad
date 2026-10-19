@@ -44,7 +44,7 @@ sequenceDiagram
     participant GH as GitHub (issues, board, dev and wave branches)
 
     O->>GH: move the card to Todo#59; the issue carries ready-for-agent
-    O->>WD: watchd.sh start: clears token-guard.since, token-over.alert and token-pause
+    O->>WD: watchd.sh start: clears token-guard.since, token-over and token-pause
     WD->>FL: spawn#59; fastloop writes fastloop.pid each beat
     WD->>W: spawn, restart 5 s after an exit
     FL->>CC: each beat, background: single.sh childcc childcc.py over every active run
@@ -221,7 +221,7 @@ sequenceDiagram
     J->>GH: R: a failed or completed run with nothing landed: Todo#59; needs-human with nothing landed: frozen:owner#59; a Closed or Abandoned card is never frozen
     J->>J: rule O drops disp-N of a run that landed nothing and counts it (wave.sh fail)#59; rule C kills a zombie run
     Note over W: token cap
-    W->>W: token-guard.sh over the cap: token-over.alert, one alert, a cycle.log line#59; the loop goes on
+    W->>W: token-guard.sh over the cap: token-over, one alert, a cycle.log line#59; the loop goes on
     W->>W: last hour over 3x the cap's hourly share, after one hour measured: token-pause#59; autofrontier and autobug start nothing
     W->>W: last hour under the cap's hourly share: token-pause cleared#59; dispatch resumes
     Note over LG: live publication
