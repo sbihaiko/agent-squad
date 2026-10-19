@@ -12,8 +12,8 @@ CFG = defaults.load()
 
 
 class Matcher:
-    def __init__(self, hooks, timeout=None):
-        self.hooks, self.timeout = hooks, timeout
+    def __init__(self, matcher=None, hooks=(), timeout=None):    # the SDK HookMatcher's fields
+        self.matcher, self.hooks, self.timeout = matcher, list(hooks), timeout
 
 
 def built(sink=None):

@@ -54,7 +54,7 @@ def test_the_cli_prints_a_node_and_refuses_an_unknown_role(capsys):
 async def test_the_adapter_appends_the_role_text_after_the_shared_contract():
     from squad.sdk_adapter import SdkAdapter
     seen = []
-    a = SdkAdapter.from_defaults(CFG, query=stub([ResultMessage(result="{}")], seen), options_cls=Options, hook_cls=lambda hooks, timeout: (hooks, timeout))
+    a = SdkAdapter.from_defaults(CFG, query=stub([ResultMessage(result="{}")], seen), options_cls=Options, hook_cls=lambda hooks, timeout, matcher=None: (hooks, timeout))
     await a.call(request(instructions="ROLE TEXT"))
     shared = (defaults.ROOT / "prompts/_contract.md").read_text() + "\n" + defaults.AUTONOMY_FRAGMENT.read_text()   # autonomy is on by default
     sp = seen[0][1].kw["system_prompt"]

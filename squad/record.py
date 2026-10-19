@@ -16,6 +16,7 @@ REQUIRED = {
     "call_start": ["node", "entry", "session", "pid", "limit", "started_at"],
     "progress": ["node", "entry", "item", "session", "messages", "context_tokens", "tool"],
     "compaction": ["node", "entry", "session", "trigger"],
+    "sandbox_deny": ["node", "entry", "session", "tool", "reason"],   # a child's tool call the sandbox hook denied (squad/sandbox.py)
     "outcome": ["node", "entry", "outcome", "reasons", "artifact", "spend", "turns", "cap", "elapsed"],
     "wait": ["node", "owner", "deadline_at", "default"],
     "proposed": ["proposal_id", "kind", "target", "requested", "proposer"],

@@ -69,6 +69,7 @@ test-janitor-h.sh 0.59
 test-janitor-i.sh 1.13
 test-janitor-k.sh 1.57
 test-janitor-killed.sh 0.85
+test-janitor-live-mtime.sh 2.68
 test-janitor-neverstarted.sh 1.51
 test-janitor-own-pass.sh 3.46
 test-janitor-pid-reuse.sh 0.35

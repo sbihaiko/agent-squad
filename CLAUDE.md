@@ -38,6 +38,9 @@ ADRs and this file are never ledgers (see Design rules): no dates, counts, statu
   Guard: `tests/test_plugin.py`.
 - **One module starts a run** (`squad/launch.py`): the run folder, the `graph.json` copy, the run id and the defaults check.
   The CLI and both harness scripts call it and never build an `Engine`. A run keeps its record in its run folder. Guard: `tests/test_launch.py`.
+- **A child session writes only inside its worktree and never touches the live skill copy or the loop state** (`squad/sandbox.py`).
+  `bypassPermissions` skips `can_use_tool`, so a PreToolUse hook on every adapter session denies the call with a reason and records `sandbox_deny`.
+  The janitor alerts when the live copy changes with no publish. Guard: `tests/test_sandbox.py`, `contrib/squad-goal/scripts/test-janitor-live-mtime.sh`.
 - **A project settings file overlays the plugin defaults** (`docs/squad/defaults.yaml`, `squad/project_settings.py`).
   Order: plugin defaults, project file, roles, graph run block, node; only the project file may raise a default.
   `run_start` records its path and hash, and a resume refuses when it changed. Guard: `tests/test_project_settings.py`.

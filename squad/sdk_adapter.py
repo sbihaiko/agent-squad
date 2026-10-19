@@ -18,7 +18,7 @@ import time
 
 import anyio
 
-from squad import modelreg, prices, workcmd
+from squad import modelreg, prices, sandbox, workcmd
 from squad.adapter import AdapterError, CallResult, MessageOverCeiling
 from squad.stall import StallWatch
 
@@ -200,19 +200,34 @@ class SdkAdapter:
         """The engine hands over a function that appends an event to the run record."""
         self.sink = sink
 
-    def _hooks(self, req):
-        """A PreCompact hook that logs each compaction to the run record. The timeout is set on the matcher (G12)."""
-        if not self.log_compaction:
-            return None
+    def _matcher_cls(self):
         if self._hook_cls is None:
-            import claude_agent_sdk as sdk
-            self._hook_cls = sdk.HookMatcher
+            try:
+                import claude_agent_sdk as sdk
+                self._hook_cls = sdk.HookMatcher
+            except ImportError:     # a dev install has no SDK, and no session runs there
+                self._hook_cls = sandbox.Matcher
+        return self._hook_cls
+
+    def _hooks(self, req):
+        """The sandbox wall on every session (PreToolUse, squad/sandbox.py), and a PreCompact hook that logs each
+        compaction to the run record when the setting asks for it. The timeout is set on the matcher (G12)."""
+        cls = self._matcher_cls()
+
+        def on_deny(tool, reason):
+            if self.sink:
+                self.sink("sandbox_deny", node=req.node, entry=req.entry, item=req.item, session=req.session_id, tool=tool, reason=reason)
+        hooks = {"PreToolUse": [cls(matcher=sandbox.MATCHER, hooks=[sandbox.pre_tool_use(req.workspace or os.getcwd(), on_deny)],
+                                    timeout=self.hook_timeout)]}
+        if not self.log_compaction:
+            return hooks
 
         async def on_compact(input_data, tool_use_id, context):
             if self.sink:
                 self.sink("compaction", node=req.node, entry=req.entry, item=req.item, session=req.session_id, trigger=input_data.get("trigger"))
             return {}
-        return {"PreCompact": [self._hook_cls(hooks=[on_compact], timeout=self.hook_timeout)]}
+        hooks["PreCompact"] = [cls(hooks=[on_compact], timeout=self.hook_timeout)]
+        return hooks
 
     def _sdk(self):
         if self._query is None or self._options_cls is None:
@@ -249,9 +264,7 @@ class SdkAdapter:
             sp = dict(sp) if isinstance(sp, dict) else {"type": "preset", "preset": "claude_code"}
             sp["append"] = "\n\n".join(x for x in (sp.get("append"), req.instructions) if x)
             kw["system_prompt"] = sp
-        hooks = self._hooks(req)
-        if hooks:
-            kw["hooks"] = hooks
+        kw["hooks"] = self._hooks(req)
         return cls(**kw)
 
     async def call(self, req):

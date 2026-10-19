@@ -71,6 +71,7 @@ diff=$(bash "$here/publish-live.sh" --check "$repo" "$live")
 if [ -n "$diff" ]; then
   echo "LIVE-GUARD the live skill differs from the repository copy: $(printf '%s' "$diff" | tr '\n' ' ')"
   out=$(bash "$here/publish-live.sh" "$repo" "$live" 2>&1); rc=$?
+  [ -n "${SG_STATE:-}" ] && mkdir -p "$SG_STATE" && touch "$SG_STATE/live-publish.stamp"   # the janitor's rule M reads this change as the publish's own (#659)
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/LIVE-GUARD /'
   [ "$rc" = 0 ] || echo "LIVE-GUARD the publish exited $rc"
   left=$(bash "$here/publish-live.sh" --check "$repo" "$live")
