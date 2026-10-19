@@ -85,6 +85,7 @@ def test_an_alias_is_never_priced_through_another_models_row(tmp_path, monkeypat
     """Precedence: the raw key wins, then the canonical id, then an alias of that entry. An alias equal to another
     entry's id is not registered, so an entry with no row of its own is never priced at a stranger's rate."""
     import json
+
     from squad import modelreg
     p = tmp_path / "registry.json"
     p.write_text(json.dumps({"subscriptions": {"claude": {"label": "Claude"}}, "models": [
