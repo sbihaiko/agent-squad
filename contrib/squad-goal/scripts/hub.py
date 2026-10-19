@@ -1301,7 +1301,7 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
     items = lc = cases = None
     try:
             out = board_seam().rows(
-                '.[]|select(.content_type=="Issue" or .content_type=="DraftIssue")|{n:.content.number,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}',
+                '.[]|select(.content_type=="Issue" or .content_type=="DraftIssue")|{n:.content.number,i:.id,t:.content.title,s:.content.state,c:.content.closed_at,st:((.fields[]|select(.name=="Status")|.value.name.raw)//null),k:(((.fields[]?|select(.name=="Kind")|.value.name|if type=="object" then .raw else . end)//"")|ascii_downcase|if .=="" then null else . end),l:[.content.labels[]?.name],si:{total:.content.sub_issues_summary.total,completed:.content.sub_issues_summary.completed}}',
                 kind=True, timeout=120)
             items = [json.loads(l) for l in out.splitlines() if l.strip()]
             cases = [i["t"] for i in items if i.get("n") is None and i.get("k") == "test case"]   # a test case is a draft item: it has no number, so it is a row and never a card (#306)
@@ -1794,11 +1794,44 @@ def pr_badge(x):
     if "APPROVE" in (summary_lines(x["n"], (x.get("h") or "")[:9]) or [""])[-1]: return "approved"
     if ci and x.get("rollup") == "pass": return "green"
     return None
+MOVES = STATE / "board-moves.json"   # the door's record of every move it proved (#649), keyed by the Project item id
+MOVES_LOCK = threading.Lock()        # one writer in this process: two HTTP threads never drop the same entry twice
+def read_moves():
+    """The door's record of proved moves: {item id: {"column", "at"}}. A record that is missing, unreadable or not an
+    object is no record: the board is drawn from the read alone, and nothing is written."""
+    try: d = json.loads(MOVES.read_text())
+    except (OSError, ValueError): return {}
+    return d if isinstance(d, dict) else {}
+def drop_moves(ids):
+    """Drop the entries the board read agreed with; every other entry stays (ADR-0030: formed whole beside the record,
+    then one rename). The hub writes the record for nothing else (#650). An entry the door replaced while the board was
+    read is kept: this pass drops nothing, and the next one drops what its own read agrees with."""
+    if not ids: return
+    with MOVES_LOCK:
+        try: before = MOVES.read_text(); moves = json.loads(before)
+        except (OSError, ValueError): return
+        if not isinstance(moves, dict): return
+        left = {k: v for k, v in moves.items() if k not in ids}
+        if len(left) == len(moves): return
+        try:
+            if MOVES.read_text() != before: return   # the door wrote meanwhile: never lose a move this pass did not read
+        except OSError: return
+        _tmp = MOVES.with_name(f"{MOVES.name}.{os.getpid()}.{threading.get_ident()}.tmp")   # the temp name is the writer's own, as save_board's is (#512)
+        _tmp.write_text(json.dumps(left, sort_keys=True) + "\n"); os.replace(_tmp, MOVES)
 def board():
+    moves = read_moves()   # the record is read on every serve, so a page reload sees the same overlay (#650)
+    agreed = set()
     by = {}
     for i in board_cache["items"]:
         st, fz = _columns_module.view_column(i["st"], str(i["s"]).lower() == "closed", i.get("l"))   # the column the table names, and the freeze over it
+        pending = False
+        entry = moves.get(str(i["i"])) if i.get("i") else None   # the door keys an entry by the Project item id
+        if isinstance(entry, dict) and entry.get("column"):
+            recorded = _columns_module.SHIPPED_NAME.get(entry["column"], entry["column"])   # an old Status name reads as its shipped column
+            if recorded == st: agreed.add(str(i["i"]))   # the read carries the column the move set: the entry's work is done
+            elif recorded: st, pending = recorded, True   # the read contradicts a proved move: it lags the door's single-item read, so draw the move at once
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
+        if pending: row["pd"] = True   # the mark the page draws; the rule lives here, never in the view (ADR-0137)
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
         # The owner's one move (#560): a card in Backlog shows the arrow that starts it, and a spec card never does
@@ -1835,6 +1868,7 @@ def board():
             "items": [{"n": p["n"], "t": p["t"], "u": p["u"], "ps": p["ps"], "gs": p.get("gs"), "pb": p.get("pb"),
                        "rollup": p.get("rollup"), "ci": p.get("ci"), "o": p.get("o"), "by": p.get("by"), "cl": p.get("cl"),
                        "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO), "kind": p["kind"]} for p in open_prs]}
+    if agreed: drop_moves(agreed)   # the read and the record agree: the entry's work is done, and the mark goes with it
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
 
 PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
@@ -2018,6 +2052,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #bbody .it .ft{display:flex;justify-content:flex-end;gap:6px;margin-top:6px}#bbody .age,#bbody .tsk{display:inline-block;padding:0 6px;border-radius:9px;font-size:10.5px;font-variant-numeric:tabular-nums;color:var(--mute);border:1px solid var(--line)}#bbody .age.warm{color:#e3b341;border-color:#6b5223}#bbody .age.old{color:#f85149;border-color:#6e2a27}
 #bbody .pbg{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:700;border:1px solid}#bbody .pbg.conflict,#bbody .pbg.checks-red{color:#f85149;border-color:#6e2a27}#bbody .pbg.green{color:#3fb950;border-color:#2e6b3a}#bbody .pbg.approved{color:#3fb950;border-color:#3fb950;background:#12261a}   /* the lane badge (#247) */
 #bbody .fz{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:10px;color:var(--warn);border:1px dashed var(--warn)}   /* the freeze marker: the card keeps its column */
+#bbody .it .pnd{display:inline-block;margin-left:6px;padding:0 6px;border-radius:9px;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#0b1a12;background:var(--warn);border:1px solid var(--warn)}   /* the proved move the board read has not carried yet (#650) */
 #bsp[data-m=only],#bsp[data-m=hidden]{color:var(--warn);border-color:#6b5223}   /* the two modes that leave the specs out of the way, or ask for them: the one that draws every card is the resting colour (#456) */
 #bbody .pst{display:inline-block;margin-left:6px;padding:0 7px;border-radius:9px;font-size:10.5px;font-weight:600;vertical-align:1px;border:1px solid;max-width:100%;overflow-wrap:anywhere}
 #bbody .pst.ready{color:#3fb950;border-color:#2e6b3a;background:#12261a}#bbody .pst.running{color:#5aa9ff;border-color:#24496e;background:#0f1d2c}
@@ -2572,7 +2607,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to Todo: the owner's go signal (ADR-0142)">→ Todo</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.pd?`<span class=pnd title="pending: the board door proved this move and the board read has not carried it yet">pending</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to Todo: the owner's go signal (ADR-0142)">→ Todo</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
