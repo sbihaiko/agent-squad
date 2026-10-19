@@ -61,6 +61,8 @@ BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 # bare `VERDICT: APPROVE`, and a model that must write the heading under it writes `None.` there. Only its first content,
 # and it may say why on the same line (`None. The four criteria are met.`, #504); a second line is prose again.
 EMPTY = re.compile(r"(?i)^(?:none|no findings|nothing|n/?a|nil)(?:[.!]?$|[.:;!]?\s+\S|\s*[—–-]\s+\S)|^[—–-]$")
+# ... and the marker may come wrapped, as Opus writes it: `(none)`, `*None*`, `_none_`, `[none]` (#618).
+WRAPPED_EMPTY = re.compile(r"(?i)^[(\[*_]+\s*(?:none|no findings|nothing|n/?a|nil)[.!]?\s*[)\]*_]+[.!]?$")
 LOC = re.compile(r"^`?(?:[^\s:`]+:~?\d+(?:[-–]\d+)?|[^\s:`]*(?:/|\.[A-Za-z0-9]+)[^\s:`,]*)`?(?:[\s,;]|$)")  # path:line, or a path alone for a file-level finding; the first field of a bullet (or the second)
 # a finding about the change as a whole, not a file (#443): the branch delivers nothing from its issue, the commit
 # message misstates it -- there is no path to cite. Its place is the diff itself, and a whole-change label names it:
@@ -253,7 +255,7 @@ def survey(review, max_lines=0, fix_round=False):
             bullet = (n, [m.group(1)])
             held.add(section)
             continue
-        if bullet is None and section is not None and section not in held and EMPTY.match(text):
+        if bullet is None and section is not None and section not in held and (EMPTY.match(text) or WRAPPED_EMPTY.match(text)):
             continue                        # `None.` opens its section as empty (#498); after a bullet it is prose, below
         if bullet is None:
             return (f"line {n}: {text[:50]!r} is neither a section, a bullet nor a theme heading"
