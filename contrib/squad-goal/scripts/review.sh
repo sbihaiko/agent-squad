@@ -181,6 +181,7 @@ PY
 eligible() { local m=$1
   case $m in claude:*|grok-*|gemini-*) ;; *) [ -e "$SG_SHARED/codex-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/codex-limited")" ] && return 1;; esac
   case $m in gemini-*) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && return 1;; esac
+  case $m in grok-*) [ -e "$SG_SHARED/grok-limited" ] && return 1;; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then return 1; fi
   may_run review_models "$m" || return 1
   return 0; }
@@ -192,6 +193,8 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
   # agy (Antigravity/Gemini) quota is account-wide too: once a try says RESOURCE_EXHAUSTED, every gemini entry is skipped
   # until the reset the error itself names, instead of spending one dead try per review round
   case $m in gemini-*) [ -e "$SG_SHARED/agy-limited" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/agy-limited")" ] && continue;; esac
+  # a spent grok balance (402) has no reset: grok is skipped until the owner tops it up and removes the marker (#622)
+  case $m in grok-*) [ -e "$SG_SHARED/grok-limited" ] && { printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$")"; continue; };; esac
   if [ -e "$SG_SHARED/quota-guard" ] && jq -e --arg m "$m" '.anthropic_models|index($m)' "$cfg" >/dev/null; then continue; fi
   # switched off, or outside its window, the model is skipped like an unhealthy one: the chain moves on, and no
   # MODEL_FAIL is written. Switching every entry off leaves no reachable model, which is the pre-existing BLOCKED path.
@@ -272,6 +275,11 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       python3 -c 'import re,sys,time;t=open(sys.argv[1],errors="ignore").read();m=re.search(r"Resets in (?:([0-9]+)h)?(?:([0-9]+)m)?",t);s=(int(m.group(1) or 0)*3600+int(m.group(2) or 0)*60) if m else 0;print(int(time.time()+(s if s>60 else 6*3600)))' "$SG_STATE/review-$pr.err" > "$SG_SHARED/agy-limited"; fi
       printf "MODEL_QUOTA review %s skipped until %s on branch %s: the agy quota is spent account-wide.\n" "$m" "$(date -r "$(cat "$SG_SHARED/agy-limited")" '+%F %T')" "$bm" > "$(sg_cq_status "$iss" "mquota$$")"
       rc=99; break; fi
+    # grok 402 "usage balance exhausted" (#622): account-wide, no reset in the answer, so the marker holds until the owner removes it
+    case $m in grok-*) if grep -qE "402 Payment Required|balance exhausted" "$SG_STATE/review-$pr.err" "$out" 2>/dev/null; then
+      date +%s > "$SG_SHARED/grok-limited"
+      printf "MODEL_QUOTA review %s skipped on branch %s: the grok balance is spent; it has no reset, so the owner removes %s after a top-up.\n" "$m" "$bm" "$SG_SHARED/grok-limited" > "$(sg_cq_status "$iss" "mquota$$")"
+      rc=99; break; fi;; esac
     [ $rc = 142 ] && { printf "MODEL_TIMEOUT review %s on branch %s after %ss; next model.\n" "$m" "$bm" "$tmo" > "$(sg_cq_status "$iss" "mtimeout$$")"; break; }
     # the verdict goes on line 1 in the exact form the loop parses (review.sh, the loop's own passes and hub.py read line 1): the model may
     # have written it bold, in another case, or after a paragraph of narration -- revformat.py owns that normalization.
@@ -282,7 +290,8 @@ for m in $chain; do fmt=0   # fmt=1: this model's answer was outside the checkli
       # instead of the prose passing silently as a review.
       if ! frem=$(python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$out" 2>/dev/null); then
         printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so the next model is tried.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" > "$(sg_cq_status "$iss" "mformat$$")"
-        fmt=1; rc=1; break
+        # one reachable model (#622): no next model, so the shape failure spends a retry, never the whole review
+        fmt=1; rc=1; [ "$reachable" -gt 1 ] && break; continue
       fi
     fi
     grep -q 'VERDICT' "$out" 2>/dev/null && [ $rc = 0 ] && { echo "$head" > "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
