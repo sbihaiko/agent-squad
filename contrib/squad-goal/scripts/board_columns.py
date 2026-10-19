@@ -81,7 +81,7 @@ def column_for(facts):
 HEX = {"GRAY": "#9aa4b1", "BLUE": "#79b8ff", "YELLOW": "#e8d44d", "ORANGE": "#f5b041", "PURPLE": "#b087f9",
        "PINK": "#f78fb3", "GREEN": "#3ecf8e", "RED": "#ff6b6b"}
 LANES = ({"key": "pr_open", "name": "Open PRs", "color": "#5aa9ff", "tracking": True},)
-ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "dev_ci": "Testing"}
+ROLE = {"issue_closed": "Closed", "abandoned": "Abandoned", "unscheduled": "Backlog", "issue_todo": "Todo", "dev_ci": "Testing"}
 SPEC_LABEL = "spec"
 
 

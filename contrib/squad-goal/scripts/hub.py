@@ -1328,9 +1328,12 @@ def board_pass(fetch_open=None, fetch_landed=None, repos=None):
             # is the age the header shows (#1810), instead of claiming a fresh board nothing came back for.
             if len(errs) < len(rs): board_cache["t"] = time.time()
     except Exception as e: board_cache["err"] = str(e)[:80]
-    # the temp name is the writer's own (#512): hubmux runs one hub per profile in one process, so the pid alone is shared
-    _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.{threading.get_ident()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
+    save_board()
     return board_cache
+def save_board():
+    """The cache file writes the rows the hub holds. The temp name is the writer's own (#512): hubmux runs one hub per
+    profile in one process, so the pid alone is shared."""
+    _tmp = BOARD.with_name(f"{BOARD.name}.{os.getpid()}.{threading.get_ident()}.tmp"); _tmp.write_text(json.dumps(board_cache)); os.replace(_tmp, BOARD)
 def refresh_board():
     """board_pass() every 60 s, or within 2 s of a board move made through scripts/board.sh (board-dirty flag).
     The items route lags a write by seconds, so a pass a move asked for is read again 16 s later: the card never waits a minute in its old column."""
@@ -1798,6 +1801,9 @@ def board():
         row = {"n": i["n"], "t": i["t"], "c": i.get("c"), "l": i.get("l") or []}
         if fz: row["fz"] = fz
         if _columns_module.SPEC_LABEL in row["l"]: row["sp"] = True   # a spec is an issue with the spec label: the Specs filter reads this
+        # The owner's one move (#560): a card in Backlog shows the arrow that starts it, and a spec card never does
+        # (ADR-0142). The rule lives here, not in the page: the card renders the fact its row carries (ADR-0137).
+        if st == COLUMN["unscheduled"] and not row.get("sp") and str(i["s"]).lower() != "closed": row["pm"] = True
         if i.get("b"): row["b"] = i["b"]
         sc = task_count(i)                       # the card's own count, a value: the page renders it and holds no rule
         if sc: row["sc"] = sc
@@ -1830,6 +1836,32 @@ def board():
                        "rollup": p.get("rollup"), "ci": p.get("ci"), "o": p.get("o"), "by": p.get("by"), "cl": p.get("cl"),
                        "r": p.get("r") or REPO, "rt": repo_tag(p.get("r") or REPO), "kind": p["kind"]} for p in open_prs]}
     return {"t": board_cache["t"], "err": board_cache["err"], "prs": lane, "groups": groups, "cases": cases, "labels": sorted({l for i in board_cache["items"] for l in (i.get("l") or [])}), "lc": board_cache.get("lc", {})}
+
+PROMOTE_TO = COLUMN["issue_todo"]   # the column the arrow moves a card into: the owner's go signal (ADR-0142)
+def promote_write(issue):
+    """The one writer call of the owner's move: `<owner> <project> Todo <n>`, the shape reconcile.py writes, so the
+    board seam (`board.sh`) is the only reach of the carrier."""
+    return subprocess.run(["bash", str(pathlib.Path(__file__).resolve().parent / "board.sh"), OWNER, str(PROJECT_NO), PROMOTE_TO, str(issue)], capture_output=True, text=True, timeout=120)
+def promote(issue):
+    """Move one open card from Backlog to Todo through the board seam (#560). Only a card the hub holds in Backlog now
+    is accepted: a closed issue keeps its column (ADR-0143), a spec is never work (ADR-0142), and a card already in
+    Todo sends no write (ADR-0144). A proven write updates the cache, so the card moves at the next refresh without a
+    GitHub read right after the write."""
+    if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0: return {"err": "issue: a number"}
+    item = next((i for i in board_cache.get("items") or [] if i.get("n") == issue), None)
+    if item is None: return {"err": "not on the board"}
+    if str(item.get("s") or "").lower() == "closed": return {"err": "the issue is closed: a closed card keeps its column"}
+    col, _ = _columns_module.view_column(item.get("st"), False, item.get("l"))
+    if col != COLUMN["unscheduled"]: return {"err": f"the card is in {col}, not {COLUMN['unscheduled']}: only a Backlog card moves"}
+    if _columns_module.SPEC_LABEL in (item.get("l") or []): return {"err": "a spec is never work: its tickets are (ADR-0142)"}
+    try: r = promote_write(issue)
+    except Exception as e: return {"err": str(e)[:200] or "the writer did not answer"}
+    if r.returncode:
+        lines = (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()
+        return {"err": (next((l for l in lines if l.startswith("#")), lines[0] if lines else "") or "the writer refused")[:300]}
+    item["st"] = PROMOTE_TO   # the cache follows the write, so the next refresh shows the move without a GitHub read after it
+    save_board()
+    return {"ok": True, "issue": issue, "to": PROMOTE_TO}
 
 _issue_cache = {}
 def gh_json(path, timeout=30):
@@ -2002,6 +2034,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 #lf{display:inline-block;position:relative;font-size:11px;font-weight:400}#lf summary{list-style:none;cursor:pointer;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:2px 8px;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#lf summary::-webkit-details-marker{display:none}#lf.set summary{color:var(--warn);border-color:#6b5223}
 #lfl{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:200px;max-height:320px;overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px;box-shadow:0 6px 18px #0008}#lfl label{display:flex;gap:6px;align-items:center;padding:2px 4px;border-radius:4px;cursor:pointer;white-space:nowrap}#lfl label:hover{background:#1c222b}#lfl .lft{display:flex;gap:4px;justify-content:space-between;align-items:center;padding:0 2px 6px;margin-bottom:4px;border-bottom:1px solid var(--line)}#lfl .lft button{font:inherit;font-size:10.5px}#lfl .lft button.on{color:var(--warn);border-color:#6b5223}#bbody .it .lbs{display:block;margin-top:4px}#bbody .it .lbs span{display:inline-block;background:var(--lb,#2a303b);border:1px solid transparent;border-radius:9px;padding:0 6px;margin:0 3px 2px 0;font-size:9.5px;color:#c9d1d9}#bbody .it .lbs span.on{border-color:var(--warn);color:var(--fg)}
 #bbody .it .id:hover{border-color:var(--pin)}#bbody .it .tt{display:block}
+#bbody .it .pmp{display:inline-block;margin-top:4px;font:inherit;font-size:10.5px;padding:0 7px;border-radius:9px;cursor:pointer;color:var(--pin);background:#12161c;border:1px solid var(--line)}#bbody .it .pmp:hover{border-color:var(--pin)}#bbody .it .pmp:disabled{opacity:.5;cursor:default}   /* the owner's move, on a Backlog card only (#560) */
 #bbody .it .prr{display:block;margin-top:2px;font-size:10.5px;color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #bbody .it .blk{display:block;margin-top:4px;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}#bbody .it .blk a{color:var(--pin);text-decoration:none}
 #bbody .prs .it .cir{display:inline-block;margin-left:6px;font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--cc);border:1px solid color-mix(in srgb,var(--cc) 45%,transparent);border-radius:999px;padding:0 5px;white-space:nowrap}   /* the pull request's own CI rollup (#440) */
@@ -2429,7 +2462,7 @@ $("#pbox").innerHTML=`<div class=bar><span class=m>${d.pr?"PR":"Issue"} #${d.n} 
 ${d.pull?`<div class=prbar><span class=pill>${esc(d.pull.head||"?")} &rarr; ${esc(d.pull.base||"?")}</span><span class=pill>+${d.pull.add??0} &minus;${d.pull.del??0} · ${d.pull.files??0} files</span>${d.pull.draft?"<span class=pill>draft</span>":""}<span class="pill ${d.pull.mstate==="clean"?"ok":d.pull.mstate==="dirty"?"bad":""}">merge: ${esc(d.pull.mstate||"?")}</span>${Object.entries(d.pull.checks).map(([k,v])=>`<span class="pill ${k==="success"?"ok":/failure|cancelled|timed_out|action_required/.test(k)?"bad":""}">CI ${esc(k)} ${v}</span>`).join("")}${Object.entries(d.pull.reviews).map(([u,st])=>`<span class="pill ${st==="APPROVED"?"ok":st==="CHANGES_REQUESTED"?"bad":""}">${esc(u)}: ${esc(st.toLowerCase().replace("_"," "))}</span>`).join("")}</div>`:""}<div class=meta>by ${esc(d.by)} · opened ${when(d.created)} · updated ${when(d.updated)}</div>${d.labels.map(l=>`<span class=lb>${esc(l)}</span>`).join("")}
 <div class=md>${d.body?md(d.body):"<span class=m>(no description)</span>"}</div><h3 class=sec>Last ${d.comments.length} of ${d.total} comments</h3>`+(d.comments.map(c=>`<div class=cm><div class=meta>${esc(c.by)} · ${when(c.at)}</div><div class=md>${md(c.body)}</div></div>`).join("")||"<span class=m>no comments</span>");
 $("#px").onclick=()=>pop.classList.remove("on");$("#pprev").onclick=()=>step(-1);$("#pnext").onclick=()=>step(1);$("#pbox").scrollTop=0}catch(e){$("#pbox").textContent="failed to load"}}
-document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||c.classList.contains("m"))return;window.open("https://github.com/"+(c.dataset.r||"__REPO__")+"/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
+document.addEventListener("click",e=>{const c=e.target.closest("#bbody .it");if(!c||e.target.closest("a")||e.target.closest("button")||c.classList.contains("m"))return;window.open("https://github.com/"+(c.dataset.r||"__REPO__")+"/"+(c.dataset.pr!==undefined?"pull/":"issues/")+c.dataset.n,"_blank","noopener");return;   // every card opens its GitHub page; the popup is no longer used from the board   // a PR card opens its GitHub page in a new tab (owner, 2026-10-09); an issue card keeps the popup
 nav=[...c.closest(".sc").querySelectorAll(".it[data-n]")].map(x=>[+x.dataset.n,x.dataset.r||"__REPO__"]);showIssue(c.dataset.n,c.dataset.r)});
 const hm=location.hash.match(/issue=(\d+)/);if(hm)showIssue(+hm[1]);   // deep link: /#issue=1171
 document.addEventListener("click",e=>{const h=e.target.closest("#bbody .ah");if(!h||e.target.closest("[data-eye]"))return;const g=h.parentElement.dataset.g;if(g===COLNAME.pr_open)bo.prOpen=bo.prOpen===false;else bo.open=g;saveB();pollBoard()});
@@ -2539,7 +2572,7 @@ const ageC=o=>{const h=(Date.now()-Date.parse(o))/3600000;return h>=24?"old":h>=
 setInterval(()=>document.querySelectorAll("#bbody .age").forEach(e=>{e.textContent=age(e.dataset.o);e.className="age "+ageC(e.dataset.o)}),30000);
 const gcls=c=>c.v==="?"?"unk":c.v==="debt"?"debt":c.v.startsWith("OK")?"ok":(c.v.startsWith("CHG")||c.v.startsWith("BLK"))?"bad":"";
 const gstrip=s=>`<div class="gstrip${s.old?" old":""}" title="${esc(s.old?`these facts are ${s.age} s old: the strip greys out past 180 s, so nothing here is being claimed as fresh`:"R review · C CI · T threads · B base · H labels and holds")}">`+s.cells.map(c=>`<span class="gc ${gcls(c)}" title="${esc(c.tip||"")}">${c.k}<b>${esc(c.v)}</b></span>`).join("")+`</div>`;
-const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
+const cards=(g,it,shown)=>shown.map(x=>{const pr=x.kind==="pr";return `<div class=it data-n="${x.n}" data-r="${esc(x.r||"__REPO__")}"${pr?" data-pr":""} style="--cc:${colOf(g.name,CN)}${tint(x)}"><a class=id target=_blank href="https://github.com/${esc(x.r||"__REPO__")}/${pr?"pull":"issues"}/${x.n}">${pr?"PR ":""}#${x.n}</a>${x.rt?`<span class=rpo title="the repository this card belongs to: ${esc(x.r)}">${esc(x.rt)}</span>`:""}${x.pb?`<span class="pbg ${x.pb.replace(" ","-")}">${esc(x.pb)}</span>`:""}${x.rollup?`<span class="cir ${esc(x.rollup)}" title="CI states on the head${(x.ci||[]).length?": "+esc((x.ci||[]).join(", ")):""}">CI ${esc(x.rollup)}</span>`:""}${x.fz?`<span class=fz title="a freeze is a marker, never a move: the card keeps its column">${esc(x.fz)}</span>`:""}${x.ps?`<span class="pst ${x.ps[0]}"${x.ps[2]?` title="${esc(x.ps[2])}"`:""}>${esc(x.ps[1])}</span>`:""}${x.c?`<span class=dt>${x.c.slice(5,16).replace("T"," ")}</span>`:""}<span class=tt>${esc(x.t)}</span>${x.pm&&!pr?`<button class=pmp data-n="${x.n}" title="move this card to Todo: the owner's go signal (ADR-0142)">→ Todo</button>`:""}${x.ps&&x.ps[3]?`<div class=prr>${esc(x.ps[3])}</div>`:""}${x.gs?gstrip(x.gs):""}${(x.l||[]).length?`<span class=lbs>${x.l.map(l=>`<span class="${(bo.labels||[]).includes(l)?"on":""}"${lbc(l)}>${esc(l)}</span>`).join("")}</span>`:""}${(x.b&&x.b.length)?`<div class=blk>blocked by ${x.b.map(n=>`<a target=_blank rel=noopener href="https://github.com/__REPO__/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${x.ho?`<div class=hld>${esc(x.ho)}</div>`:""}${(x.cl||[]).length?`<div class=clos title="the issues this pull request closes">closes ${x.cl.map(n=>`<a target=_blank rel=noopener href="https://github.com/${esc(x.r||"__REPO__")}/issues/${n}">#${n}</a>`).join(", ")}</div>`:""}${(x.o||x.sc||x.by)?`<div class=ft>${x.sc?`<span class=tsk title="sub-issues closed / total: ${esc(x.sc)}">${esc(x.sc)}</span>`:""}${x.o?`<span class="age ${ageC(x.o)}" data-o="${x.o}" title="open since ${x.o.slice(0,16).replace("T"," ")} UTC">${age(x.o)}</span>`:""}${x.by?`<span class=au title="opened by ${esc(x.by)}">${esc(x.by)}</span>`:""}</div>`:""}</div>`}).join("")+(it.length>shown.length?`<div class="it m">${it.length-shown.length} more · scroll</div>`:"");
 // A visible column holding no cards is not drawn at all: the columns that do have cards take the width, and the
 // collapsed one is accounted for by a line at the foot of the hidden: strip. Which columns those are is derived on
 // every render -- from the filtered count, the user's hidden set and the set the line's eye added -- and never
@@ -2576,6 +2609,12 @@ $("#bsp").onclick=()=>{bo.specs=(specMode()+1)%3;saveB();spPaint();pollBoard()};
 spPaint();
 $("#lfl").onchange=e=>{const v=e.target.value,h=new Set(bo.labels||[]);e.target.checked?h.add(v):h.delete(v);bo.labels=[...h];saveB();pollBoard()};
 $("#lfl").onclick=e=>{const t=e.target.closest("button");if(!t)return;e.preventDefault();if(t.dataset.lc)bo.labels=[];else bo.lmode=t.dataset.lm;saveB();pollBoard()};
+// The owner's one move (#560): the arrow a Backlog card carries delegates to the hub, and the card shows the reason a
+// refusal gives. Which cards carry the arrow is the row's own fact (`x.pm`), never the page's rule.
+document.addEventListener("click",async e=>{const b=e.target.closest("#bbody .pmp");if(!b)return;e.preventDefault();e.stopPropagation();const n=+b.dataset.n,card=b.closest(".it");b.disabled=true;
+try{const r=await fetch("/api/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue:n})}),d=await r.json();
+ if(d.err){card.insertAdjacentHTML("beforeend",`<div class=perr>${esc(d.err)}</div>`);b.disabled=false}
+ else{b.textContent="moved to Todo ✓";pollBoard()}}catch(x){card.insertAdjacentHTML("beforeend","<div class=perr>the hub did not answer</div>");b.disabled=false}});
 document.addEventListener("click",e=>{if(!e.target.closest("#lf"))$("#lf").open=false});
 pollBoard();setInterval(pollBoard,5000);
 let ver=null;setInterval(async()=>{try{const v=(await (await fetch("/api/version")).json()).v;if(ver===null)ver=v;else if(v!==ver)location.reload()}catch(e){}},3000);
@@ -3201,10 +3240,13 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         # loopback only, and a cross-site page must not be able to write: require our own origin and a JSON body
         org = self.headers.get("Origin") or ""
-        ok = self.path in ("/api/models", "/api/plans") and own_host(self) and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
+        ok = self.path in ("/api/models", "/api/plans", "/api/promote") and own_host(self) and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
         try:
             if not ok: out = {"err": "forbidden"}
-            else: out = (plans_set if self.path == "/api/plans" else models_set)(json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}"))
+            else:
+                body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192)) or b"{}")
+                if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
+                else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
         body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 
