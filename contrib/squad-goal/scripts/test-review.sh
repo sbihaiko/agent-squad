@@ -182,6 +182,16 @@ out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); 
 [ ! -s "$CLAUDE_ARGS" ] && jq -e '.thinking.type=="disabled" and (has("tools")|not) and .model=="nt"' "$CURL_BODY" >/dev/null 2>&1 && ok "review_no_tools: one direct call, thinking off, no tool" || ko "review_no_tools: not a direct no-thinking call: args=$(cat "$CLAUDE_ARGS") body=$(head -c 200 "$CURL_BODY" 2>/dev/null)"
 jq -r '.messages[0].content' "$CURL_BODY" 2>/dev/null | /usr/bin/grep -q 'no tools' && ! jq -r '.messages[0].content' "$CURL_BODY" | /usr/bin/grep -q 'git show' && ok "review_no_tools: the prompt judges from its own text" || ko "review_no_tools: the prompt still sends it to read code"
 [ $rc = 0 ] && head -1 "$T/st/review-fix_1-x.md" | /usr/bin/grep -q 'VERDICT: APPROVE' && /usr/bin/grep -q 'claude:nt	900	40' "$T/st/token-usage.tsv" && ok "review_no_tools: the answer is the review, and its tokens are counted" || ko "review_no_tools: answer not kept: rc=$rc $(cat "$T/st/review-fix_1-x.md" 2>/dev/null) $(tail -1 "$T/st/token-usage.tsv")"
+# #643: a chain id with a context suffix (claude:nt[1m]) matches its per-model settings written without it (claude:nt).
+printf '{"review_models":["claude:nt[1m]"],"review_no_tools":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$CURL_BODY"; : > "$CLAUDE_ARGS"
+GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+[ ! -s "$CLAUDE_ARGS" ] && [ -s "$CURL_BODY" ] && ok "review_no_tools: a [1m] chain id matches its entry without the suffix (#643)" || ko "review_no_tools: claude:nt[1m] kept its tools: args=$(cat "$CLAUDE_ARGS")"
+printf '{"review_models":["claude:s[1m]"],"review_timeout_seconds_by_model":{"claude:s":2},"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
+CLAUDE_SLEEP=4 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -q 'after 2s' "$T/st/cq/"*mtimeout* 2>/dev/null && ok "review_timeout_seconds_by_model: a [1m] chain id takes its timeout without the suffix (#643)" || ko "per-model timeout missed claude:s[1m]: $(cat "$T/st/cq/"* 2>/dev/null | head -3)"
+printf '{"review_models":["claude:nt"],"review_no_tools":["claude:nt"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 printf '{"type":"message","stop_reason":"max_tokens","content":[{"type":"text","text":"VERDICT: APPROVE"}],"usage":{"input_tokens":900,"output_tokens":8000}}' > "$CURL_REPLY"; rm -f "$T/st/review-fix_1-x".*
 GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1; rc=$?
 [ $rc != 0 ] && ! head -1 "$T/st/review-fix_1-x.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE' && ok "review_no_tools: an answer cut at max_tokens is no review" || ko "review_no_tools: a cut answer was kept: rc=$rc"
