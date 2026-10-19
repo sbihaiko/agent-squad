@@ -539,6 +539,12 @@ def test_a_card_another_writer_moved_follows_the_read_once_its_entry_expires(ser
     assert "ITEM9" not in recorded(state), "the expired entry of the card another writer moved stayed"
 
 
+def log_lines(state):
+    """The loop's log, line by line: the expiry report is the one line the board writes there."""
+    log = state / "cycle.log"
+    return log.read_text().splitlines() if log.exists() else []
+
+
 def test_a_read_that_agrees_settles_an_entry_past_the_window(served):
     """A lag between the move and the first read can put a move past its window. A read that began after the move and
     carries its column is agreement, not a disagreement: the entry drops with no expiry report."""
@@ -549,14 +555,27 @@ def test_a_read_that_agrees_settles_an_entry_past_the_window(served):
     assert [p[0] for p in placed] == ["Doing"] and "pd" not in placed[0][1], \
         f"an agreeing read was drawn as a disagreement: {placed}"
     assert "ITEM7" not in recorded(state), "the agreeing read did not drop the entry"
-    log = state / "cycle.log"
-    assert not log.exists() or not log.read_text().strip(), \
-        f"an agreeing read was reported as an expiry: {log.read_text() if log.exists() else ''}"
+    assert log_lines(state) == [], f"an agreeing read was reported as an expiry: {log_lines(state)}"
+
+
+def test_a_stale_board_cache_never_expires_by_the_wall_clock(served):
+    """The window is measured against the instant the list read began, not the wall clock: a cache that stopped
+    updating has not given the move its window of reads, so the mark stays until a read past the window disagrees."""
+    mod, state, port = served
+    read_at = now() - 1000   # the last read began long ago and has not been refreshed since
+    lagging(mod, [card(7, "Todo")], read_at, completed=read_at + 2)
+    record(state, {"ITEM7": {"column": "Doing", "at": at(read_at + 10)}})   # the read began before the move
+    placed = where(get_board(port), 7)
+    assert [p[0] for p in placed] == ["Doing"] and placed[0][1].get("pd") is True, \
+        f"a stale cache expired a move it began before: {placed}"
+    assert "ITEM7" in recorded(state), "a stale cache dropped a move it never gave a window of reads"
+    assert log_lines(state) == [], f"a stale cache reported an expiry: {log_lines(state)}"
 
 
 def test_a_failed_drop_never_reports_the_expiry_twice_from_a_fresh_process(served, monkeypatch):
-    """The drop of an expired entry is bookkeeping that may fail: the entry stays and the next serve retries it, in a
-    fresh hub process too. The loop was told once, so the retry writes no second line."""
+    """The expiry report follows the drop that removes the entry, so it is idempotent across hub processes: a drop the
+    state directory refuses reports nothing, the next serve retries it (in a fresh hub process too), and the retry
+    that succeeds writes one line -- a later process finds no entry and writes no second."""
     mod, state, port = served
     lagging(mod, [card(7, "Todo")], now() - 10)
     record(state, {"ITEM7": {"column": "Doing", "at": at(now() - 600)}})
@@ -572,16 +591,37 @@ def test_a_failed_drop_never_reports_the_expiry_twice_from_a_fresh_process(serve
     assert [p[0] for p in first] == ["Todo"] and "pd" not in first[0][1], \
         f"the expired entry did not return the card to the read: {first}"
     assert "ITEM7" in recorded(state), "the failed drop changed the record"
-    lines = (state / "cycle.log").read_text().splitlines() if (state / "cycle.log").exists() else []
-    assert len(lines) == 1, f"the expiry was not reported once: {lines}"
+    assert log_lines(state) == [], f"a refused drop reported an expiry the next serve would repeat: {log_lines(state)}"
+    monkeypatch.setattr(mod.os, "replace", real_replace)   # the next serve's drop succeeds
     fresh = _module("hub_board_pending_retry", HUB_PY)   # each cycle spawns a new hub: only the state directory survives
     fresh.board_cache = mod.board_cache
     again = where(fresh.board(), 7)
     assert [p[0] for p in again] == ["Todo"] and "pd" not in again[0][1], \
         f"the retry did not serve the read's column: {again}"
-    assert "ITEM7" in recorded(state), "the retry dropped the entry though its write was still refused"
-    lines = (state / "cycle.log").read_text().splitlines()
-    assert len(lines) == 1, f"the retry reported the same expiry again: {lines}"
+    assert "ITEM7" not in recorded(state), "the retry did not drop the expired entry"
+    assert len(log_lines(state)) == 1, f"the retry did not report the expiry once: {log_lines(state)}"
+    later = _module("hub_board_pending_retry_later", HUB_PY)   # a still later process: the entry is gone
+    later.board_cache = mod.board_cache
+    later.board()
+    assert len(log_lines(state)) == 1, f"a later process reported the dropped expiry again: {log_lines(state)}"
+
+
+def test_a_window_that_is_not_a_number_warns_and_uses_the_default(hub, monkeypatch, capsys):
+    """A window that no number names is the 120 s default, and one line on stderr names the bad value and the default:
+    a setting the hub ignored never passes silently."""
+    mod, _ = hub
+    monkeypatch.setenv("SG_PENDING_WINDOW_SECONDS", "soon")
+    assert mod.pending_window() == 120
+    err = capsys.readouterr().err
+    assert "SG_PENDING_WINDOW_SECONDS" in err and "'soon'" in err and "120" in err, \
+        f"a bad window passed silently: {err!r}"
+    monkeypatch.setenv("SG_PENDING_WINDOW_SECONDS", "-5")
+    assert mod.pending_window() == 120
+    err = capsys.readouterr().err
+    assert "'-5'" in err and "120" in err, f"a negative window passed silently: {err!r}"
+    monkeypatch.setenv("SG_PENDING_WINDOW_SECONDS", "60")
+    assert mod.pending_window() == 60
+    assert not capsys.readouterr().err, "a window the hub reads warned"
 
 
 def test_the_window_defaults_to_120_seconds(served):
