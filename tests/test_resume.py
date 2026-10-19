@@ -22,6 +22,13 @@ def wait_doc(default="pass", deadline=100):
     return doc(nodes, ["a", "ask", "b"])
 
 
+def asks(d):
+    """The opt-in of ADR-0147 rule 8: a graph asks the engine to resolve its spellings with `models.resolve`."""
+    d = json.loads(json.dumps(d))
+    d["models"] = {"resolve": True}
+    return d
+
+
 OK = {"output": {"x": 1, "y": 1}, "spend": 0.1}
 
 
@@ -81,7 +88,7 @@ def rewrite_models_hash(run, sha):
 @pytest.mark.anyio
 async def test_run_start_records_the_entries_hash_of_the_models_the_graph_names(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
-    eng, _ = make(wait_doc(), tmp_path / "run", registry=str(reg))
+    eng, _ = make(asks(wait_doc()), tmp_path / "run", registry=str(reg))
     await eng.run()
     start = events(tmp_path / "run", "run_start")[0]
     assert start["models"] == {"resolve": True, "entries_sha256": modelreg.entries_sha256(["sonnet"], modelreg.load(reg))}
@@ -92,10 +99,10 @@ async def test_run_start_records_the_entries_hash_of_the_models_the_graph_names(
 async def test_a_resume_does_not_refuse_an_unrelated_registry_edit(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
-    eng, _ = make(wait_doc(), run, registry=str(reg))
+    eng, _ = make(asks(wait_doc()), run, registry=str(reg))
     await eng.run()
     write_registry(reg, opus_label="Opus 5.5 renamed")
-    eng2, ad2 = make(wait_doc(), run, registry=str(reg))
+    eng2, ad2 = make(asks(wait_doc()), run, registry=str(reg))
     v = await eng2.resume(answer="pass")
     assert v.verdict == "completed" and [c.node for c in ad2.calls] == ["b"]
 
@@ -104,10 +111,10 @@ async def test_a_resume_does_not_refuse_an_unrelated_registry_edit(tmp_path):
 async def test_a_resume_refuses_a_changed_registry_entry_the_graph_names(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
-    eng, _ = make(wait_doc(), run, registry=str(reg))
+    eng, _ = make(asks(wait_doc()), run, registry=str(reg))
     await eng.run()
     write_registry(reg, sonnet_label="Sonnet 5.5 renamed")
-    eng2, _ = make(wait_doc(), run, registry=str(reg))
+    eng2, _ = make(asks(wait_doc()), run, registry=str(reg))
     with pytest.raises(ResumeRefused, match="model registry"):
         await eng2.resume(answer="pass")
 
@@ -117,10 +124,10 @@ async def test_a_resume_accepts_the_fingerprint_an_earlier_record_wrote_for_know
     """A record from before the fingerprint named unknown spellings keeps its hash for a graph of known ones."""
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
-    eng, _ = make(wait_doc(), run, registry=str(reg))
+    eng, _ = make(asks(wait_doc()), run, registry=str(reg))
     await eng.run()
     rewrite_models_hash(run, PRE_CHANGE_SONNET_SHA256)
-    eng2, ad2 = make(wait_doc(), run, registry=str(reg))
+    eng2, ad2 = make(asks(wait_doc()), run, registry=str(reg))
     v = await eng2.resume(answer="pass")
     assert v.verdict == "completed" and [c.node for c in ad2.calls] == ["b"]
 
@@ -132,10 +139,10 @@ async def test_a_resume_refuses_when_a_model_the_graph_could_not_resolve_is_now_
     d = wait_doc()
     d["nodes"][1]["model"] = "mystery"          # agent `a` names a spelling the registry does not know
     run = tmp_path / "run"
-    eng, _ = make(d, run, registry=str(reg))
+    eng, _ = make(asks(d), run, registry=str(reg))
     await eng.run()
     write_registry(reg, mystery=True)
-    eng2, _ = make(d, run, registry=str(reg))
+    eng2, _ = make(asks(d), run, registry=str(reg))
     with pytest.raises(ResumeRefused, match="model registry"):
         await eng2.resume(answer="pass")
 
@@ -144,25 +151,48 @@ async def test_a_resume_refuses_when_a_model_the_graph_could_not_resolve_is_now_
 async def test_a_record_without_the_models_key_resumes_opaque(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
-    eng, _ = make(wait_doc(), run, registry=str(reg))
+    eng, _ = make(asks(wait_doc()), run, registry=str(reg))
     await eng.run()
     strip_models(run)
     write_registry(reg, sonnet_label="Sonnet 5.5 renamed")
-    eng2, ad2 = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
+    eng2, ad2 = make(asks(wait_doc()), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
     v = await eng2.resume(answer="pass")
     assert v.verdict == "completed" and ad2.resolve is False
 
 
 @pytest.mark.anyio
-async def test_run_start_turns_resolution_on_and_the_resume_reads_it(tmp_path):
+async def test_run_start_turns_resolution_on_for_a_graph_that_asks_and_the_resume_reads_it(tmp_path):
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, ad = make(asks(wait_doc()), run, registry=str(reg), adapter=ResolveAdapter({"a": OK, "b": OK}, repeat_last=True))
+    await eng.run()
+    assert ad.resolve is True
+    eng2, ad2 = make(asks(wait_doc()), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
+    await eng2.resume(answer="pass")
+    assert ad2.resolve is True
+
+
+@pytest.mark.anyio
+async def test_a_graph_that_does_not_ask_keeps_resolution_off(tmp_path):
+    """ADR-0147 rule 8: a registry landing changes no caller. A graph without the opt-in sends its own spelling."""
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
     eng, ad = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"a": OK, "b": OK}, repeat_last=True))
     await eng.run()
-    assert ad.resolve is True
-    eng2, ad2 = make(wait_doc(), run, registry=str(reg), adapter=ResolveAdapter({"b": OK}, repeat_last=True))
-    await eng2.resume(answer="pass")
-    assert ad2.resolve is True
+    assert ad.resolve is False
+    assert events(run, "run_start")[0]["models"] == {"resolve": False}
+    out = [e for e in events(run, "outcome") if e["node"] == "a"][0]
+    assert (out["model"], out["route_model"]) == ("sonnet", "sonnet") and "model_id" not in out
+
+
+@pytest.mark.anyio
+async def test_an_sdk_run_without_the_opt_in_sends_the_graph_spelling(tmp_path):
+    seen = []
+    reg = wire_registry(tmp_path / "registry.json")
+    ad = SdkAdapter(query=stub([ResultMessage(result=json.dumps({"status": "pass", "x": 1}))], seen), options_cls=Options)
+    eng = Engine(from_doc(doc([agent("a")], ["a"])), ad, tmp_path / "run", registry=str(reg))
+    await eng.run()
+    assert seen and seen[0][1].kw["model"] == "sonnet"
 
 
 def wire_registry(path):
@@ -182,7 +212,7 @@ async def test_an_sdk_run_resolves_through_the_engine_registry(tmp_path):
     seen = []
     reg = wire_registry(tmp_path / "registry.json")
     ad = SdkAdapter(query=stub([ResultMessage(result=json.dumps({"status": "pass", "x": 1}))], seen), options_cls=Options)
-    eng = Engine(from_doc(doc([agent("a")], ["a"])), ad, tmp_path / "run", registry=str(reg))
+    eng = Engine(from_doc(asks(doc([agent("a")], ["a"]))), ad, tmp_path / "run", registry=str(reg))
     await eng.run()
     assert seen and seen[0][1].kw["model"] == "wire-sonnet"
     out = events(tmp_path / "run", "outcome")[0]
@@ -193,7 +223,7 @@ async def test_an_sdk_run_resolves_through_the_engine_registry(tmp_path):
 async def test_an_outcome_keeps_the_raw_spelling_and_names_the_registry_id(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
     run = tmp_path / "run"
-    eng, _ = make(wait_doc(), run, registry=str(reg))
+    eng, _ = make(asks(wait_doc()), run, registry=str(reg))
     await eng.run()
     out = [e for e in events(run, "outcome") if e["node"] == "a"][0]
     assert (out["model"], out["model_id"], out["route_model"]) == ("sonnet", "claude-sonnet-5-5", "sonnet")

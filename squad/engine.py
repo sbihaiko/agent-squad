@@ -116,6 +116,15 @@ class Engine:
             out += [m for m in (n.get("adapt") or {}).get("models") or [] if isinstance(m, str)]
         return out
 
+    def _resolve_opted_in(self):
+        """A graph asks for resolution with `models.resolve: true`; a graph without the key keeps its raw spellings.
+
+        ADR-0147 rule 8: resolution is recorded at run start and applied only when the run opts in, so a graph that
+        did not ask sends exactly the string it carries.
+        """
+        blk = self.g.doc.get("models")
+        return isinstance(blk, dict) and blk.get("resolve") is True
+
     def _set_resolve(self, on):
         """Record the resolution setting and hand it to an adapter that can resolve a spelling (the SDK adapter).
 
@@ -274,8 +283,11 @@ class Engine:
         if bad := skills.dirty(self.vendor):   # refuse before run_start, no record
             raise opt.OptionError(f"vendor/skills is not clean: {'; '.join(bad)}. Nothing ran")
         self.preflight = self._preflight_start()
-        self._set_resolve(True)
-        models = {"resolve": True, "entries_sha256": modelreg.entries_sha256(self._model_names(), self._registry())}
+        resolve = self._resolve_opted_in()
+        self._set_resolve(resolve)
+        models = {"resolve": resolve}
+        if resolve:
+            models["entries_sha256"] = modelreg.entries_sha256(self._model_names(), self._registry())
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
                            models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}),
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),

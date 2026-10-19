@@ -215,6 +215,17 @@ def test_refuses_a_run_cap_below_an_agent_spend_minimum():
     has(d, "run spend cap")
 
 
+# --- model resolution opt-in ---
+def test_a_graph_asks_for_resolution_with_its_models_block():
+    """ADR-0147 rule 8: resolution is applied only when the graph opts in with `models.resolve`."""
+    d = five()
+    assert errors(d) == []
+    d["models"] = {"resolve": True}
+    assert errors(d) == []
+    d["models"] = {"resolve": "yes"}
+    assert errors(d)
+
+
 # --- adaptation report, learnings ---
 def test_adaptation_report_is_never_a_registered_source():
     schema = json.loads((DESIGN / "graph.schema.json").read_text())

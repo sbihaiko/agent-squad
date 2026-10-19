@@ -122,6 +122,7 @@ async def test_a_run_keeps_the_raw_graph_spelling_in_model_and_the_registry_id_a
                                            "subscription": "claude", "aliases": ["sonnet"],
                                            "routes": {"gateway": {"auth": "subscription", "model": "sonnet", "served": ["sonnet"]}}}]}))
     d = doc([agent("a", output_key="x", next={"fail": "exit:fail"})], ["a"])
+    d["models"] = {"resolve": True}          # the graph opts in, so the outcome names the id beside the raw spelling
     eng = Engine(from_doc(d), ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1}}), tmp_path / "run", registry=str(reg))
     await eng.run()
     out = [e for e in record.read(tmp_path / "run" / "record.jsonl") if e["event"] == "outcome"][0]

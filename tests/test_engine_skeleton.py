@@ -133,6 +133,7 @@ async def test_a_run_writes_one_run_start_and_one_verdict_event(tmp_path):
 async def test_an_agent_outcome_records_the_model_the_effort_and_the_tokens_when_known(tmp_path):
     a = agent("a", output_key="x")
     d = doc([a], ["a"])
+    d["models"] = {"resolve": True}          # the graph opts in; the registry id is recorded beside the raw spelling
     adapter = ScriptedAdapter({"a": {"output": {"x": 1}, "spend": 0.1, "turns": 2, "usage": {"tokens_in": 120, "tokens_out": 30}}})
     eng = Engine(from_doc(d), adapter, tmp_path / "run", target=make_repo(tmp_path / "repo"))
     await eng.run()

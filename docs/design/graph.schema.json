@@ -71,6 +71,16 @@
           }
         ]
       }
+    },
+    "models": {
+      "description": "The run's model resolution setting. Absent means off: every node sends the spelling the graph carries.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resolve": {
+          "type": "boolean"
+        }
+      }
     }
   },
   "$defs": {
