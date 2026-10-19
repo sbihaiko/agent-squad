@@ -21,10 +21,10 @@ from tests.test_waves import writer
 ARGV = ["{run_id}", "{child}", "{issue}", "{worktree}", "{base}"]
 
 
-def stub(tmp_path, code, sleep=0):
-    """A review command: it logs `<cwd> <argv>` to review.log, prints two findings, sleeps, and exits with `code`."""
+def stub(tmp_path, code, sleep=0, lead=0):
+    """A review command: it waits `lead` seconds, logs `<cwd> <argv>` to review.log, prints two findings, sleeps, and exits with `code`."""
     p = tmp_path / "review.sh"
-    p.write_text(f'#!/bin/sh\necho "$PWD $*" >> "{tmp_path}/review.log"\necho "blocking: a.txt lacks a test"\n'
+    p.write_text(f'#!/bin/sh\nsleep {lead}\necho "$PWD $*" >> "{tmp_path}/review.log"\necho "blocking: a.txt lacks a test"\n'
                  f'echo "blocking: no docs"\nsleep {sleep}\nexit {code}\n')
     p.chmod(0o755)
     return str(p)
@@ -47,11 +47,11 @@ def gated(cmd, deadline=30):
     return tweak
 
 
-def run_one(tmp_path, code, sleep=0, deadline=30, **request):
+def run_one(tmp_path, code, sleep=0, deadline=30, lead=0, **request):
     repo = sibling_repo(tmp_path / "t")
     base = git.head(repo)
     eng = make(tmp_path, {"router": routed(req(**(request or {"task": "issue #599"}))), "route.router.1": writer("a.txt")},
-               tweak=gated(stub(tmp_path, code, sleep), deadline), target=repo)
+               tweak=gated(stub(tmp_path, code, sleep, lead), deadline), target=repo)
     return eng, repo, base
 
 
@@ -188,6 +188,20 @@ async def test_the_review_deadline_ends_a_review_and_holds_the_child(tmp_path):
     assert land["outcome"] == "fail" and land["reasons"] == ["review_deadline"]
     rv = land["effect"]["review"]
     assert rv["verdict"] == "deadline" and rv["exit_code"] is None and rv["findings"].startswith("blocking: a.txt lacks a test")
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_the_review_deadline_holds_a_child_whose_review_prints_nothing_before_it(tmp_path):
+    """#612: a review that starts late (a loaded machine) prints nothing before the deadline; the hold does not need its output."""
+    eng, repo, _ = run_one(tmp_path, 0, sleep=30, deadline=1, lead=3)
+    assert (await eng.run()).verdict == "failed"
+    assert not (repo / "a.txt").exists()
+    [land] = ev(tmp_path, "land")
+    assert land["outcome"] == "fail" and land["reasons"] == ["review_deadline"]
+    rv = land["effect"]["review"]
+    assert rv["verdict"] == "deadline" and rv["exit_code"] is None
+    assert rv["findings"].startswith("blocking: a.txt lacks a test")
 
 
 def test_the_graph_validates_a_review_gate_and_refuses_a_misplaced_one(tmp_path):
