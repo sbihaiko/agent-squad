@@ -8,8 +8,15 @@ Shipped columns (`board-definition.json`): Backlog, Todo, Doing, Code Review, Co
 
 `watchd.sh` supervises two lanes:
 
-- **Fast lane** (`fastloop.sh`, every `SG_FAST_INTERVAL` s, 120 by default). Each beat: start one `childcc.py` pass in the background under the `single.sh childcc` lock, unless the pass this lane started still lives; then start `autofrontier.sh` and `autobug.sh` detached. A lane whose supervisor died exits.
-- **Slow lane** (`watch.sh`, about 90 s a cycle). Order: token guard; verdicts and wave landings; stall watchdog; `reconcile.py` (every eighth cycle, detached); `branchland.sh`, `branchreviewpass.sh`, `branchfixpass.sh` (detached, each under its own lock, skipped when `SG_LAND_PAUSED` is set); `childcc.py`, `autofrontier.sh`, `autobug.sh` only when the fast lane is down; `autohunt.sh`; `heartbeat.sh`; `wtclean.sh` (every third cycle); `janitor.sh`; `live-guard.sh`; `vendor-guard.sh`.
+- **Fast lane** (`fastloop.sh`, every `SG_FAST_INTERVAL` s, 120 by default). Each beat: start one `childcc.py` pass in the background under the `single.sh childcc` lock, unless the pass this lane started still lives; then start `autobug.sh` and, after it ends, `autofrontier.sh`, detached. A new Todo card in the hub's board cache ends the wait early. A lane whose supervisor died exits.
+- **Slow lane** (`watch.sh`, about 90 s a cycle). Order: token guard; verdicts and wave landings; stall watchdog; `reconcile.py` (every eighth cycle, detached); `branchland.sh`, `branchreviewpass.sh`, `branchfixpass.sh` (detached, each under its own lock, skipped when `SG_LAND_PAUSED` is set); `childcc.py`, `autobug.sh`, `autofrontier.sh` only when the fast lane is down; `autohunt.sh`; `heartbeat.sh`; `wtclean.sh` (every third cycle); `janitor.sh`; `live-guard.sh`; `vendor-guard.sh`.
+
+Each dispatch pass first runs the stops in `ghcall.sh`, in order. Each stop prints one line, writes it to cycle.log, and the pass dispatches nothing:
+
+- `gh_loop_stop`: an open issue carries `loop-bug` (ADR-0146). `childcc.py` stops on the same label (`loop_defect`).
+- `gh_dispatch_hold`: the count in `childcc-waiting` is over `SG_DISPATCH_MAX_WAITING` (unset: no hold; a count over 30 min old: no hold).
+- `gh_disk_stop`: the volume of `$SG_STATE` or `$TMPDIR` has less than `SG_MIN_FREE_GB` GiB free (20 by default).
+- `gh_bug_first` (`autofrontier.sh` only): `bugs-waiting`, which `autobug.sh` writes, is over 0 and under 30 min old.
 
 No cycle step promotes `dev` to `stg`. The owner starts each promotion (ADR-0145 rule 3).
 
@@ -28,8 +35,9 @@ sequenceDiagram
     participant L as launch.py
     participant E as engine (squad start)
     participant C as child agent
+    participant RR as runreview.sh
     participant CC as childcc.py
-    participant CR as childreview.sh
+    participant CR as childreview.sh + review.sh
     participant WV as wave.sh
     participant G as gate.sh + fast-gate.sh
     participant J as janitor.py
@@ -40,7 +48,8 @@ sequenceDiagram
     WD->>FL: spawn#59; fastloop writes fastloop.pid each beat
     WD->>W: spawn, restart 5 s after an exit
     FL->>CC: each beat, background: single.sh childcc childcc.py over every active run
-    FL->>AF: each beat, detached: autofrontier.sh, then autobug.sh
+    FL->>AF: each beat, detached: autobug.sh, then autofrontier.sh
+    AF->>AF: stops: gh_loop_stop, gh_dispatch_hold, gh_disk_stop, gh_bug_first
     AF->>GH: open issues through ghcall#59; Todo cards (sg_todo_cards)
     AF->>AF: candidate: SG_FRONTIER_LABEL, card in Todo, no skip label, no open work branch, not live#59; stack.sh READY
     AF->>AF: write auto/disp-N#59; mkreq.sh builds the request
@@ -57,12 +66,17 @@ sequenceDiagram
     E->>E: router: spawn_requested, spawn_accepted
     E->>C: worktree RUN/ws/LOGICAL-CHILD on squad/RUN_ID/SLUG, cut from the target HEAD
     C->>C: edits, commits "Refs #N", prepush --local#59; pushes nothing
-    E->>E: outcome pass#59; Dispatch.land merges into the target#59; land event with before and head
+    E->>E: outcome pass#59; Dispatch.rounds: review_gate before the merge
+    E->>RR: runreview.sh RUN CHILD N in the child worktree#59; SQUAD_REVIEW_ROUND, SQUAD_REVIEW_FIX
+    RR->>CR: one reviews slot (caps)#59; childreview.sh RUN N
+    CR->>GH: fetch wave/RUN
+    CR->>CR: review.sh --worktree origin/wave/RUN under review-KEY.lock: review-KEY.md, .sha, .base
+    RR-->>E: 0 APPROVE#59; 4 fix round#59; 1 CHANGES or BLOCKED, requeued#59; 3 no review here
+    E->>E: review_round event per round#59; on 4: entry n+1 of the child in its worktree, then round n+1
+    E->>E: on 0 or 3: Dispatch.land merges into the target#59; land event with before, head, review, rounds
     CC->>CC: pending: child with outcome pass, issue named, no cc- marker#59; cursor picks one child (SG_CHILDCC_BUDGET 1)
     CC->>GH: issue state open?
-    CC->>CR: once per head (rvd- marker): childreview.sh RUN N in the child worktree
-    CR->>GH: fetch wave/RUN
-    CR->>CR: review.sh --worktree origin/wave/RUN: review-KEY.md, .sha, .base
+    CC->>CR: only when the run did not approve the head: once per head (rvd- marker), card Doing to Code Review
     CC->>WV: wave.sh enter RUN N, cwd the child worktree
     WV->>WV: not expired#59; review APPROVE, base wave/RUN, sha HEAD
     WV->>GH: fetch wave/RUN#59; rebase on its tip
@@ -94,24 +108,25 @@ The column is the one the writer asks for. A board write that the API refuses le
 | step | actor | reads | writes | column asked |
 |---|---|---|---|---|
 | 1 | owner | - | card to Todo; `watchd.sh start` (watchd.pid, watch.log) | Todo |
-| 2 | fastloop.sh | `SG_FAST_INTERVAL` (`env.sh`); its own childcc pid | fastloop.pid every beat; one background childcc pass; both dispatch passes, detached | - |
-| 3 | autofrontier.sh | open issues (ghcall, one aggregate read); Todo cards; labels: needs `SG_FRONTIER_LABEL`, skips the bug label and `SG_FRONTIER_SKIP_LABELS` (spec, needs-owner, needs-ratification, needs-info, frozen:owner, frozen:dependency, wontfix); disp-/bug- markers; live issues in active runs (`startability.sh`); remote work branches; `stack.sh`; caps, envelope and `fundroom.py` | auto/disp-N; req/NAME.body; mkreq.sh request; cq comment; card Doing | Doing |
-| 3b | autobug.sh | the same, over bug issues (go label and Todo card too) | auto/bug-N; card Doing, and the bug board when `SG_BUG_PROJECT` is set | Doing |
+| 2 | fastloop.sh | `SG_FAST_INTERVAL` (`env.sh`); its own childcc pid; Todo cards in the board cache | fastloop.pid every beat; one background childcc pass; autobug then autofrontier, detached | - |
+| 3 | autofrontier.sh | the four stops (`ghcall.sh`); open issues (ghcall, one aggregate read); Todo cards; labels: needs `SG_FRONTIER_LABEL`, skips the bug label and `SG_FRONTIER_SKIP_LABELS` (spec, needs-owner, needs-ratification, needs-info, frozen:owner, frozen:dependency, wontfix); disp-/bug- markers; live issues in active runs (`startability.sh`); remote work branches; `stack.sh`; caps, envelope and `fundroom.py` | auto/disp-N; req/NAME.body; mkreq.sh request; cq comment; card Doing | Doing |
+| 3b | autobug.sh | the same, over bug issues (go label and Todo card too), with no `gh_bug_first` stop | auto/bug-N; bugs-waiting (startable bugs left with no run); card Doing, and the bug board when `SG_BUG_PROJECT` is set | Doing |
 | 4 | launch.py | `origin/$SG_BASE`, fetched now (`_landing_base`); the request's issues (`_issue_named`) | target: the issue worktree `worktrees/child/gui-N` when the request names one issue (`_issue_worktree`; a reused tree is reset to the base, extra commits kept on `refs/squad/leftover/*`, a dirty tree falls back), else its own `worktrees/run/KEY` on `squad/run/KEY` (`_run_worktree`); the engine process with `--keep-children`; `TARGET/runs/RUN/request.txt`, `launch.log`; one active-runs.txt line, absolute | Doing |
 | 5 | wave.sh start | origin/dev, origin/wave/RUN (scratch clone) | remote wave/RUN; auto/wave-RUN, waved-RUN, wave-start-RUN | Doing |
 | 6 | engine router | request text | record: spawn_requested, spawn_accepted | Doing |
 | 7 | child agent | its worktree `RUN/ws/LOGICAL-CHILD`, cut from the target HEAD (`Children.worktree`) | commits "Refs #N" on `squad/RUN_ID/SLUG`; no push | Doing |
-| 8 | engine Dispatch.land | child outcome pass; workspace exists | merge into the target branch; land event with `effect.before` and `head` | Doing |
+| 7b | engine Dispatch.rounds, runreview.sh | the dispatch node's `review` gate (`review_gate` in `router.graph.json`, argv `SG_RUN_REVIEW`); the run's wave marker; one `reviews` slot (`caps.sh`, `SG_RUN_REVIEW_WAIT`); a fix grant held from the run budget | one `review_round` event per round (head, verdict, offered). Exit 0 approve; 3 no review here (no issue, no wave, no slot, no verdict); 4 fix: CHANGES with a fix grant on offer and findings that changed (`revformat.py --stall`, `runfix` markers), and the child runs entry n+1 in its worktree; 1 hold: BLOCKED, CHANGES with no offer, or `SG_RUN_FIX_STALLS` (3) rounds with the same findings: `wave.sh requeue` with the verdict line and every blocking finding, `requeued-RUN-CHILD` = head | Doing |
+| 8 | engine Dispatch.land | child outcome pass; workspace exists; the last review round | approve or no review: merge into the target branch. Hold: no merge, reasons `review_held`, `review_deadline` or `review_fix_failed`. Land event with `effect.before`, `head`, `review`, `rounds` | Doing |
 | 9 | engine verdict | record fold | verdict; `prune` keeps child trees for a `keep_children` run | Doing |
-| 10 | childcc.py | active runs, or the run watch.sh hands it; spawn_accepted and outcome pass; issue state (gh); wave-/waved- markers; card column for a backfill; requeued-, rvd- markers; auto/childcc-cursor, childcc-round | rvd-RUN-CHILD (head and pid); cc-RUN-CHILD; cursor and round; cq comment; card Code Complete only for a run with no wave; exit 3 when children wait | Code Complete (no wave) |
-| 11 | childreview.sh | child HEAD; origin/wave/RUN; review chain (step 11b) | review-KEY.md, .sha (review.sh), .base; cq status comment | - |
-| 11b | review.sh | `review_models` of the `models.json` beside the script (the live copy is machine config), in config order (`review_order: config`) | the first model that answers with a verdict wins. Skipped: codex while `$SG_SHARED/codex-limited` holds a future time; gemini (agy) while `agy-limited` does; an `anthropic_models` entry while `quota-guard` exists; a model switched off in the hub; a model outside its `hours` window | - |
-| 12 | wave.sh enter | wave-start-RUN age; review-KEY.{md,base,sha}; origin/wave/RUN, rebased on before the gates; `SG_WAVE_GATES` | gate-status fast line (gate.sh); remote wave/RUN tip; card Code Complete; auto/entered-RUN-N | Code Complete |
+| 10 | childcc.py | open `loop-bug` issues; active runs, or the run watch.sh hands it; spawn_accepted, the last passing outcome per child, land events (outcome and review verdict); issue state (gh); wave-/waved- markers; card column for a backfill; requeued-, rvd-, apphold-, holds- markers; auto/childcc-cursor, childcc-round | rvd-RUN-CHILD (head and pid); crv-RUN-CHILD and card Doing to Code Review when a review starts or a child waits; cc-RUN-CHILD; cursor and round; childcc-waiting; childcc-now.json; cq comment; card Code Complete only for a run with no wave; exit 3 when children wait | Code Review; Code Complete (no wave) |
+| 11 | childreview.sh | child HEAD; origin/wave/RUN; review chain (step 11b) | review-KEY.md, .sha (review.sh), .base; cq status comment. Exit 1 when no verdict: childcc drops its rvd- claim | - |
+| 11b | review.sh | `review_models` of the `models.json` beside the script (the live copy is machine config), in config order (`review_order: config`); review-KEY.lock | the first model that answers with a verdict wins (see Review of one branch). Skipped: codex while `$SG_SHARED/codex-limited` holds a future time; gemini (agy) while `agy-limited` does; grok while `grok-limited` exists; an `anthropic_models` entry while `quota-guard` exists; a model switched off in the hub; a model outside its `hours` window | - |
+| 12 | wave.sh enter | wave-start-RUN age (an expired wave takes only a head the review approved against it); review-KEY.{md,base,sha}; origin/wave/RUN, rebased on before the gates; `SG_WAVE_GATES` | gate-status fast line (gate.sh); remote wave/RUN tip; card Code Complete, a refused write named (`board_write`); auto/entered-RUN-N | Code Complete |
 | 13 | watch.sh | verdict in the record; wave-RUN marker; wave age (`wave.sh expired`) | wland-RUN and its `.pass`/`.left` marks, transient; watch-seen.txt | - |
-| 14 | wave.sh land | origin/dev, origin/wave/RUN; `Refs #N` in commits ahead of dev; the run record (`run_issues`) for a capped or empty wave; auto/wowed-RUN | remote dev tip; wave/RUN deleted; wave-start-, wland-tries- removed; issues closed; landed.tsv; cq delivery; card Closed; wave-RUN removed once every issue closed | Closed |
+| 14 | wave.sh land | origin/dev, origin/wave/RUN; `Refs #N` in commits ahead of dev; the run record (`run_issues`) and entered- markers for a capped or empty wave; auto/wowed-RUN | remote dev tip; wave/RUN deleted; wave-start-, wland-tries- removed; issues closed; landed.tsv; cq delivery; card Closed; wave-RUN removed once every issue closed | Closed |
 | 15 | GitHub CI | push to dev (`ci.yml`) | check runs on the dev tip | - |
-| 16 | wtclean.sh (every third cycle) | child trees under `*/runs/RUN/ws/*`; verdict or zombie; wave hold (`wave-RUN`, capped at `SG_WAVE_HOLD_MAX_SECONDS`); clean tree; HEAD in the base or on a remote or other branch; issue trees under `worktrees/child/*` | removes those trees and throwaway branches; wt tally | - |
-| 17 | janitor.py R | run records (active runs and run folders under the checkout, `worktrees/run/*` and `worktrees/child/*`); entered- markers; issue state; board cards, read once; remote branches; review files | board PATCH only on a mismatch, highest rank wins; Run fields; cycle.log | Closed |
+| 16 | wtclean.sh (every third cycle) | child trees under `*/runs/RUN/ws/*`; verdict or zombie; wave hold (`wave-RUN`, capped at `SG_WAVE_HOLD_MAX_SECONDS`); clean tree; HEAD in the base or on a remote or other branch; issue trees under `worktrees/child/*`; run trees `worktrees/run/KEY` whose every run ended for good (`completed`, or `failed` with no remains) | removes those trees and throwaway branches, `squad/run/KEY` after its tree; wt tally | - |
+| 17 | janitor.py R | run records (active runs and run folders under the checkout, `worktrees/run/*` and `worktrees/child/*`); entered- markers; issue state and labels; board cards, read once; remote branches; review files | board PATCH only on a mismatch. An issue follows the newest run that holds it; rank orders the signals of that run only. A child done and not in the run's open wave ranks Code Review (35). Run fields; frozen:owner for a Blocked want; cycle.log | Code Review; Closed |
 | 18 | owner | the dev tip | `promote-pass.sh`: full suite in a clean clone under the gate lock (try mode), gate-status-full, commit status `squad/full-proof`, then `promote-stg.sh` | - |
 | 19 | promote-stg.sh | gate-status-full (`SG_PROMOTE_PROOF=local`) or the dev tip's CI (`ci`), under the gate lock | stg ref, fast-forward only; promote.log once per tip and reason | - |
 | 20 | live-guard.sh | main tree branch is stg and clean; fetch origin/stg; `publish-live.sh --check` | ff of the main tree; the file list into `~/.claude/skills/squad-goal` | - |
@@ -123,6 +138,16 @@ A loop run keeps its folder inside its target: `worktrees/child/gui-N/runs/RUN` 
 ### The childcc pass
 
 One pass works at most `SG_CHILDCC_BUDGET` children (1 by default). A child costs budget only when its entry reaches the review and the gates. A closed issue, a landed wave, a backfill skip and a requeue held on the same head cost nothing. The pass starts after the child that `auto/childcc-cursor` names. `auto/childcc-round` holds the children worked since the last complete pass. A pass that leaves a child with no turn in the round exits 3. On 3, `land_wave` defers the landing and keeps the run unread.
+
+A child the run approved enters with no second review. If its entry still holds it, `apphold-RUN-CHILD` makes the pass review it from then on. A child that `WAVE HOLD` keeps out is not counted as visited, so the wave waits for it until its age cap. A review hold counts per head in `holds-RUN-CHILD`. At `SG_HOLD_TRIES` (3) holds on one head, the pass requeues the issue with the hold reason. A review that says CHANGES requeues the issue with the first finding. A child whose engine landing failed is requeued once with that reason and never enters. A child its run already requeued (`requeued-` marker) gets its cc- marker and nothing else.
+
+### Review of one branch
+
+`review.sh` takes the lock `review-KEY.lock` (flock on fd 9), waiting up to `SG_REVIEW_LOCK_WAIT` s (3600). `runreview.sh` and `childcc.py` can review the same child, so the second one waits. A verdict the first one wrote for the same head is reused, and no model is called. Each try writes private files `review-KEY.md.PID*`. Only a verdict, or the BLOCKED line, reaches `review-KEY.md`, by a rename. A head that moves during the review publishes `VERDICT: BLOCKED (... head moved during the review)`. When every model fails, it publishes `VERDICT: BLOCKED (every review model failed)` and exits 1. An answer outside the checklist shape (`revformat.py`) is MODEL_FORMAT. With more than one reachable model, the same model gets one repair try with the complaint. A `review_no_tools` model gets its repair turn inside its direct `/v1/messages` call instead. Status files carry the model and the try in their names. A grok 402 writes `grok-limited`, which only the owner removes.
+
+### Requeue counts
+
+`wave.sh requeue` keeps two ledgers per issue. A loop-caused reason (`loop_caused`: a wave that landed without the child, an adapter error, a merge or rebase conflict, a disk stop, a review with no ruling or a moved head) counts in `loopqueues-N`. At `SG_LOOP_REQUEUE_CAP` (6) `loop_stop` adds `needs-owner`, asks for Blocked, and queues SQUAD-NEEDS-HUMAN. Any other reason counts in `requeues-N`. At `SG_REQUEUE_CAP` (3) `stop` adds `frozen:owner` and queues SQUAD-NOT-STARTABLE. One run counts once. A new non-RED `Refs #N` commit in the base starts the count again. A requeue the age cap makes (`cap`) counts in neither. `janitor.py` rule O counts a run that delivered nothing through `wave.sh fail`, with the run's own review verdict as the kind.
 
 ### Gate lock
 
@@ -139,6 +164,7 @@ sequenceDiagram
     participant AF as autofrontier.sh
     participant L as launch.py
     participant E as engine
+    participant RR as runreview.sh
     participant CC as childcc.py
     participant WV as wave.sh
     participant W as watch.sh
@@ -146,6 +172,7 @@ sequenceDiagram
     participant LG as live-guard.sh
     participant GH as GitHub
     Note over AF,L: before a run
+    AF->>AF: loop-bug open, too many children wait, disk under the floor, or bugs wait: one line, nothing dispatched
     AF->>AF: mkreq.sh refuses a slice: the contested tickets are deferred, their disp- markers freed, the rest rebuilt#59; a whole-batch refusal frees every marker
     L->>L: fetch of origin/dev fails or names no commit: refuse the start, no tree made
     L->>L: worktree add fails three times: refuse the start
@@ -156,18 +183,21 @@ sequenceDiagram
     E->>E: spawn_rejected: request_malformed, max_children_over, envelope errors, after_unmet, spend_over_remainder
     E->>E: child fail: spend cap, deadline, child_workspace_failed, adapter error#59; a failed check turns a pass into a fail
     E->>E: land fail: land_workspace_missing, land_timeout, merge_conflict#59; ac_regression resets the target
-    Note over E,CC: childcc reads the child outcome, never its land event: a child whose engine landing failed still enters the wave
+    Note over E,RR: in-run review
+    RR->>WV: exit 1: wave.sh requeue N with the verdict line and every blocking finding#59; requeued-RUN-CHILD = head
+    E->>E: land fail review_held, review_deadline or review_fix_failed: no merge, the worktree stays
+    CC->>CC: land fail with requeued- marker: CHILD HELD, cc- marker#59; without it: requeue "its landing failed", cc- marker
     Note over CC,WV: entry refused: gates red, rebase conflict, push refused twice, wave expired
-    WV->>GH: requeue: rm disp-N, bug-N#59; card Todo#59; cq why#59; at SG_REQUEUE_CAP (3) frozen:owner and SQUAD-NOT-STARTABLE instead
+    WV->>GH: requeue: rm disp-N, bug-N#59; card Todo#59; cq why#59; at a ledger cap NEEDS-HUMAN or STOP instead (Requeue counts)
     CC->>CC: requeued-RUN-CHILD = HEAD, no cc- marker: no new try on the same head
-    Note over CC,WV: entry held: no review, wrong base, other sha, not APPROVE, gate lock held
-    WV-->>CC: exit 1 WAVE HOLD, nothing requeued
+    Note over CC,WV: entry held: no review, wrong base, other sha, not APPROVE, gate lock or gate slots held
+    WV-->>CC: exit 1 WAVE HOLD, nothing requeued#59; the child stays left, so the pass exits 3
+    CC->>WV: SG_HOLD_TRIES review holds on one head: wave.sh requeue N with the hold reason
     CC->>WV: review says CHANGES: wave.sh requeue N with the first finding
-    CC->>CC: no cc- marker: the next pass tries again
-    W->>WV: on the verdict cycle the landing runs with the child out of the wave
-    WV->>GH: nothing ahead of dev: delete wave/RUN#59; deliver each dispatched issue whose non-RED Refs commit dev holds#59; exit 0
+    W->>WV: at the age cap the landing runs with the child out of the wave
+    WV->>GH: nothing ahead of dev: delete wave/RUN#59; deliver each dispatched issue whose child entered or whose non-RED Refs commit dev holds#59; capped: requeue the rest#59; exit 0
     CC->>CC: later passes see waved- without wave-: cc- marker written, no entry
-    J->>GH: R: the child's engine landing ranks Code Complete#59; the work sits in the run target only
+    J->>GH: R: the wave landed without the child: Todo (20)#59; the open wave lacks it: Code Review (35)
     Note over W,CC: childcc pass incomplete
     CC-->>W: exit 3: the landing waits, the run stays unread
     W->>W: childcc lock held past SG_LAND_WAIT, or the pass failed: the run stays unread
@@ -184,10 +214,11 @@ sequenceDiagram
     Note over W,WV: wave age cap (SG_WAVE_MAX_AGE_SECONDS, 7200 s)
     W->>WV: expired and no verdict: land_wave now
     WV->>GH: enter refuses a child that arrives after the cap: requeue
-    WV->>GH: land lands what entered#59; requeues each run issue the wave did not carry
+    WV->>GH: enter still takes a head the review approved against the wave
+    WV->>GH: land lands what entered#59; requeues each run issue the wave did not carry, an empty wave too
     Note over W,J: run needs-human or failed
     J->>GH: R: a failed or completed run with nothing landed: Todo#59; needs-human with nothing landed: frozen:owner#59; a Closed or Abandoned card is never frozen
-    J->>J: rule O drops disp-N of a run that landed nothing#59; rule C kills a zombie run
+    J->>J: rule O drops disp-N of a run that landed nothing and counts it (wave.sh fail)#59; rule C kills a zombie run
     Note over W: token cap
     W->>W: token-guard.sh exits 1 with a sentence: cycle.log, token-stop, watchd.sh stop, exit
     Note over LG: live publication
@@ -196,6 +227,5 @@ sequenceDiagram
 
 ## 4. Edges the code leaves open
 
-- An empty wave returns before the age-cap requeue. A capped run whose children never entered gets no requeue for an issue that dev does not hold.
-- No step removes a run worktree `worktrees/run/KEY` or its branch `squad/run/KEY`. `wtclean.sh` removes child trees under its `runs/RUN/ws` and the issue trees under `worktrees/child`.
-- The wave entry drops the output of its Code Complete board write, so a refused write is not named.
+- `loop_stop` (`wave.sh`) asks for Blocked. The shipped board has no Blocked option, so `board.py` refuses the write and `wave.sh` names the refusal. The card keeps its column. Janitor rule R then reads `needs-owner` and adds `frozen:owner`.
+- `review.sh` sets `prev` only inside a comment, so it never queues a MODEL_SWITCH line.
