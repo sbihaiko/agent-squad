@@ -242,3 +242,54 @@ def test_cli_migrate_dry_run_writes_nothing(tmp_path, capsys):
     assert rc == 0
     assert "dropped coding gemini-3.8-flash-high" in out
     assert path.read_text() == REPO.read_text()
+
+
+# --- the live skill copy is the operator's: a migrate there needs --live (#658) -----------------------------
+
+def _live_file(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    live = home / ".claude" / "skills" / "squad-goal" / "scripts" / "models.json"
+    live.parent.mkdir(parents=True)
+    live.write_text(REPO.read_text())
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("SG_LIVE_DIR", raising=False)
+    return live
+
+
+def test_cli_migrate_refuses_a_path_under_the_live_skills_without_live(tmp_path, monkeypatch, capsys):
+    live = _live_file(tmp_path, monkeypatch)
+    rc = mr.main(["migrate", str(live)])
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert "--live" in err and str(live.resolve()) in err
+    assert live.read_text() == REPO.read_text()
+    assert not live.with_name("models.json.v1.bak").exists()
+
+
+def test_migrate_refuses_a_symlink_into_the_live_skills(tmp_path, monkeypatch, reg):
+    live = _live_file(tmp_path, monkeypatch)
+    link = tmp_path / "elsewhere"
+    link.symlink_to(live.parent, target_is_directory=True)
+    with pytest.raises(mr.RegistryError, match="--live"):
+        mr.migrate(link / "models.json", reg=reg)
+    assert live.read_text() == REPO.read_text()
+
+
+def test_migrate_refuses_a_path_under_sg_live_dir(tmp_path, monkeypatch, reg):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    live_dir = tmp_path / "live" / "squad-goal"
+    (live_dir / "scripts").mkdir(parents=True)
+    path = live_dir / "scripts" / "models.json"
+    path.write_text(REPO.read_text())
+    monkeypatch.setenv("SG_LIVE_DIR", str(live_dir))
+    with pytest.raises(mr.RegistryError, match="--live"):
+        mr.migrate(path, reg=reg)
+    assert path.read_text() == REPO.read_text()
+
+
+def test_migrate_of_the_live_skills_runs_with_live_or_as_a_dry_run(tmp_path, monkeypatch, capsys):
+    live = _live_file(tmp_path, monkeypatch)
+    assert mr.main(["migrate", "--dry-run", str(live)]) == 0
+    assert live.read_text() == REPO.read_text()
+    assert mr.main(["migrate", "--live", str(live)]) == 0
+    assert json.loads(live.read_text())["schema_version"] == 2
