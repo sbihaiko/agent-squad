@@ -339,10 +339,12 @@ rm -rf "$T/w3"; $G clone -q "$T/origin.git" "$T/w3" 2>/dev/null
 r1=$(land2 run-7); rc1=$?; r2=$(land2 run-7); rc2=$?
 [ $rc1 = 1 ] && [ $rc2 = 1 ] && [ -e "$T/st/auto/wave-run-7" ] && ok "K: a conflicting landing fails and keeps its marker below the cap" || ko "K: exits $rc1 $rc2, marker $([ -e "$T/st/auto/wave-run-7" ] && echo kept || echo gone)"
 /usr/bin/grep -q 'issues/70/labels' "$T/gh.log" && ko "K: escalated below the cap" || ok "K: nothing is escalated below the cap"
-r3=$(land2 run-7); rc3=$?
+: > "$T/board.log"; r3=$(land2 run-7); rc3=$?
 [ $rc3 = 1 ] && case "$r3" in *"WAVE NEEDS-HUMAN"*) ok "K: the third failure escalates to the owner";; *) ko "K: no escalation: '$r3'";; esac || ko "K: exit $rc3: '$r3'"
 /usr/bin/grep -q 'issues/70/labels -f labels\[\]=frozen:owner' "$T/gh.log" && ok "K: the issue the wave carries is labelled frozen:owner" || ko "K: no label: $(cat "$T/gh.log")"
 ls "$T/st/cq/"x__y#70-wavestuck* >/dev/null 2>&1 && ok "K: one comment is queued on the issue" || ko "K: no queued comment for #70"
+# #657: nothing landed, so the card leaves Code Complete for Todo; it keeps frozen:owner, so the frontier does not take it.
+/usr/bin/grep -qx "o 3 Todo 70" "$T/board.log" && ok "K: the stopped wave moves its issue card to Todo" || ko "K: the card stays where it was: '$(cat "$T/board.log")'"
 [ ! -e "$T/st/auto/wave-run-7" ] && ok "K: the marker is cleared, so the loop stops retrying" || ko "K: the marker is kept after the escalation"
 $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch keeps the work for the owner" || ko "K: the wave branch is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K: dev is not moved by a failing landing" || ko "K: dev moved"
