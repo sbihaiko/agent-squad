@@ -362,4 +362,21 @@ rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; bash "$T/s/review.sh" --branch fix/
   && ok "19 each model's MODEL_FORMAT keeps its own status file" || ko "19 status files: $(/bin/ls "$T/st/cq")"
 /bin/ls "$T/st/" | /usr/bin/grep -q 'review-fix_1-x\.md\.[0-9]' && ko "19 a private attempt file was left: $(/bin/ls "$T/st")" || ok "19 no private attempt file is left"
 
+# 20) #625: with several reachable models, an answer outside the shape goes back once to the same model with the check's
+# complaint, before the chain moves on. The second answer is the shape: APPROVE by that model, no BLOCKED.
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat > "$T/prompt.\$(wc -l < "$T/ccalls" 2>/dev/null | tr -d ' ')"; echo "\$*" >> "$T/ccalls"
+[ "\$(wc -l < "$T/ccalls")" -ge 2 ] && { echo "VERDICT: APPROVE"; exit 0; }
+printf 'VERDICT: CHANGES\\n## Blocking\\n- a finding with no place\\n'
+J
+chmod +x "$T/bin/claude"
+printf '{"review_models":["claude:one","claude:two"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/ccalls" "$T/prompt".*; : > "$T/ccalls"; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && case "$out" in model=claude:one*"VERDICT: APPROVE"*) true;; *) false;; esac && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] \
+  && ok "20 a format failure is repaired once by the same model" || ko "20 repair: rc=$rc '$out' md='$(head -1 "$T/st/review-fix_1-x.md")'"
+[ "$(/usr/bin/grep -c -- '--model one' "$T/ccalls")" = 2 ] && ! /usr/bin/grep -q -- '--model two' "$T/ccalls" && ok "20 the repair is the same model, once" || ko "20 calls: $(cat "$T/ccalls")"
+/usr/bin/grep -q 'outside the shape' "$T/prompt.1" 2>/dev/null && /usr/bin/grep -q 'a finding with no place' "$T/prompt.1" && ok "20 the repair prompt carries the complaint and the answer" || ko "20 repair prompt: $(tail -5 "$T/prompt.1" 2>/dev/null)"
+/bin/ls "$T/st/" | /usr/bin/grep -q 'review-fix_1-x\.md\.[0-9]' && ko "20 a private attempt file was left" || ok "20 no private attempt file is left"
+
 rm -rf "$T"; exit $fail

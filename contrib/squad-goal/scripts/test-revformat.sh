@@ -274,4 +274,27 @@ done
 printf 'VERDICT: CHANGES\n## Blocking\n- The code is wide — two reviews race — serialize them\n' > "$T/r.md"
 python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ko "24 an unlocated bullet passed" || ok "24 an unlocated bullet still fails"
 
+# #625: a location may name a symbol instead of a line (`path:symbol`, backticked whole or on the symbol), and an
+# acceptance-criteria finding names its criterion (AC1, AC 2, Acceptance criterion 3, Issue AC ...) as a whole-change
+# location. Each bullet below reshapes a line a live review was refused for. A bullet that names no place still fails.
+while IFS= read -r b; do
+  printf 'VERDICT: CHANGES\n## Blocking\n- %s\n' "$b" > "$T/r.md"
+  python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ok "25 passes: ${b:0:44}" || ko "25 rejected: $b: $(python3 "$src" --max-lines 60 "$T/r.md" 2>&1)"
+done <<'B'
+`squad/launch.py:_router_open` — a second copy of the window rule — two rules drift — call modelreg
+squad/modelreg.py:`_route_for` — the sdk use picks the cli route — the gateway gets the wrong id — resolve through the gateway
+`tests/test_dispatch.py:test_repo_graphs_name_registry_ids` — the test asserts wire == raw — it passes on the wrong string — assert the served list
+squad/modelreg.py:_wire() — the context suffix is dropped — the 1M context is lost — re-append it
+AC1 (TDD RED history on dev): the diff adds no RED commit — the history cannot show the test failed first — add the RED commit
+AC 2 — the loop behavior changes — v1 promises none — gate it behind an opt-in
+Acceptance criterion 3 — the resolver is not the one module — two windows drift — share one rule
+Issue AC check: this diff cannot prove "no behavior change" — no test covers the old path — add a regression test
+B
+printf 'VERDICT: CHANGES\n## Blocking\n- AC1 (TDD RED history on dev): the diff adds no RED commit\n' > "$T/r.md"
+python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ko "25 an AC bullet with no fields passed" || ok "25 an AC bullet still needs its fields"
+for b in 'Note:something — x — y — z' 'the router: _route_for — x — y — z' 'Accepted — the code is fine — nothing fails — none'; do
+  printf 'VERDICT: CHANGES\n## Blocking\n- %s\n' "$b" > "$T/r.md"
+  python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ko "25 an unlocated bullet passed: $b" || ok "25 still fails: ${b:0:30}"
+done
+
 rm -rf "$T"; exit $fail
