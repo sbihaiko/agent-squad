@@ -109,6 +109,16 @@ r=$(bash "$T/s/autobug.sh" 2>&1); rc=$?
 [ -e "$T/st/auto/bug-1228" ] && ko "3b a refused dispatch left auto/bug-1228 behind" || ok "3b no stale marker for another issue either"
 [ -e "$T/launched" ] && ko "3b a refused dispatch launched a run" || ok "3b a refused dispatch launches no run"
 
+# 3c) (#664) with no profile the request must not prescribe a check that cannot run. This suite clears every SG_*
+# variable, so SG_PROFILE is unset: the body says the check is unavailable and names why.
+rm -rf "$T/st/req"; mkdir -p "$T/st/req" "$T/st/cq" "$T/st/locks"
+printf '#!/bin/bash\nmkdir -p "$SG_STATE/req"; echo "$SG_STATE/req/$1.txt"; cat "$2" > "$SG_STATE/req/$1.txt"\n' > "$T/s/mkreq.sh"
+chmod +x "$T/s/mkreq.sh"
+r=$(bash "$T/s/autobug.sh" 2>&1)
+body=$(cat "$T/st/req/"*.txt 2>/dev/null)
+case "$body" in *'"bash contrib/squad-goal/scripts/prepush.sh --local"'*) ko "3c no profile, yet the request prescribes prepush.sh --local";; *) ok "3c no profile: the request does not prescribe prepush.sh --local";; esac
+case "$body" in *"no squad-goal profile resolves"*) ok "3c the request names why the prepush check is unavailable";; *) ko "3c the request does not name why: '$body'";; esac
+
 # 4) autofrontier never dispatches a debt issue (1400 has ready-for-agent + debt; 1401 is a real slice)
 r=$(AF_DRY=1 bash "$T/s/autofrontier.sh" 2>&1)
 case "$r" in *1400*) ko "4 autofrontier dispatched debt #1400: '$r'";; *1401*) ok "4 autofrontier skips debt, keeps the slice";; *) ko "4 autofrontier dispatched nothing: '$r'";; esac

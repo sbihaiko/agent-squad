@@ -102,6 +102,22 @@ async def test_node_settings_map_onto_sdk_options():
     assert kw["setting_sources"] == ["project"]   # the project's own CLAUDE.md applies, as in any repo
 
 
+def test_the_session_environment_carries_the_loop_profile(monkeypatch):
+    """#664: a fix run and a coding child run the worktree's own `prepush.sh --local`, and its `env.sh` resolves the
+    profile from SG_PROFILES_DIR. The session must carry both the profile and its directory, or the check exits 2."""
+    monkeypatch.setenv("SG_PROFILE", "agent-squad")
+    monkeypatch.setenv("SG_PROFILES_DIR", "/live/profiles")
+    env = SdkAdapter(query=object(), options_cls=Options).options(request()).kw["env"]
+    assert (env["SG_PROFILE"], env["SG_PROFILES_DIR"]) == ("agent-squad", "/live/profiles")
+
+
+def test_a_session_outside_the_loop_carries_no_profile(monkeypatch):
+    monkeypatch.delenv("SG_PROFILE", raising=False)
+    monkeypatch.delenv("SG_PROFILES_DIR", raising=False)
+    env = SdkAdapter(query=object(), options_cls=Options).options(request()).kw.get("env", {})
+    assert "SG_PROFILE" not in env and "SG_PROFILES_DIR" not in env
+
+
 async def test_a_spend_cap_is_reported_with_measured_spend():
     r = await adapter([ResultMessage(subtype="error_max_budget_usd", is_error=True, total_cost_usd=2.01)]).call(request())
     assert (r.stop_reason, r.spend) == ("spend_cap", 2.01)
