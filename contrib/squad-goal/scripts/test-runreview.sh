@@ -73,9 +73,10 @@ reset; out=$(STUB_VERDICT=BLOCKED rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" != 0 ] && [ "$rc" != 3 ] && /usr/bin/grep -q '^wave.sh requeue 7 .*(VERDICT: BLOCKED)' "$T/wave.log" && [ -e "$T/st/auto/requeued-run-1-route.1.1" ] \
   && ok "E: BLOCKED requeues and writes the marker" || ko "E: exit $rc, wave.log '$(cat "$T/wave.log")'"
 
-# F) a review that wrote no verdict (the chain was down): no review here, so childcc reviews the child later, as today.
+# F) a review that wrote no verdict (the chain was down): "try again" (5, #635), so the run reviews the child again inside its
+# deadline. Nothing is requeued.
 reset; out=$(STUB_VERDICT=NONE rr run-1 route.1.1 7 2>&1); rc=$?
-[ "$rc" = 3 ] && [ ! -s "$T/wave.log" ] && ok "F: no verdict answers no review here and requeues nothing" || ko "F: exit $rc: $out"
+[ "$rc" = 5 ] && [ ! -s "$T/wave.log" ] && ok "F: no verdict answers try again (5) and requeues nothing" || ko "F: exit $rc: $out"
 
 # G) a full `reviews` budget: the command waits, says so on one line, and reviews once a slot frees.
 reset; /bin/sleep 300 & HOLD=$!
@@ -89,6 +90,13 @@ kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null; wait "$W"
 [ "$(cat "$T/g.rc")" = 0 ] && [ "$(cat "$T/rev.log")" = "childreview run-1 7" ] && ok "G: the review runs once a slot frees" || ko "G: rc '$(cat "$T/g.rc")', rev.log '$(cat "$T/rev.log")'"
 occ=$(PYTHONPATH="$T/squad" python3 -m squad.caps 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["occupancy"]["reviews"])')
 [ "$occ" = 0 ] && ok "G: the slot is given back" || ko "G: reviews still held: $occ"
+
+# K) a slot wait past its bound (#635): "try again" (5), no review and nothing requeued.
+reset; /bin/sleep 300 & HOLD=$!
+PYTHONPATH="$T/squad" python3 -m squad.caps take reviews test-holder --count 99 --pid "$HOLD" >/dev/null 2>&1
+out=$(cd "$T/wt" && SG_RUN_REVIEW_WAIT=0.2 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
+kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null
+[ "$rc" = 5 ] && [ ! -s "$T/rev.log" ] && [ ! -s "$T/wave.log" ] && ok "K: a slot wait past its bound answers try again (5)" || ko "K: exit $rc: $out"
 
 # H) a fix round on offer (#570): a first CHANGES exits 4 with the full review and requeues nothing.
 fx() { (cd "$T/wt" && SQUAD_REVIEW_FIX=1 STUB_VERDICT=${V:-CHANGES} SG_RUN_FIX_STALLS=2 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>/dev/null); }
