@@ -272,7 +272,8 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   fi
   # The review of the child reads only its own commits, against its merge-base with the wave branch (#376), and a verdict that
   # did not approve it keeps it out of the wave. The gate reads three things: the verdict, the base it was read against (the
-  # wave branch, never `dev`, which would be the whole wave), and the sha it read. The sha is read before the rebase below:
+  # wave branch, never `dev`, which would be the whole wave; the diff starts at the newer merge-base with the wave or with
+  # `dev`, #655), and the sha it read. The sha is read before the rebase below:
   # the entry rewrites the child's shas while its own commits stay the same, so what was approved is what enters, rebased.
   # A child that cannot enter is held where it stands -- its branch and its review stay for the fix round -- so nothing is
   # requeued here, unlike a failed gate, a conflict or a refused push.
