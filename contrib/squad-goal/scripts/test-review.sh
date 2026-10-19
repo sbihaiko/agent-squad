@@ -426,6 +426,7 @@ jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/nul
 # 22) #633: a fix round answers in JSON with the same schema. claude -p carries --json-schema, the prompt carries the
 # schema, and the previous findings it reads are the rendered markdown. A fixed finding in resolved renders the
 # '## Resolved' section the fix-round check reads, and the next fix round reads that rendered review unchanged.
+# With no Blocking finding left and one Debt finding, it is saved as an approval (#653); the model wrote CHANGES.
 printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$T/st/review-fix_1-x.md"; echo ccc333 > "$T/st/review-fix_1-x.sha"
 printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 cat > "$T/j21" <<'R'
@@ -436,13 +437,14 @@ rm -f "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null);
 /usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "22 a fix round asks for JSON with --json-schema" || ko "22 fix round args: $(cat "$T/args21")"
 sed -n '1,/=== BRANCH/p' "$T/prompt21" | /usr/bin/grep -q '"resolved"' && ok "22 the fix prompt carries the schema" || ko "22 the fix prompt has no schema"
 sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — y — z$' && ok "22 the fix prompt reads the previous findings as markdown" || ko "22 previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
-[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)" ] && /usr/bin/grep -q '^## Resolved$' "$T/st/review-fix_1-x.md" \
   && /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' "$T/st/review-fix_1-x.md" \
   && ok "22 the fix-round JSON answer renders the '## Resolved' section" || ko "22 fix render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
-[ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")" = "blocking=0 debt=1" ] && python3 "$T/s/revformat.py" --fix-round "$T/st/review-fix_1-x.md" >/dev/null \
-  && ok "22 the rendered fix round passes the fix-round check, blocking=0 debt=1" || ko "22 fix check: $(python3 "$T/s/revformat.py" --fix-round "$T/st/review-fix_1-x.md")"
+[ "$(python3 "$T/s/revformat.py" --summary "$T/st/review-fix_1-x.md")" = "blocking=0 debt=1" ] && sed '1s/.*/VERDICT: CHANGES/' "$T/st/review-fix_1-x.md" | python3 "$T/s/revformat.py" --fix-round - >/dev/null \
+  && ok "22 the rendered fix round passes the fix-round check, blocking=0 debt=1" || ko "22 fix check: $(sed '1s/.*/VERDICT: CHANGES/' "$T/st/review-fix_1-x.md" | python3 "$T/s/revformat.py" --fix-round -)"
 jq -e '.resolved|length==1' "$T/st/review-fix_1-x.answer.json" >/dev/null 2>&1 && ok "22 the fix round keeps its raw JSON answer" || ko "22 no raw fix-round JSON"
-echo ccc333 > "$T/st/review-fix_1-x.sha"; bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+# an approval starts no fix round (#653), so line 1 is set back to CHANGES to start the next one
+sed '1s/.*/VERDICT: CHANGES/' "$T/st/review-fix_1-x.md" > "$T/r653" && mv -f "$T/r653" "$T/st/review-fix_1-x.md"; echo ccc333 > "$T/st/review-fix_1-x.sha"; bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
 sed -n '/=== PREVIOUS FINDINGS/,/=== DELTA/p' "$T/prompt21" | /usr/bin/grep -q '^- a.cs:1 — x — fixed: the ADR is followed now — UI.Tests/a.cs$' \
   && ok "22 the next fix round reads the rendered review as its previous findings" || ko "22 next previous findings: $(sed -n '/=== PREVIOUS/,/=== DELTA/p' "$T/prompt21")"
 rm -f "$T/j21"

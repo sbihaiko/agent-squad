@@ -75,7 +75,7 @@ o="$out.$$"; e="$o.err"
 trap '[ -e "$e" ] && mv -f "$e" "$SG_STATE/review-$pr.err"; rm -f "$o" "$o".*' EXIT
 publish() { printf '%s\n' "$1" > "$o.pub" && mv -f "$o.pub" "$out"; }
 prevmd="$SG_STATE/review-$pr.prev.md"; delta=""
-if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/review-$pr.md" | grep -q CHANGES && [ "$(cat "$last")" != "$head" ] \
+if [ -s "$last" ] && [ -s "$SG_STATE/review-$pr.md" ] && head -1 "$SG_STATE/review-$pr.md" | grep -q '^VERDICT: CHANGES' && [ "$(cat "$last")" != "$head" ] \
    && ahead "$(cat "$last")" "$head"; then
   delta=$(deltadiff "$(cat "$last")" "$head")
   [ "$(printf '%s\n' "$delta" | wc -l)" -le "$(jq -r '.review_delta_max_lines // 3000' "$cfg")" ] && cp "$SG_STATE/review-$pr.md" "$prevmd" || delta=""
@@ -353,6 +353,12 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
         # reachable model (#622), there is no next model, so the shape failure spends a retry, never the whole review.
         fmt=1; rc=1; { [ "$rep" = 1 ] || [ "$reachable" -gt 1 ]; } && break; continue
       fi
+    fi
+    # #653: a CHANGES with no Blocking finding and at least one Debt finding is an approval (revformat.py --summary, the one
+    # predicate), so it is saved as APPROVE: wave.sh, childcc and the fix round read line 1, and they must read it so too.
+    if [ $rc = 0 ] && [ "$(head -1 "$o" 2>/dev/null)" = "VERDICT: CHANGES" ] \
+       && python3 "$(dirname "$0")/revformat.py" --summary "$o" 2>/dev/null | /usr/bin/grep -qE '^blocking=0 debt=[1-9]'; then
+      { echo "VERDICT: APPROVE (the model wrote CHANGES with only Debt findings)"; tail -n +2 "$o"; } > "$o.v" && mv -f "$o.v" "$o"
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope
     grep -q 'VERDICT' "$o" 2>/dev/null && [ $rc = 0 ] && { if [ -s "$o.answer" ]; then mv -f "$o.answer" "$SG_STATE/review-$pr.answer.json"; else rm -f "$SG_STATE/review-$pr.answer.json"; fi; mv -f "$o" "$out"; echo "$head" > "$o.sha" && mv -f "$o.sha" "$last"; echo "model=$m${delta:+ (fix round, delta)}$lane $(head -1 "$out")"; git -C "$SG_CHECKOUT" status --porcelain | head -3; exit 0; }
