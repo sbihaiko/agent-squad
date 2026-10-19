@@ -32,7 +32,6 @@ LEGACY = {
     "contrib/squad-goal/scripts/hub.py": "the panel spells review models and validates the add-box shape",
     "contrib/squad-goal/scripts/launch.py": "the launch gate reads the off switch and the spent providers",
     "contrib/squad-goal/scripts/provkey.py": "the Qwen key gate names an id the registry does not carry",
-    "contrib/squad-goal/scripts/review.sh": "review.sh routes its chain by CLI prefix",
     "contrib/squad-goal/scripts/mkreq.sh": "the request template names the [1m] suffix in prose",
 }
 
