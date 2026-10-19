@@ -18,6 +18,8 @@ const task = await taskSpace(SPACE_NAME);
 try {
   const page = task.page("p1");
   await page.cdp("Emulation.setFocusEmulationEnabled", { enabled: true });   // a tab in the background still counts as focused, so :focus-visible rings draw
+  // The page lays out by the window width (a bottom sheet under 900px): every probe gets one desktop viewport, never the browser window's size.
+  await page.cdp("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await page.goto(FILE_URL);
   let title = "";
   for (let i = 0; i < 60 && !title.startsWith("RESULT "); i++) {
