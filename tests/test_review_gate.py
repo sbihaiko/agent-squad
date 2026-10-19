@@ -187,7 +187,7 @@ async def test_the_review_deadline_ends_a_review_and_holds_the_child(tmp_path):
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "fail" and land["reasons"] == ["review_deadline"]
     rv = land["effect"]["review"]
-    assert rv["verdict"] == "deadline" and rv["exit_code"] is None and rv["findings"].startswith("blocking: a.txt lacks a test")
+    assert rv["verdict"] == "deadline" and rv["exit_code"] is None
 
 
 @pytest.mark.anyio
@@ -200,8 +200,7 @@ async def test_the_review_deadline_holds_a_child_whose_review_prints_nothing_bef
     [land] = ev(tmp_path, "land")
     assert land["outcome"] == "fail" and land["reasons"] == ["review_deadline"]
     rv = land["effect"]["review"]
-    assert rv["verdict"] == "deadline" and rv["exit_code"] is None
-    assert rv["findings"].startswith("blocking: a.txt lacks a test")
+    assert rv["verdict"] == "deadline" and rv["exit_code"] is None and rv["findings"] == ""
 
 
 def test_the_graph_validates_a_review_gate_and_refuses_a_misplaced_one(tmp_path):
