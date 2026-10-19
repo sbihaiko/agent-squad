@@ -273,3 +273,29 @@ _Avoid_: status badge, result pill
 **Project settings file**:
 `docs/squad/defaults.yaml` under the target. It holds only the keys the owner changed and overlays the plugin defaults: plugin defaults, project file, `roles`, graph run block, node. It is the one layer that may raise a plugin default. `run_start` records its path and sha256 (`project_settings`), and a resume refuses when it changed. Keys outside its catalog (`squad/project_settings.py`) and credential keys are refused.
 _Avoid_: user config, local defaults
+
+### The loop
+
+**Requeue**:
+The loop sends an issue whose child did not enter its wave back to Todo, so a later run builds it again. `wave.sh requeue` counts it per issue, one count per run. A new non-RED `Refs #N` commit in the base starts the count again.
+_Avoid_: retry, redispatch
+
+**Loop-caused requeue**:
+A requeue whose cause is the loop, not the issue's work: a wave that landed without the child, an adapter error, a merge or rebase conflict, a disk stop, a review with no ruling, a head that moved during the review. It counts in its own ledger, `loopqueues-N`, never toward `SG_REQUEUE_CAP`. At `SG_LOOP_REQUEUE_CAP` (6) the issue gets `needs-owner`. A requeue the wave age cap makes counts in neither ledger.
+_Avoid_: infra failure, flaky requeue
+
+**Hold**:
+A wave entry that refuses a child for now and requeues nothing (`WAVE HOLD`): no review, a wrong base, another sha, a verdict that is not APPROVE, or the gate lock or gate slots held. The child stays left, so the wave waits for it. `holds-RUN-CHILD` counts holds per head; at `SG_HOLD_TRIES` (3) on one head the child is requeued with the hold reason.
+_Avoid_: block, skip
+
+**Owner freeze**:
+The `frozen:owner` label: the owner acts next on the issue, and its card keeps the column the work reached. Blocked is no column. `needs-owner` is the label a writer adds to ask for it (a loop-caused requeue cap, for one); janitor rule R reads it and writes `frozen:owner`. No dispatch pass takes an issue that carries either. Only the owner removes them.
+_Avoid_: Blocked column, needs-human label
+
+**Review lock**:
+The lock `review-KEY.lock` that `review.sh` holds for one branch, so two reviews of the same branch never run at once (`SG_REVIEW_LOCK_WAIT`, 3600 s). The second review reuses a verdict the first wrote for the same head and calls no model (verdict reuse). Only a final verdict reaches `review-KEY.md`.
+_Avoid_: review queue, review mutex
+
+**Dispatch stop**:
+A check that each dispatch pass runs first (`ghcall.sh`). A stop prints one line, writes it to `cycle.log`, and the pass dispatches nothing. The stops: a loop defect (`loop-bug`, ADR-0146); too many children waiting for review; the disk floor, under `SG_MIN_FREE_GB` GiB free (20); bug first, where the frontier pass waits while `bugs-waiting` names a startable bug with no run.
+_Avoid_: pause, throttle
