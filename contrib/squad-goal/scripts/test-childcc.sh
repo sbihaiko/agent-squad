@@ -67,6 +67,8 @@ echo "$out" | /usr/bin/grep -q 'RUN PARENT .*(fin-two)' && ko "a finished run go
 cat > "$T/wave.sh" <<'W'
 #!/bin/bash
 echo "$*" >> "$WAVE_CALLS"
+[ "$1" = expired ] && { [ -e "$WAVE_CALLS.expired-$2" ]; exit; }   # the age cap: a case marks the run's wave expired (#620)
+[ "$1" = requeue ] && { echo "WAVE REQUEUE #$2: $3"; exit 0; }
 [ -e "$WAVE_FAIL" ] && { echo "WAVE REQUEUE #$3: the local gates failed: x"; exit 1; }
 [ "$3" = 5300 ] && { echo "WAVE HOLD #$3: no review yet"; exit 1; }   # a held child: no requeue, so every pass tries it again
 [ "$3" = 5600 ] && { echo "WAVE STOP #$3: requeued 3 times, so it is not dispatched again: x"; exit 1; }   # the requeue cap stopped it
@@ -134,7 +136,19 @@ pass bud >/dev/null; rc=$?
 run2 fair 5300 5301; : > "$WAVE_CALLS"
 pass fair >/dev/null; pass fair >/dev/null; rc=$?
 [ "$(ent fair 5300)" = 1 ] && [ "$(ent fair 5301)" = 1 ] && ok "a held child does not take every pass" || ko "entries for a held child and its sibling: $(cat "$WAVE_CALLS")"
-[ "$rc" = 0 ] && ok "once each child had its turn, the pass exits 0" || ko "the pass after each child's turn exited $rc"
+[ "$rc" = 3 ] && ok "a held child keeps the wave from landing: the pass exits 3 (#620)" || ko "a pass with a held child exited $rc: the wave lands without it"
+# The hold is bounded (#620): after SG_HOLD_TRIES review holds on the same head (3 by default) the child goes back to the
+# queue with that reason, so the wave lands without waiting on a dead review chain for its whole age cap.
+pass fair >/dev/null; rc=$?
+[ "$rc" = 3 ] && ! /usr/bin/grep -q '^requeue 5300' "$WAVE_CALLS" && ok "a second hold still keeps the wave" || ko "second hold: exit $rc, calls $(cat "$WAVE_CALLS")"
+out=$(pass fair); rc=$?
+[ "$rc" = 0 ] && /usr/bin/grep -q '^requeue 5300 .*no verdict' "$WAVE_CALLS" && ok "the third hold on one head requeues the child, and the wave may land" || ko "third hold: exit $rc, calls $(cat "$WAVE_CALLS"), out $out"
+pass fair >/dev/null; rc=$?
+[ "$rc" = 0 ] && [ "$(ent fair 5300)" = 3 ] && ok "a child the hold requeued is not entered again on the same head" || ko "after the hold requeue: exit $rc, calls $(cat "$WAVE_CALLS")"
+# A held child of a wave past its age cap holds nothing: the wave lands, and the cap requeues the child (#620, #378).
+run2 cap 5300 5301; : > "$WAVE_CALLS"; : > "$WAVE_CALLS.expired-cap"
+pass cap >/dev/null; pass cap >/dev/null; rc=$?
+[ "$rc" = 0 ] && ok "a held child of an expired wave does not keep it from landing" || ko "expired wave with a held child: exit $rc"
 # a child whose requeue holds it on an unchanged head costs no work: its sibling is worked in the same pass
 run2 sup 5400 5401; : > "$WAVE_CALLS"; /usr/bin/git -C "$T/co/runs/sup/ws/target-a" rev-parse HEAD > "$T/st/auto/requeued-sup-a"
 pass sup >/dev/null; rc=$?

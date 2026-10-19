@@ -506,6 +506,20 @@ r=$(cd "$T/c310" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-14 310 2>&1
 [ $rc = 0 ] || ko "T: the second entry exited $rc: '$r'"
 case "$r" in *refused*) ko "T: a working board write is named refused: '$r'";; *) ok "T: a working board write names no refusal";; esac
 
+# U (#620): a child that ENTERED its wave (entered-<run>-<n>) whose commit reached dev by another route makes the wave land
+# empty, and dev holds no `Refs #N` line for it (a squash rewrote the message). The entry is the proof: the issue is
+# delivered, never requeued, even past the age cap.
+W15=wave/run-15; start2 run-15 >/dev/null
+printf 'run-15\n' > "$T/st/auto/disp-231"; : > "$T/st/auto/entered-run-15-231"
+mkdir -p "$T/co/runs/run-15"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #231 work"}}' > "$T/co/runs/run-15/record.jsonl"
+printf '%s\n' "$(( $(date +%s) - 7201 ))" > "$T/st/auto/wave-start-run-15"
+: > "$T/gh.log"; : > "$T/board.log"
+r=$(land2 run-15); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "U: the wave of an entered child lands empty (exit 0)";; *) ko "U: not an empty landing: '$r'";; esac || ko "U: exit $rc: '$r'"
+case "$r" in *"WAVE REQUEUE #231"*) ko "U: an entered child is requeued: '$r'";; *) ok "U: an entered child is not requeued";; esac
+/usr/bin/grep -q 'issues/231 -f state=closed' "$T/gh.log" && ok "U: an entered child of an empty wave is delivered" || ko "U: #231 is not closed: $(cat "$T/gh.log")"
+
 # Q (#575): a gate lock held by another pass never makes an entry or a landing wait for it. The entry and the landing run
 # inline in the fast lane and the watch cycle, so a wait there stops every dispatch and every cycle (a promotion held the
 # lock for 30 min). Both use try mode: the child enters, and the wave lands, on a later pass, with no requeue and no try spent.
