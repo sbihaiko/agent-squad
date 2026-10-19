@@ -606,9 +606,15 @@ def reconcile_board():
     # Rank 20, a run that ended with nothing delivered: Doing back to Todo. It is the one backward move the loop makes, and it
     # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
     # back into Todo or Backlog: only the owner does.
+    runs = []; newest = {}   # a card follows the newest run that holds its issue: an older run's column never overrides it, whatever its rank (#619)
     for r in keep:
         f = folder(r); i = read(f); nums = req_issues(f)
         if i: nums |= i["acc"]
+        age = (1, "") if i is None else (0, str(i["run_ts"]))   # a run with no record yet (a dispatch marker) is the newest
+        runs.append((f, i, nums, age))
+        for n in nums: newest[n] = max(newest.get(n, age), age)
+    for f, i, nums, age in runs:
+        nums = {n for n in nums if age >= newest[n]}   # rank orders the signals of one run only (#619)
         by_issue = {}   # issue -> the children whose own accept line named it: that child's outcome decides its card (#271)
         if i:
             for ch in sorted(i["kid_issue"]):
