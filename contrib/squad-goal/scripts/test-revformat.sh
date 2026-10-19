@@ -297,4 +297,40 @@ for b in 'Note:something — x — y — z' 'the router: _route_for — x — y 
   python3 "$src" --max-lines 60 "$T/r.md" >/dev/null 2>&1 && ko "25 an unlocated bullet passed: $b" || ok "25 still fails: ${b:0:30}"
 done
 
+# #632: a full review answers in JSON with the #627 schema, and one renderer writes today's markdown from it. --schema
+# prints the schema; --answer renders a JSON answer (fenced or bare) and normalizes a markdown one; --keep saves the raw
+# JSON. The rendered review passes the shape check, and its --fingerprint is the one of the equivalent markdown answer.
+python3 "$src" --schema | jq -e '.properties.verdict.enum == ["APPROVE","CHANGES"] and (.required|index("blocking")) != null' >/dev/null 2>&1 \
+  && ok "26 --schema prints the JSON schema of an answer" || ko "26 --schema: $(python3 "$src" --schema 2>&1 | head -2)"
+cat > "$T/a.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"src/a.py:12","defect":"null deref","failure":"an empty list raises TypeError","fix":"return [] when the list is empty"}],
+ "debt":[{"location":"src/b.py:42","defect":"no backoff","failure":"it hammers the API after a 500","fix":"add exponential backoff"}],"resolved":[]}
+J
+printf 'VERDICT: CHANGES\n## Blocking\n- src/a.py:12 — null deref — an empty list raises TypeError — return [] when the list is empty\n## Debt\n- src/b.py:42 — no backoff — it hammers the API after a 500 — add exponential backoff\n' > "$T/eq.md"
+python3 "$src" --answer --keep "$T/kept.json" "$T/a.json" > "$T/r.md" 2>"$T/err"; rc=$?
+[ $rc = 0 ] && [ "$(head -1 "$T/r.md")" = "VERDICT: CHANGES" ] && python3 "$src" --max-lines 60 "$T/r.md" >/dev/null \
+  && ok "26 a JSON answer renders to a review that passes the shape check" || ko "26 render: rc=$rc $(cat "$T/err") $(cat "$T/r.md")"
+[ "$(python3 "$src" --summary "$T/r.md")" = "blocking=1 debt=1" ] && ok "26 the rendered review reads blocking=1 debt=1" || ko "26 summary: $(python3 "$src" --summary "$T/r.md")"
+[ -n "$(python3 "$src" --fingerprint "$T/r.md")" ] && [ "$(python3 "$src" --fingerprint "$T/r.md")" = "$(python3 "$src" --fingerprint "$T/eq.md")" ] \
+  && ok "26 the rendered --fingerprint equals the equivalent markdown's" || ko "26 fingerprint: $(diff "$T/r.md" "$T/eq.md")"
+jq -e '.verdict=="CHANGES"' "$T/kept.json" >/dev/null 2>&1 && ok "26 --keep saves the raw JSON answer" || ko "26 --keep: $(cat "$T/kept.json" 2>&1)"
+{ echo 'Here is the review.'; echo '```json'; cat "$T/a.json"; echo '```'; } > "$T/f.json"
+python3 "$src" --answer "$T/f.json" > "$T/r2.md" 2>/dev/null && cmp -s "$T/r.md" "$T/r2.md" && ok "26 a fenced JSON answer renders the same" || ko "26 fenced: $(cat "$T/r2.md")"
+printf '{"verdict":"APPROVE","blocking":[],"debt":[],"resolved":[]}' > "$T/ap.json"   # the #618 shape: an empty section
+python3 "$src" --answer "$T/ap.json" > "$T/r.md" 2>/dev/null && [ "$(cat "$T/r.md")" = "VERDICT: APPROVE" ] && python3 "$src" "$T/r.md" >/dev/null \
+  && ok "26 #618: an empty section is an empty list, and passes" || ko "26 #618 empty: $(cat "$T/r.md")"
+cat > "$T/625.json" <<'J'
+{"verdict":"CHANGES","blocking":[{"location":"squad/modelreg.py:_route_for","defect":"the sdk use picks the cli route","failure":"the gateway gets the wrong id","fix":"resolve through the gateway"},
+ {"location":"AC1","defect":"the diff adds no RED commit","failure":"the history cannot show the test failed first","fix":"add the RED commit"}],"debt":[],"resolved":[]}
+J
+python3 "$src" --answer "$T/625.json" > "$T/r.md" 2>/dev/null && python3 "$src" --max-lines 60 "$T/r.md" >/dev/null && [ "$(python3 "$src" --summary "$T/r.md")" = "blocking=2 debt=0" ] \
+  && ok "26 #625: path:symbol and AC locations in JSON pass" || ko "26 #625: $(python3 "$src" "$T/r.md") $(cat "$T/r.md")"
+printf '{"verdict":"MAYBE","blocking":[],"debt":[]}' > "$T/bad.json"
+out=$(python3 "$src" --answer "$T/bad.json" 2>&1 >/dev/null); rc=$?
+[ $rc = 1 ] && case "$out" in *verdict*) true;; *) false;; esac && ok "26 a JSON answer off the schema is refused with the parser's reason" || ko "26 bad JSON: rc=$rc '$out'"
+printf '{"verdict":"CHANGES","blocking":[{"location":"a.py:1","defect":"x"}],"debt":[]}' > "$T/bad.json"
+python3 "$src" --answer "$T/bad.json" >/dev/null 2>&1 && ko "26 a finding with missing fields passed" || ok "26 a finding with missing fields is refused"
+printf '**VERDICT: approve**\n' > "$T/md.md"
+[ "$(python3 "$src" --answer "$T/md.md")" = "$(python3 "$src" --normalize "$T/md.md")" ] && ok "26 a markdown answer is normalized as before" || ko "26 markdown: $(python3 "$src" --answer "$T/md.md" 2>&1)"
+
 rm -rf "$T"; exit $fail

@@ -383,4 +383,40 @@ rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/ccalls" "$T/prompt".*; : > "$T/c
 /usr/bin/grep -q 'outside the shape' "$T/prompt.1" 2>/dev/null && /usr/bin/grep -q 'a finding with no place' "$T/prompt.1" && ok "20 the repair prompt carries the complaint and the answer" || ko "20 repair prompt: $(tail -5 "$T/prompt.1" 2>/dev/null)"
 /bin/ls "$T/st/" | /usr/bin/grep -q 'review-fix_1-x\.md\.[0-9]' && ko "20 a private attempt file was left" || ok "20 no private attempt file is left"
 
+# 21) #632: a full review asks for JSON on every model path and renders it. claude -p carries --json-schema and its answer
+# is the envelope's structured_output; codex carries --output-schema <file>; the prompt (agy, grok, the direct path)
+# carries the schema. The saved review-<key>.md is the rendered checklist, and the raw JSON is kept as
+# review-<key>.answer.json, never as review-<key>.json (a failed claude envelope).
+J='{"verdict":"CHANGES","blocking":[{"location":"a.cs:1","defect":"diverges from ADR-0001","failure":"wrong","fix":"fix"}],"debt":[],"resolved":[]}'
+cat > "$T/bin/claude" <<C
+#!/bin/bash
+cat > "$T/prompt21"; echo "\$*" > "$T/args21"
+jq -cn --argjson s '$J' '{type:"result",subtype:"success",is_error:false,result:"",structured_output:\$s,usage:{input_tokens:10,output_tokens:5}}'
+C
+cat > "$T/bin/codex" <<C
+#!/bin/bash
+cat > "$T/prompt21c"; echo "\$*" > "$T/args21c"; o=""
+while [ \$# -gt 0 ]; do case "\$1" in -o) o=\$2; shift;; --output-schema) cp "\$2" "$T/schema21c"; shift;; esac; shift; done
+printf '%s\n' '$J' > "\$o"
+C
+chmod +x "$T/bin/claude" "$T/bin/codex"
+printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+/usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "21 claude -p asks for JSON with --json-schema" || ko "21 claude args: $(cat "$T/args21")"
+/usr/bin/grep -q '"verdict"' "$T/prompt21" && ok "21 the full prompt carries the schema" || ko "21 the full prompt has no schema"
+[ $rc = 0 ] && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" \
+  && ok "21 claude: the JSON answer is rendered into review-<key>.md" || ko "21 claude render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
+jq -e '.verdict=="CHANGES"' "$T/st/review-fix_1-x.answer.json" >/dev/null 2>&1 && [ ! -e "$T/st/review-fix_1-x.json" ] \
+  && ok "21 the raw JSON is kept as review-<key>.answer.json" || ko "21 raw JSON: $(/bin/ls "$T/st" | /usr/bin/grep fix_1-x)"
+printf '{"review_models":["gpt-x"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+jq -e '.properties.verdict.enum==["APPROVE","CHANGES"]' "$T/schema21c" >/dev/null 2>&1 && ok "21 codex asks for JSON with --output-schema" || ko "21 codex args: $(cat "$T/args21c")"
+[ $rc = 0 ] && /usr/bin/grep -q '^- a.cs:1 — diverges from ADR-0001 — wrong — fix$' "$T/st/review-fix_1-x.md" && ok "21 codex: the JSON answer is rendered" || ko "21 codex render: rc=$rc '$out' $(cat "$T/st/review-fix_1-x.md")"
+# the fix round stays markdown here (#633): no schema flag
+printf 'VERDICT: CHANGES\n## Blocking\n- a.cs:1 — x — y — z\n' > "$T/st/review-fix_1-x.md"; echo ccc333 > "$T/st/review-fix_1-x.sha"
+printf '{"review_models":["claude:m"],"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
+/usr/bin/grep -q 'FIX ROUND' "$T/prompt21" && ! /usr/bin/grep -q -- '--json-schema' "$T/args21" && ok "21 a fix round asks for no schema yet" || ko "21 fix round args: $(cat "$T/args21")"
+rm -f "$T/bin/codex"
+
 rm -rf "$T"; exit $fail
