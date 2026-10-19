@@ -24,6 +24,14 @@ printf 'cache\n' > "$T/live/scripts/__pycache__/models.cpython-312.pyc"; printf 
 pass env; [ "$(alerts)" = 1 ] && ok "a bytecode cache, a .pyo and .DS_Store raise nothing" || ko "a bytecode cache raised LIVE-MTIME ($(alerts))"
 rm "$T/live/scripts/__pycache__/models.cpython-312.pyc"
 pass env; [ "$(alerts)" = 1 ] && ok "a bytecode cache that goes raises nothing" || ko "a removed bytecode cache raised LIVE-MTIME ($(alerts))"
+# A snapshot taken before the fix recorded the cache file. Its absence on the next pass is no removal either, so the fix
+# raises nothing once over the file already under the live copy (#661).
+python3 - "$T/st/live-mtime.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["files"]["scripts/__pycache__/models.cpython-312.pyc"] = 1.0
+json.dump(d, open(sys.argv[1], "w"))
+PY
+pass env; [ "$(alerts)" = 1 ] && ok "a snapshot that recorded a bytecode cache raises nothing when it is gone" || ko "an old cache entry alerted ($(alerts))"
 printf 'print(1)\n' > "$T/live/scripts/real.py"
 pass env; [ "$(alerts)" = 2 ] && ok "a real script changing still raises LIVE-MTIME" || ko "a real script change was ignored ($(alerts))"
 rm "$T/live/SKILL.md"

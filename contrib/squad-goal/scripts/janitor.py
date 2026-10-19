@@ -47,7 +47,8 @@
     review moves a card back from a later column (#603, ADR-0143). No route is added: the branch read is the one work_branches makes, and the dev tip's CI is one door read a pass.
  M  the live skill copy ($SG_LIVE_DIR, else ~/.claude/skills/squad-goal): a file whose mtime changed, or that came or went, since the last pass while no
     publish ran raises LIVE-MTIME (#659). live-guard.sh stamps $SG_STATE/live-publish.stamp when it publishes; a stamp newer than the last snapshot
-    excuses the pass's changes. The snapshot is $SG_STATE/live-mtime.json; the first pass only takes it, and a dry pass never keeps it.
+    excuses the pass's changes. A Python bytecode cache (__pycache__/, *.pyc, *.pyo) and an editor's .DS_Store are no change to the
+    loop's code and raise nothing. The snapshot is $SG_STATE/live-mtime.json; the first pass only takes it, and a dry pass never keeps it.
 Every open issue of the repository carries a card, whether or not a run names it (#92): the pass reads the repository's open-issue list once through the door (gh_aggregate, the throttle) and adds the ones the board does not carry, in the dispatch column, or in Blocked when the issue carries needs-owner or needs-ratification, so an issue created while the loop runs is never left with no status."""
 import json, os, pathlib, re, signal, subprocess, sys, tempfile, time, urllib.parse
 st = pathlib.Path(os.environ["SG_STATE"]); co = pathlib.Path(os.environ["SG_CHECKOUT"]).resolve(); dry = bool(os.environ.get("JANITOR_DRY")); now = time.time()
@@ -1032,6 +1033,9 @@ if hb.exists() and (not hm.exists() or now - hm.stat().st_mtime > 600):
             if not mk.exists():
                 say(f"STATE-REGRESSION #{n}: card is {stt} but its history reached Code Complete/Testing at {reach[-1]}")
                 if not dry: mk.touch()
+def live_noise(rel):   # a path no publish makes: a Python bytecode cache, a compiled file, or an editor's .DS_Store (#661)
+    parts = rel.split("/")
+    return "__pycache__" in parts or rel.endswith((".pyc", ".pyo")) or parts[-1] == ".DS_Store"
 def live_mtime():   # M (#659): a change to the live skill copy that no publish made
     live = pathlib.Path(os.environ.get("SG_LIVE_DIR") or pathlib.Path.home() / ".claude" / "skills" / "squad-goal")
     snap, stamp = st / "live-mtime.json", st / "live-publish.stamp"
@@ -1039,7 +1043,7 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
     cur = {}
     for p in live.rglob("*"):
         try:
-            if p.is_file(): cur[str(p.relative_to(live))] = p.stat().st_mtime
+            if p.is_file() and not live_noise(str(p.relative_to(live))): cur[str(p.relative_to(live))] = p.stat().st_mtime
         except OSError: pass
     try: old = json.loads(snap.read_text())
     except Exception: old = None
@@ -1047,7 +1051,8 @@ def live_mtime():   # M (#659): a change to the live skill copy that no publish 
         tmp = snap.with_name(snap.name + f".{os.getpid()}"); tmp.write_text(json.dumps({"at": now, "files": cur})); os.replace(tmp, snap)
     if not isinstance(old, dict) or not isinstance(old.get("files"), dict): return
     if stamp.exists() and stamp.stat().st_mtime >= old.get("at", 0): return
-    files = old["files"]; changed = sorted(k for k in set(cur) | set(files) if cur.get(k) != files.get(k))
+    files = {k: v for k, v in old["files"].items() if not live_noise(k)}   # a cache entry kept by an old snapshot is no removal either
+    changed = sorted(k for k in set(cur) | set(files) if cur.get(k) != files.get(k))
     if changed:
         alert(f"LIVE-MTIME {live}: {len(changed)} file(s) changed with no publish: {', '.join(changed[:5])}")
 live_mtime()
