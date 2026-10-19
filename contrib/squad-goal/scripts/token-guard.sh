@@ -18,8 +18,10 @@
 #   SG_TOKEN_NOTIFY            the notifier of an alert, default /usr/bin/osascript
 #
 # Two states, each a marker in $SG_STATE. Each start of a state writes one sentence on stdout and one line in alerts.log.
-#   token-over   the total since the marker, or its rate over the floor span, is over the cap. A report: the loop goes on.
-#                It clears, and the alert re-arms, on the first pass under the cap.
+#   token-over.alert
+#                the file records that the over-cap report has already alerted. Its sentence is the total since the
+#                marker, or the rate over the floor span. It is removed on the first pass under the cap, so the next
+#                over-cap pass writes one new alert. A report: the loop goes on.
 #   token-pause  the burn of the last hour, after one full hour of measurement, is over SG_TOKEN_PAUSE_FACTOR times the
 #                cap's hourly share (cap * 3600 / window). autofrontier.sh and autobug.sh start nothing while it is there.
 #                It clears on the first pass whose hourly burn is under the cap's hourly share: dispatch resumes by itself.
@@ -45,7 +47,7 @@ marker=$(tr -cd '0-9' < "$marker_file" 2>/dev/null)
 if [ -z "$marker" ]; then printf '%s\n' "$now" > "$marker_file" 2>/dev/null || true; exit 0; fi
 elapsed=$(( now - marker ))
 if [ "$elapsed" -lt 0 ]; then printf '%s\n' "$now" > "$marker_file" 2>/dev/null || true; exit 0; fi
-over_file="$state/token-over"; pause_file="$state/token-pause"
+over_file="$state/token-over.alert"; pause_file="$state/token-pause"
 
 # alert <sentence>: one line in alerts.log and one notification
 alert() { echo "$(date '+%F %T') $1" >> "$state/alerts.log" 2>/dev/null; "$SG_TOKEN_NOTIFY" -e "display notification \"${1//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1 || true; }

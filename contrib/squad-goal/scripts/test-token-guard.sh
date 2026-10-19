@@ -8,7 +8,7 @@ unset "${!SG_@}"; export HOME="$T/home" SG_TOKEN_NOTIFY=true; mkdir -p "$HOME" "
 cp "$src" "$T/s/token-guard.sh" 2>/dev/null || { echo "FAIL the guard is not there: $src"; exit 1; }
 cp "$d/tokens.py" "$T/s/tokens.py" 2>/dev/null || { echo "FAIL tokens.py is not there: $d/tokens.py"; exit 1; }
 : > "$T/s/env.sh"   # the guard sources env.sh; the stub leaves the caller's SG_* (a real profile supplies them)
-G="$T/s/token-guard.sh"; L="$T/st/token-usage.tsv"; M="$T/st/token-guard.since"; P="$T/st/token-pause"; O="$T/st/token-over"; AL="$T/st/alerts.log"
+G="$T/s/token-guard.sh"; L="$T/st/token-usage.tsv"; M="$T/st/token-guard.since"; P="$T/st/token-pause"; O="$T/st/token-over.alert"; AL="$T/st/alerts.log"
 now() { date +%s; }
 iso() { python3 -c 'import datetime,sys;print(datetime.datetime.fromtimestamp(int(sys.argv[1])).isoformat())' "$1"; }   # tokens.py reads the ts as an ISO string
 line() { printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$1")" "$2" "$3" "$4" "$5" "$6" >> "$L"; }
@@ -32,6 +32,12 @@ o2=$(guard); rc2=$?
 [ $rc2 = 2 ] && [ -z "$o2" ] && [ "$(/usr/bin/grep -c 'Token burn' "$AL")" = 1 ] && ok "a second pass over the cap is quiet and alerts no more" || ko "second pass: rc=$rc2 out=$o2"
 rm -f "$L"; o3=$(guard); rc3=$?
 [ $rc3 = 0 ] && [ ! -e "$O" ] && ok "a pass under the cap re-arms the alert" || ko "re-arm: rc=$rc3 out=$o3"
+# the marker is the alert's state, never a latch: a second over-cap pass after the recovery writes exactly one new alert
+line "$(now)" review:PR#7 claude:opus 1000000 600000 0; o4=$(guard); rc4=$?
+[ $rc4 = 2 ] && [ -e "$O" ] && [ "$(/usr/bin/grep -c 'Token burn' "$AL")" = 2 ] && ok "a second over-cap pass after a recovery writes one new alert" || ko "second alert: rc=$rc4 out=$o4 alerts=$(/usr/bin/grep -c 'Token burn' "$AL")"
+o5=$(guard); rc5=$?
+[ $rc5 = 2 ] && [ -z "$o5" ] && [ "$(/usr/bin/grep -c 'Token burn' "$AL")" = 2 ] && ok "and the pass after that second alert is quiet" || ko "after second alert: rc=$rc5 out=$o5"
+rm -f "$L"; guard >/dev/null    # a pass under the cap re-arms the alert again for the sentence checks below
 rm -f "$L" "$AL"; marker 10; line "$(now)" review:PR#7 claude:opus 1000000 600000 0; o=$(guard)
 case "$o" in *1600000*) ok "the sentence names the measured total";; *) ko "no total in: $o";; esac
 case "$o" in *1500000*) ok "the sentence names the cap";; *) ko "no cap in: $o";; esac
