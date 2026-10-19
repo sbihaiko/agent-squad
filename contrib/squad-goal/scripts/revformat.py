@@ -15,6 +15,9 @@ Nothing else: no preamble, no restating the diff, no closing summary.
 `review.sh` runs this on every model answer: a review that ignores the shape is a format failure
 of that try (the chain moves on and says so), never a silent pass. The loop's own passes ask for
 the bullets per section with --summary instead of grepping a tag on the line (ADR-0273 Decision 3/5).
+A JSON answer (#632) is rendered before this check, so the render meets every layout rule and only the semantic rules
+can fail it: a finding names its place, and APPROVE carries no Blocking finding (#634). The layout rules stay for the
+markdown answer, which is still accepted.
 
 A fix round answers its previous findings in a `## Resolved` section of their own, accepted only
 with --fix-round (#1834). An answered finding moves there with the same bullet,

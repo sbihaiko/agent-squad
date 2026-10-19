@@ -338,9 +338,10 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       rm -f "$o.answer"; frem=$(answer_check "$o" "$o.n" "$o.answer"); fok=$?
       [ -s "$o.n" ] && mv -f "$o.n" "$o"; rm -f "$o.n"
       if [ "$fok" != 0 ]; then
-        # #625: with several reachable models, the same model gets one repair try first: the prompt, its answer and the
-        # check's complaint. The no-tools path already had its repair turn inside direct(). One extra try at most.
-        nx="the next model is tried"; [ "$reachable" -gt 1 ] && [ "$rep" = 0 ] && [ -n "$frem" ] && ! notools "$m" && nx="the same model answers once more with the complaint"
+        # #625, #634: the same model gets one repair try first, for any number of reachable models: the prompt, its
+        # answer and the check's complaint (for a JSON answer, the parser's error). The no-tools path already had its
+        # repair turn inside direct(). One extra try at most; a failed repair ends this model's turn.
+        nx="the next model is tried"; [ "$rep" = 0 ] && [ -n "$frem" ] && ! notools "$m" && nx="the same model answers once more with the complaint"
         printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so %s.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" "$nx" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
         if [ "$nx" != "the next model is tried" ]; then
           rep=1; [ "$lim" -gt "$i" ] || lim=$((i+1)); [ -e "$p.orig" ] || cp "$p" "$p.orig"
@@ -348,8 +349,9 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
             echo "=== REPAIR"; echo "Your answer is outside the shape: $frem. Answer again: the same findings, every line in the shape, nothing else."; } > "$p.r" && mv -f "$p.r" "$p"
           fmt=1; rc=1; continue
         fi
-        # one reachable model (#622): no next model, so the shape failure spends a retry, never the whole review
-        fmt=1; rc=1; [ "$reachable" -gt 1 ] && break; continue
+        # a failed repair ends this model's turn (#634). With no repair try (no complaint, or the no-tools path) and one
+        # reachable model (#622), there is no next model, so the shape failure spends a retry, never the whole review.
+        fmt=1; rc=1; { [ "$rep" = 1 ] || [ "$reachable" -gt 1 ]; } && break; continue
       fi
     fi
     # the raw JSON answer is kept as review-<key>.answer.json (#632); review-<key>.json is a failed claude envelope

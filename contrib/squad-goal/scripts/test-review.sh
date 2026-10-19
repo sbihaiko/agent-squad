@@ -337,7 +337,7 @@ rm -f "$T/st/review-fix_1-x".* "$T/grokcalls" "$T/st/cq/"*; out=$(bash "$T/s/rev
 [ ! -e "$T/grokcalls" ] && case "$out" in model=claude:ok*) true;; *) false;; esac && ok "15 grok-limited skips grok on the next review" || ko "15 grok tried again: calls=$(wc -l < "$T/grokcalls" 2>/dev/null) '$out'"
 /usr/bin/grep -q 'owner' "$T/st/cq/"*mquota* 2>/dev/null && ok "15 the skip line says the owner clears the marker" || ko "15 skip line: $(cat "$T/st/cq/"*mquota* 2>/dev/null)"
 rm -f "$T/st/grok-limited" "$T/bin/grok"
-# 16) #622: with one reachable model, an answer outside the checklist shape is retried up to model_retry_budget, not BLOCKED at once.
+# 16) #622, #634: with one reachable model, an answer outside the checklist shape gets its repair turn, not BLOCKED at once.
 printf '#!/bin/bash\ncat >/dev/null; echo x >> "$T/ccalls"; [ "$(wc -l < "$T/ccalls")" -ge 2 ] && { echo "VERDICT: APPROVE"; exit 0; }; printf "Checking.\\nVERDICT: CHANGES\\n1. a finding\\n"\n' | sed "s|\$T|$T|g" > "$T/bin/claude"; chmod +x "$T/bin/claude"
 printf '{"review_models":["claude:only"],"model_retry_budget":2,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
 rm -f "$T/st/review-fix_1-x".* "$T/ccalls" "$T/st/cq/"*; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
