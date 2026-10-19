@@ -721,4 +721,18 @@ r=$(hold 9 0 31)
 case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "19 a stale count file holds nothing";; *) ko "19 a stale count file: '$r'";; esac
 $G -q "stale childcc" <<<"$r" && ok "19 a stale count file is logged" || ko "19 the stale count is not logged: '$r'"
 
+# 20) (#615) a full disk fails every run the pass would start, and the owner's machine with it. Under SG_MIN_FREE_GB GiB
+# free on the volume of $SG_STATE or of $TMPDIR, the pass dispatches nothing, names the volume and its free space, and
+# publishes the line to the loop log. At or over the floor it dispatches as before.
+disk() { # <floor>: one dry pass on fresh state
+  rm -rf "$T/st/auto" "$T/st/req" "$T/st/cq"; mkdir -p "$T/st/auto" "$T/st/req" "$T/st/cq" "$T/st/locks"; : > "$T/st/cycle.log"
+  rm -f "$T/st/childcc-waiting"; SG_MIN_FREE_GB=$1 AB_DRY=1 bash "$T/s/autobug.sh" 2>&1
+}
+r=$(disk 999999); rc=$?
+[ "$rc" = 0 ] && ok "20 a disk stop exits 0" || ko "20 the stopped pass exited $rc: '$r'"
+$G -q "AUTOBUG would dispatch" <<<"$r" && ko "20 under the floor the pass dispatched: '$r'" || ok "20 under the floor the pass dispatches nothing"
+$G -qE "^DISK STOP: .* has [0-9]+ GiB free, under the floor of 999999 GiB; nothing dispatched$" <<<"$r" && ok "20 the stop names the volume, its free space and the floor" || ko "20 no stop line: '$r'"
+$G -qE "^DISK STOP: " "$T/st/cycle.log" && ok "20 the stop is published to the loop log" || ko "20 cycle.log: $(cat "$T/st/cycle.log")"
+r=$(disk 0); case "$r" in *"AUTOBUG would dispatch"*"[1228]"*) ok "20 over the floor the pass dispatches";; *) ko "20 over the floor: '$r'";; esac
+
 rm -rf "$T"; exit $fail

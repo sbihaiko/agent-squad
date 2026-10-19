@@ -269,6 +269,16 @@ issues '[{"number":91,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
 r=$(run)
 [ "$(marked 91)" = 1 ] && ok "Y: closing the issue resumes dispatch with no other action" || ko "Y: dispatch did not resume: '$r'"
 
+# Y2 (#615): under SG_MIN_FREE_GB GiB free on the volume of $SG_STATE or of $TMPDIR, the frontier pass dispatches nothing
+# and names the volume in the loop log; at or over the floor it dispatches as before.
+scene diskstop
+issues '[{"number":92,"title":"a","body":"b","labels":[{"name":"wave:01"}]}]'
+r=$(SG_MIN_FREE_GB=999999 run)
+[ "$(lines "$LAUNCHLOG")" = 0 ] && [ "$(marked 92)" = 0 ] && ok "Y2: a disk under the floor halts the frontier pass" || ko "Y2: the pass launched onto a full disk: '$r'"
+$G -qE "^DISK STOP: " "$d/st/cycle.log" 2>/dev/null && ok "Y2: the stop is published to the loop log" || ko "Y2: cycle.log: $(cat "$d/st/cycle.log" 2>/dev/null)"
+r=$(SG_MIN_FREE_GB=0 run)
+[ "$(marked 92)" = 1 ] && ok "Y2: over the floor the pass dispatches" || ko "Y2: over the floor: '$r'"
+
 # Z (#562): an interim limit until the review moves into the run. childcc writes the count of finished children that wait
 # for review to $SG_STATE/childcc-waiting; over SG_DISPATCH_MAX_WAITING the frontier pass dispatches nothing and says why,
 # and at the cap it dispatches as before. The other edges (no cap, no file, a stale file) are the shared helper's, in
