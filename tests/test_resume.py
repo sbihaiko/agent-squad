@@ -66,6 +66,18 @@ def strip_models(run):
     p.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
 
 
+# The fingerprint an earlier record wrote for the `sonnet` graph above: one entry per resolved id, no per-spelling row.
+PRE_CHANGE_SONNET_SHA256 = "af9d89c993fdb4e801e597e62096924b04f94bf5ebbd63d111e2112a1df85855"
+
+
+def rewrite_models_hash(run, sha):
+    """Rewrite the run_start fingerprint with a value an earlier record wrote."""
+    p = run / "record.jsonl"
+    lines = [json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+    lines[0]["models"]["entries_sha256"] = sha
+    p.write_text("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
 @pytest.mark.anyio
 async def test_run_start_records_the_entries_hash_of_the_models_the_graph_names(tmp_path):
     reg = write_registry(tmp_path / "registry.json")
@@ -98,6 +110,19 @@ async def test_a_resume_refuses_a_changed_registry_entry_the_graph_names(tmp_pat
     eng2, _ = make(wait_doc(), run, registry=str(reg))
     with pytest.raises(ResumeRefused, match="model registry"):
         await eng2.resume(answer="pass")
+
+
+@pytest.mark.anyio
+async def test_a_resume_accepts_the_fingerprint_an_earlier_record_wrote_for_known_spellings(tmp_path):
+    """A record from before the fingerprint named unknown spellings keeps its hash for a graph of known ones."""
+    reg = write_registry(tmp_path / "registry.json")
+    run = tmp_path / "run"
+    eng, _ = make(wait_doc(), run, registry=str(reg))
+    await eng.run()
+    rewrite_models_hash(run, PRE_CHANGE_SONNET_SHA256)
+    eng2, ad2 = make(wait_doc(), run, registry=str(reg))
+    v = await eng2.resume(answer="pass")
+    assert v.verdict == "completed" and [c.node for c in ad2.calls] == ["b"]
 
 
 @pytest.mark.anyio
