@@ -16,7 +16,7 @@ b=$(mktemp)
   echo "One child, a FIX RUN in the kept worktree $wt (branch $br, child of run $run) for GitHub issue #$iss (repo $SG_REPO). Work only in $wt: commit on top of its HEAD ${sha:0:9} there. Push no branch, and open no pull request. Never write outside $wt; never run publish-live.sh and never touch ~/.claude/skills (#658). Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo; echo "[review] The review of the child's own diff says VERDICT: CHANGES. Address every finding (fix it, or say why it is wrong, with file:line evidence):"
   tail -n +2 "$f"
-  echo "Before every commit, run in $wt: bash $here/prepush.sh --local   (it must print nothing)."; } > "$b"
+  echo "Before every commit, run in $wt: bash $wt/contrib/squad-goal/scripts/prepush.sh --local   (it must print nothing)."; } > "$b"
 req=$(bash "$here/mkreq.sh" "auto-childfix-$run-$iss-${sha:0:9}" "$b") || { rm -f "$b"; echo "CHILDFIX $br @ ${sha:0:9}: refused by mkreq.sh (#$iss)" >&2; exit 1; }
 rm -f "$b"
 # The kept worktree is the run's target (#654): ac-verify and every gate that reads a tree read the child's files there, and the

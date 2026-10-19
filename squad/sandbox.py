@@ -9,11 +9,13 @@ A denial returns a reason the agent reads, so it can continue another way, and t
 """
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 
 WRITE_TOOLS = {"Edit": "file_path", "MultiEdit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 MATCHER = "|".join([*WRITE_TOOLS, "Bash"])
 MIGRATE = re.compile(r"modelreg(?:\.py)?\s+migrate\b")
+_SHELL_OP = re.compile(r"\d*(?:>>?|<|\||&|;)")
 
 
 @dataclass
@@ -26,6 +28,40 @@ class Matcher:
 
 def _inside(path, root):
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _live_roots(env, home):
+    """Every live skill directory, symlinks resolved: `~/.claude/skills` and SG_LIVE_DIR. The operator's copy."""
+    roots = []
+    if home:
+        roots += [os.path.join(home, ".claude", "skills"), os.path.join(os.path.realpath(home), ".claude", "skills")]
+    if val := env.get("SG_LIVE_DIR"):
+        roots += [val, os.path.realpath(val)]
+    out = []
+    for root in roots:
+        real = os.path.realpath(root)
+        if real not in out:
+            out.append(real)
+    return out
+
+
+def _migrate_target(cmd):
+    """The path a `modelreg migrate` names, or None when it names none: then the default target is the live file."""
+    match = MIGRATE.search(cmd)
+    if match is None:
+        return None
+    rest = cmd[match.end():]
+    try:
+        tokens = shlex.split(rest, posix=True)
+    except ValueError:
+        tokens = rest.split()
+    for token in tokens:
+        if _SHELL_OP.fullmatch(token):
+            break
+        if token.startswith("-"):
+            continue
+        return token
+    return None
 
 
 def bash_needles(env, home):
@@ -59,11 +95,22 @@ def deny_reason(tool, tool_input, root, env=None, home=None):
         cmd = tool_input.get("command")
         if not isinstance(cmd, str):
             return None
+        if MIGRATE.search(cmd):
+            raw = _migrate_target(cmd)
+            live = _live_roots(env, home)
+            if raw is None:
+                target = live[0] if live else os.path.join(home or "", ".claude", "skills")
+                return (f"sandbox: modelreg migrate with no path is denied; its default target is the live skill copy "
+                        f"{target}, which only the operator migrates after landing")
+            raw = home + raw[1:] if home and (raw == "~" or raw.startswith("~/")) else raw
+            path = os.path.realpath(os.path.join(root, raw))
+            for target in live:
+                if _inside(path, target):
+                    return (f"sandbox: modelreg migrate of {raw} is denied; {target} is the live skill copy, "
+                            f"which only the operator migrates after landing")
         for needle in bash_needles(env, home):
             if needle in cmd:
                 return f"sandbox: a command that names {needle} is denied; the live skill copy and the loop state are not this session's to touch"
-        if MIGRATE.search(cmd) and "--dry-run" not in cmd:
-            return "sandbox: modelreg migrate is denied in a child session; only --dry-run may run"
     return None
 
 
