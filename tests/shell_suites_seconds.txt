@@ -92,6 +92,7 @@ test-watch-land.sh 8.5
 test-watchd-token-stop.sh 8.4
 test-wave-lifecycle.sh 27.5
 test-wave.sh 38.1
+test-wtclean-run-tree.sh 1.7
 test-wtclean.sh 90.5
 test-janitor-own-pass.sh 3.5
 test-janitor-floor-startable.sh 3.6
