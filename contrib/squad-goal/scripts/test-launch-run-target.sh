@@ -65,6 +65,28 @@ if [ -z "$c1" ] || $G -C "$co" merge-base --is-ancestor "$c1" "$($G -C "$t2" rev
 : > "$T/targets"; run "$T/repl.txt" > "$T/c1.out" & run "$T/repl.txt" > "$T/c2.out" & wait
 [ "$(sort -u "$T/targets" | /usr/bin/grep -c .)" = 2 ] && ok "two concurrent launches get two targets" || ko "concurrent targets: $(cat "$T/targets") $(cat "$T/c1.out" "$T/c2.out")"
 
+# #654: a fix run names the kept worktree it fixes (SG_RUN_TARGET). That tree is the run's target as it is: no reset, no new
+# tree, so every gate that reads the target (ac-verify at final_gate) reads the child's files, and the fix commits stay on its branch.
+kept="$co/worktrees/run/r1/runs/run-x/ws/kept"; mkdir -p "$(dirname "$kept")"
+$G -C "$co" worktree add -q -b kept-br "$kept" "$tip"
+(cd "$kept" && echo child > child-only.txt && $G add child-only.txt && $G commit -qm "child work"); kh=$($G -C "$kept" rev-parse HEAD)
+: > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$kept" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1)
+t=$(tail -1 "$T/targets"); rd=$(tail -1 "$T/st/active-runs.txt" 2>/dev/null)
+[ "$t" = "$kept" ] && ok "a fix run's target is the kept worktree it names" || ko "fix run target is ${t:-none}, not $kept: $o"
+case "$rd" in "$kept"/runs/*) ok "the fix run's folder is inside the kept worktree";; *) ko "fix run folder $rd is outside $kept";; esac
+for _ in $(seq 1 100); do [ -s "$rd/child-head" ] && break; sleep 0.1; done
+$G -C "$kept" merge-base --is-ancestor "$kh" HEAD && [ "$($G -C "$kept" symbolic-ref --short HEAD)" = kept-br ] \
+  && ok "the kept worktree keeps its branch and the child's commits" || ko "the kept worktree lost its branch or commits"
+$G -C "$kept" merge-base --is-ancestor "$(cat "$rd/child-head" 2>/dev/null || echo none)" HEAD 2>/dev/null \
+  && ok "the fix run's commits land on the kept branch" || ko "the fix run's child did not land on the kept branch"
+[ "$(snap)" = "$before" ] && ok "a fix run leaves the owner's checkout unchanged" || ko "a fix run changed the owner's checkout"
+: > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$co" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ ! -s "$T/targets" ] && ok "a run target that is the owner's checkout refuses the start" || ko "SG_RUN_TARGET=checkout started a run: $o"
+: > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$T/nowhere" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1); rc=$?
+[ $rc -ne 0 ] && [ ! -s "$T/targets" ] && ok "a run target that is no worktree refuses the start, never a fresh tree" || ko "SG_RUN_TARGET=nowhere started a run: $o"
+cf="$(dirname "$src")/childfix.sh"
+/usr/bin/grep -q 'SG_RUN_TARGET="$wt" python3 "$here/launch.py"' "$cf" && ok "childfix.sh names the kept worktree as the run target" || ko "childfix.sh does not pass SG_RUN_TARGET=\$wt to launch.py"
+
 # A fetch that fails refuses the start: no run, no target, and never the local branch.
 $G -C "$co" remote set-url origin "$T/gone.git"; : > "$T/targets"
 o=$(run "$T/repl.txt"); rc=$?
