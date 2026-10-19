@@ -36,7 +36,8 @@ never held for good (#600).
 A dispatch child with fix entries (#570) has one passing `outcome` per entry: the pass works it once, by its last entry (#611).
 A review here that asks for CHANGES starts one fix run in the child's kept worktree (childfix.sh, #636), and the issue does not
 go back to the queue: the child's branch is pushed nowhere, so the pushed-branch fix lane never reaches it. The marker
-auto/ccfix-<run>-<child> names the fix run's folder; while that run has no verdict the child is held and its wave waits. A fix
+auto/ccfix-<run>-<child> names the fix run's folder; while that run has no verdict the child is held and its wave waits. Each fix run's folder is also one line of auto/wave-pause-<run>:
+the wave's age cap pauses while it runs (#637, `wave.sh expired`). A fix
 run is no delivery of its own (marker auto/ccfixrun-<fix run>): the pass never works its children. The new head is reviewed
 again, and an APPROVE enters the wave. Findings that do not change after a fix run requeue the issue once, with them in the
 reason (ADR-0134, revformat.py's fingerprint); changed findings start the next fix run."""
@@ -186,6 +187,7 @@ def fix_round(rd, child, n, wt, fx, out):
     if f.returncode or not lines:
         return False, out + f"\nCHILD FIX REFUSED #{n} ({rd.name} {child}): {(f.stdout + f.stderr).strip()[-300:] or f'exit {f.returncode}'}", True
     fx.write_text(lines[-1] + "\n"); (A / f"ccfixrun-{pathlib.Path(lines[-1]).name}").touch()
+    with (A / f"wave-pause-{rd.name}").open("a") as p: p.write(lines[-1] + "\n")   # the wave's age cap pauses while the fix run runs (#637, wave.sh expired)
     revformat.record_stall(str(A), "ccfix", key, fp, same)
     return False, out + f"\nCHILD FIX RUN #{n} ({rd.name} {child}): {first_finding(wt)} -> {pathlib.Path(lines[-1]).name}", True
 def enter(rd, child, n, d, approved=False):

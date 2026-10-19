@@ -50,7 +50,8 @@
 #
 # A wave has an age cap (#378, ADR-0145 rule 13): SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, set by a profile (env.sh holds
 # the default). `start` records the epoch it cut the wave in `auto/wave-start-<run>`, and the age is read from that marker,
-# never from a second clock. A wave past its cap lands what it holds and the children of the run that never entered go back
+# never from a second clock. The time a child of the wave spends in a review round or a fix entry, in the run or in a childcc
+# fix run, pauses the cap (#637): `expired` subtracts it (wavepause.py). A wave past its cap lands what it holds and the children of the run that never entered go back
 # to the queue, an empty wave included: `land` reads the run's own record (as childcc.py does) and requeues every dispatched
 # issue that is not ahead of the base. `enter` refuses a new child into an expired wave (its issue goes back to the queue),
 # unless the review already approved the child's current head against the wave (#594): that child waited on the loop's own
@@ -84,10 +85,18 @@ mark() { mkdir -p "$SG_STATE/auto" && printf '%s\n' "$2" > "$SG_STATE/auto/wave-
 # expired <run>: 0 when the run's wave reached its age cap (SG_WAVE_MAX_AGE_SECONDS, 7200 s by default, a profile setting).
 # The age is the epoch `mark` wrote into the run's wave start marker, never a second clock. A wave with no marker, or one
 # that is not cut, is never expired: the cap is a fact about a wave that exists.
+# The age does not count the pause (#637, wavepause.py): the time a child of the wave is in a review round or a fix entry,
+# read from the run's own record, and the time of each childcc fix run that auto/wave-pause-<run> names. The run folder is
+# its line in active-runs.txt, else $SG_CHECKOUT/runs/<run>. A pause that cannot be read is no pause.
 expired() {
-  local run=$1 t; [ -e "$SG_STATE/auto/wave-$run" ] || return 1
+  local run=$1 t now cap p rd l fx=(); [ -e "$SG_STATE/auto/wave-$run" ] || return 1
   t=$(cat "$SG_STATE/auto/wave-start-$run" 2>/dev/null); case "$t" in ''|*[!0-9]*) return 1;; esac
-  [ $(( $(date +%s) - t )) -ge "${SG_WAVE_MAX_AGE_SECONDS:-7200}" ]
+  now=$(date +%s); cap=${SG_WAVE_MAX_AGE_SECONDS:-7200}
+  [ $(( now - t )) -ge "$cap" ] || return 1   # under the cap with no pause: no record is read
+  rd=$(/usr/bin/grep "/$run\$" "$SG_STATE/active-runs.txt" 2>/dev/null | tail -1); [ -n "$rd" ] || rd="${SG_CHECKOUT:-.}/runs/$run"
+  if [ -f "$SG_STATE/auto/wave-pause-$run" ]; then while IFS= read -r l; do [ -n "$l" ] && fx+=("$l"); done < "$SG_STATE/auto/wave-pause-$run"; fi
+  p=$(python3 "$here/wavepause.py" "$t" "$now" "$rd" ${fx[@]+"${fx[@]}"} 2>/dev/null); case "$p" in ''|*[!0-9]*) p=0;; esac
+  [ $(( now - t - p )) -ge "$cap" ]
 }
 
 # run_issues <run-dir>: every issue the run dispatched, read from its own record as childcc.py reads it (spawn_accepted and
@@ -382,7 +391,7 @@ stuck() {
     mkdir -p "$SG_STATE/cq"
     printf 'Needs the owner: the landing of %s in %s failed %s times and stopped (%s). The work stays on %s. Refs #%s\n' "$w" "$base" "$t" "$why" "$w" "$n" > "$(sg_cq_file "$n-wavestuck$$.md")"
   done
-  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$f"
+  rm -f "$SG_STATE/auto/wave-$run" "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$f"
   echo "WAVE NEEDS-HUMAN $w: the landing failed $t times; the run's wave marker is cleared and $w stays on the remote"
   return 1
 }
@@ -476,7 +485,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
           | awk -v RS='\036' '/Refs #/ && $0 !~ /TDD RED/ {f=1} END {exit !f}' && delivered="${delivered:+$delivered }$n"
       done
       sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
-      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"
+      sha=$(sc rev-parse "origin/$base"); rm -rf "$S"; rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wland-tries-$run"
       echo "WAVE $w landed empty in $base (nothing ahead of it; the wave branch is deleted${dispatched:+; the run was dispatched for $dispatched})"
       # An empty wave past its age cap follows the capped landing's rule too (#591): every issue of the run that `dev` does
       # not hold goes back to the queue, so a child that never entered is built into a later wave instead of staying in Doing.
@@ -508,7 +517,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   done
   sc push -q origin ":refs/heads/$w" >/dev/null 2>&1 || echo "WAVE-NOTE branch $w was not deleted" >&2
   rm -rf "$S"
-  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
+  rm -f "$SG_STATE/auto/wave-start-$run" "$SG_STATE/auto/wave-pause-$run" "$SG_STATE/auto/wland-tries-$run"   # the wave is in $base; wave-$run goes once every issue is delivered (deliver)
   # A wave that reached its age cap landed as it is (#378, ADR-0145 rule 13): the children the run dispatched that never
   # entered it go back to the queue, so the loop builds them into a later wave. They are read from the run's own record
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
