@@ -72,14 +72,15 @@ test-publish-live.sh 1.7
 test-reconcile.sh 1.5
 test-refusal-comment.sh 2.1
 test-retire-fork-only.sh 1.6
-test-retired-settings.sh 1.5
+test-retired-settings.sh 2.5
 test-revformat.sh 7.9
 test-review.sh 130.0
+test-runreview.sh 3.6
 test-serial.sh 35.8
 test-shell-suites-gate.sh 4.2
 test-single.sh 16.3
 test-single-owner.sh 0.8
-test-wave-requeue-cap.sh 0.3
+test-wave-requeue-cap.sh 3.1
 test-stack.sh 1.3
 test-state-isolation.sh 2
 test-state-split.sh 2.9
