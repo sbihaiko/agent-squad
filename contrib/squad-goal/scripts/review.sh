@@ -140,7 +140,10 @@ answer_check() { local why
   if ! why=$(python3 "$(dirname "$0")/revformat.py" --answer ${3:+--keep "$3"} "$1" 2>&1 >"$2"); then
     rm -f "$2"; echo "the JSON answer is not the schema: ${why:-revformat.py failed to read it}"; return 1; fi
   python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$2" 2>/dev/null; }
-notools() { jq -e --arg m "$1" '(.review_no_tools // []) | index($m)' "$cfg" >/dev/null 2>&1; }
+# A per-model setting matches its chain id with a context suffix stripped from both sides (#643): an entry written as
+# claude:claude-deepseek-flash applies to the chain id claude:claude-deepseek-flash[1m]. An exact key still wins.
+bare='def bare: sub("\\[[^]]*\\]$"; "");'
+notools() { jq -e --arg m "$1" "$bare"' ($m|bare) as $b | (.review_no_tools // []) | map(bare) | index($b)' "$cfg" >/dev/null 2>&1; }
 direct() {   # $1: the request body. The gateway's answer, reshaped into the CLI's JSON, goes to $o
   cap curl -sS -m "$tmo" "${ANTHROPIC_BASE_URL:-http://localhost:8016}/v1/messages" -H 'x-api-key: gateway' \
     -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -d @"$1" > "$o.api" 2>"$e"; local r=$?
@@ -246,7 +249,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
   used=$((used+1))
   echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$-$ms")"
-  tmo=$(jq -r --arg m "$m" '.review_timeout_seconds_by_model[$m] // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
+  tmo=$(jq -r --arg m "$m" "$bare"' (.review_timeout_seconds_by_model // {}) as $t | $t[$m] // ([$t | to_entries[] | select((.key|bare) == ($m|bare)) | .value] | first) // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   [ -e "$p.orig" ] && cp "$p.orig" "$p"; rep=0; lim=$tries   # rep=1: this model had its one repair try (#625); the prompt goes back to the plain one
   i=0; while [ "$i" -lt "$lim" ]; do i=$((i+1))
