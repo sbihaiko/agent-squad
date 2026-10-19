@@ -29,13 +29,19 @@ card() { printf '{"n": %s, "t": "t", "s": "OPEN", "st": "%s", "l": []}' "$1" "$2
 beats() { local c; c=$(/usr/bin/grep -c beat "$LOG" 2>/dev/null); echo "${c:-0}"; }
 lane() { : > "$LOG"; rm -f "$T/lst/fastloop.pid"; env SG_FAST_INTERVAL=$1 SG_FAST_POLL=0.2 bash "$F/fastloop.sh" >"$T/lane.out" 2>&1 & LP=$!; }
 lane_end() { kill "$LP" 2>/dev/null; wait "$LP" 2>/dev/null; pkill -P "$LP" 2>/dev/null; return 0; }
+# until_beats <n> <seconds>: polls the beat count up to a deadline, so a loaded machine delays a case and never fails it
+until_beats() { local i=0; while [ "$(beats)" -lt "$1" ] && [ $i -lt $(( $2 * 10 )) ]; do /bin/sleep 0.1; i=$((i+1)); done; [ "$(beats)" -ge "$1" ]; }
 board "$(card 5 Todo),$(card 6 Done)"
-lane 30; /bin/sleep 1.5; b1=$(beats); board "$(card 5 Todo),$(card 6 Done),$(card 7 Todo)"; /bin/sleep 3; b2=$(beats); lane_end
-[ "$b1" = 1 ] && [ "$b2" = 2 ] && ok "a new Todo card in the cache ends the wait early (beats $b1 then $b2 of a 30 s wait)" || ko "new Todo card: beats $b1 then $b2"
+lane 30; until_beats 1 10; s=$SECONDS; board "$(card 5 Todo),$(card 6 Done),$(card 7 Todo)"; until_beats 2 15; el=$((SECONDS - s)); b2=$(beats); lane_end
+[ "$b2" -ge 2 ] && [ "$el" -lt 15 ] && ok "a new Todo card in the cache ends the wait early (second beat ${el}s into a 30 s wait)" || ko "new Todo card: beats $b2 after ${el}s"
 board "$(card 5 Todo),$(card 6 Done)"
-lane 30; /bin/sleep 1.5; board "$(card 5 Todo),$(card 6 Todo)"; /bin/sleep 3; b3=$(beats); lane_end
-[ "$b3" = 2 ] && ok "a card moved into Todo ends the wait early" || ko "card moved to Todo: beats $b3 (2 expected)"
+lane 30; until_beats 1 10; s=$SECONDS; board "$(card 5 Todo),$(card 6 Todo)"; until_beats 2 15; el=$((SECONDS - s)); b3=$(beats); lane_end
+[ "$b3" -ge 2 ] && [ "$el" -lt 15 ] && ok "a card moved into Todo ends the wait early" || ko "card moved to Todo: beats $b3 after ${el}s"
 board "$(card 5 Todo),$(card 6 Done)"
-lane 4; /bin/sleep 1.5; board "$(card 5 Todo),$(card 6 Done),$(card 8 'In Progress')"; /bin/sleep 1; b4=$(beats); /bin/sleep 3; b5=$(beats); lane_end
-[ "$b4" = 1 ] && [ "$b5" = 2 ] && ok "with no new Todo card the wait runs to its bound (beats $b4 then $b5 of a 4 s wait)" || ko "no event: beats $b4 then $b5"
+lane 4; until_beats 1 10; s=$SECONDS; board "$(card 5 Todo),$(card 6 Done),$(card 8 'In Progress')"; /bin/sleep 1; b4=$(beats); until_beats 2 15; el=$((SECONDS - s)); b5=$(beats); lane_end
+[ "$b4" = 1 ] && [ "$b5" -ge 2 ] && [ "$el" -ge 3 ] && ok "with no new Todo card the wait runs to its bound (second beat ${el}s into a 4 s wait)" || ko "no event: beats $b4 then $b5 after ${el}s"
+# a fractional beat still waits: an integer-only bound made the lane spin with no pause between beats
+board "$(card 5 Todo)"
+lane 0.5; /bin/sleep 2; b6=$(beats); lane_end
+[ "$b6" -ge 2 ] && [ "$b6" -le 10 ] && ok "a fractional beat of 0.5 s still waits (beats $b6 in 2 s)" || ko "fractional beat: $b6 beats in 2 s (2 to 10 expected)"
 rm -rf "$T"; exit $fail

@@ -164,5 +164,21 @@ run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=6 SG_WATCH_POLL=1
 lane_up; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=6 SG_WATCH_POLL=1; lane_down
 [ "$(count childcc)" = 0 ] && ok "10 fast lane up: the wait runs no childcc pass" || ko "10 childcc ran $(count childcc)× inside the wait with the lane up"
 : > "$ST/active-runs.txt"
+# a verdict written by a step AFTER the top-of-cycle read loop still ends the wait: the baseline is taken at the read loop, not after the steps
+mkdir -p "$T/co/runs/run-late"; printf '{"event": "call_started"}\n' > "$T/co/runs/run-late/record.jsonl"; echo "$T/co/runs/run-late" > "$ST/active-runs.txt"
+cat > "$S/janitor.sh" <<EOF
+#!/bin/bash
+echo janitor >> "$STEPS"
+echo '{"event": "verdict", "verdict": "pass"}' >> "$T/co/runs/run-late/record.jsonl"
+EOF
+rm -f "$ST/watch-seen.txt" "$ST/cycle.log"; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=6 SG_WATCH_POLL=1
+/usr/bin/grep -q "WAIT ended early: a run verdict" "$ST/cycle.log" && ok "11 a verdict written by a step after the read loop ends the wait" || ko "11 the wait ran on after a late verdict: $(cat "$ST/cycle.log" 2>/dev/null)"
+printf '#!/bin/bash\necho janitor >> "%s"\n' "$STEPS" > "$S/janitor.sh"; : > "$ST/active-runs.txt"
+# the inline childcc points are a third and two thirds of the wait, whatever the poll: a wait of 8 polls is no multiple of 3
+lane_down; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=8 SG_WATCH_POLL=1
+[ "$(count childcc)" = 6 ] && ok "11 a wait that is no multiple of 3 polls still runs childcc twice inline" || ko "11 childcc ran $(count childcc)× in 2 cycles (6 expected)"
+# a fractional poll does not break the wait
+t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=2 SG_WATCH_POLL=0.5; el=$(( $(date +%s) - t0 ))
+[ "$el" -ge 2 ] && [ "$el" -lt 10 ] && ok "11 a fractional SG_WATCH_POLL still waits its bound (${el}s)" || ko "11 fractional poll: ${el}s of a 2 s wait"
 
 rm -rf "$T"; exit $fail
