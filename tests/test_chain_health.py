@@ -1,10 +1,11 @@
 """GitHub issue #431: when a chain is down to one model, or none, the loop and the hub say which models are out, why,
 and when they come back.
 
-One reader (`chainhealth.py`) is a thin wrapper over `modelreg.chain` and `modelreg.eligible` for coding, review, vision
-and router: the resolver owns the switch, the window, a subscription marker and the Claude reserve, and the reader names
-no rule of its own (SPEC 505). The hub draws what the reader returns and never computes the rule (ADR-0137);
-branchreviewpass.sh puts the same summary in the issue's status file.
+One reader (`chainhealth.py`) keeps the v1 rules it had for a v1 file: the registry landed beside it and this caller
+will move in its own landing with no behavior change (ADR-0147). The report names every spelling where the v1 rules
+and the registry disagree about eligibility, so that move is read, not guessed. A v2 file (`chains`) has no earlier
+behavior and is read through `modelreg.chain` and `modelreg.eligible`. The hub draws what the reader returns and never
+computes the rule (ADR-0137); branchreviewpass.sh puts the same summary in the issue's status file.
 """
 import datetime as dt
 import importlib.util
@@ -89,10 +90,14 @@ def test_no_model_left_says_so(ch, tmp_path):
     assert s["eligible"] == 0 and s["banner"].startswith("review chain: no model available of 3")
 
 
-def test_the_claude_marker_takes_an_anthropic_model_out(ch, tmp_path):
+def test_a_v1_file_keeps_its_own_rule_and_reports_where_the_registry_differs(ch, tmp_path):
+    """ADR-0147: this reader did not move to the resolver, so it reads no `claude-limited` marker. The report names
+    the spelling the registry would block, so the difference is read and not guessed."""
     (tmp_path / "claude-limited").write_text(str(int(_reset(22, 32))))
     s = ch.chain_state(CFG, "review_models", tmp_path, now=NOON)
-    assert [o["reason"] for o in s["out"]] == ["usage limit"]
+    assert s["out"] == []                       # the v1 rules read no Claude marker
+    assert s["divergence"] == [{"model": "claude-opus-5-5", "v1": "available", "registry": "usage limit"}]
+    assert "claude-opus-5-5" in s["divergence_notice"]
 
 
 def test_a_single_model_chain_has_no_banner(ch, tmp_path):
@@ -122,9 +127,8 @@ def test_a_v2_chain_lets_the_registry_subscription_decide_the_marker(ch, tmp_pat
     ("coding_models", ["gpt-5.6-terra"], "codex-limited"),
     ("review_models", ["gemini-3.8-flash-high"], "agy-limited"),
     ("vision_models", ["gpt-5.6-terra"], "codex-limited"),
-    ("router_models", ["grok-4.7"], "grok-limited"),
 ])
-def test_every_chain_is_read_through_the_resolver(ch, tmp_path, key, models, marker):
+def test_every_v1_chain_reads_the_two_v1_markers(ch, tmp_path, key, models, marker):
     (tmp_path / marker).write_text(str(int(_reset(22, 32))))
     s = ch.chain_state({key: models}, key, tmp_path, now=NOON)
     assert [o["model"] for o in s["out"]] == models
@@ -139,8 +143,8 @@ def test_every_chain_is_read_through_the_registry(ch, tmp_path):
     assert (s["coding"]["total"], s["review"]["total"], s["vision"]["total"], s["router"]["total"]) == (1, 1, 1, 1)
 
 
-def test_an_empty_vision_chain_is_reported(ch, tmp_path):
-    s = ch.chains_state(CFG | {"vision_models": []}, tmp_path, now=NOON)
+def test_an_empty_v2_vision_chain_is_reported(ch, tmp_path):
+    s = ch.chains_state(CFG | {"chains": {"vision": []}}, tmp_path, now=NOON)
     assert s["vision"]["total"] == 0
     assert s["vision"]["banner"] == "vision chain: no model configured"
 
@@ -152,7 +156,7 @@ def test_chainhealth_carries_the_seam_header():
 
 def test_the_cli_reports_a_named_chain(tmp_path):
     models = tmp_path / "models.json"
-    models.write_text(json.dumps(CFG | {"vision_models": []}))
+    models.write_text(json.dumps({"chains": {"vision": []}}))
     p = subprocess.run([sys.executable, str(SCRIPTS / "chainhealth.py"), str(models), str(tmp_path),
                         "--chain", "vision"], capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stderr
