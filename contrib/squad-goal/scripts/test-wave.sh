@@ -321,6 +321,25 @@ $O rev-parse -q --verify "refs/heads/$W6" >/dev/null && ko "J: the empty wave br
 [ -e "$T/st/auto/waved-run-6" ] && ok "J: waved-<run> stays, the durable record that the run had a wave" || ko "J: no waved-run-6 record"
 [ "$($O rev-parse dev)" = "$before" ] && ok "J: an empty landing moves dev nowhere" || ko "J: dev moved on an empty landing"
 
+# V (#667): a child's fix run holds the wave. A wave with nothing ahead of the base is not landed empty while a
+# `ccfix-<run>-<child>` marker names a fix run with no verdict: that run may still put the child in the wave, and an empty
+# landing deletes the wave branch, cleans the child's worktree and sends the issue back to the queue while it works.
+W7=wave/run-7; start2 run-7 >/dev/null; : > "$T/pushes.log"
+mkdir -p "$T/st/fix7"; : > "$T/st/fix7/record.jsonl"
+printf '%s\n' "$T/st/fix7" > "$T/st/auto/ccfix-run-7-route.router.1"
+r=$(land2 run-7); rc=$?
+[ $rc = 1 ] && ok "V: a wave whose child has a fix run with no verdict does not land empty (exit 1)" || ko "V: exit $rc: '$r'"
+$O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "V: the wave branch stays" || ko "V: the wave branch was deleted"
+[ -e "$T/st/auto/wave-run-7" ] && ok "V: the run's wave marker stays" || ko "V: the wave marker went"
+case "$r" in *"WAVE WAIT"*) ok "V: the pass names the wait";; *) ko "V: not named: '$r'";; esac
+# A fix run whose folder is gone is no verdict either: the marker alone holds the wave, and the age cap is what frees it.
+rm -rf "$T/st/fix7"
+r=$(land2 run-7); rc=$?
+[ $rc = 1 ] && ok "V: a fix run whose folder is gone still holds the wave (exit 1)" || ko "V: exit $rc: '$r'"
+rm -f "$T/st/auto/ccfix-run-7-route.router.1"
+r=$(land2 run-7); rc=$?
+[ $rc = 0 ] && case "$r" in *"landed empty"*) ok "V: with the marker gone the wave lands empty";; *) ko "V: not empty: '$r'";; esac || ko "V: exit $rc: '$r'"
+
 # N (#449): an empty wave never runs the tip's check at all. A wave with nothing ahead of the base has no child commit for a
 # red check to blame, so the check could only fail the landing of a wave that carries nothing -- and four runs went
 # needs-human on exactly that (`WAVE CHECK RED` in the loop's own log, at ebb70f8).
