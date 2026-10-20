@@ -24,8 +24,9 @@ column its work never reached.
    that has a column keeps it until work moves it forward.
    **The one backward move:** a run that ends with nothing delivered returns its card from Doing to
    Todo. The dispatch moved the card out of Todo, so the loop undoes its own claim.
-   A spec folds forward only: Doing, Closed or Abandoned. Below Doing it keeps the column the owner
-   gave it.
+   A spec card is derived, not delivered: the fold over its sub-issues is its only writer, no work
+   rule names it, and the fold corrects it between Doing and Code Complete. Below Doing it keeps the
+   column the owner gave it.
 2. **Two columns are terminal: Closed and Abandoned.** A card that reaches one stays. A closed card
    that still carries an old option lands in Closed, whatever its option said.
 3. **A migration plan names every move before any write.** It is a dry run: each card on an old
