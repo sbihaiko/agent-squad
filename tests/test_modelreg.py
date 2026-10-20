@@ -83,6 +83,7 @@ def test_fast_gateway_ids_are_gateway_only(reg):
 
 @pytest.mark.parametrize("mid,label,sub,sdk_wire,cli_runner", [
     ("gpt-6-luna", "GPT-6 Luna", "gpt", "claude-gpt-6-luna", "codex"),
+    ("gpt-6.1-sol", "GPT-6.1 Sol", "gpt", "claude-gpt-6.1-sol", "codex"),   # answers on the codex subscription (#686)
     ("claude-haiku-5-5", "Claude Haiku 5.5", "claude", "claude-haiku-5-5", "claude"),
 ])
 def test_a_live_coding_model_has_an_entry_and_a_route(reg, mid, label, sub, sdk_wire, cli_runner):
