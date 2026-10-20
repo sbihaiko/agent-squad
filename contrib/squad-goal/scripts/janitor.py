@@ -855,7 +855,13 @@ def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered
         if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return
     except (OSError, ImportError, ValueError, KeyError): pass
     if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": return
-    why = f"the wave of run {i['run_id']} landed without its child" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
+    # A wave that landed without the child names the cause wave.sh recorded for it (#682: a failed gate, a hold, a conflict, a
+    # drop at the tip, the age cap), or "unknown"; a generic text hid the cause and was read as the loop's.
+    def cause(m):
+        try: return m.read_text().strip()
+        except OSError: return ""
+    ex = next((t for r in (f.name, i["run_id"]) if r for t in [cause(st / "auto" / f"excluded-{r}-{n}")] if t), "unknown")
+    why = f"the child of run {i['run_id']} never entered its wave: {ex}" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
     # The run's own review of the child decides over the reason text (#621): CHANGES or BLOCKED a model wrote on the diff is
     # the issue's own failure (`own`); a BLOCKED the chain wrote because every model failed, a review past its deadline or one that
     # never started, is the loop's (`loop`). No review leaves the text to wave.sh.

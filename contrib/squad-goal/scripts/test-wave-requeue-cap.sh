@@ -9,8 +9,8 @@ exec 3>&2 2>>"$T.err"   # the suite's own stderr, read at the end: a "command no
 mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
-# The stub gh logs every argv; issue 42 carries the owner freeze label, every other read answers {}.
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *repos/x/y/issues/42) printf "{\\"labels\\":[{\\"name\\":\\"frozen:owner\\"}]}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+# The stub gh logs every argv; issue 42 carries the owner freeze label (the issue read is one GraphQL query), every other read answers {}.
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *"issue(number: 42)"*) printf "{\\"data\\":{\\"repository\\":{\\"i42\\":{\\"number\\":42,\\"state\\":\\"OPEN\\",\\"labels\\":{\\"nodes\\":[{\\"name\\":\\"frozen:owner\\"}]}}}}}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 # cnt <n> [loop]: the count of the issue's ledger (#673), read through its one module.
 cnt() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" count "x/y#$1" ${2:-}; }
 nsc() { cat "$T"/st/cq/* 2>/dev/null | /usr/bin/grep -c '^SQUAD-NOT-STARTABLE:'; }
@@ -74,7 +74,7 @@ gc "Part of the fix
 Refs #13"
 o=$(SG_CHECKOUT="$R" w fail 13 rc "ended failed: c")
 [ "$(cnt 13)" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new commit in the base restarts the count" || ko "evolution: count '$(cnt 13)', '$o'"
-# #621: a requeue the loop caused -- a wave that landed without its child, an adapter error, a merge conflict with a sibling,
+# #621: a requeue the loop caused -- a child a sibling's conflict or a held gate kept out of the wave, an adapter error, a merge conflict with a sibling,
 # a disk stop -- is no failure of the issue's work: it requeues the issue and never counts toward SG_REQUEUE_CAP. Its own
 # bound, SG_LOOP_REQUEUE_CAP (6), ends the issue needs-human (ADR-0029) with needs-owner and a comment naming the loop cause.
 # It writes no Blocked column (#630): the shipped board has none, and janitor rule R turns needs-owner into frozen:owner. `own` makes the janitor's verdict read (the review held the diff) count, whatever the text.

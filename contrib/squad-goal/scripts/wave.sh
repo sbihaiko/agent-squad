@@ -188,15 +188,16 @@ stop() {
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
-# loop_caused <why> [own|loop]: the loop caused this requeue, not the issue's work (#621): a wave that landed without its
-# child, an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
+# loop_caused <why> [own|loop]: the loop caused this requeue, not the issue's work (#621): a child a held gate lock or the
+# wave's age cap kept out of the wave (#682; a wave that landed without a child for a cause wave.sh did not record is no loop
+# cause, so the janitor's "unknown" counts as the issue's own), an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
 # wrote no ruling (every model failed, or a hold with no verdict), a red base battery no child's own suite names (#663), a
 # run that completed with nothing landed, a prerequisite the loop could not resolve (no profile, a sandbox denial), and a
 # network failure. The caller's kind wins over the text: the janitor reads the run's own review verdict (`own`: CHANGES or
 # BLOCKED on the diff), which a reason like "review_held" hides.
 loop_caused() {
   case "${2:-}" in own) return 1;; loop) return 0;; esac
-  case "$1" in *"landed without its child"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
+  case "$1" in *"the gate lock is held"*|*"the gate slots"*"are full"*|*"reached its age cap"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
     *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*|\
     *"no child's own suite names the cause"*|*"completed"*"nothing landed"*|*"no profile"*|*"sandbox"*"denied"*|\
     *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*) return 0;; esac
@@ -219,8 +220,30 @@ loop_stop() {
   echo "WAVE NEEDS-HUMAN #$n: $c loop-caused requeues, so it is not dispatched again: $why"
 }
 
+# excluded <run> <issue> <cause> [keep]: the cause that kept the child out of the run's wave (#682), in
+# auto/excluded-<run>-<issue>, written atomically (ADR-0030). The janitor names it when the wave lands without the child, and
+# names "unknown" when there is none. A later attempt replaces it; `keep` leaves a cause an attempt already recorded.
+excluded() {
+  local m="$SG_STATE/auto/excluded-$1-$2"
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  [ "${4:-}" = keep ] && [ -s "$m" ] && return 0
+  mkdir -p "$SG_STATE/auto" && printf '%s\n' "$(printf '%s' "$3" | head -1)" > "$m.$$" && mv -f "$m.$$" "$m"
+}
+
+# held_out <issue>: why the issue must stay where it is, and exit 0, when its ledger stopped it (own or loop) or it carries
+# frozen:owner or needs-owner (#682). A label read that does not answer holds it too: a freeze is never lifted on a guess.
+held_out() {
+  local why labels
+  why=$(ledger read "$1" state 2>/dev/null)
+  case "$why" in frozen|needs-human) printf 'its ledger is stopped (%s)\n' "$why"; return 0;; esac
+  labels=$(gh_api "repos/$SG_REPO/issues/$1" -q '[.labels[]?.name] | map(select(. == "frozen:owner" or . == "needs-owner")) | join(" ")' 2>/dev/null) \
+    || { echo "its labels could not be read"; return 0; }
+  [ -n "$labels" ] && { printf 'it carries %s\n' "$labels"; return 0; }
+  return 1
+}
+
 requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes back to the queue and the loop can build it again.
-  local n=$1 why=$2 f
+  local n=$1 why=$2 f h
   # The run is SG_REQUEUE_RUN (enter and land set it; childcc and runreview pass it). A requeue the wave's age cap made
   # (`cap`, #594) is the loop's delay, not a failure of the child: it neither counts nor stops the issue. The run behind it
   # is counted once at its end, by the janitor's `fail`, when it delivered nothing. A loop-caused one (#621) counts only
@@ -235,6 +258,8 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
     if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then stop "$n" "$why"; return 0; fi
     if [ "$fresh" = 0 ] && [ "$stopped" = 1 ]; then
       echo "WAVE STOP #$n: already frozen, so it is not dispatched again: $why"; return 0; fi
+  elif h=$(held_out "$n"); then   # a cap requeue counts nothing, so it reads the stop itself (#682): a stopped issue stays put
+    echo "WAVE STOP #$n: $h, so the age cap does not put it back in the queue: $why"; return 0
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
   board_write "${SG_TODO:-Todo}" "$n"
@@ -264,6 +289,9 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   [ -n "${SG_WAVE_GATES:-}" ] || { echo "WAVE-ERROR no gates are set for this repository (SG_WAVE_GATES): a child never enters a wave ungated (#$iss)"; return 2; }
   local rk="$SG_STATE/review-$(printf '%s' "$br" | tr / _)" rsha
   rsha=$($G rev-parse HEAD)
+  # hold <why> and refuse <why> [cap]: the child stays out, held or requeued, and the cause is recorded for the janitor (#682).
+  hold() { excluded "$run" "$iss" "$1"; echo "WAVE HOLD #$iss: $1"; return 1; }
+  refuse() { excluded "$run" "$iss" "$1"; requeue "$iss" "$@"; return 1; }
   # A wave past its age cap takes no new child (#378, ADR-0145 rule 13): the child's issue goes back to the queue, so the
   # loop builds it into a later wave, and that requeue is not counted (#594). A child whose review already approved its
   # current head against this wave still enters (#594): its wait was the loop's queue of reviews, not its own work. Any
@@ -271,7 +299,7 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # before the gates: the wave is closing.
   if expired "$run" && ! { [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] && [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] \
       && head -1 "$rk.md" 2>/dev/null | /usr/bin/grep -q 'VERDICT: APPROVE'; }; then
-    requeue "$iss" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): the child's issue goes back to the queue" cap; return 1
+    refuse "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s): the child's issue goes back to the queue" cap; return 1
   fi
   # The review of the child reads only its own commits, against its merge-base with the wave branch (#376), and a verdict that
   # did not approve it keeps it out of the wave. The gate reads three things: the verdict, the base it was read against (the
@@ -280,10 +308,10 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
   # the entry rewrites the child's shas while its own commits stay the same, so what was approved is what enters, rebased.
   # A child that cannot enter is held where it stands -- its branch and its review stay for the fix round -- so nothing is
   # requeued here, unlike a failed gate, a conflict or a refused push.
-  [ -s "$rk.md" ] || { echo "WAVE HOLD #$iss: no review of $br yet: a child never enters a wave unreviewed"; return 1; }
-  [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] || { echo "WAVE HOLD #$iss: the review of $br was read against '$(cat "$rk.base" 2>/dev/null)', not $w: it read the whole wave, not this child's own commits"; return 1; }
-  [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] || { echo "WAVE HOLD #$iss: the review of $br read $(cut -c1-9 "$rk.sha" 2>/dev/null), not HEAD ${rsha:0:9}"; return 1; }
-  head -1 "$rk.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { echo "WAVE HOLD #$iss: the review of $br did not approve it: $(head -1 "$rk.md")"; return 1; }
+  [ -s "$rk.md" ] || { hold "no review of $br yet: a child never enters a wave unreviewed"; return 1; }
+  [ "$(cat "$rk.base" 2>/dev/null)" = "$w" ] || { hold "the review of $br was read against '$(cat "$rk.base" 2>/dev/null)', not $w: it read the whole wave, not this child's own commits"; return 1; }
+  [ "$(cat "$rk.sha" 2>/dev/null)" = "$rsha" ] || { hold "the review of $br read $(cut -c1-9 "$rk.sha" 2>/dev/null), not HEAD ${rsha:0:9}"; return 1; }
+  head -1 "$rk.md" | /usr/bin/grep -q 'VERDICT: APPROVE' || { hold "the review of $br did not approve it: $(head -1 "$rk.md")"; return 1; }
   # The child is rebased on the wave tip first, and the gates read that tree: what they pass is what enters (#514). A child
   # cut from a base behind the wave (a stale main, #469) was gated on that base and failed a check the wave tip passes.
   # A push that is not a fast-forward is refused by git itself. The wave tip can move between the rebase and the push (a
@@ -294,32 +322,36 @@ enter() {   # <run> <issue>: from the child's worktree, the gates, the rebase on
       echo "WAVE-ERROR $w is not on $remote (the run cuts it from $base at its start): #$iss enters no wave"; return 2; }
     if ! $G rebase "origin/$w" >/dev/null 2>&1; then
       files=$($G diff --name-only --diff-filter=U | tr '\n' ' '); $G rebase --abort >/dev/null 2>&1
-      requeue "$iss" "the rebase on $w conflicts: ${files% }"; return 1
+      refuse "the rebase on $w conflicts: ${files% }"; return 1
     fi
   }
-  rebase_on_tip || return $?
   # The gates run in the child's own worktree, and only they open the entry (ADR-0145 rule 9). A child that fails them never
   # enters, and the wave CI is not what finds it: that one runs once, when the whole wave lands in `dev`.
   # They run under the machine-wide gate lock (#392), in try mode (#575): the entry runs inline in the fast lane, and a wait
   # there stops every dispatch, so a lock held by another gate holds the child out until a later pass, with no requeue.
-  out=$(SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
-  if [ $grc = 73 ] && h=$(held_by "$out"); then
-    case "$h" in slots:*) echo "WAVE HOLD #$iss: the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
-      *) echo "WAVE HOLD #$iss: the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
-  [ $grc = 0 ] || {
-    requeue "$iss" "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
+  gates() {
+    out=$(SERIAL_TRY=1 SG_GATE_KIND=fast bash "$here/gate.sh" bash -c "$SG_WAVE_GATES" 2>&1); grc=$?
+    if [ $grc = 73 ] && h=$(held_by "$out"); then
+      case "$h" in slots:*) hold "the gate slots (caps.gates) are full, held by ${h#slots:}; the child enters on a later pass";;
+        *) hold "the gate lock is held by pid $h; the child enters on a later pass";; esac; return 1; fi
+    [ $grc = 0 ] || { refuse "the local gates failed: $(printf '%s' "$out" | /usr/bin/grep -v '^$' | tail -1)"; return 1; }
+  }
+  rebase_on_tip || return $?
+  gates || return 1
   local try=1
   while :; do
     sha=$($G rev-parse HEAD)
     if $G push -q origin "HEAD:refs/heads/$w" 2>/dev/null; then
       board_write "Code Complete" "$iss"   # a refused write is named, never dropped (#593)
       : > "$SG_STATE/auto/entered-$run-$iss"   # the durable record of the entry (#467): the janitor's Code Complete reads it, never the run's own land
+      rm -f "$SG_STATE/auto/excluded-$run-$iss"
       echo "WAVE $br $sha entered $w (#$iss)"; return 0
     fi
     [ "$try" = 1 ] || break
     try=2; rebase_on_tip || return $?
+    gates || return 1   # the rebase made a new tree, and only the gates open the entry (#682): what enters is what they passed
   done
-  requeue "$iss" "the push to $w was refused: HEAD is not a fast-forward of its tip"; return 1
+  refuse "the push to $w was refused: HEAD is not a fast-forward of its tip"; return 1
 }
 
 # A red check at the wave tip names the child that broke it (#377, ADR-0145 rule 11). The wave's check is its CI in
@@ -372,6 +404,7 @@ wave_check() {
     cx=$(child_of "$S" "$found")
     $G -C "$S" rebase --onto "$found^" "$found" >/dev/null 2>&1 || { $G -C "$S" rebase --abort >/dev/null 2>&1
       echo "WAVE CHECK RED $w: #$cx broke the wave tip and cannot leave it (a rebase conflict): the wave does not land"; return 1; }
+    excluded "$run" "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"   # land's run (#682)
     requeue "$cx" "the check at the wave tip was red: #$cx broke it, so the child left the wave"
     echo "WAVE CHECK RED $w: #$cx broke the wave tip; it leaves the wave and its issue is back in the queue"
   done
@@ -530,6 +563,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
       # An issue whose non-RED commit the base holds is delivered below, never requeued.
       if [ "$capped" = 1 ]; then
         for n in $(run_issues "$rd"); do case " $delivered " in *" $n "*) ;; *)
+          excluded "$run" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child" keep
           requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed empty without this child: it is back in the queue" cap;; esac; done
       fi
       if [ -n "$delivered" ]; then deliver "$run" "$w" "$sha" "$delivered" || return 1; else rm -f "$SG_STATE/auto/wave-$run"; fi
@@ -562,6 +596,7 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
   # (run_issues); an issue the wave carried just closed above, and is never requeued.
   if [ "$capped" = 1 ]; then
     for n in $(run_issues "$rd"); do case " $issues " in *" $n "*) ;; *)
+      excluded "$run" "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child" keep
       requeue "$n" "the wave reached its age cap (${SG_WAVE_MAX_AGE_SECONDS:-7200} s) and landed without this child: it is back in the queue" cap;; esac; done
   fi
   # The wave is in $base: each issue it carries closes through the API, and its one delivery comment is queued, never posted
