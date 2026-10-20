@@ -380,6 +380,19 @@ echo wave/run-gone8 > "$T/st/auto/wave-run-gone8"; r=$(netland run-gone8); rc=$?
 [ $rc = 2 ] && [ "$(cat "$T/st/auto/wland-tries-run-gone8" 2>/dev/null)" = 1 ] && ok "K3: a fetch that lacks the ref still counts a try" || ko "K3: exit $rc, tries '$(cat "$T/st/auto/wland-tries-run-gone8" 2>/dev/null)': '$r'"
 rm -f "$T/st/auto/wave-run-gone8" "$T/st/auto/wland-tries-run-gone8"
 
+# K4 (#663): a landing that failed on a cause the loop itself caused -- here the base battery is red and no child's own
+# suite names the cause -- counts no landing try and freezes nothing: it is named once per issue it carries as
+# WAVE-LOOP-CAUSED, and the wave stays to land on a later cycle. A real work failure still counts and freezes at the cap (K).
+W16=wave/run-16; start2 run-16 >/dev/null; child 160 lg "origin/$W16"; en2 run-16 160 >/dev/null
+: > "$T/gh.log"; before=$($O rev-parse dev); lr=""; tr=""
+for i in 1 2 3; do r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_GATES=true land2 run-16); rc=$?; lr="$lr$rc "; tr="$tr$(cat "$T/st/auto/wland-tries-run-16" 2>/dev/null)"; done
+[ "$lr" = "1 1 1 " ] && ok "K4: a loop-caused landing failure exits 1" || ko "K4: exits $lr: '$r'"
+case "$r" in *"WAVE-LOOP-CAUSED #160:"*"no child's own suite names the cause; not counted"*) ok "K4: the loop-caused failure is named once per issue";; *) ko "K4: no WAVE-LOOP-CAUSED line: '$r'";; esac
+[ -z "$tr" ] && [ ! -e "$T/st/auto/wland-tries-run-16" ] && ok "K4: three loop-caused failures count no landing try" || ko "K4: tries counted: '$tr'"
+/usr/bin/grep -q 'frozen:owner' "$T/gh.log" && ko "K4: a loop-caused failure froze the issue" || ok "K4: a loop-caused failure freezes nothing"
+[ -e "$T/st/auto/wave-run-16" ] && ok "K4: the run keeps its wave marker" || ko "K4: the wave marker is gone"
+[ "$($O rev-parse dev)" = "$before" ] && ok "K4: dev does not move on a loop-caused failure" || ko "K4: dev moved"
+
 # L (#378): a wave has an age cap (SG_WAVE_MAX_AGE_SECONDS, 2 h by default, ADR-0145 rule 13). A wave that reaches it
 # lands the children it holds and sends the children still running back to the queue; it takes no new child. The age is
 # read from the run's own wave start marker (auto/wave-start-<run>), written once when the run cuts its wave.
