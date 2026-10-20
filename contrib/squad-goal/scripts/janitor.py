@@ -669,9 +669,8 @@ def reconcile_board():
                 unheld(n, f, i)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
-            elif landed_kid:
-                if i["failed"] or i["name"] == "needs-human": stopped_run(n, i, f"child {landed_kid} landed work locally")
-                else: code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
+            elif landed_kid:   # a landing is the child's own (#271), and the run's verdict is not the child's: a sibling's failure does not unland commits that are in the branch (#666)
+                code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
             elif holding(n) and (bool(mine and i["kid_landed"]) or not i["landed"]): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
             elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
