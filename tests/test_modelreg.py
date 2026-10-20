@@ -68,7 +68,7 @@ def test_haiku_has_an_id_and_the_three_short_names_are_aliases(reg):
 
 
 def test_retired_history_ids_have_an_entry_a_label_and_a_price(reg):
-    for mid in ("grok-4.5", "grok-4.6", "gpt-6-astra", "gpt-5.6-sol-fast", "gpt-5.5", "gpt-6.1-sol"):
+    for mid in ("grok-4.5", "grok-4.6", "gpt-6-astra", "gpt-5.6-sol-fast", "gpt-5.5"):   # gpt-6.1-sol answers on codex, so it is live (#686)
         e = _entry(reg, mid)
         assert e.retired is True, mid
         assert e.label and e.display_price, mid

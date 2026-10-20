@@ -802,8 +802,41 @@
       "label": "GPT-6.1 Sol",
       "provider": "gpt",
       "subscription": "gpt",
-      "efforts": [],
-      "routes": {},
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "routes": {
+        "cli": {
+          "auth": "subscription",
+          "argv": [
+            "codex",
+            "exec",
+            "-m",
+            "{model}",
+            "-c",
+            "service_tier=fast",
+            "-c",
+            "model_reasoning_effort={effort}",
+            "-s",
+            "read-only",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "-"
+          ],
+          "served": [
+            "gpt-6.1-sol"
+          ]
+        },
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-gpt-6.1-sol",
+          "served": [
+            "claude-gpt-6.1-sol"
+          ]
+        }
+      },
       "capabilities": {
         "tools": true,
         "thinking_off": false,
@@ -816,8 +849,10 @@
         "currency": "USD",
         "per": "mtok"
       },
-      "aliases": [],
-      "retired": true,
+      "aliases": [
+        "claude-gpt-6.1-sol"
+      ],
+      "retired": false,
       "gateway_only": false
     },
     {
