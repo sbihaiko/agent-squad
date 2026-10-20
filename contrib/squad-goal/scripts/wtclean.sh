@@ -7,6 +7,8 @@
 # A tree that holds a checked out submodule is its own class: git refuses to remove such a tree whole (`fatal: working trees
 # containing submodules cannot be moved or removed`, a line with no run id in it), so every removal here carries the flag that
 # case needs, and the line names the run or the tree. One the flag still cannot free is reported once as WT KEPT submodule.
+# Every tree an ended run keeps is named once, with its reason, as WT KEPT (#676): a live process, a tree inside it, uncommitted
+# work or commits outside the base. An ended run leaves active-runs.txt once no tree holds its folder (rule A below).
 . "$(dirname "$0")/env.sh"; G=/usr/bin/git; seen="$SG_STATE/wt-unpushed.txt"; touch "$seen"
 # The tally the hub's footer reads as `wt 10/21`: `held` per child tree this pass saw under the two child directories
 # (the set the footer counts), `free` per one it removed. A `while read` behind a pipe is a subshell, so the count lives
@@ -47,7 +49,35 @@ has_sub() { $G -C "$1" submodule status 2>/dev/null | grep -qE '^[ +U]'; }
 # populated case needs loses nothing. The class is read BEFORE the attempt: a removal that fails can take the worktree's own
 # registration with it, and then the tree can no longer say what it is. Returns 0 when the tree is gone, 2 when a tree
 # holding a checked out submodule would not go even with that flag, 1 otherwise; wt_forced says the flag was used.
+# scratch: a tool's own files at the top of a tree, which no commit carries and which are no work: the Codex CLI writes
+# `.codex/config.toml` into each tree it works in. Read as dirt, it kept every run tree of 10-18 for good, silently (#676).
+# dirt <tree>: the tree's `git status --porcelain`, less an untracked scratch entry. Empty means nothing can be lost.
+scratch=${SG_WT_SCRATCH:-.codex/}
+dirt() { $G -C "$1" status --porcelain 2>/dev/null | awk -v s=" $scratch " '!(substr($0, 1, 3) == "?? " && index(s, " " substr($0, 4) " "))'; }
+# inner <tree>: another registered worktree lies inside the tree (a run folder's ws/ trees). `git worktree remove` deletes the
+# whole directory, the inner tree and its uncommitted work with it, and says nothing: the outer tree waits for the inner one.
+inner() { $G -C "$SG_CHECKOUT" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | awk -v p="$1/" 'index($0, p) == 1 {f=1} END {exit !f}'; }
+# kept <class> <tree> <tag> <reason>: a tree an ended run keeps, named once per tree and reason (#676).
+kept() { grep -qxF "keep $3 $2" "$seen" && return 0; echo "WT KEPT $1 ${2##*/}: $4; kept"; echo "keep $3 $2" >> "$seen"; }
+# ended <run folder>: 0 when the run has ended for good, read as the dashboard reads it (the last verdict after the last run_start
+# or resume): `completed`, `failed` with nothing in `remains`, or `failed` with remains and a record still for
+# SG_RUN_RESUME_HOLD_SECONDS (a day by default). The loop never resumes a run, so past that no resume is coming, and the tree
+# held for one stayed for good (#676). Else 1, and $why names the hold when there is one to name: a run with no verdict is live.
+ended() { local f="$1/record.jsonl" last; why=
+  wave_hold "${1##*/}" && return 1
+  last=$(awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$f" 2>/dev/null)
+  case $last in
+    *'"verdict": "completed"'*) return 0;;
+    *'"verdict": "failed"'*) printf '%s' "$last" | grep -qE '"remains": *\[ *\]' && return 0
+      [ $(( now - $(mtime "$f") )) -ge "${SG_RUN_RESUME_HOLD_SECONDS:-86400}" ] && return 0
+      why="${1##*/} failed with remains a resume may still take";;
+    *'"verdict": "needs-human"'*) why="${1##*/} needs a human: the owner decides";;
+    *'"verdict": "stopped"'*) why="${1##*/} is paused: the owner resumes it";;
+    '') ;;
+    *) why="${1##*/} ended with a verdict a resume may take";; esac
+  return 1; }
 wt_remove() { wt_forced=; wt_sub=0; has_sub "$2" && wt_sub=1
+  local s; for s in $scratch; do $G -C "$2" status --porcelain -- "$s" 2>/dev/null | grep -qxF "?? $s" && rm -rf "${2:?}/$s"; done   # the caller proved it is all the dirt
   $G -C "$1" worktree remove "$2" 2>/dev/null && return 0
   [ $wt_sub = 1 ] || return 1
   $G -C "$1" worktree remove --force "$2" 2>/dev/null || return 2
@@ -68,7 +98,8 @@ $G worktree list --porcelain | sed -n 's#^worktree \(.*/runs/run-[^/]*/ws/.*\)#\
   if wave_hold "${run##*/}"; then
     grep -qx "wave $w" "$seen" || { echo "WT HELD wave ${run##*/} ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
     continue; fi
-  [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
+  inner "$w" && { kept "${run##*/}" "$w" inner "another worktree lies inside it"; continue; }
+  [ -z "$(dirt "$w")" ] || { kept "${run##*/}" "$w" dirt "uncommitted work in it"; continue; }
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
   own=$($G -C "$w" branch --show-current)
   # kept only when HEAD is on no remote branch and on no other local branch (a run that made no commit sits on its base), and
@@ -95,13 +126,14 @@ for rel in worktrees/child .worktrees; do
     [ -e "$w/.git" ] || continue                 # what `git worktree add` writes: a stray directory is not a worktree
     echo held >> "$tally"
     in_use "$w" && continue
-    [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
+    inner "$w" && { kept child "$w" inner "another worktree lies inside it"; continue; }
+    [ -z "$(dirt "$w")" ] || { kept child "$w" dirt "uncommitted work in it"; continue; }
     # A run folder inside the tree whose wave has not landed holds it (#477). The run folder is ignored, so the tree reads
     # clean, and its HEAD may already be in the base: between the run's verdict and its wave's landing only the marker keeps it.
     hold=; for r in "$w"/runs/*/; do [ -d "$r" ] && wave_hold "$(basename "$r")" && { hold=$(basename "$r"); break; }; done
     if [ -n "$hold" ]; then grep -qx "wave $w" "$seen" || { echo "WT HELD wave $hold ${w##*/}: the run's wave has not landed; kept"; echo "wave $w" >> "$seen"; }
       continue; fi
-    in_base "$w" || continue
+    in_base "$w" || { kept child "$w" ahead "commits not in origin/$SG_BASE"; continue; }
     # An active run folder inside the child itself owns this tree, even before it starts a process. The janitor drops a
     # missing folder from active-runs, so this pass only preserves a folder that still exists and has no verdict.
     live=0
@@ -133,19 +165,16 @@ done
 # goes with the tree, and only once the tree is gone.
 for w in "$SG_CHECKOUT"/worktrees/run/*; do
   [ -e "$w/.git" ] || continue
-  in_use "$w" && continue
-  n=0; ended=1
+  n=0; end=1; why=
   for r in "$w"/runs/*/; do [ -f "$r/record.jsonl" ] || continue; n=$((n + 1))
-    wave_hold "$(basename "$r")" && { ended=0; break; }
-    last=$(awk '/"event": *"(run_start|resume)"/{v=""} /"event": *"verdict"/{v=$0} END{print v}' "$r/record.jsonl")
-    case $last in
-      *'"verdict": "completed"'*) ;;
-      *'"verdict": "failed"'*) printf '%s' "$last" | grep -qE '"remains": *\[ *\]' || { ended=0; break; };;
-      *) ended=0; break;; esac
+    ended "${r%/}" || { end=0; break; }
   done
-  [ $n -gt 0 ] && [ $ended = 1 ] || continue
-  [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
-  in_base "$w" || continue
+  [ -z "$why" ] || kept run "$w" hold "$why"
+  [ $n -gt 0 ] && [ $end = 1 ] || continue
+  in_use "$w" && { kept run "$w" use "a live process works in it"; continue; }
+  inner "$w" && { kept run "$w" inner "another worktree lies inside it"; continue; }
+  [ -z "$(dirt "$w")" ] || { kept run "$w" dirt "uncommitted work in it"; continue; }
+  in_base "$w" || { kept run "$w" ahead "commits not in origin/$SG_BASE"; continue; }
   b=$($G -C "$w" branch --show-current); sha=$($G -C "$w" rev-parse --short=9 HEAD 2>/dev/null)
   wt_remove "$SG_CHECKOUT" "$w"; rc=$?
   if [ $rc = 0 ]; then echo "WT CLEAN run ${w##*/} ${b:-detached} ${sha:-}${wt_forced:+ (submodule tree: removed with --force)}"
@@ -162,7 +191,7 @@ $G worktree list --porcelain | awk '/^worktree /{w=$2} /^detached/{print w}' | w
   [ -d "$w" ] || continue; [ -n "$(find "$w" -maxdepth 0 -mmin +10 2>/dev/null)" ] || continue
   in_use "$w" && continue
   sha=$($G -C "$w" rev-parse HEAD 2>/dev/null) || continue
-  if [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] && [ -n "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+  if [ -z "$(dirt "$w")" ] && [ -n "$($G branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
     wt_remove "$SG_CHECKOUT" "$w" && echo "WT CLEAN loose ${w##*/} ${sha:0:9}${wt_forced:+ (submodule tree: removed with --force)}"
   else grep -qx "loose $w" "$seen" || { echo "WT LOOSE ${w##*/} ${sha:0:9}: detached, dirty or on no remote branch; kept"; echo "loose $w" >> "$seen"; }; fi
 done
@@ -198,12 +227,34 @@ fi
 land=${SG_LAND_BRANCH:-dev}
 $G worktree list --porcelain | awk '/^worktree /{w=$2} /^branch /{sub("refs/heads/","",$2); print w, $2}' | while read -r w b; do
   case $w in "$HOME"/wt-*) ;; *) continue;; esac
-  [ -z "$($G -C "$w" status --porcelain 2>/dev/null)" ] || continue
+  in_use "$w" && continue
+  [ -z "$(dirt "$w")" ] || continue
   $G rev-parse -q --verify "refs/remotes/origin/$land" >/dev/null 2>&1 || continue   # no landing branch to compare with
+  # A tree made a moment ago at the base tip reads exactly as a landed one: a gate or an agent starting in it lost it (#676). Its
+  # HEAD reflog says when HEAD last moved; a tree that has not moved for SG_WT_FRESH_MINUTES (30 by default) is not starting.
+  hl=$($G -C "$w" rev-parse --path-format=absolute --git-path logs/HEAD 2>/dev/null); [ -e "$hl" ] || hl=$w
   if $G merge-base --is-ancestor "$b" "origin/$land" 2>/dev/null; then
+    [ $(( now - $(mtime "$hl") )) -ge $(( ${SG_WT_FRESH_MINUTES:-30} * 60 )) ] || continue
     wt_remove "$SG_CHECKOUT" "$w" && $G branch -D "$b" >/dev/null 2>&1 && echo "WT CLEAN landed $b (in $land at $($G rev-parse --short=9 "origin/$land"))${wt_forced:+ (submodule tree: removed with --force)}"
   else grep -qx "kept $w" "$seen" || { echo "WT KEPT $b: commits not in $land yet; nothing removed"; echo "kept $w" >> "$seen"; }; fi
 done
+# A (#676): an ended run leaves active-runs.txt once no tree holds its folder. A run folder inside a tree goes with the tree, and
+# the janitor drops a missing folder; a folder that stays (the checkout's own runs/) kept its line for good, and every reader
+# of the file read 80 ended runs as its own. The line goes when the run ended for good (the rule above), its record has not
+# moved for SG_RUN_LINE_SECONDS (an hour by default: the janitor's per-run rules have read it), no process is inside its
+# folder and no registered worktree lies inside it. The file is read again just before the write, so a line appended
+# meanwhile stays.
+act="$SG_STATE/active-runs.txt"; drop="$SG_STATE/active-drop.$$"; : > "$drop"
+[ -f "$act" ] && while read -r r; do
+  case "$r" in '') continue;; /*) d=$r;; *) d="$SG_CHECKOUT/runs/$r";; esac
+  d=$(cd "$d" 2>/dev/null && pwd -P) && [ -f "$d/record.jsonl" ] || continue
+  [ $(( now - $(mtime "$d/record.jsonl") )) -ge "${SG_RUN_LINE_SECONDS:-3600}" ] || continue
+  ended "$d" || continue
+  in_use "$d" && continue; inner "$d" && continue
+  echo "$r" >> "$drop"; echo "RUN ENDED ${d##*/}: its run ended and no tree holds it; dropped from active-runs.txt"
+done < "$act"
+if [ -s "$drop" ]; then grep -vxF -f "$drop" "$act" > "$act.$$" ; mv -f "$act.$$" "$act"; fi
+rm -f "$drop"
 $G worktree prune
 # What the hub's footer reads: the tree count this pass saw in the child directories and how many of them it freed. The file
 # is written last, so a pass killed halfway leaves the previous reading in place instead of a half one.

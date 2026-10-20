@@ -74,6 +74,7 @@ ci "$T/hm/wt-18-nopr" local-only                                       # ahead o
 ci "$T/hm/wt-18-partial" first; A=$($G -C "$T/hm/wt-18-partial" rev-parse HEAD); ci "$T/hm/wt-18-partial" after-landing   # landed, then one more commit
 ci "$T/hm/wt-18-done" shipped; D=$($G -C "$T/hm/wt-18-done" rev-parse HEAD)   # landed as is
 $G push -q origin "$D:refs/heads/dev" 2>/dev/null
+for b in nopr partial done; do touch -t 202001010000 "$($G -C "$T/hm/wt-18-$b" rev-parse --path-format=absolute --git-path logs/HEAD)"; done   # HEAD idle: a fresh tree at the base tip is never a landed one (#676)
 alive() { [ -d "$T/hm/wt-18-$1" ] && $G rev-parse -q --verify "refs/heads/gui/$1" >/dev/null; }
 out=$(bash "$T/s/wtclean.sh" 2>&1); out1=$out
 alive nopr && ok "W: branch ahead of dev kept" || ko "W: a branch ahead of dev was removed: $out"
