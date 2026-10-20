@@ -21,7 +21,7 @@ top=$(git rev-parse --show-toplevel) || exit 2
 # failed test. A reason that says only "names no failed test" hides a lint or type failure from the child that must repair it.
 stage_of() {
   local p
-  p=$(sed -n 's/^\([A-Z][0-9][0-9][0-9]\) \[[^]]*\] \(.*\)$/\1 \2/p' "$1" | head -n 1)
+  p=$(sed -n -e 's/^\([A-Z][A-Z]*[0-9][0-9][0-9]*\) \[[^]]*\] \(.*\)$/\1 \2/p' -e 's/^\([A-Z][A-Z]*[0-9][0-9][0-9]*\) \([^[].*\)$/\1 \2/p' "$1" | head -n 1)   # with or without the fix marker (#671)
   if [ -n "$p" ]; then
     local f; f=$(sed -n 's/^ *--> \(.*\)$/\1/p' "$1" | head -n 1)
     echo "ruff: ${f:+$f }$p"; return
