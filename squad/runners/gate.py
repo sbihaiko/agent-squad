@@ -1,10 +1,16 @@
 """The gate runner: a deterministic check over the artifacts and facts."""
+import os
+
 from squad.gates import GateInput, run_check
 
 
 class GateRunner:
     async def run(self, ctx, node, entry, sc):
         t0 = ctx.clock()   # wall time of running the check
+        # A gate can run for minutes (ac-verify runs a suite), so its start is recorded the way an agent call's is:
+        # the dashboard reads it as in flight until the outcome (#680). `call_start` stays an agent call's own.
+        ctx.record.append("gate_start", node=node["name"], entry=entry, item=sc.item, pid=os.getpid(),
+                          limit=node.get("deadline"), started_at=ctx.wall())
         inp = GateInput(ctx.artifacts.view(sc.item), {n: f.value for (n, it), f in ctx.facts.values.items() if it in (None, sc.item)},
                         str(ctx.workspace_path(None, sc.item)))
         r = run_check(node["check"], node["params"], inp)

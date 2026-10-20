@@ -648,10 +648,12 @@ function liveModule({ lastOf, num, orNull }) {
   // With no call in flight, a gate command or an effect can be quiet for a while, so the idle period is longer.
   const STALL_IDLE = 300, STALL_GRACE = 60;
 
-  // A call in flight is a call_start with no outcome for the same node, entry and item.
+  // A call in flight is a call_start with no outcome for the same node, entry and item. A gate_start opens a gate's
+  // check the same way (#680); a record made before it has none, and its gates never read as in flight.
+  const STARTS = new Set(["call_start", "gate_start"]);
   function inFlight(events, now) {
     const done = new Set(events.filter((e) => e.event === "outcome").map((e) => `${e.node}|${e.entry}|${orNull(e.item)}`));
-    return events.filter((e) => e.event === "call_start" && !done.has(`${e.node}|${e.entry}|${orNull(e.item)}`))
+    return events.filter((e) => STARTS.has(e.event) && !done.has(`${e.node}|${e.entry}|${orNull(e.item)}`))
       .map((e) => ({ node: e.node, entry: e.entry, item: orNull(e.item), since: num(e.started_at) ? now - e.started_at : null, limit: e.limit }));
   }
 
@@ -1413,7 +1415,7 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
     const base = { run_id: start.run_id, graph_name: start.graph_name, state: live ? live.state : v ? v.verdict : "no verdict yet",
       verdict: v ? { verdict: v.verdict, exit_code: v.exit_code, reasons: v.reasons || [] } : null, timeline: runTimeline(events), ...(live ? { live } : {}) };
     if (!shown) return base;
-    const outs = events.filter((e) => e.event === "outcome"), starts = events.filter((e) => e.event === "call_start");
+    const outs = events.filter((e) => e.event === "outcome"), starts = events.filter((e) => e.event === "call_start" || e.event === "gate_start");   // a gate's start too (#680)
     const names = [...new Set([...starts, ...outs].map((e) => e.node))];
     const nodes = Object.fromEntries(names.map((nm) => [nm, nodeStats(nm, outs.filter((o) => o.node === nm), starts.filter((c) => c.node === nm).length, doc)]));
     const open = live ? openCalls(events, now) : new Map();

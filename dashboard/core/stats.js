@@ -75,7 +75,7 @@ function statsModule({ causeSummary, dispatchChecks, failureCauses, lastOf, live
     const base = { run_id: start.run_id, graph_name: start.graph_name, state: live ? live.state : v ? v.verdict : "no verdict yet",
       verdict: v ? { verdict: v.verdict, exit_code: v.exit_code, reasons: v.reasons || [] } : null, timeline: runTimeline(events), ...(live ? { live } : {}) };
     if (!shown) return base;
-    const outs = events.filter((e) => e.event === "outcome"), starts = events.filter((e) => e.event === "call_start");
+    const outs = events.filter((e) => e.event === "outcome"), starts = events.filter((e) => e.event === "call_start" || e.event === "gate_start");   // a gate's start too (#680)
     const names = [...new Set([...starts, ...outs].map((e) => e.node))];
     const nodes = Object.fromEntries(names.map((nm) => [nm, nodeStats(nm, outs.filter((o) => o.node === nm), starts.filter((c) => c.node === nm).length, doc)]));
     const open = live ? openCalls(events, now) : new Map();

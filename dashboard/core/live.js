@@ -42,10 +42,12 @@ function liveModule({ lastOf, num, orNull }) {
   // With no call in flight, a gate command or an effect can be quiet for a while, so the idle period is longer.
   const STALL_IDLE = 300, STALL_GRACE = 60;
 
-  // A call in flight is a call_start with no outcome for the same node, entry and item.
+  // A call in flight is a call_start with no outcome for the same node, entry and item. A gate_start opens a gate's
+  // check the same way (#680); a record made before it has none, and its gates never read as in flight.
+  const STARTS = new Set(["call_start", "gate_start"]);
   function inFlight(events, now) {
     const done = new Set(events.filter((e) => e.event === "outcome").map((e) => `${e.node}|${e.entry}|${orNull(e.item)}`));
-    return events.filter((e) => e.event === "call_start" && !done.has(`${e.node}|${e.entry}|${orNull(e.item)}`))
+    return events.filter((e) => STARTS.has(e.event) && !done.has(`${e.node}|${e.entry}|${orNull(e.item)}`))
       .map((e) => ({ node: e.node, entry: e.entry, item: orNull(e.item), since: num(e.started_at) ? now - e.started_at : null, limit: e.limit }));
   }
 
