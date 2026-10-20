@@ -45,4 +45,26 @@ r=$(cd "$T/co" && env -u SG_PROFILES_DIR SG_PROFILE=agent-squad SG_STATE="$T/st"
 r=$(cd "$T/co" && env -u SG_PROFILES_DIR SG_PROFILE=agent-squad SG_STATE="$T/st" SG_SQUAD=/dev/null bash "$lv/prepush.sh" --local /dev/null 2>&1); rc=$?
 [ "$rc" = 0 ] && [ -z "$r" ] && ok "a prepush beside the loop's profiles resolves with no SG_PROFILES_DIR in the caller" \
   || ko "resolved-default prepush: exit $rc '$r'"
+# #674: a child runs ruff before it hands in. A tree with squad/ and tests/ (the base battery's paths) runs
+# `ruff check --fix` and then `ruff check squad tests`; a red blocks the hand-in with ruff's own line. The stub python logs
+# its argv, so a wrong argv shows. A tree with no squad/ runs no ruff.
+rr="$T/rr"; $G init -q -b main "$rr"; ( cd "$rr" && mkdir -p squad tests && echo 'x = 1' > squad/a.py && echo 'y = 1' > tests/t.py && $G add . && c -m init )
+cat > "$T/py" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/py.log"
+[ "\$1 \$2 \$3" = "-m ruff check" ] || exit 9
+case " \$* " in *" --fix "*) [ -f "$T/fixable" ] && echo 'x = 2' > squad/a.py; exit 0;; esac
+[ -f "$T/red" ] && { echo 'F811 Redefinition of unused \`f\` from line 1'; echo ' --> tests/t.py:3:5'; exit 1; }
+exit 0
+EOF
+chmod +x "$T/py"
+pr() { ( cd "$rr" && SG_GATE_PY="$T/py" bash "$T/s/prepush.sh" --local /dev/null 2>&1 ); }
+rm -f "$T/py.log"; r=$(pr); rc=$?
+[ "$rc" = 0 ] && [ -z "$r" ] && [ "$(cat "$T/py.log" 2>/dev/null)" = "$(printf -- '-m ruff check --fix squad tests\n-m ruff check squad tests')" ] \
+  && ok "a clean tree runs ruff --fix, then ruff check squad tests, and passes" || ko "clean ruff: exit $rc '$r' log '$(cat "$T/py.log" 2>/dev/null)'"
+touch "$T/red"; r=$(pr); rc=$?
+case "$rc:$r" in 1:*"ruff: "*F811*tests/t.py*) ok "a ruff red blocks the hand-in with ruff's line";; *) ko "ruff red not flagged: exit $rc '$r'";; esac
+rm -f "$T/red"; touch "$T/fixable"; r=$(pr); rc=$?
+case "$rc:$r" in 1:*"ruff: --fix changed"*squad/a.py*) ok "a fix ruff made and nobody committed blocks the hand-in";; *) ko "uncommitted fix not flagged: exit $rc '$r'";; esac
+rm -f "$T/fixable" "$T/py.log"; r=$(SG_GATE_PY="$T/py" pp /dev/null); [ ! -e "$T/py.log" ] && ok "a tree with no squad/ runs no ruff" || ko "ruff ran in a tree with no squad/"
 rm -rf "$T"; exit $fail
