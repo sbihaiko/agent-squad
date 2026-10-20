@@ -52,7 +52,8 @@ case "$a" in
     [ -e "TMPDIR/board-down" ] && { echo "API rate limit exceeded" >&2; exit 1; }
     for n in 2002 2003 2005 2006 2009 2022 2023; do printf '%s\tIn Progress\thttps://api.github.com/repos/x/y\n' "$n"; done
     for n in 2001 2007 2008 2012; do printf '%s\tTodo\thttps://api.github.com/repos/x/y\n' "$n"; done
-    for n in 2004 2010 2011 2032; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done
+    for n in 2004 2010 2011 2032 2050; do printf '%s\tCode Complete\thttps://api.github.com/repos/x/y\n' "$n"; done   # #2050: a spec card a work rule wrongly moved forward (#665)
+    printf '2051\tIn Progress\thttps://api.github.com/repos/x/y\n2052\tClosed\thttps://api.github.com/repos/x/y\n2053\tBacklog\thttps://api.github.com/repos/x/y\n2054\tBacklog\thttps://api.github.com/repos/x/y\n'   # #2050's children, and spec #2053 with its queued child
     printf '2014\t\thttps://api.github.com/repos/x/y\n'   # on the board, no Status yet
     printf '2030\tDone\thttps://api.github.com/repos/x/y\n2031\tAbandoned\thttps://api.github.com/repos/x/y\n2029\tClosed\thttps://api.github.com/repos/x/y\n'   # spec children, and a spec card already Closed
     printf '2041\tBacklog\thttps://api.github.com/repos/x/y\n'   # a run parent that already has a card
@@ -61,7 +62,7 @@ case "$a" in
     printf '2015\tBlocked\thttps://api.github.com/repos/x/y\n';;   # stale Blocked card with no current blocking cause
   *graphql*)   # the open-issue list in ONE request: every open issue of the repository, with its labels
     printf '{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false},"nodes":['
-    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047; do
+    sep=""; for n in 2001 2002 2003 2004 2005 2006 2007 2008 2009 2011 2012 2013 2014 2015 2016 2017 2018 2019 2020 2021 2027 2028 2029 2032 2040 2041 2042 2043 2044 2045 2046 2047 2050 2051 2052 2053 2054; do
       body=""; subs='{"total":0,"completed":0}'; kids='[]'
       case $n in
         2007|2016) labs='{"nodes":[{"name":"needs-owner"}]}';;
@@ -82,7 +83,11 @@ case "$a" in
         # card (#2045) follow it; #2044 is past Backlog and keeps its column. #2046 still sits in Backlog, so #2047 stays.
         2042) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":3,"completed":0}'; kids='[{"number":2043},{"number":2044},{"number":2045}]';;
         2046) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2047}]';;
-        2043|2044|2045|2047) labs='{"nodes":[{"name":"ready-for-agent"}]}';;
+        # A spec is never work (#665): its children's commits name it, but the fold alone sets its card. #2050's card was
+        # wrongly at Code Complete while one child is still in flight; #2053 is still queued.
+        2050) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":2,"completed":1}'; kids='[{"number":2051},{"number":2052}]';;
+        2053) labs='{"nodes":[{"name":"spec"}]}'; subs='{"total":1,"completed":0}'; kids='[{"number":2054}]';;
+        2043|2044|2045|2047|2051|2052|2054) labs='{"nodes":[{"name":"ready-for-agent"}]}';;
         2019) labs='{"nodes":[{"name":"ready-for-agent"},{"name":"wave:02"}]}'; body='## Blocked by\n\n- #2006 the shape lands first';;
         *) labs='{"nodes":[]}';;
       esac
@@ -158,6 +163,10 @@ rec run-mixed '{"event":"run_start","run_id":"run-mixed","ts":"2026-10-13T08:13:
 # #2032 was fixed by hand in the landing branch (#519): no run and no work branch, but a commit in origin/dev names it. The
 # work reached dev, so the card keeps Code Complete; the floor never moves it back (ADR-0143).
 git -C "$T/co" init -q; git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "Fix the thing by hand (#2032)"
+# A spec's children land their own commits under the parent's number (#665): the subject names the spec, and no work rule
+# may read that as the spec's own delivery.
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A child of the spec landed (#2050)"
+git -C "$T/co" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "A queued child's fix is prepared (#2053)"
 git -C "$T/co" update-ref refs/remotes/origin/dev HEAD
 printf '%s\n' '{"items":[{"n":2015,"st":"Done","s":"open"}]}' > "$T/st/hub-board.json"   # the cached board exposes the false Done card to rule H while R repairs the live card
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BASE=main SG_HUB_DIR="$T/st" python3 -I "$T/s/janitor.py" 2>&1)
@@ -249,6 +258,12 @@ done
 ! /usr/bin/grep -q ' 2044$' "$T/board.calls" 2>/dev/null && ok "a child past Backlog keeps its column" || ko "#2044 moved: $(/usr/bin/grep ' 2044$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 204[26]$' "$T/board.calls" 2>/dev/null && ok "the spec card keeps the owner's column" || ko "a spec moved: $(/usr/bin/grep -E ' 204[26]$' "$T/board.calls")"
 ! /usr/bin/grep -q ' 2047$' "$T/board.calls" 2>/dev/null && ok "a child of a spec in Backlog stays in Backlog" || ko "#2047 moved: $(/usr/bin/grep ' 2047$' "$T/board.calls")"
+# A spec is never work (#665): a commit subject that names it is its children's, so no work rule writes its card, and the
+# fold alone sets it -- including the correction of a card a work rule moved forward while its children were in flight.
+/usr/bin/grep -q '^STATUS o 4 Doing 2050$' "$T/board.calls" 2>/dev/null && ok "a spec card a work rule moved forward is folded back to Doing (#665)" || ko "#2050 not corrected: $(bc) $o"
+/usr/bin/grep -q 'BOARD-RECONCILE #2050: card -> Doing (spec folds over its sub-issues)' "$T/st/cycle.log" 2>/dev/null && ok "the correction is named in cycle.log" || ko "#2050 correction not named: $(cat "$T/st/cycle.log" 2>/dev/null)"
+! /usr/bin/grep -q ' 2053$' "$T/board.calls" 2>/dev/null && ok "a commit that names a spec never moves its card forward" || ko "#2053 moved: $(/usr/bin/grep ' 2053$' "$T/board.calls")"
+! /usr/bin/grep -q ' 2054$' "$T/board.calls" 2>/dev/null && ok "the correction leaves its queued child's card alone" || ko "#2054 moved: $(/usr/bin/grep ' 2054$' "$T/board.calls")"
 # The fold adds no GitHub call: the children come with the open-issue read, never from a sub-issues route.
 ! /usr/bin/grep -q 'sub_issues' "$T/gh.calls" 2>/dev/null && ok "no sub-issues route is called" || ko "a sub-issues call: $(/usr/bin/grep sub_issues "$T/gh.calls")"
 [ "$(/usr/bin/grep -c graphql "$T/gh.calls")" = 1 ] && ok "the fold rides the one open-issue read" || ko "reads: $(/usr/bin/grep -c graphql "$T/gh.calls")"
