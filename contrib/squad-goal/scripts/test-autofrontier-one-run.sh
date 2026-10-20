@@ -43,7 +43,7 @@ printf 'open(__import__("os").environ["LAUNCHLOG"], "a").write("launch\\n")\n' >
 chmod +x "$T/scripts/mkreq.sh"
 # board.sh keeps the call it was handed: <owner> <project> <column> <issue>... (#33: the card move was a bare `true`, so no case could say which cards moved)
 printf '#!/bin/bash\necho "$*" >> "$BOARDLOG"\n' > "$T/board.sh"; chmod +x "$T/board.sh"
-cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py} "$T/scripts/"   # the pass reads the open-issue list through the door
+cp "$src" "$T/scripts/autofrontier.sh"; cp "$(dirname "$src")"/{ghcall.sh,ghread.py,ghthrottle.py,issue_ledger.py} "$T/scripts/"   # the pass reads the open-issue list through the door
 # The seam's door, stubbed at the script's own name (#550): one `<issue>\t<state>` line per card. A fixture issue's card is
 # in Todo unless it names its own "card" ("" is no card); CARDS_DOWN is a board that does not answer.
 cat > "$T/scripts/issue_state.py" <<'PY'
@@ -119,7 +119,7 @@ added && ok "a dispatch adds each missing board card before its move" || ko "a d
 #     line, so the child sees the failure it must fix. An issue with no failed dispatch carries none.
 scene repair
 issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":42,"title":"a","body":"c","labels":[{"name":"wave:01"}]}]'
-mkdir -p "$d/st/auto"; printf 'run-x\t\tthe local gates failed: fast-gate: the base battery failed at ruff: tests/t.py:8:8 F401\n' > "$d/st/auto/requeues-41.runs"
+SG_STATE="$d/st" SG_REPO=o/r python3 "$T/scripts/issue_ledger.py" fail 'o/r#41' run-x '' 'the local gates failed: fast-gate: the base battery failed at ruff: tests/t.py:8:8 F401' >/dev/null   # the issue's ledger file (#673)
 r=$(run)
 line41=$($G -E '^CHILD' "$MKLOG.body" | $G ' 41 ')
 case "$line41" in *"an earlier attempt failed the entry gate: the local gates failed: fast-gate: the base battery failed at ruff: tests/t.py:8:8 F401"*) ok "a redispatched issue carries its last gate failure on its CHILD line";; *) ko "the CHILD line for 41: '$line41' (pass: $r)";; esac

@@ -4,7 +4,7 @@
 # re-dispatches it. A run that landed work stops at Code Complete and keeps its marker (#239: a local landing is not a
 # merge into the base, so it is not Done); a live run writes Run fields. Stubbed gh/board. usage: bash test-janitor-failed-dispatch.sh [janitor.py]
 src=${1:-$(dirname "$0")/janitor.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$T/s/issue_state.py"
+mkdir -p "$T/bin" "$T/s" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/s/janitor.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/issue_ledger.py" "$T/s/"
 printf '#!/bin/bash\necho "$*" >> %s/board.calls\n' "$T" > "$T/s/board.sh"
 printf '#!/bin/bash\necho "$*" >> %s/notify.calls\n' "$T" > "$T/notify"; chmod +x "$T/notify"
 cat > "$T/bin/gh" <<'J'
@@ -56,6 +56,11 @@ printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #
 printf 'run-loopdup\t\tended failed: adapter_error\n' > "$T/st/auto/loopqueues-709.runs"; echo 1 > "$T/st/auto/loopqueues-709"
 mk run-chain; printf 'CHILD — GitHub issue(s) 710 (one PR):\n' > "$T/co/runs/run-chain/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #710"}\n{"event": "land", "node": "c1", "outcome": "fail", "reasons": ["review_held"], "effect": {"name": "review", "review": {"verdict": "hold", "findings": "VERDICT: BLOCKED (every review model failed)\\n"}}}\n{"event": "verdict", "verdict": "failed", "reasons": ["review_held"], "exit_code": 1}\n' > "$T/co/runs/run-chain/record.jsonl"
+# #673: the janitor reads the issue's ledger file through its module; a run that file lists is not sent again either.
+mk run-jdup; printf 'CHILD — GitHub issue(s) 711 (one PR):\n' > "$T/co/runs/run-jdup/request.txt"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #711"}\n{"event": "verdict", "verdict": "failed", "reasons": ["x"], "exit_code": 1}\n' > "$T/co/runs/run-jdup/record.jsonl"
+SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" fail 'x/y#711' run-jdup '' 'ended failed: x' >/dev/null
+touch -t 202001010000 "$T/co/runs/run-jdup/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-chain/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-held/record.jsonl" "$T/co/runs/run-loopdup/record.jsonl"
 touch -t 202001010000 "$T/co/runs/run-fail/record.jsonl" "$T/co/runs/run-land/record.jsonl" "$T/co/runs/run-bug/record.jsonl" "$T/co/runs/run-nomark/record.jsonl" "$T/co/runs/run-human/record.jsonl" "$T/co/runs/run-dup/record.jsonl"

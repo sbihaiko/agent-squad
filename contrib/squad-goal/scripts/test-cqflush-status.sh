@@ -15,6 +15,7 @@ for a; do case "$a" in body=@*) bf=${a#body=@};; esac; done
 all="$*"
 case "$all" in
   *per_page*) for f in "$C"/*; do [ -e "$f" ] && jq -Rs --arg id "$(basename "$f")" '{id: ($id|tonumber), body: .}' < "$f"; done | jq -s . ; exit 0;;
+  *"--method DELETE"*issues/comments/*) id=${all##*issues/comments/}; id=${id%% *}; rm -f "$C/$id"; echo "DELETE $id" >> "$GHLOG";;
   *"--method PATCH"*issues/comments/*) id=${all##*issues/comments/}; id=${id%% *}; cp "$bf" "$C/$id"; echo "PATCH $id" >> "$GHLOG";;
   *issues/comments/*) id=${all##*issues/comments/}; id=${id%% *}; jq -Rs --arg id "$id" '{id: ($id|tonumber), body: .}' < "$C/$id";;
   *body=@*) id=$(( $(ls "$C" | wc -l) + 1 )); cp "$bf" "$C/$id"; echo "POST $id" >> "$GHLOG"; echo "$id";;
@@ -56,4 +57,14 @@ out=$(flush); [ "$(ncom)" = 2 ] && $G -q 'closed after' "$T/c/2" && ! $G -q 'mer
 # 6. an unmarked comment is posted as before
 put 'x__alpha#7-note.md' 'plain'
 out=$(flush); [ "$(ncom)" = 3 ] && ok "an unmarked comment is still posted" || ko "unmarked: $(cat "$T/ghlog") / $out"
+
+# 7. a re-arm (#673, issue_ledger.py rearm) queues <n>-unstart~<tag>.md: every SQUAD-NOT-STARTABLE comment of the issue goes,
+#    and no other comment does. A second one with nothing left to remove sends no write.
+printf 'SQUAD-NOT-STARTABLE: 3 failed dispatches\n' > "$T/c/8"; printf 'a plain note\n' > "$T/c/9"; : > "$T/ghlog"
+put 'x__alpha#7-unstart~rearm1.md' 'SQUAD-NOT-STARTABLE:'
+out=$(flush); [ ! -e "$T/c/8" ] && [ -e "$T/c/9" ] && [ "$(cat "$T/ghlog")" = "DELETE 8" ] && [ -f "$B/alpha/cq/x__alpha#7-unstart~rearm1.md.done" ] \
+  && ok "a re-arm removes the SQUAD-NOT-STARTABLE comment and no other" || ko "unstart: $(cat "$T/ghlog") / $out / $(ls "$T/c")"
+put 'x__alpha#7-unstart~rearm2.md' 'SQUAD-NOT-STARTABLE:'
+out=$(flush); [ "$(cat "$T/ghlog")" = "DELETE 8" ] && [ -f "$B/alpha/cq/x__alpha#7-unstart~rearm2.md.done" ] \
+  && ok "a re-arm with nothing to remove sends no write" || ko "unstart again: $(cat "$T/ghlog") / $out"
 rm -rf "$T"; exit $fail

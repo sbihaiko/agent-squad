@@ -17,7 +17,7 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
-cp "$d/wave.sh" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/" 2>/dev/null
+cp "$d/wave.sh" "$d/issue_ledger.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 {
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
@@ -433,7 +433,7 @@ before=$($O rev-parse $W8); child 82 g82 "origin/$W8"; REV_BASE=$W8 REV_SHA=0000
 r=$(cd "$T/c82" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-8 82 2>&1); rc=$?
 [ $rc = 1 ] && case "$r" in *"WAVE REQUEUE #82"*"age cap"*) ok "L: an expired wave takes no child with a stale approval, and its issue is back in the queue";; *) ko "L: no cap reason: '$r'";; esac || ko "L: the entry exited $rc: '$r'"
 [ "$($O rev-parse $W8)" = "$before" ] && ok "L: the child with a stale approval does not enter" || ko "L: the wave tip moved on an expired wave"
-[ ! -e "$T/st/auto/requeues-82" ] && ok "L: a cap requeue does not count toward the requeue cap" || ko "L: the cap requeue was counted: $(cat "$T/st/auto/requeues-82")"
+[ ! -e "$T/st/state/x__y__82.json" ] && ok "L: a cap requeue does not count toward the requeue cap" || ko "L: the cap requeue was counted: $(cat "$T/st/state/x__y__82.json")"
 # an approved child (its review approved its current head, read against the wave) still enters a capped wave (#594): the
 # wait was the loop's queue, not its own work
 child 83 g83 "origin/$W8"; REV_BASE=$W8 rev 83
@@ -447,7 +447,7 @@ $O cat-file -e dev:g80 2>/dev/null && ok "L: the child the wave held is in dev" 
 /usr/bin/grep -q 'issues/80 -f state=closed' "$T/gh.log" && ok "L: the held child's issue is closed" || ko "L: #80 was not closed"
 $O cat-file -e dev:g83 2>/dev/null && ok "L: the approved late child is in dev" || ko "L: #83 is not in dev"
 [ ! -e "$T/st/auto/disp-81" ] && /usr/bin/grep -qx 'o 3 Todo 81' "$T/board.log" && ok "L: the child still running is back in the queue" || ko "L: #81 was not requeued"
-[ ! -e "$T/st/auto/requeues-81" ] && ok "L: the landing's cap requeue does not count toward the requeue cap" || ko "L: the landing's cap requeue was counted"
+[ ! -e "$T/st/state/x__y__81.json" ] && ok "L: the landing's cap requeue does not count toward the requeue cap" || ko "L: the landing's cap requeue was counted"
 /usr/bin/grep -q 'issues/81 -f state=closed' "$T/gh.log" && ko "L: an issue that never entered the wave was closed" || ok "L: the child back in the queue is not closed"
 [ ! -e "$T/st/auto/wave-start-run-8" ] && ok "L: the landed wave clears its start marker" || ko "L: the wave start marker outlives the landing"
 

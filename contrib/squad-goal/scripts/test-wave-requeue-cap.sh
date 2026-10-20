@@ -6,10 +6,12 @@
 # usage: bash test-wave-requeue-cap.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 exec 3>&2 2>>"$T.err"   # the suite's own stderr, read at the end: a "command not found" there is a fixture that lacks a file (#610)
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/"
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledger.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\nprintf "{}"\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+# cnt <n> [loop]: the count of the issue's ledger (#673), read through its one module.
+cnt() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" count "x/y#$1" ${2:-}; }
 nsc() { cat "$T"/st/cq/* 2>/dev/null | /usr/bin/grep -c '^SQUAD-NOT-STARTABLE:'; }
 for i in 1 2; do
   echo req > "$T/st/auto/disp-7"
@@ -31,8 +33,8 @@ case "$o8" in *"WAVE-BOARD #8 Todo refused: board refused"*) ok "a refused card 
 # toward the cap and never stops the issue, and the count real failures left stays as it was.
 echo 2 > "$T/st/auto/requeues-9"; echo req > "$T/st/auto/disp-9"   # two real failures already counted: a counted requeue now stops it
 o9=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 9 "the wave reached its age cap" cap)
-[ ! -e "$T/st/auto/disp-9" ] && [ "$(cat "$T/st/auto/requeues-9")" = 2 ] && case "$o9" in *"WAVE REQUEUE #9"*) true;; *) false;; esac \
-  && ok "a cap requeue never counts and never stops the issue" || ko "cap requeue: count '$(cat "$T/st/auto/requeues-9")', '$o9'"
+[ ! -e "$T/st/auto/disp-9" ] && [ "$(cnt 9)" = 2 ] && case "$o9" in *"WAVE REQUEUE #9"*) true;; *) false;; esac \
+  && ok "a cap requeue never counts and never stops the issue" || ko "cap requeue: count '$(cnt 9)', '$o9'"
 echo req > "$T/st/auto/disp-9"; o9=$(PATH="$T/bin:$PATH" bash "$T/s/wave.sh" requeue 9 "the local gates failed: x")
 case "$o9" in *"WAVE STOP #9"*) ok "real failures still stop the issue at the third";; *) ko "no stop at the third real failure: '$o9'";; esac
 # #609: one count of failed dispatches, keyed by the run (ADR-0134). A run counts once per issue, whether a requeue or the
@@ -43,7 +45,7 @@ gl() { /usr/bin/grep -c "issues/$1/labels" "$T/gh.log" 2>/dev/null; }
 SG_REQUEUE_RUN=r1 w requeue 11 "the review asked for changes: a" >/dev/null
 SG_REQUEUE_RUN=r1 w requeue 11 "the local gates failed: b" >/dev/null
 o=$(w fail 11 r1 "ended failed: run_spend_cap")
-[ "$(cat "$T/st/auto/requeues-11" 2>/dev/null)" = 1 ] && ok "one run counts once, however many times it fails the issue" || ko "run key: count '$(cat "$T/st/auto/requeues-11" 2>/dev/null)', '$o'"
+[ "$(cnt 11)" = 1 ] && ok "one run counts once, however many times it fails the issue" || ko "run key: count '$(cnt 11)', '$o'"
 o=$(w fail 11 r2 "ended failed: node_spend_cap")
 case "$o" in *"WAVE STOP"*) ko "the second run stopped the issue: '$o'";; *) ok "a second failed run is below the cap";; esac
 o=$(w fail 11 r3 "ended failed: the gates failed")
@@ -55,7 +57,7 @@ case "$c11" in SQUAD-NOT-STARTABLE:*r1*"the review asked for changes: a"*r2*node
 o=$(w fail 11 r3 "ended failed: the gates failed")
 [ "$(gl 11)" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a run already counted freezes nothing again" || ko "repeat of r3: '$o', labels $(gl 11)"
 o=$(w fail 11 r4 "ended failed: x")
-[ "$(cat "$T/st/auto/requeues-11")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new run after the freeze (the owner let it start) counts from one" || ko "after the freeze: count '$(cat "$T/st/auto/requeues-11")', '$o'"
+[ "$(cnt 11)" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new run after the freeze (the owner let it start) counts from one" || ko "after the freeze: count '$(cnt 11)', '$o'"
 # Evolution: a new non-RED `Refs #12` commit in origin/dev restarts the count; a RED one does not.
 R="$T/co"; /usr/bin/git init -q "$R"; gc() { /usr/bin/git -C "$R" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1" && /usr/bin/git -C "$R" update-ref refs/remotes/origin/dev HEAD; }
 gc "start"
@@ -70,20 +72,20 @@ gc "Part of the fix
 
 Refs #13"
 o=$(SG_CHECKOUT="$R" w fail 13 rc "ended failed: c")
-[ "$(cat "$T/st/auto/requeues-13")" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new commit in the base restarts the count" || ko "evolution: count '$(cat "$T/st/auto/requeues-13")', '$o'"
+[ "$(cnt 13)" = 1 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac && ok "a new commit in the base restarts the count" || ko "evolution: count '$(cnt 13)', '$o'"
 # #621: a requeue the loop caused -- a wave that landed without its child, an adapter error, a merge conflict with a sibling,
 # a disk stop -- is no failure of the issue's work: it requeues the issue and never counts toward SG_REQUEUE_CAP. Its own
 # bound, SG_LOOP_REQUEUE_CAP (6), ends the issue needs-human (ADR-0029) with needs-owner and a comment naming the loop cause.
 # It writes no Blocked column (#630): the shipped board has none, and janitor rule R turns needs-owner into frozen:owner. `own` makes the janitor's verdict read (the review held the diff) count, whatever the text.
 for r in l1 l2 l3 l4; do o=$(w fail 21 $r "the wave of run $r landed without its child"); done
-[ ! -e "$T/st/auto/requeues-21" ] && [ "$(gl 21)" = 0 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac \
-  && ok "a wave that landed without its child never counts toward the cap" || ko "loop fail: count '$(cat "$T/st/auto/requeues-21" 2>/dev/null)', '$o'"
+[ "$(cnt 21)" = 0 ] && [ "$(gl 21)" = 0 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac \
+  && ok "a wave that landed without its child never counts toward the cap" || ko "loop fail: count '$(cnt 21)', '$o'"
 echo req > "$T/st/auto/disp-22"
 for r in a b c; do SG_REQUEUE_RUN=$r w requeue 22 "ended failed: adapter_error" >/dev/null; done
 SG_REQUEUE_RUN=d w requeue 22 "the rebase on wave/x conflicts: f.py" >/dev/null; echo req > "$T/st/auto/disp-22"
 o=$(SG_REQUEUE_RUN=e w requeue 22 "DISK STOP: / has 1 GiB free")
-[ ! -e "$T/st/auto/disp-22" ] && [ ! -e "$T/st/auto/requeues-22" ] && case "$o" in *"WAVE REQUEUE #22"*) true;; *) false;; esac \
-  && ok "a loop-caused requeue still requeues the issue, with no count" || ko "loop requeue: count '$(cat "$T/st/auto/requeues-22" 2>/dev/null)', '$o'"
+[ ! -e "$T/st/auto/disp-22" ] && [ "$(cnt 22)" = 0 ] && case "$o" in *"WAVE REQUEUE #22"*) true;; *) false;; esac \
+  && ok "a loop-caused requeue still requeues the issue, with no count" || ko "loop requeue: count '$(cnt 22)', '$o'"
 o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m1 "ended failed: merge_conflict"); o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m2 "ended failed: adapter_error")
 o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m3 "the wave of run m3 landed without its child")
 c23=$(cat "$T"/st/cq/*23-* 2>/dev/null)
@@ -92,11 +94,15 @@ case "$o" in *"WAVE NEEDS-HUMAN #23"*) ok "the loop bound ends the issue needs-h
 case "$c23" in *"landed without its child"*) ok "the loop stop comment names the loop cause";; *) ko "loop stop comment: '$c23'";; esac
 case "$c23" in *SQUAD-NOT-STARTABLE*) ko "the loop stop is no owner freeze: '$c23'";; *) ok "the loop stop queues no SQUAD-NOT-STARTABLE";; esac
 w fail 24 o1 "ended failed: review_held" own >/dev/null; w fail 24 o2 "ended failed: adapter_error" own >/dev/null
-[ "$(cat "$T/st/auto/requeues-24" 2>/dev/null)" = 2 ] && ok "own counts toward the cap whatever the reason text" || ko "own: count '$(cat "$T/st/auto/requeues-24" 2>/dev/null)'"
+[ "$(cnt 24)" = 2 ] && ok "own counts toward the cap whatever the reason text" || ko "own: count '$(cnt 24)'"
 SG_REQUEUE_RUN=v1 w requeue 25 "the review of its own diff in run v1 asked for changes (VERDICT: BLOCKED (every review model failed)) at abc:" >/dev/null
 SG_REQUEUE_RUN=v2 w requeue 25 "the review of its own diff in run v2 asked for changes (VERDICT: BLOCKED) at abc:
 - a real finding" >/dev/null
-[ "$(cat "$T/st/auto/requeues-25" 2>/dev/null)" = 1 ] && ok "a BLOCKED the chain wrote (every model failed) never counts; one a model wrote does" || ko "chain BLOCKED: count '$(cat "$T/st/auto/requeues-25" 2>/dev/null)'"
+[ "$(cnt 25)" = 1 ] && ok "a BLOCKED the chain wrote (every model failed) never counts; one a model wrote does" || ko "chain BLOCKED: count '$(cnt 25)'"
+# #673: the counts live in one file per issue, keyed by repository and issue, and the old counter files are written no more.
+[ -f "$T/st/state/x__y__11.json" ] && [ ! -e "$T/st/auto/requeues-11" ] && [ ! -e "$T/st/auto/requeues-11.runs" ] && [ ! -e "$T/st/auto/loopqueues-23.runs" ] \
+  && ok "the count is in the issue's ledger file, not in auto/requeues-N" || ko "ledger files: $(/bin/ls "$T/st/state" "$T/st/auto" 2>&1 | tr '\n' ' ')"
+[ "$(cnt 23 loop)" = 3 ] && ok "the loop-caused count is the ledger's loop count" || ko "loop count #23: '$(cnt 23 loop)'"
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail
