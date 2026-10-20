@@ -499,6 +499,17 @@ land() {   # <run> [folder]: the wave's landing pass -- the rebase on the base, 
     # BEFORE the tip's check: an empty wave has no child commit to blame for a red check, so that check can only fail the
     # landing of a wave that carries nothing (#449: it ran anyway, and four runs went needs-human on it).
     [ "$(sc rev-list --count "origin/$base..HEAD")" -gt 0 ] || {
+      # A child's fix run in flight holds the wave (#667): the childcc pass started it because the review asked for changes,
+      # and it may still put the child in the wave. Landing empty here would delete the wave branch, clean the child's
+      # worktree and send the issue back to the queue while that work runs. The age cap is what frees the wave (the capped
+      # branch below), so a marker whose fix run never verdicts cannot hold it for good.
+      if [ "$capped" != 1 ]; then for fx in "$SG_STATE/auto/ccfix-$run"-*; do
+        [ -e "$fx" ] || continue
+        f=$(cat "$fx" 2>/dev/null)
+        [ -n "$f" ] && /usr/bin/grep -q '"event": "verdict"' "$f/record.jsonl" 2>/dev/null && continue
+        echo "WAVE WAIT $w: the fix run of one of its children has no verdict yet, so it does not land empty"
+        rm -rf "$S"; return 1
+      done; fi
       # The run's work may have reached the base outside this wave (#533): the run's children merged into its target and
       # their trees are gone, so no entry exists. The issues the run was dispatched for are named, and each one whose
       # non-RED `Refs #N` commit the base holds (an ancestor of origin/$base by construction) is delivered. A RED commit
