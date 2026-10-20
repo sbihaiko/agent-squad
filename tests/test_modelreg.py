@@ -81,6 +81,24 @@ def test_fast_gateway_ids_are_gateway_only(reg):
         assert set(e.routes) == {"gateway"}, mid
 
 
+@pytest.mark.parametrize("mid,label,sub,sdk_wire,cli_runner", [
+    ("gpt-6-luna", "GPT-6 Luna", "gpt", "claude-gpt-6-luna", "codex"),
+    ("claude-haiku-5-5", "Claude Haiku 5.5", "claude", "claude-haiku-5-5", "claude"),
+])
+def test_a_live_coding_model_has_an_entry_and_a_route(reg, mid, label, sub, sdk_wire, cli_runner):
+    """The live coding chain names gpt-6-luna and claude-haiku-5-5 (#679). Each needs its own entry, so a child
+    takes the gateway wire, the quota marker of its subscription applies, and the hub shows its label."""
+    e = _entry(reg, mid)
+    assert (e.label, e.subscription, e.retired) == (label, sub, False)
+    assert e.capabilities["tools"] is True
+    assert mr.invocation(mid, "sdk", reg=reg).wire == sdk_wire
+    assert e.routes["cli"]["argv"][0] == cli_runner
+    doc = {"coding_models": [mid], "vision_models": [mid]}
+    for name in ("coding", "vision"):
+        row = mr.chain(doc, name, reg).entries[0]
+        assert row.known and row.route and row.subscription == sub, (name, row)
+
+
 # --- load: fault isolation and named failures ------------------------------------------------------------
 
 def _write_registry(path, models, subscriptions=None):
