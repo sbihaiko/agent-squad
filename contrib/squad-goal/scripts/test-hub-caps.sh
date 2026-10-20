@@ -22,13 +22,18 @@ probe() { # <checkout> <sg_squad or ""> : stdout to $T/out, stderr to $T/err
       SG_HUB_DIR="$T/hub" SG_STATE="$T/st" HOME="$T/home" python3 "$T/probe.py" "$live/hub.py" >"$T/out" 2>"$T/err" )
 }
 
+# The ceilings the checkout resolves are the fixture's, never a number written here: a project settings file in the checkout
+# (docs/squad/defaults.yaml) narrows them, and this suite proves the resolution, not the values (ADR-0018).
+want=$(cd "$repo" && env -u PYTHONPATH python3 -c 'import json; from squad import caps; r = caps.resolve("."); print(json.dumps({"runs": r["runs"], "children": r["children"]}))' 2>/dev/null)
+[ -n "$want" ] || ko "the checkout resolves no ceilings"
+
 # 1. the live copy, SG_SQUAD unset, SG_CHECKOUT the repository: the ceilings come from the checkout
 probe "$repo" ""
-[ "$(cat "$T/out")" = '{"runs": 10, "children": 20}' ] && ok "checkout fallback gives runs 10 and children 20" || ko "checkout fallback: got $(cat "$T/out") ($(head -2 "$T/err" | tr '\n' ' '))"
+[ "$(cat "$T/out")" = "$want" ] && ok "checkout fallback gives the ceilings the checkout resolves ($want)" || ko "checkout fallback: got $(cat "$T/out"), want $want ($(head -2 "$T/err" | tr '\n' ' '))"
 
 # 2. SG_SQUAD names a folder with no squad package: it is skipped, the checkout still resolves
 probe "$repo" "$T/bare"
-[ "$(cat "$T/out")" = '{"runs": 10, "children": 20}' ] && ok "a dead SG_SQUAD falls through to the checkout" || ko "dead SG_SQUAD: got $(cat "$T/out") ($(head -2 "$T/err" | tr '\n' ' '))"
+[ "$(cat "$T/out")" = "$want" ] && ok "a dead SG_SQUAD falls through to the checkout" || ko "dead SG_SQUAD: got $(cat "$T/out"), want $want ($(head -2 "$T/err" | tr '\n' ' '))"
 
 # 3. nothing resolves: no ceiling is guessed, and two calls log exactly one line that names the exception
 probe "$T/bare" ""
