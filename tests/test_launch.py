@@ -284,6 +284,14 @@ def test_the_harness_scripts_for_many_runs_pass_watch_off():
 
 # --- SPEC 505: the router chain's on/hrs overlay, applied once before the graph copy ---
 
+
+@pytest.fixture(autouse=True)
+def _own_shared(tmp_path_factory, monkeypatch):
+    """The router overlay reads the quota cache and the markers (#678): each test reads its own, never the machine's."""
+    shared = tmp_path_factory.mktemp("shared")
+    monkeypatch.setenv("SG_SHARED", str(shared))
+    return shared
+
 def _window(offset):
     """A one-hour local window starting `offset` hours from now: 0 holds this hour, 1 does not."""
     import time
@@ -549,3 +557,35 @@ def _rewrite_start(tmp_path, drop):
     first = json.loads(lines[0])
     first.pop(drop)
     path.write_text("\n".join([json.dumps(first), *lines[1:]]) + "\n")
+
+
+def _spend(shared, sub):
+    import time
+    doc = json.loads((shared / "hub-quota.json").read_text()) if (shared / "hub-quota.json").exists() else {}
+    doc[sub] = {"windows": [{"label": "weekly", "pct": 100.0, "resets": 9999999999}], "asof": time.time()}
+    (shared / "hub-quota.json").write_text(json.dumps(doc))
+
+
+def test_the_router_overlay_skips_a_spent_subscription_and_keeps_the_order(tmp_path, _own_shared):    # #678
+    """The overlay checked only the switch and the window, so a child could be given a model whose subscription is spent.
+    It applies the resolver's eligibility: a spent entry is skipped, and the order of the rest is kept."""
+    models = _router_models(tmp_path, [{"id": "sonnet"}, {"id": "grok-4.5"}, {"id": "gpt-5.6-terra"}])
+    _spend(_own_shared, "grok")
+    g = _dispatch_graph(["sonnet", "grok-4.5", "gpt-5.6-terra"])
+    assert launch.router_overlay(g, models) == {"route": ["sonnet", "gpt-5.6-terra"]}
+
+
+def test_the_router_overlay_keeps_the_claude_reserve(tmp_path, _own_shared):    # #678
+    import time
+    models = _router_models(tmp_path, [{"id": "opus"}, {"id": "gpt-5.6-terra"}])
+    (_own_shared / "hub-quota.json").write_text(json.dumps(
+        {"claude": {"windows": [{"label": "weekly", "pct": 92.0, "resets": 9999999999}], "asof": time.time()}}))
+    assert launch.router_overlay(_dispatch_graph(["opus", "gpt-5.6-terra"]), models) == {"route": ["gpt-5.6-terra"]}
+
+
+def test_a_spent_set_that_closes_every_model_is_a_noop_with_a_note(tmp_path, _own_shared, capsys):    # #678
+    models = _router_models(tmp_path, [{"id": "grok-4.5"}])
+    _spend(_own_shared, "grok")
+    assert launch.router_overlay(_dispatch_graph(["grok-4.5"]), models) == {}
+    err = capsys.readouterr().err
+    assert "route" in err and "grok-4.5" in err and "weekly quota spent" in err

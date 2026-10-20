@@ -453,3 +453,87 @@ def test_cli_check_passes_the_committed_registry_and_names_a_bad_entry(tmp_path)
     r = _cli("--registry", str(path), "check")
     assert r.returncode == 1
     assert "bad-gpt" in r.stdout
+
+
+# --- #678: one quota path, a stale cache, a spent weekly window -------------------------------------------------
+
+def _quota(tmp_path, doc):
+    (tmp_path / "hub-quota.json").write_text(json.dumps(doc))
+
+
+def test_the_shared_directory_is_the_seam_one_without_sg_shared(tmp_path, monkeypatch):
+    """#678: with no SG_SHARED the resolver read `$SG_STATE`, a per-profile directory, so it and the hub read two files.
+    The seam names one directory for every profile, as env.sh and address.sh do."""
+    monkeypatch.delenv("SG_SHARED", raising=False)
+    monkeypatch.setenv("SG_STATE", str(tmp_path / "agent-squad"))
+    monkeypatch.setenv("SG_STATE_BASE", str(tmp_path / "base"))
+    assert mr._shared_dir() == tmp_path / "base" / "_shared"
+    monkeypatch.setenv("SG_SHARED", str(tmp_path / "shared"))
+    assert mr._shared_dir() == tmp_path / "shared"
+
+
+def test_a_spent_weekly_window_closes_every_subscription_until_its_reset(tmp_path):
+    """#678: grok at 100% weekly stayed eligible. A spent window with a reset ahead skips the entry until that reset,
+    even when the reading is old: a window's use only grows until it resets."""
+    entry = _chain_entry(tmp_path, {"coding_models": ["grok-4.5"]}, "coding", "grok-4.5")
+    _quota(tmp_path, {"grok": {"windows": [{"label": "weekly", "pct": 100.0, "resets": 500000}], "asof": 1000,
+                               "until": 500000}})
+    ev = mr.eligible(entry, shared=tmp_path, now=200000)
+    assert ev.ok is False and ev.reason == "weekly quota spent" and ev.until == 500000
+    assert mr.eligible(entry, shared=tmp_path, now=600000).ok is True
+
+
+def test_a_spent_window_takes_the_row_until_when_the_window_names_no_reset(tmp_path):
+    entry = _chain_entry(tmp_path, {"coding_models": ["gemini-3.8-flash"]}, "coding", "gemini-3.8-flash")
+    _quota(tmp_path, {"gemini": {"windows": [{"label": "weekly", "pct": 100}], "asof": 1000, "until": 9000}})
+    ev = mr.eligible(entry, shared=tmp_path, now=1000)
+    assert ev.ok is False and ev.reason == "weekly quota spent" and ev.until == 9000
+
+
+def test_a_stale_cache_is_unknown_and_says_so(tmp_path, monkeypatch):
+    """#678: a cache days old said claude 8%. An old reading never makes an entry eligible by itself, and never blocks
+    one: the entry runs, and the reason names the stale cache."""
+    entry = _chain_entry(tmp_path, {"coding_models": ["claude-opus-5-5"]}, "coding", "claude-opus-5-5")
+    _quota(tmp_path, {"claude": {"windows": [{"label": "weekly", "pct": 95}], "asof": 1000}})
+    now = 1000 + 7 * 3600
+    ev = mr.eligible(entry, shared=tmp_path, now=now)
+    assert ev.ok is True and "stale" in ev.reason
+    ev = mr.eligible(entry, shared=tmp_path, now=1000 + 60)
+    assert ev.ok is False and ev.reason == "claude weekly reserve"
+    monkeypatch.setenv("SG_QUOTA_STALE_SECONDS", str(8 * 3600))
+    assert mr.eligible(entry, shared=tmp_path, now=now).ok is False
+
+
+def test_a_stale_cache_still_keeps_the_marker(tmp_path):
+    entry = _chain_entry(tmp_path, {"coding_models": ["claude-opus-5-5"]}, "coding", "claude-opus-5-5")
+    _quota(tmp_path, {"claude": {"windows": [{"label": "weekly", "pct": 5}], "asof": 1000}})
+    (tmp_path / "claude-limited").write_text("9999999999")
+    ev = mr.eligible(entry, shared=tmp_path, now=1000 + 30 * 3600)
+    assert ev.ok is False and ev.reason == "usage limit"
+
+
+def test_the_claude_reserve_holds_until_its_reset_and_lifts_after_it(tmp_path):
+    entry = _chain_entry(tmp_path, {"coding_models": ["claude-opus-5-5"]}, "coding", "claude-opus-5-5")
+    _quota(tmp_path, {"claude": {"windows": [{"label": "weekly", "pct": 92.0, "resets": 50000}], "asof": 1000}})
+    ev = mr.eligible(entry, shared=tmp_path, now=40000)
+    assert ev.ok is False and ev.reason == "claude weekly reserve" and ev.until == 50000
+    assert mr.eligible(entry, shared=tmp_path, now=60000).ok is True
+
+
+def test_a_spent_entry_is_skipped_and_the_chain_order_kept(tmp_path):
+    """#678, owner: an exhausted entry is skipped until its reset, never reordered."""
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({"coding_models": ["grok-4.5", "gpt-5.6-terra", "claude-opus-5-5", "gemini-3.8-flash"]}))
+    _quota(tmp_path, {"grok": {"windows": [{"label": "weekly", "pct": 100, "resets": 9000}], "asof": 1000},
+                      "claude": {"windows": [{"label": "weekly", "pct": 50, "resets": 9000}], "asof": 1000},
+                      "gemini": {"windows": [{"label": "weekly", "pct": 100, "resets": 9000}], "asof": 1000}})
+    entries = mr.chain(path, "coding").entries
+    assert [e.id for e in entries if mr.eligible(e, shared=tmp_path, now=1000, hour=3).ok] == \
+        ["gpt-5.6-terra", "claude-opus-5-5"]
+
+
+def test_spent_names_the_spellings_whose_subscription_is_spent(tmp_path):
+    """The loop's launcher hands the run `--spent-models`; the resolver names the ids whose subscription the quota cache
+    or a marker closes, so a child is not given a spent subscription."""
+    _quota(tmp_path, {"grok": {"windows": [{"label": "weekly", "pct": 100, "resets": 9000}], "asof": 1000}})
+    assert mr.spent(["grok-4.5", "claude-opus-5-5", "nobody-knows"], shared=tmp_path, now=1000) == ["grok-4.5"]

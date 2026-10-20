@@ -138,14 +138,35 @@ def _shared(tmp_path, **markers):
     return d
 
 
+def _modelreg():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("modelreg_shipped", SCRIPTS / "modelreg.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_a_closed_marker_names_the_graph_models_of_its_provider_as_spent(tmp_path):
     spent = _fn(SCRIPTS / "launch.py", "_spent_models", time=__import__("time"), pathlib=__import__("pathlib"), ALIASES={}, SPENT_MARKERS=(("gpt-", "codex-limited"), ("gemini-", "agy-limited")),
                 provkey=__import__("types").SimpleNamespace(closed=lambda m: False),   # no keyed model here (#482)
+                modelreg=_modelreg(),
                 _run_models=lambda doc: [("router", "claude-gpt-5.5", True), ("route", "claude-opus-5-5", True), ("route", "claude-gemini-3.8-flash", False), ("route", "claude-gpt-5.6-terra", False)])
     sh = _shared(tmp_path, codex_limited=2000, agy_limited=500)
     assert spent({}, sh, now=1000) == ["claude-gpt-5.5", "claude-gpt-5.6-terra"]   # codex is closed until 2000, agy's epoch has passed
     assert spent({}, sh, now=3000) == []
     assert spent({}, None, now=1000) == []                                           # no shared dir: nothing is closed
+
+
+def test_a_spent_quota_window_names_the_graph_models_of_its_subscription_as_spent(tmp_path):    # #678
+    """The markers were the only source, so a child could be given grok while its weekly window was spent. The resolver's
+    quota rule names it too; the chain leaves a spent id out and keeps the order of the rest."""
+    spent = _fn(SCRIPTS / "launch.py", "_spent_models", time=__import__("time"), pathlib=__import__("pathlib"), ALIASES={}, SPENT_MARKERS=(),
+                provkey=__import__("types").SimpleNamespace(closed=lambda m: False), modelreg=_modelreg(),
+                _run_models=lambda doc: [("route", "claude-opus-5-5", True), ("route", "grok-4.5", False), ("route", "claude-gpt-5.6-terra", False)])
+    sh = _shared(tmp_path)
+    (sh / "hub-quota.json").write_text(json.dumps({"grok": {"windows": [{"label": "weekly", "pct": 100, "resets": 5000}], "asof": 900}}))
+    assert spent({}, sh, now=1000) == ["grok-4.5"]
+    assert spent({}, sh, now=6000) == []
 
 
 @pytest.mark.heavy   # launch.py waits for the run folder, over a second

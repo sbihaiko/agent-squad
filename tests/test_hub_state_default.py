@@ -56,3 +56,15 @@ def test_sg_state_still_wins_when_the_runner_exports_it(runner, monkeypatch, tmp
     monkeypatch.setenv("SG_STATE", str(state))
     hub = load_hub("hub_state_exported")
     assert hub.STATE == state
+
+
+def test_the_shared_directory_is_the_seam_one_and_never_the_state(runner, monkeypatch, tmp_path):
+    """#678: `SG_SHARED or STATE` put the quota cache of a hub started without SG_SHARED in its profile's state directory,
+    so the loop read another file. The seam names one shared directory for every profile, as env.sh does."""
+    home, _ = runner
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setenv("SG_STATE", str(state))
+    hub = load_hub("hub_shared_seam")
+    assert hub.SHARED == home / ".cache" / "squad-goal" / "_shared", hub.SHARED
+    assert hub.QUOTA == hub.SHARED / "hub-quota.json"

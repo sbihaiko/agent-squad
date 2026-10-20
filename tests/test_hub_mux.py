@@ -334,3 +334,22 @@ def test_each_profile_writes_its_own_board_cache(tmp_path, monkeypatch):
     a, b = apps["alpha"]["mod"].BOARD, apps["beta"]["mod"].BOARD
     assert a != b, f"two profiles on two boards share one cache: {a}"
     assert foreign not in (a, b), "a hub takes the cache of the shell that started hubmux"
+
+
+def test_each_profile_reads_the_one_shared_quota_directory(tmp_path, monkeypatch):
+    """#678: hubmux pinned no SG_SHARED, so a hub started from a shell without it wrote its quota cache in its profile's
+    state directory, and the loop, which reads `$SG_SHARED/hub-quota.json`, read a cache days old."""
+    prof, base = tmp_path / "profiles", tmp_path / "state"
+    prof.mkdir()
+    for slug, repo in (("alpha", "x/alpha"), ("beta", "y/beta")):
+        (tmp_path / f"co-{slug}").mkdir()
+        _profile(prof, slug, repo, tmp_path / f"co-{slug}")
+    monkeypatch.setenv("SG_PROFILES_DIR", str(prof))
+    monkeypatch.setenv("SG_STATE_BASE", str(base))
+    monkeypatch.delenv("SG_SHARED", raising=False)
+    spec = importlib.util.spec_from_file_location("hubmux_shared", SCRIPTS / "hubmux.py")
+    mux = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mux)
+    apps = mux.load_apps()
+    for slug in ("alpha", "beta"):
+        assert apps[slug]["mod"].QUOTA == base / "_shared" / "hub-quota.json", apps[slug]["mod"].QUOTA
