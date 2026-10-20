@@ -37,26 +37,28 @@ def hub():
     ("gemini-3.8-flash-medium", "review_models", "Gemini 3.8 Flash", "agy CLI"),
     ("gpt-5.6-luna", "vision_models", "GPT-5.6 Luna", "codex CLI"),
     ("opus", None, "Opus 5.5", "gateway"),
+    ("gpt-6-luna", "coding_models", "GPT-6 Luna", "codex CLI"),   # registered by #679
+    ("claude-haiku-5-5", "coding_models", "Claude Haiku 5.5", "gateway"),
 ])
 def test_a_registered_id_shows_its_llm_beside_its_route(hub, raw, chain, llm, route):
     box = hub.model_box(raw, chain)
     assert box == {"id": raw, "llm": llm, "route": route, "registered": True, "text": f"{llm} · {route}"}
 
 
-@pytest.mark.parametrize("raw", ["gpt-6-luna", "claude-haiku-5-5", "no-such-model-9"])
+@pytest.mark.parametrize("raw", ["gpt-9-nova", "claude-haiku-9-9", "no-such-model-9"])
 def test_an_unknown_id_says_unregistered_plainly(hub, raw):
     assert hub.model_box(raw) == {"id": raw, "llm": None, "route": None, "registered": False, "text": "unregistered"}
 
 
 def test_the_panel_gets_a_box_for_every_chain_id_and_never_stores_it(hub, monkeypatch, tmp_path):
     models = tmp_path / "models.json"
-    models.write_text(json.dumps({"coding_models": ["claude-grok-4.7"], "review_models": ["gpt-6-luna"],
+    models.write_text(json.dumps({"coding_models": ["claude-grok-4.7"], "review_models": ["gpt-9-nova"],
                                   "vision_models": []}))
     monkeypatch.setattr(hub, "MODELS", models)
     monkeypatch.setattr(hub, "gateway_models", lambda ttl=120: [])
     got = hub.models_get()
     assert got["boxes"]["coding_models"]["claude-grok-4.7"]["text"] == "Grok 4.7 · gateway"
-    assert got["boxes"]["review_models"]["gpt-6-luna"]["text"] == "unregistered"
+    assert got["boxes"]["review_models"]["gpt-9-nova"]["text"] == "unregistered"
     assert set(got["boxes"]["router_models"]) == set(got["router_models"])
     assert set(got["boxes"]["known"]) >= set(got["known"]) | set(got["router_known"])
     assert "boxes" in hub.READONLY

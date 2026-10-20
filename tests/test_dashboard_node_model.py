@@ -36,9 +36,9 @@ def test_an_agent_with_no_record_shows_its_configured_model_marked():
 
 
 def test_an_unregistered_model_says_so_plainly():
-    got = _line({"name": "a", "kind": "agent", "model": "sonnet"}, _used("gpt-6-luna"))
-    assert got == {"llm": True, "source": "used", "registered": False, "text": "gpt-6-luna · unregistered"}
-    assert _line({"name": "a", "kind": "agent", "model": "claude-haiku-5-5"})["text"] == "claude-haiku-5-5 · unregistered (configured)"
+    got = _line({"name": "a", "kind": "agent", "model": "sonnet"}, _used("gpt-9-nova"))
+    assert got == {"llm": True, "source": "used", "registered": False, "text": "gpt-9-nova · unregistered"}
+    assert _line({"name": "a", "kind": "agent", "model": "claude-haiku-9-9"})["text"] == "claude-haiku-9-9 · unregistered (configured)"
 
 
 def test_an_agent_with_no_model_at_all_says_none_is_set():
@@ -71,7 +71,7 @@ def test_fmt_llm_reads_a_label_and_marks_an_unknown_id():
     assert _llm("claude-deepseek-flash[1m]") == "DeepSeek V4.1 Flash (no tools)"   # a served spelling is an alias
     assert _llm("gemini-3.8-flash-low") == "Gemini 3.8 Flash"
     assert _llm("claude-gpt-5.6-terra medium tdd") == "GPT-5.6 Terra medium tdd"
-    assert _llm("gpt-6-luna medium") == "gpt-6-luna · unregistered medium"
+    assert _llm("gpt-9-nova medium") == "gpt-9-nova · unregistered medium"
     assert _llm(None) == "—"
 
 
