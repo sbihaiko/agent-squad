@@ -25,7 +25,7 @@ mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; echo "$1"
 mk run-fail; printf 'CHILD — GitHub issue(s) 701 (bug; one PR):\n' > "$T/co/runs/run-fail/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #701 on fix/701-x"}\n{"event": "verdict", "verdict": "failed", "reasons": ["adapter_error"], "exit_code": 1}\n' > "$T/co/runs/run-fail/record.jsonl"
 echo run-fail > "$T/st/auto/disp-701"
-# N2: failed run that landed work (the gate had no acceptance command) -> card Code Complete and marker kept
+# N2: failed run that landed work (the gate had no acceptance command) -> card stays Todo (#660) and marker kept
 mk run-land; printf 'CHILD — GitHub issue(s) 702 (bug; one PR):\n' > "$T/co/runs/run-land/request.txt"
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #702 on fix/702-x"}\n{"event": "land", "outcome": "pass"}\n{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:no_ac_commands"], "exit_code": 1}\n' > "$T/co/runs/run-land/record.jsonl"
 echo run-land > "$T/st/auto/disp-702"
@@ -69,7 +69,8 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 [ ! -e "$T/st/auto/disp-701" ] && ok "O: failed run -> disp marker dropped" || ko "O disp-701 kept: $o"
 /usr/bin/grep -q 'DISPATCH-FAILED #701' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'adapter_error' "$T/st/cq/"*701* >/dev/null 2>&1 && /usr/bin/grep -q 'run-fail' "$T/st/cq/"*701* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Code Complete 702$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 702' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-702" ] && ok "O: a run that landed work stops at Code Complete, never Done, and keeps its marker" || ko "O #702 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+# A failed run's own local landing moves no card forward (#660): its Todo stands, never Code Complete or Done, and it keeps its marker.
+/usr/bin/grep -q '^o 4 Todo 702$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -Eq 'Code Complete 702|Done 702' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-702" ] && ok "O: a failed run that landed work keeps Todo, never Code Complete or Done, and keeps its marker" || ko "O #702 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q -- '^--run-fields o 4 704 run-live ' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-704" ] && ok "O: an issue a live run works gets Run fields" || ko "O #704 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Todo 703$' "$T/board.calls" 2>/dev/null && /usr/bin/grep -q '^o 1 To triage 703$' "$T/board.calls" 2>/dev/null && [ ! -e "$T/st/auto/bug-703" ] && ok "O: autobug run -> loop board Todo + bug board To triage" || ko "O #703 not released: $(cat "$T/board.calls" 2>/dev/null)"
 exp=$'fail 701 run-fail ended failed: adapter_error\nfail 703 run-bug ended failed: node_spend_cap\nfail 705 run-nomark ended completed: nothing landed\nfail 708 run-held ended failed: review_held own\nfail 710 run-chain ended failed: review_held loop'

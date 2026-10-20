@@ -157,35 +157,34 @@ landed_key() {
     | awk -v RS='\036' -F'\037' 'NF > 1 && $2 !~ /TDD RED/ { sub(/^\n/, "", $1); print $1; exit }'
 }
 
-# count <issue> <run> <why>: one failed dispatch of the issue (#609). The count is the issue's (#532), in auto/requeues-<n>,
-# and auto/requeues-<n>.runs lists each one: the run, the evolution key, the reason. The run is the key: one run counts once,
+# ledger <op> <issue> ...: the issue's one ledger file (#673, issue_ledger.py), keyed <owner>/<repo>#<n> (ADR-0138). It holds
+# what auto/requeues-<n> and its .runs held, under a lock per issue and with an atomic write (ADR-0030), and reads those old
+# files once while it is missing.
+ledger() { local op=$1 n=$2; shift 2; python3 "$here/issue_ledger.py" "$op" "$SG_REPO#$n" "$@"; }
+
+# count <issue> <run> <why> [own|loop]: one failed dispatch of the issue (#609). The count is the issue's (#532), in its
+# ledger file, which lists each one: the run, the evolution key, the reason. The run is the key: one run counts once,
 # whether a requeue or the janitor's `fail` reports it. Evolution starts the count again at one: a new key (a non-RED commit
 # in the base names the issue), or a new run after the freeze, which only the owner lets start. A different reason is no
-# evolution: the reasons change while nothing reaches the base. Sets c (the count) and fresh (1: this call added a line).
-# A 4th argument names the ledger: `loopqueues` keeps the loop-caused requeues apart (#621).
+# evolution: the reasons change while nothing reaches the base. Sets c (the count), fresh (1: this call counted the run)
+# and stopped (1: the ledger is stopped). The 4th argument names the ledger: `loop` keeps the loop-caused requeues apart
+# (#621). A ledger that does not answer counts nothing, and the line says so.
 count() {
-  local n=$1 run=$2 why=$3 cf lf key last; cf="$SG_STATE/auto/${4:-requeues}-$n"; lf="$cf.runs"; fresh=0
-  mkdir -p "$SG_STATE/auto"
-  c=$(cat "$cf" 2>/dev/null); case "$c" in ''|*[!0-9]*) c=0;; esac
-  if [ -n "$run" ] && cut -f1 "$lf" 2>/dev/null | /usr/bin/grep -qxF -- "$run"; then return 0; fi
-  key=$(landed_key "$n"); last=$(tail -1 "$lf" 2>/dev/null)
-  if { [ "$last" = frozen ] && [ -n "$run" ]; } || { [ -n "$last" ] && [ "$last" != frozen ] && [ "$(printf '%s' "$last" | cut -f2)" != "$key" ]; }; then
-    rm -f "$lf"; c=0
-  fi
-  printf '%s\t%s\t%s\n' "$run" "$key" "$(printf '%s' "$why" | head -1 | tr '\t' ' ')" >> "$lf"
-  c=$((c + 1)); echo "$c" > "$cf"; fresh=1
+  local out; c=0; fresh=0; stopped=0
+  out=$(ledger fail "$1" "$2" "$(landed_key "$1")" "$3" "${4:-own}" 2>&1) || { echo "WAVE-LEDGER #$1 refused: $out"; return 0; }
+  read -r c fresh stopped <<< "$out"
 }
 
 # stop <issue> <why>: the count reached SG_REQUEUE_CAP (3 by default). The card keeps the column it reached with an owner
 # freeze (ADR-0029), and one SQUAD-NOT-STARTABLE comment lists every run counted and its reason; both dispatch passes read
-# the label and the comment. The owner frees the issue by removing both.
+# the label and the comment. The owner frees the issue by removing both, or by `issue_ledger.py rearm`.
 stop() {
-  local n=$1 why=$2 lf="$SG_STATE/auto/requeues-$1.runs" f
+  local n=$1 why=$2 f runs
   freeze_owner "$n"
+  runs=$(ledger stop "$n" "$why" own 2>&1)
   f=$(sg_cq_file "$n-wavestop$$.md" 2>/dev/null) && {
     printf 'SQUAD-NOT-STARTABLE: %s failed dispatches with no change in the work the base holds for it; the loop stops building it (ADR-0134).\n\nRuns:\n' "$c"
-    awk -F'\t' '$1 != "frozen" { printf "- %s: %s\n", ($1 == "" ? "(no run named)" : $1), $3 }' "$lf" 2>/dev/null; } > "$f"
-  echo frozen >> "$lf"
+    printf '%s\n' "$runs"; } > "$f"
   echo "WAVE STOP #$n: $c failed dispatches with no change, so it is not dispatched again: $why"
 }
 
@@ -211,12 +210,12 @@ loop_caused() {
 # column and janitor rule R turns needs-owner into frozen:owner (Blocked on the old vocabulary). The owner frees it by
 # removing the labels.
 loop_stop() {
-  local n=$1 why=$2 lf="$SG_STATE/auto/loopqueues-$1.runs" f out
+  local n=$1 why=$2 f out runs
   out=$(gh_send -X POST "repos/$SG_REPO/issues/$n/labels" -f "labels[]=needs-owner" 2>&1) || printf 'WAVE-LABEL #%s needs-owner refused: %s\n' "$n" "$out"
+  runs=$(ledger stop "$n" "$why" loop 2>&1)
   f=$(sg_cq_file "$n-loopstop$$.md" 2>/dev/null) && {
     printf 'SQUAD-NEEDS-HUMAN: %s requeues the loop itself caused, none a failure of this issue'"'"'s work; the loop stops building it (#621). Last cause: %s\n\nRuns:\n' "$c" "$(printf '%s' "$why" | head -1)"
-    awk -F'\t' '$1 != "frozen" { printf "- %s: %s\n", ($1 == "" ? "(no run named)" : $1), $3 }' "$lf" 2>/dev/null; } > "$f"
-  echo frozen >> "$lf"
+    printf '%s\n' "$runs"; } > "$f"
   echo "WAVE NEEDS-HUMAN #$n: $c loop-caused requeues, so it is not dispatched again: $why"
 }
 
@@ -227,14 +226,14 @@ requeue() {   # <issue> <why> [cap]: the child never entered, so its issue goes 
   # is counted once at its end, by the janitor's `fail`, when it delivered nothing. A loop-caused one (#621) counts only
   # toward its own, larger bound.
   if [ "${3:-}" != cap ] && loop_caused "$why"; then
-    count "$n" "${SG_REQUEUE_RUN:-}" "$why" loopqueues
+    count "$n" "${SG_REQUEUE_RUN:-}" "$why" loop
     if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_LOOP_REQUEUE_CAP:-6}" ]; then loop_stop "$n" "$why"; return 0; fi
-    if [ "$fresh" = 0 ] && [ "$(tail -1 "$SG_STATE/auto/loopqueues-$n.runs" 2>/dev/null)" = frozen ]; then
+    if [ "$fresh" = 0 ] && [ "$stopped" = 1 ]; then
       echo "WAVE NEEDS-HUMAN #$n: already stopped, so it is not dispatched again: $why"; return 0; fi
   elif [ "${3:-}" != cap ]; then
     count "$n" "${SG_REQUEUE_RUN:-}" "$why"
     if [ "$fresh" = 1 ] && [ "$c" -ge "${SG_REQUEUE_CAP:-3}" ]; then stop "$n" "$why"; return 0; fi
-    if [ "$fresh" = 0 ] && [ "$(tail -1 "$SG_STATE/auto/requeues-$n.runs" 2>/dev/null)" = frozen ]; then
+    if [ "$fresh" = 0 ] && [ "$stopped" = 1 ]; then
       echo "WAVE STOP #$n: already frozen, so it is not dispatched again: $why"; return 0; fi
   fi
   rm -f "$SG_STATE/auto/disp-$n" "$SG_STATE/auto/bug-$n"
@@ -247,7 +246,7 @@ fail() {   # <issue> <run> <why> [own|loop]: the run ended with nothing delivere
   local n=$1 run=$2 why=$3
   { [ -n "$n" ] && [ -n "$run" ]; } || { echo "WAVE-ERROR wave.sh fail <issue> <run> <why>"; return 2; }
   if loop_caused "$why" "${4:-}"; then   # the loop's failure, not the issue's (#621): its own ledger and bound
-    count "$n" "$run" "$why" loopqueues
+    count "$n" "$run" "$why" loop
     [ "$fresh" = 1 ] || { echo "WAVE FAILED #$n: run $run is already counted"; return 0; }
     [ "$c" -ge "${SG_LOOP_REQUEUE_CAP:-6}" ] && { loop_stop "$n" "$why"; return 0; }
     echo "WAVE FAILED #$n: loop-caused, $c of ${SG_LOOP_REQUEUE_CAP:-6} (run $run), not counted toward the cap: $why"; return 0

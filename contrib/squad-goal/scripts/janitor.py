@@ -846,11 +846,14 @@ for d in [*(st / "auto").glob("disp-*"), *(st / "auto").glob("bug-*")]:
     if not dry: d.unlink()
 def count_failed(n, f, i):   # O (#609): a run that ended with nothing delivered for issue n is one failed dispatch, counted
     # by wave.sh fail (one count per issue, keyed by the run, frozen at SG_REQUEUE_CAP), whether or not it still holds a marker.
-    # A run the ledger lists is not sent again, so a pass costs no call for a run already counted.
+    # A run the issue's ledger file lists (#673, read through issue_ledger.py, its one module) is not sent again, so a pass
+    # costs no call for a run already counted. A ledger that cannot be read sends the call: wave.sh counts a run once anyway.
     try:
-        if any(l.split("\t")[0] == f.name for k in ("requeues", "loopqueues") if (st / "auto" / f"{k}-{n}.runs").exists()
-               for l in (st / "auto" / f"{k}-{n}.runs").read_text().splitlines()): return
-    except OSError: pass
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the ledger sits beside this script; -I keeps the script's directory off sys.path
+        import issue_ledger
+        rec = issue_ledger.read(f"{repo0}#{n}")
+        if any(x["run"] == f.name for k in issue_ledger.LEDGERS for x in rec[k]["runs"]): return
+    except (OSError, ImportError, ValueError, KeyError): pass
     if holding(n) or issue_info(n)[0] != "open" or pr_count(n) != "0": return
     why = f"the wave of run {i['run_id']} landed without its child" if i["landed"] else f"ended {i['name']}: " + ("; ".join(i["reasons"]) or "nothing landed")
     # The run's own review of the child decides over the reason text (#621): CHANGES or BLOCKED a model wrote on the diff is
