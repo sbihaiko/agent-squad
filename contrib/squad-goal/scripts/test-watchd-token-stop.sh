@@ -16,15 +16,23 @@ p.write_text(t)
 PY
 # the stub watch.sh: one line to the log, then a stop from inside the cycle, then exit
 # the pause lets `start` see the supervisor alive before the stop lands, the way a real cycle does
-printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 2\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
+printf '#!/bin/bash\necho "cycle ran" >> "$SG_STATE/watch.log"\nsleep 8\nbash "%s" stop\nexit 0\n' "$T/watchd.sh" > "$T/watch.sh"
 # the real fast lane, beside stub passes: its childcc runs in the background (#590), and a stub childcc.py starts a child of
 # its own, as a review does. The stop must end the pass and its child too (#529).
 cp "$d/fastloop.sh" "$d/single.sh" "$T/"; printf 'export SG_STATE=%s; SG_FAST_INTERVAL=60\n' "$SG_STATE" > "$T/env.sh"
 for f in autofrontier autobug; do printf '#!/bin/bash\nexit 0\n' > "$T/$f.sh"; chmod +x "$T/$f.sh"; done
 printf 'import os,subprocess\np=subprocess.Popen(["sleep","30"])\nopen(os.environ["SG_STATE"]+"/pass.pid","w").write("%%d %%d\\n" %% (os.getpid(), p.pid))\np.wait()\n' > "$T/childcc.py"
-chmod +x "$T/watch.sh" "$T/watchd.sh"
+# The comment flusher is a third lane (#669): the queue is the only place a child learns why the entry gate rejected its work,
+# so a loop that runs without it repeats every rejection blind. The stub marks its start and stays up like the real one.
+printf '#!/bin/bash\necho $$ > "$SG_STATE/cq.pid"; echo start >> "$SG_STATE/cq.starts"; sleep 30\n' > "$T/cqflush.sh"
+chmod +x "$T/watch.sh" "$T/watchd.sh" "$T/cqflush.sh"
 bash "$T/watchd.sh" start >/dev/null
 sup=$(cat "$SG_STATE/watchd.pid" 2>/dev/null)
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do [ -s "$SG_STATE/cq.pid" ] && break; sleep 0.2; done
+cqpid=$(cat "$SG_STATE/cq.pid" 2>/dev/null)
+{ [ -n "$cqpid" ] && /bin/ps -p "$cqpid" >/dev/null 2>&1; } && ok "the supervisor starts the comment flusher" || ko "no comment flusher ran (pid ${cqpid:-none})"
+bash "$T/watchd.sh" start >/dev/null 2>&1   # a second start of a live loop starts no second lane
+[ "$(cat "$SG_STATE/cq.starts" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "a second start runs no second flusher" || ko "the flusher started $(cat "$SG_STATE/cq.starts" 2>/dev/null | wc -l | tr -d ' ') times"
 # the stop has to land on its own: wait for the supervisor to be gone, never kill it ourselves
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do /bin/ps -p "$sup" >/dev/null 2>&1 || break; sleep 1; done
 /bin/ps -p "$sup" >/dev/null 2>&1 && ko "the supervisor is still alive after watch.sh stopped it (pid $sup)" || ok "the supervisor exits when watch.sh stops it"
@@ -36,6 +44,7 @@ n=$(/usr/bin/grep -c "cycle ran" "$SG_STATE/watch.log" 2>/dev/null)
 # the fast lane dies with the supervisor
 fl=$(cat "$SG_STATE/fastloop.pid" 2>/dev/null)
 { [ -z "$fl" ] || ! /bin/ps -p "$fl" >/dev/null 2>&1; } && ok "the fast lane is gone" || ko "the fast lane is still alive (pid $fl)"
+{ [ -z "$cqpid" ] || ! /bin/ps -p "$cqpid" >/dev/null 2>&1; } && ok "the comment flusher stops with the supervisor" || ko "the comment flusher is still alive (pid $cqpid)"
 ps_=$(cat "$SG_STATE/pass.pid" 2>/dev/null)
 up() { for p in $ps_; do /bin/ps -p "$p" >/dev/null 2>&1 && return 0; done; return 1; }
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$ps_" ] && up || break; sleep 0.2; done
