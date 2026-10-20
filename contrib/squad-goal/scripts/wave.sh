@@ -191,12 +191,16 @@ stop() {
 
 # loop_caused <why> [own|loop]: the loop caused this requeue, not the issue's work (#621): a wave that landed without its
 # child, an adapter error, a merge conflict with a sibling (the rebase on the wave tip), a disk stop, a review chain that
-# wrote no ruling (every model failed, or a hold with no verdict). The caller's kind wins over the text: the janitor reads
-# the run's own review verdict (`own`: CHANGES or BLOCKED on the diff), which a reason like "review_held" hides.
+# wrote no ruling (every model failed, or a hold with no verdict), a red base battery no child's own suite names (#663), a
+# run that completed with nothing landed, a prerequisite the loop could not resolve (no profile, a sandbox denial), and a
+# network failure. The caller's kind wins over the text: the janitor reads the run's own review verdict (`own`: CHANGES or
+# BLOCKED on the diff), which a reason like "review_held" hides.
 loop_caused() {
   case "${2:-}" in own) return 1;; loop) return 0;; esac
   case "$1" in *"landed without its child"*|*adapter_error*|*merge_conflict*|*"the rebase on "*" conflicts"*|*"DISK STOP"*|*"No space left"*|\
-    *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*) return 0;; esac
+    *"every review model failed"*|*"head moved during the review"*|*"with no verdict"*|\
+    *"no child's own suite names the cause"*|*"completed"*"nothing landed"*|*"no profile"*|*"sandbox"*"denied"*|\
+    *"Could not resolve host"*|*"Failed to connect"*|*"Connection timed out"*|*"Operation timed out"*|*"Network is unreachable"*) return 0;; esac
   return 1
 }
 
@@ -391,9 +395,18 @@ netfail() {
 # stuck <run> <wave> <clone> <why>: a landing that failed on a cause a repeat does not change. The attempts are counted in
 # auto/wland-tries-<run>; at SG_WAVE_LAND_TRIES (default 3) the pass stops retrying: each issue the wave carries gets the label
 # frozen:owner, its card goes to Todo (#657), one comment is queued, and the run's wave marker goes, so the cycle stops. The wave
-# branch stays on the remote with the work, when it is there. Returns 1 either way: the landing did not happen.
+# branch stays on the remote with the work, when it is there. A cause the loop itself caused (#663) is no work failure: each
+# issue is named once as WAVE-LOOP-CAUSED and counts no try, the wave stays, and the normal cap handles the issue. Returns 1
+# either way: the landing did not happen.
 stuck() {
-  local run=$1 w=$2 S=$3 why=$4 f="$SG_STATE/auto/wland-tries-$1" t n
+  local run=$1 w=$2 S=$3 why=$4 f="$SG_STATE/auto/wland-tries-$1" t n named=""
+  if loop_caused "$why"; then
+    for n in $(refs_of "$S" "origin/$base..origin/$w"); do
+      echo "WAVE-LOOP-CAUSED #$n: $why; not counted"; named=1
+    done
+    [ -n "$named" ] || echo "WAVE-LOOP-CAUSED $w: $why; not counted"
+    return 1
+  fi
   mkdir -p "$SG_STATE/auto"; t=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); printf '%s\n' "$t" > "$f"
   echo "WAVE-ERROR $why"
   [ "$t" -ge "${SG_WAVE_LAND_TRIES:-3}" ] || return 1
