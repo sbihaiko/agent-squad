@@ -68,7 +68,7 @@ touch -t 202001010000 "$T/co/runs/run-empty-land/record.jsonl"
 mk run-live 903
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #903 on fix/903-x"}\n' > "$T/co/runs/run-live/record.jsonl"
 echo run-live > "$T/st/auto/disp-903"
-# D: the run ended without landing, but a work branch names the issue
+# D: the run ended needs-human without landing, and a work branch names the issue: the branch is stale, so the card stays Blocked (#660)
 mk run-pr 904
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #904 on fix/904-x"}\n{"event": "verdict", "verdict": "needs-human", "reasons": ["label_missing"], "exit_code": 0}\n' > "$T/co/runs/run-pr/record.jsonl"
 echo run-pr > "$T/st/auto/disp-904"
@@ -94,7 +94,7 @@ o=$(run)
 [ ! -e "$T/st/auto/disp-905" ] && ok "O: a landing that moved the tip by nothing drops its marker (no delivery)" || ko "O disp-905 kept although the land carried nothing: $o"
 /usr/bin/grep -q '^o 4 Todo 905$' "$T/board.calls" 2>/dev/null && ok "R: a run that ended with nothing delivered leaves the card in the queue, never Code Complete" || ko "R #905 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
 [ -e "$T/st/auto/disp-903" ] && /usr/bin/grep -q -- '^--run-fields o 4 903 run-live ' "$T/board.calls" 2>/dev/null && ok "O: a live run keeps the marker and writes Run fields" || ko "O #903 not live-marked: $(cat "$T/board.calls" 2>/dev/null)"
-[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Code Complete 904$' "$T/board.calls" 2>/dev/null && ok "O: a work branch naming the issue moves to Code Complete and keeps its marker" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+[ -e "$T/st/auto/disp-904" ] && /usr/bin/grep -q '^o 4 Blocked 904$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Code Complete 904' "$T/board.calls" 2>/dev/null && ok "O: a needs-human run's stale work branch keeps its marker, and its card Blocked (#660)" || ko "O #904 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/disp-906" ] && ok "E: a dispatch whose own request ended failed is dropped once it is old" || ko "E disp-906 kept: the frontier stays starved"
 /usr/bin/grep -q 'stale disp-906' "$T/st/cycle.log" 2>/dev/null && ok "E: the drop is announced with the request that failed" || ko "E announcement: $(cat "$T/st/cycle.log" 2>/dev/null)"
 [ -e "$T/st/auto/disp-907" ] && ok "E: a request that ended any other way keeps its marker" || ko "E disp-907 dropped by mistake"

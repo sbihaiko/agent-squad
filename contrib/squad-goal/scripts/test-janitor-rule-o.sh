@@ -3,7 +3,8 @@
 #  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
 #  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed) keeps card and marker,
 #      and the card stops at Code Complete (#239: a local landing is not a merge into the base, so it is not Done);
-#  (C) an issue a work branch names keeps its card and its marker (#382: a branch, never a pull request).
+#  (C) an issue a work branch names keeps its marker (#382: a branch, never a pull request), but a failed run's branch is stale:
+#      the card goes back to Todo, never forward to Code Complete (#660; ADR-0143: nothing delivered is the one backward move).
 # The gh stub answers the same way the live API does, including its refusal of a POST to /search/issues:
 # `gh api search/issues -f q=...` returns "Not Found", `gh api -X GET search/issues -f q=...` answers the real count.
 # Stubbed gh/board; a temp state dir, so the live watch.log, markers and board are never read or written.
@@ -44,7 +45,7 @@ echo run-router > "$T/st/auto/disp-801"
 mk run-land 802
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #802 on fix/802-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "head": "a7df8f1ecff77bdb5833721121a7a50be4066053"}}\n{"event": "outcome", "node": "final_gate", "entry": 1, "outcome": "fail", "reasons": ["ac-verify:no_ac_commands"]}\n{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:no_ac_commands"], "exit_code": 1}\n' > "$T/co/runs/run-land/record.jsonl"
 echo run-land > "$T/st/auto/disp-802"
-# C: failed run that landed nothing, but an open PR names the issue
+# C: failed run that landed nothing, but a work branch names the issue
 mk run-pr 803
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #803 on fix/803-x"}\n{"event": "outcome", "node": "router", "entry": 1, "outcome": "pass", "routed": "continue", "reasons": [], "pos": 3}\n{"event": "verdict", "verdict": "failed", "reasons": ["adapter_error"], "exit_code": 1}\n' > "$T/co/runs/run-pr/record.jsonl"
 echo run-pr > "$T/st/auto/disp-803"
@@ -67,7 +68,7 @@ o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_
 /usr/bin/grep -q 'DISPATCH-FAILED #801' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'no_landed_change' "$T/st/cq/"*801* >/dev/null 2>&1 && /usr/bin/grep -q 'run-router' "$T/st/cq/"*801* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Code Complete 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Code Complete 803$' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: an issue an open PR names moves to Code Complete and keeps its marker" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 803$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Code Complete 803' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: a failed run's stale work branch keeps its marker, and its card goes back to Todo" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q 'repos/x/y/branches' "$T/branch.calls" 2>/dev/null && ok "O: the work-branch lookup reached the API" || ko "O: no work-branch lookup answered: $(cat "$T/branch.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/bug-804" ] && ok "O: a deleted child-worktree run releases its bug marker" || ko "O bug-804 kept: $o"
 /usr/bin/grep -q 'MISSING.*#804.*bug-804.*dropped' "$T/st/cycle.log" 2>/dev/null && ok "O: the missing-run release is named in cycle.log" || ko "O missing-run cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
