@@ -8,11 +8,12 @@ Guards: `tests/test_launch.py`.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 
-from squad import caps, git, modelreg, record, workflows
+from squad import caps, git, modelreg, node_commit, record, workflows
 from squad import defaults as D
 from squad import project_settings as P
 from squad.engine import Engine, ResumeRefused
@@ -227,31 +228,38 @@ def keep_runs_out_of_the_target(target, run_dir):
 
 def target_drift(start, target=None):
     """A refusal text when the run's target cannot take a resume, else None (ADR-0107). The target is the one named, else the recorded one.
-    Refused: a target that is missing, the owner's checkout (an old record, or a replaced target), and a target now on another branch than
-    the recorded one. Nothing is migrated: a person starts a new run. A record from before `target_branch` has no branch to compare."""
+    Refused: a target that is missing, the owner's checkout when the run did not start there (an old record, or a replaced target), a
+    target now on another branch than the recorded one, and a git probe past its deadline. Nothing is migrated: a person starts a new run.
+    A record from before `target_branch` has no branch to compare. A record that says `target_owned` false started in the owner's checkout."""
     named = target or start.get("target")
     if not named:
         return None
     path = Path(named).resolve()
     if not path.is_dir():
         return f"the run target {path} is missing: its worktree is gone, start a new run"
-    if git.available(str(path)) and (git.main_worktree(path) == path or git.toplevel(path) != path):
-        return f"the run target {path} is the owner's checkout, which a run never owns: start a new run in its own worktree"
-    recorded = start.get("target_branch")
-    if recorded and git.available(str(path)):
-        r = git.run(["symbolic-ref", "--short", "-q", "HEAD"], str(path))
-        now = r.stdout.strip() if r.returncode == 0 else None
-        if now != recorded:
-            return f"the run target {path} is on branch {now or 'no branch'}, not the recorded branch {recorded}: restore the branch or start a new run"
+    deadline = node_commit.PROBE_DEADLINE_S
+    try:
+        if not git.available(str(path), deadline):
+            return None
+        if start.get("target_owned") is not False and not git.owned_worktree(path, deadline):
+            return f"the run target {path} is the owner's checkout, which a run never owns: start a new run in its own worktree"
+        recorded = start.get("target_branch")
+        now = git.branch(str(path), deadline) if recorded else None
+    except subprocess.TimeoutExpired:
+        return f"git did not answer for the run target {path} within {deadline} s: try again, or start a new run"
+    if recorded and now != recorded:
+        return f"the run target {path} is on branch {now or 'no branch'}, not the recorded branch {recorded}: restore the branch or start a new run"
     return None
 
 
 def resume_engine(graph, run_dir, *, adapter=None, defaults=None, target=None, options=None, watch=None, opener=None, ticker=None):
     """The engine for `resume`: the same defaults rules as `launch`, no new folder, no new run id (the replay takes the id from the record).
     The router overlay comes from `run_start`, so the clock and the graph copy cannot move it. A page already open for the folder is reused."""
+    events = record.read(Path(run_dir) / "record.jsonl")
+    if events and events[0]["event"] == "run_start":
+        target = target or events[0].get("target")   # the target checked is the target the engine works in
     data, prec, limits = project_settings(target)
     adapter, rec, autonomy = _adapter_and_record(adapter, defaults, data, watch)
-    events = record.read(Path(run_dir) / "record.jsonl")
     if events and events[0]["event"] == "run_start":
         gone = target_drift(events[0], target)
         if gone:

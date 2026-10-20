@@ -57,7 +57,7 @@ def ownership(engine, p, is_target):
         return None
     if not is_target:
         return "outside_run_area"
-    if git.main_worktree(p, PROBE_DEADLINE_S) == p or git.toplevel(p, PROBE_DEADLINE_S) != p:
+    if not git.owned_worktree(p, PROBE_DEADLINE_S):
         return "owner_checkout"
     return None if run_folder_under(engine, p) else "outside_run_area"
 

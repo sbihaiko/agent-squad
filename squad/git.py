@@ -13,8 +13,8 @@ def on_path():
     return shutil.which("git") is not None
 
 
-def available(target):
-    return on_path() and run(["rev-parse", "--is-inside-work-tree"], target).returncode == 0
+def available(target, timeout=None):
+    return on_path() and run(["rev-parse", "--is-inside-work-tree"], target, timeout=timeout).returncode == 0
 
 
 def head(cwd):
@@ -43,6 +43,18 @@ def main_worktree(cwd, timeout=None):
 def toplevel(cwd, timeout=None):
     r = run(["rev-parse", "--show-toplevel"], cwd, timeout=timeout)
     return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def owned_worktree(path, timeout=None):
+    """True when `path` is the top of a linked worktree whose main checkout is elsewhere: the only kind of tree a run owns.
+    The owner's checkout and a subfolder of a repository are not."""
+    return main_worktree(path, timeout) != path and toplevel(path, timeout) == path
+
+
+def branch(cwd, timeout=None):
+    """The branch `cwd` stands on, or None (no git, a detached HEAD)."""
+    r = run(["symbolic-ref", "--short", "-q", "HEAD"], cwd, timeout=timeout)
+    return r.stdout.strip() or None if r.returncode == 0 else None
 
 
 def unmerged(cwd):

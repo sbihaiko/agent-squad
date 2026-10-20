@@ -8,12 +8,13 @@ check. A loop repeats its ordered children under the reserved `next` words. Resu
 the record into a verdict.
 """
 import math
+import subprocess
 import time
 from pathlib import Path
 
 import anyio
 
-from squad import adapt, git, modelreg, skills
+from squad import adapt, git, modelreg, node_commit, skills
 from squad import options as opt
 from squad import verdict as V
 from squad.adapt import Effective
@@ -289,7 +290,7 @@ class Engine:
             models["entries_sha256"] = modelreg.entries_sha256(self._model_names(), self._registry())
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
                            models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}),
-                           engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target), **({"target_branch": b} if (b := self._target_branch()) else {}),
+                           engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target), **({"target_branch": b} if (b := self._target_branch()) else {}), **self._target_owned(),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
                            state_binding=self.state_binding,
@@ -300,8 +301,20 @@ class Engine:
         """The branch the target stands on at run start, or None (no git, a detached HEAD): a resume refuses a target on another branch."""
         if not self.has_git:
             return None
-        r = git.run(["symbolic-ref", "--short", "-q", "HEAD"], self.target)
-        return r.stdout.strip() or None if r.returncode == 0 else None
+        try:
+            return git.branch(self.target, node_commit.PROBE_DEADLINE_S)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def _target_owned(self):
+        """`target_owned` for `run_start`: whether the target was a linked worktree the run owns. A run started in the owner's checkout
+        records False, so its resume goes on there; a record with no marker is an old one, and a resume refuses its checkout target."""
+        if not self.has_git:
+            return {}
+        try:
+            return {"target_owned": git.owned_worktree(self.target, node_commit.PROBE_DEADLINE_S)}
+        except subprocess.TimeoutExpired:
+            return {}
 
     def _seed_facts(self):
         if self.options.get("tier_pin"):

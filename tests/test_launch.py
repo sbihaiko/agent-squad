@@ -84,7 +84,8 @@ async def test_run_start_carries_the_autonomy_values_and_a_resume_with_a_changed
     from tests.test_resume import wait_doc
     both = {"a": {"output": {"x": 1, "y": 1}, "spend": 0.1}, "b": {"output": {"x": 1, "y": 1}, "spend": 0.1}}
     same, off = _autonomy_file(tmp_path, "same.yaml"), _autonomy_file(tmp_path, "off.yaml", enabled=False)
-    eng = launch.launch(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), defaults=same)
+    (tmp_path / "t").mkdir()    # a target the test owns, so the result never depends on the checkout running pytest
+    eng = launch.launch(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), defaults=same, target=tmp_path / "t")
     assert (await eng.run()).exit_code == 10
     assert eng.record.events[0]["autonomy"] == {"enabled": True, "max_resumes": 3}
     g = from_doc(wait_doc())
@@ -105,7 +106,8 @@ async def test_run_start_records_the_spent_models_and_a_resume_reads_the_option_
     resume takes the value its caller passes now and records it in its own `resume` event; the run_start value stays the first one."""
     from tests.test_resume import wait_doc
     both = {"a": {"output": {"x": 1, "y": 1}, "spend": 0.1}, "b": {"output": {"x": 1, "y": 1}, "spend": 0.1}}
-    eng = launch.launch(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), options={"spent_models": ["claude-gpt-5.5"]})
+    (tmp_path / "t").mkdir()
+    eng = launch.launch(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), options={"spent_models": ["claude-gpt-5.5"]}, target=tmp_path / "t")
     assert (await eng.run()).exit_code == 10
     assert eng.record.events[0]["engine_options"]["spent_models"] == ["claude-gpt-5.5"]
     again = launch.resume_engine(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(both, repeat_last=True), options={"spent_models": []})
@@ -485,11 +487,65 @@ async def test_a_resume_refuses_a_target_on_another_branch(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_a_resume_refuses_a_record_that_names_the_owner_s_checkout(tmp_path):
+async def test_a_resume_refuses_an_old_record_that_names_the_owner_s_checkout(tmp_path):
+    """An old record has no `target_owned` marker: its checkout target is refused."""
     from squad.engine import ResumeRefused
     main, _ = _own_worktree(tmp_path)
     g = await _wait(tmp_path, main)
+    _rewrite_start(tmp_path, drop="target_owned")
     with pytest.raises(ResumeRefused, match="owner's checkout"):
         _resume(tmp_path, g, target=main)
     with pytest.raises(ResumeRefused, match="owner's checkout"):
-        _resume(tmp_path, g)    # the CLI hands the recorded target when none is named
+        _resume(tmp_path, g)    # a caller that names no target gets the recorded one
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_a_run_s_own_worktree_replaced_by_the_owner_s_checkout(tmp_path):
+    from squad.engine import ResumeRefused
+    main, wt = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, wt)
+    with pytest.raises(ResumeRefused, match="owner's checkout"):
+        _resume(tmp_path, g, target=main)
+
+
+@pytest.mark.anyio
+async def test_a_run_started_in_the_owner_s_checkout_resumes_there_so_start_and_resume_agree(tmp_path):
+    main, _ = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, main)
+    assert record.read(tmp_path / "r" / "record.jsonl")[0]["target_owned"] is False
+    assert (await _resume(tmp_path, g, target=main).resume(answer="pass")).exit_code == 0
+
+
+@pytest.mark.anyio
+async def test_a_resume_with_no_target_works_in_the_recorded_one(tmp_path):
+    _, wt = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, wt)
+    assert _resume(tmp_path, g).target == wt.resolve()
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_when_git_does_not_answer_in_time(tmp_path, monkeypatch):
+    import subprocess
+
+    from squad import git
+    from squad.engine import ResumeRefused
+    _, wt = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, wt)
+    seen = []
+
+    def slow(args, cwd, check=False, timeout=None):
+        seen.append(timeout)
+        raise subprocess.TimeoutExpired(["git", *args], timeout)
+    monkeypatch.setattr(git, "run", slow)
+    with pytest.raises(ResumeRefused, match="did not answer"):
+        _resume(tmp_path, g, target=wt)
+    assert seen and None not in seen
+
+
+def _rewrite_start(tmp_path, drop):
+    import json
+    path = tmp_path / "r" / "record.jsonl"
+    lines = path.read_text().splitlines()
+    first = json.loads(lines[0])
+    first.pop(drop)
+    path.write_text("\n".join([json.dumps(first), *lines[1:]]) + "\n")
