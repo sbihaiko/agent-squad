@@ -3400,7 +3400,7 @@ class H(BaseHTTPRequestHandler):
         org = self.headers.get("Origin") or ""
         ok = self.path in ("/api/models", "/api/plans", "/api/promote") and own_host(self) and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
         try:
-            raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 8192))   # read before any answer: a refusal that leaves the body unread resets the connection
+            raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
             else:
                 body = json.loads(raw or b"{}")
