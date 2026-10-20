@@ -19,6 +19,8 @@ req_file = pathlib.Path(sys.argv[1]).resolve(); cwd = pathlib.Path.cwd().resolve
 import importlib.util   # provkey.py sits beside this script: a model whose provider needs an absent key is closed (#482)
 _pk_spec = importlib.util.spec_from_file_location("provkey", here / "provkey.py")
 provkey = importlib.util.module_from_spec(_pk_spec); _pk_spec.loader.exec_module(provkey)
+_mr_spec = importlib.util.spec_from_file_location("modelreg", here / "modelreg.py")   # the quota cache closes a spent subscription (#678)
+modelreg = importlib.util.module_from_spec(_mr_spec); _mr_spec.loader.exec_module(modelreg)
 
 # the coding model comes from models.json (the hub's "squad models" panel), never from memory or a doc
 mdoc = json.load(open(here / "models.json"))
@@ -95,7 +97,8 @@ def _spent_models(doc, shared, now=None):
         except (OSError, ValueError): return False
     ids = {ALIASES.get(m, m) for _, m, _ in _run_models(doc)}
     return sorted({m for m in ids for prefix, name in SPENT_MARKERS if shared and m.removeprefix("claude-").startswith(prefix) and closed(name)}
-                  | {m for m in ids if provkey.closed(m)})   # #482: a model with no key leaves the chain the same way
+                  | {m for m in ids if provkey.closed(m)}   # #482: a model with no key leaves the chain the same way
+                  | set(modelreg.spent(sorted(ids), shared=shared, now=now) if shared else ()))   # #678: a marker or a spent quota window
 off_ids = _off_ids()
 if off_ids:
     try: gdoc = json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text())

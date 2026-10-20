@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from squad import limits
+from squad import limits, modelreg
 from squad.adapter import ScriptedAdapter
 from squad.engine import Engine
 from squad.graph import from_doc
@@ -57,7 +57,7 @@ def _spent_models():
     return _fn(LAUNCH, "_spent_models", time=time, pathlib=pathlib,
                ALIASES={"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"},
                SPENT_MARKERS=(("gpt-", "codex-limited"), ("gemini-", "agy-limited")),
-               provkey=SimpleNamespace(closed=lambda m: False),
+               provkey=SimpleNamespace(closed=lambda m: False), modelreg=modelreg,
                _run_models=_fn(LAUNCH, "_run_models"))
 
 

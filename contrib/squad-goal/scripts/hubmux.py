@@ -30,7 +30,8 @@ def load_apps():
             continue
         pinned = {"SG_REPO": c.get("SG_REPO", ""), "SG_OWNER": c.get("SG_OWNER", ""), "SG_PROJECT": c.get("SG_PROJECT", ""),
                   "SG_CHECKOUT": c.get("SG_CHECKOUT", ""), "SG_STATE": c.get("SG_STATE", ""), "SG_PROFILE": slug, "SG_HUB_DIR": "",
-                  "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", "")}   # the profile's own board cache, never the shell's (#512)
+                  "SG_BOARD_CACHE": c.get("SG_BOARD_CACHE", ""),   # the profile's own board cache, never the shell's (#512)
+                  "SG_SHARED": c.get("SG_SHARED", "")}   # the one shared directory the loop reads, never the profile's state (#678)
         before = {k: os.environ.get(k) for k in pinned}
         try:
             os.environ.update(pinned)

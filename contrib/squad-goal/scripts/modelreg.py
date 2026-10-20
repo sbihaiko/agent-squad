@@ -11,10 +11,12 @@ entries still load.
 """
 import argparse
 import difflib
+import functools
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -25,6 +27,7 @@ AUTHS = ("subscription", "api_key", "unverified")
 V1_CHAINS = {"coding": "coding_models", "review": "review_models",
              "vision": "vision_models", "router": "router_models"}
 DEFAULT_RESERVE_PERCENT = 10
+DEFAULT_QUOTA_STALE_SECONDS = 6 * 3600   # a quota reading older than this is unknown; SG_QUOTA_STALE_SECONDS overrides
 _CTX = re.compile(r"\[([A-Za-z0-9]{1,8})\]$")
 _EFFORT = re.compile(r"^(.*)-(low|medium|high)$")
 
@@ -145,7 +148,28 @@ def _default_plans_path():
 
 
 def _shared_dir(shared=None):
-    return Path(shared or os.environ.get("SG_SHARED") or os.environ.get("SG_STATE") or ".")
+    """The one shared directory of every profile: markers and the hub quota cache. SG_SHARED, else the directory the
+    seam (address.sh, `sg_shared_dir`) names, as env.sh resolves it; never a profile's SG_STATE (#678). Only with no
+    seam beside this module does it fall back to SG_STATE, then the working directory."""
+    if shared or os.environ.get("SG_SHARED"):
+        return Path(shared or os.environ["SG_SHARED"])
+    env = tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("SG_") or k == "HOME"))
+    return Path(_seam_shared(env) or os.environ.get("SG_STATE") or ".")
+
+
+@functools.lru_cache(maxsize=8)
+def _seam_shared(_env):
+    """`sg_shared_dir` from address.sh, once per process and environment; empty when no seam answers."""
+    here = Path(__file__).resolve().parent
+    seam = _first_file([here / "address.sh", here.parent / "contrib" / "squad-goal" / "scripts" / "address.sh"])
+    if not seam.is_file():
+        return ""
+    try:
+        p = subprocess.run(["bash", "-c", '. "$1" 2>/dev/null; sg_shared_dir', "_", str(seam)],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return p.stdout.strip()
 
 
 # --- load: fault isolation -------------------------------------------------------------------------------
@@ -505,12 +529,53 @@ def _marker_state(sub, shared, now, reg):
 
 
 def _quota_row(sub, shared, reg):
+    """One subscription's row of the hub quota cache. A row with no `asof` takes the file time."""
     probe = (reg.subscriptions.get(sub) or {}).get("quota_probe") or sub
+    path = _shared_dir(shared) / "hub-quota.json"
     try:
-        doc = json.loads((_shared_dir(shared) / "hub-quota.json").read_text())
-    except (OSError, ValueError):
+        doc = json.loads(path.read_text())
+        row = dict(doc.get(probe) or {})
+        if row and not isinstance(row.get("asof"), (int, float)):
+            row["asof"] = path.stat().st_mtime
+    except (OSError, ValueError, AttributeError):
         return {}
-    return doc.get(probe) or {}
+    return row
+
+
+def _stale_seconds():
+    try:
+        return float(os.environ.get("SG_QUOTA_STALE_SECONDS") or DEFAULT_QUOTA_STALE_SECONDS)
+    except ValueError:
+        return DEFAULT_QUOTA_STALE_SECONDS
+
+
+def _quota_state(sub, shared, now, reg, reserve=None):
+    """(ok, reason, until) from the hub quota cache, for one subscription.
+
+    A weekly window at 100% closes the subscription until its reset (the window's `resets`, else the row's `until`);
+    for Claude, the reserve closes it at `100 - reserve`. A window's use only grows until it resets, so a reading with a
+    reset ahead holds at any age. Any other reading older than the stale bound is unknown: the entry runs, and the
+    reason names the stale cache. A reading whose reset has passed is unknown too: the window rolled over.
+    """
+    row = _quota_row(sub, shared, reg)
+    if not row:
+        return True, None, None
+    age = now - row["asof"]
+    stale = age > _stale_seconds()
+    weekly = _weekly(row) or {}
+    pct = weekly.get("pct")
+    resets = weekly.get("resets") or row.get("until")
+    ahead = isinstance(resets, (int, float)) and resets > now
+    fresh = not stale and (ahead or not isinstance(resets, (int, float)))
+    until = int(resets) if ahead else None
+    if isinstance(pct, (int, float)) and (ahead or fresh):
+        if pct >= 100:
+            return False, "weekly quota spent", until
+        if reserve is not None and pct >= 100 - reserve:
+            return False, "claude weekly reserve", until
+    if stale:
+        return True, f"quota cache stale ({age / 3600:.0f} h old), read as unknown", None
+    return True, None, None
 
 
 def _weekly(row):
@@ -531,7 +596,8 @@ def _plans():
 
 
 def eligible(entry, shared=None, now=None, hour=None, reg=None):
-    """Why one chain entry may not run now: the switch, its window, its subscription marker, or the Claude reserve.
+    """Why one chain entry may not run now: the switch, its window, its subscription marker, a spent weekly window, or
+    the Claude reserve. An eligible entry may carry a reason: a stale quota cache, read as unknown (#678).
 
     A v1 entry keeps the marker rule it had before the registry: its `legacy_codex` flag applies Codex's marker even
     when the registry maps the spelling to another subscription, so a v1 file never changes behavior.
@@ -553,12 +619,27 @@ def eligible(entry, shared=None, now=None, hour=None, reg=None):
     marker = _marker_state(sub, shared, now, reg)
     if marker:
         return Eligibility(False, marker[0], marker[1])
-    reserve = _reserve_percent(sub, reg)
-    if reserve is not None:
-        weekly = _weekly(_quota_row(sub, shared, reg))
-        if weekly and weekly.get("pct") is not None and weekly["pct"] >= 100 - reserve:
-            return Eligibility(False, "claude weekly reserve", weekly.get("resets"))
-    return Eligibility(True, None, None)
+    return Eligibility(*_quota_state(sub, shared, now, reg, _reserve_percent(sub, reg)))
+
+
+def spent(raws, shared=None, now=None, reg=None):
+    """The spellings of `raws` whose subscription a marker or the quota cache closes now, in their order (#678).
+
+    Only the subscription is read: a switch or a window belongs to a chain, and a spelling with no subscription is
+    never spent. The caller skips a spent spelling and keeps the order of the rest.
+    """
+    reg = reg or default_registry()
+    now = time.time() if now is None else now
+    out = []
+    for raw in raws:
+        ref = normalize(raw, reg)
+        entry = reg.entries.get(ref.id)
+        sub = entry.subscription if entry else None
+        if not sub or raw in out or (reg.subscriptions.get(sub) or {}).get("spend_only"):
+            continue
+        if _marker_state(sub, shared, now, reg) or not _quota_state(sub, shared, now, reg, _reserve_percent(sub, reg))[0]:
+            out.append(raw)
+    return out
 
 
 def quota(sub, shared=None, now=None, reserve_percent=None, reg=None):
@@ -579,9 +660,10 @@ def quota(sub, shared=None, now=None, reserve_percent=None, reg=None):
     if reserve is not None:
         reserve = reserve_percent if reserve_percent is not None else reserve
         out["reserve_percent"] = reserve
-        weekly = _weekly(out)
-        if not out["limited"] and weekly and weekly.get("pct") is not None and weekly["pct"] >= 100 - reserve:
-            out.update(limited=True, reason="claude weekly reserve", until=weekly.get("resets"))
+    if not out["limited"]:
+        ok, reason, until = _quota_state(sub, shared, time.time() if now is None else now, reg, reserve)
+        if not ok:
+            out.update(limited=True, reason=reason, until=until)
     return out
 
 

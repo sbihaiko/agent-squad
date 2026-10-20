@@ -118,21 +118,9 @@ def _adapter_and_record(adapter, defaults, project=None, watch=None):
     return adapter, rec, D.autonomy(cfg)    # the autonomy setting is recorded on every run, with the project overlay
 
 
-def _router_open(entry, hour):
-    """Whether the router chain allows one entry at this local hour: its switch first, then its window. An unreadable window is open."""
-    if not entry.on:
-        return False
-    if not entry.hrs:
-        return True
-    try:
-        start, end = int(entry.hrs[:2]), int(entry.hrs[3:5])
-    except (ValueError, IndexError):
-        return True
-    return start <= hour < end if start <= end else (hour >= start or hour < end)
-
-
 def router_overlay(graph, models_path, now=None):
-    """The models each dispatch `allow.models` keeps under `chains.router` (its on/hrs, v1 and v2 through `modelreg.chain`).
+    """The models each dispatch `allow.models` keeps under `chains.router`: `modelreg.eligible` for each entry (its on/hrs,
+    its subscription marker, a spent weekly window, the Claude reserve; v1 and v2 through `modelreg.chain`) (#678).
 
     Returns `{dispatch node name: [spelling, ...]}`, empty when every entry is open. A spelling outside the router chain
     has no switch, so it stays. The overlay is a no-op when the router chain closes every model of a node: a graph that
@@ -148,7 +136,8 @@ def router_overlay(graph, models_path, now=None):
     if not entries:
         return {}
     hour = time.localtime(now).tm_hour
-    closed = {e.id for e in entries if not _router_open(e, hour)}
+    why = {e.id: ev.reason for e in entries if not (ev := modelreg.eligible(e, now=now, hour=hour)).ok}
+    closed = set(why)
     if not closed:
         return {}
     overlay = {}
@@ -163,6 +152,10 @@ def router_overlay(graph, models_path, now=None):
         kept = [m for m in authored if modelreg.normalize(m).id not in closed]
         if kept and kept != authored:      # a closed set that empties a valid envelope leaves it as authored
             overlay[node["name"]] = kept
+        elif not kept:
+            print(f"squad: note: the router chain closes every model of dispatch node {node['name']!r} "
+                  f"({'; '.join(f'{m}: {why[modelreg.normalize(m).id]}' for m in authored)}), so its envelope stays as authored",
+                  file=sys.stderr)
     return overlay
 
 

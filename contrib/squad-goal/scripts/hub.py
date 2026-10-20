@@ -82,7 +82,14 @@ def state_dir():
 STATE = pathlib.Path(state_dir())
 # hub state lives in the target repo's runs area (already gitignored there), never versioned; SG_HUB_DIR overrides
 HUBDIR = pathlib.Path(os.environ.get("SG_HUB_DIR") or pathlib.Path(CHECKOUT) / "runs" / ".hub"); HUBDIR.mkdir(parents=True, exist_ok=True)
-SHARED = pathlib.Path(os.environ.get("SG_SHARED") or STATE); SHARED.mkdir(parents=True, exist_ok=True)
+def shared_dir():
+    """$SG_SHARED, else the seam's `sg_shared_dir` (address.sh), as env.sh resolves it: one directory for every profile, never
+    a profile's STATE. `SG_SHARED or STATE` put a hub started without SG_SHARED on its own quota cache, and the loop read another (#678)."""
+    sh = os.environ.get("SG_SHARED")
+    if sh: return sh
+    p = subprocess.run(["bash", "-c", '. "$1/address.sh" 2>/dev/null; sg_shared_dir', "_", str(pathlib.Path(__file__).resolve().parent)], capture_output=True, text=True, timeout=30)
+    return p.stdout.strip() or str(STATE)   # STATE only where no seam is shipped beside the hub (a bare test copy)
+SHARED = pathlib.Path(shared_dir()); SHARED.mkdir(parents=True, exist_ok=True)
 (HUBDIR / ".gitignore").write_text("*\n")   # keeps the folder untracked even where runs/ is not ignored
 for _n in ("hub-history.json", "hub-prs.json", "hub-kills.log"):   # one-time move from the old per-user cache
     if (STATE / _n).exists() and not (HUBDIR / _n).exists(): (HUBDIR / _n).write_bytes((STATE / _n).read_bytes())

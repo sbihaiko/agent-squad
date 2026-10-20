@@ -432,7 +432,9 @@ async def test_a_resume_after_the_router_window_closes_reads_the_copy_and_comple
 def test_the_loop_launch_passes_the_models_path_and_never_the_filtering_rule():    # SPEC 505
     src = (ROOT / "contrib" / "squad-goal" / "scripts" / "launch.py").read_text()
     assert '"--models"' in src and 'here / "models.json"' in src
-    assert "modelreg" not in src          # the overlay lives in the one module that starts a run, never in the script
+    # the overlay lives in the one module that starts a run, never in the script; the script asks the resolver only which
+    # subscriptions are spent (#678), the same read its markers already were
+    assert "router_overlay" not in src and '"router")' not in src and "eligible(" not in src
 
 
 # A resume refuses a missing or replaced run target (#582, ADR-0107).
