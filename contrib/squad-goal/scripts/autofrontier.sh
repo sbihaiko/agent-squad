@@ -189,7 +189,11 @@ child_block() { local c=$1 n; set -- $c; echo; echo "CHILD — GitHub issue(s) $
 build_body() { local c
   { echo "PANEL: $name"
     echo "IMPORTANT: your first and only action is to call the spawn tool for the ${#kids[@]} child(ren) below, all in one turn; ending the turn without a spawn call fails the run. Spawn each child with ${spendarg}. Repo $SG_REPO. One child per CHILD block. The run cut each child's own worktree and checked out its branch there: the child's own working directory is that worktree, and you name no path for it. Tell the child to work where it stands, to commit there, to create no worktree and no branch of its own, and to push nothing. The loop reads that worktree, enters the child's commits into the run's wave branch, and lands the wave in $SG_BASE with one push (ADR-0145 rule 9). A block with several issues touches one shared slice: ONE child, one \"Refs #N\" line per issue in the commit message. en-US everywhere; no Co-Authored-By and no \"Generated with Claude Code\" line. Rules: $SG_CODING_RULES."
-    echo "Before the child reports done, run \"bash contrib/squad-goal/scripts/prepush.sh --local\" in that worktree: it must print nothing."
+    if sg_profile_resolves; then
+      echo "Before the child reports done, run \"bash contrib/squad-goal/scripts/prepush.sh --local\" in that worktree: it must print nothing."
+    else
+      echo "The child's prepush check is unavailable: no squad-goal profile resolves for this session (SG_PROFILE='${SG_PROFILE:-}', SG_PROFILES_DIR='$(sg_profiles_dir)'), so it must not run prepush.sh --local; name that in the report."
+    fi
     echo; [ -n "${SG_FRONTIER_PREAMBLE:-}" ] && [ -f "$SG_FRONTIER_PREAMBLE" ] && cat "$SG_FRONTIER_PREAMBLE"
     for c in "${kids[@]}"; do child_block "$c"; done
   } > "$body"

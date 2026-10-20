@@ -100,6 +100,9 @@ sg_board_cache() { printf '%s/_boards/%s_%s/hub-board.json\n' "$(sg_state_base)"
 # The launchd label of one repository's health agent: one agent per repository, so each supervisor is watched.
 sg_health_label() { printf 'com.squad-goal.health.%s\n' "$1"; }
 sg_profiles_dir() { echo "${SG_PROFILES_DIR:-$_sg_ctx_here/profiles}"; }
+# 0 when SG_PROFILE names a profile the profiles directory holds, so a worktree's own prepush.sh --local resolves the
+# same profile; 1 otherwise, and the request says the check is unavailable instead of prescribing a command that exits 2.
+sg_profile_resolves() { [ -n "${SG_PROFILE:-}" ] && [ -f "$(sg_profiles_dir)/$SG_PROFILE.sh" ]; }
 # Every known profile slug, one per line, in byte order; example.sh is a template, never a repository.
 sg_profiles() { local f n; for f in "$(sg_profiles_dir)"/*.sh; do [ -f "$f" ] || continue; n=$(basename "$f" .sh)
   [ "$n" = example ] || echo "$n"; done | LC_ALL=C sort; }

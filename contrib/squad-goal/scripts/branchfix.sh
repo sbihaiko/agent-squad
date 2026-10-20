@@ -8,4 +8,8 @@ head -1 "$f" 2>/dev/null | grep -q CHANGES || exit 0
 echo "One child, a FIX RUN on the work branch $br for GitHub issue #$iss (repo $repo). Check out origin/$br, commit on top, push to the SAME branch (git push origin HEAD:$br); no pull request. Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
 echo; echo "[review] The latest automated review of the branch says VERDICT: CHANGES. Address every finding (fix it, or say why it is wrong, with file:line evidence):"
 tail -n +2 "$f"
-echo "Before every push, run: bash $(cd "$(dirname "$0")" && pwd)/prepush.sh --local   (it must print nothing)."
+if sg_profile_resolves; then
+  echo "Before every push, run: bash $(cd "$(dirname "$0")" && pwd)/prepush.sh --local   (it must print nothing)."
+else
+  echo "The prepush check is unavailable: no squad-goal profile resolves for this session (SG_PROFILE='${SG_PROFILE:-}', SG_PROFILES_DIR='$(sg_profiles_dir)'), so do not run prepush.sh; name that in your report."
+fi

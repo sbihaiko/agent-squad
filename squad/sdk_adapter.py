@@ -259,6 +259,9 @@ class SdkAdapter:
         if "VIRTUAL_ENV" in os.environ:     # the actor's Bash reaches the project's python3, as a gate command does
             clean = workcmd.clean_env(os.environ)
             kw["env"] = {**kw.get("env", {}), "VIRTUAL_ENV": "", "PATH": clean["PATH"]}
+        prof = {var: os.environ[var] for var in ("SG_PROFILE", "SG_PROFILES_DIR") if os.environ.get(var)}
+        if prof:     # #664: the worktree's own prepush.sh resolves the same profile the loop uses
+            kw["env"] = {**kw.get("env", {}), **prof}
         if req.instructions:     # the role text joins the system prompt after the shared contract; the user message holds only the JSON
             sp = kw.get("system_prompt")
             sp = dict(sp) if isinstance(sp, dict) else {"type": "preset", "preset": "claude_code"}

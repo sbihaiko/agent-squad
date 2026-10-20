@@ -25,6 +25,7 @@ for _l in /usr/sbin/lsof /usr/bin/lsof; do [ -n "$SG_LSOF" ] || { [ -x "$_l" ] &
 unset _l
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$here/address.sh"   # the one resolution of a repository: profiles dir, checkout and origin match, state directory
+SG_PROFILES_DIR="$(sg_profiles_dir)"; export SG_PROFILES_DIR   # a session a run starts carries it, so the worktree's own prepush resolves the loop's profile (#664)
 [ -n "${SG_PROFILE:-}" ] || SG_PROFILE=$(repoctx "$PWD" 2>/dev/null | sed -n 's/^SG_PROFILE=//p')
 : "${SG_PROFILE:?no squad-goal profile matched; set SG_PROFILE or add scripts/profiles/<name>.sh}"
 _sg_ctx=$(repoctx "$SG_PROFILE") || exit 2
