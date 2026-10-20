@@ -15,9 +15,9 @@ printf '#!/bin/bash\necho "note: wave stub $*"\n' > "$T/s/wave.sh"
 cat > "$T/bin/caffeinate" <<'C'
 #!/bin/bash
 while [ "${1#-}" != "$1" ]; do shift; done
-t=; while [ $# -gt 0 ]; do [ "$1" = --target ] && t=$2; shift; done
+t=; rd=$PWD/runs; while [ $# -gt 0 ]; do [ "$1" = --target ] && t=$2; [ "$1" = --runs-dir ] && rd=$2; shift; done
 printf '%s\n' "$t" >> "$CAFF_TARGETS"
-r="$PWD/runs/run-20261018-000000-$$"; mkdir -p "$r/ws"
+r="$rd/run-20261018-000000-$$"; mkdir -p "$r/ws"
 c="$r/ws/target-c1"; /usr/bin/git -C "$t" worktree add -q -b "child-$$" "$c" HEAD
 (cd "$c" && echo "$$" > "child-$$.txt" && /usr/bin/git add . && /usr/bin/git -c user.email=t@t -c user.name=t commit -qm "child $$")
 /usr/bin/git -C "$t" -c user.email=t@t -c user.name=t merge -q --no-ff -m "land child $$" "child-$$"
@@ -73,7 +73,9 @@ $G -C "$co" worktree add -q -b kept-br "$kept" "$tip"
 : > "$T/targets"; o=$(cd "$co" && SG_RUN_TARGET="$kept" SG_STATE="$T/st" SG_CHECKOUT="$co" SG_BASE=dev SG_SQUAD="$T/squad" SG_ALLOW_MODEL=1 python3 -I "$T/s/launch.py" "$T/repl.txt" 2>&1)
 t=$(tail -1 "$T/targets"); rd=$(tail -1 "$T/st/active-runs.txt" 2>/dev/null)
 [ "$t" = "$kept" ] && ok "a fix run's target is the kept worktree it names" || ko "fix run target is ${t:-none}, not $kept: $o"
-case "$rd" in "$kept"/runs/*) ok "the fix run's folder is inside the kept worktree";; *) ko "fix run folder $rd is outside $kept";; esac
+# The run folder lives with every other run (#668): the kept worktree is the target its gates read, and the worktree is what a
+# landing or a cleanup deletes, so a folder inside it disappears with the record three readers ask for liveness.
+case "$rd" in "$co"/runs/*) ok "the fix run's folder is beside the other runs";; *) ko "fix run folder ${rd:-none} is not under $co/runs";; esac
 for _ in $(seq 1 100); do [ -s "$rd/child-head" ] && break; sleep 0.1; done
 $G -C "$kept" merge-base --is-ancestor "$kh" HEAD && [ "$($G -C "$kept" symbolic-ref --short HEAD)" = kept-br ] \
   && ok "the kept worktree keeps its branch and the child's commits" || ko "the kept worktree lost its branch or commits"
