@@ -141,6 +141,23 @@ answer_check() { local why
   if ! why=$(python3 "$(dirname "$0")/revformat.py" --answer ${3:+--keep "$3"} "$1" 2>&1 >"$2"); then
     rm -f "$2"; echo "the JSON answer is not the schema: ${why:-revformat.py failed to read it}"; return 1; fi
   python3 "$(dirname "$0")/revformat.py" --max-lines "$cap" $fr "$2" 2>/dev/null; }
+# repair_ask <complaint>: the one text a re-ask sends, on the direct lane and on the CLI lane alike.
+repair_ask() { echo "Your answer is outside the shape: $1. Answer again: the same findings, every line in the shape, nothing else."; }
+# format_fail <complaint>: one answer of model $m failed the format check -- revformat.py's shape or schema, or the CLI's
+# own --json-schema check (#675). It queues MODEL_FORMAT, which names the model, and the first time it sets up the one
+# re-ask of the same model with the complaint (#625, #634). Exit 0: re-ask; 1: this model's turn ends; 2: a plain retry.
+format_fail() { local nx="the next model is tried"
+  [ "$rep" = 0 ] && [ -n "$1" ] && [ "$tools" = 1 ] && nx="the same model answers once more with the complaint"
+  printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so %s.\n" "$m" "$bm" "${1:-the answer is not the shape (revformat.py failed to read it)}" "$nx" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
+  fmt=1; rc=1
+  if [ "$nx" != "the next model is tried" ]; then
+    rep=1; [ "$lim" -gt "$i" ] || lim=$((i+1)); [ -e "$p.orig" ] || cp "$p" "$p.orig"
+    { cat "$p.orig"; echo "=== YOUR PREVIOUS ANSWER (outside the shape)"; cat "$o"; echo "=== REPAIR"; repair_ask "$1"; } > "$p.r" && mv -f "$p.r" "$p"
+    return 0
+  fi
+  # a failed re-ask ends this model's turn (#634). With no re-ask (no complaint, or the no-tools path) and one
+  # reachable model (#622), there is no next model, so the format failure spends a retry, never the whole review.
+  { [ "$rep" = 1 ] || [ "$reachable" -gt 1 ]; } && return 1; return 2; }
 # A per-model setting matches its chain id with a context suffix stripped from both sides (#643). An exact key still wins.
 bare='def bare: sub("\\[[^]]*\\]$"; "");'
 # route_of <model>: the registry's row for one reviewer -- route, runner, wire string, tools (1 or 0) -- through the one resolver
@@ -274,7 +291,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
           if [ $r = 0 ] && jq -er 'select(.is_error|not) | .result' "$o" > "$o.t" 2>/dev/null \
              && ! frem=$(answer_check "$o.t" "$o.n") && [ -n "$frem" ]; then
             mv "$o" "$o.1"
-            jq --rawfile a "$o.t" --arg f "$frem" '.messages += [{role:"assistant", content:$a}, {role:"user", content:("Your answer is outside the shape: " + $f + ". Answer again: the same findings, every line in the shape, nothing else.")}]' "$p.body" > "$p.body2"
+            jq --rawfile a "$o.t" --arg f "$(repair_ask "$frem")" '.messages += [{role:"assistant", content:$a}, {role:"user", content:$f}]' "$p.body" > "$p.body2"
             direct "$p.body2"; r=$?
             jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
           fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
@@ -315,6 +332,10 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
     else printf "%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$tc" "$m" "$tu" >> "$tl"; fi
     # The run ended in an error: no verdict came of it, so the chain moves on as it does for a failed call (the tokens above
     # are still counted; the answer is not saved as a review).
+    # #675: a CLI run that ends error_max_structured_output_retries is a format failure, not an infrastructure one: its
+    # own --json-schema check refused every answer, so the same model gets the re-ask the shape check gives.
+    if [ "$bad" = error_max_structured_output_retries ]; then
+      format_fail "the CLI's --json-schema check refused every answer (the run ended $bad)"; case $? in 1) break;; *) continue;; esac; fi
     [ -n "$bad" ] && { printf "MODEL_FAIL review %s on branch %s: the run ended %s (exit %s), so its answer is no review: %s\n" "$m" "$bm" "$bad" "$rc" "$(head -c 200 "$o" 2>/dev/null | tr '\n' ' ')" > "$(sg_cq_status "$iss" "mfail$$-$ms-$i")"; fmt=1; rc=1; continue; }
     [ -e "$p.superseded" ] && { publish "VERDICT: BLOCKED ($lbl head moved during the review)"; rm -f "$p.superseded"; echo "superseded by a new push"; exit 1; }
     printf "%s\t%s\t%s\t%s\t%s\n" "$(date +%FT%T)" "$pr" "$m" "$(( $(date +%s) - t1 ))" "$rc" >> "$SG_STATE/review-times.tsv"   # per-model latency, to order review_models by data
@@ -345,20 +366,10 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
       rm -f "$o.answer"; frem=$(answer_check "$o" "$o.n" "$o.answer"); fok=$?
       [ -s "$o.n" ] && mv -f "$o.n" "$o"; rm -f "$o.n"
       if [ "$fok" != 0 ]; then
-        # #625, #634: the same model gets one repair try first, for any number of reachable models: the prompt, its
-        # answer and the check's complaint (for a JSON answer, the parser's error). The no-tools path already had its
-        # repair turn inside direct(). One extra try at most; a failed repair ends this model's turn.
-        nx="the next model is tried"; [ "$rep" = 0 ] && [ -n "$frem" ] && [ "$tools" = 1 ] && nx="the same model answers once more with the complaint"
-        printf "MODEL_FORMAT review %s on branch %s: %s. The prompt asks for the checklist shape; this model answered outside it, so %s.\n" "$m" "$bm" "${frem:-the answer is not the shape (revformat.py failed to read it)}" "$nx" > "$(sg_cq_status "$iss" "mformat$$-$ms-$i")"
-        if [ "$nx" != "the next model is tried" ]; then
-          rep=1; [ "$lim" -gt "$i" ] || lim=$((i+1)); [ -e "$p.orig" ] || cp "$p" "$p.orig"
-          { cat "$p.orig"; echo "=== YOUR PREVIOUS ANSWER (outside the shape)"; cat "$o"
-            echo "=== REPAIR"; echo "Your answer is outside the shape: $frem. Answer again: the same findings, every line in the shape, nothing else."; } > "$p.r" && mv -f "$p.r" "$p"
-          fmt=1; rc=1; continue
-        fi
-        # a failed repair ends this model's turn (#634). With no repair try (no complaint, or the no-tools path) and one
-        # reachable model (#622), there is no next model, so the shape failure spends a retry, never the whole review.
-        fmt=1; rc=1; { [ "$rep" = 1 ] || [ "$reachable" -gt 1 ]; } && break; continue
+        # #625, #634: the same model gets one re-ask first, for any number of reachable models: the prompt, its answer
+        # and the check's complaint (for a JSON answer, the parser's error). The no-tools path already had its re-ask
+        # inside direct(). One extra try at most; a failed re-ask ends this model's turn (format_fail).
+        format_fail "$frem"; case $? in 1) break;; *) continue;; esac
       fi
     fi
     # #653: a CHANGES with no Blocking finding and at least one Debt finding is an approval (revformat.py --summary, the one
