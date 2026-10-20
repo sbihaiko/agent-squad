@@ -90,19 +90,20 @@ def test_the_snapshot_reading_module_carries_the_seam_header():
 
 def test_every_place_the_page_presents_a_model_goes_through_the_formatter():
     """The positive half: each render site names the formatter. Measured 2026-10-13: the card, the group card, the
-    roster, the child row, the available and used harness rows, the inherited allow list, and the agent summary."""
+    roster, the child row, the available and used harness rows, the inherited allow list, and the agent summary.
+    Each goes through `fmt.llm`, which reads like `fmt.model` and marks an unregistered id (#677)."""
     graph = (PAGE / "graph.js").read_text()
     panel = (PAGE / "panel.js").read_text()
     for src, site in [
-        (graph, "${role}${f.model(c.model)}"),                      # the child card's kind line
-        (graph, "core.fmt.model(gr.harness)"),                      # the group card, drawn and in its tooltip
-        (panel, "core.fmt.model(gr.harness)"),                      # the group detail box
-        (panel, "esc(f.model(c.model))"),                           # the selected child's row
-        (panel, "esc(core.fmt.model(r.model))"),                    # the roster table
-        (panel, "esc(f.model(a.model))"),                           # the available harness
-        (panel, "esc(f.model(u.model))"),                           # the used harness
-        (panel, "a.models.map((m) => f.model(m))"),                 # the inherited allow list
-        (panel, "esc(f.model(model))"),                             # the agent summary of the run
+        (graph, "${role}${f.llm(c.model)}"),                      # the child card's kind line
+        (graph, "core.fmt.llm(gr.harness)"),                      # the group card, drawn and in its tooltip
+        (panel, "core.fmt.llm(gr.harness)"),                      # the group detail box
+        (panel, "esc(f.llm(c.model))"),                           # the selected child's row
+        (panel, "esc(core.fmt.llm(r.model))"),                    # the roster table
+        (panel, "esc(f.llm(a.model))"),                           # the available harness
+        (panel, "esc(f.llm(u.model))"),                           # the used harness
+        (panel, "a.models.map((m) => f.llm(m))"),                 # the inherited allow list
+        (panel, "esc(f.llm(model))"),                             # the agent summary of the run
     ]:
         assert site in src, f"this render site does not hide the prefix: {site}"
 

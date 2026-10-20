@@ -87,7 +87,50 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures, models }) {
       const id = (REG.aliases || {})[head] || head, label = (REG.labels || {})[id];
       return label ? label + text.slice(head.length) : text;
     },
+    // A box that stands for a model (#677): the registry label, as `model` reads it, and an id the registry does not
+    // know marked "unregistered" in plain words. A context suffix (`[1m]`) is the same model.
+    llm: (m) => {
+      if (m === null || m === undefined || m === "") return DASH;
+      const text = String(m), head = text.split(/\s+/)[0], label = labelOf(head);
+      return (label || head + " \u00b7 unregistered") + text.slice(head.length);
+    },
   };
 
-  return { runCap, runTotals, totalsCells, issueProgress, progressCells, DASH, fmt };
+  function labelOf(head) {
+    const bare = String(head).replace(/\[[0-9a-z]+\]$/i, ""), id = (REG.aliases || {})[bare] || bare;
+    return (REG.labels || {})[id] || null;
+  }
+
+  // What a node card says about its LLM (#677, ADR-0137): the card renders this and decides nothing. An agent shows
+  // the model the record says it used, else the graph's model marked "configured". A node that calls no model says
+  // "no LLM" and what it runs instead; a loop or an each is control only. A review-command gate runs a command that
+  // picks its own LLM, so it claims none. The card prefixes the kind, so the text stays short enough for the card.
+  // `node` is the graph node, `ns` its run statistics (runStats), or null before the record touches it.
+  function nodeModel(node, ns) {
+    const n = node || {}, kind = n.kind;
+    if (kind === "agent") {
+      const used = ns && ns.harness && ns.harness.used ? ns.harness.used.model : null;
+      const m = used || n.model || null;
+      if (!m) return { llm: true, source: null, registered: null, text: "model not set" };
+      return { llm: true, source: used ? "used" : "configured", registered: !!labelOf(m), text: fmt.llm(m) + (used ? "" : " (configured)") };
+    }
+    const none = (text) => ({ llm: false, source: null, registered: null, text: "no LLM \u00b7 " + text });
+    if (kind === "gate") {
+      const argv = n.params && Array.isArray(n.params.argv) ? n.params.argv : null;
+      if (n.check === "review-command") {
+        // `sh -c 'body' name ...` names its program in the slot after the body, as $0.
+        const shell = argv && /^(?:.*\/)?(?:ba|z)?sh$/.test(String(argv[0])) && argv[1] === "-c";
+        const prog = shell ? (argv[3] || "a shell command") : argv && argv.length ? argv[0] : "a command";
+        return { llm: null, source: null, registered: null, text: `${String(prog).split("/").pop()} \u00b7 own LLM` };
+      }
+      return none(n.check || "a check");
+    }
+    if (kind === "action") return none(n.effect || "an action");
+    if (kind === "wait") return none(`waits for ${n.owner || "a person"}`);
+    if (kind === "dispatch") return none("children");
+    if (kind === "loop" || kind === "each") return { llm: false, source: null, registered: null, text: "no LLM" };
+    return none(kind || "unknown kind");
+  }
+
+  return { runCap, runTotals, totalsCells, issueProgress, progressCells, DASH, fmt, nodeModel };
 }

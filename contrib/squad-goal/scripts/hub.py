@@ -1242,7 +1242,7 @@ def stats(period, src="both"):
             x = mt.setdefault(m, {"model": m, "in": 0, "out": 0, "cache": 0, "spend": 0.0, "calls": 0})
             for k in ("in", "out", "cache", "calls"): x[k] += v[k]
             x["spend"] += v["spend"]
-    models = sorted(({**x, "spend": round(x["spend"], 2)} for x in mt.values()), key=lambda x: -(x["in"] + x["out"]))
+    models = sorted(({**x, "spend": round(x["spend"], 2), "box": model_box(x["model"])} for x in mt.values()), key=lambda x: -(x["in"] + x["out"]))
     return {"buckets": rows, "totals": {k: round(v, 2) for k, v in tot.items()}, "models": models}
 
 BOARD = pathlib.Path(os.environ.get("SG_BOARD_CACHE") or HUBDIR / "hub-board.json"); BOARD.parent.mkdir(parents=True, exist_ok=True)
@@ -2096,7 +2096,7 @@ button.on{border-color:var(--pin);color:var(--pin)}
 .kr .d{grid-column:2;justify-self:end;font-size:9px;padding:0;white-space:nowrap;color:var(--mute)}.kr .d .good{color:#5fd38d}.kr .d .bad{color:#ff7b7b}
 #mbody{padding:0}.mc{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0 8px}.mc .mt{font-size:12px;font-weight:600;color:var(--fg);margin:0 0 2px}.mc .mx{font-size:11px;color:var(--mute);margin:0 0 8px;line-height:1.35}
 .mr{display:grid;grid-template-columns:22px minmax(0,1fr);align-items:center;gap:5px 8px;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:5px;font-size:12px}.mr.p{border-color:#2f5d45;background:#13211b}.mr .rk{flex:none;width:22px;height:22px;border-radius:11px;background:#222a35;color:var(--mute);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}.mr.p .rk{background:var(--ok);color:#0b1a12}
-.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10.5px;height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:none;border-color:var(--pin)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
+.mr .mn{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3;font-size:12px;color:var(--fg)}.mr .ct{grid-column:1/3;display:flex;flex-wrap:wrap;gap:3px;align-items:center;min-width:0}.mr .mi{font-size:10px;color:var(--mute);margin-left:4px}.mr .ur{color:var(--warn)}.mr .pv{flex:1 1 auto;min-width:0;font-size:9.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mr .pv b{color:var(--ok);font-weight:600}.mr .el{flex:none;font-size:9px;color:var(--mute);margin-left:2px}.mr .mn small{display:block;font-size:10px;color:var(--mute)}.mr .ef{flex:none;width:62px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px;height:26px;padding:0 2px;cursor:pointer;text-overflow:ellipsis}.mr .ef.set{color:var(--warn);border-color:#6b5223}.mr .hr{flex:none;width:50px;background:#0f1115;color:var(--fg);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:10.5px;height:26px;padding:0 2px;text-align:center}.mr .hr::placeholder{color:var(--mute)}.mr .hr:focus{outline:none;border-color:var(--pin)}.mr .hr.set{color:var(--warn);border-color:#6b5223}
 .mr .mb{flex:none;display:flex;gap:2px;margin-left:4px}.mr .mb button{min-width:24px;height:24px;padding:0;font-size:12px;line-height:1}.mr .mb button:hover:not(:disabled){background:#2e3846;border-color:#4a5566}.mr .mb button:disabled{opacity:.25;cursor:default}.mr .mb button.x:hover:not(:disabled){color:var(--err);border-color:var(--err)}
 /* The switch (#1819): a state, so it reads as a word, not a glyph. Off de-emphasises the row and marks the rank badge
    -- the order itself is untouched, which is the point of the switch. */
@@ -2414,21 +2414,26 @@ function mdlSetHrs(k,m,v){v=(v||"").trim();mdl.hours=mdl.hours||{};mdl.hours[k]=
    and its hrs, and every consumer of the chain skips it exactly like a model outside its window. */
 function mdlOff(k,m){return !!(mdl.off&&mdl.off[k]&&mdl.off[k][m])}
 function mdlSetOff(k,m,v){mdl.off=mdl.off||{};mdl.off[k]=mdl.off[k]||{};if(v)mdl.off[k][m]=true;else delete mdl.off[k][m]}
-function mdlProv(m){const x=m.replace(/^claude:/,"");return /^claude-(sonnet|opus|haiku|fable)/.test(x)||x==="claude-session"?"Claude":/^claude-/.test(x)?"via CLI":/^gpt/.test(x)?"Codex":/^grok/.test(x)?"xAI":/^gemini/.test(x)?"Google":""}
+/* What a model box shows is the hub's answer, model_box() (#677, ADR-0137): the registry label and its route, or
+   "unregistered". The page holds no provider rule. An id just typed into an Add box has no answer until the save. */
+const MBOX0={llm:null,route:null,registered:null,text:"resolved on save"};
+function mdlBox(k,m){const b=mdl.boxes||{};return (b[k]||{})[m]||(b.known||{})[m]||MBOX0}
+function mdlName(x,m){return x.llm?`${esc(x.llm)} <span class=mi>${esc(m)}</span>`:`${esc(m)}`}
+function mdlRoute(x,dflt){return x.registered===false?`<span class=ur>unregistered</span>`:esc(x.route||(x.registered?dflt:x.text))}
 /* The router's own chain (#95): the dispatch envelope of the run graph. It is a queue like the role chains, so it
    reads the same way -- rank, ↑ ↓, ✕, Add -- but it is graph data: it lives in the run graph, never in models.json
    (ADR-0106), and the Save writes it there and restamps the record the graph ships beside. */
 function mdlRouter(){const ids=mdl.router_models||[],e=mdl.envelope||{};
  const rk=i=>i?"fallback "+i:"primary";
  return `<div class=mc><div class=mt>Router</div><div class=mx>The models the router may ask a child for, in order, from the run graph${e.graph?` <code>${esc(e.graph)}</code>`:""}${e.node?` (<code>${esc(e.node)}</code>)`:""}. A request outside this list is refused whole; the first entry is the model a child takes when it names none.</div>`
- +ids.map((m,i)=>`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk(i)}">${mdlProv(m)||rk(i)}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`).join("")
+ +ids.map((m,i)=>{const x=mdlBox("router_models",m);return`<div class="mr${i?"":" p"}"><span class=rk title="${rk(i)}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk(i)} · ${esc(x.text)}">${mdlRoute(x,rk(i))}</span><span class=mb><button data-rv="${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-rv="${i}|1" ${i<ids.length-1?"":"disabled"} title="move down">↓</button><button class=x data-rrm="${i}" ${ids.length>1?"":"disabled"} title="remove from the envelope">✕</button></span></span></div>`}).join("")
  +`<div class=madd><input list=mkr data-radd placeholder="add a model id the gateway serves…"><button data-raddb="router">Add</button></div>`
  +`<div class=mx>efforts ${(e.efforts||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · workspaces ${(e.workspaces||[]).map(x=>`<code>${esc(x)}</code>`).join(" ")||"—"} · children ≤ ${e.max_children??"–"} · parallel ≤ ${e.max_parallel??"–"} · depth ≤ ${e.max_depth??"–"}</div></div>`}
 function mdlRender(){const b=$("#mbody");if(!mdl){b.innerHTML="<span class=m>loading…</span>";return}
- $("#mdsr").textContent=mdl.last_coding||(mdl.coding_models||[])[0]||"";   // the model the last run coded with, not the chain's head
+ {const lc=mdl.last_coding||(mdl.coding_models||[])[0]||"",x=lc?mdlBox("coding_models",lc):MBOX0;$("#mdsr").textContent=x.llm?`${x.llm} · ${lc}`:lc}   // the model the last run coded with, not the chain's head
  const dirty=JSON.stringify(mdl)!==mdlSrv,known=mdl.known||[],lbl=m=>(mdl.labels||{})[m]||"";   // the registry label: display only, the saved value stays the id (#672)
  const ch=mdl.chain||{},chOut=ch.out||[],chBan=ch.banner?`<div class="mx err" role=alert>${esc(ch.banner)}</div>`:(ch.notice?`<div class=mx>${esc(ch.notice)}</div>`:"");
- b.innerHTML=chBan+`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}" label="${esc(lbl(m))}">`).join("")}</datalist><datalist id=mkr>${(mdl.router_known||[]).map(m=>`<option value="${esc(m)}" label="${esc(lbl(m))}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),pv=mdlProv(m),of=mdlOff(k,m),bl=((mdl.blocked||{})[k]||[]).includes(m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)}">${esc(m)}</span><span class=ct><span class=pv title="${rk}${pv?" · "+pv:""}">${pv||rk}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}${bl?`<span class=bk title="the router envelope does not allow ${esc(m)}: a request naming it is refused whole, so the router picks an allowed model instead. Add it to the Router queue or take it out of this chain">blocked by envelope</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
+ b.innerHTML=chBan+`<datalist id=mk>${known.map(m=>`<option value="${esc(m)}" label="${esc(lbl(m))}">`).join("")}</datalist><datalist id=mkr>${(mdl.router_known||[]).map(m=>`<option value="${esc(m)}" label="${esc(lbl(m))}">`).join("")}</datalist><datalist id=hrp>${HRP.map(v=>`<option value="${v}">`).join("")}</datalist>`+Object.keys(MLAB).map(k=>`<div class=mc><div class=mt>${MLAB[k]}</div><div class=mx>${MDESC[k]} Tried top to bottom; the first healthy model wins, and a model switched off is skipped like one outside its hrs window.</div>`+mdl[k].map((m,i)=>{const ef=mdlEff(k,m),hr=mdlHrs(k,m),x=mdlBox(k,m),of=mdlOff(k,m),bl=((mdl.blocked||{})[k]||[]).includes(m),rk=i?"fallback "+i:"primary";return`<div class="mr${i?"":" p"}${of?" off":""}"><span class=rk title="${rk}${of?" · switched off":""}">${i+1}</span><span class=mn title="${esc(m)} · ${esc(x.text)}">${mdlName(x,m)}</span><span class=ct><span class=pv title="${rk} · ${esc(x.text)}">${mdlRoute(x,rk)}${of?" · out of the chain":""}</span>${k==="review_models"&&chOut.find(o=>o.model===m&&o.until_text)?`<span class=bk title="${esc(chOut.find(o=>o.model===m).reason)}">${esc(chOut.find(o=>o.model===m).reason)}, resets ${esc(chOut.find(o=>o.model===m).until_text)}</span>`:""}${bl?`<span class=bk title="the router envelope does not allow ${esc(m)}: a request naming it is refused whole, so the router picks an allowed model instead. Add it to the Router queue or take it out of this chain">blocked by envelope</span>`:""}<span class=el>effort</span><select class="ef${ef?" set":""}" data-ef="${k}|${esc(m)}" title="effort for this model (medium is the default)">${EFF.map(e=>`<option value="${e==="medium"?"":e}"${(ef||"medium")===e?" selected":""}>${e}</option>`).join("")}</select><span class=el>hrs</span><input class="hr${hr?" set":""}" list=hrp data-hr="${k}|${esc(m)}" value="${esc(hr)}" placeholder="always" title="local hours this model may run (HH-HH, wraps midnight; empty = always)"><span class=mb><button data-mv="${k}|${i}|-1" ${i?"":"disabled"} title="move up">↑</button><button data-mv="${k}|${i}|1" ${i<mdl[k].length-1?"":"disabled"} title="move down">↓</button><button class="sw${of?" off":""}" data-sw="${k}|${esc(m)}" aria-pressed="${of}" title="${of?"out of the chain — it never runs; its rank, effort and hrs are kept, press to put it back":"in the chain — press to take it out without removing it: it keeps its rank, its effort and its hrs"}">${of?"off":"on"}</button><button class=x data-rm="${k}|${i}" ${mdl[k].length>1?"":"disabled"} title="remove from chain">✕</button></span></span></div>`}).join("")+`<div class=madd><input list=mk data-add="${k}" placeholder="add a model id…"><button data-addb="${k}">Add</button></div></div>`).join("")
  +mdlRouter()
  +`<div class=mx><b>effort</b> · <b>hrs</b> local time <code>HH-HH</code>, wraps midnight, empty = always · <b>switch</b> <code>off</code> skips a model and keeps its place · <b>✕</b> deletes the row. A coding row must name an id the dispatch envelope allows.</div>`
  +`<div class="msave${dirty?" dirty":""}"><button id=msv ${dirty?"":"disabled"}>Save</button><button id=mrv ${dirty?"":"disabled"}>Revert</button><span class="st${mdlMsg.startsWith("!")?" err":mdlMsg?" okm":""}">${mdlMsg?esc(mdlMsg.replace(/^!/,"")):(dirty?"<span class=dot></span>unsaved changes":"saved in models.json")}</span></div>`}
@@ -2458,7 +2463,7 @@ function pie(ms){const rows=ms.map(m=>({...m,v:m.in+m.out})).filter(m=>m.v>0);if
  const tot=rows.reduce((a,m)=>a+m.v,0);const keep=[],fold=[];
  for(const m of rows) (m.v/tot<OTHER?fold:keep).push(m);
  while(keep.length+(fold.length?1:0)>6) fold.unshift(keep.pop());
- const sl=keep.map(m=>({n:m.model,v:m.v,t:`${m.model}: ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
+ const nm=m=>(m.box&&m.box.registered===false?m.model+" · unregistered":(m.box&&m.box.llm)||m.model),sl=keep.map(m=>({n:nm(m),v:m.v,t:`${nm(m)} (${m.model}): ${tk(m.in)} in · ${tk(m.out)} out · ${tk(m.cache)} cache read · ${m.calls} calls · ${usd(m.spend)}`}));
  if(fold.length){const v=fold.reduce((a,m)=>a+m.v,0),t=fold.map(m=>`${m.model}: ${(m.v/tot*100).toFixed(2)}%`).join("\n");sl.push({n:`other · ${fold.length} models`,v,t})}
  let a0=-Math.PI/2;const R=52,C=60,arc=sl.map((x,i)=>{const a1=a0+x.v/tot*2*Math.PI,big=a1-a0>Math.PI?1:0,p=sl.length===1?`<circle cx=${C} cy=${C} r=${R} fill="${PCOL[i]}"><title>${esc(x.t)}</title></circle>`:`<path d="M${C} ${C}L${C+R*Math.cos(a0)} ${C+R*Math.sin(a0)}A${R} ${R} 0 ${big} 1 ${C+R*Math.cos(a1)} ${C+R*Math.sin(a1)}Z" fill="${PCOL[i]}" stroke="#161a21" stroke-width=1><title>${esc(x.t)}</title></path>`;a0=a1;return p}).join("");
  return `<div class=pie><svg viewBox="0 0 120 120" width=112 height=112>${arc}<circle cx=${C} cy=${C} r=26 fill="#161a21"/><text x=${C} y=${C-1} text-anchor=middle fill="#d8dde6" font-size=11 font-weight=600>${tk(tot)}</text><text x=${C} y=${C+12} text-anchor=middle fill="#8a93a3" font-size=8>tokens</text></svg><div class=lg>${sl.map((x,i)=>`<div title="${esc(x.t)}"><i style="background:${PCOL[i]}"></i><span class=ln>${esc(x.n)}</span><b>${Math.round(x.v/tot*100)}%</b></div>`).join("")}</div></div>`}
@@ -2992,7 +2997,7 @@ def subs_month():
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
 ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
-READONLY = ("known", "router_known", "labels", "last_coding", "envelope", "blocked", "chain")   # fields models_get() adds for the panel: posted back, never stored
+READONLY = ("known", "router_known", "labels", "boxes", "last_coding", "envelope", "blocked", "chain")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
 # substituted when the page is served, so a second spelling cannot refuse an id the save takes -- the shape without the
@@ -3096,6 +3101,25 @@ def model_labels(ids):
         e = router_envelope.modelreg.model(m)
         if e is not None and e.label: out[m] = e.label
     return out
+
+
+ROUTE_TEXT = {"gateway": "gateway", "direct": "direct API"}   # a cli route reads as its own CLI, named by the registry's argv
+
+
+def model_box(raw, chain=None):
+    """What one hub box that stands for a model shows (#677): the registry label beside the route, or "unregistered".
+
+    The rule lives here, never in the page (ADR-0137). `chain` picks the spelling that chain stores (chain_id), so a
+    review row of an Anthropic id reads as the claude CLI it runs through. A cli route is named by its argv's program
+    (claude, codex, grok, agy)."""
+    reg = router_envelope.modelreg
+    spelling = chain_id(chain, raw) if chain else raw
+    e, ref = reg.model(spelling), reg.normalize(spelling)
+    if e is None or not e.label:
+        return {"id": raw, "llm": None, "route": None, "registered": False, "text": "unregistered"}
+    argv = ((e.routes.get("cli") or {}).get("argv") or [None]) if ref.route == "cli" else [None]
+    route = f"{pathlib.Path(argv[0]).name} CLI" if argv[0] else ROUTE_TEXT.get(ref.route or "", ref.route)
+    return {"id": raw, "llm": e.label, "route": route, "registered": True, "text": f"{e.label} · {route}" if route else e.label}
 
 
 ANTHROPIC_ID = re.compile(r"^claude-(opus|sonnet|haiku|fable)-[0-9][0-9a-z.\-]*$")
@@ -3248,6 +3272,9 @@ def models_get():
             "known": known_models(d), "last_coding": last_coding_model(), "envelope": envelope_of(),
             "router_models": router_get(), "router_known": router_known(),
             "labels": model_labels(set(known_models(d)) | set(router_known()) | {bare_id(m) for k in CHAINS for m in d.get(k, [])}),
+            "boxes": {**{k: {bare_id(m): model_box(bare_id(m), k) for m in d.get(k, [])} for k in CHAINS},
+                      ROUTER_CHAIN: {m: model_box(m) for m in router_get()},
+                      "known": {m: model_box(m) for m in set(known_models(d)) | set(router_known()) | ({last_coding_model()} - {None, ""})}},
             "chain": chainhealth.chain_state(d, "review_models", SHARED),
             "blocked": {k: router_envelope.envelope_blocked([bare_id(m) for m in d.get(k, [])], router_get()) for k in ("coding_models",)}}
 def models_set(new):

@@ -46,13 +46,13 @@ def test_an_agent_with_no_model_at_all_says_none_is_set():
 
 
 @pytest.mark.parametrize("node,text", [
-    ({"name": "g", "kind": "gate", "check": "scope"}, "no LLM · scope check"),
-    ({"name": "g", "kind": "gate", "check": "ac-verify"}, "no LLM · ac-verify check"),
+    ({"name": "g", "kind": "gate", "check": "scope"}, "no LLM · scope"),
+    ({"name": "g", "kind": "gate", "check": "ac-verify"}, "no LLM · ac-verify"),
     ({"name": "w", "kind": "action", "effect": "merge_land"}, "no LLM · merge_land"),
     ({"name": "m", "kind": "wait", "owner": "rafael"}, "no LLM · waits for rafael"),
-    ({"name": "l", "kind": "loop"}, "no LLM · loop control"),
-    ({"name": "e", "kind": "each"}, "no LLM · each control"),
-    ({"name": "d", "kind": "dispatch"}, "no LLM · starts children"),
+    ({"name": "l", "kind": "loop"}, "no LLM"),
+    ({"name": "e", "kind": "each"}, "no LLM"),
+    ({"name": "d", "kind": "dispatch"}, "no LLM · children"),
 ])
 def test_a_node_that_calls_no_model_says_no_llm_and_what_it_runs(node, text):
     assert _line(node) == {"llm": False, "source": None, "registered": None, "text": text}
@@ -60,7 +60,10 @@ def test_a_node_that_calls_no_model_says_no_llm_and_what_it_runs(node, text):
 
 def test_a_review_command_gate_names_its_command_and_claims_no_llm_of_its_own():
     got = _line({"name": "r", "kind": "gate", "check": "review-command", "params": {"argv": ["/x/review.sh", "--pr"]}})
-    assert got == {"llm": None, "source": None, "registered": None, "text": "runs review.sh · its own LLM"}
+    assert got == {"llm": None, "source": None, "registered": None, "text": "review.sh · own LLM"}
+    shell = {"name": "r", "kind": "gate", "check": "review-command",
+             "params": {"argv": ["sh", "-c", 'exec bash "$SG_RUN_REVIEW" "$@"', "runreview", "{run_id}"]}}
+    assert _line(shell)["text"] == "runreview · own LLM"
 
 
 def test_fmt_llm_reads_a_label_and_marks_an_unknown_id():

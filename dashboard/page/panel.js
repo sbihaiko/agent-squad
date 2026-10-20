@@ -41,7 +41,7 @@ function childHtml(c) {
   const f = core.fmt;
   const rows = c.rejected ? [`request rejected by code, so no child started`] : [
     `outcome <b>${esc(c.outcome || "none yet")}</b>${c.land ? ` \u00b7 landing <b>${esc(c.land.outcome)}</b>${c.land.head ? " " + esc(c.land.head.slice(0, 10)) : ""}` : ""}`,
-    `model <b>${esc(f.model(c.model))}</b> \u00b7 effort <b>${esc(c.effort === null ? f.count(null) : c.effort)}</b> \u00b7 workspace ${esc(c.workspace === null ? f.count(null) : c.workspace)}`,
+    `model <b>${esc(f.llm(c.model))}</b> \u00b7 effort <b>${esc(c.effort === null ? f.count(null) : c.effort)}</b> \u00b7 workspace ${esc(c.workspace === null ? f.count(null) : c.workspace)}`,
     `time <b>${f.seconds(c.elapsed)}</b> \u00b7 cost <b>${f.usd(c.spend)}</b> \u00b7 turns <b>${f.count(c.turns)}</b>`,
     `tokens <b>${f.tokens(c.tokens_in)}</b> in \u00b7 <b>${f.tokens(c.tokens_out)}</b> out \u00b7 <b>${f.rate(c.tps)}</b>`,
     `checks ${c.checks ? Object.entries(c.checks).map(([g, v]) => `${esc(g)} <b>${esc(v)}</b>`).join(", ") || "none" : f.count(null)}`,
@@ -55,11 +55,11 @@ function childHtml(c) {
 function rosterHtml(dispatch) {
   const rows = core.childRoster(S.children, dispatch);
   if (!rows.length) return "";
-  const body = rows.map((r) => `<tr data-child="${esc(r.name)}" class="s-${esc(r.state)}${S.selected === r.name ? " sel" : ""}" title="${esc(r.name)}"><td>${r.index}</td><td>${esc(r.label)}</td><td class="m" title="${esc(r.outcome)}${r.rework ? " · " + esc(r.rework) : ""}">${r.glyph}${r.rework ? " ↻" : ""}</td><td>${esc(core.fmt.model(r.model))}</td><td>${esc(r.time)}</td><td>${esc(r.cost)}</td><td>${esc(r.turns)}</td></tr>`).join("");
+  const body = rows.map((r) => `<tr data-child="${esc(r.name)}" class="s-${esc(r.state)}${S.selected === r.name ? " sel" : ""}" title="${esc(r.name)}"><td>${r.index}</td><td>${esc(r.label)}</td><td class="m" title="${esc(r.outcome)}${r.rework ? " · " + esc(r.rework) : ""}">${r.glyph}${r.rework ? " ↻" : ""}</td><td>${esc(core.fmt.llm(r.model))}</td><td>${esc(r.time)}</td><td>${esc(r.cost)}</td><td>${esc(r.turns)}</td></tr>`).join("");
   return `<h2>Children of ${esc(dispatch)} <span class="note">(${rows.length})</span></h2><table class="roster"><thead><tr><th>#</th><th>name</th><th title="outcome">out</th><th>model</th><th>time</th><th>cost</th><th>turns</th></tr></thead><tbody>${body}</tbody></table>`;
 }
 function groupHtml(gr) {
-  return `<h2>Group ${esc(gr.name)}</h2><div class="runbox">${gr.harness ? esc(core.fmt.model(gr.harness)) + "<br>" : ""}${esc(gr.line)}<br>cost <b>${core.fmt.usd(gr.cost)}</b><br><span class="note">Time, cost and tokens are sums over the children (children run side by side, so the time can exceed the run's). Double-click the card, or press Space on it, to show one card per child.</span></div>`;
+  return `<h2>Group ${esc(gr.name)}</h2><div class="runbox">${gr.harness ? esc(core.fmt.llm(gr.harness)) + "<br>" : ""}${esc(gr.line)}<br>cost <b>${core.fmt.usd(gr.cost)}</b><br><span class="note">Time, cost and tokens are sums over the children (children run side by side, so the time can exceed the run's). Double-click the card, or press Space on it, to show one card per child.</span></div>`;
 }
 
 // What the record says of one graph node: how it ended, and why when it failed.
@@ -93,7 +93,7 @@ function harnessHtml(h) {
   const row = (label, a) => {
     const line = [
       a.skill ? `skill <b>${esc(a.skill)}</b>` : "",
-      `model <b>${esc(f.model(a.model))}</b>`,
+      `model <b>${esc(f.llm(a.model))}</b>`,
       `effort <b>${esc(a.effort === null ? f.count(null) : a.effort)}</b>`,
       `tools ${esc(listText(a.tools))}`,
       `stall cap ${esc(capText(a.stalls))}`,
@@ -106,7 +106,7 @@ function harnessHtml(h) {
   if (h.allow) {
     const a = h.allow;
     const line = [
-      `allowed models ${esc(listText(a.models === null ? null : a.models.map((m) => f.model(m))))}`,
+      `allowed models ${esc(listText(a.models === null ? null : a.models.map((m) => f.llm(m))))}`,
       `allowed efforts ${esc(listText(a.efforts))}`,
       `allowed tools ${esc(listText(a.tools))}`,
       `allowed skills ${esc(listText(a.skills))}`,
@@ -119,7 +119,7 @@ function harnessHtml(h) {
   const u = h.used;
   const usedLine = [
     u.skill ? `skill <b>${esc(u.skill)}</b>` : "",
-    `model <b>${esc(f.model(u.model))}</b>`,
+    `model <b>${esc(f.llm(u.model))}</b>`,
     `effort <b>${esc(u.effort === null ? f.count(null) : u.effort)}</b>`,
     `turns <b>${f.count(u.turns)}</b>`,
     `tokens ${f.tokens(u.tokens_in)} in · ${f.tokens(u.tokens_out)} out`,
@@ -185,7 +185,7 @@ function renderRunPanel() {
   const agents = nodesOf().filter((n) => st.nodes[n.name] && st.nodes[n.name].harness).map((n) => {
     const h = st.nodes[n.name].harness, c = h.configured, u = h.used;
     const model = u.model || c.model, effort = u.effort || c.effort;
-    return `<b>${esc(n.name)}</b>: ${esc(f.model(model))} \u00b7 ${esc(effort === null ? f.count(null) : effort)} \u00b7 tools ${esc(c.tools === null ? f.count(null) : c.tools.join(", "))}${u.model ? "" : ` <span class="note">(graph setting; the record has no model)</span>`}`;
+    return `<b>${esc(n.name)}</b>: ${esc(f.llm(model))} \u00b7 ${esc(effort === null ? f.count(null) : effort)} \u00b7 tools ${esc(c.tools === null ? f.count(null) : c.tools.join(", "))}${u.model ? "" : ` <span class="note">(graph setting; the record has no model)</span>`}`;
   });
   const skillsLine = e.skills === null ? "unrecorded" : e.skills.length ? e.skills.map((k) => `<span title="${esc(k.name)} ${esc(k.hash)}">${esc(k.name)} ${esc(String(k.hash).slice(0, 8))}</span>`).join(", ") : "none";
   const commit = e.skills_commit === null ? "unrecorded" : `<span title="${esc(e.skills_commit)}">${esc(String(e.skills_commit).slice(0, 8))}</span>`;
