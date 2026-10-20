@@ -35,7 +35,8 @@
     a completed run, whether or not it landed work, whose branch has not landed -> Code Complete; a failed run with nothing landed -> $SG_TODO (Todo); a needs-human run with nothing landed -> Blocked (ADR-0029: the owner is the next actor,
     and Todo would tell him the loop has it); an issue labelled needs-owner or needs-ratification -> Blocked. R is the one owner of a loop-board card a kept run names: no other rule writes one, so no rule races it.
     An issue labelled frozen:owner keeps the column it carries, and cycle.log names the write R held back (BOARD-FROZEN). A run that stopped needs-human or failed never moves its issue's
-    card forward: its Todo or Blocked stands, and a work branch or local landing it left is stale evidence.
+    card forward: its Todo or Blocked stands, and a work branch it left is stale evidence. A local landing is delivered work (ADR-0143): a failed run's landing reaches
+    Code Complete, the child's own or the run's; a needs-human run's landing keeps Blocked, since the owner is the next actor (ADR-0029).
     Text fields: Run and Run started carry the run id and its start time while the card is In Progress, and are cleared when it is anything else. A card already in its expected status is not written again, and a write GitHub refuses is named in cycle.log (BOARD-RECONCILE / BOARD-WRITE-FAILED), never swallowed.
     The board is read once per pass (one fields read, one items read per project), and the card cache follows every status the pass writes, so a later rule (O, Q, P) reads the column the pass set, never the stale read. An issue the board answers no card for is added with its expected status in one write (board.sh --add);
     a board that does not answer at all (a refusal, a deadline miss) is told apart from that: nothing is moved on a guess, nothing is reported as a defect.
@@ -637,13 +638,10 @@ def reconcile_board():
         else:
             set_expected(n, "Code Complete", why, i["run_id"], i["run_ts"], 60)
             wave_column(n, f, i)
-    def stopped_run(n, i, evidence):   # a run that stopped needs-human or failed never moves its issue's card forward: its Todo or Blocked stands, whatever branch or local landing it left
+    def stopped_run(n, i, evidence):   # a run that stopped needs-human never moves its issue's card forward: its Blocked stands, whatever local landing it left (ADR-0029, #660)
         stopped.add(n)
         why = "; ".join(i["reasons"]) or "no reason recorded"
-        human = i["name"] == "needs-human"
-        set_expected(n, "Blocked" if human else os.environ.get("SG_TODO", "Todo"),
-                     f"run {i['run_id']} {evidence}, but the run {'needs a human' if human else 'failed'} ({why})",
-                     i["run_id"], i["run_ts"], 40 if human else 20)
+        set_expected(n, "Blocked", f"run {i['run_id']} {evidence}, but the run needs a human ({why})", i["run_id"], i["run_ts"], 40)
     # Rank 20, a run that ended with nothing delivered: Doing back to Todo. It is the one backward move the loop makes, and it
     # undoes the loop's own claim, the dispatch that moved the card out of Todo (ADR-0143, #550). No other rule moves a card
     # back into Todo or Backlog: only the owner does.
@@ -669,8 +667,9 @@ def reconcile_board():
                 unheld(n, f, i)
             elif not i["verdict"]:
                 set_expected(n, "In Progress", f"run {i['run_id']} is live", i["run_id"], i["run_ts"], 30)
-            elif landed_kid:   # a landing is the child's own (#271), and the run's verdict is not the child's: a sibling's failure does not unland commits that are in the branch (#666)
-                code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
+            elif landed_kid:   # a landing is the child's own (#271), and a failed verdict does not unland commits that are in the branch (#666, ADR-0143); needs-human makes the owner the next actor (ADR-0029, #660)
+                if i["name"] == "needs-human": stopped_run(n, i, f"child {landed_kid} landed work locally")
+                else: code_complete(n, f, i, f"run {i['run_id']} child {landed_kid} landed work locally")
             elif holding(n) and (bool(mine and i["kid_landed"]) or not i["landed"]): continue   # nothing landed here, but a live run works the issue or a pending wave carries it: its card is that run's, never this run's Todo or Blocked (#540)
             elif mine and i["kid_landed"]:   # the run landed, but through a sibling: this child committed nothing, so its own outcome decides and the loop's column holds it (#271)
                 c = mine[0]; oc, ors = i["kid_out"].get(c, ("", []))
@@ -682,7 +681,7 @@ def reconcile_board():
                     if oc == "fail": stopped.add(n)
                     set_expected(n, os.environ.get("SG_TODO", "Todo"), f"run {i['run_id']} child {c} {oc or 'stopped'} with nothing landed ({why})", i["run_id"], i["run_ts"], 20)
             elif i["landed"]:
-                if i["failed"] or i["name"] == "needs-human": stopped_run(n, i, "landed work locally")
+                if i["name"] == "needs-human": stopped_run(n, i, "landed work locally")   # a failed run's landing is delivered work, so it reaches Code Complete (ADR-0143)
                 else: code_complete(n, f, i, f"run {i['run_id']} landed work locally")
             elif i["failed"]:
                 stopped.add(n)
