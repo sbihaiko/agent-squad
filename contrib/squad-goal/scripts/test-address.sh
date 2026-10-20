@@ -103,8 +103,9 @@ envok=0; { [ $rc != 0 ] && [ ! -s "$T/ghcalls" ] && printf '%s' "$out" | /usr/bi
 # profile it stops there with no call recorded. Run only once env.sh is shown to stop, so no script runs unresolved.
 for s in "$d"/*.sh; do b=$(basename "$s")
   # gh wrappers take the repository as an argument; startability.sh is a library; cqflush.sh and mkreq.sh resolve per
-  # address and run below
-  case "$b" in test-*|env.sh|address.sh|ghcall.sh|check-gh-interface.sh|startability.sh|cqflush.sh|mkreq.sh) continue;; esac
+  # address and run below. check-tdd-red.sh runs from prepush's already-resolved env and reaches gh only when SG_REPO is
+  # non-empty, so it has no env.sh to source and cannot start with one.
+  case "$b" in test-*|env.sh|address.sh|ghcall.sh|check-gh-interface.sh|startability.sh|cqflush.sh|mkreq.sh|check-tdd-red.sh) continue;; esac
   /usr/bin/grep -qE '(^|[^a-z_-])gh (api|issue|pr|repo|project|run|label)' "$s" || continue
   first=$(/usr/bin/grep -nvE '^[[:space:]]*(#|$)' "$s" | head -1); e=$(/usr/bin/grep -n 'env\.sh"' "$s" | head -1 | cut -d: -f1)
   [ "${first%%:*}" = "$e" ] || { ko "guard: $b calls gh but does not resolve its repository first (first command: ${first#*:})"; continue; }
