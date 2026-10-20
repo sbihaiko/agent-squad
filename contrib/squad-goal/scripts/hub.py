@@ -3318,6 +3318,13 @@ def models_set(new):
         v = [chain_id(k, m) for m in v]      # the panel works in bare ids; the file gets the spelling the role needs
         if len(set(v)) != len(v): return {"err": f"{k}: need 1-8 distinct model ids"}
         d[k] = v
+    # ✕ takes a row out of its chain, and the panel still posts that row's effort, hrs and switch back (#685): a setting of
+    # a model no longer in its chain goes with the row, never refuses the Save. A bad value of a kept row still refuses.
+    def _kept(sec):
+        if not isinstance(sec, dict): return sec
+        return {k: ({m: v for m, v in ek.items() if not isinstance(m, str) or m in {bare_id(x) for x in d.get(k, [])}} if isinstance(ek, dict) else ek)
+                for k, ek in sec.items()}
+    eff, hrs, off = _kept(eff), _kept(hrs), _kept(off)
     if eff is not None:
         # efforts live beside the chains, never inside them (other scripts jq the arrays of strings); "default" = key absent
         if not isinstance(eff, dict) or set(eff) - set(CHAINS): return {"err": "efforts: unknown chain"}
