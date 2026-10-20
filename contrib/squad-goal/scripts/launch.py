@@ -285,7 +285,7 @@ if root and gp.exists():
                          capture_output=True, text=True)
     if chk.returncode: sys.exit(f"invalid graph {gp}:\n{chk.stdout}{chk.stderr}")
 
-runs = target / "runs"
+runs = (pathlib.Path(checkout) if named else target) / "runs"   # a fix run's folder lives beside every other run, never inside the kept worktree it fixes: that worktree is what a landing or a cleanup deletes, and the record three readers ask for liveness would go with it (#668)
 before = set(p.name for p in runs.glob("run-*")) if runs.exists() else set()
 log = state / (req_file.stem + ".log")
 try: spent = _spent_models(json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text()), os.environ.get("SG_SHARED"))
@@ -303,7 +303,7 @@ def _keeps_children():
     except OSError: return False
 keep = ["--keep-children"] if _issue_child_request(req_text) and _keeps_children() else []
 proc = subprocess.Popen(["caffeinate", "-dimsu", "uv", "run", "--project", squad, "--extra", "sdk", "squad", "start"] + (["--workflow", os.environ["SG_WORKFLOW"]] if os.environ.get("SG_WORKFLOW") else []) + keep + [
-                        "--models", str(here / "models.json"), "--target", str(target)] + (["--spent-models", ",".join(spent)] if spent else []) + (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
+                        "--models", str(here / "models.json"), "--target", str(target)] + (["--runs-dir", str(runs)] if named else []) + (["--spent-models", ",".join(spent)] if spent else [])+ (["--model-hours", ",".join(f"{m}={w}" for m, w in hours.items())] if hours else []) + (["--model-order", ",".join(order)] if order else []) + [req_text],
                         stdout=open(log, "w"), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                         cwd=str(target),
                         env={**os.environ, "SQUAD_HEADLESS": "1"})
