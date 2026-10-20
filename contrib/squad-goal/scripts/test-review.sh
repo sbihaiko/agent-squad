@@ -507,4 +507,30 @@ J
 rm -f "$T/st/review-fix_1-x".*; CLAUDE_BLOCKING=1 bash "$T/s/review.sh" --branch fix/1-x 8 >/dev/null 2>&1
 [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: CHANGES" ] && ok "24 a CHANGES with a Blocking finding is saved unchanged" || ko "24 blocking: '$(head -1 "$T/st/review-fix_1-x.md")'"
 
+# 25) #675: on the claude -p lane, the CLI's own --json-schema check can refuse every answer: the run ends
+# error_max_structured_output_retries. That is a format failure, not an infrastructure one: the same model answers once
+# more with the complaint, as on the direct lane, and the MODEL_FORMAT line names the model that failed.
+cat > "$T/bin/claude" <<J
+#!/bin/bash
+cat > "$T/prompt.\$(wc -l < "$T/ccalls" 2>/dev/null | tr -d ' ')"; echo "\$*" >> "$T/ccalls"
+if [ -e "$T/fix25" ] && [ "\$(wc -l < "$T/ccalls")" -ge 2 ]; then
+  jq -cn '{type:"result",subtype:"success",is_error:false,result:"",structured_output:{verdict:"APPROVE",blocking:[],debt:[],resolved:[]},usage:{input_tokens:10,output_tokens:5}}'
+else jq -cn '{type:"result",subtype:"error_max_structured_output_retries",is_error:true,result:"VERDICT: APPROVE, no findings",usage:{input_tokens:10,output_tokens:5}}'; fi
+J
+chmod +x "$T/bin/claude"; touch "$T/fix25"
+printf '{"review_models":["claude:one","claude:two"],"review_order":"config","model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/ccalls"; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc = 0 ] && case "$out" in model=claude:one*"VERDICT: APPROVE"*) true;; *) false;; esac && [ "$(head -1 "$T/st/review-fix_1-x.md")" = "VERDICT: APPROVE" ] \
+  && ok "25 a CLI schema refusal is repaired once by the same model" || ko "25 CLI repair: rc=$rc '$out' md='$(head -1 "$T/st/review-fix_1-x.md" 2>/dev/null)'"
+[ "$(/usr/bin/grep -c -- '--model one' "$T/ccalls")" = 2 ] && ! /usr/bin/grep -q -- '--model two' "$T/ccalls" && ok "25 the re-ask is the same model, once" || ko "25 calls: $(cat "$T/ccalls")"
+/usr/bin/grep -q 'outside the shape' "$T/prompt.1" 2>/dev/null && /usr/bin/grep -q 'error_max_structured_output_retries' "$T/prompt.1" && /usr/bin/grep -q 'VERDICT: APPROVE, no findings' "$T/prompt.1" \
+  && ok "25 the re-ask carries the complaint and the previous answer" || ko "25 re-ask prompt: $(tail -4 "$T/prompt.1" 2>/dev/null)"
+/usr/bin/grep -qs 'claude:one.*the same model answers once more' "$T/st/cq/"*mformat*claude_one* && ok "25 the MODEL_FORMAT line names the model that failed" || ko "25 mformat: $(cat "$T/st/cq/"*mformat* 2>/dev/null)"
+/bin/ls "$T/st/cq" | /usr/bin/grep -q mfail && ko "25 a format refusal was queued as MODEL_FAIL: $(cat "$T/st/cq/"*mfail*)" || ok "25 no MODEL_FAIL for a format refusal"
+rm -f "$T/fix25" "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/ccalls"; out=$(bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null); rc=$?
+[ $rc != 0 ] && [ "$(/usr/bin/grep -c -- '--model one' "$T/ccalls")" = 2 ] && [ "$(/usr/bin/grep -c -- '--model two' "$T/ccalls")" = 2 ] \
+  && /usr/bin/grep -qs 'claude:one' "$T/st/cq/"*mformat*claude_one* && /usr/bin/grep -qs 'claude:two' "$T/st/cq/"*mformat*claude_two* \
+  && ok "25 a failed re-ask ends the model's turn, and each model's failure is recorded" || ko "25 failed re-ask: rc=$rc calls=$(cat "$T/ccalls" | tr '\n' ' ') cq=$(/bin/ls "$T/st/cq" | tr '\n' ' ')"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".* "$T/ccalls"
+
 rm -rf "$T"; exit $fail
