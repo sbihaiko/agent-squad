@@ -36,6 +36,7 @@ def test_the_dashboard_embeds_the_registry_snapshot_and_the_registry_models():
     data = engine_data()["models"]
     assert data["labels"] == {mid: e.label for mid, e in reg.entries.items()}
     assert data["aliases"] == dict(reg.aliases)
+    assert all(modelreg.model(sp, reg).id == mid for sp, mid in data["spellings"].items())   # a served spelling reads as its entry (#677)
     assert data["prices"] == {mid: e.display_price for mid, e in reg.entries.items() if e.display_price}
     assert json.dumps(data, sort_keys=True).replace("</", "<\\/") in OUT.read_text()
     assert set(served_lists()["models"]) == set(reg.entries) | set(reg.aliases)

@@ -68,6 +68,8 @@ def test_a_review_command_gate_names_its_command_and_claims_no_llm_of_its_own():
 
 def test_fmt_llm_reads_a_label_and_marks_an_unknown_id():
     assert _llm("claude-deepseek-flash") == "DeepSeek V4.1 Flash (no tools)"
+    assert _llm("claude-deepseek-flash[1m]") == "DeepSeek V4.1 Flash (no tools)"   # a served spelling is an alias
+    assert _llm("gemini-3.8-flash-low") == "Gemini 3.8 Flash"
     assert _llm("claude-gpt-5.6-terra medium tdd") == "GPT-5.6 Terra medium tdd"
     assert _llm("gpt-6-luna medium") == "gpt-6-luna · unregistered medium"
     assert _llm(None) == "—"

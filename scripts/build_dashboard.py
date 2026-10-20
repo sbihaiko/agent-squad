@@ -64,6 +64,10 @@ def model_snapshot():
     return {
         "labels": {mid: e.label for mid, e in reg.entries.items()},
         "aliases": dict(reg.aliases),
+        # Every spelling a route serves that the resolver reads (a context suffix, an effort) maps to its entry, so the
+        # page parses no id (#677). The resolver is the seam: a spelling it does not read stays out.
+        "spellings": {sp: hit.id for e in reg.entries.values() for r in e.routes.values() for sp in (r.get("served") or [])
+                      if sp not in reg.entries and sp not in reg.aliases and (hit := modelreg.model(sp, reg)) is not None},
         "prices": {mid: e.display_price for mid, e in reg.entries.items() if e.display_price},
         "providers": {mid: e.provider for mid, e in reg.entries.items()},
     }

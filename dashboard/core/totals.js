@@ -88,7 +88,7 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures, models }) {
       return label ? label + text.slice(head.length) : text;
     },
     // A box that stands for a model (#677): the registry label, as `model` reads it, and an id the registry does not
-    // know marked "unregistered" in plain words. A context suffix (`[1m]`) is the same model.
+    // know marked "unregistered" in plain words. Every spelling a route serves is in the alias map, so no parse here.
     llm: (m) => {
       if (m === null || m === undefined || m === "") return DASH;
       const text = String(m), head = text.split(/\s+/)[0], label = labelOf(head);
@@ -97,7 +97,7 @@ function totalsModule({ lastOf, num, sumOf, tokenFigures, models }) {
   };
 
   function labelOf(head) {
-    const bare = String(head).replace(/\[[0-9a-z]+\]$/i, ""), id = (REG.aliases || {})[bare] || bare;
+    const id = (REG.aliases || {})[head] || (REG.spellings || {})[head] || head;
     return (REG.labels || {})[id] || null;
   }
 
