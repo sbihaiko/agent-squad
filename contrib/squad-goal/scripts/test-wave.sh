@@ -17,7 +17,7 @@ unset REV REV_BASE REV_SHA   # each case decides the review; an ambient one from
 unset SG_SERIAL_HELD SG_GATE_STATUS SG_GATE_KIND SERIAL_WAIT_SECONDS SERIAL_HOLD_SECONDS SERIAL_POLL_SECONDS
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/co" "$T/bin"
-cp "$d/wave.sh" "$d/issue_ledger.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/" 2>/dev/null
+cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/wavepause.py" "$d/child_issues.py" "$d/address.sh" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 {
   printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=dev SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T"
@@ -617,5 +617,46 @@ case "$wbat" in *"ruff check squad tests"*"mypy squad"*'-n ${SQUAD_GATE_WORKERS:
 case "$wbat$wcmd" in *"-n auto"*) ko "R: the base gate runs pytest -n auto";; *) ok "R: the base gate never runs pytest -n auto";; esac
 /usr/bin/grep -q 'sg_base_gate "origin/\$base"' "$T/s/wave.sh" && ok "R: wave.sh builds its tip check from the shared definition" || ko "R: wave.sh does not use the shared base gate"
 ! /usr/bin/grep -v '^[[:space:]]*#' "$T/s/wave.sh" | /usr/bin/grep -q 'ruff check squad tests' && ok "R: wave.sh keeps no copy of the base battery" || ko "R: wave.sh still carries a copy of the base battery"
+
+# V (#682): a push to the wave that the remote refuses repeats once from the fetch and the rebase on the moved tip, and the
+# gates run again on that rebased tree before the second push: what enters is what the gates passed. A sibling enters
+# between the gates and the push (the remote's hook moves the wave tip and refuses the push once).
+W40=wave/run-40; start2 run-40 >/dev/null
+rm -rf "$T/sib"; $G clone -q "$T/origin.git" "$T/sib" 2>/dev/null
+(cd "$T/sib" && $G checkout -q -b sib "origin/$W40" && echo s > s40 && $G add s40 && $G -c user.email=a@b -c user.name=t commit -q -m "a sibling (Refs #499)" && $G push -q origin HEAD:refs/heads/sib40)
+SIB=$($G -C "$T/sib" rev-parse HEAD)
+cat > "$T/origin.git/hooks/pre-receive" <<H
+#!/bin/bash
+reject=
+while read -r old new ref; do [ "\$ref" = refs/heads/$W40 ] && [ -e "$T/hook40" ] && reject=1; done
+[ -n "\$reject" ] || exit 0
+rm -f "$T/hook40"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
+H
+chmod +x "$T/origin.git/hooks/pre-receive"
+child 400 g400 "origin/$W40"; REV_BASE=$W40 rev 400; : > "$T/hook40"; : > "$T/gl40"
+r=$(cd "$T/c400" && SG_WAVE_GATES="echo gate >> '$T/gl40'" bash "$T/s/wave.sh" enter run-40 400 2>&1); rc=$?
+[ $rc = 0 ] && $O merge-base --is-ancestor "$SIB" $W40 && $O cat-file -e $W40:g400 2>/dev/null && ok "V: a refused entry push rebases and enters" || ko "V: exit $rc: '$r'"
+[ "$(wc -l < "$T/gl40" | tr -d ' ')" = 2 ] && ok "V: the gates run again on the rebased tree before the second push" || ko "V: the gates ran $(wc -l < "$T/gl40" | tr -d ' ') times: '$r'"
+[ ! -e "$T/st/auto/excluded-run-40-400" ] && ok "V: a child that entered records no exclusion" || ko "V: excluded marker for an entered child"
+# V2: the gates fail on the rebased tree, so the child does not enter, and the cause is recorded for the janitor.
+child 401 g401 "origin/$W40"; REV_BASE=$W40 rev 401; rm -f "$T/g401"
+rm -rf "$T/sib2"; $G clone -q "$T/origin.git" "$T/sib2" 2>/dev/null
+(cd "$T/sib2" && $G checkout -q -b sib "origin/$W40" && echo s > s41 && $G add s41 && $G -c user.email=a@b -c user.name=t commit -q -m "another sibling (Refs #498)")
+SIB=$($G -C "$T/sib2" rev-parse HEAD); $G -C "$T/sib2" push -q origin HEAD:refs/heads/sib41
+cat > "$T/origin.git/hooks/pre-receive" <<H
+#!/bin/bash
+reject=
+while read -r old new ref; do [ "\$ref" = refs/heads/$W40 ] && [ -e "$T/hook40" ] && reject=1; done
+[ -n "\$reject" ] || exit 0
+rm -f "$T/hook40"; printf '%s\n' "$SIB" > "$T/origin.git/refs/heads/$W40"; exit 1
+H
+: > "$T/hook40"; before=$SIB
+r=$(cd "$T/c401" && SG_WAVE_GATES="[ -e '$T/g401' ] && { echo red after the rebase; exit 1; }; touch '$T/g401'" bash "$T/s/wave.sh" enter run-40 401 2>&1); rc=$?
+[ $rc != 0 ] && [ "$($O rev-parse $W40)" = "$before" ] && ok "V2: a rebased tree the gates fail never enters" || ko "V2: exit $rc, tip $($O rev-parse $W40): '$r'"
+case "$(cat "$T/st/auto/excluded-run-40-401" 2>/dev/null)" in *"the local gates failed: red after the rebase"*) ok "V2: the exclusion cause is recorded";; *) ko "V2: excluded marker '$(cat "$T/st/auto/excluded-run-40-401" 2>/dev/null)'";; esac
+# W (#682): a hold records its cause too, so the janitor names it when the wave lands without the child.
+child 402 g402 "origin/$W40"; REV=none rev 402
+r=$(cd "$T/c402" && SG_WAVE_GATES=true bash "$T/s/wave.sh" enter run-40 402 2>&1)
+case "$(cat "$T/st/auto/excluded-run-40-402" 2>/dev/null)" in *"no review of gui/402 yet"*) ok "W: a review hold records its cause";; *) ko "W: excluded marker '$(cat "$T/st/auto/excluded-run-40-402" 2>/dev/null)': '$r'";; esac
 
 rm -rf "$T"; [ $fail = 0 ] && { printf 'TDD GREEN\n'; exit 0; } || { printf 'TDD RED\n'; exit $fail; }

@@ -6,10 +6,11 @@
 # usage: bash test-wave-requeue-cap.sh [scripts dir]
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 exec 3>&2 2>>"$T.err"   # the suite's own stderr, read at the end: a "command not found" there is a fixture that lacks a file (#610)
-mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledger.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/"
+mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/bin"; cp "$d/wave.sh" "$d/issue_ledger.py" "$d/ghread.py" "$d/address.sh" "$d/ghcall.sh" "$d/base-battery.sh" "$T/s/"
 printf 'export SG_STATE=%s SG_REPO=x/y SG_OWNER=o SG_PROJECT=3 BOARD=%s/board.sh\n. %s/address.sh\n' "$T/st" "$T" "$T/s" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\nif [ "${BOARD_REFUSE:-}" = 1 ]; then echo "board refused" >&2; exit 1; fi\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\nprintf "{}"\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
+# The stub gh logs every argv; issue 42 carries the owner freeze label, every other read answers {}.
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/gh.log"\ncase "$*" in *repos/x/y/issues/42) printf "{\\"labels\\":[{\\"name\\":\\"frozen:owner\\"}]}";; *) printf "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 # cnt <n> [loop]: the count of the issue's ledger (#673), read through its one module.
 cnt() { SG_STATE="$T/st" SG_REPO=x/y python3 "$T/s/issue_ledger.py" count "x/y#$1" ${2:-}; }
 nsc() { cat "$T"/st/cq/* 2>/dev/null | /usr/bin/grep -c '^SQUAD-NOT-STARTABLE:'; }
@@ -77,9 +78,9 @@ o=$(SG_CHECKOUT="$R" w fail 13 rc "ended failed: c")
 # a disk stop -- is no failure of the issue's work: it requeues the issue and never counts toward SG_REQUEUE_CAP. Its own
 # bound, SG_LOOP_REQUEUE_CAP (6), ends the issue needs-human (ADR-0029) with needs-owner and a comment naming the loop cause.
 # It writes no Blocked column (#630): the shipped board has none, and janitor rule R turns needs-owner into frozen:owner. `own` makes the janitor's verdict read (the review held the diff) count, whatever the text.
-for r in l1 l2 l3 l4; do o=$(w fail 21 $r "the wave of run $r landed without its child"); done
+for r in l1 l2 l3 l4; do o=$(w fail 21 $r "the child of run $r never entered its wave: the rebase on wave/$r conflicts: f.py"); done
 [ "$(cnt 21)" = 0 ] && [ "$(gl 21)" = 0 ] && case "$o" in *"WAVE STOP"*) false;; *) true;; esac \
-  && ok "a wave that landed without its child never counts toward the cap" || ko "loop fail: count '$(cnt 21)', '$o'"
+  && ok "a child a sibling's conflict kept out of the wave never counts toward the cap" || ko "loop fail: count '$(cnt 21)', '$o'"
 echo req > "$T/st/auto/disp-22"
 for r in a b c; do SG_REQUEUE_RUN=$r w requeue 22 "ended failed: adapter_error" >/dev/null; done
 SG_REQUEUE_RUN=d w requeue 22 "the rebase on wave/x conflicts: f.py" >/dev/null; echo req > "$T/st/auto/disp-22"
@@ -87,11 +88,11 @@ o=$(SG_REQUEUE_RUN=e w requeue 22 "DISK STOP: / has 1 GiB free")
 [ ! -e "$T/st/auto/disp-22" ] && [ "$(cnt 22)" = 0 ] && case "$o" in *"WAVE REQUEUE #22"*) true;; *) false;; esac \
   && ok "a loop-caused requeue still requeues the issue, with no count" || ko "loop requeue: count '$(cnt 22)', '$o'"
 o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m1 "ended failed: merge_conflict"); o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m2 "ended failed: adapter_error")
-o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m3 "the wave of run m3 landed without its child")
+o=$(SG_LOOP_REQUEUE_CAP=3 w fail 23 m3 "the child of run m3 never entered its wave: the gate lock is held by pid 9; the child enters on a later pass")
 c23=$(cat "$T"/st/cq/*23-* 2>/dev/null)
 case "$o" in *"WAVE NEEDS-HUMAN #23"*) ok "the loop bound ends the issue needs-human";; *) ko "no loop stop at SG_LOOP_REQUEUE_CAP: '$o'";; esac
 ! /usr/bin/grep -q ' Blocked 23$' "$T/board.log" && /usr/bin/grep -Fqx -- 'api -X POST repos/x/y/issues/23/labels -f labels[]=needs-owner' "$T/gh.log" && ! /usr/bin/grep -q 'issues/23/labels -f labels\[\]=frozen:owner' "$T/gh.log" && ok "the loop stop adds needs-owner and writes no Blocked column (#630)" || ko "loop stop: board '$(tr '\n' ' ' < "$T/board.log")', gh '$(/usr/bin/grep 'issues/23' "$T/gh.log")'"
-case "$c23" in *"landed without its child"*) ok "the loop stop comment names the loop cause";; *) ko "loop stop comment: '$c23'";; esac
+case "$c23" in *"the gate lock is held by pid 9"*) ok "the loop stop comment names the loop cause";; *) ko "loop stop comment: '$c23'";; esac
 case "$c23" in *SQUAD-NOT-STARTABLE*) ko "the loop stop is no owner freeze: '$c23'";; *) ok "the loop stop queues no SQUAD-NOT-STARTABLE";; esac
 w fail 24 o1 "ended failed: review_held" own >/dev/null; w fail 24 o2 "ended failed: adapter_error" own >/dev/null
 [ "$(cnt 24)" = 2 ] && ok "own counts toward the cap whatever the reason text" || ko "own: count '$(cnt 24)'"
@@ -103,6 +104,28 @@ SG_REQUEUE_RUN=v2 w requeue 25 "the review of its own diff in run v2 asked for c
 [ -f "$T/st/state/x__y__11.json" ] && [ ! -e "$T/st/auto/requeues-11" ] && [ ! -e "$T/st/auto/requeues-11.runs" ] && [ ! -e "$T/st/auto/loopqueues-23.runs" ] \
   && ok "the count is in the issue's ledger file, not in auto/requeues-N" || ko "ledger files: $(/bin/ls "$T/st/state" "$T/st/auto" 2>&1 | tr '\n' ' ')"
 [ "$(cnt 23 loop)" = 3 ] && ok "the loop-caused count is the ledger's loop count" || ko "loop count #23: '$(cnt 23 loop)'"
+# #682: the cause of a child the wave landed without decides, never the generic text. The janitor names the cause wave.sh
+# recorded, or "unknown"; the old generic text and an unknown cause are no loop cause, and a held gate lock and the age cap are.
+w fail 26 u1 "the wave of run u1 landed without its child" >/dev/null
+w fail 26 u2 "the child of run u2 never entered its wave: unknown" >/dev/null
+[ "$(cnt 26)" = 2 ] && [ "$(cnt 26 loop)" = 0 ] && ok "the generic text and an unknown cause count toward the cap" || ko "unknown cause: own '$(cnt 26)', loop '$(cnt 26 loop)'"
+w fail 27 g1 "the child of run g1 never entered its wave: the gate slots (caps.gates) are full, held by 1; the child enters on a later pass" >/dev/null
+w fail 27 g2 "the child of run g2 never entered its wave: the wave reached its age cap (7200 s): the child's issue goes back to the queue" >/dev/null
+[ "$(cnt 27)" = 0 ] && [ "$(cnt 27 loop)" = 2 ] && ok "a held gate and the age cap are loop causes" || ko "loop causes: own '$(cnt 27)', loop '$(cnt 27 loop)'"
+# #682: an age-cap requeue reads the stop first: an issue its ledger stopped, or one that carries frozen:owner or needs-owner,
+# keeps its dispatch marker and its card; only a free issue goes back to Todo.
+SG_STATE="$T/st" python3 "$T/s/issue_ledger.py" stop 'x/y#41' "the gates failed" own >/dev/null; echo req > "$T/st/auto/disp-41"
+o=$(w requeue 41 "the wave reached its age cap" cap)
+[ -e "$T/st/auto/disp-41" ] && ! /usr/bin/grep -q ' Todo 41$' "$T/board.log" && case "$o" in *"WAVE STOP #41"*) true;; *) false;; esac \
+  && ok "an age-cap requeue leaves an issue the ledger stopped where it is" || ko "stopped #41: '$o', board '$(/usr/bin/grep ' 41$' "$T/board.log")'"
+SG_STATE="$T/st" python3 "$T/s/issue_ledger.py" stop 'x/y#43' "adapter_error" loop >/dev/null; echo req > "$T/st/auto/disp-43"
+o=$(w requeue 43 "the wave reached its age cap" cap)
+[ -e "$T/st/auto/disp-43" ] && ! /usr/bin/grep -q ' Todo 43$' "$T/board.log" && ok "an age-cap requeue leaves an issue the loop ledger stopped where it is" || ko "loop-stopped #43: '$o'"
+echo req > "$T/st/auto/disp-42"; o=$(w requeue 42 "the wave reached its age cap" cap)
+[ -e "$T/st/auto/disp-42" ] && ! /usr/bin/grep -q ' Todo 42$' "$T/board.log" && case "$o" in *"WAVE STOP #42"*frozen:owner*) true;; *) false;; esac \
+  && ok "an age-cap requeue leaves an issue frozen for the owner where it is" || ko "frozen #42: '$o', board '$(/usr/bin/grep ' 42$' "$T/board.log")'"
+echo req > "$T/st/auto/disp-44"; o=$(w requeue 44 "the wave reached its age cap" cap)
+[ ! -e "$T/st/auto/disp-44" ] && /usr/bin/grep -q ' Todo 44$' "$T/board.log" && ok "an age-cap requeue still frees an issue nothing stopped" || ko "free #44: '$o'"
 cat "$T.err" >&3
 /usr/bin/grep -Eq 'command not found|No such file' "$T.err" && ko "the run printed a missing command or file: $(/usr/bin/grep -E 'command not found|No such file' "$T.err" | tr '\n' ' ')"
 rm -rf "$T" "$T.err"; exit $fail
