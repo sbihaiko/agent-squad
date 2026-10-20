@@ -227,6 +227,65 @@
       "gateway_only": false
     },
     {
+      "id": "claude-haiku-5-5",
+      "label": "Claude Haiku 5.5",
+      "provider": "claude",
+      "subscription": "claude",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "routes": {
+        "cli": {
+          "auth": "subscription",
+          "argv": [
+            "claude",
+            "-p",
+            "--strict-mcp-config",
+            "--model",
+            "{model}",
+            "--effort",
+            "{effort}",
+            "{prompt_file}"
+          ],
+          "served": [
+            "claude-haiku-5-5"
+          ]
+        },
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-haiku-5-5",
+          "served": [
+            "claude-haiku-5-5"
+          ]
+        },
+        "direct": {
+          "auth": "unverified",
+          "model": "claude-haiku-5-5",
+          "served": [
+            "claude-haiku-5-5"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": true,
+        "vision": true,
+        "context": 1000000
+      },
+      "display_price": {
+        "input": 0.1,
+        "output": 0.5,
+        "currency": "USD",
+        "per": "mtok"
+      },
+      "aliases": [],
+      "retired": false,
+      "gateway_only": false
+    },
+    {
       "id": "claude-fable-5-1",
       "label": "Fable 5.1",
       "provider": "claude",
@@ -491,6 +550,58 @@
       },
       "aliases": [
         "claude-gpt-5.6-luna"
+      ],
+      "retired": false,
+      "gateway_only": false
+    },
+    {
+      "id": "gpt-6-luna",
+      "label": "GPT-6 Luna",
+      "provider": "gpt",
+      "subscription": "gpt",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "routes": {
+        "cli": {
+          "auth": "subscription",
+          "argv": [
+            "codex",
+            "exec",
+            "-m",
+            "{model}",
+            "-c",
+            "service_tier=fast",
+            "-c",
+            "model_reasoning_effort={effort}",
+            "-s",
+            "read-only",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "-"
+          ],
+          "served": [
+            "gpt-6-luna"
+          ]
+        },
+        "gateway": {
+          "auth": "unverified",
+          "model": "claude-gpt-6-luna",
+          "served": [
+            "claude-gpt-6-luna"
+          ]
+        }
+      },
+      "capabilities": {
+        "tools": true,
+        "thinking_off": false,
+        "vision": true,
+        "context": 400000
+      },
+      "aliases": [
+        "claude-gpt-6-luna"
       ],
       "retired": false,
       "gateway_only": false
