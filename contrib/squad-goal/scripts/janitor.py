@@ -596,6 +596,7 @@ def reconcile_board():
     testing = set()   # issues whose wave is in dev while the CI of the dev tip runs: Done waits for the CI to end
     frozen = set()   # issues that carry the owner freeze this pass: shipped vocabulary only
     stopped = set()   # issues whose newest run stopped needs-human or failed: no stale branch or local landing moves them forward
+    specs = set()   # a spec is never work, and its card is a fold over its sub-issues (ADR-0142): a commit subject, a branch or a landing that names it is its children's, so no work rule writes its card and the fold alone sets it (#665)
     held_owner = {}   # issue -> (rank, status, why): the write frozen:owner held back this pass, named in cycle.log when it differs
     _owner_frozen = {}
     def owner_frozen(n):   # the issue carries frozen:owner: the owner holds its card, so R never moves it (the open-issue read answers for the whole pass)
@@ -703,6 +704,7 @@ def reconcile_board():
     # (ADR-0143). Only the owner moves a card there. This rank is below every rule above, so current run, marker, branch,
     # landing, closure, or owner-label evidence wins.
     oans, olabels = open_issues()
+    specs = {k for k, ls in olabels.items() if "spec" in ls} if oans else set()
     if oans:
         for n in sorted(olabels, key=int):
             if holding(n) and n not in expected: continue   # a run still delivers it and no rule named its column: the floor never sends it back to Todo (#540)
@@ -746,11 +748,11 @@ def reconcile_board():
         if shipped and state == "closed" and reason in ("not_planned", "duplicate"): set_expected(n, "Abandoned", f"issue is closed as {reason}", "", "", 95)   # not delivered, by decision (spec #132)
         labels = issue_labels(n)
         if labels & {"needs-owner", "needs-ratification"}: set_expected(n, "Blocked", "issue is blocked by owner label", "", "", 100)
-        if str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519)
-        if n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set
+        if n not in specs and str(n) in named_in_land(): set_expected(n, "Code Complete", "a commit in the landing branch names the issue", "", "", 50)   # a hand fix in dev: the floor never moves it back (ADR-0143, #519). Never a spec: a commit that names one is its child's (#665)
+        if n not in specs and n not in stopped and branch_ahead_count(n) != "0":   # the branch's own state sets the column (#358): no pull request is read. A stopped run's branch is stale: it never lifts the Todo or Blocked its verdict set, and a branch that names a spec is its children's (#665)
             if shipped and review_waits(n): set_expected(n, column_for(wave_facts(n, ()) | {"review_wait": True})[0], "a work branch names the issue and the review of its tip waits", "", "", 50)   # ADR-0145: a child enters the wave only after its review approves, so a review that waits marks Doing
             else: set_expected(n, "Code Complete", "a work branch names the issue and is not in dev yet", "", "", 50)
-        if n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Pushing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it
+        if n not in specs and n not in testing and branch_in_dev_count(n) != "0" and cards(proj)[1].get(str(n), "") in ("Code Complete", "Pushing", "Testing"):   # a fresh branch is in dev too, so only a card that reached the wave path is delivered by it, and a spec's branch is its children's (#665)
             set_expected(n, "Done", "its work branch is in dev", "", "", 80)
     answered, have_all = cards(proj)
     if not answered: return   # no answer from the board: nothing is moved on a guess (a card that does not exist is an answer, and is created below)
@@ -771,7 +773,7 @@ def reconcile_board():
             if note is None:
                 say(f"TERMINAL-NO-CONDITION #{n}: the condition of {want} could not be read; card not moved ({why})")
                 continue
-        if shipped and want in (doing, CODE_REVIEW) and past(have, want): want = have   # a card only moves forward (ADR-0143, #603): a live run or a review never moves it back
+        if shipped and want in (doing, CODE_REVIEW) and past(have, want) and n not in specs: want = have   # a card only moves forward (ADR-0143, #603): a live run or a review never moves it back. A spec card carries no delivery of its own, so the fold corrects it (#665)
         if have is None:   # an issue created while the loop runs has no card until this pass adds one, with its status, in one write (#86)
             if board_write(["--add", owner, str(proj), want, str(n)], n, why): say(f"BOARD-RECONCILE #{n}: card added -> {want} ({why})")
             else: continue
