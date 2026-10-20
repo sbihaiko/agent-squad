@@ -17,6 +17,19 @@ py=${SG_GATE_PY:-$SG_CHECKOUT/.venv/bin/python}; [ -x "$py" ] || py=python3
 fastcmd=${SG_FAST_CMD:-"$(sg_base_battery "$py")"}
 mb=$(git merge-base HEAD "$base" 2>/dev/null) || { echo "fast-gate: base $base does not resolve: the changed scripts are unknown, so the gate does not pass"; exit 2; }
 top=$(git rev-parse --show-toplevel) || exit 2
+# The check the battery failed at, named with its own line (#670): ruff's code and path, mypy's line, or pytest, which named no
+# failed test. A reason that says only "names no failed test" hides a lint or type failure from the child that must repair it.
+stage_of() {
+  local p
+  p=$(sed -n 's/^\([A-Z][0-9][0-9][0-9]\) \[[^]]*\] \(.*\)$/\1 \2/p' "$1" | head -n 1)
+  if [ -n "$p" ]; then
+    local f; f=$(sed -n 's/^ *--> \(.*\)$/\1/p' "$1" | head -n 1)
+    echo "ruff: ${f:+$f }$p"; return
+  fi
+  p=$(sed -n 's/^\([^ ]*:[0-9][0-9]*\): error: \(.*\)$/\1: \2/p' "$1" | head -n 1)
+  [ -n "$p" ] && { echo "mypy: $p"; return; }
+  echo "pytest: it named no failed test"
+}
 # A test that fails under the parallel battery and passes alone is saturation, not a defect (#520): the failed tests the log
 # names run once more, serially (pyproject turns the pytest cache off, so --lf would rerun the whole battery). A red that
 # names no test (lint, types) or a red there too fails the gate. The battery output stays in a log that the failure line names.
@@ -25,7 +38,7 @@ log=${SG_STATE:-${TMPDIR:-/tmp}}/fast-gate-$(git rev-parse --short HEAD 2>/dev/n
 if ! bash -c "$fastcmd" > "$log" 2>&1; then
   tail -n 5 "$log"
   ids=$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)
-  [ -n "$ids" ] || { echo "fast-gate: the base battery failed and names no failed test ($log)"; exit 1; }
+  [ -n "$ids" ] || { echo "fast-gate: the base battery failed at $(stage_of "$log") ($log)"; exit 1; }
   # shellcheck disable=SC2086  # one word per test id; set -f keeps a parametrized id such as t[a.sh] from globbing
   set -f; if bash -c "$retrycmd \"\$@\"" retry $ids >> "$log" 2>&1; then echo "fast-gate: the base battery failed under load and its failed tests passed alone: saturation, not a defect ($log)"
   else echo "fast-gate: the base battery failed, and its failed tests fail alone too ($log)"; exit 1; fi; set +f
