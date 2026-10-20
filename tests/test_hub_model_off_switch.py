@@ -266,3 +266,17 @@ def test_the_consult_has_nothing_to_ask_when_every_coding_model_is_off(tmp_path)
     out = _bash(f'mjson={models}; hh=20;\n{fn}\nmodel=$(pick); printf "[%s]\\n" "$model"')
     assert out == "[]"
     assert "no coding model may run now" in CONSULT.read_text()
+
+
+def test_a_row_removed_with_its_hours_effort_and_switch_saves_and_drops_them(hub, models):
+    """✕ takes a row out of the chain, and the panel still posts the row's hrs, effort and switch back (#685): the Save
+    writes, and the removed model's settings go with it instead of refusing every Save after a removal."""
+    out = _post(hub, coding_models=["claude-deepseek-v4-flash", "gpt-5.6-terra"],
+                hours={"coding_models": {"claude-sonnet-5-5": "19-07"}},
+                efforts={"coding_models": {"claude-sonnet-5-5": "low", "gpt-5.6-terra": "low"}},
+                off={"coding_models": {"claude-sonnet-5-5": True}})
+    assert "err" not in out, out
+    saved = json.loads(models.read_text())
+    assert saved["coding_models"] == ["claude-deepseek-v4-flash", "gpt-5.6-terra"]
+    assert "hours" not in saved and "off" not in saved
+    assert saved["efforts"] == {"coding_models": {"gpt-5.6-terra": "low"}}
