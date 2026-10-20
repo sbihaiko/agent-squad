@@ -163,9 +163,9 @@ def first_finding(wt):   # the first finding of the review the entry read, for t
     try: lines = [l.strip() for l in md.read_text().splitlines()[1:] if l.strip()]
     except OSError: return "no finding was written"
     return (lines[0] if lines else "no finding was written")[:300]
-def fix_live(fx):   # the fix run the marker names has no verdict yet; a folder with no record is no run that lives
+def fix_live(fx):   # the fix run the marker names has no verdict yet, and a record that cannot be read is no verdict either (#667): the fix run lived inside the child's worktree, and a landing that cleaned it took the record too, so the child stays held and the wave's age cap frees it
     try: return '"event": "verdict"' not in (pathlib.Path(fx.read_text().strip()) / "record.jsonl").read_text()
-    except OSError: return False
+    except OSError: return True
 def fix_round(rd, child, n, wt, fx, out):
     """A review here asked for CHANGES (#636). The first time, or when the findings changed after a fix run, one fix run
     starts in the child's worktree and the child is held: (False, line, True). Findings that a fix run left as they were
