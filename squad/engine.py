@@ -289,12 +289,19 @@ class Engine:
             models["entries_sha256"] = modelreg.entries_sha256(self._model_names(), self._registry())
         self.record.append("run_start", run_id=self.run_id, graph_name=self.g.doc["name"], graph_hash=self.g.hash,
                            models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}),
-                           engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target),
+                           engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target), **({"target_branch": b} if (b := self._target_branch()) else {}),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
                            **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
                            state_binding=self.state_binding,
                            **({"caps": self.ceiling.caps} if self.ceiling else {}),
                            skills=skills.snapshot(self.g.doc, self.vendor), skills_commit=skills.commit(self.vendor))
+
+    def _target_branch(self):
+        """The branch the target stands on at run start, or None (no git, a detached HEAD): a resume refuses a target on another branch."""
+        if not self.has_git:
+            return None
+        r = git.run(["symbolic-ref", "--short", "-q", "HEAD"], self.target)
+        return r.stdout.strip() or None if r.returncode == 0 else None
 
     def _seed_facts(self):
         if self.options.get("tier_pin"):

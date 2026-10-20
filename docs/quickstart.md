@@ -59,7 +59,7 @@ squad resume <run-id>
 ```
 The verdict prints the exact command, with the absolute run folder, so it works from any directory.
 
-Use it after a crash, a pause or a `needs-human` verdict. A resume refuses when a skill, the project settings or the autonomy setting changed since the run started.
+Use it after a crash, a pause or a `needs-human` verdict. A resume refuses when a skill, the project settings or the autonomy setting changed since the run started. It also refuses when the run's target is missing, is your own checkout, or is on another branch than the one the run started on; it never migrates a record, so start a new run.
 
 ## Where the run folder is
 

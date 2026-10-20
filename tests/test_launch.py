@@ -423,3 +423,73 @@ def test_the_loop_launch_passes_the_models_path_and_never_the_filtering_rule(): 
     src = (ROOT / "contrib" / "squad-goal" / "scripts" / "launch.py").read_text()
     assert '"--models"' in src and 'here / "models.json"' in src
     assert "modelreg" not in src          # the overlay lives in the one module that starts a run, never in the script
+
+
+# A resume refuses a missing or replaced run target (#582, ADR-0107).
+
+BOTH = {"a": {"output": {"x": 1, "y": 1}, "spend": 0.1}, "b": {"output": {"x": 1, "y": 1}, "spend": 0.1}}
+
+def _started_in(tmp_path, target):
+    """A run that waited with `target` as its target: the record names it, and the resume has work left."""
+    from tests.test_resume import wait_doc
+    eng = launch.launch(from_doc(wait_doc()), tmp_path / "r", adapter=ScriptedAdapter(BOTH, repeat_last=True), target=target)
+    return eng, from_doc(wait_doc())
+
+
+async def _wait(tmp_path, target):
+    eng, g = _started_in(tmp_path, target)
+    assert (await eng.run()).exit_code == 10
+    return g
+
+
+def _own_worktree(tmp_path):
+    from tests.gitrepo import make_repo, sh
+    main = make_repo(tmp_path / "owner")
+    wt = tmp_path / "own"
+    sh(main, "git", "worktree", "add", "-q", "-b", "squad/run-x", str(wt))
+    return main, wt
+
+
+def _resume(tmp_path, g, **kw):
+    return launch.resume_engine(g, tmp_path / "r", adapter=ScriptedAdapter(BOTH, repeat_last=True), **kw)
+
+
+@pytest.mark.anyio
+async def test_a_resume_in_the_run_s_own_worktree_on_its_branch_goes_on(tmp_path):
+    _, wt = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, wt)
+    assert (await _resume(tmp_path, g, target=wt).resume(answer="pass")).exit_code == 0
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_a_target_that_is_missing(tmp_path):
+    import shutil
+
+    from squad.engine import ResumeRefused
+    _, wt = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, wt)
+    shutil.rmtree(wt)
+    with pytest.raises(ResumeRefused, match="missing"):
+        _resume(tmp_path, g, target=wt)
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_a_target_on_another_branch(tmp_path):
+    from squad.engine import ResumeRefused
+    from tests.gitrepo import sh
+    _, wt = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, wt)
+    sh(wt, "git", "checkout", "-q", "-b", "other")
+    with pytest.raises(ResumeRefused, match="branch"):
+        _resume(tmp_path, g, target=wt)
+
+
+@pytest.mark.anyio
+async def test_a_resume_refuses_a_record_that_names_the_owner_s_checkout(tmp_path):
+    from squad.engine import ResumeRefused
+    main, _ = _own_worktree(tmp_path)
+    g = await _wait(tmp_path, main)
+    with pytest.raises(ResumeRefused, match="owner's checkout"):
+        _resume(tmp_path, g, target=main)
+    with pytest.raises(ResumeRefused, match="owner's checkout"):
+        _resume(tmp_path, g)    # the CLI hands the recorded target when none is named
