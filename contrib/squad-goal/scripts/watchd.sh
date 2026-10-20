@@ -1,6 +1,6 @@
 #!/bin/bash
 # usage: watchd.sh start|stop|status   (run `start` from the target checkout)
-# Keeps watch.sh (the 90 s cycle) and fastloop.sh (childcc every SG_FAST_INTERVAL s) alive without a Monitor task: a supervisor in its own session restarts them if they die.
+# Keeps watch.sh (the 90 s cycle), fastloop.sh (childcc every SG_FAST_INTERVAL s) and cqflush.sh (the comment queue) alive without a Monitor task: a supervisor in its own session restarts them if they die.
 # Events go to $SG_STATE/watch.log (read them with watchtail.sh); pid in $SG_STATE/watchd.pid.
 . "$(dirname "$0")/env.sh"; P="$SG_STATE/watchd.pid"; L="$SG_STATE/watch.log"; me="$(cd "$(dirname "$0")" && pwd)/watchd.sh"
 alive() { [ -s "$P" ] && pid=$(cat "$P") && /bin/ps -p "$pid" -ww -o command= 2>/dev/null | grep -qF "$me run"; }
@@ -16,10 +16,13 @@ case "${1:-status}" in
     # The stop reaches every pass of both lanes, not the two lanes alone: a stop from inside the group signals this
     # supervisor only (#489), and a lane's foreground pass (childcc and its reviews) would run on and spend (#529). The
     # supervisor ignores the signal itself and sends it to its whole group.
-    fast=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; exit 0' TERM INT
+    fast=; cq=; trap 'trap "" TERM INT; kill -TERM -- "-$$" 2>/dev/null; rm -f "$P" "$SG_STATE/fastloop.pid"; exit 0' TERM INT
     while :; do
       # the fast lane (childcc every SG_FAST_INTERVAL s) lives beside watch.sh, so a slow cycle step never delays a dispatch
       { [ -n "$fast" ] && kill -0 "$fast" 2>/dev/null; } || { bash "$(dirname "$me")/fastloop.sh" >> "$L" 2>&1 & fast=$!; }
+      # the comment queue is the only place a child learns why the entry gate rejected its work (#669): a loop that runs
+      # without its flusher repeats every rejection blind, so the flusher runs beside the two lanes and restarts with them
+      { [ -n "$cq" ] && kill -0 "$cq" 2>/dev/null; } || { bash "$(dirname "$me")/cqflush.sh" >> "$SG_STATE/cqflush.log" 2>&1 & cq=$!; }
       bash "$(dirname "$me")/watch.sh" >> "$L" 2>&1 & child=$!; wait $child; echo "WATCHD watch.sh exited, restarting in 5s" >> "$L"; sleep 5; done;;
   stop) alive || { echo "watchd not running"; rm -f "$P"; exit 0; }
     # The stop must reach the supervisor, and a signal a process sends to its own group is not delivered to itself: the
