@@ -115,6 +115,16 @@ case "$(cat "$d/st/auto/disp-21")" in frontier-*) ok "a marker names the request
 moved 21 22 23 && ok "every dispatched issue gets its own card move" || ko "every dispatched issue gets its own card move: '$(cat "$BOARDLOG")'"
 added && ok "a dispatch adds each missing board card before its move" || ko "a dispatch does not add missing board cards: '$(cat "$BOARDLOG")'"
 
+# 1b) (#670) A redispatch is a repair, not a repeat: an issue whose last dispatch failed carries that reason on its own CHILD
+#     line, so the child sees the failure it must fix. An issue with no failed dispatch carries none.
+scene repair
+issues '[{"number":41,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":42,"title":"a","body":"c","labels":[{"name":"wave:01"}]}]'
+mkdir -p "$d/st/auto"; printf 'run-x\t\tthe local gates failed: fast-gate: the base battery failed at ruff: tests/t.py:8:8 F401\n' > "$d/st/auto/requeues-41.runs"
+r=$(run)
+line41=$($G -E '^CHILD' "$MKLOG.body" | $G ' 41 ')
+case "$line41" in *"an earlier attempt failed the entry gate: the local gates failed: fast-gate: the base battery failed at ruff: tests/t.py:8:8 F401"*) ok "a redispatched issue carries its last gate failure on its CHILD line";; *) ko "the CHILD line for 41: '$line41' (pass: $r)";; esac
+case "$($G -E '^CHILD' "$MKLOG.body" | $G ' 42 ')" in *"earlier attempt"*) ko "an issue with no failed dispatch carries a failure line";; *) ok "an issue with no failed dispatch carries no failure line";; esac
+
 # 1a) A ticket whose blockers have all closed may carry only its wave label. The wave orders the
 #     frontier; it does not grant permission to start. A label-gated read leaves it invisible.
 scene wave-only

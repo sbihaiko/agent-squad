@@ -50,6 +50,15 @@ out=$(fgr); /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ko "a green battery ran
 out=$(BASE_FAIL=lint fgr); rc=$?
 [ $rc -ne 0 ] && ! /usr/bin/grep -q "retry-cmd" "$T/ran.log" && ok "a red that names no failed test (lint, types) runs no retry and fails" || ko "lint red: rc $rc: '$(cat "$T/ran.log")'"
 
+# (#670) A red that is lint or types names the check it failed at, with its own line. A reason that reads "names no failed test"
+# hides which check failed, and the child that must repair it never learns which one it was.
+printf '#!/bin/bash\n[ -n "$RUFF_FAIL" ] && { echo "F401 [*] os imported but unused"; echo "  --> tests/test_hub_models_v2.py:8:8"; echo "Found 1 error."; exit 1; }\n[ -n "$MYPY_FAIL" ] && { echo "squad/x.py:12: error: bad type"; exit 1; }\nexit 0\n' > "$T/lint.sh"; chmod +x "$T/lint.sh"
+lintgate() { rm -f "$T/ran.log" "$SG_STATE/gate-status"; (cd "$R" && SG_FAST_BASE=dev SG_FAST_CMD="$T/lint.sh" bash "$d/fast-gate.sh" 2>&1); }
+out=$(RUFF_FAIL=1 lintgate); rc=$?
+[ $rc -ne 0 ] && case "$out" in *"ruff:"*"tests/test_hub_models_v2.py"*"F401"*) true;; *) false;; esac && ok "a lint red names ruff, its path and its code" || ko "ruff red: rc $rc: $out"
+out=$(MYPY_FAIL=1 lintgate); rc=$?
+[ $rc -ne 0 ] && case "$out" in *"mypy"*"squad/x.py:12"*) true;; *) false;; esac && ok "a type red names mypy and its line" || ko "mypy red: rc $rc: $out"
+
 # A shell script selects the same suite on a separate branch from the same base.
 $G -C "$R" checkout -q dev; $G -C "$R" checkout -q -b gui/sh; echo 1 >> "$S/foo.sh"; echo 1 >> "$S/baz.sh"; echo 1 >> "$R/docs/x.md"; $G -C "$R" commit -qam shell-work
 out=$(fg); rc=$?

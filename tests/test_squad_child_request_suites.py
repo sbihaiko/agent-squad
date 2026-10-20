@@ -21,7 +21,10 @@ SUITES_LINE = (
     "SUITES: run what you touched -- the shell suite beside the script you changed "
     "(`bash contrib/squad-goal/scripts/test-<script>.sh`) and the targeted pytest cases "
     "(`uv run --extra dev pytest tests/<file>.py -q -p no:deepeval -k <case>`). "
-    "The machine's full gate (`bash contrib/squad-goal/scripts/shell-suites.sh` and the pytest gate beside it) "
+    "Then run `bash contrib/squad-goal/scripts/fast-gate.sh` in your worktree before you report done: "
+    "it is the gate your commit must pass to enter the wave, its pytest takes the bounded worker count it carries, "
+    "and it must exit 0. "
+    "The machine's full gate (`bash contrib/squad-goal/scripts/shell-suites.sh` and the full pytest suite beside it) "
     "belongs to the loop and to the land pass, once per landing: never run it."
 )
 PR_BODY = "IMPORTANT: your first and only action is X\nEdit dashboard/free.py\n"
@@ -70,6 +73,13 @@ def test_the_line_names_the_targeted_commands_and_not_only_the_full_gate(tmp_pat
     line = [ln for ln in text.splitlines() if ln.startswith("SUITES:")][0]
     assert "test-<script>.sh" in line and "pytest tests/<file>.py" in line, line
     assert "once per landing" in line and "belongs to the loop" in line, line
+
+
+def test_the_line_makes_the_entry_gate_the_childs_own_check(tmp_path):
+    # #670: an approved child kept dying at the entry gate on a check it was never told to run. The line now names that gate.
+    line = [ln for ln in _mkreq(tmp_path, "pr4", PR_BODY).splitlines() if ln.startswith("SUITES:")][0]
+    assert "fast-gate.sh" in line and "must exit 0" in line, line
+    assert "shell-suites.sh" in line and "never run it" in line, line   # the machine-wide gate stays the loop's
 
 
 def test_the_request_still_carries_the_done_check_the_gate_reads(tmp_path):
