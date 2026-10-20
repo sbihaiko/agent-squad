@@ -1,0 +1,8 @@
+# The project settings for this repository (squad/project_settings.py): only the keys the owner changed.
+# Soak, decided by the owner: one wave at a time on this machine, and a child call capped at 4 USD. A run holds one slot,
+# its fix run the second, so a second wave cannot start while either lives (autofrontier.sh reads the free slots).
+# Remove this file when the soak lifts (Oct 24 2026, when the gateway quota returns).
+caps:
+  runs: 2
+limits:
+  max_budget_usd: 4
