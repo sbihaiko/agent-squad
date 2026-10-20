@@ -87,6 +87,7 @@ process.stdin.on("end", async () => {
     else if (o.op === "stateclass") out.push(core.stateClass(o.ns));
     else if (o.op === "childclass") out.push(core.childStateClass(o.c));
     else if (o.op === "harness") out.push(core.nodeHarness(o.doc, o.events, o.name));
+    else if (o.op === "nodemodel") out.push(core.nodeModel(o.node, o.ns === undefined ? null : o.ns));
     else if (o.op === "label") out.push(core.nodeLabel(o.node));
     else if (o.op === "clayout") out.push(core.childLayout(o.children, o.layout, o.box, o.gap, o.doc));
     else if (o.op === "splitkids") out.push(core.splitChildren(o.children, o.expanded));
