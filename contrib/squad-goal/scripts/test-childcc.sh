@@ -310,6 +310,14 @@ out=$(fixpass cfx 6100); rc=$?
 [ "$(/usr/bin/grep -c '^cfx 6100 ' "$T/fix.calls")" = 1 ] && ! /usr/bin/grep -q '^requeue 6100' "$WAVE_CALLS" && [ "$rc" = 3 ] \
   && ok "while the fix run lives no second fix run starts and nothing requeues" || ko "live fix run: calls '$(cat "$T/fix.calls")', waves $(cat "$WAVE_CALLS"), exit $rc"
 /usr/bin/grep -q ' 6100$' "$T/moves" 2>/dev/null && ko "the fix run's own child moved the card: $(cat "$T/moves")" || ok "the fix run's own child moves no card"
+# A fix run's folder that cannot be read is no verdict either (#667): the fix run lived inside the child's worktree, and a
+# landing that cleaned that worktree took its record with it. The child stays held -- never released to a wave that would
+# land empty -- and the wave's age cap is what frees it.
+mv "$T/co/runs/fix-6100" "$T/co/runs/fix-6100.gone"
+out=$(fixpass cfx 6100); rc=$?
+[ "$rc" = 3 ] && [ "$(/usr/bin/grep -c '^cfx 6100 ' "$T/fix.calls")" = 1 ] && ok "a fix run whose record is unreadable still holds its child" || ko "unreadable fix run: exit $rc, calls '$(cat "$T/fix.calls")', out $out"
+! /usr/bin/grep -q '^requeue 6100' "$WAVE_CALLS" && ok "an unreadable fix run requeues nothing" || ko "requeued: $(cat "$WAVE_CALLS")"
+mv "$T/co/runs/fix-6100.gone" "$T/co/runs/fix-6100"
 printf '**VERDICT: APPROVE**\n' > "$T/verdict-6100"; fixed cfx 6100
 out=$(fixpass cfx 6100); rc=$?
 /usr/bin/grep -q 'WAVE x entered (#6100)' <<<"$out" && [ -e "$T/st/auto/cc-cfx-c" ] && ! /usr/bin/grep -q '^requeue 6100' "$WAVE_CALLS" \
