@@ -15,12 +15,14 @@ cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$S/" 2>/dev/
 # The remote: one bare repository with one commit on dev. The nightly clones it into its own tree and runs there.
 git init -q -b dev "$T/src"; $G -C "$T/src" commit -q --allow-empty -m one
 git init -q --bare "$T/origin.git"; $G -C "$T/src" push -q "$T/origin.git" dev; sha=$($G -C "$T/src" rev-parse dev)
-# Each mode stub logs the tree it ran in, names a failing test when its own FAIL_<mode> is set, and exits red there.
+# Each mode stub logs the tree it ran in, names a failing test when its own FAIL_<mode> is set, names a file it could not
+# collect when its own COLLECT_<mode> is set, and exits red there.
 for m in parallel serial; do
   cat > "$T/$m.sh" <<EOF
 #!/bin/bash
 echo "$m \$PWD" >> "$T/ran.log"
 [ "\${FAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\nFAILED tests/test_y.py::test_b - boom\n'; exit 1; }
+[ "\${COLLECT_$m:-}" = 1 ] && { printf 'ERROR tests/test_module.py - ImportError: no module named x\n'; exit 1; }
 exit 0
 EOF
   chmod +x "$T/$m.sh"; done
@@ -79,10 +81,24 @@ out=$(ng); rc=$?
 mark; out=$(ng); rc=$?
 [ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "the next day runs both modes again" || ko "next day rc $rc: '$(cat "$T/ran.log" 2>&1)'"
 
-# 7) an unreadable record never holds dispatch
-printf 'not a result\n' > "$ST/nightly-result"
-hold >/dev/null; [ $? = 1 ] && ok "a record the loop cannot read never holds dispatch" || ko "an unreadable record held dispatch"
+# 7) a record the loop cannot read never holds dispatch, and neither does a line that only LOOKS red: the hold reads the
+#    whole six-field record, never its second field alone (#704, ADR-0153)
+bad_rec() { printf "$1" > "$ST/nightly-result"; hold >/dev/null; [ $? = 1 ]; }
+bad_rec 'not a result\n' && ok "a record the loop cannot read never holds dispatch" || ko "an unreadable record held dispatch"
+bad_rec 'garbage\tfail\n' && ok "a two-field line that says fail never holds dispatch" || ko "a two-field fail line held dispatch"
+bad_rec "$(date +%s)\tfail\t$sha\tpass\tmaybe\t-\n" && ok "a mode outside pass|fail never holds dispatch" || ko "an invalid mode held dispatch"
+bad_rec "$(date +%s)\tfail\t$sha\tpass\tfail\n" && ok "a record short a field never holds dispatch" || ko "a five-field fail record held dispatch"
+bad_rec "$(date +%s)\tpass\t$sha\tfail\tpass\t-\n" && ok "a result that contradicts its modes never holds dispatch" || ko "a contradictory record held dispatch"
+bad_rec "nope\tfail\t$sha\tpass\tfail\t-\n" && ok "a timestamp that is not a number never holds dispatch" || ko "a non-numeric time held dispatch"
+bad_rec "$(date +%s)\tfail\t\tpass\tfail\t-\n" && ok "a record with no sha never holds dispatch" || ko "an empty sha held dispatch"
 rm -f "$ST/nightly-result"
 hold >/dev/null; [ $? = 1 ] && ok "no record at all never holds dispatch" || ko "a missing record held dispatch"
+
+# 8) a collection error names the file it could not collect: `ERROR tests/test_module.py` carries no `::`, and it is
+#    still a failing id the hub must show (#704, ADR-0153)
+rm -f "$T/ran.log" "$ST/alerts.log"; mark
+out=$(ng COLLECT_parallel=1); rc=$?
+rec
+[ "$r_res $r_ids" = "fail tests/test_module.py" ] && ok "a collection error names the file it could not collect" || ko "record: '$r_res $r_ids' (rc $rc: $out)"
 
 rm -rf "$T"; exit $fail
