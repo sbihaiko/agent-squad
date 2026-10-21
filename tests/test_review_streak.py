@@ -17,7 +17,7 @@ from squad import review_streak as R
 from squad.adapter import CallResult
 from tests.gitrepo import sh, sibling_repo
 from tests.helpers import node, router
-from tests.test_dispatch import MODEL, ev, make, req, routed
+from tests.test_dispatch import MODEL, child_outs, ev, make, req, routed
 from tests.test_review_gate import gated
 from tests.test_waves import writer
 
@@ -212,3 +212,44 @@ async def test_a_held_ledger_starts_no_child_session(tmp_path, monkeypatch, corr
     assert "ledger_held" in v.reasons and any("holds the issue" in r for r in v.reasons), v.reasons
     [child] = [e for e in outcomes(tmp_path)]
     assert (child["outcome"], child["reasons"][0]) == ("needs-human", "ledger_held")
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_a_dependent_of_a_held_issue_is_held_with_the_ledger_cause(tmp_path, monkeypatch):
+    """#702 (ADR-0149 rule 4, ADR-0029): a child that runs after a ledger-held issue is held with it, never failed
+    `after_failed`. The dependent's failure would fold the dispatch to `failed` and hide the ledger's cause, though the
+    owner is the one who must answer the frozen issue."""
+    repo = github_target(tmp_path)
+    held_ledger(tmp_path, monkeypatch, "735", corrupt=True)
+    eng = make(tmp_path, {"router": routed(req(task="issue #735"), req("codebase-design", tools=["Read"], after=[0]),
+                                          req("codebase-design", tools=["Read"], after=[1])),
+                          CHILD: writer("a.txt")}, target=repo)
+    v = await eng.run()
+    assert calls(eng) == [], "neither the held issue nor its dependents start a session"
+    outs = child_outs(tmp_path)
+    assert (outs[CHILD]["outcome"], outs[CHILD]["reasons"][0]) == ("needs-human", "ledger_held")
+    for dep_name in ("route.router.2", "route.router.3"):   # the hold follows the chain of dependents, it never fails one
+        dep = outs[dep_name]
+        assert dep["outcome"] == "needs-human" and dep["reasons"][0] == "after_held", dep
+    assert v.verdict == "needs-human", v.reasons
+    assert any("holds the issue" in r for r in v.reasons), v.reasons
+
+
+@pytest.mark.anyio
+@pytest.mark.heavy
+async def test_first_failure_asks_the_owner_for_a_held_issue_not_a_cancelled_sibling(tmp_path, monkeypatch):
+    """#702 (ADR-0029): a ledger hold is not a failed attempt, so `first_failure` never cancels the held issue's siblings.
+    A cancelled sibling folds the dispatch to `failed` and hides the ledger's cause; the run asks the owner instead."""
+    def first_failure(d):
+        node(d, "route")["join"] = "first_failure"
+    repo = github_target(tmp_path)
+    held_ledger(tmp_path, monkeypatch, "735", corrupt=True)
+    eng = make(tmp_path, {"router": routed(req("diagnosing-bugs"), req(task="issue #735")),
+                          "route.router.1": writer("a.txt")}, tweak=first_failure, target=repo)
+    v = await eng.run()
+    outs = child_outs(tmp_path)
+    assert outs["route.router.1"]["outcome"] == "pass", "a held issue never cancels its siblings"
+    assert (outs["route.router.2"]["outcome"], outs["route.router.2"]["reasons"][0]) == ("needs-human", "ledger_held")
+    assert v.verdict == "needs-human", v.reasons
+    assert any("holds the issue" in r for r in v.reasons), v.reasons

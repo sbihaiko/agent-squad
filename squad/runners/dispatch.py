@@ -158,6 +158,13 @@ class Dispatch:
     def landed_reasons(self, name, reasons):
         return list(self.landed[name]["reasons"]) if name in self.landed and self.landed[name]["outcome"] != "pass" else reasons
 
+    def entry_verdict(self, node, seen):
+        """The outcome of one dispatch entry: its join rule, except that an issue ledger's hold asks the owner whatever the
+        rule says (ADR-0029). No dependent's failure and no cancelled sibling hides the ledger's cause (ADR-0149 rule 4)."""
+        outcome, reasons = V.fold_dispatch([o for _, o, _ in seen], node["join"], len(seen))
+        holds = V.ledger_holds(seen)
+        return ("needs-human", list(dict.fromkeys(holds + reasons))) if holds else (outcome, reasons)
+
     async def land(self, node, entry, sc, seen):
         """Land every passing write child's branch into the target, in request order, once.
         A landing that turns an earlier child's held-out command red is undone.
@@ -532,7 +539,7 @@ class DispatchRunner:
             raise Frontier([(node["name"], sc.item)])
         seen = [(n, d.landed_outcome(n, o), d.landed_reasons(n, r)) for n, o, r in seen]
         self.close_gates(ctx, node, entry, sc, d, seen)
-        outcome, reasons = V.fold_dispatch([o for _, o, _ in seen], node["join"], len(seen))
+        outcome, reasons = d.entry_verdict(node, seen)   # a held issue asks the owner, never a dependent's failure (ADR-0029)
         if reasons == ["no_dispatch"]:      # name why every request was refused, so the verdict line is not the only clue (record.jsonl holds the full event)
             reasons += d.rejections(ent, pe)[:8]
         if outcome != "pass" and not reasons:

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 EXIT = {"completed": 0, "needs-human": 10, "conflict": 20, "failed": 1, "stopped": 30}
 WORST = ("fail", "deadline", "needs-human", "pass")  # the join order of `each` and `dispatch`
+LEDGER_HOLDS = ("ledger_held", "after_held")  # a child its issue ledger held, and a child that runs after one (ADR-0149 rule 4)
 DEFAULT_ROUTE = {"pass": "continue", "fail": "exit:fail", "deadline": "exit:deadline", "needs-human": "exit:needs-human"}
 
 
@@ -46,6 +47,12 @@ def fold_dispatch(child_outcomes, rule, accepted):
     if accepted == 0:
         return "fail", ["no_dispatch"]
     return join(child_outcomes, rule), []
+
+
+def ledger_holds(seen):
+    """The reasons of the children an issue ledger held, `[]` when none was. A hold asks the owner (ADR-0029), so neither
+    a dependent's failure nor a cancelled sibling hides it: the dispatch asks the owner whatever its join rule says."""
+    return _dedupe([r for _n, o, rs in seen if o == "needs-human" and rs and rs[0] in LEDGER_HOLDS for r in rs])
 
 
 def _route(ev):
