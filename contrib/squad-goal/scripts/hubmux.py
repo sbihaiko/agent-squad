@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Squad hub for every repository: one process on one loopback port, one path per repository (#20).
 usage: hubmux.py [port]   default 7700. `/<profile>` is that profile's hub page (hub.py, loaded once per profile with the
-profile's own context from the seam, address.sh); `/` lists the known repositories and their live workers; a path no profile owns
-answers 404 with that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other
-listener. Read-only, as hub.py is: it starts no run."""
+profile's own context from the seam, address.sh); `/` lists the repositories and their live workers that the request may see
+(every one on loopback; on the tailnet, those whose own allow list admits the login); a path no profile owns answers 404 with
+that list; `/api/hub` names the hub and its repositories, so hubctl.sh can tell this hub from any other listener. A refused
+tailnet request answers 403 with its reason. Read-only, as hub.py is: it starts no run."""
 import html, importlib.util, io, json, os, pathlib, shlex, subprocess, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -106,28 +107,56 @@ def rewrite(body, slug):
     return body
 
 
+def admitted(apps, h, method):
+    """(the profiles this request may see, the refusal reason). Loopback sees every profile; a tailnet request sees the
+    profiles whose own access rule (hub.py access(), the seam) admits its login, and a refusal names none of them."""
+    port = h.server.server_port
+    if (h.headers.get("Host") or "") in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        return apps, ""
+    seen, reasons = {}, []
+    for slug, app in apps.items():
+        if "mod" not in app: continue
+        v = app["mod"].access(h, method)
+        if v.allowed: seen[slug] = app
+        else: reasons.append(v.reason)
+    if seen: return seen, ""
+    return {}, next((r for r in reasons if r != "forbidden host"), "forbidden host")
+
+
 def server(port, apps):
     class Mux(BaseHTTPRequestHandler):
+        profile = None   # the hub.py handler class of the repository this request addresses; set per request
+
         def log_message(self, *a): pass
 
         def _send(self, code, body, ct):
             self.send_response(code); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
+        def refuse(self, reason): self._send(403, reason.encode(), "text/plain; charset=utf-8")
+        def not_found(self): return self.profile.not_found(self)
+        def dash(self, method, body=b""): return self.profile.dash(self, method, body)
+
         def _route(self, method):
             path = self.path.split("?", 1)[0]
-            if path == "/": return self._send(200, root_page(apps, "squad hub"), "text/html; charset=utf-8")
-            if path == "/api/hub": return self._send(200, json.dumps(listing(apps)).encode(), "application/json")
+            if path in ("/", "/api/hub"):
+                seen, reason = admitted(apps, self, method)
+                if reason: return self.refuse(reason)
+                if path == "/": return self._send(200, root_page(seen, "squad hub"), "text/html; charset=utf-8")
+                return self._send(200, json.dumps(listing(seen)).encode(), "application/json")
             slug = path.split("/")[1]
             app = apps.get(slug)
             if not app or "mod" not in app:
-                return self._send(404, root_page(apps, f"no repository at /{slug}", test_note(slug, apps)), "text/html; charset=utf-8")
+                seen, reason = admitted(apps, self, method)
+                if reason: return self.refuse(reason)
+                return self._send(404, root_page(seen, f"no repository at /{slug}", test_note(slug, seen)), "text/html; charset=utf-8")
+            self.profile = app["mod"].H
             self.path = self.path[len(slug) + 1:] or "/"
             if self.path.startswith("?"): self.path = "/" + self.path
             if self.path.startswith("/dash/"):   # a run's dashboard streams as it arrives: never buffered, never rewritten
-                return getattr(app["mod"].H, "do_" + method)(self)
+                return getattr(self.profile, "do_" + method)(self)
             real, buf = self.wfile, io.BytesIO()
             self.wfile = buf
-            try: getattr(app["mod"].H, "do_" + method)(self)
+            try: getattr(self.profile, "do_" + method)(self)
             finally: self.wfile = real
             head, sep, body = buf.getvalue().partition(b"\r\n\r\n")
             real.write(head + sep + (rewrite(body, slug) if b"text/html" in head or b"application/json" in head else body))

@@ -63,12 +63,12 @@ def fleet(tmp_path_factory):
     spec.loader.exec_module(mux)
     apps = mux.load_apps()
     stub = ThreadingHTTPServer(("127.0.0.1", 0), Stream)
-    threading.Thread(target=stub.serve_forever, daemon=True).start()
+    threading.Thread(target=stub.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     for slug in apps:
         apps[slug]["mod"].runs = lambda: []
     apps["alpha"]["mod"].run_list = lambda: [{"id": RUN, "port": stub.server_address[1]}]
     srv = mux.server(0, apps)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     yield {"port": srv.server_address[1], "stream": Stream}
     srv.shutdown()
     stub.shutdown()
