@@ -2,7 +2,7 @@
 import ast
 import importlib.util
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,7 +13,7 @@ CFD_PY = SCRIPTS / "board_cfd.py"
 COLUMNS = ["Todo", "Doing", "Closed"]
 
 
-def _epoch(*args, tz=timezone.utc):
+def _epoch(*args, tz=UTC):
     return datetime(*args, tzinfo=tz).timestamp()
 
 
