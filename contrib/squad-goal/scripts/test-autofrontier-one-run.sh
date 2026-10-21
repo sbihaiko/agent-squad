@@ -452,6 +452,19 @@ issues '[{"number":331,"title":"a","body":"b","card":"Backlog","labels":[{"name"
 r=$(run)
 ! $G -q '^FRONTIER idle:' <<<"$r" && ok "I4: a pass with no Todo card writes no idle line" || ko "I4: '$r'"
 
+# I5 (#744): an idle pass leaves the streak it started in $SG_STATE/frontier-idle -- the epoch it began and its own line --
+#     so the janitor can raise one alert when the frontier holds Todo work and starts none past a bound. A pass that
+#     dispatches drops the file, so the next idle starts the clock again without any other writer.
+scene idlestreak
+issues '[{"number":341,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]},{"number":342,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]}]'
+r=$(run); m=$SG_STATE/frontier-idle
+[ -s "$m" ] && $G -q 'FRONTIER idle: 2 todo, 0 startable' "$m" && ok "I5: an idle pass records the streak and its own line" || ko "I5: no streak marker: '$(cat "$m" 2>/dev/null)'"
+first=$(cut -f1 "$m"); sleep 1; r=$(run)
+[ -s "$m" ] && [ "$(cut -f1 "$m")" = "$first" ] && ok "I5: a later idle pass keeps the streak's start" || ko "I5: the streak restarted ($first -> '$(cat "$m" 2>/dev/null)')"
+issues '[{"number":341,"title":"a","body":"b","labels":[{"name":"wave:01"}]},{"number":342,"title":"a","body":"b","unready":true,"labels":[{"name":"enhancement"}]}]'
+r=$(run)
+[ "$(marked 341)" = 1 ] && [ ! -e "$m" ] && ok "I5: a pass that dispatches drops the streak, so the clock starts again" || ko "I5: marker after a dispatch: '$(cat "$m" 2>/dev/null)'"
+
 rm -rf "$T"
 [ "$fail" = 0 ] && { echo "autofrontier one-run: all checks green"; exit 0; }
 echo "autofrontier one-run: FAILED"; exit 1
