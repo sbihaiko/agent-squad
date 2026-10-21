@@ -1059,11 +1059,14 @@ def _nightly_status():
     TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704): the last full run in both modes, its result, the sha it ran
     at, each mode's own result and the failing test ids. None when the file is absent or is not that line.
 
-    A record whose modes are outside pass|fail, or whose result contradicts them — a `pass` over a red mode — is not that
-    line either: a record the hub cannot trust is no reading, and it never draws a pass. The record is one line, and it is
-    read whole: a file with anything after its one line is no reading either, because a first line alone never proves the
-    file whole. `gh_dispatch_hold` drops the same lines, so the hub and the hold never disagree about which record they
-    are looking at (ADR-0153)."""
+    `<ids>` is ONE JSON array of strings, `[]` when none: a pytest node id may itself carry a space (a parametrized case
+    id), so the ids are never read as a whitespace-separated list, which would cut such an id in two.
+
+    A record whose modes are outside pass|fail, whose ids are not that array, or whose result contradicts its modes — a
+    `pass` over a red mode — is not that line either: a record the hub cannot trust is no reading, and it never draws a
+    pass. The record is one line, and it is read whole: a file with anything after its one line is no reading either,
+    because a first line alone never proves the file whole. `gh_dispatch_hold` drops the same lines, so the hub and the
+    hold never disagree about which record they are looking at (ADR-0153)."""
     text = _read(STATE / "nightly-result")
     if text.endswith("\n"): text = text[:-1]   # the one line may end in a newline, and nothing else follows it
     if "\n" in text: return None
@@ -1071,8 +1074,10 @@ def _nightly_status():
     if len(f) != 6 or not f[0].isdigit() or f[1] not in ("pass", "fail") or not f[2]: return None
     if f[3] not in ("pass", "fail") or f[4] not in ("pass", "fail"): return None
     if f[1] != ("pass" if f[3] == "pass" and f[4] == "pass" else "fail"): return None
-    return {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4],
-            "ids": [] if f[5] in ("", "-") else f[5].split(), "ts": float(f[0])}
+    try: ids = json.loads(f[5])
+    except (TypeError, ValueError): return None
+    if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids): return None
+    return {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4], "ids": ids, "ts": float(f[0])}
 
 def _newest_mtime(*paths):
     ts = []

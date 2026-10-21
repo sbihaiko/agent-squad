@@ -132,11 +132,13 @@ gh_land_stop() {
 # A missing or unreadable record never holds, by the same rule as above.
 
 # sg_nightly_red   A nightly result record's failing ids when the record is a readable RED one, nothing otherwise. The
-# record is one line, `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704). A line
-# the loop cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not a number, an empty
-# sha, a result or a mode outside pass|fail, or a result that contradicts the modes. The record is read whole: a file that
-# carries anything after its one line is not that record either, because a first line alone never proves the file whole.
-# The hub drops the same lines, so the two readers never disagree about which record they are looking at.
+# record is one line, `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704), where
+# `<ids>` is ONE JSON array of strings, `[]` when none: a pytest node id may carry a space, so the ids are never split at
+# whitespace. A line the loop cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not
+# a number, an empty sha, a result or a mode outside pass|fail, ids that are not one array of strings, or a result that
+# contradicts the modes. The record is read whole: a file that carries anything after its one line is not that record
+# either, because a first line alone never proves the file whole. The hub drops the same lines, so the two readers never
+# disagree about which record they are looking at.
 sg_nightly_red() {
   local rec nf ts res sha par ser ids
   [ -r "$1" ] || return 1
@@ -155,7 +157,12 @@ sg_nightly_red() {
     fail:fail:pass|fail:pass:fail|fail:fail:fail) ;;   # a red result names at least one red mode, and nothing else
     *) return 1;;                                      # a pass, or a result its modes contradict
   esac
-  printf '%s\n' "${ids:--}"
+  # The ids are one JSON array of strings, read as that array and never as words: a node id may carry a space.
+  printf '%s' "$ids" | python3 -c 'import json,sys
+try: v=json.load(sys.stdin)
+except Exception: sys.exit(1)
+if type(v) is not list or not all(type(x) is str for x in v): sys.exit(1)
+print(", ".join(v) if v else "no test named")' 2>/dev/null || return 1
 }
 
 gh_dispatch_hold() {

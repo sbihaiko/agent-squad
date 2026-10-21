@@ -10,9 +10,10 @@
 # once. The marker is written after the run, so a suite that dies leaves no marker and the next cycle tries again.
 # One result record, written atomically (ADR-0030), is what the hub reads:
 #   $SG_STATE/nightly-result: `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>`
-# The result is a pass only when both modes pass. `<ids>` is the failing test ids, space separated, or `-` when none; a mode
-# that failed names at least the tests it failed, and the hub draws them. A red record holds dispatch (ghcall.sh,
-# gh_dispatch_hold) until one green run replaces it.
+# The result is a pass only when both modes pass. `<ids>` is ONE JSON array of the complete failing test ids, `[]` when
+# none; a mode that failed names at least the tests it failed, and the hub draws them. An id is never split at a space,
+# so a parametrized case id such as `test_x[case with space]` reaches the hub whole. A red record holds dispatch
+# (ghcall.sh, gh_dispatch_hold) until one green run replaces it.
 # A red result raises one alert on the path health.sh already uses: one line in $SG_STATE/alerts.log and one notification
 # (HEALTH_NOTIFY overrides the notifier). The two mode logs stay in $SG_STATE/nightly-parallel.log and nightly-serial.log.
 here="$(cd "$(dirname "$0")" && pwd)"; st=${SG_STATE:-/tmp/sg-state}
@@ -37,16 +38,26 @@ par=${SG_NIGHTLY_PARALLEL:-"$py -m pytest -p no:deepeval -n auto"}
 ser=${SG_NIGHTLY_SERIAL:-"$py -m pytest -p no:deepeval -p no:xdist"}
 # A failing id is whatever pytest's short summary names after `FAILED ` or `ERROR `: a node id, or the file a
 # collection error names (`ERROR tests/test_module.py`, no `::`). Both are what the hub shows, so neither is dropped.
-ids_of() { sed -n -e 's/^FAILED \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ ]*\).*/\1/p' "$1" | sort -u; }
+# pytest writes ` - ` and the failure's message after the id, so the id is the line up to the FIRST ` - `; the rest is
+# the message and is never part of the id. A node id may itself carry a space (a parametrized case id such as
+# `test_x[case with space]`), so the ids are never split at whitespace: the record carries them as ONE JSON array on its
+# one line, and both readers (hub.py, ghcall.sh) parse that array and never a word of it.
+ids_of() { sed -n -e 's/^FAILED //p' -e 's/^ERROR //p' "$1" | sed -e 's/ - .*//'; }
 pout=$st/nightly-parallel.log; sout=$st/nightly-serial.log
 pm=pass; ( cd "$tree" && bash -c "$par" ) > "$pout" 2>&1 || pm=fail
 sm=pass; ( cd "$tree" && bash -c "$ser" ) > "$sout" 2>&1 || sm=fail   # both modes always run: the record says which one broke
-ids=$({ ids_of "$pout"; ids_of "$sout"; } | sort -u | tr '\n' ' ' | sed 's/ $//'); ids=${ids:--}
+failed=$st/nightly-failing.$$   # one complete id per line, so no id is ever split
+{ ids_of "$pout"; ids_of "$sout"; } | sort -u > "$failed"
+nfail=$(awk 'END{print NR}' "$failed")
+ids=$("$py" -c 'import json,sys; print(json.dumps([l for l in sys.stdin.read().split("\n") if l], separators=(",", ":")))' < "$failed") \
+  || { rm -f "$failed"; echo "nightly: the failing ids could not be encoded" >&2; exit 1; }
+rm -f "$failed"
 res=pass; { [ "$pm" = pass ] && [ "$sm" = pass ]; } || res=fail
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$res" "$tip" "$pm" "$sm" "$ids" > "$st/nightly-result.$$" \
   && mv -f "$st/nightly-result.$$" "$st/nightly-result" || { echo "nightly: the result record could not be written" >&2; exit 1; }
 if [ "$res" = fail ]; then
-  msg="NIGHTLY full suite red at ${tip:0:7}: $(printf '%s\n' "$ids" | wc -w | tr -d ' ') failing test(s)"
+  if [ "$nfail" -gt 0 ]; then msg="NIGHTLY full suite red at ${tip:0:7}: $nfail failing test(s)"
+  else msg="NIGHTLY full suite red at ${tip:0:7}: no failing test named"; fi
   printf '%s %s\n' "$(date '+%F %T')" "$msg" >> "$st/alerts.log"
   notify=${HEALTH_NOTIFY:-/usr/bin/osascript}
   "$notify" -e "display notification \"${msg//\"/\'}\" with title \"squad-goal\"" >/dev/null 2>&1
