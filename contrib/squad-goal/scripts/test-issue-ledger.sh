@@ -37,6 +37,16 @@ L wave 'x/z#12' run-e entered 'entered wave/run-e at s1' >/dev/null; L wave 'x/z
 L wave 'x/z#13' run-e entered 'entered wave/run-e at s2' >/dev/null; L wave 'x/z#14' run-f held 'no review yet' >/dev/null
 [ "$(L entered x/z | sort | tr '\t\n' ': ')" = "run-e:12 run-e:13 " ] && ok "the ledger lists each run a child entered, after a later event too" || ko "entered: '$(L entered x/z)'"
 [ -z "$(L entered x/q)" ] && ok "a repository with no ledger lists no entry" || ko "entered x/q: '$(L entered x/q)'"
+# A landing try and an owed close are ledger facts of the run (ADR-0149): `landtry` counts the run's failed landings for the
+# issue and prints the count, `owe` keeps the issue a landed wave could not close, and `owed` lists them for the run.
+[ "$(L landtry 'x/z#20' run-g 'the rebase conflicts')" = 1 ] && [ "$(L landtry 'x/z#20' run-g 'the rebase conflicts')" = 2 ] \
+  && ok "each failed landing counts one try, the same cause too" || ko "landtry: '$(L read 'x/z#20' wave)'"
+[ "$(L read 'x/z#20' wave | python3 -c 'import json,sys; f=json.load(sys.stdin)["run-g"]; print(f["state"], f["tries"])')" = "stuck 2" ] \
+  && ok "the tries are the run's stuck fact" || ko "tries fact: '$(L read 'x/z#20' wave)'"
+[ "$(L owe 'x/z#21' run-g wave/run-g abc)" = recorded ] && [ "$(L owed x/z run-g | tr '\t' :)" = "abc:wave/run-g:21" ] \
+  && ok "an issue a landed wave could not close is owed in its ledger" || ko "owed: '$(L owed x/z run-g)'"
+L wave 'x/z#21' run-g delivered 'landed wave/run-g in dev as abc' >/dev/null
+[ -z "$(L owed x/z run-g)" ] && ok "a delivered issue is owed no more" || ko "owed after delivery: '$(L owed x/z run-g)'"
 # A kill in a write leaves a temp file beside the old file: the old file reads whole, and the next event writes.
 printf '{"tor' > "$T/st/state/x__y__9.json.zz.tmp"
 [ "$(W run-d)" = "held gate lock" ] && [ "$(L wave 'x/y#9' run-d entered 'in')" = recorded ] && ok "a write killed before its rename loses nothing" || ko "torn temp: '$(L read 'x/y#9')'"

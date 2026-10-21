@@ -62,6 +62,7 @@ rev() { local n=$1 sha; sha=$($G -C "$T/c$n" rev-parse HEAD); rm -f "$T/st/revie
 en() { local n=$1; rev "$n"; (cd "$T/c$n" && SG_WAVE_GATES=${GATES-true} bash "$T/s/wave.sh" enter run-1 "$n"); }
 # wfact <issue> <run>: the wave fact the issue's ledger holds for the run, "<state> <cause>" (ADR-0149: wave events write it).
 wfact() { SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#$1" wave 2>/dev/null | python3 -c 'import json,sys; r=json.load(sys.stdin).get(sys.argv[1]) or {}; print(r.get("state",""), r.get("cause",""))' "$2" 2>/dev/null; }
+tries() { SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read "x/y#$1" wave 2>/dev/null | python3 -c 'import json,sys; print((json.load(sys.stdin).get(sys.argv[1]) or {}).get("tries",""))' "$2" 2>/dev/null; }
 entered() { $O merge-base --is-ancestor "$($G -C "$T/c$1" rev-parse HEAD)" $W 2>/dev/null && echo yes || echo no; }
 # The wave's landing pass runs beside the run, never in the owner's checkout (it works in a throwaway clone).
 land() { (cd "$T/co" && bash "$T/s/wave.sh" land "$@"); }
@@ -277,6 +278,7 @@ case "$r" in *"#40"*"did not close"*) ok "E3: the close that failed is named";; 
 # the run's wave marker stays; a later pass tries the close again, and the delivery is recorded once the close succeeds.
 [ "$rc" != 0 ] && ok "E3b: a landing that could not close an issue exits non-zero" || ko "E3b: the landing exited 0 with #40 still open"
 [ -e "$T/st/auto/wave-run-3" ] && ok "E3b: the run keeps its wave marker, so a later pass lands it again" || ko "E3b: the wave marker is gone: nothing tries the close again"
+case "$(wfact 40 run-3)" in "owed "*) [ ! -e "$T/st/auto/wowed-run-3" ] && ok "E3b: the owed close is a fact in the issue's ledger, with no wowed- marker" || ko "E3b: a wowed- marker is written";; *) ko "E3b: ledger fact of #40: '$(wfact 40 run-3)'";; esac
 printf '#!/bin/bash\necho "$*" >> "%s/gh.log"\ncase "$*" in *"issues/"*) echo "{\\"number\\":1,\\"state\\":\\"closed\\"}";; *) echo "{}";; esac\n' "$T" > "$T/bin/gh"; chmod +x "$T/bin/gh"
 : > "$T/gh.log"; : > "$T/board.log"; : > "$T/pushes.log"; dev0=$($O rev-parse dev)
 r=$(land2 run-3); rc=$?
@@ -287,6 +289,7 @@ r=$(land2 run-3); rc=$?
 [ "$(awk -F'\t' '$4=="40"' "$T/st/landed.tsv" 2>/dev/null | wc -l | tr -d ' ')" = 1 ] && ok "E3b: the ledger carries one row for #40" || ko "E3b: the ledger row for #40 is not single"
 [ "$($O rev-parse dev)" = "$dev0" ] && [ -z "$(cat "$T/pushes.log")" ] && ok "E3b: the later pass pushes nothing" || ko "E3b: the later pass pushed"
 [ ! -e "$T/st/auto/wave-run-3" ] && ok "E3b: the wave marker goes once the issue is delivered" || ko "E3b: the wave marker stays after delivery"
+case "$(wfact 40 run-3)" in "delivered "*) ok "E3b: the owed fact turns delivered";; *) ko "E3b: ledger fact of #40 after delivery: '$(wfact 40 run-3)'";; esac
 
 # E4: the issues a wave carries are read from the whole message of each commit and named once (#375 review). A `Refs #N`
 # that sits in a commit body closes its issue like one in a subject, and an issue two commits (or one commit twice) name is
@@ -378,12 +381,19 @@ $O rev-parse -q --verify "refs/heads/$W7" >/dev/null && ok "K: the wave branch k
 # K2 (#477): a landing that exits 2 -- the wave branch is gone, the base is gone, or the checkout failed -- is a landing
 # that failed, so it counts toward the same cap. Below the cap the marker stays and the next cycle tries again; at the cap
 # the marker and the wave start go, so no wave-<run> hold outlives a landing that can never happen.
-mkdir -p "$T/st/auto"; echo wave/run-gone > "$T/st/auto/wave-run-gone"; date +%s > "$T/st/auto/wave-start-run-gone"
+mkdir -p "$T/st/auto" "$T/co/runs/run-gone"; echo wave/run-gone > "$T/st/auto/wave-run-gone"; date +%s > "$T/st/auto/wave-start-run-gone"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #95 work"}}' > "$T/co/runs/run-gone/record.jsonl"
 r1=$(land2 run-gone); rc1=$?; r2=$(land2 run-gone); rc2=$?
+[ "$(tries 95 run-gone)" = 2 ] && [ ! -e "$T/st/auto/wland-tries-run-gone" ] && ok "K2: each try is counted in the ledger of the run's issue, with no wland-tries- marker" || ko "K2: tries '$(tries 95 run-gone)', $(/bin/ls "$T/st/auto")"
 [ $rc1 = 2 ] && [ $rc2 = 2 ] && [ -e "$T/st/auto/wave-run-gone" ] && ok "K2: a landing with no wave branch exits 2 and keeps its marker below the cap" || ko "K2: exits $rc1 $rc2, marker $([ -e "$T/st/auto/wave-run-gone" ] && echo kept || echo gone): '$r1'"
 r3=$(land2 run-gone); rc3=$?
 [ $rc3 = 2 ] && [ ! -e "$T/st/auto/wave-run-gone" ] && [ ! -e "$T/st/auto/wave-start-run-gone" ] && ok "K2: the third exit-2 landing clears the hold" || ko "K2: exit $rc3, marker $([ -e "$T/st/auto/wave-run-gone" ] && echo kept || echo gone): '$r3'"
 case "$r3" in *"WAVE NEEDS-HUMAN wave/run-gone"*) ok "K2: the cleared hold is named on one NEEDS-HUMAN line";; *) ko "K2: no NEEDS-HUMAN line: '$r3'";; esac
+# K2b: a wave that names no issue (no Refs ahead of the base, no run record) has no ledger to count in and holds no issue,
+# so its first failed landing clears its hold.
+echo wave/run-none > "$T/st/auto/wave-run-none"; r=$(land2 run-none); rc=$?
+[ $rc = 2 ] && [ ! -e "$T/st/auto/wave-run-none" ] && case "$r" in *"WAVE NEEDS-HUMAN wave/run-none"*"names no issue"*) true;; *) false;; esac \
+  && ok "K2b: a wave with no issue clears its hold at its first failed landing" || ko "K2b: exit $rc, $(/bin/ls "$T/st/auto" | /usr/bin/grep run-none): '$r'"
 
 # K3 (#656): a fetch that fails on a network error (DNS, connect, timeout) is no landing that failed for good: the next
 # cycle can land. It counts no try, freezes nothing, prints one WAVE-NETWORK line and exits 2. The remote is reached through
@@ -392,30 +402,32 @@ printf '#!/bin/bash\nwhile [ $# -gt 0 ] && [ "$1" != stub ]; do shift; done; shi
 netland() { (cd "$T/co" && SG_LAND_REMOTE="ssh://stub$T/origin.git" GIT_SSH_COMMAND="$T/bin/ssh-stub" bash "$T/s/wave.sh" land "$1" 2>&1); }
 W8=wave/run-8; start2 run-8 >/dev/null; child 80 nf "origin/$W8"; en2 run-8 80 >/dev/null
 : > "$T/netdown"; : > "$T/gh.log"; before=$($O rev-parse dev); nr=""
-tr=""; for i in 1 2 3; do r=$(netland run-8); rc=$?; nr="$nr$rc "; tr="$tr$(cat "$T/st/auto/wland-tries-run-8" 2>/dev/null)"; done
+tr=""; for i in 1 2 3; do r=$(netland run-8); rc=$?; nr="$nr$rc "; tr="$tr$(tries 80 run-8)"; done
 [ "$nr" = "2 2 2 " ] && ok "K3: a landing whose fetch fails on the network exits 2" || ko "K3: exits $nr: '$r'"
 case "$r" in *"WAVE-NETWORK"*"Could not resolve host"*"lands on a later cycle"*) ok "K3: the network failure is named on one WAVE-NETWORK line";; *) ko "K3: no WAVE-NETWORK line: '$r'";; esac
 case "$r" in *"WAVE-ERROR"*|*"NEEDS-HUMAN"*) ko "K3: a network failure is read as a stuck landing: '$r'";; *) ok "K3: a network failure is no stuck landing";; esac
-[ -z "$tr" ] && [ ! -e "$T/st/auto/wland-tries-run-8" ] && ok "K3: three network failures count no landing try" || ko "K3: tries counted: '$tr'"
+[ -z "$tr" ] && ok "K3: three network failures count no landing try" || ko "K3: tries counted: '$tr'"
 /usr/bin/grep -q 'frozen:owner' "$T/gh.log" && ko "K3: a network failure froze the issue" || ok "K3: a network failure freezes nothing"
 [ -e "$T/st/auto/wave-run-8" ] && ok "K3: the run keeps its wave marker" || ko "K3: the wave marker is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K3: dev does not move while the network is down" || ko "K3: dev moved"
 rm -f "$T/netdown"; r=$(netland run-8); rc=$?
 [ $rc = 0 ] && [ "$($O cat-file -e dev:nf 2>/dev/null && echo yes)" = yes ] && ok "K3: the next good landing lands the wave" || ko "K3: exit $rc: '$r'"
 # A fetch that answers and lacks the ref still counts, on the same remote.
-echo wave/run-gone8 > "$T/st/auto/wave-run-gone8"; r=$(netland run-gone8); rc=$?
-[ $rc = 2 ] && [ "$(cat "$T/st/auto/wland-tries-run-gone8" 2>/dev/null)" = 1 ] && ok "K3: a fetch that lacks the ref still counts a try" || ko "K3: exit $rc, tries '$(cat "$T/st/auto/wland-tries-run-gone8" 2>/dev/null)': '$r'"
-rm -f "$T/st/auto/wave-run-gone8" "$T/st/auto/wland-tries-run-gone8"
+echo wave/run-gone8 > "$T/st/auto/wave-run-gone8"; mkdir -p "$T/co/runs/run-gone8"
+printf '%s\n' '{"event": "spawn_accepted", "child": "a", "definition": {"prompt": "GitHub issue #96 work"}}' > "$T/co/runs/run-gone8/record.jsonl"
+r=$(netland run-gone8); rc=$?
+[ $rc = 2 ] && [ "$(tries 96 run-gone8)" = 1 ] && ok "K3: a fetch that lacks the ref still counts a try" || ko "K3: exit $rc, tries '$(tries 96 run-gone8)': '$r'"
+rm -f "$T/st/auto/wave-run-gone8"
 
 # K4 (#663): a landing that failed on a cause the loop itself caused -- here the base battery is red and no child's own
 # suite names the cause -- counts no landing try and freezes nothing: it is named once per issue it carries as
 # WAVE-LOOP-CAUSED, and the wave stays to land on a later cycle. A real work failure still counts and freezes at the cap (K).
 W16=wave/run-16; start2 run-16 >/dev/null; child 160 lg "origin/$W16"; en2 run-16 160 >/dev/null
 : > "$T/gh.log"; before=$($O rev-parse dev); lr=""; tr=""
-for i in 1 2 3; do r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_GATES=true land2 run-16); rc=$?; lr="$lr$rc "; tr="$tr$(cat "$T/st/auto/wland-tries-run-16" 2>/dev/null)"; done
+for i in 1 2 3; do r=$(SG_WAVE_TIP_GATES=false SG_WAVE_CHILD_GATES=true land2 run-16); rc=$?; lr="$lr$rc "; tr="$tr$(tries 160 run-16)"; done
 [ "$lr" = "1 1 1 " ] && ok "K4: a loop-caused landing failure exits 1" || ko "K4: exits $lr: '$r'"
 case "$r" in *"WAVE-LOOP-CAUSED #160:"*"no child's own suite names the cause; not counted"*) ok "K4: the loop-caused failure is named once per issue";; *) ko "K4: no WAVE-LOOP-CAUSED line: '$r'";; esac
-[ -z "$tr" ] && [ ! -e "$T/st/auto/wland-tries-run-16" ] && ok "K4: three loop-caused failures count no landing try" || ko "K4: tries counted: '$tr'"
+[ -z "$tr" ] && ok "K4: three loop-caused failures count no landing try" || ko "K4: tries counted: '$tr'"
 /usr/bin/grep -q 'frozen:owner' "$T/gh.log" && ko "K4: a loop-caused failure froze the issue" || ok "K4: a loop-caused failure freezes nothing"
 [ -e "$T/st/auto/wave-run-16" ] && ok "K4: the run keeps its wave marker" || ko "K4: the wave marker is gone"
 [ "$($O rev-parse dev)" = "$before" ] && ok "K4: dev does not move on a loop-caused failure" || ko "K4: dev moved"
@@ -609,7 +621,7 @@ t0=$(date +%s); r=$(SERIAL_WAIT_SECONDS=8 SG_WAVE_TIP_GATES="bash '$T/s/gate.sh'
 [ $rc != 0 ] && [ $((t1 - t0)) -lt 6 ] && ok "Q: a landing under a held gate lock returns at once" || ko "Q: land exit $rc after $((t1 - t0)) s: '$r'"
 case "$r" in *"WAVE WAIT $W30"*"gate lock"*) ok "Q: the landing names the held gate lock";; *) ko "Q: no wait line: '$r'";; esac
 case "$r" in *"WAVE CHECK RED"*) ko "Q: a held gate lock read as a red tip: '$r'";; *) ok "Q: a held gate lock is no red tip";; esac
-[ ! -e "$T/st/auto/wland-tries-run-30" ] && ok "Q: a held gate lock spends no landing try" || ko "Q: a try was counted"
+[ -z "$(tries 301 run-30)" ] && ok "Q: a held gate lock spends no landing try" || ko "Q: a try was counted"
 [ "$($O rev-parse dev)" = "$before" ] && ok "Q: dev does not move while the lock is held" || ko "Q: dev moved"
 rm -rf "$T/st/locks/gate"; kill $hp 2>/dev/null
 r=$(SG_WAVE_TIP_GATES="bash '$T/s/gate.sh' true" land2 run-30 2>&1); rc=$?
@@ -696,7 +708,7 @@ start2 run-51 >/dev/null; child 510 g510 "origin/wave/run-51"; en2 run-51 510 >/
 r=$(SG_WAVE_TIP_GATES="echo 'fast-gate: unknown: no class; inconclusive'; exit 4" SG_WAVE_CHILD_GATES='exit 1' land2 run-51 2>&1); rc=$?
 [ $rc != 0 ] && ! $O cat-file -e dev:g510 2>/dev/null && case "$r" in *inconclusive*) true;; *) false;; esac && ok "AA: an inconclusive tip check holds the landing and says so" || ko "AA: tip exit $rc: '$r'"
 case "$r" in *"WAVE CHECK RED"*|*REQUEUE*) ko "AA: an inconclusive tip check blamed a child: '$r'";; *) ok "AA: an inconclusive tip check blames no child";; esac
-[ ! -e "$T/st/auto/wland-tries-run-51" ] && ok "AA: an inconclusive tip check counts no landing try" || ko "AA: tries $(cat "$T/st/auto/wland-tries-run-51")"
+[ -z "$(tries 510 run-51)" ] && ok "AA: an inconclusive tip check counts no landing try" || ko "AA: tries $(tries 510 run-51)"
 
 # The ledger replaced the auto/excluded-<run>-<n> marker (ADR-0149 rule 6): no case leaves one.
 [ -z "$(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-')" ] && ok "no excluded- marker is written" || ko "excluded markers: $(/bin/ls "$T/st/auto" | /usr/bin/grep '^excluded-' | tr '\n' ' ')"
