@@ -226,17 +226,27 @@ def test_a_gate_lock_shell_suite_is_executable(name):
 
 
 def test_two_hand_gates_started_at_once_run_one_after_the_other_in_short(tmp_path):
-    """The short form of the soak below: sub-second holds and a 50 ms poll, so the fast battery proves it."""
+    """The short form of the soak below. The first gate holds the lock until the second prints its wait line, so the proof
+    never races the slot take that gate.sh runs before the lock (a python start, seconds under load)."""
     d = _tree(tmp_path)
     log = tmp_path / "log"
-    cmd = ["bash", str(d / "gate.sh"), "sh", "-c", f"echo start >> {log}; sleep 0.25; echo end >> {log}"]
+    release = tmp_path / "release"
+    cmd = ["bash", str(d / "gate.sh"), "sh", "-c", f"echo start >> {log}; while [ ! -e {release} ]; do sleep 0.02; done; echo end >> {log}"]
     env = _env(tmp_path / "st") | POLL | {"SERIAL_WAIT_SECONDS": "20", "SERIAL_HOLD_SECONDS": "20"}
     first = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE, text=True)
-    deadline = time.time() + 5
-    while not log.exists() and time.time() < deadline:
-        time.sleep(0.02)
-    second = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE, text=True)
-    err = first.communicate(timeout=30)[1] + second.communicate(timeout=30)[1]
+    try:
+        deadline = time.time() + 20
+        while not log.exists() and time.time() < deadline:
+            time.sleep(0.02)
+        second = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE, text=True)
+        seen = []
+        for line in second.stderr:   # EOF ends the read: the second gate gives up after SERIAL_WAIT_SECONDS
+            seen.append(line)
+            if WAIT_LINE.search(line):
+                break
+    finally:
+        release.touch()
+    err = first.communicate(timeout=60)[1] + "".join(seen) + second.communicate(timeout=60)[1]
     assert log.read_text().split() == ["start", "end", "start", "end"], "two gates overlapped, or one was dropped"
     assert len(WAIT_LINE.findall(err)) == 1, err
 
