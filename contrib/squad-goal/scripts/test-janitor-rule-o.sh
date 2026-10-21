@@ -1,8 +1,10 @@
 #!/bin/bash
 # Rule O (#1811): `landed` is the pass of the stage that lands the work, and the release must actually happen.
 #  (A) a failed run whose only pass is the router's landed nothing -> its marker is dropped, and rule R (the card's one owner) writes Todo;
-#  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed) keeps card and marker,
-#      and the card stops at Code Complete (#239: a local landing is not a merge into the base, so it is not Done);
+#  (B) a failed run that DID land (a `land` event with outcome pass, even when a later stage failed), and whose landing reached
+#      the landing branch (its head is an ancestor of origin/dev), keeps card and marker, and the card stops at Code Complete (#239: not Done);
+#  (G) a failed run whose landing is only its local land commit (the head is in no origin/dev) delivered nothing (#691, ADR-0143):
+#      the card goes back to Todo and the marker is dropped, so the issue dispatches again;
 #  (C) an issue a work branch names keeps its marker (#382: a branch, never a pull request), but a failed run's branch is stale:
 #      the card goes back to Todo, never forward to Code Complete (#660; ADR-0143: nothing delivered is the one backward move).
 # The gh stub answers the same way the live API does, including its refusal of a POST to /search/issues:
@@ -29,13 +31,17 @@ case "$a" in
   *repos/x/y/compare/*) echo ahead;;
   *projectsV2/4/fields*) echo FID4;;
   *projectsV2/1/fields*) echo FID1;;
-  *projectsV2/4/items*) for n in 801 802 803; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
+  *projectsV2/4/items*) for n in 801 802 803 807; do printf '%s\tIn Progress\n' "$n"; done;;   # one read, every card
   *projectsV2/1/items*) for n in 801 802 803; do printf '%s\tDoing\n' "$n"; done;;
   *issues/806*) [ -e "TMPDIR/806ok" ] && echo open || exit 1;;   # F: the first state read is refused, the next answers
   *issues/80*) echo open;;
 esac
 J
 sed -i '' "s|TMPDIR|$T|" "$T/bin/gh"; chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
+# The checkout's origin/dev holds one commit; a second commit sits only on a local work branch, as a run's own land commit does (#691).
+g() { /usr/bin/git -C "$T/co" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+g init -q; g commit -q --allow-empty -m base; g update-ref refs/remotes/origin/dev HEAD; inbase=$(g rev-parse HEAD)
+g commit -q --allow-empty -m 'squad: land route.router.1 (run-local)'; local=$(g rev-parse HEAD)
 mk() { mkdir -p "$T/co/runs/$1"; echo "$1" >> "$T/st/active-runs.txt"; printf 'CHILD — GitHub issue(s) %s (bug; one PR):\n' "$2" > "$T/co/runs/$1/request.txt"; }
 # A: failed run, nothing landed, the router's own pass is the only pass in the record
 mk run-router 801
@@ -43,7 +49,7 @@ printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #
 echo run-router > "$T/st/auto/disp-801"
 # B: failed run that landed a change: a land pass, then a later stage that failed
 mk run-land 802
-printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #802 on fix/802-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "head": "a7df8f1ecff77bdb5833721121a7a50be4066053"}}\n{"event": "outcome", "node": "final_gate", "entry": 1, "outcome": "fail", "reasons": ["ac-verify:no_ac_commands"]}\n{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:no_ac_commands"], "exit_code": 1}\n' > "$T/co/runs/run-land/record.jsonl"
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #802 on fix/802-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "head": "%s"}}\n{"event": "outcome", "node": "final_gate", "entry": 1, "outcome": "fail", "reasons": ["ac-verify:no_ac_commands"]}\n{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:no_ac_commands"], "exit_code": 1}\n' "$inbase" > "$T/co/runs/run-land/record.jsonl"
 echo run-land > "$T/st/auto/disp-802"
 # C: failed run that landed nothing, but a work branch names the issue
 mk run-pr 803
@@ -61,14 +67,20 @@ echo autobug-live > "$T/st/auto/bug-805"
 mk run-flaky 806
 printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #806 on fix/806-x"}\n{"event": "verdict", "verdict": "failed", "reasons": ["run_spend_cap"], "exit_code": 1}\n' > "$T/co/runs/run-flaky/record.jsonl"
 echo run-flaky > "$T/st/auto/disp-806"
+# G: failed run that landed only locally: its land commit is on its work branch and never reached origin/dev (#691)
+mk run-local 807
+printf '{"event": "spawn_accepted", "child": "c1", "definition": "GitHub issue #807 on gui/807-x"}\n{"event": "land", "node": "route.router.1", "parent": "route", "entry": 1, "outcome": "pass", "reasons": [], "effect": {"name": "merge_land", "before": "%s", "head": "%s"}}\n{"event": "outcome", "node": "final_gate", "entry": 1, "outcome": "fail", "reasons": ["ac-verify:fast-gate"]}\n{"event": "verdict", "verdict": "failed", "reasons": ["ac-verify:fast-gate"], "exit_code": 1}\n' "$inbase" "$local" > "$T/co/runs/run-local/record.jsonl"
+echo run-local > "$T/st/auto/disp-807"
 touch -t 202001010000 "$T/co/runs"/run-*/record.jsonl
 o=$(SG_STATE="$T/st" SG_CHECKOUT="$T/co" SG_REPO=x/y SG_OWNER=o SG_PROJECT=4 SG_BUG_PROJECT=1 SG_TODO=Todo SG_BUG_DOING=Doing SG_BUG_TRIAGE="To triage" SG_BASE=main SG_HUB_DIR="$T/st" JANITOR_NOTIFY="$T/notify" python3 -I "$T/s/janitor.py" 2>&1)
 /usr/bin/grep -q '^o 4 Todo 801$' "$T/board.calls" 2>/dev/null && ok "O: failed run whose only pass is the router's -> card back to Todo" || ko "O #801 not demoted: $(cat "$T/board.calls" 2>/dev/null) $o"
 [ ! -e "$T/st/auto/disp-801" ] && ok "O: failed run whose only pass is the router's -> marker dropped" || ko "O disp-801 kept: $o"
 /usr/bin/grep -q 'DISPATCH-FAILED #801' "$T/st/cycle.log" 2>/dev/null && ok "O: reported run + reason" || ko "O cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -l 'no_landed_change' "$T/st/cq/"*801* >/dev/null 2>&1 && /usr/bin/grep -q 'run-router' "$T/st/cq/"*801* && ok "O: comment names the run and the reason" || ko "O comment: $(ls "$T/st/cq" 2>/dev/null)"
-/usr/bin/grep -q '^o 4 Code Complete 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a run that landed stops at Code Complete, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Code Complete 802$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Done 802' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-802" ] && ok "O: a failed run whose landing reached origin/dev stops at Code Complete, never Done, and keeps its marker" || ko "O #802 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
 /usr/bin/grep -q '^o 4 Todo 803$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -q 'Code Complete 803' "$T/board.calls" 2>/dev/null && [ -e "$T/st/auto/disp-803" ] && ok "O: a failed run's stale work branch keeps its marker, and its card goes back to Todo" || ko "O #803 not reconciled: $(cat "$T/board.calls" 2>/dev/null)"
+/usr/bin/grep -q '^o 4 Todo 807$' "$T/board.calls" 2>/dev/null && ! /usr/bin/grep -Eq 'Code Complete 807|Done 807' "$T/board.calls" 2>/dev/null && ok "R: a failed run whose landing never reached origin/dev delivered nothing, so its card goes back to Todo (#691)" || ko "R #807 not back in Todo: $(cat "$T/board.calls" 2>/dev/null)"
+[ ! -e "$T/st/auto/disp-807" ] && /usr/bin/grep -q 'DISPATCH-FAILED #807' "$T/st/cycle.log" 2>/dev/null && ok "O: a failed run's local-only landing drops its marker, so the issue dispatches again (#691)" || ko "O disp-807 kept: $(cat "$T/st/cycle.log" 2>/dev/null)"
 /usr/bin/grep -q 'repos/x/y/branches' "$T/branch.calls" 2>/dev/null && ok "O: the work-branch lookup reached the API" || ko "O: no work-branch lookup answered: $(cat "$T/branch.calls" 2>/dev/null)"
 [ ! -e "$T/st/auto/bug-804" ] && ok "O: a deleted child-worktree run releases its bug marker" || ko "O bug-804 kept: $o"
 /usr/bin/grep -q 'MISSING.*#804.*bug-804.*dropped' "$T/st/cycle.log" 2>/dev/null && ok "O: the missing-run release is named in cycle.log" || ko "O missing-run cycle.log: $(cat "$T/st/cycle.log" 2>/dev/null)"
