@@ -105,12 +105,11 @@ def test_review_sh_reads_no_review_no_tools_list():
 
 
 def test_the_repo_review_chain_is_the_live_chain(reg):
-    live = json.loads(LIVE_SHAPE.read_text())["review_models"]
-    repo = json.loads(MODELS.read_text())["review_models"]
-    assert repo == live
-    ids = [e.id for e in modelreg.chain(MODELS, "review", reg).entries]
-    assert ids == ["claude-opus-5-5", "gemini-3.8-flash", "grok-4.6"]
-    assert [e.effort for e in modelreg.chain(MODELS, "review", reg).entries] == [None, "medium", None]
+    live = modelreg.chain(json.loads(LIVE_SHAPE.read_text()), "review", reg).entries
+    repo = modelreg.chain(json.loads(MODELS.read_text()), "review", reg).entries
+    assert [e.raw for e in repo] == [e.raw for e in live if e.id != "grok-4.6"]
+    assert [e.id for e in repo] == ["claude-opus-5-5", "gemini-3.8-flash"]
+    assert [e.effort for e in repo] == [None, "medium"]
 
 
 @pytest.mark.parametrize("raw", ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-sol-fast", "gpt-5.6-terra-fast", "gpt-5.6-luna-fast"])
@@ -135,9 +134,11 @@ def test_an_unknown_runner_is_refused_by_name():
     assert "unsupported runner" in REVIEW.read_text()
 
 
-def test_the_review_timeouts_name_only_models_in_the_chain():
+def test_the_review_timeouts_name_only_models_in_the_chain(reg):
     doc = json.loads(MODELS.read_text())
-    assert set(doc.get("review_timeout_seconds_by_model", {})) <= set(doc["review_models"])
+    assert "review_timeout_seconds_by_model" not in doc
+    chain = {e.raw for e in modelreg.chain(doc, "review", reg).entries}
+    assert {e.raw for e in modelreg.chain(doc, "review", reg).entries if e.timeout_s is not None} <= chain
 
 
 

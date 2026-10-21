@@ -23,6 +23,7 @@ test-check-tdd-red.sh 5.05
 test-childcc.sh 9.14
 test-cluster.sh 7.87
 test-codex-reset.sh 0.15
+test-consult.sh 0.57
 test-cqflush-address.sh 1.82
 test-cqflush-interval.sh 0.13
 test-cqflush-status.sh 1.54

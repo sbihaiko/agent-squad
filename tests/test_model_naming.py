@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from squad import modelreg
 from squad.envelope import validate_request
 from squad.workflows import DYNAMIC_SEED
 
@@ -10,7 +11,7 @@ MODELS = ROOT / "contrib" / "squad-goal" / "scripts" / "models.json"
 
 def test_squad_goal_coding_chain_names_models_the_dispatch_envelope_can_run():
     """The request builder names coding_models[0]; the dispatch envelope must honor that id."""
-    chain = json.loads(MODELS.read_text())["coding_models"]
+    chain = [e.raw for e in modelreg.chain(json.loads(MODELS.read_text()), "coding").entries]
     graph = json.loads(DYNAMIC_SEED.read_text())
     allowed = {m for n in graph["nodes"] if n["kind"] == "dispatch" for m in n["allow"]["models"]}
     missing = [m for m in chain if m not in allowed]
@@ -25,7 +26,7 @@ def test_a_request_that_names_a_coding_model_fits_the_shipped_envelope():
     doc = json.loads(DYNAMIC_SEED.read_text())
     disp = next(n for n in doc["nodes"] if n["kind"] == "dispatch")
     router = next(n for n in doc["nodes"] if n["name"] == disp["entry"])
-    for model in json.loads(MODELS.read_text())["coding_models"]:
+    for model in [e.raw for e in modelreg.chain(json.loads(MODELS.read_text()), "coding").entries]:
         raw = {"prompt": "Move the counter into its own module.", "skill": "tdd", "model": model,
                "tools": list(router["tools"])}
         _, errs = validate_request(disp, raw, 1, router["tools"], disp["budget"]["spend"]["max"])
