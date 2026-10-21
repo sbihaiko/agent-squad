@@ -41,7 +41,7 @@ printf ': "${SG_REPO:=x/emu}"; SG_REPOS="x/emu x/tool"; SG_CHECKOUT=%s; %s\n' "$
 export PATH="$S/bin:$PATH" SG_SQUAD=$(cd "$here/../../.." && pwd) SQUAD_CAPS_DIR="$T/caps" SQUAD_CAPS_POLL=0.2 SG_STATE_BASE="$S/state"
 # one pass of the loop as profile $1: its output is dropped, its stderr is kept (env.sh's warning goes there)
 cycle() { : > "$S/launched"; : > "$S/ghlog"; rm -rf "$S/state"
-  ( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=$1 bash -c '. "$1/env.sh"; exec bash "$1/branchreviewpass.sh"' _ "$S/s" >/dev/null 2>"$S/err-$1" )
+  ( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILES_DIR=$S/s/profiles SG_PROFILE=$1 bash -c '. "$1/env.sh"; exec bash "$1/branchreviewpass.sh"' _ "$S/s" >/dev/null 2>"$S/err-$1" )
   for i in $(seq 1 20); do $G -q '^review.sh' "$S/launched" 2>/dev/null && break; sleep 0.3; done; }
 warned() { $G -c 'SG_TOOLING_REPO' "$S/err-$1" 2>/dev/null; }
 
@@ -54,11 +54,11 @@ w=$($G SG_TOOLING_REPO "$S/err-retired" | head -1)
 case "$w" in *retired*SG_REPOS*) ;; *) w="";; esac
 [ -n "$w" ] && printf '%s' "$w" | $G -q 'profile retired' && ok "the warning names the profile, the setting and its replacement" || ko "the warning is incomplete: $(cat "$S/err-retired")"
 # a second source of env.sh in the same state directory stays quiet: one warning per cycle, not one per script
-( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=retired bash -c '. "$1/env.sh"; . "$1/env.sh"' _ "$S/s" 2>"$S/err-again" )
+( cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILES_DIR=$S/s/profiles SG_PROFILE=retired bash -c '. "$1/env.sh"; . "$1/env.sh"' _ "$S/s" 2>"$S/err-again" )
 [ ! -s "$S/err-again" ] && ok "a later script of the same cycle is silent" || ko "the warning repeated: $(cat "$S/err-again")"
 
 # --- nothing narrows what the profile works: its own repository and the retired one are both in the list
-out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=retired bash -c '. "$1/env.sh" 2>/dev/null; sg_repos | tr "\n" " "; echo "|${SG_TOOLING_REPO:-unset}|$(sg_resolve_repo tool)"' _ "$S/s")
+out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILES_DIR=$S/s/profiles SG_PROFILE=retired bash -c '. "$1/env.sh" 2>/dev/null; sg_repos | tr "\n" " "; echo "|${SG_TOOLING_REPO:-unset}|$(sg_resolve_repo tool)"' _ "$S/s")
 [ "$out" = "x/emu x/tool |unset|x/tool" ] && ok "the retired repository is one more entry of SG_REPOS, still resolvable, and the retired key is no longer read" \
   || ko "retired profile repositories: '$out'"
 
@@ -66,7 +66,7 @@ out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG
 cycle migrated
 $G -q '^review.sh x/emu gui/1512 1512$' "$S/launched" && ok "migrated profile: the pass runs the same work" || ko "migrated profile: the pass did not run (launched: $(cat "$S/launched"))"
 [ ! -s "$S/err-migrated" ] || ! $G -qi 'retired\|SG_TOOLING_REPO' "$S/err-migrated" && ok "migrated profile: no warning" || ko "migrated profile warned: $(cat "$S/err-migrated")"
-out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILE=migrated bash -c '. "$1/env.sh" 2>/dev/null; sg_repos | tr "\n" " "' _ "$S/s")
+out=$(cd "$S/co" && env -u SG_TOOLING_REPO -u SG_REPOS -u SG_REPO -u SG_STATE SG_PROFILES_DIR=$S/s/profiles SG_PROFILE=migrated bash -c '. "$1/env.sh" 2>/dev/null; sg_repos | tr "\n" " "' _ "$S/s")
 [ "$out" = "x/emu x/tool " ] && ok "migrated profile: the same repositories" || ko "migrated profile repositories: '$out'"
 
 # --- 3. a suite the loop runs inherits SG_PROFILES_DIR from env.sh (#664), and the nightly is such a suite (#746): the scene
