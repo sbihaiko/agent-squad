@@ -23,7 +23,7 @@ def _section():
 def test_the_six_owner_steps_appear_in_order():
     items = re.findall(r"^(\d+)\. (.+)$", _section(), re.M)
     assert [number for number, _ in items] == ["1", "2", "3", "4", "5", "6"]
-    for (_, body), markers in zip(items, STEP_MARKERS):
+    for (_, body), markers in zip(items, STEP_MARKERS, strict=True):
         for marker in markers:
             assert marker in body, f"step missing '{marker}': {body}"
 
