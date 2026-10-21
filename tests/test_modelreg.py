@@ -53,10 +53,13 @@ def test_gemini_efforts_are_low_medium_high(reg):
     assert list(_entry(reg, "gemini-3.8-flash").efforts) == ["low", "medium", "high"]
 
 
-def test_deepseek_v4_flash_stays_its_own_id(reg):
-    canonical, legacy = _entry(reg, "deepseek-flash"), _entry(reg, "deepseek-v4-flash")
-    assert canonical.id != legacy.id
-    assert legacy.capabilities["tools"] is True
+def test_the_legacy_deepseek_spelling_resolves_to_the_canonical_id(reg):
+    """#730: one model, one id. The v4 spelling is an alias of the canonical entry, never an entry of its own, so a
+    chain that names it and a price row that keys the other one cannot disagree."""
+    assert "deepseek-v4-flash" not in reg.entries
+    canonical = _entry(reg, "deepseek-flash")
+    assert canonical.capabilities["tools"] is True
+    assert mr.normalize("claude-deepseek-v4-flash[1m]").id == "deepseek-flash"
 
 
 def test_deepseek_flash_uses_tools_so_a_coding_chain_keeps_it(reg):
@@ -170,8 +173,8 @@ def test_normalize_never_raises_on_a_non_string():
 
 @pytest.mark.parametrize("raw,mid,route,effort,ctx", [
     ("gemini-3.8-flash-medium", "gemini-3.8-flash", "cli", "medium", None),
-    ("deepseek-v4-flash", "deepseek-v4-flash", "gateway", None, None),
-    ("claude:claude-deepseek-v4-flash[1m]", "deepseek-v4-flash", "cli", None, "1m"),
+    ("deepseek-v4-flash", "deepseek-flash", "gateway", None, None),
+    ("claude:claude-deepseek-v4-flash[1m]", "deepseek-flash", "cli", None, "1m"),
     ("opus", "claude-opus-5-5", "gateway", None, None),
 ])
 def test_normalize_splits_prefix_context_alias_and_effort(raw, mid, route, effort, ctx):
