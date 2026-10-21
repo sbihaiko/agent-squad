@@ -1,0 +1,88 @@
+#!/bin/bash
+# Regression test for nightly.sh (#704): the full suite in both modes, heavy included, once a day, in its own clone under its
+# own serial lock, never under the landing (gate) lock; one atomic result record the hub reads, one alert on red, and a red
+# record that holds dispatch until one green run. usage: bash test-nightly.sh [path/to/nightly.sh]
+# A throwaway bare repository is the remote, the two modes are stub commands that log the tree they ran in, and the notifier is
+# a stub: nothing here runs a real suite, no case touches the network, a model or the emulator.
+# Hermetic first: the live loop exports its own SG_* to every run it dispatches, and a leaked SG_STATE would point this suite at
+# the owner's state. Drop them all, as shell-suites.sh does for every suite (#1410).
+for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
+d=$(dirname "$0"); src=${1:-$d/nightly.sh}; T=$(mktemp -d); S=$T/scripts; ST=$T/st; fail=0
+mkdir -p "$S" "$ST"; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+G="git -c user.email=a@b -c user.name=t"
+cp "$d/serial.sh" "$d/ghcall.sh" "$d/ghread.py" "$d/ghthrottle.py" "$S/" 2>/dev/null
+[ -f "$src" ] && cp "$src" "$S/nightly.sh"
+# The remote: one bare repository with one commit on dev. The nightly clones it into its own tree and runs there.
+git init -q -b dev "$T/src"; $G -C "$T/src" commit -q --allow-empty -m one
+git init -q --bare "$T/origin.git"; $G -C "$T/src" push -q "$T/origin.git" dev; sha=$($G -C "$T/src" rev-parse dev)
+# Each mode stub logs the tree it ran in, names a failing test when its own FAIL_<mode> is set, and exits red there.
+for m in parallel serial; do
+  cat > "$T/$m.sh" <<EOF
+#!/bin/bash
+echo "$m \$PWD" >> "$T/ran.log"
+[ "\${FAIL_$m:-}" = 1 ] && { printf 'FAILED tests/test_x.py::test_a - boom\nFAILED tests/test_y.py::test_b - boom\n'; exit 1; }
+exit 0
+EOF
+  chmod +x "$T/$m.sh"; done
+printf '#!/bin/bash\necho "$*" >> "%s/notify.log"\n' "$T" > "$T/notify.sh"; chmod +x "$T/notify.sh"
+export T
+# ng [VAR=val...]: one nightly run against the fixture, its own state, tree and remote
+ng() { env "$@" SG_STATE="$ST" SG_REPO=o/r SG_BASE=dev SG_NIGHTLY_REMOTE="$T/origin.git" SG_NIGHTLY_TREE="$T/tree" \
+  SG_NIGHTLY_PARALLEL="$T/parallel.sh" SG_NIGHTLY_SERIAL="$T/serial.sh" HEALTH_NOTIFY="$T/notify.sh" bash "$S/nightly.sh" 2>&1; }
+rec() { r_ts= r_res= r_sha= r_par= r_ser= r_ids=
+  [ -f "$ST/nightly-result" ] && IFS=$'\t' read -r r_ts r_res r_sha r_par r_ser r_ids < "$ST/nightly-result"; }
+hold() { ( export SG_STATE="$ST"; . "$S/ghcall.sh"; gh_dispatch_hold ); }   # the dispatch hold both dispatch passes read (ghcall.sh)
+mark() { rm -f "$ST/auto/nightly-$(date +%F)"; }
+
+# 1) both modes run once, in the nightly tree, and the record says pass with the sha and both modes
+out=$(ng); rc=$?
+[ $rc = 0 ] && ok "a green nightly exits 0" || ko "green nightly rc $rc: $out"
+[ "$(cat "$T/ran.log" 2>/dev/null)" = "parallel $T/tree
+serial $T/tree" ] && ok "both modes run in the nightly tree, parallel then serial" || ko "ran: '$(cat "$T/ran.log" 2>&1)'"
+rec
+[ "$r_res $r_sha $r_par $r_ser $r_ids" = "pass $sha pass pass -" ] && ok "the record is pass, the tip sha, both modes green and no failing test" || ko "record: '$r_res $r_sha $r_par $r_ser $r_ids'"
+[ -e "$ST/auto/nightly-$(date +%F)" ] && ok "the run leaves its once-a-day marker" || ko "no day marker after a run"
+[ ! -d "$ST/locks/nightly" ] && ok "the nightly lock is released when the run ends" || ko "the nightly lock stayed behind"
+[ ! -e "$ST/alerts.log" ] && ok "a green nightly raises no alert" || ko "a green nightly alerted: $(cat "$ST/alerts.log")"
+
+# 2) a red parallel mode fails the record, names its failing tests, and still runs the serial mode: the record carries both
+rm -f "$T/ran.log" "$ST/alerts.log"; mark
+out=$(ng FAIL_parallel=1); rc=$?
+[ $rc = 1 ] && ok "a red nightly exits 1" || ko "red nightly rc $rc: $out"
+rec
+[ "$r_res $r_par $r_ser" = "fail fail pass" ] && ok "the record says fail, and which mode failed" || ko "record: '$r_res $r_par $r_ser'"
+[ "$r_ids" = "tests/test_x.py::test_a tests/test_y.py::test_b" ] && ok "the record names the failing tests" || ko "ids: '$r_ids'"
+/usr/bin/grep -qx "serial $T/tree" "$T/ran.log" && ok "the serial mode still runs after a red parallel one" || ko "ran: '$(cat "$T/ran.log" 2>&1)'"
+
+# 3) a red result raises one alert through the existing alert path: alerts.log and the notifier
+/usr/bin/grep -q "NIGHTLY" "$ST/alerts.log" 2>/dev/null && ok "a red nightly writes one alert line" || ko "no NIGHTLY line in alerts.log: '$(cat "$ST/alerts.log" 2>&1)'"
+/usr/bin/grep -q "${sha:0:7}" "$ST/alerts.log" 2>/dev/null && ok "the alert names the sha it ran at" || ko "the alert names no sha: '$(cat "$ST/alerts.log" 2>&1)'"
+[ "$(/usr/bin/grep -c . "$T/notify.log" 2>/dev/null)" = 1 ] && ok "the notifier is called once" || ko "notify calls: '$(cat "$T/notify.log" 2>&1)'"
+
+# 4) a red record holds dispatch until one green run, and a green one releases it
+hold >/dev/null; [ $? = 0 ] && ok "the dispatch hold stops a pass after a red nightly" || ko "a red nightly held no dispatch"
+[ -z "$(hold 2>&1 | /usr/bin/grep -i nightly)" ] && ko "the hold does not say why it stopped" || ok "the hold names the nightly as its cause"
+mark; out=$(ng)                                     # one green run
+hold >/dev/null; [ $? = 1 ] && ok "one green nightly releases delivery" || ko "the hold outlived a green nightly: $(hold)"
+
+# 5) the landing lock is never taken: a held gate lock is no obstacle, and it is left as it was
+mkdir -p "$ST/locks/gate"; echo $$ > "$ST/locks/gate/pid"; rm -f "$T/ran.log"; mark
+out=$(ng); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "a held landing lock does not stop the nightly" || ko "gate lock rc $rc: $out"
+[ -e "$ST/locks/gate/pid" ] && ok "the nightly never took the landing lock" || ko "the nightly removed the landing lock"
+rm -rf "$ST/locks/gate"
+
+# 6) once a day: a second start the same day runs nothing, and a later day runs again
+rm -f "$T/ran.log"
+out=$(ng); rc=$?
+[ $rc = 0 ] && [ ! -s "$T/ran.log" ] && ok "a second start the same day runs no mode" || ko "second start rc $rc ran: '$(cat "$T/ran.log" 2>&1)'"
+mark; out=$(ng); rc=$?
+[ $rc = 0 ] && [ "$(/usr/bin/grep -c . "$T/ran.log")" = 2 ] && ok "the next day runs both modes again" || ko "next day rc $rc: '$(cat "$T/ran.log" 2>&1)'"
+
+# 7) an unreadable record never holds dispatch
+printf 'not a result\n' > "$ST/nightly-result"
+hold >/dev/null; [ $? = 1 ] && ok "a record the loop cannot read never holds dispatch" || ko "an unreadable record held dispatch"
+rm -f "$ST/nightly-result"
+hold >/dev/null; [ $? = 1 ] && ok "no record at all never holds dispatch" || ko "a missing record held dispatch"
+
+rm -rf "$T"; exit $fail
