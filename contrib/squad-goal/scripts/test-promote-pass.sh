@@ -29,7 +29,7 @@ esac
 EOF
 chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH"
 # The stub suite logs where it ran, the HEAD it ran at, and whether the gate lock was held around it; $T/suite-rc is its exit.
-printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/gate" ] && echo held || echo free) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" > "$T/suite"
+printf '#!/bin/bash\necho "$(pwd -P) $(git rev-parse HEAD) $([ -d "$SG_STATE/locks/gate" ] && echo held || echo free) $(git status --porcelain | wc -l | tr -d " ")" >> "%s/suite.log"\necho "$([ -e "$SG_STATE/promote-reserve" ] && echo reserved || echo unreserved)" >> "%s/reserve.log"\nexit $(cat "%s/suite-rc" 2>/dev/null || echo 0)\n' "$T" "$T" "$T" > "$T/suite"
 chmod +x "$T/suite"; export SG_PROMOTE_SUITE="$T/suite"
 runs() { cat "$T/suite.log" 2>/dev/null | wc -l | tr -d " "; }
 lines() { cat "$SG_STATE/promote.log" 2>/dev/null | /usr/bin/grep -c "promote-pass: $1"; }
@@ -47,6 +47,10 @@ read -r where at lock dirty < "$T/suite.log"
 [ "$lock" = held ] && ok "the suite ran inside the gate lock" || ko "the suite ran outside the gate lock"
 [ "$dirty" = 0 ] && ok "the suite ran in a clean tree" || ko "the suite's tree was dirty ($dirty)"
 case "$where" in "$HOME"/wt-*|*/wt-*) ko "the suite tree is a wt-* tree, which wtclean removes: $where";; *) ok "the suite tree is not a wt-* tree";; esac
+# #739: the proof reserves the machine it measures. The dispatchers read the marker through gh_dispatch_hold, and the pass
+# removes it on exit, so a stopped proof leaves nothing behind.
+[ "$(tail -n 1 "$T/reserve.log" 2>/dev/null)" = reserved ] && ok "the proof reserved the machine while the suite ran" || ko "no reserve stood while the suite ran: '$(cat "$T/reserve.log" 2>/dev/null)'"
+[ ! -e "$SG_STATE/promote-reserve" ] && ok "the reserve is gone after the proof" || ko "the reserve outlived the proof"
 IFS=$'\t' read -r _ kind res sha < "$SG_STATE/gate-status-full"
 [ "$kind $res $sha" = "full pass $t1" ] && ok "the pass wrote the full pass line for the tip" || ko "full line: '$kind $res $sha'"
 /usr/bin/grep -q -- "-X POST repos/x/emu/statuses/$t1 .*context=squad/full-proof" "$T/gh.log" && ok "the pass wrote a commit status on the proven sha, under its own context" || ko "no commit status POST: $(cat "$T/gh.log")"
@@ -111,6 +115,18 @@ pass; rc=$?
 [ $rc = 0 ] && [ "$(tip stg)" = "$t7" ] && ok "the same tip is proved once the machine is free" || ko "retry after load: rc $rc, stg $(tip stg)"
 /usr/bin/grep -q -- '-n auto' "$d/promote-pass.sh" && ko "the default suite still takes every core (-n auto)" || ok "the default suite bounds its workers (#738)"
 /usr/bin/grep -q 'sg_battery_workers' "$d/promote-pass.sh" && ok "the worker count comes from the one machine bound" || ko "promote-pass.sh carries its own worker count"
+
+# The dispatchers read the reserve (#739): a standing one holds them in one line, and a marker past the gate lock's own bound
+# is a proof that died and holds nothing.
+hold() { ( export SG_STATE="$SG_STATE"; . "$d/ghcall.sh"; gh_dispatch_hold ); }
+rm -f "$SG_STATE/nightly-result" "$SG_STATE/promote-reserve"
+printf '%s 1\n' "$(date +%s)" > "$SG_STATE/promote-reserve"
+out=$(hold); rc=$?
+[ $rc = 0 ] && case "$out" in *"DISPATCH HOLD: the promotion proof holds the machine"*) true;; *) false;; esac \
+  && ok "a standing reserve holds the dispatchers in one line" || ko "reserve: rc $rc, '$out'"
+printf '%s 1\n' "$(( $(date +%s) - 8000 ))" > "$SG_STATE/promote-reserve"
+hold >/dev/null; [ $? = 1 ] && ok "a reserve past the lock's bound holds nothing" || ko "a dead reserve held the dispatcher"
+rm -f "$SG_STATE/promote-reserve"
 
 # The owner starts each promotion (#576, ADR-0145 rule 3): no cycle step runs promote-pass.sh.
 /usr/bin/grep -vE '^[[:space:]]*#' "$d/watch.sh" | /usr/bin/grep -q 'promote-pass\.sh' && ko "watch.sh still runs the promotion" || ok "watch.sh runs no promotion step: the owner starts it"

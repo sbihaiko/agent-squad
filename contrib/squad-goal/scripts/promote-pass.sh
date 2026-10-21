@@ -21,6 +21,11 @@ mark() {  # <tip> <reason>: one marker and one line per tip
   echo "$(date -u +%FT%TZ) promote-pass: $1 $2" >> "$log"; echo "promote-pass: $1 $2"; }
 if [ "${1:-}" = --hold ]; then   # inside the gate lock: suite, full line, commit status, read-back, promotion
   tip=$2; . "$d/ghcall.sh"; unset SG_GATE_STATUS SG_GATE_KIND   # the suite inherits no gate setting of this hold
+  # The proof reserves what it measures (#739): the dispatchers read this marker (gh_dispatch_hold) and start no run while it
+  # stands, so the suite is not measured against the next wave landing. Its bound is the gate lock's own (SERIAL_HOLD_SECONDS),
+  # and the trap removes it on exit, INT and TERM, so a stopped proof leaves nothing behind.
+  printf '%s %s\n' "$(date +%s)" "$$" > "$state/promote-reserve.$$" && mv "$state/promote-reserve.$$" "$state/promote-reserve"
+  trap 'rm -f "$state/promote-reserve"' EXIT INT TERM
   [ "$(g rev-parse HEAD)" = "$tip" ] || { mark "$tip" "not promoted: the clean tree is not at the tip"; exit 1; }
   py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] || py=python3
   suite=${SG_PROMOTE_SUITE:-"$py -m ruff check squad tests && $py -m mypy squad && $py -m pytest -p no:deepeval -n ${SG_PROMOTE_WORKERS:-$(sg_battery_workers)} && $py -m pytest -p no:deepeval -p no:xdist"}
