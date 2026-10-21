@@ -149,8 +149,8 @@ def test_a_quick_suites_bound_is_the_floor(monkeypatch):
     assert shell_suites.timeout_for("/nowhere/test-quick.sh") == shell_suites.MIN_TIMEOUT_SECONDS
 
 
-def test_the_longest_suite_gets_a_bound_above_the_one_it_met_under_load():
-    """test-review.sh measures 266.8 s quiet, and it crossed the old 300 s bound at load 61. Its bound follows its own measure."""
-    measured = shell_suites.measured()["test-review.sh"]
-    assert measured * slowcap.MAX_CONTENTION_FACTOR > 300.0
-    assert shell_suites.timeout_for(SCRIPTS / "test-review.sh") == measured * slowcap.MAX_CONTENTION_FACTOR
+def test_every_real_suite_s_bound_covers_the_load_the_cap_excuses():
+    """test-review.sh measured 266.8 s quiet and crossed a 300 s hand-tuned bound at load 61 (#736). Every suite's bound is its
+    own measure times the load the cap excuses, so no suite is failed for the machine's wall."""
+    for name, seconds in shell_suites.measured().items():
+        assert shell_suites.timeout_for(SCRIPTS / name) >= seconds * shell_suites.LOAD_FACTOR

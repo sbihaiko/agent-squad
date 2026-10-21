@@ -256,7 +256,9 @@ def test_a_commit_the_base_already_holds_closes_no_issue(wave):
 @pytest.mark.slow(reason="runs the wave's hermetic shell suite over a throwaway remote")
 @pytest.mark.heavy
 def test_the_wave_suite_proves_the_landing_pass():
-    r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=120)
+    """The suite's bound is its own measured time times the load the cap excuses (`shell_suites.timeout_for`), never a wall
+    second tuned on a quiet machine: 47 s quiet crossed a 120 s hand-tuned bound at load 61 (#736)."""
+    r = shell_suites.run(SCRIPTS / "test-wave.sh")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in LAND_CASES:
@@ -274,7 +276,7 @@ def test_the_wave_suite_survives_an_inherited_gate_lock():
     the gate hands it, and keep every FAIL line."""
     env = {"SG_SERIAL_HELD": "gate", "SG_GATE_STATUS": "self", "SG_GATE_KIND": "full",
            "SERIAL_WAIT_SECONDS": "86400", "SERIAL_HOLD_SECONDS": "7200"}
-    r = shell_suites.run(SCRIPTS / "test-wave.sh", timeout=300, extra_env=env)
+    r = shell_suites.run(SCRIPTS / "test-wave.sh", extra_env=env)
     fails = [line for line in (r.stdout + r.stderr).splitlines() if line.startswith("FAIL")]
     assert r.returncode == 0 and not fails, r.stdout + r.stderr
 
@@ -282,7 +284,7 @@ def test_the_wave_suite_survives_an_inherited_gate_lock():
 @pytest.mark.slow(reason="runs the run lifecycle over a throwaway checkout, remote and stubbed launch")
 @pytest.mark.heavy
 def test_the_run_lifecycle_cuts_and_enters_the_wave():
-    r = shell_suites.run(SCRIPTS / "test-wave-lifecycle.sh", timeout=300)
+    r = shell_suites.run(SCRIPTS / "test-wave-lifecycle.sh")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in LIFECYCLE_CASES:
@@ -292,7 +294,7 @@ def test_the_run_lifecycle_cuts_and_enters_the_wave():
 @pytest.mark.slow(reason="runs the run-completion suite's own loop over a temp scripts dir")
 @pytest.mark.heavy
 def test_the_run_completion_lands_the_wave_and_leaves_a_waveless_run_alone():
-    r = shell_suites.run(SCRIPTS / "test-watch-land.sh", timeout=300)
+    r = shell_suites.run(SCRIPTS / "test-watch-land.sh")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TDD GREEN" in r.stdout, r.stdout
     for case in COMPLETION_CASES:

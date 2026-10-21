@@ -5,7 +5,8 @@ drives review.sh and branchreview.sh over a bare local remote and a stub `gh`/`c
 branch the three-dot compare and the prompt carry only the child's own commits, the base is kept beside the verdict, and the
 verdict still lands in the issue's one status comment. `test-wave.sh` drives wave.sh: a child whose review asked for changes,
 a review read against `dev` (the whole wave), a review of an older tip, and a child with no review are all held out of the
-wave branch. Both run offline, in throwaway repos, and take a few seconds, so each call is marked heavy.
+wave branch. Both run offline, in throwaway repos, and take a few seconds, so each call is marked heavy and carries a slow
+reason: a real script suite's wall time is the machine's, never the test's own work.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ def _suite(name: str):
     return shell_suites.run(SCRIPTS / name)
 
 
+@pytest.mark.slow(reason="test-branchreview.sh runs a real review suite over throwaway repositories, and its own wall time is the machine's")
 @pytest.mark.heavy
 def test_the_review_reads_the_child_diff_against_the_wave_branch() -> None:
     r = _suite("test-branchreview.sh")

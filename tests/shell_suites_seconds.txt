@@ -1,5 +1,5 @@
 # Measured run time in seconds of each shell suite, one 'name seconds' per line; the runner reads it (tests/shell_suites.py).
-# 0.5 s or more: heavy. Over 8 s: also a slow reason. Every suite is listed; a test fails on one that is not.
+# 0.5 s or more: heavy. Over 5 s: also a slow reason (the 20 s cap divided by the 4x load it excuses). Every suite is listed; a test fails on one that is not.
 # Rows come from `python3 -m tests.measure_shell_suites --write [name ...]`, run serially on a quiet machine.
 test-acpaths.sh 1.38
 test-address.sh 3.28
