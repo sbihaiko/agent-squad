@@ -51,6 +51,7 @@ test-hub-caps.sh 0.41
 test-hub-ci.sh 0.08
 test-hub-demote.sh 0.07
 test-hub-killed.sh 0.06
+test-hub-metrics.sh 1.52
 test-hub-run-issue.sh 0.33
 test-hub-state-default.sh 0.20
 test-hub-test-panel.sh 0.09
