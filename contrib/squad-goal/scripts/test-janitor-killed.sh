@@ -15,4 +15,15 @@ o=$(pass env JANITOR_DRY=1); echo "$o" | /usr/bin/grep -q 'zombie run run-zombie
 last run-zombie | /usr/bin/grep -q '"event": "verdict"' && ko "a dry run wrote a verdict" || ok "a dry run writes no verdict"
 o=$(pass env); /usr/bin/grep -q 'run-zombie' "$T/st/active-runs.txt" && ko "the zombie stays in active-runs: $o" || ok "the zombie is dropped from active-runs"
 last run-zombie | /usr/bin/grep -q '"verdict": "failed".*"reasons": \["killed/no-process"\]' && ok "the zombie's record ends in the killed verdict" || ko "no killed verdict: $(last run-zombie)"
+# #745: a helper the session left behind (uv, caffeinate -- any process with a cwd inside the run folder) is not a live run.
+# The run's own session is; a helper is reaped with the zombie, or it keeps the run "alive" for ever.
+mk run-helper 1002
+( cd "$T/co/runs/run-helper" && exec sleep 60 ) & hp=$!
+sleep 0.3
+o=$(pass env)
+/usr/bin/grep -q 'run-helper' "$T/st/active-runs.txt" && ko "a leftover helper keeps the run alive: $o" || ok "a leftover helper does not keep a zombie alive"
+st=$(ps -o state= -p "$hp" 2>/dev/null | tr -d ' ')   # a killed child is a zombie until the shell reaps it, so the state decides
+case "$st" in Z*|"") ok "the zombie's leftover helper is killed with it";; *) ko "the zombie's leftover helper survives the pass (state $st)";; esac
+wait "$hp" 2>/dev/null
+
 exit $fail
