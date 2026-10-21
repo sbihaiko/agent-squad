@@ -61,7 +61,9 @@ def test_the_request_and_the_fix_run_name_the_worktrees_own_prepush():
         assert "bash contrib/squad-goal/scripts/prepush.sh --local" in text, f
         assert "$here/prepush.sh" not in text, f
     fix = read("childfix.sh")
-    assert "bash $wt/contrib/squad-goal/scripts/prepush.sh --local" in fix
+    # #740: the command is the profile's, agent-squad's by default, and a relative script path is anchored at the kept worktree.
+    assert "SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local" in fix
+    assert "pc=${pc/#bash contrib\\//bash $wt/contrib/}" in fix
     assert "$here/prepush.sh" not in fix
 
 

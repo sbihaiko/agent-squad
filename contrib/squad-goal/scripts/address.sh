@@ -103,6 +103,20 @@ sg_profiles_dir() { echo "${SG_PROFILES_DIR:-$_sg_ctx_here/profiles}"; }
 # 0 when SG_PROFILE names a profile the profiles directory holds, so a worktree's own prepush.sh --local resolves the
 # same profile; 1 otherwise, and the request says the check is unavailable instead of prescribing a command that exits 2.
 sg_profile_resolves() { [ -n "${SG_PROFILE:-}" ] && [ -f "$(sg_profiles_dir)/$SG_PROFILE.sh" ]; }
+# (#740) The gate commands a request names are the profile's: SG_FAST_GATE_CMD (the entry gate a child runs last),
+# SG_PREPUSH_CMD (the prepush check, which prints nothing when clean), SG_SUITES_HINT (the targeted suites a child runs) and
+# SG_FULL_GATE_HINT (the full gate the loop keeps). A value the profile sets wins, and an empty one means none. A value the
+# profile leaves unset is set empty when the target checkout (SG_CHECKOUT) lacks the script agent-squad's text names, so a
+# request never names a script its repository does not hold; else it stays unset, and the request builder writes
+# agent-squad's text. env.sh calls this after the profile.
+sg_gate_cmds() { local s="${SG_CHECKOUT:-}/contrib/squad-goal/scripts"
+  if [ -n "${SG_CHECKOUT:-}" ]; then
+    [ -n "${SG_FAST_GATE_CMD+x}" ] || [ -f "$s/fast-gate.sh" ] || SG_FAST_GATE_CMD=
+    [ -n "${SG_PREPUSH_CMD+x}" ] || [ -f "$s/prepush.sh" ] || SG_PREPUSH_CMD=
+    [ -n "${SG_SUITES_HINT+x}" ] || [ -f "$s/shell-suites.sh" ] || SG_SUITES_HINT=
+    [ -n "${SG_FULL_GATE_HINT+x}" ] || [ -f "$s/shell-suites.sh" ] || SG_FULL_GATE_HINT=
+  fi
+  export SG_FAST_GATE_CMD SG_PREPUSH_CMD SG_SUITES_HINT SG_FULL_GATE_HINT; }
 # Every known profile slug, one per line, in byte order; example.sh is a template, never a repository.
 sg_profiles() { local f n; for f in "$(sg_profiles_dir)"/*.sh; do [ -f "$f" ] || continue; n=$(basename "$f" .sh)
   [ "$n" = example ] || echo "$n"; done | LC_ALL=C sort; }

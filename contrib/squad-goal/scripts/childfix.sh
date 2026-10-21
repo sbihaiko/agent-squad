@@ -16,8 +16,12 @@ b=$(mktemp)
   echo "One child, a FIX RUN in the kept worktree $wt (branch $br, child of run $run) for GitHub issue #$iss (repo $SG_REPO). Work only in $wt: commit on top of its HEAD ${sha:0:9} there. Push no branch, and open no pull request. Never write outside $wt; never run publish-live.sh and never touch ~/.claude/skills (#658). Keep \"Refs #$iss\" (never Closes). Rules: $SG_CODING_RULES."
   echo; echo "[review] The review of the child's own diff says VERDICT: CHANGES. Address every finding (fix it, or say why it is wrong, with file:line evidence):"
   tail -n +2 "$f"
-  if sg_profile_resolves; then
-    echo "Before every commit, run in $wt: bash $wt/contrib/squad-goal/scripts/prepush.sh --local   (it must print nothing)."
+  pc=${SG_PREPUSH_CMD-bash contrib/squad-goal/scripts/prepush.sh --local}   # (#740) the profile's prepush command, or none
+  pc=${pc/#bash contrib\//bash $wt/contrib/}   # a relative script path is anchored at the kept worktree
+  if sg_profile_resolves && [ -n "$pc" ]; then
+    echo "Before every commit, run in $wt: $pc   (it must print nothing)."
+  elif sg_profile_resolves; then
+    echo "No prepush check is configured for this repository, so run none: a missing check is not a failure; name that in your report."
   else
     echo "The prepush check is unavailable: no squad-goal profile resolves for this session (SG_PROFILE='${SG_PROFILE:-}', SG_PROFILES_DIR='$(sg_profiles_dir)'), so do not run prepush.sh --local; name that in your report."
   fi; } > "$b"
