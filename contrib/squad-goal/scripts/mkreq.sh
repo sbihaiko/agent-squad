@@ -13,16 +13,17 @@ mjson="$(cd "$(dirname "$0")" && pwd)/models.json"; hh=$((10#$(date +%H)))
 keyless() { case $1 in *qwen*) python3 "$(dirname "$0")/provkey.py" "$1";; *) return 1;; esac; }
 spent() { local f; keyless "$1" && return 0; case $1 in *gpt-*) f=codex-limited;; *gemini-*) f=agy-limited;; *) return 1;; esac
   [ -s "${SG_SHARED:-/nonexistent}/$f" ] && [ "$(date +%s)" -lt "$(cat "$SG_SHARED/$f")" ]; }
-mayrun() { [ "$(jq -r --arg m "$1" '.off.coding_models[$m] // false' "$mjson")" != true ] || return 1
+rows=$(python3 "$(dirname "$0")/modelreg.py" chain coding --models "$mjson" --tsv | awk -F'\t' '{print $2, ($5 == "" ? "-" : $5), $7}')   # raw spelling, hrs window ("-" = always), on
+mayrun() { [ "$3" = 1 ] || return 1
   spent "$1" && return 1
-  local w; w=$(jq -r --arg m "$1" '.hours.coding_models[$m] // empty' "$mjson"); [ -n "$w" ] || return 0
-  local a=$((10#${w%%-*})) b=$((10#${w##*-}))
+  [ "$2" != - ] || return 0
+  local a=$((10#${2%%-*})) b=$((10#${2##*-}))
   if [ "$a" -le "$b" ]; then [ "$hh" -ge "$a" ] && [ "$hh" -lt "$b" ]; else [ "$hh" -ge "$a" ] || [ "$hh" -lt "$b" ]; fi; }
 cm=""; fb=""
-for m in $(jq -r '.coding_models[]' "$mjson"); do mayrun "$m" || continue
-  if [ -z "$cm" ]; then cm=$m; elif [ -z "$fb" ]; then fb=$m; fi; done
-[ -n "$cm" ] || cm=$(jq -r '.coding_models[0] // empty' "$mjson")   # every entry off or out of window: name [0], launch.py refuses loudly
-[ -n "$fb" ] || for m in $(jq -r --arg c "$cm" '.coding_models[]|select(.!=$c)' "$mjson"); do keyless "$m" || { fb=$m; break; }; done   # a keyless model is never the fallback either (#482)
+while read -r m w on; do mayrun "$m" "$w" "$on" || continue
+  if [ -z "$cm" ]; then cm=$m; elif [ -z "$fb" ]; then fb=$m; fi; done <<<"$rows"
+[ -n "$cm" ] || cm=$(awk 'NR==1{print $1}' <<<"$rows")   # every entry off or out of window: name [0], launch.py refuses loudly
+[ -n "$fb" ] || while read -r m _; do [ "$m" = "$cm" ] && continue; keyless "$m" || { fb=$m; break; }; done <<<"$rows"   # a keyless model is never the fallback either (#482)
 [ $# -eq 2 ] || { echo "usage: mkreq.sh <name> <body-file>" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"
 # The request lands in the state directory of the repository it is for (#25); a request builder sources env.sh, which

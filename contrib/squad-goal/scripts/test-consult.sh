@@ -1,0 +1,30 @@
+#!/bin/bash
+# consult.sh asks the first coding model that may run now, read from models.json as a v1 or a v2 chain (ADR-0147).
+d="$(cd "$(dirname "$0")" && pwd)"; T=$(mktemp -d); fail=0; log=$T/log; : > "$log"
+ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }
+S=$T/scripts; mkdir -p "$S" "$T/bin" "$T/state" "$T/co" "$T/run"
+cp "$d/consult.sh" "$d/modelreg.py" "$d/registry.json" "$S/"
+printf 'export SG_STATE=%s SG_CHECKOUT=%s\n' "$T/state" "$T/co" > "$S/env.sh"
+printf '#!/bin/bash\necho "GO: a valid task"\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"
+printf 'Edit scripts/x.py\n' > "$T/run/request.txt"
+export PATH="$T/bin:$PATH" CONSULT_DRY=1
+ask() { rm -f "$T/run/consult.done"; bash "$S/consult.sh" "$T/run" 2>"$T/err"; }
+
+cp "$d/models.json" "$S/models.json"
+out=$(ask)
+case "$out" in *"(claude-gpt-5.6-terra): GO"*) ok "the repo models.json (v2) asks its first coding model";;
+  *) ko "v2 repo file asks: ${out:-nothing} $(cat "$T/err")";; esac
+
+printf '{"schema_version":2,"chains":{"coding":[{"id":"gpt-5.6-terra","raw":"claude-gpt-5.6-terra","route":"gateway","on":false},{"id":"grok-4.7","raw":"claude-grok-4.7","route":"gateway"}]}}' > "$S/models.json"
+out=$(ask)
+case "$out" in *"(claude-grok-4.7): GO"*) ok "a v2 entry switched off is skipped";;
+  *) ko "v2 off entry asked: ${out:-nothing} $(cat "$T/err")";; esac
+
+printf '{"coding_models":["claude-sonnet-5-5"]}' > "$S/models.json"
+out=$(ask)
+case "$out" in *"(claude-sonnet-5-5): GO"*) ok "a v1 chain still asks its first model";;
+  *) ko "v1 chain asks: ${out:-nothing} $(cat "$T/err")";; esac
+
+cat "$log"
+[ $fail = 0 ] && printf 'TDD GREEN\n' || printf 'TDD RED\n'
+rm -rf "$T"; exit $fail

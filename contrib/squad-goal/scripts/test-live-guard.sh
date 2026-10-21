@@ -8,7 +8,7 @@ d=$(dirname "$0"); src=${1:-$d/live-guard.sh}; T=$(mktemp -d); fail=0; ok() { ec
 
 S=$T/scripts; co=$T/co; live=$T/home/.claude/skills/squad-goal; repo=$co/contrib/squad-goal
 mkdir -p "$S" "$repo/scripts/profiles" "$live/scripts/profiles" "$T/st"
-cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"
+cp "$src" "$S/live-guard.sh"; cp "$d/publish-live.sh" "$S/publish-live.sh"; cp "$d/modelreg.py" "$d/registry.json" "$S/"
 # The pass reads its checkout and its live skill from the profile, as every pass does: the fixture profile names both.
 cat > "$S/env.sh" <<EOF
 export SG_CHECKOUT=\${SG_CHECKOUT:-$co} SG_LIVE_DIR=\${SG_LIVE_DIR:-$live} SG_STATE=\${SG_STATE:-$T/st}
@@ -52,6 +52,27 @@ chmod 755 "$live"
 [ "$rc" = 0 ] && ok "a publish that cannot land still exits 0" || ko "the pass exited $rc: $out"
 case "$out" in *LIVE-GUARD*"copy SKILL.md"*) ok "the unresolved difference is read and named";; *) ko "the unresolved difference is silent: $out";; esac
 case "$out" in *LIVE-GUARD*"could not resolve"*"copy SKILL.md"*) ok "the pass names the difference the publish left";; *) ko "the pass does not name what the publish left: $out";; esac
+
+# --- the review chain is compared as the resolver reads it, a v1 live file against a v2 repository file (ADR-0147) ---
+cp "$repo/SKILL.md" "$live/SKILL.md"; cp "$repo/scripts/hub.py" "$live/scripts/hub.py"
+printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$repo/scripts/models.json"
+printf '%s\n' '{"review_models":["claude:claude-opus-5-5","claude:claude-sonnet-5-5"]}' > "$live/scripts/models.json"
+out=$(pass)
+case "$out" in *"LIVE-GUARD the live review chain differs"*) ok "a v1 live review chain that differs from the v2 repository chain is named";;
+  *) ko "a v1 live review chain that differs from the v2 repository chain is silent: $out";; esac
+printf '%s\n' '{"review_models":["claude:claude-opus-5-5","claude:claude-sonnet-5-5"]}' > "$live/scripts/models.json"
+printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli","effort":"high"}]}}' > "$repo/scripts/models.json"
+out=$(pass)
+case "$out" in *"LIVE-GUARD the live review chain differs"*) ok "a v2 effort that the v1 live chain does not carry is named";;
+  *) ko "an effort the live chain does not carry is silent: $out";; esac
+printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$repo/scripts/models.json"
+printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":true},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$live/scripts/models.json"
+out=$(pass)
+case "$out" in *"LIVE-GUARD the live review chain differs"*) ok "a v2 switch that differs between two v2 files is named";;
+  *) ko "a v2 switch that differs between two v2 files is silent: $out";; esac
+printf '%s\n' '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli"}]}}' > "$live/scripts/models.json"
+out=$(pass)
+case "$out" in *"LIVE-GUARD the live review chain"*) ko "equal review chains are named: $out";; *) ok "equal review chains are silent";; esac
 
 # --- the main tree follows origin/stg before the publish (issue #292, #359) ---------------------------------
 # The live copy is published from the main working tree, and nothing moved that tree to origin/stg: it stayed at an old

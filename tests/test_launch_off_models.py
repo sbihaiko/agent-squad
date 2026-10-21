@@ -37,7 +37,7 @@ def graph(router="opus", allow=("opus", "sonnet", "haiku")):
     ]}
 
 
-def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=None):
+def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=None, doc_models=None):
     """Run launch.py from a throwaway checkout whose workflow is `doc`; return the finished process and the run folders."""
     s, co, st, bin_ = tmp_path / "s", tmp_path / "co", tmp_path / "st", tmp_path / "bin"
     for d in (s, st, bin_, co / "runs", co / "docs/squad/workflows", tmp_path / "squad"):
@@ -50,7 +50,7 @@ def launch(tmp_path, doc, off=None, env=None, workflow_file="default", hours=Non
               "vision_models": ["claude-sonnet-5-5"], "hours": hours or {}}
     if off:
         models["off"] = off
-    (s / "models.json").write_text(json.dumps(models))
+    (s / "models.json").write_text(json.dumps(doc_models or models))
     (s / "hub.py").write_text("print('hub')\n")
     (co / f"docs/squad/workflows/{workflow_file}.graph.json").write_text(json.dumps(doc))
     stub = bin_ / "caffeinate"
@@ -173,3 +173,24 @@ def test_the_deliberate_exception_starts_a_run_outside_the_window(tmp_path):
     r, runs = launch(tmp_path, graph(router="opus", allow=("haiku",)), hours=hours, env={"SG_ALLOW_MODEL": "1"})
     assert r.returncode == 0, r.stdout + r.stderr
     assert runs
+
+
+V2_SONNET_OFF = {"schema_version": 2, "chains": {
+    "coding": [{"id": "claude-sonnet-5-5", "route": "gateway", "on": False}],
+    "review": [{"id": "claude-opus-5-5", "raw": "claude:claude-opus-5-5", "route": "cli"}],
+    "vision": [{"id": "claude-sonnet-5-5", "route": "cli"}]}}
+
+
+def test_a_v2_coding_chain_whose_every_entry_is_off_is_refused(tmp_path):
+    r, runs = launch(tmp_path, graph(router="haiku", allow=("haiku",)), doc_models=V2_SONNET_OFF)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "every coding model is switched off" in out
+    assert runs == []
+
+
+def test_a_v2_coding_entry_outside_its_hours_is_refused(tmp_path):
+    doc = {"schema_version": 2, "chains": {"coding": [{"id": "claude-sonnet-5-5", "route": "gateway", "hrs": _window(1)}]}}
+    r, runs = launch(tmp_path, graph(router="haiku", allow=("haiku",)), doc_models=doc)
+    assert r.returncode != 0 and "every coding model is switched off" in r.stdout + r.stderr
+    assert runs == []

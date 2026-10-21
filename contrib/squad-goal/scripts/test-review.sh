@@ -4,6 +4,7 @@
 # 2) the branch tip moving during the review kills the reviewer and ends BLOCKED (superseded), not a hang.
 # 7) #1501: the aging leash must not kill the only reachable model; 8) with several reachable models it still clamps.
 src=${1:-$(dirname "$0")/review.sh}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
+export SG_SHARED="$T/st"   # the shared marks (quota-guard, *-limited) are the suite's own, never the machine's under ~/.cache
 mkdir -p "$T/bin" "$T/st/cq" "$T/s"; cp "$src" "$T/s/review.sh"; cp "$(dirname "$src")/revformat.py" "$(dirname "$src")/ghcall.sh" "$(dirname "$src")/ghread.py" "$(dirname "$src")/modelreg.py" "$T/s/"; : > "$T/s/codex-reset.py"
 # the registry the review reads: the shipped one plus `nt`, a model whose capabilities say no tools (the no-tools path reads that, not a list)
 jq '.models += [{id:"nt",label:"nt",provider:"claude",subscription:"claude",aliases:["claude:nt"],capabilities:{tools:false},
@@ -532,5 +533,15 @@ rm -f "$T/fix25" "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".*; : > "$T/cc
   && /usr/bin/grep -qs 'claude:one' "$T/st/cq/"*mformat*claude_one* && /usr/bin/grep -qs 'claude:two' "$T/st/cq/"*mformat*claude_two* \
   && ok "25 a failed re-ask ends the model's turn, and each model's failure is recorded" || ko "25 failed re-ask: rc=$rc calls=$(cat "$T/ccalls" | tr '\n' ' ') cq=$(/bin/ls "$T/st/cq" | tr '\n' ' ')"
 rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"* "$T/prompt".* "$T/ccalls"
+
+# v2 (ADR-0147): the review chain is a list of registry ids; an entry switched off is skipped, and the next one runs with its own effort.
+printf '#!/bin/bash\ncat > /dev/null; echo "$*" >> "$CLAUDE_ARGS"; echo "VERDICT: APPROVE"\n' > "$T/bin/claude"; chmod +x "$T/bin/claude"   # earlier cases replace the stub
+printf '{"schema_version":2,"chains":{"review":[{"id":"claude-opus-5-5","raw":"claude:claude-opus-5-5","route":"cli","on":false},{"id":"claude-sonnet-5-5","raw":"claude:claude-sonnet-5-5","route":"cli","effort":"high"}]},"model_retry_budget":1,"review_timeout_seconds":60,"review_delta_max_lines":3000,"anthropic_models":[]}' > "$T/s/models.json"
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*; export CLAUDE_ARGS="$T/claude-args"; : > "$CLAUDE_ARGS"
+out=$(GH_FILES="UI/x.cs" bash "$T/s/review.sh" --branch fix/1-x 8 2>/dev/null)
+/usr/bin/grep -q -- '--model claude-sonnet-5-5' "$CLAUDE_ARGS" && /usr/bin/grep -q -- '--effort high' "$CLAUDE_ARGS" && ! /usr/bin/grep -q 'claude-opus-5-5' "$CLAUDE_ARGS" \
+  && ok "a v2 review chain skips its off entry and runs the next with its effort" || ko "v2 review chain: args=$(cat "$CLAUDE_ARGS" 2>/dev/null) cq=$(/bin/ls "$T/st/cq" | tr '\n' ' ')"
+unset CLAUDE_ARGS
+rm -f "$T/st/review-fix_1-x".* "$T/st/cq/"*
 
 rm -rf "$T"; exit $fail

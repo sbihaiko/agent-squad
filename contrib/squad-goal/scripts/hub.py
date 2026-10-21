@@ -3,7 +3,7 @@
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
 import datetime as dt, glob, hashlib, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
-import agyquota, chainhealth, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
+import agyquota, chainhealth, modelreg, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -3058,6 +3058,16 @@ def subs_month():
 MODELS = pathlib.Path(__file__).resolve().parent / "models.json"
 CHAINS = ("coding_models", "review_models", "vision_models")   # all three live in models.json
 ROUTER_CHAIN = "router_models"   # the router's own chain, written into the run graph (the dispatch envelope, #95)
+def v1_view(d):
+    """The panel's reading of models.json: a v2 file's chains as the resolver reads them, under the v1 keys the panel draws (ADR-0147)."""
+    if d.get("schema_version") != 2: return d
+    view = {k: v for k, v in d.items() if k not in ("schema_version", "chains")}
+    rows = {k: modelreg.chain(d, k.removesuffix("_models")).entries for k in CHAINS}
+    view.update({k: [e.raw for e in rows[k]] for k in CHAINS})
+    view["off"] = {k: {e.raw: True for e in rows[k] if not e.on} for k in CHAINS}
+    view["hours"] = {k: {e.raw: e.hrs for e in rows[k] if e.hrs} for k in CHAINS}
+    view["efforts"] = {k: {e.raw: e.effort for e in rows[k] if e.effort} for k in CHAINS}
+    return view
 READONLY = ("known", "router_known", "suggest", "version", "labels", "boxes", "last_coding", "envelope", "blocked", "chain")   # fields models_get() adds for the panel: posted back, never stored
 # One model-id shape, in one place (#221): a bare id, and the context suffix the gateway serves beside it
 # (`claude-deepseek-v4-flash[1m]`). The save validates with MODEL_ID and the page's Add box tests the same source,
@@ -3352,7 +3362,7 @@ def models_get():
 
     The file keeps the spelling each role needs (chain_id); the panel never sees it, so a reader cannot pick the
     wrong one of two spellings of the same model."""
-    d = json.loads(MODELS.read_text())
+    d = v1_view(json.loads(MODELS.read_text()))
     return {**{k: [bare_id(m) for m in d.get(k, [])] for k in CHAINS},
             "efforts": {k: {bare_id(m): v for m, v in ek.items()} for k, ek in efforts_of(d).items()},
             "hours": {k: {bare_id(m): v for m, v in hk.items()} for k, hk in hours_of(d).items()},
@@ -3396,6 +3406,7 @@ def _models_set(new):
     # the panel invented -- "unknown chain" on every Save (2026-10-11).
     new = {k: v for k, v in new.items() if k not in READONLY} if isinstance(new, dict) else new
     if not isinstance(new, dict) or set(new) - set(CHAINS) - {"efforts", "hours", "off", ROUTER_CHAIN}: return {"err": "unknown chain"}
+    if json.loads(MODELS.read_text()).get("schema_version") == 2: return {"err": "models.json is v2: the panel cannot save it yet; edit its chains with modelreg"}
     # The router chain is the dispatch envelope, so it lives in the run graph and never in this file (#95)
     rchain = new.pop(ROUTER_CHAIN, None)
     if rchain == []:

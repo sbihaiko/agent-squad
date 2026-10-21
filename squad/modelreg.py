@@ -983,7 +983,7 @@ def main(argv=None):
         if ns.tsv:
             for e in rows:
                 print("\t".join([e.id, e.raw, e.route or "", e.effort or "", e.hrs or "",
-                                 "" if e.timeout_s is None else str(e.timeout_s)]))
+                                 "" if e.timeout_s is None else str(e.timeout_s), "1" if e.on else "0"]))
         else:
             for e in rows:
                 print(e.id)

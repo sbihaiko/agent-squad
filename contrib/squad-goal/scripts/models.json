@@ -1,37 +1,64 @@
 {
+  "schema_version": 2,
+  "chains": {
+    "coding": [
+      {
+        "id": "gpt-5.6-terra",
+        "raw": "claude-gpt-5.6-terra",
+        "route": "gateway"
+      },
+      {
+        "id": "grok-4.7",
+        "raw": "claude-grok-4.7",
+        "route": "gateway"
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "route": "gateway",
+        "hrs": "19-07"
+      }
+    ],
+    "review": [
+      {
+        "id": "claude-opus-5-5",
+        "raw": "claude:claude-opus-5-5",
+        "route": "cli",
+        "hrs": "19-07"
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "raw": "gemini-3.8-flash-medium",
+        "route": "cli",
+        "effort": "medium"
+      }
+    ],
+    "vision": [
+      {
+        "id": "gpt-5.6-luna",
+        "route": "cli"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "route": "cli"
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "raw": "gemini-3.8-flash-low",
+        "route": "cli",
+        "effort": "low"
+      }
+    ],
+    "router": []
+  },
   "_doc": "Role-based model chains for squad-goal. First healthy, quota-eligible entry wins. Squad ids must be in the dynamic dispatch envelope in docs/design/router.graph.json; if a chain wants a provider alias, the request must name the allowed id that stands for it. A review id routes through the registry (config/models.registry.json): its route and its tools capability pick the runner, never the spelling. `efforts`, `hours` and `review_timeout_seconds_by_model` are optional {model: value} maps set from the hub's models panel: hours is a local window \"HH-HH\" (start inclusive, end exclusive, wraps midnight; absent = always), and a model outside its window is skipped.",
   "stall_timeout_minutes": 15,
   "review_stall_minutes": 60,
   "model_retry_budget": 2,
   "anthropic_weekly_reserve_percent": 10,
   "anthropic_models": [],
-  "coding_models": [
-    "claude-gpt-5.6-terra",
-    "claude-grok-4.7",
-    "claude-sonnet-5-5"
-  ],
-  "review_models": [
-    "claude:claude-opus-5-5",
-    "gemini-3.8-flash-medium",
-    "grok-4.6"
-  ],
-  "vision_models": [
-    "gpt-5.6-luna",
-    "gpt-5.6-terra",
-    "gemini-3.8-flash-low"
-  ],
   "review_timeout_seconds": 360,
   "review_delta_max_lines": 3000,
   "_review_max_lines": "Line cap of a saved review (#1777): the checklist shape of revformat.py, verdict line, headings and bullets together. review.sh puts it in the prompt and rejects an answer over it as a MODEL_FORMAT failure; retune it here, never in the prompt.",
   "review_max_lines": 60,
-  "hours": {
-    "coding_models": {
-      "claude-sonnet-5-5": "19-07"
-    },
-    "review_models": {
-      "claude:claude-opus-5-5": "19-07"
-    }
-  },
-  "review_timeout_seconds_by_model": {},
   "review_order": "config"
 }

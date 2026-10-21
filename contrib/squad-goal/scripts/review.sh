@@ -194,13 +194,15 @@ cap() { capraw "$@" <&0 & local pid=$! n=0   # <&0: a background job would other
   wait $pid 2>/dev/null; }
 # hours: a model whose window in models.json's `hours` does not contain the current local hour is skipped
 # (empty window = always; "22-07" wraps midnight, start inclusive, end exclusive). Set from the hub's models panel.
-hours_ok() { local k=$1 m=$2 w h a b; w=$(jq -r --arg k "$k" --arg m "$m" '.hours[$k][$m] // empty' "$cfg" 2>/dev/null)
+row_of() { awk -F'\t' -v m="$1" -v c="$2" '$2==m{print $c; exit}' <<<"$rrows"; }   # one review row: 2 raw, 4 effort, 5 hrs, 6 timeout_s, 7 on
+effort_of() { local e; e=$(row_of "$1" 4); echo "${e:-medium}"; }
+hours_ok() { local w h a b; w=$(row_of "$2" 5)
   [ -n "$w" ] || return 0
   h=$((10#$(date +%H))); a=$((10#${w%%-*})); b=$((10#${w##*-}))
   if [ "$a" -le "$b" ]; then { [ "$h" -ge "$a" ] && [ "$h" -lt "$b" ]; } else { [ "$h" -ge "$a" ] || [ "$h" -lt "$b" ]; }; fi; }
 # A model the hub's models panel switched off (#1819) is skipped exactly like one outside its window, and the two are one
 # predicate wherever a consumer only has to decide whether the model may run.
-off_ok() { [ "$(jq -r --arg k "$1" --arg m "$2" '.off[$k][$m] // false' "$cfg" 2>/dev/null)" != true ]; }
+off_ok() { [ "$(row_of "$2" 7)" != 0 ]; }
 may_run() { hours_ok "$1" "$2" && off_ok "$1" "$2"; }
 # a full Codex window (hub quota) skips codex before any try; --sync also clears a marker the cache has outlived (#1525)
 python3 "$(dirname "$0")/codex-reset.py" --sync "$SG_SHARED/codex-limited"
@@ -210,7 +212,7 @@ tries=$(jq -r .model_retry_budget "$cfg"); prev=""
 [ -n "${SG_REVIEW_RETRY_BUDGET:-}" ] && tries=$SG_REVIEW_RETRY_BUDGET
 # fast lane: a branch whose files are all docs (docs/**, *.md) or tests (*Tests*/**, test_*, *_test.*, tests/**) is reviewed at
 # low effort; the rest of the chain is only its infrastructure fallback. SG_REVIEW_FASTLANE=no: off.
-chain=$(jq -r '.review_models[]' "$cfg"); lane=""
+rrows=$(python3 "$(dirname "$0")/modelreg.py" chain review --models "$cfg" --tsv); chain=$(awk -F'\t' '{print $2}' <<<"$rrows"); lane=""
 if [ "${SG_REVIEW_FASTLANE:-yes}" = yes ]; then
   files=$(filesof)
   if [ -n "$files" ] && ! printf '%s\n' "$files" | grep -vqE '^docs/|\.md$|Tests?/|(^|/)tests?/|(^|/)test_[^/]*$|_test\.[a-z]+$'; then
@@ -272,7 +274,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
   used=$((used+1))
   echo "$m" > "$SG_STATE/review-$pr.model"   # the model this review tries now: the hub reads it for the pass that holds the child (#598)
   [ -n "$prev" ] && printf "MODEL_SWITCH review %s -> %s on branch %s (previous model failed %s times).\n" "$prev" "$m" "$bm" "$tries" > "$(sg_cq_status "$iss" "mswitch$$-$ms")"
-  tmo=$(jq -r --arg m "$m" "$bare"' (.review_timeout_seconds_by_model // {}) as $t | $t[$m] // ([$t | to_entries[] | select((.key|bare) == ($m|bare)) | .value] | first) // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
+  tmo=$(row_of "$m" 6); [ -n "$tmo" ] || tmo=$(jq -r --arg m "$m" "$bare"' (.review_timeout_seconds_by_model // {}) as $t | $t[$m] // ([$t | to_entries[] | select((.key|bare) == ($m|bare)) | .value] | first) // .review_timeout_seconds // 480' "$cfg")   # SG_REVIEW_TIMEOUT clamps it down for a long review, except when one model is all that is reachable
   [ -n "${SG_REVIEW_TIMEOUT:-}" ] && [ "$reachable" -gt 1 ] && [ "$tmo" -gt "$SG_REVIEW_TIMEOUT" ] && tmo=$SG_REVIEW_TIMEOUT   # per-model cap: a slow model gets the headroom its own record needs, and a fast one is not held to it
   [ -e "$p.orig" ] && cp "$p.orig" "$p"; rep=0; lim=$tries   # rep=1: this model had its one repair try (#625); the prompt goes back to the plain one
   i=0; while [ "$i" -lt "$lim" ]; do i=$((i+1))
@@ -296,7 +298,7 @@ for m in $chain; do fmt=0; ms=$(printf '%s' "$m" | tr -c 'A-Za-z0-9.-' _)   # ms
             jq -s '.[1] + {usage: {input_tokens: ((.[0].usage.input_tokens//0)+(.[1].usage.input_tokens//0)), output_tokens: ((.[0].usage.output_tokens//0)+(.[1].usage.output_tokens//0))}}' "$o.1" "$o" > "$o.s" 2>/dev/null && mv "$o.s" "$o"
           fi; rm -f "$o.t" "$o.n" "$o.1" "$o.s" "$p.body2"; (exit $r)
         else
-          cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || jq -r --arg m "$m" '.efforts.review_models[$m] // "medium"' "$cfg")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
+          cap claude -p --output-format json --strict-mcp-config --model "$wire" --effort "$([ -n "$lane" ] && echo low || effort_of "$m")" --tools Read Grep Glob Bash --allowedTools "Bash(git show:*)" "Bash(git log:*)" "Bash(git diff:*)" --disallowedTools Skill Edit Write NotebookEdit WebFetch "${schemaargs[@]}" < $p > "$o" 2>"$e"
         fi;;
       cli:grok) (cd "$SG_CHECKOUT" && cap grok -m "$wire" --prompt-file "$p" --output-format plain --permission-mode dontAsk --disable-web-search) > "$o" 2>"$e";;
       cli:agy) (cd "$SG_CHECKOUT" && cap agy --model "$wire" --mode plan --dangerously-skip-permissions --print-timeout 1800s -p "$(cat "$p")") > "$o" 2>"$e";;   # Antigravity CLI: its ids carry the effort (gemini-3.8-flash-high); the gemini CLI refuses this account. plan mode auto-denies a tool headless, so the call approves its own tools

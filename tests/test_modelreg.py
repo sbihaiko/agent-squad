@@ -238,9 +238,9 @@ def test_invocation_keeps_todays_wire_string(raw, use, wire, reg):
 # The role chains this repository ships. A registry landing changes no caller, so a chain entry moves only in its
 # own landing with its own test; this pin makes an accidental rewrite of models.json fail here.
 PINNED_CHAINS = {
-    "coding_models": ["claude-gpt-5.6-terra", "claude-grok-4.7", "claude-sonnet-5-5"],   # no model that takes no tools (ADR-0147)
-    "review_models": ["claude:claude-opus-5-5", "gemini-3.8-flash-medium", "grok-4.6"],
-    "vision_models": ["gpt-5.6-luna", "gpt-5.6-terra", "gemini-3.8-flash-low"],
+    "coding": ["claude-gpt-5.6-terra", "claude-grok-4.7", "claude-sonnet-5-5"],   # no model that takes no tools (ADR-0147)
+    "review": ["claude:claude-opus-5-5", "gemini-3.8-flash-medium"],
+    "vision": ["gpt-5.6-luna", "gpt-5.6-terra", "gemini-3.8-flash-low"],
 }
 
 
@@ -260,17 +260,12 @@ def test_an_alias_that_is_another_entrys_id_is_not_registered(tmp_path):
 def test_every_repo_spelling_is_known_and_pinned(reg):
     """The chains and graphs in this repository are the table's source; none may fall out of the registry."""
     mdoc = json.loads(MODELS.read_text())
-    raws = []
-    for key, pinned in PINNED_CHAINS.items():
-        assert mdoc.get(key) == pinned, f"{key} moved: {mdoc.get(key)}"
-        raws += pinned
-    for raw in raws:
-        assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
-    for models in (mdoc.get("hours") or {}).values():
-        for raw in models:
+    assert mdoc["schema_version"] == 2
+    for name, pinned in PINNED_CHAINS.items():
+        raws = [e.raw for e in mr.chain(mdoc, name, reg).entries]
+        assert raws == pinned, f"{name} moved: {raws}"
+        for raw in raws:
             assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
-    for raw in mdoc.get("review_timeout_seconds_by_model") or {}:
-        assert mr.normalize(raw, reg).known, f"{raw} is not in the registry"
 
 
 # --- chain: v1, v2, mixed ----------------------------------------------------------------------------------

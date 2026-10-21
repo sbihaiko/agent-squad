@@ -24,8 +24,12 @@ modelreg = importlib.util.module_from_spec(_mr_spec); _mr_spec.loader.exec_modul
 
 # the coding model comes from models.json (the hub's "squad models" panel), never from memory or a doc
 mdoc = json.load(open(here / "models.json"))
+def _chain(name):   # one chain's entries, read through the resolver: a v1 or a v2 models.json (ADR-0147)
+    return modelreg.chain(mdoc, name.removesuffix("_models")).entries
+def _row(chain, mid):
+    return next((e for e in _chain(chain) if e.raw == mid), None)
 def _in_hours(chain, mid):   # mirrors hub.py's in_hours: the model's own window, local hour, "" = always
-    w = (mdoc.get("hours") or {}).get(chain, {}).get(mid)
+    row = _row(chain, mid); w = row.hrs if row else None
     if not isinstance(w, str) or not re.match(r"^([01]\d|2[0-3])-([01]\d|2[0-3])$", w) or w[:2] == w[3:]: return True
     h = time.localtime().tm_hour; a, b = int(w[:2]), int(w[3:])
     return a <= h < b if a <= b else (h >= a or h < b)
@@ -35,8 +39,9 @@ def _spent(mid):   # #508: the subscription is spent until the marker's time (co
     try: return bool(f and os.environ.get("SG_SHARED")) and time.time() < int((pathlib.Path(os.environ["SG_SHARED"]) / f).read_text().strip())
     except (OSError, ValueError): return False
 def _may_run(chain, mid):   # mirrors hub.py's may_run: the panel's switch first, then the model's own window, then its subscription
-    return not (mdoc.get("off") or {}).get(chain, {}).get(mid) and _in_hours(chain, mid) and not _spent(mid)
-cm = mdoc.get("coding_models") or []
+    row = _row(chain, mid)
+    return (row is None or row.on) and _in_hours(chain, mid) and not _spent(mid)
+cm = [e.raw for e in _chain("coding_models")]
 # the model the request must name is the first of the chain that may run now: a window in the hub's models panel
 # (e.g. claude-sonnet-5-5 at night) is honoured here, and so is the row's switch, and the reason is printed when one
 # is skipped. Every entry off or out of window is the same refusal: no model may run now.
@@ -67,13 +72,13 @@ if primary and not os.environ.get("SG_ALLOW_MODEL"):
 ALIASES = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5-20251001"}
 def _off_ids():   # {bare model id: chain}: hub.py's model_off (the switch counts when the model is in the chain); review_models spells an Anthropic id `claude:<id>`
     out = {}
-    for chain, row in (mdoc.get("off") or {}).items():
-        for mid, v in (row or {}).items():
-            if v and mid in (mdoc.get(chain) or []): out.setdefault(mid.removeprefix("claude:"), chain)
+    for chain in ("coding_models", "review_models", "vision_models"):
+        for e in _chain(chain):
+            if not e.on: out.setdefault(e.raw.removeprefix("claude:"), chain)
     # a model outside its `hours` window is closed the same way: the router and the dispatch fallbacks must not pick it
-    for chain in mdoc.get("hours") or {}:
-        for mid in (mdoc.get("hours") or {}).get(chain) or {}:
-            if mid in (mdoc.get(chain) or []) and not _in_hours(chain, mid): out.setdefault(mid.removeprefix("claude:"), chain + " hours window")
+    for chain in ("coding_models", "review_models", "vision_models"):
+        for e in _chain(chain):
+            if e.hrs and not _in_hours(chain, e.raw): out.setdefault(e.raw.removeprefix("claude:"), chain + " hours window")
     return out
 def _graph_path(workflow):   # mirrors squad/workflows.py resolve: no id, `default` or `dynamic` is the owner's default file, else the dynamic seed
     folder = cwd / "docs" / "squad" / "workflows"; sq = pathlib.Path(squad)
@@ -294,7 +299,7 @@ log = state / (req_file.stem + ".log")
 try: spent = _spent_models(json.loads(_graph_path(os.environ.get("SG_WORKFLOW")).read_text()), os.environ.get("SG_SHARED"))
 except (OSError, ValueError): spent = []   # an absent or malformed graph is the squad's own refusal to make, not this launcher's
 # The coding chain's hours windows go to the run too, so its own fallback skips a model that the window closes while the run lives (#571).
-hours = {m: w for m, w in ((mdoc.get("hours") or {}).get("coding_models") or {}).items() if isinstance(w, str) and w}
+hours = {e.raw: e.hrs for e in _chain("coding_models") if isinstance(e.hrs, str) and e.hrs}
 # The coding chain's order goes to the run as well: the launch picks by it, so an in-run fallback follows the same order
 # rather than the graph allow-list order, and the request line and the engine agree on the next model (#617).
 order = [m for m in cm if isinstance(m, str) and m]

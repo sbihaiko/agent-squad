@@ -8,7 +8,7 @@ d=$(dirname "$0"); T=$(mktemp -d); log=$T/report; : > "$log"; fail=0
 unset $(compgen -e | /usr/bin/grep '^SG_') 2>/dev/null || true
 ok() { printf 'ok   %s\n' "$1" >> "$log"; }; ko() { printf 'FAIL %s\n' "$1" >> "$log"; fail=1; }
 S=$T/scripts; mkdir -p "$S" "$T/bin" "$T/home"
-cp "$d/mkreq.sh" "$d/address.sh" "$d/models.json" "$d/req-checklist.txt" "$S/"   # address.sh: the seam mkreq.sh resolves its state directory through, as env.sh sources it
+cp "$d/mkreq.sh" "$d/address.sh" "$d/models.json" "$d/req-checklist.txt" "$d/modelreg.py" "$d/registry.json" "$S/"   # address.sh: the seam mkreq.sh resolves its state directory through, as env.sh sources it
 printf 'export SG_REPO=o/r SG_CHECKOUT=%s\n' "$T/co" > "$S/env.sh"
 export HOME=$T/home; R=$HOME/.cache/squad-goal/req
 body() { printf 'IMPORTANT: your first and only action is X\nPANEL: %s\nEdit %s\n' "$1" "$2" > "$T/$3.body"; }
@@ -228,6 +228,14 @@ run q1; /usr/bin/grep -q '^Coding model: claude-deepseek-flash\[1m\]' "$R/q1.txt
 rm -f "$R/q1.txt"; echo $(( $(date +%s) - 60 )) > "$T/shared/codex-limited"
 run q1; /usr/bin/grep -q '^Coding model: claude-gpt-5.6-terra' "$R/q1.txt" 2>/dev/null && ok "an expired quota marker skips nothing" || ko "expired marker still skips: $(/usr/bin/grep '^Coding model' "$R/q1.txt" 2>/dev/null)"
 cp "$T/models.keep" "$S/models.json"; rm -f "$R/q1.txt"
+# v2 (ADR-0147): a chain is a list of registry ids; the request names the raw spelling of the first entry that may run.
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/v2repo.py\n' > "$T/v2repo.body"
+run v2repo; /usr/bin/grep -q '^Coding model: claude-gpt-5.6-terra' "$R/v2repo.txt" 2>/dev/null && ok "the repo models.json (v2) names its first coding model" || ko "v2 repo file names: $(/usr/bin/grep '^Coding model' "$R/v2repo.txt" 2>/dev/null) $(cat "$T/v2repo.err")"
+rm -f "$R/v2repo.txt"
+printf '{"schema_version":2,"chains":{"coding":[{"id":"gpt-5.6-terra","raw":"claude-gpt-5.6-terra","route":"gateway","on":false},{"id":"grok-4.7","raw":"claude-grok-4.7","route":"gateway"}]}}' > "$S/models.json"
+printf 'IMPORTANT: your first and only action is X\nEdit scripts/v2off.py\n' > "$T/v2off.body"
+run v2off; /usr/bin/grep -q '^Coding model: claude-grok-4.7' "$R/v2off.txt" 2>/dev/null && ok "a v2 entry switched off is skipped" || ko "v2 off entry named: $(/usr/bin/grep '^Coding model' "$R/v2off.txt" 2>/dev/null) $(cat "$T/v2off.err")"
+rm -f "$R/v2off.txt"; cp "$T/models.keep" "$S/models.json"
 # (#658) every request, the coding child's and the fix run's, forbids a write outside the worktree and the live skill copy.
 printf 'IMPORTANT: your first and only action is X\nEdit scripts/q658.py\n' > "$T/w658.body"
 run w658; /usr/bin/grep -qF 'Never write outside your worktree; never run publish-live.sh and never touch ~/.claude/skills' "$R/w658.txt" 2>/dev/null \

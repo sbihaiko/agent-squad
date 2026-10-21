@@ -14,12 +14,15 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import pathlib
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
+
+from squad import modelreg
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "contrib" / "squad-goal" / "scripts"
@@ -177,11 +180,11 @@ def test_the_switch_toggles_the_panel_state(hub):
 def _launch_predicate(doc):
     """launch.py's own gate, sliced out and run: `_may_run(chain, mid)` over the models.json this test hands it."""
     block = LAUNCH.read_text()
-    block = block[block.index("def _in_hours("):block.index('cm = mdoc.get("coding_models")')]
+    block = block[block.index("def _chain("):block.index('cm = [e.raw for e in _chain("coding_models")]')]
     spec = importlib.util.spec_from_file_location("provkey", SCRIPTS / "provkey.py")
     provkey = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(provkey)
-    ns = {"mdoc": doc, "re": re, "time": __import__("time"), "provkey": provkey}   # the key gate launch.py loads beside itself (#482)
+    ns = {"mdoc": doc, "re": re, "time": __import__("time"), "os": os, "pathlib": pathlib, "provkey": provkey, "modelreg": modelreg}   # the key gate launch.py loads beside itself (#482)
     exec(compile(block, str(LAUNCH), "exec"), ns)      # noqa: S102 -- the shipped predicate, not a copy of it
     return ns["_may_run"]
 
@@ -206,13 +209,20 @@ def test_every_coding_model_switched_off_leaves_launch_with_no_model_at_all():
     assert "switched off" in LAUNCH.read_text()      # the refusal names both reasons on the existing path
 
 
+def _shipped(text, start, stop=None):
+    """One assignment line of the shipped script, with `$(dirname "$0")` made the scripts' directory (no $0 under bash -c)."""
+    line = next(ln.strip() for ln in text.splitlines() if ln.strip().startswith(start))
+    return (line.split(stop)[0] if stop else line).replace('$(dirname "$0")', str(SCRIPTS))
+
+
 def test_mkreq_skips_a_coding_model_switched_off(tmp_path):
     """mkreq.sh names the model in the request, so it skips it here too — launch.py would refuse the request."""
     models = tmp_path / "models.json"
     models.write_text(json.dumps(dict(MODELS_DOC, off={"coding_models": {"claude-sonnet-5-5": True}})))
+    rows = _shipped(MKREQ.read_text(), "rows=$(python3")
     fn = _fn(MKREQ.read_text(), "mayrun() {")
-    out = _bash(f'mjson={models}; hh=20;\n{fn}\n'
-                'for m in claude-sonnet-5-5 claude-deepseek-v4-flash; do if mayrun "$m"; then printf "%s\\n" "$m"; fi; done')
+    out = _bash(f'mjson={models}; hh=20; spent() {{ return 1; }}\n{rows}\n{fn}\n'
+                'while read -r m w on; do if mayrun "$m" "$w" "$on"; then printf "%s\\n" "$m"; fi; done <<<"$rows" | head -1')
     assert out == "claude-deepseek-v4-flash"
 
 
@@ -221,16 +231,17 @@ def test_mkreq_still_leaves_an_in_window_model_alone(tmp_path):
     models.write_text(json.dumps(MODELS_DOC))
     fn = _fn(MKREQ.read_text(), "mayrun() {")
     hh = int(subprocess.run(["date", "+%H"], capture_output=True, text=True).stdout)
-    inwin = "claude-sonnet-5-5" if not 7 <= hh < 19 else "claude-deepseek-v4-flash"
-    out = _bash(f'mjson={models}; hh={hh};\n{fn}\nif mayrun "$1"; then echo yes; else echo no; fi', [inwin])
+    inwin, window = ("claude-sonnet-5-5", "19-07") if not 7 <= hh < 19 else ("claude-deepseek-v4-flash", "-")
+    out = _bash(f'mjson={models}; hh={hh}; spent() {{ return 1; }}\n{fn}\nif mayrun "$1" "$2" 1; then echo yes; else echo no; fi', [inwin, window])
     assert out == "yes"
 
 
 def _review_predicates(tmp_path, doc):
     models = tmp_path / "review-models.json"
     models.write_text(json.dumps(doc))
-    fn = "".join(_fn(REVIEW.read_text(), opener, end="; }\n") for opener in ("hours_ok() {", "off_ok() {", "may_run() {"))
-    return models, fn
+    rows = _shipped(REVIEW.read_text(), "rrows=$(python3", stop="; chain=")
+    fns = [_fn(REVIEW.read_text(), "row_of() {"), *(_fn(REVIEW.read_text(), o, end="; }\n") for o in ("hours_ok() {", "off_ok() {", "may_run() {"))]
+    return models, "\n".join([rows, *fns])
 
 
 def test_a_reviewer_switched_off_is_skipped_like_one_out_of_window(tmp_path):
@@ -253,8 +264,9 @@ def test_the_consult_never_wakes_a_model_switched_off(tmp_path):
     """consult.sh asks the coding model directly when the router hesitated: it must skip a model taken out of the chain."""
     models = tmp_path / "models.json"
     models.write_text(json.dumps(dict(MODELS_DOC, off={"coding_models": {"claude-sonnet-5-5": True}})))
+    rows = _shipped(CONSULT.read_text(), "rows=$(python3")
     fn = _fn(CONSULT.read_text(), "pick() {")
-    out = _bash(f'mjson={models}; hh=20;\n{fn}\nmodel=$(pick); printf "%s\\n" "$model"')
+    out = _bash(f'here={SCRIPTS}; mjson={models}; hh=20;\n{rows}\n{fn}\nmodel=$(pick); printf "%s\\n" "$model"')
     assert out == "claude-deepseek-v4-flash"
 
 

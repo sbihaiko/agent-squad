@@ -106,7 +106,7 @@ def test_chainhealth_names_the_missing_key(no_key, tmp_path):
 def _mkreq(tmp_path, cfg, env_key=None):
     s, home = tmp_path / "s", tmp_path / "home"
     s.mkdir(); home.mkdir()
-    for f in ("mkreq.sh", "address.sh", "req-checklist.txt", "provkey.py"):
+    for f in ("mkreq.sh", "address.sh", "req-checklist.txt", "provkey.py", "modelreg.py", "registry.json"):
         shutil.copy(SCRIPTS / f, s / f)
     (s / "models.json").write_text(json.dumps({"coding_models": [QWEN, "test-model"]}))
     (tmp_path / "b.body").write_text("IMPORTANT: your first and only action is X\nPANEL: p\nEdit scripts/a.py\n")
