@@ -157,3 +157,10 @@ def test_the_scan_reads_the_run_folders_that_still_exist(tmp_path):
     record(tmp_path, "run-a", [outcome("claude-gpt-5.6-terra", SESSION_LIMIT), verdict()])
     (tmp_path / "not-a-run").mkdir()
     assert [d.name for d in AC.run_folders(tmp_path)] == ["run-a"]
+
+
+def test_a_bare_number_is_not_the_api_s_own_status():
+    # A number in a sentence about something else is not the API's answer: session.provider_error keeps the same rule, so a
+    # frame size or a duration never reads as an authentication or a quota failure.
+    assert AC.cause("ResultError: the call produced nothing in 403 s") == "unknown"
+    assert AC.cause("ResultError: the frame was 422 bytes") == "unknown"
