@@ -213,6 +213,10 @@ $O rev-parse -q --verify "refs/heads/$W" >/dev/null && ko "J: the landed wave br
 # Each issue of the wave is closed through the API, and its one delivery comment is queued, never posted.
 for n in $WAVE_ISSUES; do /usr/bin/grep -q "issues/$n -f state=closed" "$T/gh.log" || ko "J: #$n is not closed through the API"; done
 for n in $WAVE_ISSUES; do case "$(wfact $n run-1)" in "delivered "*) ;; *) ko "J: #$n has no delivered fact in its ledger: '$(wfact $n run-1)'";; esac; done
+# The landing is also the issue's `landed` fact (ADR-0149, #695): rule R reads it, never the run's land heads.
+landedfacts() { SG_STATE=$T/st python3 "$T/s/issue_ledger.py" landed x/y 2>/dev/null; }
+[ "$(landedfacts | cut -f2 | sort -n | tr '\n' ' ')" = "$(printf '%s\n' $WAVE_ISSUES | sort -n | tr '\n' ' ')" ] && ok "J: each issue the wave landed has its landed fact" || ko "J: landed facts: '$(landedfacts)'"
+landedfacts | awk -F'\t' '$1!="run-1" {bad=1} END {exit bad}' && ok "J: the landed fact is keyed by the run that landed it" || ko "J: landed facts: '$(landedfacts)'"
 [ "$(/usr/bin/grep -c 'state=closed' "$T/gh.log")" = 8 ] && ok "J: each issue of the wave is closed through the API" || ko "J: $(/usr/bin/grep -c 'state=closed' "$T/gh.log") closes for 8 issues"
 for n in $WAVE_ISSUES; do ls "$T/st/cq/"x__y#$n-delivery~* >/dev/null 2>&1 || ko "J: no delivery comment is queued for #$n"; done
 [ "$(ls "$T/st/cq/"*-delivery~* 2>/dev/null | wc -l | tr -d ' ')" = 8 ] && ok "J: each issue of the wave has its one delivery comment queued" || ko "J: $(ls "$T/st/cq" 2>/dev/null | tr '\n' ' ')"

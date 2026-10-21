@@ -154,3 +154,32 @@ def test_a_kill_in_the_middle_of_a_write_leaves_the_old_file_whole(tmp_path):
 @pytest.mark.parametrize("bad", ["", "a/b", "a/b#", "a#7", "a/b#x"])
 def test_a_key_with_no_repository_and_number_is_refused(tmp_path, bad):
     assert run(tmp_path, "read", bad).returncode == 2
+
+
+def test_a_landing_is_a_fact_keyed_by_its_run_or_its_branch(tmp_path):
+    """#695: the landing pass writes the issue's delivery as a `landed` fact, and rule R reads it, never a run's land heads."""
+    assert run(tmp_path, "landed", "a/b#7", "run-1", "run", "abc").stdout.strip() == "recorded"
+    assert run(tmp_path, "landed", "a/b#7", "run-1", "run", "abc").stdout.strip() == "duplicate", "a landing counts once"
+    assert run(tmp_path, "landed", "a/b#8", "fix/8-x", "branch", "def").stdout.strip() == "recorded"
+    assert sorted(run(tmp_path, "landed", "a/b").stdout.splitlines()) == ["fix/8-x\t8", "run-1\t7"]
+    assert run(tmp_path, "landed", "a/b#7", "run-1", "wave", "abc").returncode == 2, "only a run or a branch lands"
+
+
+def test_a_landing_and_a_requeue_head_follow_a_rearm_floor(tmp_path):
+    """#695: the old auto/requeued- marker becomes a `requeue` fact, and both facts go with a rearm."""
+    run(tmp_path, "landed", "a/b#7", "run-1", "run", "abc")
+    run(tmp_path, "requeue", "a/b#7", "run-1", "abc")
+    run(tmp_path, "rearm", "a/b#7")
+    d = json.loads(run(tmp_path, "read", "a/b#7").stdout)
+    assert d["landed"] == {} and d["requeued"] == {}
+    assert run(tmp_path, "landed", "a/b#7", "run-1", "run", "abc").stdout.strip() == "floor"
+    assert run(tmp_path, "requeue", "a/b#7", "run-1", "abc").stdout.strip() == "floor"
+
+
+def test_the_head_a_run_requeued_the_issue_on_is_a_fact(tmp_path):
+    """#695: childcc's requeue waits for a new head; the head it was requeued on is a ledger fact."""
+    assert run(tmp_path, "requeue", "a/b#7", "run-1", "abc").stdout.strip() == "recorded"
+    assert run(tmp_path, "requeue", "a/b#7", "run-1", "abc").stdout.strip() == "duplicate"
+    assert run(tmp_path, "requeue", "a/b#7", "run-1", "def").stdout.strip() == "recorded", "a new head records"
+    assert run(tmp_path, "requeued", "a/b#7", "run-1").stdout.strip() == "def"
+    assert run(tmp_path, "requeued", "a/b#7", "run-2").stdout.strip() == ""

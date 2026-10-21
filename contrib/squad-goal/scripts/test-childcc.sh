@@ -3,7 +3,7 @@
 # Live pass moves at once; a finished run is backfilled only when the card is Todo/In Progress/Blocked, never past Code Complete.
 unset SG_BOARD_VOCAB   # the old-vocabulary case needs it unset; a caller that exports it must not turn the suite red
 src=${1:-$(dirname "$0")/childcc.py}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
-mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/revformat.py" "$T/"
+mkdir -p "$T/bin" "$T/st/auto" "$T/st/cq" "$T/co/runs"; cp "$src" "$T/childcc.py"; cp "$(dirname "$src")/issue_ledger.py" "$(dirname "$src")/issue_state.py" "$(dirname "$src")/child_issues.py" "$(dirname "$src")/ghread.py" "$(dirname "$src")/revformat.py" "$T/"
 printf '#!/bin/bash\necho "$@" >> %s/moves\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
 cat > "$T/bin/gh" <<'GH'
 #!/bin/bash
@@ -75,6 +75,9 @@ echo "$*" >> "$WAVE_CALLS"
 echo "WAVE gui/$3 entered (#$3)"
 W
 export WAVE_CALLS=$T/wave.calls WAVE_FAIL=$T/wave.fail; : > "$WAVE_CALLS"
+lq() { # issue: the head the run requeued it on, from its ledger (the old auto/requeued- marker, ADR-0149)
+  python3 "$T/issue_ledger.py" requeued "x/y#$1" "$2" 2>/dev/null; }
+lqset() { python3 "$T/issue_ledger.py" requeue "x/y#$1" "$2" "$3" >/dev/null 2>&1; }
 wtree() { # run [child]: the child's worktree, a git repo with one commit
   local d="$T/co/runs/$1/ws/target-${2:-c}"; mkdir -p "$d"; /usr/bin/git -C "$d" init -q . && /usr/bin/git -C "$d" -c user.email=a@b -c user.name=t commit -q --allow-empty -m one; }
 pass() { : > "$T/st/active-runs.txt"; echo "$T/co/runs/$1" >> "$T/st/active-runs.txt"; (cd "$T/co" && python3 "$T/childcc.py.run" 2>&1); }
@@ -101,7 +104,7 @@ h=$(/usr/bin/git -C "$T/co/runs/rvw/ws/target-c" rev-parse HEAD)
 echo "$h" > "$T/st/auto/rvd-rvw-c"   # the claim as a pass wrote it before it died: the head, and no pass alive behind it
 pass rvw >/dev/null
 [ "$(grep -c '^rvw 5102' "$T/cr.calls")" = 1 ] && ok "a claim whose pass died is no claim: the child is reviewed again" || ko "a dead pass's claim held the review: $(cat "$T/cr.calls")"
-c1=$(grep -c '^rvw 5102' "$T/cr.calls"); sleep 30 & live=$!; echo "$h $live" > "$T/st/auto/rvd-rvw-c"; rm -f "$T/st/auto/cc-rvw-c" "$T/st/auto/requeued-rvw-c"
+c1=$(grep -c '^rvw 5102' "$T/cr.calls"); sleep 30 & live=$!; echo "$h $live" > "$T/st/auto/rvd-rvw-c"; rm -f "$T/st/auto/cc-rvw-c"
 pass rvw >/dev/null; kill $live 2>/dev/null
 [ "$(grep -c '^rvw 5102' "$T/cr.calls")" = "$c1" ] && ok "a claim whose pass is alive holds: the review is not repeated" || ko "a live claim was reviewed again: $(cat "$T/cr.calls")"
 # A review takes a review slot in try mode (#567): a full budget skips the review for this pass, with one line naming the
@@ -150,7 +153,7 @@ run2 cap 5300 5301; : > "$WAVE_CALLS"; : > "$WAVE_CALLS.expired-cap"
 pass cap >/dev/null; pass cap >/dev/null; rc=$?
 [ "$rc" = 0 ] && ok "a held child of an expired wave does not keep it from landing" || ko "expired wave with a held child: exit $rc"
 # a child whose requeue holds it on an unchanged head costs no work: its sibling is worked in the same pass
-run2 sup 5400 5401; : > "$WAVE_CALLS"; /usr/bin/git -C "$T/co/runs/sup/ws/target-a" rev-parse HEAD > "$T/st/auto/requeued-sup-a"
+run2 sup 5400 5401; : > "$WAVE_CALLS"; lqset 5400 sup "$(/usr/bin/git -C "$T/co/runs/sup/ws/target-a" rev-parse HEAD)"
 pass sup >/dev/null; rc=$?
 [ "$(ent sup 5400)" = 0 ] && [ "$(ent sup 5401)" = 1 ] && [ "$rc" = 0 ] && ok "a requeued child on an unchanged head costs no work" \
   || ko "entries with a requeued child: $(cat "$WAVE_CALLS"), exit $rc"
@@ -168,8 +171,8 @@ pass lfail >/dev/null
 # A child the requeue cap stopped (WAVE STOP) is a requeue too (#594): the same head is never entered again.
 run wst 5600 n; wtree wst; echo wave/wst > "$T/st/auto/wave-wst"; echo wave/wst > "$T/st/auto/waved-wst"; : > "$WAVE_CALLS"
 pass wst >/dev/null; pass wst >/dev/null
-[ "$(cat "$T/st/auto/requeued-wst-c" 2>/dev/null)" = "$(/usr/bin/git -C "$T/co/runs/wst/ws/target-c" rev-parse HEAD)" ] && [ "$(ent wst 5600)" = 1 ] \
-  && ok "a stopped child gets the requeued marker and is not entered again on the same head" || ko "WAVE STOP: marker '$(cat "$T/st/auto/requeued-wst-c" 2>/dev/null)', entries $(cat "$WAVE_CALLS")"
+[ "$(lq 5600 wst)" = "$(/usr/bin/git -C "$T/co/runs/wst/ws/target-c" rev-parse HEAD)" ] && [ "$(ent wst 5600)" = 1 ] \
+  && ok "a stopped child gets the requeue fact and is not entered again on the same head" || ko "WAVE STOP: fact '$(lq 5600 wst)', entries $(cat "$WAVE_CALLS")"
 # A loop defect halts delivery too (#596, ADR-0146): a defect in the loop's own machinery is fixed outside the loop, so no
 # child enters a wave and no card moves while one carries `loop-bug`. The pass reads the open issues once, names the issue in
 # the same line the dispatch passes print, and writes nothing else. Closing the issue resumes the entry with no marker.
@@ -240,7 +243,7 @@ rrun rap 5800 pass '' approve; : > "$WAVE_CALLS"; : > "$T/cr.calls"; rm -f "$T/m
 pass rap >/dev/null
 ! /usr/bin/grep -q '^rap ' "$T/cr.calls" && ok "a child its run approved gets no second review call" || ko "an approved child was reviewed again: $(cat "$T/cr.calls")"
 [ "$(ent rap 5800)" = 1 ] && [ -e "$T/st/auto/cc-rap-c" ] && ok "a child its run approved enters its wave" || ko "approved child entry: $(cat "$WAVE_CALLS")"
-rrun rhd 5801 fail '"review_held"' hold; /usr/bin/git -C "$T/co/runs/rhd/ws/target-c" rev-parse HEAD > "$T/st/auto/requeued-rhd-c"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
+rrun rhd 5801 fail '"review_held"' hold; lqset 5801 rhd "$(/usr/bin/git -C "$T/co/runs/rhd/ws/target-c" rev-parse HEAD)"; : > "$WAVE_CALLS"; : > "$T/cr.calls"
 pass rhd >/dev/null; pass rhd >/dev/null
 [ "$(ent rhd 5801)" = 0 ] && ok "a child its run held is not entered" || ko "a held child was entered: $(cat "$WAVE_CALLS")"
 ! /usr/bin/grep -q '^rhd ' "$T/cr.calls" && ok "a child its run held is not reviewed again" || ko "a held child was reviewed: $(cat "$T/cr.calls")"

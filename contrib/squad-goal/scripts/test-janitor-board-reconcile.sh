@@ -209,7 +209,7 @@ cq="$T/st/cq/x__y#2009-refusal-board-write-failed.md"
 /usr/bin/grep -q '^STATUS o 4 Code Complete 2022$' "$T/board.calls" 2>/dev/null && ok "the child that landed moves its own card to Code Complete" || ko "#2022 not Code Complete: $(bc) $o"
 # #666: the run's verdict is not the child's. A child that landed its own work reads Code Complete even when the run
 # failed over a sibling: the sibling's failure does not unland commits that are in the branch.
-/usr/bin/grep -q 'BOARD-RECONCILE #2022: card -> Code Complete (run run-mixed child route.router.1 landed work locally)' "$T/st/cycle.log" 2>/dev/null && ok "a landing inside a failed run is still the child's delivery" || ko "#2022 landing lost to the run's verdict: $(/usr/bin/grep '2022' "$T/st/cycle.log" 2>/dev/null)"
+/usr/bin/grep -q 'BOARD-RECONCILE #2022: card -> Code Complete (run run-mixed landed work locally)' "$T/st/cycle.log" 2>/dev/null && ok "a landing inside a failed run is still the child's delivery" || ko "#2022 landing lost to the run's verdict: $(/usr/bin/grep '2022' "$T/st/cycle.log" 2>/dev/null)"
 ! /usr/bin/grep -q 'Code Complete 2023' "$T/board.calls" 2>/dev/null && ok "a child that landed nothing is never credited the run's landing" || ko "#2023 read Code Complete over its sibling's landing: $(bc)"
 /usr/bin/grep -q '^STATUS o 4 Todo 2023$' "$T/board.calls" 2>/dev/null && ok "a failed child with no branch and no PR stays in the loop's queue" || ko "#2023 did not stay in Todo: $(bc) $o"
 /usr/bin/grep -q 'BOARD-RECONCILE #2023: card -> Todo (run run-mixed child route.router.2 fail with nothing landed (red gate))' "$T/st/cycle.log" 2>/dev/null && ok "the reason names the child and its own outcome" || ko "child reason not named: $(cat "$T/st/cycle.log" 2>/dev/null)"

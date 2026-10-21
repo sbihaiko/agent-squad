@@ -63,4 +63,19 @@ L rearm 'x/y#11' >/dev/null && [ "$(L read 'x/y#11' state)" = todo ] && ok "a re
 echo 1 > "$T/st/auto/loopqueues-30"
 [ "$(L read 'x/y#30' state)" = held ] && [ "$(L read 'x/y#31' state)" = todo ] && ok "a missing ledger holds only beside old counters" || ko "missing: '$(L read 'x/y#30')' '$(L read 'x/y#31' state)'"
 L migrate 'x/y#30' >/dev/null && [ "$(L read 'x/y#30' state)" = todo ] && [ "$(L count 'x/y#30' loop)" = 1 ] && ok "migrate carries the old counters in" || ko "migrate: '$(L read 'x/y#30')'"
+# A landing pass records the issue's work in the base (ADR-0149, #695): `landed` is the fact rule R reads instead of a
+# run's land heads. It is keyed by the run (or by the branch a branchland pass landed), a duplicate writes nothing, and a
+# rearm clears it. A `requeue` fact holds the head a run requeued the issue's child on (the old auto/requeued- marker).
+[ "$(L landed 'x/z#40' run-h run abc)" = recorded ] && [ "$(L landed x/z | tr '\t' :)" = "run-h:40" ] \
+  && ok "a landing is a ledger fact keyed by its run" || ko "landed: '$(L read 'x/z#40' landed)'"
+[ "$(L landed 'x/z#40' run-h run abc)" = duplicate ] && ok "a duplicate landing changes nothing" || ko "landed dup: '$(L read 'x/z#40' landed)'"
+[ "$(L landed 'x/z#41' fix/41-x branch def)" = recorded ] && [ "$(L landed x/z | sort | tr '\t\n' ': ')" = "fix/41-x:41 run-h:40 " ] \
+  && ok "a branchland landing is a fact of its branch" || ko "landed branch: '$(L landed x/z)'"
+[ "$(L requeue 'x/z#40' run-h abc123)" = recorded ] && [ "$(L requeued 'x/z#40' run-h)" = abc123 ] \
+  && ok "the head a run requeued the issue on is a ledger fact" || ko "requeued: '$(L read 'x/z#40' requeued)'"
+[ "$(L requeue 'x/z#40' run-h abc123)" = duplicate ] && [ -z "$(L requeued 'x/z#40' run-j)" ] \
+  && ok "a duplicate requeue changes nothing, and a run that did not requeue names no head" || ko "requeued dup: '$(L read 'x/z#40' requeued)'"
+L rearm 'x/z#40' >/dev/null
+[ "$(L read 'x/z#40' landed)" = "{}" ] && [ -z "$(L requeued 'x/z#40' run-h)" ] \
+  && ok "a rearm clears the landing and requeue facts" || ko "after rearm: '$(L read 'x/z#40')'"
 rm -rf "$T"; exit $fail

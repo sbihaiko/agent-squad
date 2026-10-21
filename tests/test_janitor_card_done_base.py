@@ -64,7 +64,7 @@ def _write(path: Path, text: str) -> None:
 
 
 def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = "", entered: bool = False, card: str = "",
-            live: bool = False) -> Path:
+            live: bool = False, fact: bool = True) -> Path:
     """The janitor with the throttle and the reader beside it, a stub `gh` (the merge scoped to the base answers
     `scoped`), a stub board.sh, and one finished run for issue #2030. `wave` is "open" (the run's wave is not in the base
     yet) or "closed" (it landed); `entered` leaves the record that the issue's child entered that wave. `card` is the column
@@ -93,6 +93,9 @@ def sandbox(tmp_path: Path, scoped: str, *, landed: bool = False, wave: str = ""
         (auto / "waved-run-stacked").write_text("wave/run-stacked\n")
     if wave == "open":
         (auto / "wave-run-stacked").write_text("wave/run-stacked\n")
+    if landed and fact:   # the landing pass's `landed` fact (ADR-0149, #695): rule R reads it, never the record's land heads
+        subprocess.run([sys.executable, str(tmp_path / "issue_ledger.py"), "landed", f"x/y#{N}", "run-stacked", "run", "abc"],
+                       env={**os.environ, "SG_STATE": str(tmp_path / "st")}, check=True, capture_output=True)
     if entered:   # the entry is a fact in the issue's ledger (ADR-0149), written by its one module
         subprocess.run([sys.executable, str(tmp_path / "issue_ledger.py"), "wave", f"x/y#{N}", "run-stacked", "entered", "entered wave/run-stacked"],
                        env={**os.environ, "SG_STATE": str(tmp_path / "st")}, check=True, capture_output=True)
@@ -134,6 +137,27 @@ def test_a_locally_landed_run_without_a_merged_pr_stops_at_code_complete(tmp_pat
     log = writes(tmp_path)
     assert f"ADD o 4 Code Complete {N}" in log, f"the card did not stop at Code Complete: {log}"
     assert f"Done {N}" not in log, f"the card read Done from a local landing: {log}"
+
+
+@pytest.mark.heavy
+def test_a_record_land_head_with_no_landing_fact_delivers_nothing(tmp_path):
+    """#695: rule R reads the landing pass's `landed` fact, never a head the run's record names. The child entered its wave
+    and the run recorded a land event, but no landing pass wrote the fact, so the wave never reached the base: nothing is
+    delivered, and the card goes back to the queue, as #691 requires."""
+    sandbox(tmp_path, "echo 0", landed=True, wave="closed", entered=True, fact=False)
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"Code Complete {N}" not in log, f"the card read Code Complete over a landing no pass recorded: {log}"
+    assert f"ADD o 4 Todo {N}" in log, f"the card did not go back to the queue: {log}"
+
+
+@pytest.mark.heavy
+def test_the_landing_pass_fact_is_what_makes_the_entered_child_code_complete(tmp_path):
+    """#695: the same run, with the `landed` fact its landing pass writes, is delivered work."""
+    sandbox(tmp_path, "echo 0", landed=True, wave="closed", entered=True)
+    janitor(tmp_path)
+    log = writes(tmp_path)
+    assert f"ADD o 4 Code Complete {N}" in log, f"the landing fact did not reach Code Complete: {log}"
 
 
 @pytest.mark.heavy

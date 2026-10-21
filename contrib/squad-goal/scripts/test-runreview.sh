@@ -10,7 +10,7 @@
 for v in $(compgen -e | /usr/bin/grep '^SG_'); do unset "$v"; done
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/st/cq" "$T/squad"
-cp "$d/runreview.sh" "$d/caps.sh" "$d/revformat.py" "$T/s/" 2>/dev/null
+cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$d/revformat.py" "$T/s/" 2>/dev/null
 for x in squad config; do ln -s "$(cd "$d/../../.." && pwd)/$x" "$T/squad/$x"; done
 export SQUAD_CAPS_DIR=$T/caps SQUAD_CAPS_POLL=0.05
 cat > "$T/s/env.sh" <<EOF
@@ -35,7 +35,8 @@ chmod +x "$T/s/childreview.sh" "$T/s/wave.sh"
 $G init -q -b squad/run-1/target-route.1.1 "$T/wt"; (cd "$T/wt" && echo x > f && $G add f && $G -c user.email=a@b -c user.name=t commit -q -m "work (Refs #7)")
 head=$($G -C "$T/wt" rev-parse HEAD)
 rr() { (cd "$T/wt" && bash "$T/s/runreview.sh" "$@"); }
-reset() { : > "$T/rev.log"; : > "$T/wave.log"; rm -f "$T/st/auto/requeued-"* "$T/st/auto/runfix-"* "$T/st/review-"*; }
+reset() { : > "$T/rev.log"; : > "$T/wave.log"; rm -f "$T/st/auto/runfix-"* "$T/st/review-"*; rm -rf "$T/st/state"; }
+lq() { SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" requeued "x/y#7" run-1 2>/dev/null; }   # the head the run requeued the issue on (ADR-0149)
 
 # A) the run has no wave: "no review here" (3), no review and no slot; the child lands in the run as today.
 reset; out=$(rr run-1 route.1.1 7 2>&1); rc=$?
@@ -51,7 +52,7 @@ reset; out=$(rr run-1 route.1.1 "" 2>&1); rc=$?
 reset; out=$(rr run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "C: an approved child exits 0, so the run merges it" || ko "C: exit $rc: $out"
 [ "$(cat "$T/rev.log")" = "childreview run-1 7" ] && ok "C: the review is childreview.sh, called with the run and the issue" || ko "C: rev.log '$(cat "$T/rev.log")'"
-[ ! -s "$T/wave.log" ] && [ ! -e "$T/st/auto/requeued-run-1-route.1.1" ] && ok "C: nothing is requeued" || ko "C: wave.log '$(cat "$T/wave.log")'"
+[ ! -s "$T/wave.log" ] && [ -z "$(lq)" ] && ok "C: nothing is requeued" || ko "C: wave.log '$(cat "$T/wave.log")'"
 
 # D) CHANGES: requeue once with every blocking finding, the marker holds the head, exit non-zero (the engine holds the child).
 reset; out=$(STUB_VERDICT=CHANGES rr run-1 route.1.1 7 2>&1); rc=$?
@@ -62,7 +63,7 @@ reset; out=$(STUB_VERDICT=CHANGES rr run-1 route.1.1 7 2>&1); rc=$?
   && ok "D: the requeue carries every blocking finding" || ko "D: findings missing: '$(cat "$T/wave.log")'"
 ! /usr/bin/grep -q 'a nit' "$T/wave.log" && ok "D: a nit is not a blocking finding" || ko "D: a nit reached the requeue"
 [ "$(/usr/bin/grep -c '^wave.sh requeue' "$T/wave.log")" = 1 ] && ok "D: one requeue" || ko "D: requeues: $(/usr/bin/grep -c '^wave.sh requeue' "$T/wave.log")"
-[ "$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)" = "$head" ] && ok "D: the requeued marker holds the reviewed head" || ko "D: marker '$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)'"
+[ "$(lq)" = "$head" ] && ok "D: the requeue fact holds the reviewed head" || ko "D: fact '$(lq)'"
 case "$out" in *"a.py:1 first finding"*"b.py:2 second finding"*) ok "D: the output (the run record's findings) carries the review";; *) ko "D: out '$out'";; esac
 # the same head asked again (a resume): no second requeue
 : > "$T/wave.log"; STUB_VERDICT=CHANGES rr run-1 route.1.1 7 >/dev/null 2>&1; rc=$?
@@ -70,7 +71,7 @@ case "$out" in *"a.py:1 first finding"*"b.py:2 second finding"*) ok "D: the outp
 
 # E) BLOCKED: requeued the same way.
 reset; out=$(STUB_VERDICT=BLOCKED rr run-1 route.1.1 7 2>&1); rc=$?
-[ "$rc" != 0 ] && [ "$rc" != 3 ] && /usr/bin/grep -q '^wave.sh requeue 7 .*(VERDICT: BLOCKED)' "$T/wave.log" && [ -e "$T/st/auto/requeued-run-1-route.1.1" ] \
+[ "$rc" != 0 ] && [ "$rc" != 3 ] && /usr/bin/grep -q '^wave.sh requeue 7 .*(VERDICT: BLOCKED)' "$T/wave.log" && [ -n "$(lq)" ] \
   && ok "E: BLOCKED requeues and writes the marker" || ko "E: exit $rc, wave.log '$(cat "$T/wave.log")'"
 
 # F) a review that wrote no verdict (the chain was down): "try again" (5, #635), so the run reviews the child again inside its
@@ -102,7 +103,7 @@ kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null
 fx() { (cd "$T/wt" && SQUAD_REVIEW_FIX=1 STUB_VERDICT=${V:-CHANGES} SG_RUN_FIX_STALLS=2 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>/dev/null); }
 reset; out=$(fx); rc=$?
 [ "$rc" = 4 ] && ok "H: a first CHANGES with a fix round on offer exits 4 (fix)" || ko "H: exit $rc"
-[ ! -s "$T/wave.log" ] && [ ! -e "$T/st/auto/requeued-run-1-route.1.1" ] && ok "H: a fix round requeues nothing" || ko "H: wave.log '$(cat "$T/wave.log")'"
+[ ! -s "$T/wave.log" ] && [ -z "$(lq)" ] && ok "H: a fix round requeues nothing" || ko "H: wave.log '$(cat "$T/wave.log")'"
 [ "$out" = "$(printf '**VERDICT: CHANGES**\n## Blocking\n- a.py:1 first finding\n- b.py:2 second finding\n## Nits\n- c.py:3 a nit')" ] \
   && ok "H: stdout is the full review, the fix round's input" || ko "H: out '$out'"
 # the same findings again: one failed round with no change, under the cap of 2, so another fix round
@@ -115,7 +116,7 @@ out=$(STUB_EXTRA="d.py:9 a new finding" fx); rc=$?
 [ "$rc" = 4 ] && ok "H: the count starts again after a change" || ko "H: exit $rc"
 # a second round in a row with those findings reaches the cap: requeued once, exit 1
 out=$(STUB_EXTRA="d.py:12 a new finding" fx); rc=$?
-[ "$rc" = 1 ] && [ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && [ "$(cat "$T/st/auto/requeued-run-1-route.1.1")" = "$head" ] \
+[ "$rc" = 1 ] && [ "$(/usr/bin/grep -c '^wave.sh requeue 7 ' "$T/wave.log")" = 1 ] && [ "$(lq)" = "$head" ] \
   && ok "H: at the stall cap the issue is requeued once (a moved line is no change)" || ko "H: exit $rc, wave.log '$(cat "$T/wave.log")'"
 
 # I) BLOCKED with a fix round on offer: requeued, no fix round.

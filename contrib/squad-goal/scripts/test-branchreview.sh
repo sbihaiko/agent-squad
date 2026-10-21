@@ -100,15 +100,15 @@ out=$(cd "$T/child" && bash "$T/s/childreview.sh" run-1 7 2>&1); rc=$?
 mv "$T/s/review.sh.real" "$T/s/review.sh"
 # 8) #601, ADR-0145 rule 9: a child of the loop is reviewed by its own run. runreview.sh, the loop workflow's review gate,
 #    wraps childreview.sh in the child's worktree: CHANGES requeues the issue at once with every blocking finding of the
-#    review (never the first line only), writes the marker childcc honors, and exits non-zero so the run holds the child.
-cp "$d/runreview.sh" "$d/caps.sh" "$T/s/" 2>/dev/null; mkdir -p "$T/st/auto"; echo wave/run-1 > "$T/st/auto/wave-run-1"
+#    review (never the first line only), writes the requeue fact childcc honors, and exits non-zero so the run holds the child.
+cp "$d/runreview.sh" "$d/issue_ledger.py" "$d/caps.sh" "$T/s/" 2>/dev/null; mkdir -p "$T/st/auto"; echo wave/run-1 > "$T/st/auto/wave-run-1"
 printf '#!/bin/bash\nprintf "wave.sh %%s\\n" "$*" >> "%s/wave.log"\n' "$T" > "$T/s/wave.sh"; rm -f "$T/st/review-$ck".*
 out=$(cd "$T/child" && SQUAD_CAPS_DIR="$T/caps" SG_SQUAD="$(cd "$d/../../.." && pwd)" CLAUDE_CHANGES=1 bash "$T/s/runreview.sh" run-1 route.1.1 7 2>&1); rc=$?
 [ "$rc" != 0 ] && [ "$rc" != 3 ] && ok "run: CHANGES exits non-zero, so the run holds the child" || ko "run: runreview exited $rc: $out"
 /usr/bin/grep -q '^wave.sh requeue 7 ' "$T/wave.log" && /usr/bin/grep -qx -- '- a.cs:1 — diverges from ADR-0001 — wrong — fix' "$T/wave.log" \
   && ok "run: the issue is requeued with the review's blocking finding" || ko "run: wave.log '$(cat "$T/wave.log" 2>/dev/null)'"
-[ "$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)" = "$(cd "$T/child" && $G rev-parse HEAD)" ] && ok "run: the requeued marker holds the reviewed head" \
-  || ko "run: marker '$(cat "$T/st/auto/requeued-run-1-route.1.1" 2>/dev/null)'"
+[ "$(SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" requeued "x/y#7" run-1 2>/dev/null)" = "$(cd "$T/child" && $G rev-parse HEAD)" ] && ok "run: the requeue fact holds the reviewed head" \
+  || ko "run: fact '$(SG_STATE=$T/st SG_REPO=x/y python3 "$T/s/issue_ledger.py" requeued "x/y#7" run-1 2>/dev/null)'"
 # 9) #655: a child that sits on a dev tip newer than its wave branch (a fix run rebased it there) is reviewed on its own
 #    commits only. dev's later commits are in dev already: they are never the child's, so the review never asks to change them.
 #    The base file still names the wave branch, so the entry's gate passes for this correctly reviewed child.

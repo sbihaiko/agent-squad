@@ -5,7 +5,7 @@
 unset SG_SERIAL_HELD   # a gate inside a gate hands the lock name down; this suite takes its own gate lock, so its wait is proved
 d=${1:-$(cd "$(dirname "$0")" && pwd)}; T=$(mktemp -d); fail=0; ok() { echo "ok   $1"; }; ko() { echo "FAIL $1"; fail=1; }
 G=/usr/bin/git; mkdir -p "$T/s" "$T/st/auto" "$T/bin" "$T/co/runs"
-cp "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
+cp "$d/issue_ledger.py" "$d/gate.sh" "$d/caps.sh" "$d/serial.sh" "$d/fast-gate.sh" "$d/base-battery.sh" "$d/branchland.sh" "$d/revformat.py" "$d/workbranches.sh" "$d/ffland.sh" "$d/address.sh" "$d/ghread.py" "$d/ghthrottle.py" "$d/ghcall.sh" "$T/s/" 2>/dev/null
 export SG_SQUAD=$(cd "$d/../../.." && pwd) SQUAD_CAPS_DIR=$T/caps   # a gate takes gate slots (#567): this repository's squad.caps and a throwaway budget
 printf 'export SG_STATE=%s SG_REPO=x/y SG_BASE=main SG_OWNER=o SG_PROJECT=3 SG_CHECKOUT=%s SG_LAND_REMOTE=%s/origin.git BOARD=%s/board.sh\n' "$T/st" "$T/co" "$T" "$T" > "$T/s/env.sh"
 printf '#!/bin/bash\necho "$*" >> "%s/board.log"\n' "$T" > "$T/board.sh"; chmod +x "$T/board.sh"
@@ -49,6 +49,8 @@ $O rev-parse -q --verify refs/heads/gui/7-x >/dev/null && ko "branch not deleted
 case "$r" in *"BRANCHLAND LANDED gui/7-x as $($O rev-parse dev)"*"closed #7"*) ok "the line names the branch, the sha and the issue";; *) ko "no landed line: '$r'";; esac
 # the landing ledger the hub's last-landing fact reads (#358): epoch, branch, landed sha, issue; the branch itself is gone from the remote
 [ "$(awk -F'\t' '$2=="gui/7-x"{print $3 "/" $4}' "$T/st/landed.tsv" 2>/dev/null)" = "$($O rev-parse dev)/7" ] && ok "the landing is kept as a ledger row: branch, landed sha, issue" || ko "no ledger row: '$(cat "$T/st/landed.tsv" 2>/dev/null)'"
+# The landing is the issue's `landed` fact (ADR-0149, #695): rule R reads it, never a run's land heads.
+[ "$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read 'x/y#7' landed | python3 -c 'import json,sys; f=json.load(sys.stdin).get("gui/7-x") or {}; print(f.get("kind",""), f.get("sha",""))')" = "branch $($O rev-parse dev)" ] && ok "the landing is a landed fact of the branch, with its sha" || ko "no landed fact: '$(SG_STATE=$T/st python3 "$T/s/issue_ledger.py" read 'x/y#7' landed)'"
 /usr/bin/grep -q "issues/7 -f state=closed" "$T/gh.log" && ok "the issue is closed by the API" || ko "no close call: $(cat "$T/gh.log")"
 ls "$T/st/cq/"x__y#7-delivery~* >/dev/null 2>&1 && ok "the one delivery comment is queued" || ko "no delivery file: $(ls "$T/st/cq" 2>&1)"
 /usr/bin/grep -q "issues/7/comments" "$T/gh.log" && ko "the pass posted the comment itself" || ok "the pass posts no comment itself (the flush does)"
