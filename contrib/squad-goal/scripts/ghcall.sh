@@ -130,18 +130,38 @@ gh_land_stop() {
 # The nightly full suite decides the same way (#704): a red record at $SG_STATE/nightly-result (nightly.sh) holds delivery
 # until one green run replaces it, because a base whose full suite is red starts work on a defect the loop already found.
 # A missing or unreadable record never holds, by the same rule as above.
+
+# sg_nightly_red   A nightly result record's failing ids when the record is a readable RED one, nothing otherwise. The
+# record is `<epoch> TAB <pass|fail> TAB <sha> TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704). A line the loop
+# cannot trust is no reading and holds nothing (ADR-0153): not six fields, a time that is not a number, an empty sha, a
+# result or a mode outside pass|fail, or a result that contradicts the modes. The hub drops the same lines, so the two
+# readers never disagree about which record they are looking at.
+sg_nightly_red() {
+  local rec nf ts res sha par ser ids
+  rec=$(head -n 1 "$1" 2>/dev/null) || return 1
+  [ -n "$rec" ] || return 1
+  nf=$(printf '%s\n' "$rec" | awk -F'\t' '{print NF}')
+  [ "$nf" = 6 ] || return 1
+  ts=$(printf '%s\n' "$rec" | cut -f1); res=$(printf '%s\n' "$rec" | cut -f2); sha=$(printf '%s\n' "$rec" | cut -f3)
+  par=$(printf '%s\n' "$rec" | cut -f4); ser=$(printf '%s\n' "$rec" | cut -f5); ids=$(printf '%s\n' "$rec" | cut -f6)
+  case "$ts" in ''|*[!0-9]*) return 1;; esac
+  [ -n "$sha" ] || return 1
+  case "$par" in pass|fail) ;; *) return 1;; esac
+  case "$ser" in pass|fail) ;; *) return 1;; esac
+  case "$res:$par:$ser" in
+    fail:fail:pass|fail:pass:fail|fail:fail:fail) ;;   # a red result names at least one red mode, and nothing else
+    *) return 1;;                                      # a pass, or a result its modes contradict
+  esac
+  printf '%s\n' "${ids:--}"
+}
+
 gh_dispatch_hold() {
-  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nrec nres nids
-  nrec=$(head -n 1 "$SG_STATE/nightly-result" 2>/dev/null)
-  if [ -n "$nrec" ]; then
-    nres=$(printf '%s\n' "$nrec" | cut -f2)
-    if [ "$nres" = fail ]; then
-      nids=$(printf '%s\n' "$nrec" | cut -f6)
-      line="DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
-      printf '%s\n' "$line"
-      printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
-      return 0
-    fi
+  local m=${SG_DISPATCH_MAX_WAITING:-} f="${SG_STATE:?gh_dispatch_hold: no state directory}/childcc-waiting" n t line nids
+  if nids=$(sg_nightly_red "$SG_STATE/nightly-result"); then
+    line="DISPATCH HOLD: the nightly full suite is red (${nids:-no test named}); no new run until one green nightly"
+    printf '%s\n' "$line"
+    printf '%s\n' "$line" >> "$SG_STATE/cycle.log"
+    return 0
   fi
   [ -n "$m" ] || return 1
   case "$m" in *[!0-9]*) echo "DISPATCH HOLD: SG_DISPATCH_MAX_WAITING='$m' is not a non-negative integer; no limit"; return 1;; esac

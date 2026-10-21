@@ -774,27 +774,30 @@ def _gate_parts(g, now):
     text = f"gate {g['kind']} {g['result']} {_age(max(now - g['ts'], 0.0))} ago"
     return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}]
 
-NIGHTLY_TIP_IDS = 5   # the failing tests the tooltip names: a red suite can name dozens, and a hover is one readable line
 def _nightly_parts(n, now):
     """`nightly pass 6h ago`: the last full suite in both modes (nightly.sh, #704), its result and its age. A pass reads in
     the ok tone and a fail in the err tone; a record the hub cannot read is `nightly ?` in the neutral tone, never a pass.
     No record at all draws no block.
-    The tooltip carries what the block must not lose: which mode failed, the sha it ran at, and the tests that failed — the
-    first NIGHTLY_TIP_IDS of them, then the count of the rest. The operator acts on the test ids, so they are never dropped
-    from the hub; they are MOVED to the hover, as the gate's sha is (the section's rule (b))."""
+    The tooltip carries which mode failed and the sha it ran at. The operator acts on the test ids, so every one of them
+    is carried: the tooltip names them all, and `detail` gives the page a list a keyboard and a screen reader can open.
+    The line itself stays one compact reading — the ids are MOVED off it, never dropped from the hub, as the gate's sha is
+    (the section's rule (b))."""
     if n is None: return []
     modes = ("pass", "fail")
+    red = isinstance(n, dict) and (n.get("parallel") != "pass" or n.get("serial") != "pass")
     ok = isinstance(n, dict) and n.get("result") in modes and n.get("sha") and n.get("parallel") in modes \
         and n.get("serial") in modes and isinstance(n.get("ts"), (int, float)) and not isinstance(n.get("ts"), bool) \
-        and isinstance(n.get("ids"), list)
+        and isinstance(n.get("ids"), list) and n["result"] == ("fail" if red else "pass")
     if not ok: return [{"text": "nightly ?", "tone": FOOT_NEUTRAL}]
     text = f"nightly {n['result']} {_age(max(now - n['ts'], 0.0))} ago"
     tip = [f"parallel {n['parallel']} · serial {n['serial']} · ran at {str(n['sha'])[:7]}"]
     ids = [str(x) for x in n["ids"] if x]
+    part = {"text": text, "tone": "ok" if n["result"] == "pass" else "err"}
     if ids:
-        rest = len(ids) - NIGHTLY_TIP_IDS
-        tip.append(f"{len(ids)} failed: " + ", ".join(ids[:NIGHTLY_TIP_IDS]) + (f" +{rest} more" if rest > 0 else ""))
-    return [{"text": text, "tone": "ok" if n["result"] == "pass" else "err", "tip": " · ".join(tip)}]
+        tip.append(f"{len(ids)} failed: " + ", ".join(ids))
+        part["detail"] = ids
+    part["tip"] = " · ".join(tip)
+    return [part]
 
 def _cycle_state(now):
     """The watch cycle's own beat, read off the `HH:MM:SS CYCLE <n>s` lines watch.sh writes to cycle.log: when the last cycle
@@ -889,16 +892,17 @@ def _subs_fact(subs, now):
     """The subs block as one string: its parts in the order they are read, which is the text the line carries."""
     return FOOT_SEP.join(p["text"] for p in _subs_parts(subs, now))
 
-def _fact(key, text, bad=False, parts=None, tip=None):
+def _fact(key, text, bad=False, parts=None, tip=None, detail=None):
     """One block of the line (#1843): its text, its own palette colour, and the parts it paints. A block with no parts
     of its own is the single part its text already is, with no tone — so the block's colour stands for the whole value.
     A part whose own reading earns a tone keeps it on top of that colour, which is how the block still says WHICH fact
     it is while the value says whether it is the bad one.
     `tip` is what the block does not say out loud but must not lose: a second number (the sha a gate ran at), read on
-    hover. It is how a fact is MOVED off a reading bar and never deleted from it. The line is a reading and carries no
-    press: the one control this bar ever held was the worktree count's `clean now`, and it left the page with the
-    accordion that drew it (the owner's ruling 2026-10-16)."""
-    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "tip": tip,
+    hover. It is how a fact is MOVED off a reading bar and never deleted from it. `detail` is the same move for a list
+    too long to read on the bar: every entry, drawn in an expandable list the page can open (the nightly's failing
+    tests). The line is a reading and carries no press: the one control this bar ever held was the worktree count's
+    `clean now`, and it left the page with the accordion that drew it (the owner's ruling 2026-10-16)."""
+    return {"key": key, "text": text, "bad": bad, "color": FOOT_BLOCK_COLORS[key], "tip": tip, "detail": detail,
             "parts": parts if parts is not None else [{"text": text, "tone": ""}]}
 
 
@@ -1001,7 +1005,8 @@ def foot_items(src, now=None):
              _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate),
                    parts=gate or None, tip=(gate[0].get("tip") if gate else None)),
              _fact("nightly", FOOT_SEP.join(p["text"] for p in nightly), bad=any(p["tone"] == "err" for p in nightly),
-                   parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None)),
+                   parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None),
+                   detail=(nightly[0].get("detail") if nightly else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
              _fact("cycle", _cycle_fact(src.get("cycle"), now)),
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
@@ -1052,9 +1057,15 @@ def _gate_status():
 def _nightly_status():
     """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB <pass|fail> TAB <sha>
     TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704): the last full run in both modes, its result, the sha it ran
-    at, each mode's own result and the failing test ids. None when the file is absent or is not that line."""
+    at, each mode's own result and the failing test ids. None when the file is absent or is not that line.
+
+    A record whose modes are outside pass|fail, or whose result contradicts them — a `pass` over a red mode — is not that
+    line either: a record the hub cannot trust is no reading, and it never draws a pass. `gh_dispatch_hold` drops the same
+    lines, so the hub and the hold never disagree about which record they are looking at (ADR-0153)."""
     f = _read(STATE / "nightly-result").rstrip("\n").split("\t")
     if len(f) != 6 or not f[0].isdigit() or f[1] not in ("pass", "fail") or not f[2]: return None
+    if f[3] not in ("pass", "fail") or f[4] not in ("pass", "fail"): return None
+    if f[1] != ("pass" if f[3] == "pass" and f[4] == "pass" else "fail"): return None
     return {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4],
             "ids": [] if f[5] in ("", "-") else f[5].split(), "ts": float(f[0])}
 
@@ -2392,6 +2403,8 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #foot{flex:none;display:flex;gap:10px;align-items:center;padding:5px 10px;background:var(--panel);border-top:1px solid var(--line);font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums}
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}#foot.warn b.ldred{color:var(--err)}#foot b.ldred{color:var(--err)}
 #ldfacts{margin-left:20px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}#ldfacts .sep{margin:0 3px;color:#4b5563}
+#ldfacts details.nfd{display:inline-block;vertical-align:top}#ldfacts details.nfd>summary{display:inline;cursor:pointer;list-style:none}#ldfacts details.nfd>summary::-webkit-details-marker{display:none}
+#ldfacts details.nfd[open]{white-space:normal}#ldfacts details.nfd>ul{margin:4px 0 0;padding:0 0 0 16px;white-space:normal;color:var(--mute);font-variant-numeric:normal}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
 #who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
 </style>
@@ -2470,7 +2483,7 @@ function footText(items,cols){return footFit(items,cols).map(i=>i.text).join(" �
 // serves already carries it. The tone is decided where the number is — the hub serves it — never here:
 const FTONE={ok:"var(--ok)",warn:"var(--warn)",err:"var(--err)",neutral:"var(--mute)"};
 function footParts(i){return (i.parts||[{text:i.text}]).map(p=>{const t=FTONE[p.tone]?`<span style="color:${FTONE[p.tone]}">${esc(p.text)}</span>`:esc(p.text);return p.tip?`<span title="${esc(p.tip)}">${t}</span>`:t}).join(" · ")}
-function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`;return i.tip?`<span title="${esc(i.tip)}">${s}</span>`:s}
+function footItem(i){const t=footParts(i),s=i.bad?`<span class=bad>${t}</span>`:`<span style="color:var(--${i.color})">${t}</span>`,b=i.tip?`<span title="${esc(i.tip)}">${s}</span>`:s,d=i.detail||[];return d.length?`<details class=nfd><summary>${b}</summary><ul>${d.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:b}
 // The facts' own width budget: what the bar has left after the `load` label, the three cells, their gaps and the facts'
 // own margin. The line drops whole blocks when it is too narrow, so a budget that promises more room than the bar has
 // would let one block run past the window instead of dropping.

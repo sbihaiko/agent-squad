@@ -35,7 +35,9 @@ py=${SG_GATE_PY:-${SG_CHECKOUT:+$SG_CHECKOUT/.venv/bin/python}}; [ -x "$py" ] ||
 # The two modes are one command each, so a caller may point them elsewhere: the whole suite, heavy included, in both.
 par=${SG_NIGHTLY_PARALLEL:-"$py -m pytest -p no:deepeval -n auto"}
 ser=${SG_NIGHTLY_SERIAL:-"$py -m pytest -p no:deepeval -p no:xdist"}
-ids_of() { sed -n -e 's/^FAILED \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ ]*::[^ ]*\).*/\1/p' "$1" | sort -u; }
+# A failing id is whatever pytest's short summary names after `FAILED ` or `ERROR `: a node id, or the file a
+# collection error names (`ERROR tests/test_module.py`, no `::`). Both are what the hub shows, so neither is dropped.
+ids_of() { sed -n -e 's/^FAILED \([^ ]*\).*/\1/p' -e 's/^ERROR \([^ ]*\).*/\1/p' "$1" | sort -u; }
 pout=$st/nightly-parallel.log; sout=$st/nightly-serial.log
 pm=pass; ( cd "$tree" && bash -c "$par" ) > "$pout" 2>&1 || pm=fail
 sm=pass; ( cd "$tree" && bash -c "$ser" ) > "$sout" 2>&1 || sm=fail   # both modes always run: the record says which one broke
