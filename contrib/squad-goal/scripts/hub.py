@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Squad hub: one browser page that lists every live run dashboard (agent-squad dashboard_server processes) and embeds them.
 usage: hub.py [port]   default 7700, loopback only. Read-only: it discovers servers via ps/lsof and reads record.jsonl."""
-import datetime as dt, glob, hashlib, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
+import datetime as dt, glob, hashlib, html, importlib.util, json, os, re, select, shlex, statistics as st, subprocess, sys, tempfile, threading, time, pathlib, urllib.parse, urllib.request
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # the seam module sits beside this script; a run under -I has the script's directory off sys.path
 import agyquota, chainhealth, modelreg, provkey, router_envelope   # the one envelope source, shared with launch.py (#436)
 from issue_state import board_state, KINDS, TEST_CASE_TITLE, _utc
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import NamedTuple
 
 _columns_spec = importlib.util.spec_from_file_location("board_columns", pathlib.Path(__file__).resolve().parent / "board_columns.py")
 _columns_module = importlib.util.module_from_spec(_columns_spec); _columns_spec.loader.exec_module(_columns_module)
@@ -333,8 +334,8 @@ def squad_roots(sg_squad, sg_checkout, checkout, here):
         if r and r not in out: out.append(r)
     return out
 
-def load_squad(roots):
-    """`squad.caps` and `squad.run_caps` from the first root that holds the package, and only from that root: a package that
+def load_squad(roots, names=("caps", "run_caps")):
+    """The `squad` modules `names` (default `squad.caps` and `squad.run_caps`) from the first root that holds the package, and only from that root: a package that
     some other entry of this machine's path happens to hold answers for no root (#452). A root that fails leaves nothing
     behind (not on sys.path, not in sys.modules), so the next one imports clean. Raises the last failure, which names what
     was missing.
@@ -347,12 +348,12 @@ def load_squad(roots):
     for m in ambient: del sys.modules[m]
     try:
         for root in roots:
-            added = root not in sys.path
+            added = not (sys.path and sys.path[0] == root)   # the asked root goes first, else a squad earlier on sys.path answers for it
             if added: sys.path.insert(0, root)
             try:
-                from squad import caps, run_caps
-                here = getattr(caps, "__file__", None)   # the caps module the import found: it must live under the root that was asked
-                if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return caps, run_caps
+                mods = [importlib.import_module("squad." + n) for n in names]
+                here = getattr(mods[0], "__file__", None)   # the first module the import found: it must live under the root that was asked
+                if here and pathlib.Path(here).resolve().is_relative_to(pathlib.Path(root).resolve()): return tuple(mods)
                 err = ModuleNotFoundError(f"{root} holds no squad package (the one imported is {here})")
             except Exception as e:
                 err = e
@@ -2300,7 +2301,9 @@ iframe{flex:1;width:100%;border:1px solid var(--line);background:#0f1115;min-hei
 #foot b{color:var(--fg);font-weight:600}#foot.warn{border-top-color:#6b5223}#foot.warn b{color:var(--warn)}#foot.warn b.ldred{color:var(--err)}#foot b.ldred{color:var(--err)}
 #ldfacts{margin-left:20px;white-space:nowrap}#ldfacts .bad{color:var(--warn)}#ldfacts .sep{margin:0 3px;color:#4b5563}
 .load{display:inline-block;margin-left:4px;padding:0 5px;border-radius:9px;background:#3a2a12;color:var(--warn);font-size:9.5px;border:1px solid #6b5223}
+#who{padding:3px 12px;color:var(--mute);border-bottom:1px solid var(--line)}#who:empty{display:none}
 </style>
+<div id=who>__WHO__</div>
 <div id=win>
 <div id=side>
 <details id=plans class=sp><summary>subscriptions<span class=sr id=plsr></span></summary><div class=sb><div id=subs></div></div></details>
@@ -3512,10 +3515,11 @@ def _models_set(new):
     tmp = MODELS.with_suffix(".tmp"); tmp.write_text(json.dumps(d, indent=2) + "\n"); os.replace(tmp, MODELS)
     return models_get()
 
-def served_page():
+def served_page(login=""):
     """The page as the hub serves it, every placeholder substituted. The model-id shape replaces its quoted placeholder:
     json.dumps brings its own quotes, and a second pair is a syntax error that empties the page."""
-    return PAGE.replace("__REPO__", REPO).replace('"__MODELID__"', json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
+    who = f"signed in as {html.escape(login)}" if login else ""
+    return PAGE.replace("__WHO__", who).replace("__REPO__", REPO).replace('"__MODELID__"', json.dumps(MODEL_ID_SRC)).replace("__CAPS__", json.dumps(loop_caps())).replace("__LOADMS__", str(int(LOAD_SAMPLE_SECS * 1000))).replace("__LOADERR__", str(LOAD_ERR_PCT))
 
 
 def own_host(h):
@@ -3523,11 +3527,59 @@ def own_host(h):
     return (h.headers.get("Host") or "") in (f"127.0.0.1:{h.server.server_port}", f"localhost:{h.server.server_port}")
 
 
+def tailnet_roots():
+    """Where the tailnet rule reads its seam and settings reader: the tree this file sits in first, so a stale SG_SQUAD never answers for the hub's own code."""
+    return [str(pathlib.Path(__file__).resolve().parents[3]), *squad_roots(os.environ.get("SG_SQUAD"), os.environ.get("SG_CHECKOUT"), CHECKOUT, __file__)]
+
+def _load_tailnet_seam():
+    """The tailnet access seam (squad/tailnet_access.py), loaded by path from the first root that holds it."""
+    roots = tailnet_roots()
+    for root in roots:
+        path = pathlib.Path(root) / "squad" / "tailnet_access.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("tailnet_access", path)
+            seam = importlib.util.module_from_spec(spec); spec.loader.exec_module(seam)
+            return seam
+    sys.exit("hub: no squad/tailnet_access.py in: " + ", ".join(roots))
+TAILNET = _load_tailnet_seam()
+
+_PROJECT = {}
+def tailnet_block():
+    """The `tailnet` block of the project file under the profile's checkout (squad/project_settings.py). Empty when the file or
+    the squad package does not load, so the seam refuses every tailnet request."""
+    try:
+        if "ps" not in _PROJECT:
+            (_PROJECT["ps"],) = load_squad(tailnet_roots(), ("project_settings",))
+        data, _ = _PROJECT["ps"].load(CHECKOUT)
+    except Exception as e:
+        log_once(f"hub: tailnet settings unavailable, every tailnet request is refused: {type(e).__name__}: {' '.join(str(e).split())}")
+        return {}
+    return (data or {}).get("tailnet") or {}
+
+class Access(NamedTuple):
+    allowed: bool
+    reason: str
+    login: str      # the login the page header shows; empty off the tailnet
+    tailnet: bool   # the request is addressed to the tailnet name
+
+def access(h, method):
+    """The one rule for every route: the loopback Host as own_host has always answered it, a tailnet request through the seam."""
+    if own_host(h): return Access(True, "", "", False)
+    login = h.headers.get(TAILNET.LOGIN_HEADER) or ""
+    host = h.headers.get("Host") or ""
+    tn = tailnet_block()
+    v = TAILNET.decide(host=host, origin=h.headers.get("Origin") or "", method=method, login=login,
+                       port=h.server.server_port, tailnet_host=tn.get("host") or "", allowed_logins=tn.get("allow") or [])
+    return Access(v.allowed, v.reason, login if v.allowed else "", bool(tn.get("host")) and host == tn["host"])
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+    def refuse(self, reason):
+        body = reason.encode()
+        self.send_response(403); self.send_header("Content-Type", "text/plain; charset=utf-8"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        if not own_host(self):
-            self.send_response(403); self.send_header("Content-Length", "0"); self.end_headers(); return
+        a = access(self, "GET")
+        if not a.allowed: return self.refuse(a.reason)
         if self.path.startswith("/held/"):   # a run the childcc pass holds: its dashboard, started when none runs (#689)
             port = open_held(re.sub(r"[^\w-]", "", self.path[6:].split("?")[0]))
             if port is None: self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
@@ -3554,13 +3606,14 @@ class H(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/models"): body, ct = json.dumps(models_get()).encode(), "application/json"
         elif self.path.startswith("/api/speed"): body, ct = json.dumps(speed()).encode(), "application/json"
         elif self.path.startswith("/api/load"): body, ct = json.dumps(load_payload()).encode(), "application/json"
-        else: body, ct = served_page().encode(), "text/html; charset=utf-8"
+        else: body, ct = served_page(a.login).encode(), "text/html; charset=utf-8"
         self.send_response(200); self.send_header("Content-Type", ct); self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
     def do_POST(self):
-        # loopback only, and a cross-site page must not be able to write: require our own origin and a JSON body
+        # a cross-site page must not be able to write: a loopback write needs our own origin, a tailnet write the tailnet origin (the seam), and a JSON body
+        a = access(self, "POST")
         org = self.headers.get("Origin") or ""
-        ok = self.path in ("/api/models", "/api/plans", "/api/promote") and own_host(self) and re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org) and "json" in (self.headers.get("Content-Type") or "")
+        ok = a.allowed and self.path in ("/api/models", "/api/plans", "/api/promote") and (a.tailnet or re.match(r"^http://(127\.0\.0\.1|localhost)(:\d+)?$", org)) and "json" in (self.headers.get("Content-Type") or "")
         try:
             raw = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1 << 20))   # read before any answer: a refusal that leaves the body unread resets the connection; the models panel posts back ~20 KB of read-only fields (#684)
             if not ok: out = {"err": "forbidden"}
@@ -3569,6 +3622,7 @@ class H(BaseHTTPRequestHandler):
                 if self.path == "/api/promote": out = promote(body.get("issue")) if isinstance(body, dict) else {"err": "bad request"}   # the owner's move (#560)
                 else: out = (plans_set if self.path == "/api/plans" else models_set)(body)
         except Exception as e: out = {"err": "bad request"}
+        if not a.allowed and a.tailnet: return self.refuse(a.reason)
         body = json.dumps(out).encode(); self.send_response(400 if "err" in out else 200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 
 SELF = pathlib.Path(__file__).resolve(); LOADED = SELF.stat().st_mtime_ns
