@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
-from squad import defaults, launch, record
+from squad import defaults, launch, record, tailnet_check
 from squad import graph as G
 from squad.adapter import ScriptedAdapter
 from squad.engine import ResumeRefused
@@ -92,6 +92,13 @@ def parser():
     cs.add_parser("init", help="create the file with only the keys changed so far")
     c = cs.add_parser("show", help="print every setting with its value, unit and source layer")
     c.add_argument("--defaults", help="agent defaults file (default config/agent-defaults.yaml)")
+    tn = sub.add_parser("tailnet", help="print the tailscale serve command for the hub, or check the hub is not on Funnel")
+    tns = tn.add_subparsers(dest="tailnet_cmd", required=True)
+    c = tns.add_parser("serve-command", help="print the tailscale serve command for the hub port; starts nothing")
+    c.add_argument("port", nargs="?", type=int, default=tailnet_check.HUB_PORT)
+    c = tns.add_parser("check", help="exit 0 when the hub port is served to the tailnet only; exit 1 and name the cause otherwise")
+    c.add_argument("port", nargs="?", type=int, default=tailnet_check.HUB_PORT)
+    c.add_argument("--status", help="read this JSON file instead of running `tailscale serve status --json`")
     for name in ("run", "resume", "start", "work", "task"):
         helps = {"start": "start a run from a request or a task; the `default` workflow unless --workflow names one",
                  "work": "alias of `start`: start a run from a request", "task": "alias of `start --task`: start a run for one task"}
@@ -161,6 +168,8 @@ def main(argv=None):
             return _setup(a)
         if a.cmd == "config":
             return _config(a)
+        if a.cmd == "tailnet":
+            return _tailnet(a)
         return asyncio.run(_run(a) if a.cmd == "run" else _resume(a))
     except SystemExit as e:
         return e.code if isinstance(e.code, int) else USAGE
@@ -177,6 +186,24 @@ def _new_node(a):
     except scaffold.ScaffoldError as e:
         return _fail(str(e))
     print(json.dumps(node, indent=2))
+    return 0
+
+
+def _tailnet(a):
+    if a.tailnet_cmd == "serve-command":
+        print(tailnet_check.serve_command(a.port))
+        return 0
+    try:
+        status = tailnet_check.load_status(a.status)
+    except tailnet_check.StatusError as e:
+        print(f"tailnet check: {e}")
+        return 1
+    problems = tailnet_check.diagnose(status, a.port)
+    for m in problems:
+        print(f"fail: {m}")
+    if problems:
+        return 1
+    print(f"tailnet check: ok, hub port {a.port} is served to the tailnet only")
     return 0
 
 
