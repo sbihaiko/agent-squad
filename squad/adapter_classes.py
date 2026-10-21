@@ -101,6 +101,21 @@ def _raw(ev: dict) -> str:
     return ""
 
 
+def _spawn_model(events, name) -> str:
+    """The model the accepted request that created a child names. A child outcome written before it named its model
+    is still classed by the route that child was asked to run on."""
+    if not isinstance(name, str):
+        return ""
+    for ev in events:
+        if ev.get("event") != "spawn_accepted" or ev.get("child") != name:
+            continue
+        d = ev.get("definition")
+        value = d.get("model") if isinstance(d, dict) else None
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def classify_event(ev: dict, reg=None) -> ErrorClass:
     """The class of one adapter-error outcome event. The model is resolved through the one resolver (ADR-0147)."""
     raw = _raw(ev)
@@ -122,6 +137,10 @@ def classify_run(events, reg=None) -> list[ErrorClass]:
         return []
     outcomes = [e for e in evs if e.get("event") == "outcome" and "adapter_error" in (e.get("reasons") or [])]
     root = next((e for e in outcomes if _text(e)), None) or (outcomes[0] if outcomes else None)
+    if root is not None and not _raw(root):
+        raw = _spawn_model(evs, root.get("node"))
+        if raw:
+            root = {**root, "model": raw}
     return [classify_event(root, reg)] if root is not None else [ErrorClass("unknown", "unknown", "unknown")]
 
 

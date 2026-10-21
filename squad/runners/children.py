@@ -224,7 +224,8 @@ class Children:
             return self.outcome(name, "fail", out.reasons, None, {}, entry)
         if out.kind == "adapter_error":
             return self.outcome(name, "fail", session.adapter_reason(out.error), None,
-                                {"cap": out.res.amount, "elapsed": out.elapsed,
+                                {"model": model, "effort": d["effort"],   # the chain entry it tried: a child has no node-level model
+                                 "cap": out.res.amount, "elapsed": out.elapsed,
                                  "diagnostic": session.adapter_diagnostic(out.error, message), **session.error_fields(out.error)}, entry)
         return self.settle(ctx, name, d, ws, out, model, entry)
 
