@@ -8,6 +8,11 @@
 # line per difference, prints what it read, publishes it, and reads again. A difference still there after the publish is
 # a fact the cycle cannot leave unread, and it is named as one.
 #
+# A publish records the tested sha, the source HEAD, in the live PUBLISHED file, and the pass names it (#700). The
+# drivers keep running the sha watchd recorded at start until the owner restarts them, so the pass names that restart
+# once per publish and never starts or stops a process. Live models.json is owner config: the pass never compares it
+# with the repository, and names a hand edit once (see notes below).
+#
 # The rule of the publish is untouched: an explicit FILE LIST, never a mirror. Only the names the repository ships cross
 # over, the names it retired are dropped by name, and the live copy's machine config (scripts/models.json, the per-repo
 # profiles under scripts/profiles/, $SG_STATE) is never one of the names -- so this pass never builds a path of its own
@@ -30,11 +35,6 @@ live=${SG_LIVE_DIR:-$HOME/.claude/skills/squad-goal}
 repo=${SG_CHECKOUT:-}/contrib/squad-goal
 [ -n "${SG_CHECKOUT:-}" ] && [ -f "$repo/SKILL.md" ] || exit 0                  # this checkout does not ship the skill
 [ -d "$live" ] || exit 0                                                       # no live copy on this machine: nothing to keep in step
-# The review chain is machine config the publish never writes, and the hub panel edits the live one. Read both lists and
-# name a difference every cycle; a missing file or a missing jq says nothing (#542).
-rc_rows() { python3 "$here/modelreg.py" chain review --models "$1" --tsv 2>/dev/null | tr '\t' ' ' | tr '\n' ';'; }   # both shapes read the same (ADR-0147)
-rc_live=$(rc_rows "$live/scripts/models.json"); rc_repo=$(rc_rows "$repo/scripts/models.json")
-[ -n "$rc_live" ] && [ -n "$rc_repo" ] && [ "$rc_live" != "$rc_repo" ] && echo "LIVE-GUARD the live review chain differs from the repository: live $rc_live, repository $rc_repo"
 digest() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
 mode_of() { if stat -f '%Lp' / >/dev/null 2>&1; then xargs -0 stat -f '%Lp %N'; else xargs -0 stat -c '%a %n'; fi; }
 live_state() { # every file the live copy holds, by name, mode and content: a hand edit there is an input too (ADR-0140)
@@ -42,8 +42,32 @@ live_state() { # every file the live copy holds, by name, mode and content: a ha
   { ( cd "$live" && find . -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | mode_of ) 2>/dev/null
     ( cd "$live" && find . -type f ! -name '*.pyc' ! -path '*/__pycache__/*' -print0 | LC_ALL=C sort -z | xargs -0 $h ) 2>/dev/null
   } | digest; }
+# Notes that run every cycle, before any skip: each is named once, then silent until its input changes (#700). They
+# read files only, never write the live copy, and never start or stop a process.
+# - live models.json is owner config the publish never writes; the hub panel edits it. A change of its digest is named
+#   once. The first digest a state dir sees is kept with no line.
+# - a stray .bak-* copy in live scripts/ is clutter: the list is named once, and never removed.
+# - the drivers run the sha watchd recorded at start ($SG_STATE/driver.sha); a PUBLISHED sha that differs is a restart
+#   only the owner makes, named once per published sha.
+once() { # once NAME VALUE LINE: print LINE when VALUE differs from the value kept under NAME; keep VALUE
+  local f=$SG_STATE/live-guard.$1; [ "$(cat "$f" 2>/dev/null)" = "$2" ] && return 0
+  mkdir -p "$SG_STATE" && printf '%s\n' "$2" > "$f.$$" && mv "$f.$$" "$f"; [ -n "$3" ] && echo "$3"; return 0; }
+notes() {
+  [ -n "${SG_STATE:-}" ] || return 0
+  local m dg cl ds ps
+  m=$live/scripts/models.json
+  if [ -f "$m" ]; then dg=$(digest < "$m" | cut -c1-12)
+    if [ -f "$SG_STATE/live-guard.models" ]; then once models "$dg" "LIVE-GUARD live models.json changed by hand: $dg"; else once models "$dg" ""; fi
+  fi
+  cl=$( cd "$live/scripts" 2>/dev/null && find . -maxdepth 1 -type f -name '*.bak-*' | sed 's|^\./|scripts/|' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+  if [ -n "$cl" ]; then once clutter "$cl" "LIVE-GUARD live clutter, not shipped: $cl"; else rm -f "$SG_STATE/live-guard.clutter"; fi
+  ds=$(cat "$SG_STATE/driver.sha" 2>/dev/null); ps=$(cut -d' ' -f1 "$live/PUBLISHED" 2>/dev/null)
+  [ -n "$ds" ] && [ -n "$ps" ] && [ "$ds" != "$ps" ] && once restart "$ps" "LIVE-GUARD drivers run ${ds:0:8}, published ${ps:0:8}: restart pending (owner)"
+  return 0; }
 key_now() { { git -C "$tree" rev-parse HEAD; git -C "$tree" status --porcelain --untracked-files=no
   git -C "$tree" rev-parse "origin/$base"; live_state; } 2>/dev/null | digest; }
+
+notes
 
 # The publish reads the main working tree, and nothing moved that tree to origin: it sat at an old commit while later PRs
 # merged, and the live loop ran old scripts. The source is stg and only stg (ADR-0145): a work branch lands in dev, and the
@@ -79,6 +103,7 @@ if [ -n "$diff" ]; then
   [ -n "${SG_STATE:-}" ] && mkdir -p "$SG_STATE" && touch "$SG_STATE/live-publish.stamp"   # the janitor's rule M reads this change as the publish's own (#659)
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/LIVE-GUARD /'
   [ "$rc" = 0 ] || echo "LIVE-GUARD the publish exited $rc"
+  [ "$rc" = 0 ] && [ -s "$live/PUBLISHED" ] && echo "LIVE-GUARD published $(cut -c1-8 "$live/PUBLISHED")"
   left=$(bash "$here/publish-live.sh" --check "$repo" "$live")
   if [ -n "$left" ]; then
     echo "LIVE-GUARD the publish could not resolve: $(printf '%s' "$left" | tr '\n' ' ')"   # named every cycle: the key is not kept
@@ -86,6 +111,7 @@ if [ -n "$diff" ]; then
   fi
   echo "LIVE-GUARD the live skill now matches the repository copy"
 fi
+notes                                                                 # a publish to another sha: the restart is named now
 if [ -n "$key" ] && [ -n "${SG_STATE:-}" ]; then                      # keep the key the next cycle reads
   mkdir -p "$SG_STATE"; next=$(key_now); [ -n "$next" ] && { printf '%s\n' "$next" > "$kf.$$" && mv "$kf.$$" "$kf"; }
 fi

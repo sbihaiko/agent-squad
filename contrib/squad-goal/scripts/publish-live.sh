@@ -11,6 +11,8 @@
 # A publish refuses (exit 3, nothing written, one line naming both commits) when the source HEAD is not in the history of
 # $SG_SQUAD's HEAD, the repository the live scripts import squad from (#605). SG_SQUAD unset or the source repo: no check.
 # A publish refuses (exit 3, nothing written, one line naming the tree) when the source is a linked worktree (#658).
+# A publish writes $dest/PUBLISHED (`<sha> <utc>`, atomic): the tested sha, the source HEAD (#700). --check prints
+# `publish <sha>` while PUBLISHED is missing or names another sha. A publish with a failed copy writes no PUBLISHED. A source with no git has no sha and no PUBLISHED.
 #
 # The retired names (#122, #134, #361) are the routes the repository no longer ships: the fork-only route and, from the #361
 # landing, the pull-request route. The fork names are split in the source so this list is not itself a call site:
@@ -82,12 +84,12 @@ shipped() { { ( cd "$src" && find . -type f ! -name .DS_Store ! -name '*.pyc' ! 
   | { grep -vE '^scripts/profiles/.+\.sh$' || true; }
   [ -f "$src/scripts/profiles/example.sh" ] && printf '%s\n' scripts/profiles/example.sh; } | LC_ALL=C sort -u; }
 
+sha=$(git -C "$src" rev-parse HEAD 2>/dev/null); bad=
 rc=0
 for f in $(shipped); do
   if [ -f "$dest/$f" ] && cmp -s "$src/$f" "$dest/$f" && { [ ! -x "$src/$f" ] || [ -x "$dest/$f" ]; }; then continue; fi
   if [ -n "$check" ]; then echo "copy $f"; rc=1; continue; fi
-  mkdir -p "$dest/$(dirname "$f")"
-  cp -p "$src/$f" "$dest/$f.new.$$" && mv "$dest/$f.new.$$" "$dest/$f"    # new inode: a running copy keeps reading the old one
+  { mkdir -p "$dest/$(dirname "$f")" && cp -p "$src/$f" "$dest/$f.new.$$" && mv "$dest/$f.new.$$" "$dest/$f"; } || bad=1  # new inode: a running copy keeps reading the old one
 done
 for n in $RETIRED; do
   stem=${n%.*}
@@ -108,5 +110,9 @@ for n in $RETIRED_DATA; do
   if [ -n "$check" ]; then echo "drop $n"; rc=1; continue; fi
   rm -f "$dest/$n"; echo "publish-live: dropped $n"
 done
+if [ -n "$sha" ] && [ "$(cut -d' ' -f1 "$dest/PUBLISHED" 2>/dev/null)" != "$sha" ]; then
+  if [ -n "$check" ]; then echo "publish $sha"; rc=1
+  elif [ -z "$bad" ]; then printf '%s %s\n' "$sha" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dest/PUBLISHED.new.$$" && mv "$dest/PUBLISHED.new.$$" "$dest/PUBLISHED"; fi
+fi
 [ -n "$check" ] && exit $rc
 echo "publish-live: $(shipped | wc -l | tr -d ' ') file(s) published to $dest, retired names dropped by name"

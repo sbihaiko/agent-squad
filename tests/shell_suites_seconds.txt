@@ -88,14 +88,14 @@ test-land-target.sh 0.12
 test-launch-run-target.sh 1.98
 test-launch-target.sh 3.55
 test-launch.sh 6.08
-test-live-guard.sh 5.93
+test-live-guard.sh 7.00
 test-merge-audit.sh 1.32
 test-mkreq.sh 6.64
 test-pass-deadline.sh 15.65
 test-prepush.sh 1.28
 test-promote-pass.sh 11.04
 test-promote.sh 15.14
-test-publish-live.sh 2.13
+test-publish-live.sh 2.50
 test-reconcile.sh 1.60
 test-refusal-comment.sh 1.87
 test-refusal-names.sh 0.10
@@ -122,6 +122,7 @@ test-view-domain-firewall.sh 0.37
 test-watch-cycle.sh 94.70
 test-watch-land.sh 10.13
 test-watch-single-exec.sh 0.02
+test-watchd-driver-sha.sh 2.30
 test-watchd-token-stop.sh 6.28
 test-wave-lifecycle.sh 18.50
 test-wave-requeue-cap.sh 3.35

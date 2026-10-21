@@ -33,7 +33,18 @@ reader for was its own drift.
    `$SG_CHECKOUT/contrib/squad-goal` when that tree carries the skill (its own `SKILL.md`). A profile
    whose checkout is another repository ships no copy of this skill, and the pass says nothing. The
    destination is the publish's own default (`$SG_LIVE_DIR`, else `~/.claude/skills/squad-goal`).
-5. **The pass never fails the cycle.** A drift, and a publish that could not land, are reported and the
+5. **A publish records the tested sha.** The tested sha is the source HEAD the publish copies from.
+   The publish writes `PUBLISHED` (`<sha> <utc>`) at the top of the live skill, atomically, and only when
+   every copy landed. `--check` names `publish <sha>` while the file is missing or names another sha.
+   The pass prints `LIVE-GUARD published <sha>` after a publish.
+6. **A restart is the owner's.** `watchd.sh start` records the sha the drivers start on in
+   `$SG_STATE/driver.sha`. A later publish to another sha is named once per publish as a pending restart.
+   The pass never starts or stops a process.
+7. **Live `models.json` is owner config, read and never compared.** The pass does not compare it with
+   the repository copy each cycle. It names a change of its digest once as a hand edit, then stays silent
+   until the digest changes. A stray `.bak-*` copy in the live `scripts/` is listed once as clutter and
+   is never removed.
+8. **The pass never fails the cycle.** A drift, and a publish that could not land, are reported and the
    pass exits 0: the cycle's other steps keep their beat, and a source tree the publish cannot resolve
    is a defect of that tree, named every cycle until the tree drops it.
 
@@ -43,6 +54,9 @@ reader for was its own drift.
 - A tree that still ships a name the repository retired is a difference the publish cannot resolve: the
   check reads it as a name to copy and the publish drops it by name, so the reader names it every cycle
   until the tree drops it. The defect is in the tree, not in the two lists.
+- The live copy names the sha it holds, and the drivers name the sha they run, so a gap between them is
+  one line, not a guess.
+- A note that does not change is not printed again, so two cycles with no change print nothing.
 - The reader owns no second dialect of the publish: what it reads and what it prints are the publish's
   own lines.
 
@@ -51,5 +65,8 @@ reader for was its own drift.
 `contrib/squad-goal/scripts/test-live-guard.sh` (a drifted live copy is published and the difference is
 named; after the pass the publish reports no difference; the machine config and a file no one named are
 untouched; a difference the publish cannot land is named; a checkout that ships no copy of the skill
-says nothing) and `contrib/squad-goal/scripts/test-watch-cycle.sh` (the cycle runs the pass once per
+says nothing; a publish names its sha and a pending restart once; a hand edit to live `models.json` and
+live clutter are named once), `contrib/squad-goal/scripts/test-publish-live.sh` (`PUBLISHED` and its
+`--check` line; a linked worktree writes none), `contrib/squad-goal/scripts/test-watchd-driver-sha.sh`
+(a start records `driver.sha`) and `contrib/squad-goal/scripts/test-watch-cycle.sh` (the cycle runs the pass once per
 cycle under its own single-flight lock).
