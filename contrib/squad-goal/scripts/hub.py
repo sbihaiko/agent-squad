@@ -723,7 +723,7 @@ FOOT_SEP = " · "
 # them, and a block that is no longer drawn carries no palette entry to drift.
 FOOT_TONES = ("ok", "warn", "err")   # the three tones the load strip already paints (#1816), reused and never a second ladder
 FOOT_NEUTRAL = "neutral"             # a value the hub could not verify: the bar's own plain colour, never one of the tones
-FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none",
+FOOT_BLOCK_COLORS = {"burn": "err", "landing": "wait", "gate": "none", "nightly": "run",
                      "quota": "none", "cycle": "wait", "subs": "run", "loop": "none"}  # subs teal: it shares with landing, which is not its neighbour; loop ends the line (#554)
 # A quota marker names the CLI (`codex-limited`, `agy-limited`); the subs token names the same account by its plan.
 MARKER_SUB = {"codex": "gpt", "agy": "gemini"}
@@ -773,6 +773,28 @@ def _gate_parts(g, now):
     if not ok: return [{"text": "gate ?", "tone": FOOT_NEUTRAL}]
     text = f"gate {g['kind']} {g['result']} {_age(max(now - g['ts'], 0.0))} ago"
     return [{"text": text, "tone": "ok" if g["result"] == "pass" else "err", "tip": f"ran at {str(g['sha'])[:7]}"}]
+
+NIGHTLY_TIP_IDS = 5   # the failing tests the tooltip names: a red suite can name dozens, and a hover is one readable line
+def _nightly_parts(n, now):
+    """`nightly pass 6h ago`: the last full suite in both modes (nightly.sh, #704), its result and its age. A pass reads in
+    the ok tone and a fail in the err tone; a record the hub cannot read is `nightly ?` in the neutral tone, never a pass.
+    No record at all draws no block.
+    The tooltip carries what the block must not lose: which mode failed, the sha it ran at, and the tests that failed — the
+    first NIGHTLY_TIP_IDS of them, then the count of the rest. The operator acts on the test ids, so they are never dropped
+    from the hub; they are MOVED to the hover, as the gate's sha is (the section's rule (b))."""
+    if n is None: return []
+    modes = ("pass", "fail")
+    ok = isinstance(n, dict) and n.get("result") in modes and n.get("sha") and n.get("parallel") in modes \
+        and n.get("serial") in modes and isinstance(n.get("ts"), (int, float)) and not isinstance(n.get("ts"), bool) \
+        and isinstance(n.get("ids"), list)
+    if not ok: return [{"text": "nightly ?", "tone": FOOT_NEUTRAL}]
+    text = f"nightly {n['result']} {_age(max(now - n['ts'], 0.0))} ago"
+    tip = [f"parallel {n['parallel']} · serial {n['serial']} · ran at {str(n['sha'])[:7]}"]
+    ids = [str(x) for x in n["ids"] if x]
+    if ids:
+        rest = len(ids) - NIGHTLY_TIP_IDS
+        tip.append(f"{len(ids)} failed: " + ", ".join(ids[:NIGHTLY_TIP_IDS]) + (f" +{rest} more" if rest > 0 else ""))
+    return [{"text": text, "tone": "ok" if n["result"] == "pass" else "err", "tip": " · ".join(tip)}]
 
 def _cycle_state(now):
     """The watch cycle's own beat, read off the `HH:MM:SS CYCLE <n>s` lines watch.sh writes to cycle.log: when the last cycle
@@ -973,10 +995,13 @@ def foot_items(src, now=None):
     src = src or {}
     land = _landing_parts(src.get("landing"), now)
     gate = _gate_parts(src.get("gate"), now)
+    nightly = _nightly_parts(src.get("nightly"), now)
     items = [_fact("burn", _burn_fact(src.get("burn")), bad=True, tip=_burn_tip(src.get("burn"))),
              _fact("landing", FOOT_SEP.join(p["text"] for p in land), parts=land),
              _fact("gate", FOOT_SEP.join(p["text"] for p in gate), bad=any(p["tone"] == "err" for p in gate),
                    parts=gate or None, tip=(gate[0].get("tip") if gate else None)),
+             _fact("nightly", FOOT_SEP.join(p["text"] for p in nightly), bad=any(p["tone"] == "err" for p in nightly),
+                   parts=nightly or None, tip=(nightly[0].get("tip") if nightly else None)),
              _fact("quota", _quota_fact(src.get("quota"), now)),
              _fact("cycle", _cycle_fact(src.get("cycle"), now)),
              _fact("subs", _subs_fact(src.get("subs"), now), parts=_subs_parts(src.get("subs"), now))]
@@ -1024,6 +1049,15 @@ def _gate_status():
     if len(f) != 4 or not f[0].isdigit() or not all(f[1:]): return None
     return {"kind": f[1], "result": f[2], "sha": f[3], "ts": float(f[0])}
 
+def _nightly_status():
+    """The one result line the nightly full suite leaves in $SG_STATE/nightly-result, `<epoch> TAB <pass|fail> TAB <sha>
+    TAB <parallel> TAB <serial> TAB <ids>` (nightly.sh, #704): the last full run in both modes, its result, the sha it ran
+    at, each mode's own result and the failing test ids. None when the file is absent or is not that line."""
+    f = _read(STATE / "nightly-result").rstrip("\n").split("\t")
+    if len(f) != 6 or not f[0].isdigit() or f[1] not in ("pass", "fail") or not f[2]: return None
+    return {"result": f[1], "sha": f[2], "parallel": f[3], "serial": f[4],
+            "ids": [] if f[5] in ("", "-") else f[5].split(), "ts": float(f[0])}
+
 def _newest_mtime(*paths):
     ts = []
     for p in paths:
@@ -1045,7 +1079,7 @@ def foot_sources(now=None):
     """One reading of every source the line draws on. A source that is not there reads as `None` for its own fact only,
     so one unreadable file costs one `?` and never the rest of the line."""
     now = time.time() if now is None else now
-    out = {"landing": _last_landing(), "gate": _gate_status(),
+    out = {"landing": _last_landing(), "gate": _gate_status(), "nightly": _nightly_status(),
            "quota": {"codex": limited_until(_read(SHARED / "codex-limited"), now),
                      "agy": limited_until(_read(SHARED / "agy-limited"), now)}}
     plans = plans_get()   # the hand-entered percentage, for a probe that did not answer: the two things #1839's tokens read
