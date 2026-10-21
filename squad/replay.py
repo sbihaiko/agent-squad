@@ -7,6 +7,7 @@ event, and the conclusion. A reader of pause and resume starts here.
 from pathlib import Path
 
 from squad import git, modelreg, skills
+from squad import project_settings as P
 from squad.engine_errors import ResumeRefused
 from squad.graph import check_node_names
 
@@ -61,9 +62,11 @@ class Replay:
         return None
 
     def project_drift(self, start):
-        """A refusal text when the project settings file changed since the run started, else None. A record with no `project_settings` has none."""
+        """A refusal text when the project settings file changed since the run started, else None. A record with no `project_settings` has none.
+        A record with no method tag holds the raw-bytes hash and is compared by it."""
         rec = start.get("project_settings")
-        have = (self.e.project.get("record") or {}).get("sha256")
+        now = self.e.project.get("record")
+        have = None if now is None else (now["sha256"] if start.get("project_settings_method") == P.METHOD else P.raw_digest(now["path"]))
         if rec and have != rec["sha256"]:
             return f"the project settings file {rec['path']} changed since the run started: recorded {rec['sha256']}, current {have or 'gone'}"
         return None

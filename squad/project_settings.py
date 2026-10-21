@@ -20,9 +20,13 @@ from squad.options import OptionError
 
 REL = Path("docs") / "squad" / "defaults.yaml"
 CREDENTIAL = re.compile(r"api_?key|secret|password|credential|gateway|base_url|bedrock|vertex|foundry|oauth|auth", re.I)
+VALUE_CREDENTIAL = re.compile(CREDENTIAL.pattern + "|tskey-", re.I)     # tskey- is the prefix of a Tailscale auth key
+SECRET_VALUE = "credential-shaped value refused: no secret goes in this file"
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+")
 MIN_CONTEXT = D.MIN_CONTEXT
+METHOD = "without-tailnet"   # run_start tag for a hash that leaves the tailnet block out; a record with no tag holds the raw-bytes hash
 
-# key -> (type, low, high, unit, meaning). type: "int", "num", "str", "enum:a|b", "list". A bound of None is open.
+# key -> (type, low, high, unit, meaning). type: "int", "num", "str", "enum:a|b", "emails", "list". A bound of None is open.
 CATALOG = {
     "options.model": ("str", None, None, "model id", "model of a new node"),
     "options.fallback_model": ("str", None, None, "model id", "model used when the first one fails"),
@@ -46,6 +50,8 @@ CATALOG = {
     "caps.reviews": ("int", 1, 1000, "reviews", "live reviews on this machine; a project may only lower the plugin value"),
     "claude_md.max_line_width": ("int", 40, 10000, "characters", "width of one CLAUDE.md line before `squad setup --check` flags it"),
     "claude_md.max_section_lines": ("int", 5, 10000, "lines", "length of one CLAUDE.md section before `squad setup --check` flags it"),
+    "tailnet.host": ("str", None, None, "MagicDNS name", "name of this machine on the tailnet"),
+    "tailnet.allow": ("emails", None, None, "login names", "logins a tailnet request may come from"),
 }
 # The keys the plugin defaults must hold; a missing one is a defect of that file. The rest are optional.
 REQUIRED = {"options.effort", "options.permission_mode", "limits.max_stalls", "limits.max_budget_usd", "limits.max_output_tokens", "limits.context_tokens",
@@ -59,7 +65,27 @@ def path_for(target):
     return Path(target or ".") / REL
 
 
+def without_tailnet(text):
+    """The text with the top-level `tailnet` block and the blank lines after it removed. A file with no block comes back unchanged."""
+    out, inside = [], False
+    for line in text.splitlines(keepends=True):
+        if line.startswith("tailnet:"):
+            inside = True
+            continue
+        if inside and (line[:1] in (" ", "\t", "-") or not line.strip()):
+            continue
+        inside = False
+        out.append(line)
+    return "".join(out)
+
+
 def digest(path):
+    """The hash `run_start` records: the sha256 of the file without its tailnet block. With no block it is the sha256 of the bytes."""
+    return hashlib.sha256(without_tailnet(Path(path).read_bytes().decode()).encode()).hexdigest()
+
+
+def raw_digest(path):
+    """The sha256 of the file bytes: the hash a record holds when it carries no `METHOD` tag."""
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
@@ -85,6 +111,13 @@ def value_defect(spec, v, key=""):
     elif kind == "str":
         if not isinstance(v, str) or not v:
             return "must be a non-empty string"
+        if VALUE_CREDENTIAL.search(v):
+            return SECRET_VALUE
+    elif kind == "emails":
+        if not isinstance(v, list) or not all(isinstance(x, str) and EMAIL.fullmatch(x) for x in v):
+            return "must be a list of login names in email form"
+        if any(VALUE_CREDENTIAL.search(x) for x in v):
+            return SECRET_VALUE
     elif kind == "list":
         if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
             return "must be a list of strings"

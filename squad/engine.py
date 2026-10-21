@@ -16,6 +16,7 @@ import anyio
 
 from squad import adapt, git, modelreg, node_commit, skills
 from squad import options as opt
+from squad import project_settings as P
 from squad import verdict as V
 from squad.adapt import Effective
 from squad.artifacts import ArtifactStore
@@ -292,7 +293,7 @@ class Engine:
                            models=models, **({"router_overlay": self.router_overlay} if self.router_overlay else {}),
                            engine_options=self.options, root=self.g.root, plan=plan_order(self.g.doc), preflight=self.preflight, target=str(self.target), **({"target_branch": b} if (b := self._target_branch()) else {}), **self._target_owned(),
                            **({"graph_path": str(self.graph_path)} if self.graph_path else {}), **({"defaults": self.defaults} if self.defaults else {}),
-                           **({"project_settings": self.project["record"]} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
+                           **({"project_settings": self.project["record"], "project_settings_method": P.METHOD} if self.project.get("record") else {}), **({"autonomy": self.autonomy} if self.autonomy else {}),
                            state_binding=self.state_binding,
                            **({"caps": self.ceiling.caps} if self.ceiling else {}),
                            skills=skills.snapshot(self.g.doc, self.vendor), skills_commit=skills.commit(self.vendor))

@@ -8,7 +8,6 @@ import hashlib
 import json
 
 import pytest
-import yaml
 
 from squad import cli, defaults, launch, record
 from squad import project_settings as P

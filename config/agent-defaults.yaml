@@ -55,6 +55,10 @@ dashboard:                          # the run dashboard page; run_start records 
   reread_seconds: 1                 # how often the page rereads record.jsonl while a run lives. The page has no control for it. The page uses 1 when a record lacks it.
   watch_seconds: 0.2                # how often the server stats the record path while a stream is open. A pushed event follows a write within this step. A record from before it, or a file:// page, uses reread_seconds.
 
+tailnet:                            # the project file's tailnet block; its edits never refuse a resume (squad/project_settings.py)
+  host: null                        # MagicDNS name of this machine; unset refuses every tailnet request
+  allow: []                         # login names in email form; empty refuses every tailnet request
+
 watch:                              # what starts with a run from `work` or `task`
   dashboard: true                   # open the run dashboard page on the new run. A headless environment prints the URL. A failed open is a warning, never a verdict. A resume reuses a page already open.
   monitor: true                     # a run-scoped monitor reads the record on a timer and logs a stuck, abandoned or deadline-missed call to monitor.log in the run folder and to the command output. It never calls a model and never changes the run.
