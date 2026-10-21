@@ -23,6 +23,15 @@ chmod +x "$B/gh" "$B/sleep"; export PATH="$B:$PATH"
 : > "$ST/active-runs.txt"
 for s in branchland.sh branchreviewpass.sh branchfixpass.sh autohunt.sh heartbeat.sh wtclean.sh janitor.sh startability.sh live-guard.sh; do
   printf '#!/bin/bash\necho %s >> "%s"\n' "${s%.sh}" "$STEPS" > "$S/$s"; chmod +x "$S/$s"; done
+# the nightly full suite (#704) blocks for NIGHT_HOLD s on the REAL sleep, never the stubbed one: the case times the cycle
+# around it, and a cycle that waited for the suite would be as long as the suite
+cat > "$S/nightly.sh" <<EOF
+#!/bin/bash
+echo nightly >> "$STEPS"
+/bin/sleep "\${NIGHT_HOLD:-0}"
+exit 0
+EOF
+chmod +x "$S/nightly.sh"
 printf 'open("%s","a").write("childcc\\n")\n' "$STEPS" > "$S/childcc.py"
 # reconcile.py blocks for REC_SLEEP: the case times the cycle around it (a detached pass costs the cycle nothing) and reads its own log
 cat > "$S/reconcile.py" <<'PY'
@@ -180,5 +189,13 @@ lane_down; run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=8 SG_WATCH_POLL=1
 # a fractional poll does not break the wait
 t0=$(date +%s); run_cycles 2 REAL_SLEEP=1 SG_WATCH_WAIT=2 SG_WATCH_POLL=0.5; el=$(( $(date +%s) - t0 ))
 [ "$el" -ge 2 ] && [ "$el" -lt 10 ] && ok "11 a fractional SG_WATCH_POLL still waits its bound (${el}s)" || ko "11 fractional poll: ${el}s of a 2 s wait"
+
+# 12) (#704) the full suite runs nightly in both modes, and a suite of hours never holds the cycle: the step is detached under
+# its own single-flight stage, so the cycle starts it and goes on. Its own once-a-day rule and its own lock are nightly.sh's.
+lane_down; t0=$(date +%s); run_cycles 1 NIGHT_HOLD=3; el=$(( $(date +%s) - t0 ))
+[ "$(count nightly)" = 1 ] && ok "12 the cycle starts the nightly full suite" || ko "12 the cycle started $(count nightly) nightly pass(es)"
+[ "$el" -lt 3 ] && ok "12 the cycle does not wait for the nightly suite (${el}s with a 3 s suite)" || ko "12 the cycle waited for the nightly (${el}s)"
+: > "$STEPS"; run_cycles 2 NIGHT_HOLD=3
+[ "$(count nightly)" = 1 ] && ok "12 a suite still running is not started again (single.sh lock)" || ko "12 the nightly overlapped itself ($(count nightly) passes)"
 
 rm -rf "$T"; exit $fail
