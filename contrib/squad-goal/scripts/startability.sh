@@ -114,9 +114,10 @@ sg_issue_worktree_note() {   # <issue>: print child instructions only when workt
   }
   printf 'PRESERVE ISSUE WORKTREE: The existing worktree at %s is on branch %s; expected branch %s%s. Do not reuse, reset, delete, or replace it. Preserve it and report this blocker in your result.\n' "$path" "$current" "$branch" "${state:+ and it is dirty}"
 }
-# An issue whose ledger is corrupt is held (ADR-0149 rule 4): sg_ledger_held prints the cause (the issue's file and the parse
-# error) and exits 0, so no dispatch pass takes it, and it never falls back to the old counters. A ledger module that is not
-# there, or a ledger that reads, holds nothing. The owner's `issue_ledger.py rearm` writes a fresh file and frees it.
+# An issue whose ledger is corrupt, or missing beside its old counters, is held (ADR-0149 rule 4): sg_ledger_held prints the
+# cause (the issue's file and why) and exits 0, so no dispatch pass takes it, and it never falls back to the old counters. A
+# ledger module that is not there, a ledger that reads, or a new issue with no file and no old counter holds nothing. The
+# owner's `issue_ledger.py rearm` (or `migrate`, for the old counters) writes a fresh file and frees it.
 sg_ledger_held() {
   local l; l="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/issue_ledger.py"
   [ "$(python3 "$l" read "$SG_REPO#$1" state 2>/dev/null)" = held ] || return 1

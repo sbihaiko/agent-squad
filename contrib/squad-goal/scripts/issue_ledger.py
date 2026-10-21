@@ -8,6 +8,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
        issue_ledger.py stop  <key> <why> [own|loop]          the ledger stops: prints "- <run>: <why>" for each run counted
        issue_ledger.py wave  <key> <run> <state> <cause> [keep]  one wave event: prints recorded|duplicate|terminal|kept|floor
        issue_ledger.py rearm <key>                           the facts go, and the SQUAD-NOT-STARTABLE comment with them
+       issue_ledger.py migrate <key>                         the old auto/ counters of a missing ledger become its file, once
        issue_ledger.py entered <owner>/<repo>                "<run>\t<n>" for each run a child of the repository entered
        issue_ledger.py landtry <key> <run> <cause>           one failed landing of the run's wave: prints the run's tries
        issue_ledger.py owe   <key> <run> <wave> <sha>        the landed wave could not close the issue: it is owed
@@ -15,8 +16,7 @@ usage: issue_ledger.py read  <key> [state|count|last_fail|held|wave]  the record
 
 This module is the only writer of $SG_STATE/state/<owner>__<repo>__<n>.json. The key is <owner>/<repo>#<n>, the address
 seam's (ADR-0138), never a bare issue number. Owner intent stays on GitHub (ready-for-agent, the Todo card, frozen:owner,
-loop-bug); this file holds only loop facts, so a wipe of the state folder is no loss: a missing file reads as todo with 0
-attempts. Each write is a temp file, fsync, then a rename (ADR-0030), under an fcntl lock per issue, so two writers at once
+loop-bug); this file holds only loop facts. A missing file of a new issue reads as todo with 0 attempts. Each write is a temp file, fsync, then a rename (ADR-0030), under an fcntl lock per issue, so two writers at once
 lose no count and a kill in a write leaves the old file whole.
 
 Two ledgers, as wave.sh kept them: `own` counts the failures of the issue's work (SG_REQUEUE_CAP), `loop` the requeues the
@@ -45,10 +45,13 @@ A rearm keeps a floor (#692): `rearmed` holds the rearm's time and every run eit
 floor names, and the janitor counts no run whose verdict is older than the floor's time, so the old runs never stop the issue
 again. The run set covers a record with no time; the time covers a run no ledger listed.
 
-Seed: a missing file of the profile's primary repository (SG_REPO) reads the old auto/requeues-<n> and auto/loopqueues-<n>
-counters and their .runs ledgers, so a live cutover needs no halt. The counter wins over the line count: a counter the owner
-reset holds (#673: requeues-543 read 1 while its ledger held 2 lines). The first write makes the file, and the old files are
-read no more.
+A missing file holds the issue when the old counters of the profile's primary repository (SG_REPO) are there for it --
+auto/requeues-<n>, auto/loopqueues-<n>, or their .runs ledgers (ADR-0149 rule 4): the issue has loop facts the ledger does
+not hold, so a read as todo would lose them, and a read of the old files would be the fallback the rule forbids. `read`
+gives `held` with the cause, and every writer but `rearm` and `migrate` refuses it. The owner's `migrate` writes the old
+counters into the file once (the counter wins over the line count: a counter the owner reset holds, #673: requeues-543 read 1
+while its ledger held 2 lines); `rearm` clears them. Once the file exists the old files are read no more. An issue with no
+file and none of those counters is new: it reads todo.
 """
 import contextlib
 import fcntl
@@ -85,7 +88,7 @@ def empty(key):
     return {"key": key, **{led: {"count": 0, "runs": [], "stopped": None} for led in LEDGERS}}
 
 
-def seed(key):   # the old auto/ files of the primary repository, read once while the file is missing
+def seed(key):   # the old auto/ files of the primary repository: what `migrate` writes into a missing file
     rec = empty(key); o, r, n = parse(key)
     if os.environ.get("SG_REPO", f"{o}/{r}") != f"{o}/{r}": return rec   # the old files had no repository: they are SG_REPO's
     a = state_dir() / "auto"
@@ -101,14 +104,33 @@ def seed(key):   # the old auto/ files of the primary repository, read once whil
     return rec
 
 
-class Corrupt(ValueError):   # the issue's file does not parse as a ledger: the issue is held, never read as the seed (ADR-0149)
+class Held(ValueError):   # the issue's ledger cannot be read as one: the issue is held, never read as the seed (ADR-0149 rule 4)
     pass
+
+
+class Corrupt(Held):   # the issue's file does not parse as a ledger
+    pass
+
+
+class Missing(Held):   # the issue's file is missing while the old counters of the issue are there
+    pass
+
+
+def old_files(key):   # the old auto/ counter files of the issue, when the key is the primary repository's
+    o, r, n = parse(key)
+    if os.environ.get("SG_REPO", f"{o}/{r}") != f"{o}/{r}": return []
+    a = state_dir() / "auto"
+    return [p.name for name in OLD.values() for p in (a / f"{name}-{n}", a / f"{name}-{n}.runs") if p.exists()]
 
 
 def load(key):
     p = path(key)
     try: rec = json.loads(p.read_text())
-    except FileNotFoundError: return seed(key)
+    except FileNotFoundError:
+        old = old_files(key)
+        if old: raise Missing(f"a missing ledger holds the issue: {p} is not there, and the old counters {', '.join(old)} are; "
+                              f"`issue_ledger.py migrate {key}` carries them in, `rearm` clears them") from None
+        return empty(key)   # a new issue: no loop fact yet
     except (ValueError, UnicodeDecodeError) as e: raise Corrupt(f"a corrupt ledger holds the issue: {p} ({e})") from None
     if not (isinstance(rec, dict) and all(isinstance(rec.get(led), dict) and isinstance(rec[led].get("runs"), list) for led in LEDGERS)
             and isinstance(rec.get("wave", {}), dict)):
@@ -149,9 +171,9 @@ def last_fail(rec):   # the reason of the newest own failure, the one a redispat
     return runs[-1]["why"] if runs else ""
 
 
-def read(key):   # a corrupt file reads held, with empty ledgers and its cause in `held`: the reader holds the issue
+def read(key):   # a corrupt file, or a missing one beside the old counters, reads held with its cause: the reader holds the issue
     try: rec = load(key)
-    except Corrupt as e: return {**empty(key), "wave": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
+    except Held as e: return {**empty(key), "wave": {}, "state": "held", "held": str(e), "attempts": 0, "last_fail": ""}
     return {**rec, "wave": rec.get("wave", {}), "state": state(rec), "held": "", "attempts": rec["own"]["count"], "last_fail": last_fail(rec)}
 
 
@@ -203,6 +225,12 @@ def _wave(rec, ev):   # -> (recorded|duplicate|terminal|kept|floor, changed): on
     return "recorded", True
 
 
+def _migrate(rec, ev):   # the old counters become the file, once: a ledger that exists is never migrated over
+    if ev["old"] is not None: raise ValueError(f"nothing to migrate for {ev['key']}: its ledger exists, or it has no old counters")
+    rec.clear(); rec.update(seed(ev["key"]))
+    return None, True
+
+
 def _rearm(rec, ev):   # the loop facts go, and the floor (#692) keeps every run any of them named
     old = ev["old"] or {}
     runs = {x["run"] for led in LEDGERS for x in (old.get(led) or {}).get("runs", []) if isinstance(x, dict) and x.get("run")}
@@ -212,14 +240,17 @@ def _rearm(rec, ev):   # the loop facts go, and the floor (#692) keeps every run
     return None, True
 
 
-RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "rearm": _rearm}
+RULES = {"fail": _fail, "stop": _stop, "wave": _wave, "rearm": _rearm, "migrate": _migrate}
 
 
 def transition(key, ev):   # the one transition function (ADR-0149): every event of every writer, under the issue's lock
     with locked(key):
-        try: rec = load(key); ev = {**ev, "old": rec if ev["op"] == "rearm" else None}
+        try: rec = load(key); ev = {**ev, "old": rec if ev["op"] in ("rearm", "migrate") else None}
         except Corrupt:
             if ev["op"] != "rearm": raise   # a writer never overwrites a corrupt file: the issue stays held, the file stays for the owner
+            rec = empty(key); ev = {**ev, "old": None}
+        except Missing:
+            if ev["op"] not in ("rearm", "migrate"): raise   # only the owner's act decides what the old counters become
             rec = empty(key); ev = {**ev, "old": None}
         out, changed = RULES[ev["op"]](rec, {**ev, "key": key})
         if changed: save(key, rec)
@@ -236,6 +267,10 @@ def stop(key, why, led="own"):
 
 def wave(key, run, st, cause, keep=False, extra=None):
     return transition(key, {"op": "wave", "run": run, "state": st, "cause": cause, "keep": keep, "extra": extra})
+
+
+def migrate(key):
+    return transition(key, {"op": "migrate"})
 
 
 def rearm(key):   # the SQUAD-NOT-STARTABLE comment goes through the comment queue (cqflush.sh unstart~)
@@ -262,7 +297,7 @@ def repo_files(repo):   # -> [(n, record)] for every readable ledger file of the
         n = p.name[len(f"{o}__{r}__"):-len(".json")]
         if not n.isdigit(): continue
         try: out.append((n, load(f"{repo}#{n}")))
-        except Corrupt: continue
+        except Held: continue
     return out
 
 
@@ -298,9 +333,10 @@ def main(argv):
         elif op == "landtry" and len(rest) >= 2: print(landtry(key, rest[0], rest[1]))
         elif op == "owe" and len(rest) >= 3: print(owe(key, rest[0], rest[1], rest[2]))
         elif op == "wave" and len(rest) >= 3: print(wave(key, rest[0], rest[1], rest[2], rest[3:4] == ["keep"]))
+        elif op == "migrate": migrate(key); print(f"MIGRATE {key}: the old counters are in its ledger file; they are read no more")
         elif op == "rearm": print(f"REARM {key}: the loop facts are cleared; {rearm(key).name} removes the SQUAD-NOT-STARTABLE comment")
         else: print(f"issue_ledger.py: bad call: {' '.join(argv)}", file=sys.stderr); return 2
-    except Corrupt as e:
+    except Held as e:
         print(f"issue_ledger.py: held: {e}", file=sys.stderr); return 3
     except (ValueError, KeyError) as e:
         print(f"issue_ledger.py: {e}", file=sys.stderr); return 2

@@ -179,8 +179,8 @@ landed_key() {
 }
 
 # ledger <op> <issue> ...: the issue's one ledger file (#673, issue_ledger.py), keyed <owner>/<repo>#<n> (ADR-0138). It holds
-# what auto/requeues-<n> and its .runs held, under a lock per issue and with an atomic write (ADR-0030), and reads those old
-# files once while it is missing.
+# what auto/requeues-<n> and its .runs held, under a lock per issue and with an atomic write (ADR-0030). A missing file beside
+# those old files holds the issue until the owner's `migrate` (ADR-0149 rule 4).
 ledger() { local op=$1 n=$2; shift 2; python3 "$here/issue_ledger.py" "$op" "$SG_REPO#$n" "$@"; }
 
 # count <issue> <run> <why> [own|loop]: one failed dispatch of the issue (#609). The count is the issue's (#532), in its
@@ -254,7 +254,7 @@ wave_fact() {
 }
 
 # held_out <issue>: why the issue must stay where it is, and exit 0, when its ledger stopped it (own or loop), its ledger is
-# corrupt (held, ADR-0149), or it carries frozen:owner or needs-owner (#682). A label read that does not answer holds it too:
+# corrupt or missing beside its old counters (held, ADR-0149), or it carries frozen:owner or needs-owner (#682). A label read that does not answer holds it too:
 # a freeze is never lifted on a guess.
 held_out() {
   local why labels
