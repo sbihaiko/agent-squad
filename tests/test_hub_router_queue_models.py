@@ -113,6 +113,20 @@ def test_the_queue_add_box_offers_the_registry_live_anthropic_ids(hub, checkout,
     assert [m for m in got if hub.ANTHROPIC_ID.match(m) and m not in reg.entries] == []
 
 
+def test_a_role_only_save_keeps_a_hidden_router_entry_in_the_graph(hub, checkout):
+    """The Router queue shows only the entries its chain can run (#545), so a hidden entry is absent from what the panel
+    posts back. A Save that edits a role chain must not read that as an edit of the queue and delete the entry."""
+    checkout.write_text(json.dumps({"schema_version": 1, "name": "router-dynamic", "nodes": [
+        {"name": "main", "kind": "loop", "children": ["route"]},
+        {"name": "route", "kind": "dispatch", "allow": {"models": ["claude-gpt-5.6-terra", "gemini-3.8-flash"],
+                                                        "efforts": ["low"]}}]}, indent=2) + "\n")
+    got = hub.models_get()
+    assert got["router_models"] == ["claude-gpt-5.6-terra"]
+    out = hub.models_set({**got, "review_models": ["gpt-6.1-sol", "grok-4.6"]})
+    assert "err" not in out, out
+    assert _envelope(checkout) == ["claude-gpt-5.6-terra", "gemini-3.8-flash"]
+
+
 def test_a_coding_model_the_save_leaves_out_of_the_envelope_is_added_to_it(hub, checkout):
     """A coding child runs inside the dispatch envelope, so a coding model outside it reads "blocked by envelope" and
     never runs (#690). A Save that leaves one out, by a queue edit or a new coding row, appends it in the gateway's
