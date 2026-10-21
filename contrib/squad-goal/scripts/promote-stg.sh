@@ -60,7 +60,7 @@ prove "$tip"
 # The owner's consolidation rule (#743): one pull request, never a push. The merge is a merge commit, so the next tip is read
 # by ancestry and a tip already in stg is no work.
 . "$d/ghcall.sh"
-pr=$(gh_api "repos/$SG_REPO/pulls?state=open&base=stg" -q '[.[] | select(.head.ref == "dev")][0].number // empty' 2>/dev/null) \
+pr=$(gh_api "repos/$SG_REPO/pulls?state=open" -q '[.[] | select(.head.ref == "dev" and .base.ref == "stg")][0].number // empty' 2>/dev/null) \
   || refuse "$tip" "not promoted: the open dev -> stg pull request could not be read"
 if [ -z "$pr" ]; then
   o=$(gh_send -X POST "repos/$SG_REPO/pulls" -f head=dev -f base=stg -f "title=Promote dev into stg" \
